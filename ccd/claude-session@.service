@@ -1,0 +1,17 @@
+[Unit]
+Description=Durable Claude Code session %i (ccd-managed)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ccd supervise %i
+Restart=always
+RestartSec=3
+TimeoutStartSec=90
+# Only kill the supervise process on stop/restart — NOT the whole cgroup. The tmux server is
+# the durable substrate and must survive a supervisor restart; cmd_stop kills the session itself.
+KillMode=process
+
+[Install]
+WantedBy=default.target

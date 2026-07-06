@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+# ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
+# One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
+set -uo pipefail
+
+REG="$HOME/.cc-sessions"
+WRAPPER_DIR="$HOME/.local/bin"
+PROJECTS_ROOT="/data/projects"
+VALID_WRAPPERS=(claude claude2 claude-corp)
+CLAUDE_AI_BASE="https://claude.ai/code"   # by-name discovery: pick the session whose name == the id
+mkdir -p "$REG"
+
+# ── account-swap tuning (see cmd_swap/_auto_swap_check) ─────────────────
+LIMITS_DIR="$HOME/.cc-limits"   # per-account {"five":N,"seven":N,"ts":epoch} written by statusline-command.sh
+SWAP_THRESHOLD=90               # own 5h % that arms a pre-emptive swap
+SWAP_HEADROOM=30                # target must be at least this many points lower
+SWAP_COOLDOWN=900               # min seconds between swaps of one session
+SWAP_FRESH=1800                 # telemetry younger than this qualifies for pre-emptive swaps
+SWAP_QUIET=600                  # preempt only sessions quiet this long (any surface); rescue ignores
+SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
+                                # ultracode is session-only by design (no settings.json key),
+                                # so injecting it at spawn is the only way to default it.
+
+# Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
+# sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"; export XDG_RUNTIME_DIR
+: "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+
+die() { echo "ccd: $*" >&2; exit 1; }
+
+_is_valid_wrapper() { local w="$1" v; for v in "${VALID_WRAPPERS[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+_id()    { echo "$1-$2"; }                                  # wrapper project -> id
+_tmux()  { echo "cc-$1"; }                                  # id -> tmux name
+_alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
+_reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
+_reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+
+_cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
+  case "$1" in
+    claude)      echo "$HOME/.claude" ;;
+    claude2)     echo "$HOME/.claude-personal" ;;
+    claude-corp) echo "$HOME/.claude-corp" ;;
+  esac
+}
+
+_sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the registry.
+  # Claude Code rotates the active session uuid during normal operation (/clear, compaction),
+  # so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
+  # back to the last point that old uuid was active (observed 2026-07-02: days-to-weeks jumps).
+  # The live process publishes its current sessionId at <config>/sessions/<pid>.json; keeping
+  # the registry in step means resurrection resumes where the session actually was.
+  local id="$1" cfg pid sid
+  cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
+  pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]] || return 0
+  sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
+  [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && _reg_set "$id" uuid "$sid"
+  return 0
+}
+
+_default_pool() {   # wrapper -> wrappers this session may auto-swap between.
+  # Free swapping across ALL accounts (explicit user decision 2026-07-03).
+  # Narrow per session with a space-separated list in the registry `pool` field.
+  echo "${VALID_WRAPPERS[*]}"
+}
+_pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$(_reg_get "$1" wrapper)"; }
+
+_dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd unit.
+  # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
+  # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
+  # never respawned — bit us 2026-07-05). systemd-run escapes the cgroup entirely.
+  systemd-run --user --collect --quiet \
+    bash -c "exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
+    || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
+}
+
+_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if unknown/stale
+  local f="$LIMITS_DIR/$1.json" field="$2" maxage="${3:-0}" val ts now
+  [[ -f "$f" ]] || return 0
+  val=$(grep -oE "\"$field\":[0-9]+" "$f" | cut -d: -f2)
+  ts=$(grep -oE '"ts":[0-9]+' "$f" | cut -d: -f2)
+  now=$(date +%s)
+  if [[ "$maxage" -gt 0 && ( -z "$ts" || $((now - ts)) -gt "$maxage" ) ]]; then return 0; fi
+  # Readings older than their own window have certainly rolled over — report as free.
+  # Keeps accounts with no remaining reporter sessions (stale-forever) in the target pool.
+  # (7d decays slowly, so a stale seven only zeroes after a full week.)
+  if [[ -n "$ts" ]]; then
+    [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && val=0
+    [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && val=0
+  fi
+  printf '%s' "$val"
+}
+_limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
+
+_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly unknown
+  # Weekly limits are as blocking as 5h ones (user directive 2026-07-05) — a target with a
+  # free 5h window but an exhausted week is NOT a good landing spot, and an account nearing
+  # its weekly cap should evacuate just like one nearing its 5h cap.
+  local five seven
+  five=$(_limit_field "$1" five 0); seven=$(_limit_field "$1" seven 0)
+  [[ -z "$five" && -z "$seven" ]] && return 0
+  : "${five:=0}"; : "${seven:=0}"
+  (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
+}
+
+_auto_swap_check() {   # id — called each supervise tick. Two triggers, both detached:
+  #   pre-emptive: own account >= SWAP_THRESHOLD% of the 5h window (fresh telemetry) AND the
+  #                session is idle at its prompt -> swap between turns, zero conversation loss.
+  #   rescue:      the pane bottom shows a limit-reached banner (session is blocked anyway).
+  # Both pick the least-loaded pool member and require real headroom; cooldown stops ping-pong.
+  local id="$1" wrapper pool cand best="" best_five=999 five own last now pane
+  wrapper=$(_reg_get "$id" wrapper); pool=$(_pool_for "$id")
+  now=$(date +%s); last=$(_reg_get "$id" lastswap)
+  [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
+  for cand in $pool; do
+    [[ "$cand" == "$wrapper" ]] && continue
+    [[ -x "$WRAPPER_DIR/$cand" ]] || continue
+    five=$(_limit_score "$cand"); : "${five:=0}"      # never-seen target ≈ assume free
+    [[ "$five" -lt "$best_five" ]] && { best="$cand"; best_five="$five"; }
+  done
+  [[ -n "$best" ]] || return 0
+  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
+  [[ -n "$pane" ]] || return 0
+  if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)"; then
+    [[ "$best_five" -lt 80 ]] || return 0
+    _reg_set "$id" lastswap "$now"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $best (pressure=$best_five%)" >> "$REG/swap.log"
+    _dispatch_swap "$id" "$best"
+    return 0
+  fi
+  # Own pressure = max(fresh 5h, day-fresh 7d): weekly exhaustion evacuates too.
+  local own_five own_seven
+  own_five=$(_limit_field "$wrapper" five "$SWAP_FRESH")
+  own_seven=$(_limit_field "$wrapper" seven 86400)
+  own=""; for v in $own_five $own_seven; do [[ -z "$own" || "$v" -gt "$own" ]] && own="$v"; done
+  [[ -n "$own" ]] || return 0
+  [[ "$own" -ge "$SWAP_THRESHOLD" ]] || return 0
+  [[ $((own - best_five)) -ge "$SWAP_HEADROOM" ]] || return 0
+  echo "$pane" | grep -q "esc to interrupt" && return 0    # mid-turn: wait for the gap
+  echo "$pane" | grep -q "❯" || return 0                    # not at a prompt yet
+  # Authoritative idle gate: the live process reports its own status in sessions/<pid>.json.
+  # Pane heuristics alone miss running SUBAGENTS (the agents footer shows no "esc to
+  # interrupt") — learned 2026-07-03 when a preempt killed mid-flight agent batches.
+  local spid sf st sua
+  spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
+  [[ "$st" == "idle" ]] || return 0
+  # Quiet gate: don't preempt a session someone is actively driving. Remote (web/mobile)
+  # clients are invisible to tmux, but statusUpdatedAt (ms) ticks on every busy<->idle
+  # transition from ANY surface — recent activity means a human is mid-conversation, and a
+  # swap would yank their remote session (learned 2026-07-03). Rescue still fires when
+  # actually blocked: reconnecting under another account beats staying frozen.
+  sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
+  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_QUIET * 1000 )) ]] || return 0
+  _reg_set "$id" lastswap "$now"
+  echo "$(date '+%F %T') auto-preempt $id: $wrapper (pressure=$own%: 5h=${own_five:-?} 7d=${own_seven:-?}) -> $best (pressure=$best_five%)" >> "$REG/swap.log"
+  _dispatch_swap "$id" "$best"
+  return 0
+}
+
+_accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM the main TUI is up.
+  # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
+  # each needing a DIFFERENT keystroke:
+  #   • trust-folder prompt  — default is "1. Yes, I trust this folder"  → just Enter
+  #   • Bypass-Permissions warning — default is "1. No, exit" (!), accept is "2. Yes, I accept"
+  #       → must move Down to option 2, THEN Enter. (Sending a bare Enter here would EXIT.)
+  #   • (2.1.198+) big-transcript resume gate "Resume from summary (recommended)" → pick
+  #       "2. Resume full session as-is" (Down, Enter) so nothing gets silently compacted.
+  #   • (2.1.198+) per-session "Try the new fullscreen renderer?" opt-in → pick "2. Not now"
+  #       (Down, Enter): ccd/ccclip scrape the pane via capture-pane; the new renderer +
+  #       mouse support may break that scraping.
+  # The two 2.1.198 gates are matched together with the "Enter to confirm" menu footer so the
+  # same words inside a restored transcript can't false-trigger keystrokes.
+  # Window is ~15 min because 700k+-token resumes take minutes between gates; healthy sessions
+  # return the moment the live marker shows, so the common path stays fast.
+  local t="$1" fromswap="${2:-0}" i pane
+  for i in $(seq 1 450); do
+    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
+    # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
+    # without it supervise sits here for the full window and never reaches its watch loop.
+    echo "$pane" | grep -Eq "/rc active|\? for shortcuts|esc to interrupt|shift\+tab to cycle|← for agents" && return 0
+    if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Resume from summary"; then
+      if [[ "$fromswap" == "1" ]]; then
+        # Swap landing: auto-compact — the target account pays one summary, not a full
+        # 700k-token history re-read (user decision 2026-07-03). Option 1 is the default.
+        tmux send-keys -t "$t" Enter
+      else
+        # Same-account resurrect: keep full fidelity — "Resume full session as-is".
+        tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter
+      fi
+      sleep 2; continue
+    fi
+    if echo "$pane" | grep -q "Enter to confirm" && echo "$pane" | grep -q "Try the new fullscreen renderer"; then
+      tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter; sleep 2; continue
+    fi
+    if echo "$pane" | grep -q "Bypass Permissions mode"; then
+      tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter; sleep 2; continue
+    fi
+    if echo "$pane" | grep -q "trust this folder"; then
+      tmux send-keys -t "$t" Enter; sleep 2; continue
+    fi
+    sleep 2
+  done
+}
+
+_spawn() {   # id mode(new|resume) — (re)create the tmux session under the right account
+  # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
+  # URL to capture. The session is discovered on claude.ai by its name, which == the id
+  # (we pass `--remote-control '$id'`). _spawn just (re)creates the session and accepts trust.
+  local id="$1" mode="$2" wrapper workdir uuid tname sidflag
+  wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
+  [[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die "incomplete registry for '$id'"
+  tname=$(_tmux "$id")
+  # A spawn within 5 min of a swap is the swap LANDING on the new account — resume from
+  # summary there (cheap) instead of full-as-is (700k re-read on the fresh limit pool).
+  local fromswap=0 lastswap
+  lastswap=$(_reg_get "$id" lastswap)
+  [[ -n "$lastswap" && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
+  if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  tmux new-session -d -s "$tname" -x 220 -y 50 \
+    "cd '$workdir' && exec '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
+  # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
+  # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
+  tmux set-option -t "$tname" set-titles on 2>/dev/null
+  tmux set-option -t "$tname" set-titles-string '#S' 2>/dev/null
+  # Follow the most-recent client's size (defensive; with attach -d there's only ever one client,
+  # so the window always fits the device you're on — no smaller-client "dotted filler" clash).
+  tmux set-option -t "$tname" window-size latest 2>/dev/null
+  _accept_first_run_prompts "$tname" "$fromswap"
+  _inject_spawn_effort "$tname"
+}
+
+_inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
+  [[ -n "$SPAWN_EFFORT" ]] || return 0
+  local t="$1" cur
+  # Only type into an EMPTY input box — a restored draft would swallow the slash command.
+  cur=$(tmux capture-pane -t "$t" -p 2>/dev/null | grep -m1 "^❯ " | sed "s/^❯ //; s/[[:space:]]*$//")
+  if [[ -n "$cur" ]]; then echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0; fi
+  sleep 1
+  tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
+  # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
+  sleep 2
+  if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
+    tmux send-keys -t "$t" Enter
+  fi
+  return 0
+}
+
+cmd_start() {
+  local wrapper="${1:-}" project="${2:-}" workdir="${3:-}"
+  [[ -n "$wrapper" && -n "$project" ]] || die "usage: ccd start <wrapper> <project> [workdir]"
+  _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${VALID_WRAPPERS[*]})"
+  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
+  [[ -x "$WRAPPER_DIR/$wrapper" ]] || die "wrapper missing: $WRAPPER_DIR/$wrapper"
+  [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
+  [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
+  [[ -d "$workdir" ]] || die "workdir missing: $workdir"
+  local id; id=$(_id "$wrapper" "$project")
+  if _alive "$id"; then echo "already running: $id (find on claude.ai by name: $id)"; return 0; fi
+  local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
+  _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
+  _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
+  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+  _spawn "$id" "$mode"; _reg_set "$id" started 1
+  echo "started $id ($mode) — discover on claude.ai by name: $id"
+}
+
+cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
+  local id="${1:?usage: ccd ensure <id>}"
+  [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
+  if _alive "$id"; then echo "alive: $id"; return 0; fi
+  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+  _spawn "$id" "$mode"; _reg_set "$id" started 1
+  echo "ensured $id ($mode)"
+}
+
+cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
+  local id="${1:?usage: ccd supervise <id>}"
+  cmd_ensure "$id"
+  while _alive "$id"; do _sync_uuid "$id"; _auto_swap_check "$id"; sleep 5; done
+  echo "session $id ended; exiting for systemd restart" >&2
+  exit 1
+}
+
+cmd_swap() {   # id target-wrapper — move a session to another account, conversation intact.
+  # Transcripts are plain JSONL with no account binding (validated 2026-07-03): copy the
+  # current transcript into the target config dir, flip the registry wrapper, restart.
+  # Manual swaps may target ANY valid wrapper; the pool policy only constrains auto-swaps.
+  local id="${1:?usage: ccd swap <id> <target-wrapper>}" target="${2:?usage: ccd swap <id> <target-wrapper>}"
+  _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${VALID_WRAPPERS[*]})"
+  [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  local cur; cur=$(_reg_get "$id" wrapper)
+  [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
+  [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
+  # Invoked from inside the session being swapped (Claude's own Bash tool)? The swap kills
+  # its caller mid-flight — detach an orphan to finish the job after we return.
+  if [[ -n "${TMUX:-}" && "$(tmux display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
+    systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap '$id' '$target' >>'$REG/swap.log' 2>&1"
+    echo "detached: $id will restart under $target in a few seconds (this session dies with the swap — that's expected)"
+    return 0
+  fi
+  local uuid wd srccfg dstcfg mdir
+  uuid=$(_reg_get "$id" uuid); wd=$(readlink -f "$(_reg_get "$id" workdir)")
+  srccfg=$(_cfg_dir "$cur"); dstcfg=$(_cfg_dir "$target")
+  [[ -n "$srccfg" && -n "$dstcfg" ]] || die "no config-dir mapping for '$cur' -> '$target'"
+  mdir=$(echo "$wd" | tr '/._' '---')
+  systemctl --user stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
+  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null
+  sleep 1                                                  # let claude flush its final transcript entries
+  if [[ -f "$srccfg/projects/$mdir/$uuid.jsonl" ]]; then
+    mkdir -p "$dstcfg/projects/$mdir"
+    cp "$srccfg/projects/$mdir/$uuid.jsonl" "$dstcfg/projects/$mdir/"
+  else
+    echo "ccd: warn: transcript $uuid.jsonl not found under $cur config; session may resume without history" >&2
+  fi
+  _reg_set "$id" wrapper "$target"
+  _reg_set "$id" lastswap "$(date +%s)"
+  echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
+  systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
+  # Optional user notification (swap kills any attached remote session — give them a ping).
+  # Drop an executable ~/.cc-sessions/notify.sh taking the message as $1 (curl to a Discord
+  # webhook / ntfy topic / anything); absent hook = silent.
+  [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap: $id moved $cur -> $target (limits) — reopen it on claude.ai under the $target account" >/dev/null 2>&1
+  echo "swapped $id: $cur -> $target (discover on claude.ai under the $target account)"
+}
+
+cmd_swap_self() {   # target — run from INSIDE a cc session (terminal, web, or mobile:
+  # just tell Claude "run ~/.local/bin/ccd swap-self <wrapper>"). Swaps the calling session.
+  local target="${1:?usage: ccd swap-self <target-wrapper>}"
+  [[ -n "${TMUX:-}" ]] || die "swap-self only works from inside a cc tmux session"
+  local id; id=$(tmux display-message -p '#S' 2>/dev/null); id="${id#cc-}"
+  [[ -f "$REG/$id.uuid" ]] || die "current tmux session '$id' is not ccd-managed"
+  cmd_swap "$id" "$target"
+}
+
+cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
+  local wrapper="${1:?}" project="${2:?}" workdir="${3:-}"
+  cmd_start "$wrapper" "$project" "$workdir"
+  local id; id=$(_id "$wrapper" "$project")
+  if systemctl --user enable --now "claude-session@$id" 2>/dev/null; then
+    echo "enabled boot-persistence for $id"
+  else
+    echo "warn: could not enable systemd unit (lingering/unit installed?)" >&2
+  fi
+}
+
+cmd_stop() {
+  local wrapper="${1:?}" project="${2:?}"
+  local id; id=$(_id "$wrapper" "$project")
+  systemctl --user disable --now "claude-session@$id" 2>/dev/null \
+    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
+  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+  echo "stopped $id"
+}
+
+cmd_ls() {
+  printf '%-28s %-12s %-6s %s\n' "ID" "WRAPPER" "ALIVE" "WORKDIR"
+  local f id; shopt -s nullglob
+  local files=("$REG"/*.uuid)
+  [[ ${#files[@]} -eq 0 ]] && { echo "(no sessions)"; return 0; }
+  for f in "${files[@]}"; do
+    id=$(basename "$f" .uuid); local alive=no; _alive "$id" && alive=yes
+    printf '%-28s %-12s %-6s %s\n' "$id" "$(_reg_get "$id" wrapper)" "$alive" "$(_reg_get "$id" workdir)"
+  done
+  echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
+}
+
+cmd_attach() {   # create-on-demand, then exec tmux attach
+  local wrapper="${1:?usage: ccd attach <wrapper> <project>}" project="${2:?}"
+  local id; id=$(_id "$wrapper" "$project")
+  [[ -f "$REG/$id.uuid" ]] || cmd_start "$wrapper" "$project" >/dev/null || die "start failed"
+  _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
+  exec tmux attach -t "$(_tmux "$id")"
+}
+
+cmd_menu() {   # interactive picker → attach. The universal entry point for any SSH/terminal app:
+  # set the app's on-connect command to `~/.local/bin/ccd menu` and you get this list, pick, attach.
+  shopt -s nullglob
+  local files=("$REG"/*.uuid) ids=() f id i alive
+  for f in "${files[@]}"; do ids+=("$(basename "$f" .uuid)"); done
+  if [[ ${#ids[@]} -eq 0 ]]; then echo "no sessions yet — create one with: ccd start <wrapper> <project>"; return 1; fi
+  echo "── server-box sessions ──"
+  for i in "${!ids[@]}"; do
+    id="${ids[$i]}"; alive="dead"; _alive "$id" && alive="live"
+    printf "  %2d) %-30s [%s]\n" "$((i + 1))" "$id" "$alive"
+  done
+  printf "pick a number (q to quit): "
+  local choice; read -r choice
+  [[ "$choice" == "q" || -z "$choice" ]] && return 0
+  [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#ids[@]} )) || { echo "invalid choice"; return 1; }
+  id="${ids[$((choice - 1))]}"
+  _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
+  exec tmux attach -t "$(_tmux "$id")"
+}
+
+cmd_clip() {   # <png-path> [id] — file an image into a session and inject its path into the prompt.
+  # Default target is the session of the most-recently-active ATTACHED client (i.e. the one you're
+  # looking at). Pass an explicit id to override. The path is typed (no Enter) so you add your text.
+  local png="${1:?usage: ccd clip <png-path> [id]}" id="${2:-}"
+  [[ -f "$png" ]] || die "no such image: $png"
+  if [[ -z "$id" ]]; then
+    id=$(tmux list-clients -F '#{client_activity} #{client_session}' 2>/dev/null \
+           | sort -rn | awk 'NR==1{print $2}' | sed 's/^cc-//')
+    [[ -n "$id" ]] || die "no attached cc session (attach with 'cc <wrapper> <project>', or pass an id)"
+  fi
+  _alive "$id" || die "session not alive: $id"
+  local dir="$HOME/.cc-clips/$id"; mkdir -p "$dir"
+  local dest="$dir/clip-$(date +%Y%m%d-%H%M%S).png"
+  mv -f "$png" "$dest"
+  tmux send-keys -t "$(_tmux "$id")" -l "$dest "
+  echo "clip -> $dest (injected into $id)"
+}
+
+case "${1:-}" in
+  start)     shift; cmd_start "$@" ;;
+  ensure)    shift; cmd_ensure "$@" ;;
+  supervise) shift; cmd_supervise "$@" ;;
+  enable)    shift; cmd_enable "$@" ;;
+  stop)      shift; cmd_stop "$@" ;;
+  swap)      shift; cmd_swap "$@" ;;
+  swap-self) shift; cmd_swap_self "$@" ;;
+  ls|list)   cmd_ls ;;
+  menu|pick) cmd_menu ;;
+  attach)    shift; cmd_attach "$@" ;;
+  clip)      shift; cmd_clip "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|ls|menu|attach|clip} <args>" >&2; exit 1 ;;
+esac
