@@ -17,6 +17,9 @@ SWAP_HEADROOM=30                # target must be at least this many points lower
 SWAP_COOLDOWN=900               # min seconds between swaps of one session
 SWAP_FRESH=1800                 # telemetry younger than this qualifies for pre-emptive swaps
 SWAP_QUIET=600                  # preempt only sessions quiet this long (any surface); rescue ignores
+SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
+                                # quiet wait short so we swap at the NEXT turn boundary, not 10min later
+SWAP_CEIL_QUIET=30              # seconds of idle required at the ceiling (vs SWAP_QUIET normally)
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -121,7 +124,7 @@ _auto_swap_check() {   # id — called each supervise tick. Two triggers, both d
   [[ -n "$best" ]] || return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
-  if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)"; then
+  if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend"; then
     [[ "$best_five" -lt 80 ]] || return 0
     _reg_set "$id" lastswap "$now"
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $best (pressure=$best_five%)" >> "$REG/swap.log"
@@ -151,10 +154,15 @@ _auto_swap_check() {   # id — called each supervise tick. Two triggers, both d
   # transition from ANY surface — recent activity means a human is mid-conversation, and a
   # swap would yank their remote session (learned 2026-07-03). Rescue still fires when
   # actually blocked: reconnecting under another account beats staying frozen.
+  # At the ceiling every turn is paid overage, so don't wait out the full quiet window —
+  # swap at the next turn boundary. Still gated by the idle/at-prompt/not-mid-turn checks
+  # above, so we never yank a session mid-turn or mid-subagent.
+  local quiet_req="$SWAP_QUIET" reason="auto-preempt"
+  [[ "$own" -ge "$SWAP_CEILING" ]] && { quiet_req="$SWAP_CEIL_QUIET"; reason="auto-ceiling"; }
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_QUIET * 1000 )) ]] || return 0
+  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( quiet_req * 1000 )) ]] || return 0
   _reg_set "$id" lastswap "$now"
-  echo "$(date '+%F %T') auto-preempt $id: $wrapper (pressure=$own%: 5h=${own_five:-?} 7d=${own_seven:-?}) -> $best (pressure=$best_five%)" >> "$REG/swap.log"
+  echo "$(date '+%F %T') $reason $id: $wrapper (pressure=$own%: 5h=${own_five:-?} 7d=${own_seven:-?}) -> $best (pressure=$best_five%)" >> "$REG/swap.log"
   _dispatch_swap "$id" "$best"
   return 0
 }
