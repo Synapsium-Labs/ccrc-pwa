@@ -19,7 +19,8 @@ SWAP_FRESH=1800                 # telemetry younger than this qualifies for pre-
 SWAP_QUIET=600                  # preempt only sessions quiet this long (any surface); rescue ignores
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
-SWAP_CEIL_QUIET=30              # seconds of idle required at the ceiling (vs SWAP_QUIET normally)
+SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
+SPENDBLOCK_TTL=1800             # secs an account's billing group stays flagged spend-blocked before a retry
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -106,64 +107,94 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly u
   (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
 }
 
-_auto_swap_check() {   # id — called each supervise tick. Two triggers, both detached:
-  #   pre-emptive: own account >= SWAP_THRESHOLD% of the 5h window (fresh telemetry) AND the
-  #                session is idle at its prompt -> swap between turns, zero conversation loss.
-  #   rescue:      the pane bottom shows a limit-reached banner (session is blocked anyway).
-  # Both pick the least-loaded pool member and require real headroom; cooldown stops ping-pong.
-  local id="$1" wrapper pool cand best="" best_five=999 five own last now pane
-  wrapper=$(_reg_get "$id" wrapper); pool=$(_pool_for "$id")
+# ── home-account affinity + spend-cap awareness ────────────────────────
+# Each session has a HOME account; it stays there and only leaves when home can't take work
+# (rate at the ceiling, or its billing group is spend-capped), returning home as soon as it's free.
+_id_wrapper() {   # id -> the wrapper encoded in the id prefix (longest match wins)
+  case "$1" in
+    claude-corp-*) echo claude-corp ;;
+    claude2-*)     echo claude2 ;;
+    claude-*)      echo claude ;;
+  esac
+}
+_home_for() { local h; h=$(_reg_get "$1" home); [[ -n "$h" ]] && echo "$h" || _id_wrapper "$1"; }
+
+_billing_group() {   # wrapper -> billing entity (Max + Team on the same email share one spend cap)
+  case "$1" in claude|claude-corp) echo expo ;; claude2) echo gmail ;; *) echo "$1" ;; esac
+}
+_spend_blocked() {   # wrapper -> success if its billing group is flagged spend-capped within TTL
+  local f ts now; f="$REG/spendblock.$(_billing_group "$1")"
+  [[ -f "$f" ]] || return 1
+  ts=$(cat "$f" 2>/dev/null); now=$(date +%s)
+  [[ -n "$ts" && $((now - ts)) -lt "$SPENDBLOCK_TTL" ]]
+}
+_mark_spendblock() { date +%s > "$REG/spendblock.$(_billing_group "$1")"; }
+
+_avail() {   # wrapper -> success if it can take work now (rate under the ceiling AND not spend-capped)
+  local w="$1" sc
+  _spend_blocked "$w" && return 1
+  sc=$(_limit_score "$w"); [[ -z "$sc" ]] && return 0      # no telemetry at all = assume free
+  [[ "$sc" -lt "$SWAP_CEILING" ]]
+}
+
+_swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay put
+  local id="$1" cur="$2" home="$3" cand best="" best_score=999 sc
+  if [[ "$cur" == "$home" ]]; then
+    _avail "$home" && return 0                        # home is fine: stay
+  else
+    _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
+    _avail "$cur"  && return 0                        # cur still works, home down: stay put
+  fi
+  # must leave cur (home-but-down, or away-and-cur-down): pick the least-loaded AVAILABLE account
+  for cand in $(_pool_for "$id"); do
+    [[ "$cand" == "$cur" ]] && continue
+    [[ -x "$WRAPPER_DIR/$cand" ]] || continue
+    _avail "$cand" || continue
+    sc=$(_limit_score "$cand"); : "${sc:=0}"
+    [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
+  done
+  [[ -n "$best" ]] && echo "$best"
+}
+
+_auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
+  #   stay on your home account; leave only when home can't take work (rate at the ceiling or its
+  #   billing group is spend-capped); return home the instant it's free again. A hard-blocked
+  #   session (limit/spend banner up) swaps immediately; any other move waits for a turn boundary.
+  local id="$1" wrapper home now last pane target
+  wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
-  for cand in $pool; do
-    [[ "$cand" == "$wrapper" ]] && continue
-    [[ -x "$WRAPPER_DIR/$cand" ]] || continue
-    five=$(_limit_score "$cand"); : "${five:=0}"      # never-seen target ≈ assume free
-    [[ "$five" -lt "$best_five" ]] && { best="$cand"; best_five="$five"; }
-  done
-  [[ -n "$best" ]] || return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
+  # A spend-cap banner blocks the whole billing group (expo Max + Team share one), not just 5h.
+  echo "$pane" | grep -qiE "monthly spend limit|hit your .*spend" && _mark_spendblock "$wrapper"
+  target=$(_swap_target "$id" "$wrapper" "$home")
+  [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
+  _avail "$target" || return 0
+  # Hard-blocked (a real limit/spend banner is up): the session is stuck anyway -> swap now.
   if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend"; then
-    [[ "$best_five" -lt 80 ]] || return 0
     _reg_set "$id" lastswap "$now"
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $best (pressure=$best_five%)" >> "$REG/swap.log"
-    _dispatch_swap "$id" "$best"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
+    _dispatch_swap "$id" "$target"
     return 0
   fi
-  # Own pressure = max(fresh 5h, day-fresh 7d): weekly exhaustion evacuates too.
-  local own_five own_seven
-  own_five=$(_limit_field "$wrapper" five "$SWAP_FRESH")
-  own_seven=$(_limit_field "$wrapper" seven 86400)
-  own=""; for v in $own_five $own_seven; do [[ -z "$own" || "$v" -gt "$own" ]] && own="$v"; done
-  [[ -n "$own" ]] || return 0
-  [[ "$own" -ge "$SWAP_THRESHOLD" ]] || return 0
-  [[ $((own - best_five)) -ge "$SWAP_HEADROOM" ]] || return 0
+  # Otherwise (returning home, or leaving at the rate ceiling): relocate only at a clean turn
+  # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
+  # pane heuristics alone miss running subagents (learned 2026-07-03).
   echo "$pane" | grep -q "esc to interrupt" && return 0    # mid-turn: wait for the gap
   echo "$pane" | grep -q "❯" || return 0                    # not at a prompt yet
-  # Authoritative idle gate: the live process reports its own status in sessions/<pid>.json.
-  # Pane heuristics alone miss running SUBAGENTS (the agents footer shows no "esc to
-  # interrupt") — learned 2026-07-03 when a preempt killed mid-flight agent batches.
   local spid sf st sua
   spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
   [[ "$st" == "idle" ]] || return 0
-  # Quiet gate: don't preempt a session someone is actively driving. Remote (web/mobile)
-  # clients are invisible to tmux, but statusUpdatedAt (ms) ticks on every busy<->idle
-  # transition from ANY surface — recent activity means a human is mid-conversation, and a
-  # swap would yank their remote session (learned 2026-07-03). Rescue still fires when
-  # actually blocked: reconnecting under another account beats staying frozen.
-  # At the ceiling every turn is paid overage, so don't wait out the full quiet window —
-  # swap at the next turn boundary. Still gated by the idle/at-prompt/not-mid-turn checks
-  # above, so we never yank a session mid-turn or mid-subagent.
-  local quiet_req="$SWAP_QUIET" reason="auto-preempt"
-  [[ "$own" -ge "$SWAP_CEILING" ]] && { quiet_req="$SWAP_CEIL_QUIET"; reason="auto-ceiling"; }
+  # Quiet gate (short): don't relocate a session someone just touched from any surface —
+  # statusUpdatedAt (ms) ticks on every busy<->idle transition, incl. web/mobile clients.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( quiet_req * 1000 )) ]] || return 0
+  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_CEIL_QUIET * 1000 )) ]] || return 0
   _reg_set "$id" lastswap "$now"
-  echo "$(date '+%F %T') $reason $id: $wrapper (pressure=$own%: 5h=${own_five:-?} 7d=${own_seven:-?}) -> $best (pressure=$best_five%)" >> "$REG/swap.log"
-  _dispatch_swap "$id" "$best"
+  echo "$(date '+%F %T') auto-home $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
+  _dispatch_swap "$id" "$target"
   return 0
 }
 
@@ -343,6 +374,15 @@ cmd_swap_self() {   # target — run from INSIDE a cc session (terminal, web, or
   cmd_swap "$id" "$target"
 }
 
+cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps it here, and returns
+  # here whenever home is free again). Default home = the wrapper in the id prefix.
+  local id="${1:?usage: ccd prefer <id> <wrapper>}" w="${2:?usage: ccd prefer <id> <wrapper>}"
+  _is_valid_wrapper "$w" || die "unknown wrapper '$w' (valid: ${VALID_WRAPPERS[*]})"
+  [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  _reg_set "$id" home "$w"
+  echo "home for $id set to $w"
+}
+
 cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
   local wrapper="${1:?}" project="${2:?}" workdir="${3:-}"
   cmd_start "$wrapper" "$project" "$workdir"
@@ -421,6 +461,8 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
   echo "clip -> $dest (injected into $id)"
 }
 
+# Guard so the script can be `source`d by tests without running a command.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 case "${1:-}" in
   start)     shift; cmd_start "$@" ;;
   ensure)    shift; cmd_ensure "$@" ;;
@@ -429,9 +471,11 @@ case "${1:-}" in
   stop)      shift; cmd_stop "$@" ;;
   swap)      shift; cmd_swap "$@" ;;
   swap-self) shift; cmd_swap_self "$@" ;;
+  prefer)    shift; cmd_prefer "$@" ;;
   ls|list)   cmd_ls ;;
   menu|pick) cmd_menu ;;
   attach)    shift; cmd_attach "$@" ;;
   clip)      shift; cmd_clip "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|ls|menu|attach|clip} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip} <args>" >&2; exit 1 ;;
 esac
+fi
