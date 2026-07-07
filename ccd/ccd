@@ -20,7 +20,6 @@ SWAP_QUIET=600                  # preempt only sessions quiet this long (any sur
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
 SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
-SPENDBLOCK_TTL=1800             # secs an account's billing group stays flagged spend-blocked before a retry
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -107,9 +106,9 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly u
   (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
 }
 
-# ── home-account affinity + spend-cap awareness ────────────────────────
-# Each session has a HOME account; it stays there and only leaves when home can't take work
-# (rate at the ceiling, or its billing group is spend-capped), returning home as soon as it's free.
+# ── home-account affinity ──────────────────────────────────────────────
+# Each session has a HOME account; it stays there and only leaves when home is at the rate ceiling
+# (no included-usage headroom left), returning home the instant it has room again.
 _id_wrapper() {   # id -> the wrapper encoded in the id prefix (longest match wins)
   case "$1" in
     claude-corp-*) echo claude-corp ;;
@@ -119,20 +118,10 @@ _id_wrapper() {   # id -> the wrapper encoded in the id prefix (longest match wi
 }
 _home_for() { local h; h=$(_reg_get "$1" home); [[ -n "$h" ]] && echo "$h" || _id_wrapper "$1"; }
 
-_billing_group() {   # wrapper -> billing entity (Max + Team on the same email share one spend cap)
-  case "$1" in claude|claude-corp) echo expo ;; claude2) echo gmail ;; *) echo "$1" ;; esac
-}
-_spend_blocked() {   # wrapper -> success if its billing group is flagged spend-capped within TTL
-  local f ts now; f="$REG/spendblock.$(_billing_group "$1")"
-  [[ -f "$f" ]] || return 1
-  ts=$(cat "$f" 2>/dev/null); now=$(date +%s)
-  [[ -n "$ts" && $((now - ts)) -lt "$SPENDBLOCK_TTL" ]]
-}
-_mark_spendblock() { date +%s > "$REG/spendblock.$(_billing_group "$1")"; }
-
-_avail() {   # wrapper -> success if it can take work now (rate under the ceiling AND not spend-capped)
+_avail() {   # wrapper -> success if it has included-usage headroom (rate score under the ceiling).
+  # The monthly spend cap only gates PAID OVERAGE above 100%, so an account under the ceiling is
+  # always usable, and a spend-blocked one is already >=100% (excluded by this same rate check).
   local w="$1" sc
-  _spend_blocked "$w" && return 1
   sc=$(_limit_score "$w"); [[ -z "$sc" ]] && return 0      # no telemetry at all = assume free
   [[ "$sc" -lt "$SWAP_CEILING" ]]
 }
@@ -157,17 +146,15 @@ _swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay 
 }
 
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
-  #   stay on your home account; leave only when home can't take work (rate at the ceiling or its
-  #   billing group is spend-capped); return home the instant it's free again. A hard-blocked
-  #   session (limit/spend banner up) swaps immediately; any other move waits for a turn boundary.
+  #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
+  #   home the instant it has room again. A hard-blocked session (limit/spend banner up) swaps
+  #   immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
-  # A spend-cap banner blocks the whole billing group (expo Max + Team share one), not just 5h.
-  echo "$pane" | grep -qiE "monthly spend limit|hit your .*spend" && _mark_spendblock "$wrapper"
   target=$(_swap_target "$id" "$wrapper" "$home")
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
