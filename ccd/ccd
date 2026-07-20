@@ -38,6 +38,16 @@ SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session 
 die() { echo "ccd: $*" >&2; exit 1; }
 
 _gpt_enabled() { [[ ! -f "$GPT_DISABLE_FILE" && -x "$WRAPPER_DIR/gpt" ]]; }   # kill-switch + wrapper present
+_gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
+  [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
+  [[ -f "$GPT_DISABLE_FILE" ]] && { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
+  if ! _avail gpt; then     # a 429 wrote a cc-limits/gpt.json exclusion
+    local ts rem; ts=$(grep -oE '"ts":[0-9]+' "$LIMITS_DIR/gpt.json" 2>/dev/null | cut -d: -f2)
+    if [[ -n "$ts" ]]; then rem=$(( (18000 - ($(date +%s) - ts)) / 60 )); echo "429-excluded (~${rem}m of 5h cooldown left)"; else echo "excluded"; fi
+    return
+  fi
+  echo "enabled, available"
+}
 _is_valid_wrapper() { local w="$1" v; for v in "${VALID_WRAPPERS[@]}" gpt; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
@@ -414,10 +424,13 @@ cmd_ls() {
   local f id; shopt -s nullglob
   local files=("$REG"/*.uuid)
   [[ ${#files[@]} -eq 0 ]] && { echo "(no sessions)"; return 0; }
+  local gpt_here=0
   for f in "${files[@]}"; do
     id=$(basename "$f" .uuid); local alive=no; _alive "$id" && alive=yes
-    printf '%-28s %-12s %-6s %s\n' "$id" "$(_reg_get "$id" wrapper)" "$alive" "$(_reg_get "$id" workdir)"
+    local w; w=$(_reg_get "$id" wrapper); [[ "$w" == gpt ]] && gpt_here=$((gpt_here+1))
+    printf '%-28s %-12s %-6s %s\n' "$id" "$w" "$alive" "$(_reg_get "$id" workdir)"
   done
+  echo "gpt overflow lane: $(_gpt_status)  —  $gpt_here session(s) currently on it"
   echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
 }
 
