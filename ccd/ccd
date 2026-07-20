@@ -6,7 +6,13 @@ set -uo pipefail
 REG="$HOME/.cc-sessions"
 WRAPPER_DIR="$HOME/.local/bin"
 PROJECTS_ROOT="/data/projects"
-VALID_WRAPPERS=(claude claude2 claude-corp)
+VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (home-able)
+# `gpt` is a 4th overflow lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend):
+# a normal peer in the auto-swap pool, but never a HOME and instantly killable via the
+# switch file below. It has no Anthropic-style 5h/7d telemetry, so it reads as free until
+# a 429 writes an exclusion into cc-limits (see _auto_swap_check). ToS-unofficial — the
+# kill-switch is the brake.
+GPT_DISABLE_FILE="$HOME/.cc-sessions/gpt-disabled"   # touch to remove gpt from rotation instantly
 CLAUDE_AI_BASE="https://claude.ai/code"   # by-name discovery: pick the session whose name == the id
 mkdir -p "$REG"
 
@@ -31,7 +37,8 @@ SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session 
 
 die() { echo "ccd: $*" >&2; exit 1; }
 
-_is_valid_wrapper() { local w="$1" v; for v in "${VALID_WRAPPERS[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+_gpt_enabled() { [[ ! -f "$GPT_DISABLE_FILE" && -x "$WRAPPER_DIR/gpt" ]]; }   # kill-switch + wrapper present
+_is_valid_wrapper() { local w="$1" v; for v in "${VALID_WRAPPERS[@]}" gpt; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
@@ -43,6 +50,7 @@ _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
     claude)      echo "$HOME/.claude" ;;
     claude2)     echo "$HOME/.claude-personal" ;;
     claude-corp) echo "$HOME/.claude-corp" ;;
+    gpt)         echo "$HOME/.claude-gpt" ;;
   esac
 }
 
@@ -63,8 +71,11 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
 
 _default_pool() {   # wrapper -> wrappers this session may auto-swap between.
   # Free swapping across ALL accounts (explicit user decision 2026-07-03).
+  # gpt joins as a normal peer overflow target when enabled (kill-switch off + wrapper present).
   # Narrow per session with a space-separated list in the registry `pool` field.
-  echo "${VALID_WRAPPERS[*]}"
+  local pool="${VALID_WRAPPERS[*]}"
+  _gpt_enabled && pool="$pool gpt"
+  echo "$pool"
 }
 _pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$(_reg_get "$1" wrapper)"; }
 
@@ -114,6 +125,7 @@ _id_wrapper() {   # id -> the wrapper encoded in the id prefix (longest match wi
     claude-corp-*) echo claude-corp ;;
     claude2-*)     echo claude2 ;;
     claude-*)      echo claude ;;
+    gpt-*)         echo gpt ;;
   esac
 }
 _home_for() { local h; h=$(_reg_get "$1" home); [[ -n "$h" ]] && echo "$h" || _id_wrapper "$1"; }
@@ -159,7 +171,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
   # Hard-blocked (a real limit/spend banner is up): the session is stuck anyway -> swap now.
-  if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend"; then
+  # The 429/rate-limit patterns also catch the gpt overflow lane hitting the ChatGPT-sub
+  # Codex usage cap (surfaces as "API Error: 429 ..."). When gpt is the exhausted account,
+  # write a cc-limits/gpt.json exclusion so OTHER sessions stop rotating into it until the
+  # 5h window rolls over (gpt has no native telemetry; this is its only "pool is full" signal).
+  if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?"; then
+    [[ "$wrapper" == gpt ]] && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/gpt.json"
     _reg_set "$id" lastswap "$now"
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
     _dispatch_swap "$id" "$target"
@@ -255,7 +272,9 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # so the window always fits the device you're on — no smaller-client "dotted filler" clash).
   tmux set-option -t "$tname" window-size latest 2>/dev/null
   _accept_first_run_prompts "$tname" "$fromswap"
-  _inject_spawn_effort "$tname"
+  # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (GPT backend
+  # doesn't take it and the injection would just error into the prompt box).
+  [[ "$wrapper" != gpt ]] && _inject_spawn_effort "$tname"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
