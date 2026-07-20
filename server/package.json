@@ -1,0 +1,25 @@
+{
+  "name": "ccrc-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.1.0",
+    "@fastify/static": "^10.1.0",
+    "@fastify/websocket": "^11.3.0",
+    "fastify": "^5.10.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
