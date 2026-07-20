@@ -1,0 +1,46 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { loadConfig } from '../src/config.js';
+import { readRegistry } from '../src/registry.js';
+
+const seed = (dir: string, id: string, fields: Record<string, string>) => {
+  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
+};
+
+describe('readRegistry', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  });
+
+  it('reads sessions enumerated by *.uuid with optional fields', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'claude2-MekWarLive', {
+      wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+      uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
+      pool: 'claude claude2', lastswap: '1784500000',
+    });
+    seed(reg, 'claude-corp-orchard-api', {
+      wrapper: 'claude-corp', project: 'orchard-api',
+      workdir: '/data/projects/orchard-api', uuid: 'b'.repeat(36), started: '1',
+    });
+    writeFileSync(path.join(reg, 'gpt-disabled'), '');   // noise: not a session file
+    writeFileSync(path.join(reg, 'swap.log'), 'x');      // noise
+
+    const out = await readRegistry(loadConfig({ CCRC_HOME: home }));
+    expect(out.map((s) => s.id)).toEqual(['claude-corp-orchard-api', 'claude2-MekWarLive']);
+    const mek = out[1];
+    expect(mek.pool).toEqual(['claude', 'claude2']);
+    expect(mek.lastswap).toBe(1784500000);
+    expect(out[0].pool).toBeNull();
+    expect(out[0].home).toBeNull();
+  });
+
+  it('returns [] when registry dir missing', async () => {
+    const out = await readRegistry(loadConfig({ CCRC_HOME: path.join(home, 'nope') }));
+    expect(out).toEqual([]);
+  });
+});
