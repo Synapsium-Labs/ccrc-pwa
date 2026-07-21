@@ -1,0 +1,126 @@
+/* ccrc — base stylesheet. Reset comes from Tailwind preflight; every design
+   decision lives in tokens.css ("Phosphor & Ink"). This file only:
+   1. imports Tailwind + the tokens,
+   2. maps tokens into Tailwind's theme so utilities resolve to tokens
+      (components never hardcode colors/sizes — tokens are the only source),
+   3. sets app-shell element defaults. */
+
+@import 'tailwindcss';
+@import './tokens.css';
+
+@theme inline {
+  /* Backgrounds */
+  --color-page: var(--bg-page);
+  --color-surface: var(--bg-surface);
+  --color-raised: var(--bg-raised);
+  --color-well: var(--bg-well);
+  --color-sheet: var(--bg-sheet);
+  --color-scrim: var(--scrim);
+
+  /* Hairlines */
+  --color-edge-subtle: var(--edge-subtle);
+  --color-edge-strong: var(--edge-strong);
+
+  /* Ink */
+  --color-ink: var(--ink-primary);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-ink-tertiary: var(--ink-tertiary);
+  --color-ink-disabled: var(--ink-disabled);
+  --color-ink-on-well: var(--ink-on-well);
+  --color-ink-on-accent: var(--ink-on-accent);
+
+  /* Accent (the phosphor) */
+  --color-accent: var(--accent);
+  --color-accent-tint: var(--accent-tint);
+
+  /* Session status */
+  --color-status-busy: var(--status-busy);
+  --color-status-busy-text: var(--status-busy-text);
+  --color-status-idle: var(--status-idle);
+  --color-status-attention: var(--status-attention);
+  --color-status-attention-text: var(--status-attention-text);
+  --color-status-attention-tint: var(--status-attention-tint);
+  --color-status-dead: var(--status-dead);
+  --color-status-dead-text: var(--status-dead-text);
+  --color-status-dead-tint: var(--status-dead-tint);
+
+  /* Accounts (cool half of the wheel; --acct-active rebinds per [data-acct]) */
+  --color-acct-claude: var(--acct-claude);
+  --color-acct-claude-tint: var(--acct-claude-tint);
+  --color-acct-claude2: var(--acct-claude2);
+  --color-acct-claude2-tint: var(--acct-claude2-tint);
+  --color-acct-corp: var(--acct-corp);
+  --color-acct-corp-tint: var(--acct-corp-tint);
+  --color-acct-gpt: var(--acct-gpt);
+  --color-acct-gpt-tint: var(--acct-gpt-tint);
+  --color-acct-active: var(--acct-active);
+  --color-acct-active-tint: var(--acct-active-tint);
+
+  /* Limits bar */
+  --color-limit-track: var(--limit-track);
+  --color-limit-ok: var(--limit-ok);
+  --color-limit-warn: var(--limit-warn);
+  --color-limit-critical: var(--limit-critical);
+
+  /* Diff accents (wells only) */
+  --color-diff-add: var(--diff-add);
+  --color-diff-del: var(--diff-del);
+
+  /* Voice split */
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
+
+  /* Type scale (replaces Tailwind defaults with the ccrc scale) */
+  --text-2xs: var(--text-2xs);
+  --text-xs: var(--text-xs);
+  --text-sm: var(--text-sm);
+  --text-base: var(--text-base);
+  --text-lg: var(--text-lg);
+  --text-xl: var(--text-xl);
+  --text-2xl: var(--text-2xl);
+  --text-input: var(--text-input);
+
+  /* Radii */
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+
+  /* Elevation */
+  --shadow-card: var(--shadow-card);
+  --shadow-sheet: var(--shadow-sheet);
+
+  /* Motion */
+  --ease-swift: var(--ease-swift);
+  --ease-spring: var(--ease-spring);
+}
+
+/* App-shell element defaults. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg-page);
+  color: var(--ink-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  /* Native feel: the shell never rubber-bands; scroll containers own their
+     overscroll (each sets `overscroll-behavior: contain`). */
+  overscroll-behavior: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--ink-primary);
+}
