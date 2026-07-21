@@ -1,7 +1,15 @@
-import { buildServer } from './server.js';
+import { buildServer, type Deps } from './server.js';
+import { loadConfig } from './config.js';
+import { realRunner, Tmux } from './exec.js';
+import { Bus } from './bus.js';
+import { FleetWatcher } from './watch.js';
 
-const app = await buildServer();
-const host = process.env.CCRC_HOST ?? '127.0.0.1';
-const port = Number(process.env.CCRC_PORT ?? 7788);
-await app.listen({ host, port });
-console.log(`ccrc-server on ${host}:${port}`);
+const cfg = loadConfig();
+const deps: Deps = { cfg, run: realRunner, tmux: new Tmux(realRunner) };
+const bus = new Bus();
+const watcher = new FleetWatcher(deps, bus);
+
+const app = await buildServer(deps, bus, watcher);
+watcher.start();
+await app.listen({ host: cfg.host, port: cfg.port });
+console.log(`ccrc-server on ${cfg.host}:${cfg.port}`);
