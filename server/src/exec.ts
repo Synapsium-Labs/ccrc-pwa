@@ -28,6 +28,12 @@ export class Tmux {
     const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p']);
     return r.code === 0 ? r.stdout : null;
   }
+  /** Capture WITH escape sequences (`-e`) — needed to tell Claude Code's dim
+   *  ghost-suggestion placeholder (`\e[2m…\e[0m`) apart from a real typed draft. */
+  async captureAnsi(id: string): Promise<string | null> {
+    const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p', '-e']);
+    return r.code === 0 ? r.stdout : null;
+  }
   async sendLiteral(id: string, text: string): Promise<boolean> {
     return (await this.run('tmux', ['send-keys', '-t', target(id), '-l', text])).code === 0;
   }

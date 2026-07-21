@@ -141,6 +141,33 @@ describe('sendPrompt', () => {
     ]);
   });
 
+  it('ignores the dim ghost-suggestion placeholder in an empty input box', async () => {
+    // Claude Code shows a DIM suggestion (e.g. "continue") in the empty box,
+    // wrapped in \e[2m…\e[0m. It is not a real draft — sends must proceed, not
+    // fail draft-present / draft-clear-failed. Draft check reads captureAnsi.
+    const E = '\x1b';
+    const placeholder = `some history\n${E}[39m❯ ${E}[2mcontinue${E}[0m\n`;
+    const verify = `some history\n❯ hello\n`;
+    const { tmux, calls } = fakeTmux([placeholder, verify]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+    // draft check must use the ANSI capture (-e), not the plain one.
+    expect(calls.some((c) => c[0] === 'tmux' && c[1] === 'capture-pane' && c.includes('-e'))).toBe(true);
+  });
+
+  it('reads a REAL typed draft (not dim) as a draft', async () => {
+    const E = '\x1b';
+    const realDraft = `history\n${E}[39m❯ half-typed thought\n`;
+    const { tmux, calls } = fakeTmux([realDraft]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'half-typed thought' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
   it('detects a real draft in the input box even with history ❯ lines above', async () => {
     // The clip-path case: ccd clip types a path into the input box (no Enter),
     // and there is conversation history above. draftOf must return the box text.

@@ -12,19 +12,27 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const PANE_TAIL = 2000;
 
+const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
+const DIM_SPAN = /\x1b\[2m[^\x1b]*\x1b\[0m/g;  // a dim `\e[2m…\e[0m` run = ghost/placeholder text
+
 /**
- * Text in the live input box, trimmed; '' when empty or no prompt line is visible.
- * Two real-pane subtleties, both learned from live captures:
- *  - Claude Code renders past user turns with a `❯ ` prefix in the scrollback
- *    ABOVE the input box, so the box is the LAST `❯` line, never the first (the
- *    first is a historical turn and would false-positive as a draft, silently
- *    dropping every prompt into a session with any conversation history).
- *  - The EMPTY input box renders as `❯` + U+00A0 NON-BREAKING SPACE, not a plain
- *    space — so we match the `❯` marker alone and let trim() (which strips U+00A0)
- *    handle whatever whitespace follows.
+ * Text the user actually typed into the live input box, trimmed; '' when empty.
+ * Input is an ANSI-preserving capture (`captureAnsi`). Three real-pane
+ * subtleties, all learned from live captures:
+ *  - Past user turns render with a `❯ ` prefix in the scrollback ABOVE the input
+ *    box, so the box is the LAST `❯` line, never the first.
+ *  - The EMPTY input box marker is `❯` + U+00A0 NON-BREAKING SPACE, not a plain
+ *    space — so match the `❯` alone and let trim() (which strips U+00A0) do the rest.
+ *  - Claude Code shows a DIM ghost-suggestion (e.g. "continue") in the empty box,
+ *    wrapped in `\e[2m…\e[0m`. It is NOT a real draft (backspace/^U can't clear it,
+ *    typing replaces it), so strip dim spans before reading the box — otherwise
+ *    every send into a session showing a suggestion fails draft-clear-failed.
  */
-const draftOf = (pane: string): string =>
-  pane.split('\n').filter((l) => l.startsWith('❯')).at(-1)?.slice(1).trim() ?? '';
+const draftOf = (ansiPane: string): string => {
+  const boxLine = ansiPane.split('\n').filter((l) => l.replace(SGR, '').startsWith('❯')).at(-1);
+  if (boxLine === undefined) return '';
+  return boxLine.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim();
+};
 
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
@@ -39,7 +47,7 @@ export function sendPrompt(
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   return d.queue.run(id, async (): Promise<SendResult> => {
-    const pane = await d.tmux.capture(id);
+    const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
     const draft = draftOf(pane);
@@ -47,7 +55,7 @@ export function sendPrompt(
       if (!opts.replaceDraft) return { ok: false, error: 'draft-present', draft };
       await d.tmux.sendKey(id, 'C-u');
       await sleep(150);
-      const cleared = await d.tmux.capture(id);
+      const cleared = await d.tmux.captureAnsi(id);
       if (cleared === null) return { ok: false, error: 'not-alive' };
       const left = draftOf(cleared);
       if (left) return { ok: false, error: 'draft-clear-failed', draft: left };
