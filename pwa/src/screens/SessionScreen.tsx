@@ -3,7 +3,7 @@
 // banners for every degraded state (offline, dead/read-only, missing
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
-// DialogSheet mounts at the bottom; TerminalDrawer (Task 12) will join it.
+// DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { QuickConfirm } from '../components/QuickConfirm';
@@ -19,6 +19,7 @@ import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { SessionHeader } from '../session/SessionHeader';
+import { TerminalDrawer } from '../session/TerminalDrawer';
 import '../session/chat.css';
 
 /** Keyboard discipline: the bottom inset (px) the on-screen keyboard covers,
@@ -75,8 +76,7 @@ export function SessionScreen({
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
-  // TerminalDrawer (Task 12) mounts on this flag.
-  const [, setTerminalOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
@@ -124,11 +124,7 @@ export function SessionScreen({
     }
   };
 
-  const openTerminal = (): void => {
-    setTerminalOpen(true);
-    // Until the drawer ships (Task 12) the tap still answers.
-    toast('The terminal opens here soon');
-  };
+  const openTerminal = (): void => setTerminalOpen(true);
 
   // "Change model": type /model into the session — Claude's picker then
   // arrives as a normal dialog and renders through DialogSheet.
@@ -252,7 +248,7 @@ export function SessionScreen({
         confirmLabel="Stop session"
         onConfirm={() => void stopSession()}
       />
-      {/* TerminalDrawer mounts here (Task 12) — opened via `terminalOpen`. */}
+      <TerminalDrawer id={id} open={terminalOpen} onClose={() => setTerminalOpen(false)} />
     </div>
   );
 }

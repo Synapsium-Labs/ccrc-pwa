@@ -134,6 +134,37 @@
   transition-duration: var(--dur-slow) !important;
   transition-timing-function: var(--ease-swift) !important;
 }
+/* Full-height variant — the terminal drawer (DIRECTION: "the app's
+   basement"). The panel becomes the well itself: dark glass in BOTH themes,
+   rising to just under the safe area, stacked above ordinary sheets on
+   --z-drawer. Horizontal padding drops to zero — the terminal runs to the
+   glass edge and manages its own gutters. */
+.sheet-panel--full {
+  z-index: var(--z-drawer);
+  height: calc(100dvh - var(--safe-top) - var(--sp-6));
+  max-height: none;
+  background: var(--bg-well);
+  padding: var(--sp-2) 0 calc(var(--sp-2) + var(--safe-bottom));
+}
+.sheet-panel--full .sheet-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* On-well furniture: the grabber and eyebrow restate themselves in the
+   well's ink so they survive the dark glass in the light theme too. */
+.sheet-panel--full .sheet-grabber {
+  background: color-mix(in srgb, var(--ink-on-well) 30%, transparent);
+  margin-bottom: var(--sp-2);
+}
+.sheet-panel--full .sheet-eyebrow {
+  color: color-mix(in srgb, var(--ink-on-well) 55%, transparent);
+  padding: 0 var(--sp-4);
+  margin-bottom: var(--sp-2);
+}
+
 .sheet-grabber {
   flex: none;
   width: 36px;

@@ -14,9 +14,14 @@ export interface SheetProps {
   title?: string;
   /** Mono uppercase kicker above the title, e.g. "claude is asking". */
   eyebrow?: string;
+  /** Full-height variant — the terminal drawer's chrome (Task 12): a
+   *  --bg-well panel rising to the safe-area line on --z-drawer, body as a
+   *  flex column. The title goes screen-reader-only so the glass keeps its
+   *  full height for the terminal. */
+  full?: boolean;
 }
 
-export function Sheet({ open, onClose, children, title, eyebrow }: SheetProps): ReactNode {
+export function Sheet({ open, onClose, children, title, eyebrow, full }: SheetProps): ReactNode {
   return (
     <Drawer.Root
       open={open}
@@ -26,10 +31,13 @@ export function Sheet({ open, onClose, children, title, eyebrow }: SheetProps): 
     >
       <Drawer.Portal>
         <Drawer.Overlay className="sheet-scrim" data-testid="sheet-overlay" onClick={onClose} />
-        <Drawer.Content className="sheet-panel" aria-describedby={undefined}>
+        <Drawer.Content
+          className={full ? 'sheet-panel sheet-panel--full' : 'sheet-panel'}
+          aria-describedby={undefined}
+        >
           <div className="sheet-grabber" aria-hidden="true" />
           {eyebrow !== undefined && <p className="sheet-eyebrow">{eyebrow}</p>}
-          <Drawer.Title className={title ? 'sheet-title' : 'sr-only'}>
+          <Drawer.Title className={title && !full ? 'sheet-title' : 'sr-only'}>
             {title ?? 'Sheet'}
           </Drawer.Title>
           <div className="sheet-body">{children}</div>

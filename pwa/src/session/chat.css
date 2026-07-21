@@ -899,6 +899,94 @@
 }
 
 /* ------------------------------------------------------------------ *
+ *  Terminal drawer — the app's basement. The panel IS the well (see   *
+ *  .sheet-panel--full); phosphor is allowed to be literal inside.     *
+ *  Everything here styles against --ink-on-well so the drawer keeps   *
+ *  its dark glass in the light theme too.                             *
+ * ------------------------------------------------------------------ */
+.term {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.term-screen {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 0 var(--sp-2);
+}
+.term-host {
+  height: 100%;
+  overflow: hidden;
+}
+/* Attach / loss overlay — a status line over dimmed glass, in the mono
+   eyebrow voice. While attaching it respires at the phosphor's tempo. */
+.term-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--sp-4);
+  background: color-mix(in srgb, var(--bg-well) 78%, transparent);
+}
+.term-overlay-word {
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-on-well);
+}
+.term-overlay--connecting .term-overlay-word {
+  animation: tool-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+.term-overlay-word--lost {
+  color: var(--status-dead-text);
+}
+.term-retry {
+  width: auto;
+  padding: 0 var(--sp-6);
+  color: var(--ink-on-well);
+  border-color: color-mix(in srgb, var(--ink-on-well) 35%, transparent);
+}
+.term-retry:active {
+  background: color-mix(in srgb, var(--ink-on-well) 12%, transparent);
+}
+/* Quick-key bar — mono keycaps for the phone keyboard's missing keys
+   (DIRECTION: raised 6px-radius caps, 44px targets, 120ms press-compress).
+   Cut from the well's own ink, not --bg-raised, so the caps read as keys
+   set into the glass in both themes. */
+.term-keys {
+  flex: none;
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  overflow-x: auto;
+  overscroll-behavior: contain;
+}
+.term-keys .keycap {
+  flex: 1 0 auto;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  display: grid;
+  place-items: center;
+  padding: 0 var(--sp-2);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-on-well);
+  background: color-mix(in srgb, var(--ink-on-well) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-on-well) 22%, transparent);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.term-keys .keycap:active {
+  transform: translateY(1px);
+}
+
+/* ------------------------------------------------------------------ *
  *  Reduced motion — loops disabled outright, opacity pinned; the      *
  *  caret holds solid (1ms duration overrides cover the transitions).  *
  * ------------------------------------------------------------------ */
@@ -919,10 +1007,16 @@
   .attach-btn,
   .inputbar,
   .chat-head .keycap,
+  .term-keys .keycap,
   .pending-actions button,
   .opt,
   .menu-item {
     transition: none;
+  }
+  /* The attach word holds steady at mid-intensity — nothing strobes. */
+  .term-overlay--connecting .term-overlay-word {
+    animation: none;
+    opacity: 0.8;
   }
   /* The upload ring stops spinning and holds solid — still reads "working"
      next to the disabled button, nothing strobes. */
