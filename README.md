@@ -20,9 +20,10 @@ Add to home screen in Android Chrome / iOS Safari for the standalone app.
 - `deploy/` — `ccrc.service`, `notify.sh` (ccd swap hook → `/api/notify`),
   `deploy.sh`.
 
-HTTPS is fronted by `tailscale serve` on port 8443 (a secure context is
-required for the service worker + WebAPK install). The box already had serve
-mounts on 443, so ccrc lives on its own port.
+HTTPS is fronted by `tailscale serve` at 443 root (a secure context is required
+for the service worker + WebAPK install). `/fleet` (mech-fleet-preview) stays on
+443; the claude-docserver moved to `:8443` so ccrc — a PWA that wants a clean
+origin root — owns `/`.
 
 ## Develop
 
