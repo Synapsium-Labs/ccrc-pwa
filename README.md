@@ -4,9 +4,14 @@ A mobile-first, installable PWA to view and drive the `ccd` fleet of
 `--remote-control` Claude Code sessions on server-box, over Tailscale. It follows
 sessions across account swaps — the thing the official claude.ai app can't do.
 
-**Install URL (tailnet only):** `https://server-box.tailnet-example.ts.net/`
+**Install URL (tailnet only):** `https://server-box.tailnet-example.ts.net:8443/`
 Add to home screen in Android Chrome / iOS Safari for the standalone app.
-(Served at 443 root via `tailscale serve`; the claude-docserver moved to `:8443`.)
+
+> ccrc lives on port **8443**, not 443 root. The `claude-docserver` owns 443
+> root — it serves every project's docs at `https://<host>/<project>/…`, and
+> those root-path URLs are referenced all over generated specs/plans. A PWA
+> can't share that path space (its SPA fallback would swallow every doc path
+> and serve index.html), so ccrc keeps its own port.
 
 ## Architecture
 
@@ -20,10 +25,11 @@ Add to home screen in Android Chrome / iOS Safari for the standalone app.
 - `deploy/` — `ccrc.service`, `notify.sh` (ccd swap hook → `/api/notify`),
   `deploy.sh`.
 
-HTTPS is fronted by `tailscale serve` at 443 root (a secure context is required
-for the service worker + WebAPK install). `/fleet` (mech-fleet-preview) stays on
-443; the claude-docserver moved to `:8443` so ccrc — a PWA that wants a clean
-origin root — owns `/`.
+HTTPS is fronted by `tailscale serve` on port 8443 (a secure context is required
+for the service worker + WebAPK install). 443 root is the claude-docserver
+(project docs at `/<project>/…`) with mech-fleet-preview at `/fleet`; ccrc can't
+take 443 root without its SPA fallback swallowing every doc path, so it stays on
+its own port.
 
 ## Develop
 
