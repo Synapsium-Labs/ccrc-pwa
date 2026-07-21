@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ccrc — Phosphor &amp; Ink</title>
+<style>
+/* ════════════════════════════════════════════════════════════════════════
+   TOKEN BLOCK — verbatim copy of src/styles/tokens.css (self-contained)
+   ════════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg-page:    #0B0D0C;
+  --bg-surface: #141715;
+  --bg-raised:  #1C201D;
+  --bg-well:    #070808;
+  --bg-sheet:   #181C19;
+  --scrim:      rgba(4, 6, 5, 0.62);
+
+  --edge-subtle: #262B27;
+  --edge-strong: #39403A;
+
+  --ink-primary:   #ECF0EC;  /* 15.68:1 on surface */
+  --ink-secondary: #ADB6AE;  /* 8.67:1 on surface */
+  --ink-tertiary:  #8B948C;  /* 5.77:1 on surface */
+  --ink-disabled:  #5C655D;
+  --ink-on-well:   #DEE4DE;  /* 15.52:1 on well */
+  --ink-on-accent: #082312;  /* 8.87:1 on accent */
+
+  --accent:      #45D67E;
+  --accent-tint: #12291B;
+
+  --status-busy:           #45D67E;  /* dot 9.61:1 vs surface */
+  --status-busy-text:      #57E08B;  /* 10.70:1 vs surface */
+  --status-idle:           #7C867D;  /* 4.78:1 vs surface */
+  --status-attention:      #F2B84B;  /* 10.09:1 vs surface */
+  --status-attention-text: #F2B84B;  /* 8.52:1 on tint */
+  --status-attention-tint: #2E2413;
+  --status-dead:           #E06A55;  /* 5.47:1 vs surface */
+  --status-dead-text:      #E8836F;  /* 6.80:1 vs surface */
+  --status-dead-tint:      rgba(224, 106, 85, 0.12);  /* EXIT badge pill */
+
+  --acct-claude:       #6FD6EA;  /* 8.95:1 on tint */
+  --acct-claude-tint:  #0E2A31;
+  --acct-claude2:      #C7A7F4;  /* 7.90:1 on tint */
+  --acct-claude2-tint: #241C38;
+  --acct-corp:         #96B4F4;  /* 7.57:1 on tint */
+  --acct-corp-tint:    #16233B;
+  --acct-gpt:          #F0A3C8;  /* 8.11:1 on tint */
+  --acct-gpt-tint:     #331B28;
+
+  --acct-active:      var(--acct-claude);
+  --acct-active-tint: var(--acct-claude-tint);
+
+  /* Limits bands = routing policy: ok < 50, warn 50–75, critical > 75 */
+  --limit-track:    #242A25;
+  --limit-ok:       #45D67E;  /* 7.80:1 vs track */
+  --limit-warn:     #F2B84B;  /* 8.19:1 vs track */
+  --limit-critical: #E06A55;  /* 4.44:1 vs track */
+
+  --diff-add: #57E08B;  /* 11.88:1 on well */
+  --diff-del: #F08A78;  /*  8.22:1 on well */
+
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+
+  --text-2xs:  11px;
+  --text-xs:   12px;
+  --text-sm:   13px;
+  --text-base: 15px;
+  --text-lg:   17px;
+  --text-xl:   20px;
+  --text-2xl:  24px;
+  --text-input: 16px;
+
+  --leading-tight:  1.25;
+  --leading-normal: 1.5;
+  --leading-mono:   1.55;
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  --tracking-caps: 0.08em;
+
+  --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;  --sp-4: 16px;
+  --sp-5: 20px;  --sp-6: 24px;  --sp-8: 32px;  --sp-10: 40px;  --sp-12: 48px;
+
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  --r-sm:   6px;
+  --r-md:   10px;
+  --r-lg:   16px;
+  --r-xl:   22px;
+  --r-full: 999px;
+
+  --tap-min:   44px;
+  --lamp-size: 18px;
+  --well-max:  240px;
+
+  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.55);
+
+  --glow-busy:
+    0 0 0 1px   rgba(69, 214, 126, 0.30),
+    0 0 18px    rgba(69, 214, 126, 0.16),
+    0 0 44px    rgba(69, 214, 126, 0.07);
+  --glow-attention:
+    0 0 0 1px   rgba(242, 184, 75, 0.32),
+    0 0 18px    rgba(242, 184, 75, 0.16),
+    0 0 44px    rgba(242, 184, 75, 0.07);
+  --glow-dot-busy:      0 0 8px rgba(69, 214, 126, 0.55);
+  --glow-dot-attention: 0 0 8px rgba(242, 184, 75, 0.55);
+
+  --dur-press: 120ms;
+  --dur-fast:  180ms;
+  --dur-base:  240ms;
+  --dur-slow:  320ms;
+  --dur-sheet: 420ms;
+  --dur-bar:   600ms;
+  --dur-ping:  300ms;
+
+  --ease-swift:  cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.32, 1.25, 0.46, 1);
+  --ease-breathe: ease-in-out;
+
+  --breathe-period: 2600ms;
+  --pulse-period:   1300ms;
+  --caret-period:   1100ms;
+
+  --z-header: 10;
+  --z-sheet:  40;
+  --z-drawer: 50;
+  --z-toast:  60;
+
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --bg-page:    #F4F6F3;
+  --bg-surface: #FFFFFF;
+  --bg-raised:  #EAEEEA;
+  --bg-well:    #141715;
+  --bg-sheet:   #FFFFFF;
+  --scrim:      rgba(20, 26, 22, 0.42);
+
+  --edge-subtle: #DDE2DC;
+  --edge-strong: #C3CAC2;
+
+  --ink-primary:   #1A201B;  /* 16.58:1 on surface */
+  --ink-secondary: #4E5850;  /* 7.41:1 on surface */
+  --ink-tertiary:  #5F6962;  /* 5.70:1 on surface */
+  --ink-disabled:  #98A29A;
+  --ink-on-well:   #DEE4DE;  /* 13.98:1 on well */
+  --ink-on-accent: #FFFFFF;  /* 5.35:1 on accent */
+
+  --accent:      #0E7B3F;
+  --accent-tint: #DFF2E5;
+
+  --status-busy:           #178A48;  /* dot 4.41:1 vs surface */
+  --status-busy-text:      #106E39;  /* 6.34:1 vs surface */
+  --status-idle:           #6C766E;  /* 4.71:1 vs surface */
+  --status-attention:      #B27400;  /* dot 3.90:1 vs surface */
+  --status-attention-text: #8A5A0A;  /* 4.94:1 on tint */
+  --status-attention-tint: #F7E9CF;
+  --status-dead:           #B2402C;  /* 5.73:1 vs surface */
+  --status-dead-text:      #B2402C;  /* 5.73:1 vs surface */
+  --status-dead-tint:      rgba(178, 64, 44, 0.12);
+
+  --acct-claude:       #0A6377;  /* 5.80:1 on tint */
+  --acct-claude-tint:  #DAF0F6;
+  --acct-claude2:      #6D3FB4;  /* 5.73:1 on tint */
+  --acct-claude2-tint: #EDE6FA;
+  --acct-corp:         #2F55B8;  /* 5.60:1 on tint */
+  --acct-corp-tint:    #E3EAFA;
+  --acct-gpt:          #A62667;  /* 5.59:1 on tint */
+  --acct-gpt-tint:     #FAE3EE;
+
+  --limit-track:    #E3E7E2;
+  --limit-ok:       #178A48;  /* 3.52:1 vs track */
+  --limit-warn:     #B27400;  /* 3.12:1 vs track */
+  --limit-critical: #B2402C;  /* 4.59:1 vs track */
+
+  --diff-add: #57E08B;  /* 10.70:1 on well */
+  --diff-del: #F08A78;  /*  7.40:1 on well */
+
+  --shadow-card:  0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
+  --shadow-sheet: 0 -8px 40px rgba(26, 32, 27, 0.22);
+
+  --glow-busy:
+    0 0 0 1px   rgba(23, 138, 72, 0.35),
+    0 0 16px    rgba(23, 138, 72, 0.18),
+    0 0 40px    rgba(23, 138, 72, 0.08);
+  --glow-attention:
+    0 0 0 1px   rgba(178, 116, 0, 0.35),
+    0 0 16px    rgba(178, 116, 0, 0.18),
+    0 0 40px    rgba(178, 116, 0, 0.08);
+  --glow-dot-busy:      0 0 7px rgba(23, 138, 72, 0.45);
+  --glow-dot-attention: 0 0 7px rgba(178, 116, 0, 0.45);
+
+  color-scheme: light;
+}
+
+/* account rebinding — one variable, stamped at the screen root */
+[data-acct='claude']  { --acct-active: var(--acct-claude);  --acct-active-tint: var(--acct-claude-tint); }
+[data-acct='claude2'] { --acct-active: var(--acct-claude2); --acct-active-tint: var(--acct-claude2-tint); }
+[data-acct='corp']    { --acct-active: var(--acct-corp);    --acct-active-tint: var(--acct-corp-tint); }
+[data-acct='gpt']     { --acct-active: var(--acct-gpt);     --acct-active-tint: var(--acct-gpt-tint); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-press: 1ms; --dur-fast: 1ms; --dur-base: 1ms;
+    --dur-slow: 1ms; --dur-sheet: 1ms; --dur-bar: 1ms; --dur-ping: 1ms;
+    /* breathe/pulse/caret periods intentionally untouched — animations are
+       disabled outright below and opacity pinned at mid-intensity. */
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   MOCKUP STYLES
+   ════════════════════════════════════════════════════════════════════════ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg-page);
+  color: var(--ink-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  justify-content: center;
+}
+
+.specimen {
+  width: min(390px, 100%);
+  padding: var(--sp-8) 0 var(--sp-12);
+  display: grid;
+  gap: var(--sp-6);
+}
+
+/* --- specimen chrome (labels between screens) ------------------------- */
+.eyebrow {
+  font: var(--weight-medium) var(--text-2xs)/1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.section-label { margin-top: var(--sp-2); padding-left: var(--sp-1); }
+
+.spec-intro { padding: 0 var(--sp-1); display: grid; gap: var(--sp-2); }
+.spec-title {
+  font: var(--weight-medium) var(--text-2xl)/var(--leading-tight) var(--font-mono);
+  letter-spacing: -0.01em;
+}
+.spec-title::before { content: "\276F"; color: var(--accent); margin-right: 0.4em; }
+.spec-sub { font-size: var(--text-sm); color: var(--ink-secondary); max-width: 34ch; }
+
+/* --- framed screen slices --------------------------------------------- */
+.screen {
+  background: var(--bg-page);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-xl);
+  padding: var(--sp-4);
+  display: grid;
+  gap: var(--sp-3);
+  color: var(--ink-primary);
+}
+
+/* --- fleet header ------------------------------------------------------ */
+.fleet-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--sp-1) var(--sp-1) var(--sp-2);
+}
+.wordmark { font: var(--weight-medium) var(--text-xl)/1 var(--font-mono); }
+.wordmark::before { content: "\276F"; color: var(--accent); margin-right: 0.4em; }
+.fleet-count { font: var(--weight-regular) var(--text-xs)/1 var(--font-mono); color: var(--ink-tertiary); }
+
+/* --- session card ------------------------------------------------------ */
+.card {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-4);
+  display: grid;
+  gap: var(--sp-3);
+}
+.card--busy { border-color: color-mix(in srgb, var(--status-busy) 40%, var(--edge-subtle)); }
+.card--busy::after,
+.card--attention::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.55;
+  animation: breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+.card--busy::after { box-shadow: var(--glow-busy); }
+.card--attention { border-color: color-mix(in srgb, var(--status-attention) 40%, var(--edge-subtle)); }
+.card--attention::after { box-shadow: var(--glow-attention); animation-duration: var(--pulse-period); }
+@keyframes breathe { to { opacity: 1; } }
+
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
+.proj {
+  font: var(--weight-medium) var(--text-lg)/var(--leading-tight) var(--font-mono);
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.card-sub { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+
+/* the lamp: status dot seated in a darker well — a lit indicator behind glass */
+.lamp {
+  position: relative;
+  width: var(--lamp-size);
+  height: var(--lamp-size);
+  border-radius: var(--r-full);
+  background: var(--bg-well);
+  box-shadow: inset 0 0 0 1px var(--edge-strong), inset 0 1px 2px rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin-top: 2px;
+}
+/* one-shot ping ring on any dot state transition (layered on the scale pop) */
+.lamp.ping::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--r-full);
+  border: 1.5px solid var(--status-busy); /* ring takes the NEW state's color */
+  opacity: 0;
+  animation: ping var(--dur-ping) var(--ease-swift) 1 forwards;
+}
+@keyframes ping {
+  0%   { transform: scale(1);   opacity: 0.9; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+.dot { width: 8px; height: 8px; border-radius: var(--r-full); flex: none; }
+.dot--busy {
+  background: var(--status-busy);
+  box-shadow: var(--glow-dot-busy);
+  animation: breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+.dot--attention {
+  background: var(--status-attention);
+  box-shadow: var(--glow-dot-attention);
+  animation: breathe var(--pulse-period) var(--ease-breathe) infinite alternate;
+}
+.dot--dead { background: var(--status-dead); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--weight-medium) var(--text-xs)/1 var(--font-mono);
+  padding: 4px 9px;
+  border-radius: var(--r-full);
+}
+.chip i { width: 5px; height: 5px; border-radius: var(--r-full); background: currentColor; }
+.chip--claude  { color: var(--acct-claude);  background: var(--acct-claude-tint); }
+.chip--claude2 { color: var(--acct-claude2); background: var(--acct-claude2-tint); }
+.chip--corp    { color: var(--acct-corp);    background: var(--acct-corp-tint); }
+.chip--gpt     { color: var(--acct-gpt);     background: var(--acct-gpt-tint); }
+/* screen-scoped account accent — colors arrive via [data-acct] rebinding */
+.chip--active  { color: var(--acct-active);  background: var(--acct-active-tint); }
+
+/* mono readouts that update in place never jitter */
+.status-line, .limit-row, .limit-note, .tool-dur, .tool-meta, .msg-receipt, .fleet-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.status-line { font: var(--weight-regular) var(--text-xs)/1 var(--font-mono); }
+.status-line--busy      { color: var(--status-busy-text); }
+.status-line--dead      { color: var(--status-dead-text); }
+.status-line--attention { color: var(--status-attention-text); }
+[data-theme='light'] .status-line--attention,
+.badge-attn { color: var(--status-attention-text); }
+
+.badge-attn {
+  font: var(--weight-medium) var(--text-xs)/1 var(--font-mono);
+  background: var(--status-attention-tint);
+  padding: 4px 9px;
+  border-radius: var(--r-full);
+}
+
+/* limits bar — bands: ok < 50, warn 50–75, critical > 75 (routing policy) */
+.limits { display: grid; gap: 6px; }
+.limit-row {
+  display: grid;
+  grid-template-columns: 20px 1fr 40px;
+  align-items: center;
+  gap: var(--sp-2);
+  font: var(--weight-regular) var(--text-2xs)/1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.limit-row .pct { text-align: right; }
+.track { display: block; height: 4px; border-radius: var(--r-full); background: var(--limit-track); overflow: hidden; }
+.fill  { display: block; height: 100%; border-radius: var(--r-full); transition: width var(--dur-bar) var(--ease-swift); }
+.fill--ok   { background: var(--limit-ok); }
+.fill--warn { background: var(--limit-warn); }
+.fill--crit { background: var(--limit-critical); }
+/* crossing into critical narrates the consequence (ccd's actual swap) */
+.limit-note {
+  font: var(--weight-regular) var(--text-2xs)/1.4 var(--font-mono);
+  color: var(--status-dead-text);
+}
+
+/* dead card — cold via color tokens, never element opacity */
+.card--dead .proj { color: var(--ink-secondary); }
+.card--dead .chip { color: var(--ink-secondary); background: var(--bg-raised); }
+.btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  width: 100%;
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--text-base)/1 var(--font-ui);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), background var(--dur-fast) var(--ease-swift);
+}
+.btn-ghost:active { transform: scale(0.97); background: var(--bg-raised); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* account legend */
+.legend { display: flex; gap: var(--sp-2); flex-wrap: wrap; padding: var(--sp-1); }
+
+/* --- chat -------------------------------------------------------------- */
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--edge-subtle);
+}
+.back { font: var(--weight-regular) 26px/1 var(--font-ui); color: var(--ink-secondary); padding: 0 var(--sp-1); }
+.chat-title-wrap { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.chat-title {
+  font: var(--weight-medium) var(--text-base)/1.2 var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-meta { display: flex; align-items: center; gap: var(--sp-2); }
+.chat-meta .dot { width: 6px; height: 6px; }
+.chat-meta .status-line { font-size: var(--text-2xs); }
+.keycap {
+  font: var(--weight-medium) var(--text-xs)/1 var(--font-mono);
+  color: var(--ink-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.keycap:active { transform: translateY(1px); }
+
+.ts-divider {
+  text-align: center;
+  font: var(--weight-regular) var(--text-2xs)/1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-tertiary);
+  margin: var(--sp-2) 0;
+}
+
+.msg-user {
+  justify-self: end;
+  max-width: 85%;
+  background: var(--bg-raised);
+  border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  padding: 10px 14px;
+}
+.msg-receipt {
+  justify-self: end;
+  font: var(--weight-regular) var(--text-2xs)/1 var(--font-mono);
+  color: var(--ink-tertiary);
+  margin-top: -6px;
+}
+.msg-receipt b { color: var(--status-busy-text); font-weight: var(--weight-regular); }
+
+.msg-assist { display: grid; gap: var(--sp-2); font-size: var(--text-base); line-height: 1.55; }
+.msg-assist ul { padding-left: var(--sp-5); display: grid; gap: 4px; color: var(--ink-secondary); }
+.msg-assist li strong { color: var(--ink-primary); font-weight: var(--weight-semibold); }
+code {
+  font: var(--weight-regular) var(--text-sm)/1 var(--font-mono);
+  background: var(--bg-raised);
+  border-radius: var(--r-sm);
+  padding: 2px 5px;
+}
+
+/* tool cards */
+.toolcard {
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  cursor: pointer;
+}
+.tool-ok, .tool-err, .tool-run { width: 6px; height: 6px; border-radius: var(--r-full); flex: none; }
+.tool-ok  { background: var(--status-busy); }
+.tool-err { background: var(--status-dead); }
+.tool-run {
+  background: var(--status-busy);
+  box-shadow: var(--glow-dot-busy);
+  animation: breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+.tool-name { font: var(--weight-medium) var(--text-sm)/1 var(--font-mono); }
+.tool-sum {
+  flex: 1; min-width: 0;
+  font: var(--weight-regular) var(--text-xs)/1 var(--font-mono);
+  color: var(--ink-tertiary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tool-dur { flex: none; font: var(--weight-regular) var(--text-xs)/1 var(--font-mono); color: var(--ink-tertiary); }
+.tool-chev { font: var(--weight-regular) var(--text-xs)/1 var(--font-mono); color: var(--ink-tertiary); }
+.tool-body {
+  border-top: 1px solid var(--edge-subtle);
+  padding: var(--sp-3);
+  display: grid;
+  gap: var(--sp-2);
+}
+.well {
+  background: var(--bg-well);
+  color: var(--ink-on-well);
+  border-radius: var(--r-md);
+  padding: 10px var(--sp-3);
+  font: var(--weight-regular) var(--text-sm)/var(--leading-mono) var(--font-mono);
+  overflow-x: auto;
+  max-height: var(--well-max);   /* long logs scroll inside the glass */
+  overflow-y: auto;
+  white-space: pre;
+}
+.well .ctx { color: var(--ink-tertiary); }
+.well .add { color: var(--diff-add); }
+.well .del { color: var(--diff-del); }
+.tool-meta {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font: var(--weight-regular) var(--text-2xs)/1.5 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+/* non-zero exits: failure becomes glanceable in the scroll */
+.exit-badge {
+  font: var(--weight-semibold) var(--text-2xs)/1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--status-dead-text);
+  background: var(--status-dead-tint);
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+}
+
+/* streaming caret */
+.caret {
+  display: inline-block;
+  width: 7px; height: 15px;
+  background: var(--accent);
+  vertical-align: -2px;
+  margin-left: 3px;
+  animation: blink var(--caret-period) step-end infinite;
+}
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* input bar */
+.inputbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  padding: 6px 6px 6px var(--sp-4);
+  margin-top: var(--sp-2);
+}
+.prompt-glyph { font: var(--weight-semibold) var(--text-base)/1 var(--font-mono); color: var(--accent); }
+.input-ph { flex: 1; font-size: var(--text-input); color: var(--ink-tertiary); }
+.send {
+  width: 40px; height: 40px; flex: none;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  font: var(--weight-semibold) 18px/1 var(--font-ui);
+  display: grid; place-items: center;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.send:active { transform: scale(0.92); }
+
+/* --- dialog sheet ------------------------------------------------------ */
+.viewport {
+  position: relative;
+  height: 540px;
+  overflow: hidden;
+  padding: 0;
+}
+.dim-chat { padding: var(--sp-4); display: grid; gap: var(--sp-3); filter: saturate(0.8); opacity: 0.6; }
+.vp-scrim { position: absolute; inset: 0; background: var(--scrim); }
+.sheet {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  background: var(--bg-sheet);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: var(--shadow-sheet);
+  padding: var(--sp-2) var(--sp-4) var(--sp-4);
+}
+.grabber {
+  width: 36px; height: 4px;
+  border-radius: var(--r-full);
+  background: var(--edge-strong);
+  margin: var(--sp-1) auto var(--sp-4);
+}
+.sheet-eyebrow { margin-bottom: var(--sp-2); }
+.sheet-title {
+  font: var(--weight-semibold) var(--text-lg)/var(--leading-tight) var(--font-ui);
+  margin-bottom: var(--sp-4);
+}
+.opts { border-top: 1px solid var(--edge-subtle); }
+.opt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-2);
+  border-bottom: 1px solid var(--edge-subtle);
+  cursor: pointer;
+}
+.opt-glyph { width: 14px; font: var(--weight-semibold) var(--text-base)/1 var(--font-mono); color: var(--accent); flex: none; }
+/* mono index — mirrors ccd's numbered TUI menu */
+.opt-idx { width: 14px; text-align: center; font: var(--weight-regular) var(--text-xs)/1 var(--font-mono); color: var(--ink-tertiary); flex: none; }
+.opt-text { display: grid; gap: 2px; }
+.opt-desc { font-size: var(--text-sm); color: var(--ink-tertiary); }
+.opt-enter { margin-left: auto; font: var(--weight-regular) var(--text-xs)/1 var(--font-mono); color: var(--accent); flex: none; }
+.opt--selected { background: var(--accent-tint); border-radius: var(--r-md); border-bottom-color: transparent; }
+.sheet-foot {
+  text-align: center;
+  font: var(--weight-regular) var(--text-2xs)/1 var(--font-mono);
+  color: var(--ink-tertiary);
+  padding-top: var(--sp-3);
+}
+
+/* --- footer ------------------------------------------------------------ */
+.spec-foot {
+  text-align: center;
+  font: var(--weight-regular) var(--text-2xs)/1.8 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+  .card--busy::after, .card--attention::after, .dot--busy, .dot--attention, .tool-run { opacity: 0.8; }
+  .caret { opacity: 1; }
+  .lamp.ping::after { opacity: 0; }
+}
+</style>
+</head>
+<body>
+<main class="specimen">
+
+  <header class="spec-intro">
+    <p class="eyebrow">ccrc · adopted direction</p>
+    <h1 class="spec-title">Phosphor &amp; Ink</h1>
+    <p class="spec-sub">Refined terminal heritage. Glow means life; mono is the machine's voice; the cursor marks intent.</p>
+  </header>
+
+  <!-- ══════════════ 01 · FLEET ══════════════ -->
+  <p class="eyebrow section-label">01 · fleet — session cards</p>
+  <section class="screen">
+    <div class="fleet-head">
+      <span class="wordmark">ccrc</span>
+      <span class="fleet-count">6 sessions · 1 waiting</span>
+    </div>
+
+    <!-- busy card: breathing phosphor glow, lamp bezel, live clock, narrated limit -->
+    <article class="card card--busy">
+      <div class="card-top">
+        <h2 class="proj">orchard-api</h2>
+        <span class="lamp ping"><span class="dot dot--busy" role="img" aria-label="busy"></span></span>
+      </div>
+      <div class="card-sub">
+        <span class="chip chip--corp"><i></i>claude-corp</span>
+        <span class="status-line status-line--busy">working · 04:12</span>
+      </div>
+      <div class="limits">
+        <div class="limit-row"><span>5h</span><span class="track"><span class="fill fill--crit" style="width:87%"></span></span><span class="pct">87%</span></div>
+        <div class="limit-row"><span>7d</span><span class="track"><span class="fill fill--warn" style="width:68%"></span></span><span class="pct">68%</span></div>
+        <p class="limit-note">5h limit near — will move to claude</p>
+      </div>
+    </article>
+
+    <!-- dead card: matte, cold, consequence stated, one-tap recovery -->
+    <article class="card card--dead">
+      <div class="card-top">
+        <h2 class="proj">mekwarlive</h2>
+        <span class="lamp"><span class="dot dot--dead" role="img" aria-label="dead"></span></span>
+      </div>
+      <div class="card-sub">
+        <span class="chip chip--claude2"><i></i>claude2</span>
+        <span class="status-line status-line--dead">exited · 3h ago — chat is read-only</span>
+      </div>
+      <button class="btn-ghost">Restart session</button>
+    </article>
+
+    <div class="legend">
+      <span class="chip chip--claude"><i></i>claude</span>
+      <span class="chip chip--claude2"><i></i>claude2</span>
+      <span class="chip chip--corp"><i></i>claude-corp</span>
+      <span class="chip chip--gpt"><i></i>gpt</span>
+    </div>
+  </section>
+
+  <!-- ══════════════ 02 · CHAT ══════════════ -->
+  <p class="eyebrow section-label">02 · session — chat run</p>
+  <section class="screen" data-acct="corp">
+    <div class="chat-head">
+      <span class="back">&#8249;</span>
+      <div class="chat-title-wrap">
+        <div class="chat-title">orchard-api</div>
+        <div class="chat-meta">
+          <span class="dot dot--busy"></span>
+          <span class="status-line status-line--busy">working</span>
+          <span class="chip chip--active"><i></i>claude-corp</span>
+        </div>
+      </div>
+      <button class="keycap">esc</button>
+    </div>
+
+    <p class="ts-divider">today · 14:02</p>
+
+    <div class="msg-user">Run the contract tests and fix whatever breaks.</div>
+    <p class="msg-receipt">14:02 <b>&#10003;</b></p>
+
+    <!-- expanded tool card — failed run: EXIT badge on the meta row -->
+    <div class="toolcard">
+      <div class="tool-row">
+        <span class="tool-err"></span>
+        <span class="tool-name">Bash</span>
+        <span class="tool-sum">pnpm test --filter contracts</span>
+        <span class="tool-chev">&#9662;</span>
+      </div>
+      <div class="tool-body">
+        <pre class="well"><span class="ctx">FAIL  order.contract.spec.ts</span>
+<span class="del">&#10007; resolveTotal returns Money (14 ms)</span>
+<span class="del">&#10007; toDTO keeps non-default currency (6 ms)</span>
+<span class="ctx">tests: 2 failed · 41 passed</span></pre>
+        <p class="tool-meta"><span class="exit-badge">EXIT 1</span> 12.4s</p>
+      </div>
+    </div>
+
+    <div class="msg-assist">
+      <p>Two failures in <code>order.contract.spec.ts</code>, both from the new currency field:</p>
+      <ul>
+        <li><strong>resolveTotal</strong> returns a bare number where the contract expects <code>Money</code></li>
+        <li><strong>toDTO</strong> drops <code>currency</code> when it equals the tenant default</li>
+      </ul>
+    </div>
+
+    <!-- expanded tool card — the fix -->
+    <div class="toolcard">
+      <div class="tool-row">
+        <span class="tool-ok"></span>
+        <span class="tool-name">Edit</span>
+        <span class="tool-sum">src/domain/contracts/order.ts</span>
+        <span class="tool-chev">&#9662;</span>
+      </div>
+      <div class="tool-body">
+        <pre class="well"><span class="ctx">@@ resolveTotal()</span>
+<span class="del">-  return sum(lines);</span>
+<span class="add">+  return Money.sum(lines, order.currency);</span></pre>
+        <p class="tool-meta">order.ts · +1 &#8722;1 · applied</p>
+      </div>
+    </div>
+
+    <div class="msg-assist">
+      <p>Both fixed. Re-running the suite to confirm<span class="caret"></span></p>
+    </div>
+
+    <!-- collapsed tool card — running: breathing dot + live elapsed clock -->
+    <div class="toolcard">
+      <div class="tool-row">
+        <span class="tool-run"></span>
+        <span class="tool-name">Bash</span>
+        <span class="tool-sum">pnpm test --filter contracts</span>
+        <span class="tool-dur">0:07</span>
+        <span class="tool-chev">&#9656;</span>
+      </div>
+    </div>
+
+    <div class="inputbar">
+      <span class="prompt-glyph">&#10095;</span>
+      <span class="input-ph">Message orchard-api</span>
+      <button class="send" aria-label="Send">&#8593;</button>
+    </div>
+  </section>
+
+  <!-- ══════════════ 03 · DIALOG SHEET ══════════════ -->
+  <p class="eyebrow section-label">03 · dialog — bottom sheet</p>
+  <section class="screen viewport">
+    <div class="dim-chat">
+      <div class="chat-head">
+        <span class="back">&#8249;</span>
+        <div class="chat-title-wrap">
+          <div class="chat-title">orchard-api</div>
+          <div class="chat-meta">
+            <span class="dot dot--attention"></span>
+            <span class="status-line status-line--attention">waiting on you</span>
+          </div>
+        </div>
+        <button class="keycap">esc</button>
+      </div>
+      <p class="ts-divider">today · 15:41</p>
+      <div class="msg-user">Plan the legacy orders migration.</div>
+      <div class="msg-assist">
+        <p>The legacy orders table has 40M rows and three consumers. Before I write the migration plan, one decision is yours.</p>
+      </div>
+      <div class="toolcard">
+        <div class="tool-row">
+          <span class="tool-ok"></span>
+          <span class="tool-name">Read</span>
+          <span class="tool-sum">db/schema/orders.sql</span>
+          <span class="tool-dur">0.4s</span>
+          <span class="tool-chev">&#9656;</span>
+        </div>
+      </div>
+      <div class="msg-assist">
+        <p>Consumers found: billing exporter, analytics sync, and the public API's order feed. Each tolerates downtime differently.</p>
+      </div>
+    </div>
+
+    <div class="vp-scrim"></div>
+
+    <div class="sheet">
+      <div class="grabber"></div>
+      <p class="eyebrow sheet-eyebrow">claude is asking</p>
+      <h3 class="sheet-title">Which migration strategy for the legacy orders table?</h3>
+      <div class="opts">
+        <div class="opt opt--selected">
+          <span class="opt-glyph">&#10095;</span>
+          <span class="opt-idx">1</span>
+          <span class="opt-text">Expand&#8211;contract<span class="opt-desc">dual-write during backfill — safest, slower</span></span>
+          <span class="opt-enter">&#8629;</span>
+        </div>
+        <div class="opt">
+          <span class="opt-glyph"></span>
+          <span class="opt-idx">2</span>
+          <span class="opt-text">Big-bang cutover</span>
+        </div>
+        <div class="opt">
+          <span class="opt-glyph"></span>
+          <span class="opt-idx">3</span>
+          <span class="opt-text">Freeze reads, then migrate</span>
+        </div>
+      </div>
+      <p class="sheet-foot">tap an option — it answers in the session</p>
+    </div>
+  </section>
+
+  <!-- ══════════════ 04 · TRUE LIGHT THEME ══════════════ -->
+  <p class="eyebrow section-label">04 · true light theme — paper terminal</p>
+  <section class="screen" data-theme="light">
+    <article class="card card--attention">
+      <div class="card-top">
+        <h2 class="proj">intake-ai</h2>
+        <span class="lamp"><span class="dot dot--attention" role="img" aria-label="waiting on you"></span></span>
+      </div>
+      <div class="card-sub">
+        <span class="chip chip--claude"><i></i>claude</span>
+        <span class="badge-attn">waiting on you · 4m</span>
+      </div>
+      <div class="limits">
+        <div class="limit-row"><span>5h</span><span class="track"><span class="fill fill--warn" style="width:64%"></span></span><span class="pct">64%</span></div>
+        <div class="limit-row"><span>7d</span><span class="track"><span class="fill fill--crit" style="width:91%"></span></span><span class="pct">91%</span></div>
+        <p class="limit-note">7d limit near — will move to claude2</p>
+      </div>
+    </article>
+
+    <div class="toolcard">
+      <div class="tool-row">
+        <span class="tool-ok"></span>
+        <span class="tool-name">Bash</span>
+        <span class="tool-sum">gh pr checks 412 --watch</span>
+        <span class="tool-chev">&#9662;</span>
+      </div>
+      <div class="tool-body">
+        <pre class="well"><span class="add">&#10003; build · 2m 4s</span>
+<span class="add">&#10003; contract-tests · 58s</span>
+<span class="ctx">&#9675; security-scan · queued</span></pre>
+        <p class="tool-meta">wells stay dark in daylight — the glass keeps its phosphor</p>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span class="chip chip--claude"><i></i>claude</span>
+      <span class="chip chip--claude2"><i></i>claude2</span>
+      <span class="chip chip--corp"><i></i>claude-corp</span>
+      <span class="chip chip--gpt"><i></i>gpt</span>
+    </div>
+  </section>
+
+  <footer class="spec-foot">
+    phosphor &amp; ink · dark-first, true light theme<br>
+    74 contrast pairs verified · AA text 4.5:1 · AA UI 3:1
+  </footer>
+
+</main>
+</body>
+</html>

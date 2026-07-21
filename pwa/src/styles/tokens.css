@@ -1,0 +1,305 @@
+/* ============================================================================
+   ccrc — "Phosphor & Ink" design tokens
+   Adopted direction: refined terminal heritage. Dark-first; [data-theme='light']
+   is a true light theme (paper terminal), not an inversion.
+
+   Governing rule of the palette: GLOW MEANS LIFE. Only living states (busy,
+   attention) are allowed to emit light. Dead and idle are matte. Green is
+   reserved for session state + the primary action; the four account hues live
+   in the cool half of the wheel (cyan / blue / violet / magenta) so account
+   identity can never be misread as session state.
+
+   Contrast: every value verified with WCAG 2.1 relative-luminance math
+   (design/contrast-check.mjs — 74 pairs, all pass). Ratios quoted in comments
+   are computed, not estimated. Text roles target AA 4.5:1; non-text UI roles
+   (dots, bar fills, focus ring) target 3:1 per WCAG 1.4.11.
+   ========================================================================== */
+
+:root {
+  /* ------------------------------------------------------------------ *
+   *  COLOR — dark theme (default)                                       *
+   * ------------------------------------------------------------------ */
+
+  /* Background layers: green-cast graphite, stepping lighter as surfaces
+     rise. --bg-well is DARKER than the page — terminal wells are cut into
+     the interface, not laid on top of it. */
+  --bg-page:    #0B0D0C;  /* app background */
+  --bg-surface: #141715;  /* cards, tool cards, headers */
+  --bg-raised:  #1C201D;  /* chips, input bar, user bubble, keycaps */
+  --bg-well:    #070808;  /* terminal drawer, code blocks, lamp floors — the glass */
+  --bg-sheet:   #181C19;  /* bottom sheets, dialogs */
+  --scrim:      rgba(4, 6, 5, 0.62);   /* behind sheets/drawer */
+
+  /* Hairlines. Decorative — no contrast claim. */
+  --edge-subtle: #262B27;
+  --edge-strong: #39403A;
+
+  /* Text. "Ink" is warm off-white with the same green cast as the glass. */
+  --ink-primary:   #ECF0EC;  /* 15.68:1 on surface, 14.32:1 on raised — AAA */
+  --ink-secondary: #ADB6AE;  /* 8.67:1 on surface, 7.91:1 on raised */
+  --ink-tertiary:  #8B948C;  /* timestamps, meta: 5.77:1 surface, 5.27:1 raised */
+  --ink-disabled:  #5C655D;  /* intentionally sub-AA; disabled only (WCAG-exempt) */
+  --ink-on-well:   #DEE4DE;  /* terminal/code text: 15.52:1 on well */
+  --ink-on-accent: #082312;  /* text on phosphor buttons: 8.87:1 on accent */
+
+  /* Interactive accent = the phosphor. Send button, links, focus ring,
+     the ❯ preselect cursor. Same hue family as busy — intentionally:
+     "acting" and "working" share a color story. */
+  --accent:      #45D67E;   /* focus ring 10.37:1 vs page (needs 3:1) */
+  --accent-tint: #12291B;   /* preselected row bg; primary ink on it 13.43:1 */
+
+  /* Session status. busy/attention glow; idle/dead are matte.
+     Dots also sit on --bg-well lamp floors: all ≥ 3:1 there too (verified). */
+  --status-busy:           #45D67E;  /* dot: 9.61:1 vs surface (needs 3:1) */
+  --status-busy-text:      #57E08B;  /* "working…" label: 10.70:1 vs surface */
+  --status-idle:           #7C867D;  /* matte dot: 4.78:1 vs surface (needs 3:1) */
+  --status-attention:      #F2B84B;  /* P3-phosphor amber dot: 10.09:1 vs surface */
+  --status-attention-text: #F2B84B;  /* 8.52:1 on attention-tint, 10.09:1 on surface */
+  --status-attention-tint: #2E2413;  /* "waiting on you" badge bg */
+  --status-dead:           #E06A55;  /* matte dot, never glows: 5.47:1 vs surface */
+  --status-dead-text:      #E8836F;  /* "exited · 3h ago — chat is read-only": 6.80:1 vs surface */
+  --status-dead-tint:      rgba(224, 106, 85, 0.12);  /* EXIT badge pill; dead-text on it 5.89:1 over surface */
+
+  /* Account accents — chip text on chip tint. Cool half of the wheel only
+     (hues ~190/222/265/330), 40°+ apart, so no account hue collides with
+     status green/amber/red. Chips always carry the account name in mono;
+     color is the secondary cue. */
+  --acct-claude:       #6FD6EA;  /* cyan   — 8.95:1 on its tint */
+  --acct-claude-tint:  #0E2A31;
+  --acct-claude2:      #C7A7F4;  /* violet — 7.90:1 on its tint */
+  --acct-claude2-tint: #241C38;
+  --acct-corp:         #96B4F4;  /* blue   — 7.57:1 on its tint */
+  --acct-corp-tint:    #16233B;
+  --acct-gpt:          #F0A3C8;  /* magenta — 8.11:1 on its tint */
+  --acct-gpt-tint:     #331B28;
+
+  /* One-variable account accent: screens stamp data-acct at their root and
+     components style chips/headers against --acct-active only (rebinding
+     selectors at the bottom of this file). The glow never rebinds — glow is
+     green/amber; account hues never emit light. */
+  --acct-active:      var(--acct-claude);
+  --acct-active-tint: var(--acct-claude-tint);
+
+  /* Limits bar. Bands follow the operator's model-routing policy:
+     ok < 50%, warn 50–75% ("prefer handoff"), critical > 75% ("hand off
+     everything spec-able") — an amber gauge is actionable, not decorative.
+     When a bar crosses into critical, the card narrates the consequence
+     ("5h limit near — will move to claude") in --status-dead-text. */
+  --limit-track:    #242A25;
+  --limit-ok:       #45D67E;  /* 7.80:1 vs track (needs 3:1) */
+  --limit-warn:     #F2B84B;  /* 8.19:1 vs track */
+  --limit-critical: #E06A55;  /* 4.44:1 vs track */
+
+  /* Diff accents inside wells only (tool-card results, terminal). */
+  --diff-add: #57E08B;  /* 11.88:1 on well */
+  --diff-del: #F08A78;  /*  8.22:1 on well */
+
+  /* ------------------------------------------------------------------ *
+   *  TYPE                                                               *
+   * ------------------------------------------------------------------ */
+
+  /* Rule of voice: mono is anything the machine says or is (paths, ids,
+     account names, tool names, limits, timestamps, keycaps, code); sans is
+     anything a human reads as prose (chat, buttons, dialog copy).
+     Any mono value that updates in place (elapsed clocks, percentages,
+     durations) also gets font-variant-numeric: tabular-nums — readouts
+     must never jitter sideways. */
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+
+  --text-2xs:  11px;   /* eyebrows, limit labels, keycap legends */
+  --text-xs:   12px;   /* timestamps, tool-card meta */
+  --text-sm:   13px;   /* chips, tool summaries, mono code */
+  --text-base: 15px;   /* chat body, buttons, dialog options */
+  --text-lg:   17px;   /* card titles (mono), sheet titles */
+  --text-xl:   20px;   /* screen titles */
+  --text-2xl:  24px;   /* fleet heading */
+  --text-input: 16px;  /* ≥16px so iOS Safari never zoom-jumps */
+
+  --leading-tight:  1.25;
+  --leading-normal: 1.5;
+  --leading-mono:   1.55;
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  --tracking-caps: 0.08em;  /* uppercase mono eyebrows/labels */
+
+  /* ------------------------------------------------------------------ *
+   *  SPACE, RADIUS, TOUCH, SIZE                                         *
+   * ------------------------------------------------------------------ */
+  --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;  --sp-4: 16px;
+  --sp-5: 20px;  --sp-6: 24px;  --sp-8: 32px;  --sp-10: 40px;  --sp-12: 48px;
+
+  /* Safe areas (notch / home bar), promoted to tokens so padding rules can
+     compose them: padding-bottom: calc(var(--sp-3) + var(--safe-bottom)). */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  --r-sm:   6px;    /* inline code, keycaps, badges */
+  --r-md:   10px;   /* tool cards, buttons, wells */
+  --r-lg:   16px;   /* session cards, chat bubbles */
+  --r-xl:   22px;   /* sheet & drawer top corners */
+  --r-full: 999px;  /* dots, pills, grabber */
+
+  --tap-min:   44px;   /* minimum touch target (spec acceptance criterion) */
+  --lamp-size: 18px;   /* status-dot lamp bezel: --bg-well floor + inset ring */
+  --well-max:  240px;  /* tool-output wells cap here and scroll internally */
+
+  /* ------------------------------------------------------------------ *
+   *  ELEVATION & GLOW                                                   *
+   * ------------------------------------------------------------------ */
+  /* Dark theme depth comes from layer + hairline, barely from shadow. */
+  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.55);
+
+  /* The signature: phosphor bloom. Two tight rings + one wide soft halo.
+     Apply to a pseudo-element and animate ITS opacity (compositor-cheap),
+     never the box-shadow itself. */
+  --glow-busy:
+    0 0 0 1px   rgba(69, 214, 126, 0.30),
+    0 0 18px    rgba(69, 214, 126, 0.16),
+    0 0 44px    rgba(69, 214, 126, 0.07);
+  --glow-attention:
+    0 0 0 1px   rgba(242, 184, 75, 0.32),
+    0 0 18px    rgba(242, 184, 75, 0.16),
+    0 0 44px    rgba(242, 184, 75, 0.07);
+  --glow-dot-busy:      0 0 8px rgba(69, 214, 126, 0.55);
+  --glow-dot-attention: 0 0 8px rgba(242, 184, 75, 0.55);
+
+  /* ------------------------------------------------------------------ *
+   *  MOTION                                                             *
+   * ------------------------------------------------------------------ */
+  --dur-press: 120ms;   /* pressed states, key taps */
+  --dur-fast:  180ms;   /* fades, color shifts, stream chunk fade-in */
+  --dur-base:  240ms;   /* tool-card expand, dot state pop */
+  --dur-slow:  320ms;   /* card→chat shared element, sheet exit */
+  --dur-sheet: 420ms;   /* sheet & drawer entrance */
+  --dur-bar:   600ms;   /* limit-bar width changes */
+  --dur-ping:  300ms;   /* one-shot expanding ring on dot state change */
+
+  --ease-swift:  cubic-bezier(0.2, 0, 0, 1);        /* everyday exits/moves */
+  --ease-spring: cubic-bezier(0.32, 1.25, 0.46, 1); /* sheets: small overshoot */
+  --ease-breathe: ease-in-out;
+
+  --breathe-period: 2600ms;  /* busy glow inhale/exhale (alternate) */
+  --pulse-period:   1300ms;  /* attention pulse — twice the urgency of busy */
+  --caret-period:   1100ms;  /* streaming block-caret blink, steps(2) */
+
+  /* ------------------------------------------------------------------ *
+   *  Z-INDEX                                                            *
+   * ------------------------------------------------------------------ */
+  --z-header: 10;
+  --z-sheet:  40;
+  --z-drawer: 50;
+  --z-toast:  60;
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   LIGHT THEME — the paper terminal. Warm gray-green paper, true white cards,
+   ink darkened for AA. The wells STAY DARK: terminals keep their glass in
+   light mode (like every serious IDE), which also keeps the phosphor
+   identity present in daylight.
+   ========================================================================== */
+[data-theme='light'] {
+  --bg-page:    #F4F6F3;
+  --bg-surface: #FFFFFF;
+  --bg-raised:  #EAEEEA;
+  --bg-well:    #141715;  /* deliberately dark in light theme */
+  --bg-sheet:   #FFFFFF;
+  --scrim:      rgba(20, 26, 22, 0.42);
+
+  --edge-subtle: #DDE2DC;
+  --edge-strong: #C3CAC2;
+
+  --ink-primary:   #1A201B;  /* 16.58:1 on surface, 14.15:1 on raised */
+  --ink-secondary: #4E5850;  /* 7.41:1 on surface, 6.32:1 on raised */
+  --ink-tertiary:  #5F6962;  /* 5.70:1 on surface, 4.86:1 on raised */
+  --ink-disabled:  #98A29A;  /* disabled only (WCAG-exempt) */
+  --ink-on-well:   #DEE4DE;  /* 13.98:1 on the (still dark) well */
+  --ink-on-accent: #FFFFFF;  /* 5.35:1 on light accent */
+
+  --accent:      #0E7B3F;   /* focus ring 4.92:1 vs page (needs 3:1) */
+  --accent-tint: #DFF2E5;   /* primary ink on it: 14.19:1 */
+
+  --status-busy:           #178A48;  /* dot 4.41:1 vs surface, 4.10:1 vs lamp well */
+  --status-busy-text:      #106E39;  /* 6.34:1 vs surface */
+  --status-idle:           #6C766E;  /* 4.71:1 vs surface, 3.83:1 vs lamp well */
+  --status-attention:      #B27400;  /* dot 3.90:1 vs surface, 4.64:1 vs lamp well */
+  --status-attention-text: #8A5A0A;  /* 4.94:1 on tint, 5.92:1 on surface */
+  --status-attention-tint: #F7E9CF;
+  --status-dead:           #B2402C;  /* dot 5.73:1 vs surface, 3.15:1 vs lamp well */
+  --status-dead-text:      #B2402C;  /* 5.73:1 vs surface */
+  --status-dead-tint:      rgba(178, 64, 44, 0.12);  /* dead-text on it 4.81:1 over surface */
+
+  --acct-claude:       #0A6377;  /* 5.80:1 on its tint */
+  --acct-claude-tint:  #DAF0F6;
+  --acct-claude2:      #6D3FB4;  /* 5.73:1 on its tint */
+  --acct-claude2-tint: #EDE6FA;
+  --acct-corp:         #2F55B8;  /* 5.60:1 on its tint */
+  --acct-corp-tint:    #E3EAFA;
+  --acct-gpt:          #A62667;  /* 5.59:1 on its tint */
+  --acct-gpt-tint:     #FAE3EE;
+
+  --limit-track:    #E3E7E2;
+  --limit-ok:       #178A48;  /* 3.52:1 vs track (needs 3:1) */
+  --limit-warn:     #B27400;  /* 3.12:1 vs track */
+  --limit-critical: #B2402C;  /* 4.59:1 vs track */
+
+  /* Diff accents render inside dark wells in BOTH themes. */
+  --diff-add: #57E08B;  /* 10.70:1 on light-theme well */
+  --diff-del: #F08A78;  /*  7.40:1 on light-theme well */
+
+  /* Light theme earns real shadows; glow dims to a halo (a lamp in daylight). */
+  --shadow-card:  0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
+  --shadow-sheet: 0 -8px 40px rgba(26, 32, 27, 0.22);
+
+  --glow-busy:
+    0 0 0 1px   rgba(23, 138, 72, 0.35),
+    0 0 16px    rgba(23, 138, 72, 0.18),
+    0 0 40px    rgba(23, 138, 72, 0.08);
+  --glow-attention:
+    0 0 0 1px   rgba(178, 116, 0, 0.35),
+    0 0 16px    rgba(178, 116, 0, 0.18),
+    0 0 40px    rgba(178, 116, 0, 0.08);
+  --glow-dot-busy:      0 0 7px rgba(23, 138, 72, 0.45);
+  --glow-dot-attention: 0 0 7px rgba(178, 116, 0, 0.45);
+
+  color-scheme: light;
+}
+
+/* ==========================================================================
+   ACCOUNT REBINDING — the --acct-active mechanism. Screens stamp data-acct on
+   their root; everything account-tinted inside reads --acct-active only.
+   Because substitution happens at these elements, the light theme's account
+   values flow through automatically.
+   ========================================================================== */
+[data-acct='claude']  { --acct-active: var(--acct-claude);  --acct-active-tint: var(--acct-claude-tint); }
+[data-acct='claude2'] { --acct-active: var(--acct-claude2); --acct-active-tint: var(--acct-claude2-tint); }
+[data-acct='corp']    { --acct-active: var(--acct-corp);    --acct-active-tint: var(--acct-corp-tint); }
+[data-acct='gpt']     { --acct-active: var(--acct-gpt);     --acct-active-tint: var(--acct-gpt-tint); }
+
+/* ==========================================================================
+   REDUCED MOTION — glow freezes at mid-intensity, springs become fades,
+   the caret stops blinking, the ping never fires. Nothing disappears;
+   nothing moves.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-press: 1ms;
+    --dur-fast:  1ms;
+    --dur-base:  1ms;
+    --dur-slow:  1ms;
+    --dur-sheet: 1ms;
+    --dur-bar:   1ms;
+    --dur-ping:  1ms;
+    /* --breathe/pulse/caret-period stay untouched on purpose: a 0s
+       infinite-alternate loop strobes rather than stops. Consumers must
+       instead disable those animations outright (animation: none) and pin
+       glow/caret opacity at mid-intensity — see the reduced-motion block in
+       design/mockup.html (and later base.css) for the canonical pattern. */
+  }
+}
