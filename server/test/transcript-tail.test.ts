@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, appendFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { readBacklog, TranscriptTailer } from '../src/transcript/tail.js';
+import { localIO } from '../src/io.js';
 import type { ChatEvent } from '../../shared/api.js';
 
 const userLine = (uuid: string, text: string): string =>
@@ -35,14 +36,14 @@ describe('readBacklog', () => {
     for (let i = 1; i <= 6; i++) body += userLine(`u${i}`, `message ${i}`);
     writeFileSync(file, body);
 
-    const { events, offset } = await readBacklog(file, 2);
+    const { events, offset } = await readBacklog(localIO, file, 2);
     expect(events).toHaveLength(2);
     expect(events.map((e) => (e.kind === 'user' ? e.uuid : '?'))).toEqual(['u5', 'u6']);
     expect(offset).toBe(statSync(file).size);
   });
 
   it('missing file returns empty events and offset 0', async () => {
-    const out = await readBacklog(path.join(tmpdir(), 'ccrc-definitely-missing', 'x.jsonl'), 50);
+    const out = await readBacklog(localIO, path.join(tmpdir(), 'ccrc-definitely-missing', 'x.jsonl'), 50);
     expect(out).toEqual({ events: [], offset: 0 });
   });
 });
@@ -51,7 +52,7 @@ describe('TranscriptTailer', () => {
   it('started at end-of-file, emits exactly the appended entry events', { timeout: 10_000 }, async () => {
     const file = tmpFile();
     writeFileSync(file, userLine('u1', 'one') + userLine('u2', 'two'));
-    const tailer = new TranscriptTailer(file, statSync(file).size);
+    const tailer = new TranscriptTailer(localIO, file, statSync(file).size);
     tailer.start();
     try {
       const waiter = onceEvents(tailer);
@@ -68,7 +69,7 @@ describe('TranscriptTailer', () => {
   it('holds a partial line until the closing newline arrives', { timeout: 10_000 }, async () => {
     const file = tmpFile();
     writeFileSync(file, userLine('u1', 'one'));
-    const tailer = new TranscriptTailer(file, statSync(file).size);
+    const tailer = new TranscriptTailer(localIO, file, statSync(file).size);
     const seen: ChatEvent[][] = [];
     tailer.on('events', (events) => seen.push(events));
     tailer.start();

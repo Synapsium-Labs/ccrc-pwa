@@ -1,0 +1,130 @@
+import { describe, it, expect, vi } from 'vitest';
+import { appendFileSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { localIO } from '../src/io.js';
+
+const mktempDir = (): string => mkdtempSync(path.join(tmpdir(), 'ccrc-io-'));
+const tmpFile = (name = 'x.txt'): string => path.join(mktempDir(), name);
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+describe('localIO.readFile', () => {
+  it('returns file content, null when missing', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'hello world');
+    expect(await localIO.readFile(file)).toBe('hello world');
+    expect(await localIO.readFile(path.join(path.dirname(file), 'nope.txt'))).toBeNull();
+  });
+});
+
+describe('localIO.readFileFrom', () => {
+  it('reads from a byte offset and reports the full size', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcdefghij');
+    const out = await localIO.readFileFrom(file, 4);
+    expect(out).toEqual({ data: 'efghij', size: 10 });
+  });
+
+  it('offset at or past size returns empty data with the real size', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abc');
+    expect(await localIO.readFileFrom(file, 3)).toEqual({ data: '', size: 3 });
+    expect(await localIO.readFileFrom(file, 99)).toEqual({ data: '', size: 3 });
+  });
+
+  it('missing file returns null', async () => {
+    const file = tmpFile();
+    expect(await localIO.readFileFrom(file, 0)).toBeNull();
+  });
+});
+
+describe('localIO.readdir', () => {
+  it('lists entry names, null when missing/not a directory', async () => {
+    const dir = mktempDir();
+    writeFileSync(path.join(dir, 'a.txt'), 'x');
+    writeFileSync(path.join(dir, 'b.txt'), 'y');
+    const names = await localIO.readdir(dir);
+    expect(names?.slice().sort()).toEqual(['a.txt', 'b.txt']);
+    expect(await localIO.readdir(path.join(dir, 'nope'))).toBeNull();
+    expect(await localIO.readdir(path.join(dir, 'a.txt'))).toBeNull(); // not a directory
+  });
+});
+
+describe('localIO.stat', () => {
+  it('reports mtimeMs + size, null when missing', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    const s = await localIO.stat(file);
+    expect(s).not.toBeNull();
+    expect(s!.size).toBe(4);
+    expect(typeof s!.mtimeMs).toBe('number');
+    expect(await localIO.stat(path.join(path.dirname(file), 'nope'))).toBeNull();
+  });
+});
+
+describe('localIO.writeFileB64', () => {
+  it('mkdir -ps the parent and writes the decoded bytes', async () => {
+    const base = mktempDir();
+    const file = path.join(base, 'deep', 'nested', 'clip.png');
+    const data = Buffer.from('89504e470d0a1a0a', 'hex');
+    await localIO.writeFileB64(file, data.toString('base64'));
+    expect(await readFile(file)).toEqual(data);
+  });
+});
+
+describe('localIO.tailFile', () => {
+  it('emits appended bytes as they land', async () => {
+    const file = tmpFile('t.log');
+    writeFileSync(file, 'one\n');
+    const chunks: Buffer[] = [];
+    const resets: number[] = [];
+    const close = await localIO.tailFile(
+      file,
+      statSync(file).size,
+      (c) => chunks.push(c),
+      (size) => resets.push(size),
+    );
+    try {
+      appendFileSync(file, 'two\n');
+      await vi.waitFor(() => expect(chunks.map((c) => c.toString('utf8')).join('')).toBe('two\n'), { timeout: 3000 });
+      appendFileSync(file, 'three\n');
+      await vi.waitFor(
+        () => expect(chunks.map((c) => c.toString('utf8')).join('')).toBe('two\nthree\n'),
+        { timeout: 3000 },
+      );
+      expect(resets).toEqual([]);
+    } finally {
+      close();
+    }
+  });
+
+  it('emits a reset with the new size when the file is truncated', async () => {
+    const file = tmpFile('t.log');
+    writeFileSync(file, 'one\ntwo\nthree\n');
+    const resets: number[] = [];
+    const close = await localIO.tailFile(
+      file,
+      statSync(file).size,
+      () => {},
+      (size) => resets.push(size),
+    );
+    try {
+      writeFileSync(file, 'x\n'); // shorter than before -> truncation/rotation
+      await vi.waitFor(() => expect(resets).toEqual([2]), { timeout: 3000 });
+    } finally {
+      close();
+    }
+  });
+
+  it('close() stops further callbacks', async () => {
+    const file = tmpFile('t.log');
+    writeFileSync(file, 'one\n');
+    const chunks: Buffer[] = [];
+    const close = await localIO.tailFile(file, statSync(file).size, (c) => chunks.push(c), () => {});
+    close();
+    appendFileSync(file, 'two\n');
+    await sleep(1800); // longer than the internal poll interval
+    expect(chunks).toEqual([]);
+  });
+});

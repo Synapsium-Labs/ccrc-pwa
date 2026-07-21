@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
+import { localIO } from '../src/io.js';
 import { readRegistry } from '../src/registry.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
@@ -30,7 +31,7 @@ describe('readRegistry', () => {
     writeFileSync(path.join(reg, 'gpt-disabled'), '');   // noise: not a session file
     writeFileSync(path.join(reg, 'swap.log'), 'x');      // noise
 
-    const out = await readRegistry(loadConfig({ CCRC_HOME: home }));
+    const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
     expect(out.map((s) => s.id)).toEqual(['claude-corp-orchard-api', 'claude2-MekWarLive']);
     const mek = out[1];
     expect(mek.pool).toEqual(['claude', 'claude2']);
@@ -40,7 +41,7 @@ describe('readRegistry', () => {
   });
 
   it('returns [] when registry dir missing', async () => {
-    const out = await readRegistry(loadConfig({ CCRC_HOME: path.join(home, 'nope') }));
+    const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: path.join(home, 'nope') }));
     expect(out).toEqual([]);
   });
 });

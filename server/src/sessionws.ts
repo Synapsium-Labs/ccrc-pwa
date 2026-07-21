@@ -1,4 +1,3 @@
-import { stat } from 'node:fs/promises';
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { readRegistry } from './registry.js';
@@ -105,7 +104,7 @@ export class SessionStream {
 
   /** Registry record + live state → current uuid, transcript file, and status. */
   private async resolve(): Promise<Resolved | null> {
-    const records = await readRegistry(this.deps.cfg);
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
     const rec = records.find((s) => s.id === this.id);
     if (!rec) return null;
     const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
@@ -117,7 +116,7 @@ export class SessionStream {
       status = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
       if (pid) {
-        const live = await readLiveState(cfgDir, pid);
+        const live = await readLiveState(this.deps.io, cfgDir, pid);
         if (live) {
           if (live.cwd) cwd = live.cwd;
           status = live.status === 'busy' ? 'busy' : 'idle';
@@ -134,8 +133,8 @@ export class SessionStream {
    * then tail from the end of what the backlog covered.
    */
   private async sendBacklogAndTail(r: Resolved): Promise<void> {
-    const missing = !(await stat(r.file).then(() => true, () => false));
-    const { events, offset } = await readBacklog(r.file, BACKLOG_N);
+    const missing = (await this.deps.io.stat(r.file)) === null;
+    const { events, offset } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
     this.send({ type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing });
     this.startTailer(r.file, r.uuid, offset);
@@ -144,7 +143,7 @@ export class SessionStream {
   private startTailer(file: string, uuid: string, fromOffset: number): void {
     if (this.stopped) return;
     this.tailer?.stop();
-    const t = new TranscriptTailer(file, fromOffset);
+    const t = new TranscriptTailer(this.deps.io, file, fromOffset);
     this.tailer = t;
     t.on('events', (events, newOffset) => {
       this.send({ type: 'events', uuid, events, offset: newOffset });

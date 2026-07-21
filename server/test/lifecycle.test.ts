@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { localIO } from '../src/io.js';
 import { listProjects } from '../src/lifecycle.js';
 
 const ID = 'claude2-MekWarLive';
@@ -42,7 +43,7 @@ async function makeApp(opts: { fail?: boolean; projectsRoot?: string } = {}): Pr
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
   const cfg = loadConfig(env);
-  const app = await buildServer({ cfg, run, tmux: new Tmux(run) });
+  const app = await buildServer({ cfg, run, tmux: new Tmux(run), io: localIO });
   return { app, calls, cfg, home };
 }
 
@@ -107,7 +108,7 @@ describe('lifecycle routes', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, run, tmux: new Tmux(run) });
+    const app = await buildServer({ cfg, run, tmux: new Tmux(run), io: localIO });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
     // …but stop must still target claude2-cctest, not claude-cctest.
@@ -167,7 +168,7 @@ describe('listProjects', () => {
       uuid: '3'.repeat(36), started: '1',
     });
 
-    const direct = await listProjects(cfg);
+    const direct = await listProjects(localIO, cfg);
     expect(direct.roots).toEqual([root]);
     expect(direct.projects).toEqual([
       { name: 'MekWarLive', workdir: '/data/projects/MekWarLive' },   // default seeded registry session
@@ -184,7 +185,7 @@ describe('listProjects', () => {
 
   it('returns registry-only projects when the projects root is missing', async () => {
     const { app, cfg } = await makeApp({ projectsRoot: '/nope/does-not-exist' });
-    const out = await listProjects(cfg);
+    const out = await listProjects(localIO, cfg);
     expect(out.roots).toEqual(['/nope/does-not-exist']);
     expect(out.projects).toEqual([{ name: 'MekWarLive', workdir: '/data/projects/MekWarLive' }]);
     await app.close();

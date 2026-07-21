@@ -8,6 +8,7 @@ import { buildServer, type Deps } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { localIO } from '../src/io.js';
 
 const ID = 'claude2-MekWarLive';
 const UUID_A = 'a'.repeat(36);
@@ -87,7 +88,7 @@ describe('session WS', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const deps: Deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run) };
+    const deps: Deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO };
     app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -165,7 +166,7 @@ describe('session WS', () => {
       if (args[0] === 'capture-pane') return { code: 0, stdout: menuPane, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const menuApp = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run: menuRun, tmux: new Tmux(menuRun) }, new Bus());
+    const menuApp = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run: menuRun, tmux: new Tmux(menuRun), io: localIO }, new Bus());
     await menuApp.listen({ host: '127.0.0.1', port: 0 });
     const a = menuApp.server.address();
     const p = typeof a === 'object' && a !== null ? a.port : 0;

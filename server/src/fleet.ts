@@ -1,5 +1,6 @@
 import type { CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
+import type { FleetIO } from './io.js';
 import { readRegistry } from './registry.js';
 import { readLimits } from './limits.js';
 import { readLiveState } from './livestate.js';
@@ -15,23 +16,24 @@ export function idHomeWrapper(id: string): string {
  * dead if no tmux session, else busy/idle from the live status file. Used by the
  * interrupt route, since the --remote-control pane carries no busy marker.
  */
-export async function liveStatus(cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
-  const rec = (await readRegistry(cfg)).find((r) => r.id === id);
+export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
+  const rec = (await readRegistry(io, cfg)).find((r) => r.id === id);
   if (!rec || !(await tmux.hasSession(id))) return 'dead';
   const pid = await tmux.panePid(id);
   const cfgDir = cfg.wrappers[rec.wrapper];
   if (!pid || !cfgDir) return 'idle';
-  const live = await readLiveState(cfgDir, pid);
+  const live = await readLiveState(io, cfgDir, pid);
   return live?.status === 'busy' ? 'busy' : 'idle';
 }
 
 export async function assembleFleet(
+  io: FleetIO,
   cfg: CcrcConfig,
   tmux: Tmux,
   now = Math.floor(Date.now() / 1000),
   pendingDialogs?: Set<string>,
 ): Promise<FleetSession[]> {
-  const [records, limits] = await Promise.all([readRegistry(cfg), readLimits(cfg, now)]);
+  const [records, limits] = await Promise.all([readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(records.map(async (r): Promise<FleetSession> => {
     const alive = await tmux.hasSession(r.id);
     let status: SessionStatus = 'dead';
@@ -41,7 +43,7 @@ export async function assembleFleet(
       const pid = await tmux.panePid(r.id);
       const cfgDir = cfg.wrappers[r.wrapper];
       if (pid && cfgDir) {
-        const live = await readLiveState(cfgDir, pid);
+        const live = await readLiveState(io, cfgDir, pid);
         if (live) {
           status = live.status === 'busy' ? 'busy' : 'idle';
           name = live.name; statusUpdatedAt = live.statusUpdatedAt; version = live.version;

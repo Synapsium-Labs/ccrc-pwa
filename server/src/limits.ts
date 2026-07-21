@@ -1,6 +1,6 @@
-import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
+import type { FleetIO } from './io.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -12,14 +12,19 @@ const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-export async function readLimits(cfg: CcrcConfig, now = Math.floor(Date.now() / 1000)): Promise<Record<string, AccountLimits>> {
-  let names: string[] = [];
-  try { names = await readdir(cfg.limitsDir); } catch { /* no dir yet */ }
+export async function readLimits(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  now = Math.floor(Date.now() / 1000),
+): Promise<Record<string, AccountLimits>> {
+  const names = (await io.readdir(cfg.limitsDir)) ?? [];
   const out: Record<string, AccountLimits> = {};
   for (const n of names.filter((n) => n.endsWith('.json') && !n.startsWith('.'))) {
     const wrapper = n.slice(0, -'.json'.length);
     try {
-      const raw = JSON.parse(await readFile(path.join(cfg.limitsDir, n), 'utf8')) as Record<string, unknown>;
+      const content = await io.readFile(path.join(cfg.limitsDir, n));
+      if (content === null) throw new Error('missing');
+      const raw = JSON.parse(content) as Record<string, unknown>;
       const ts = numOrNull(raw.ts);
       let five = numOrNull(raw.five);
       let seven = numOrNull(raw.seven);

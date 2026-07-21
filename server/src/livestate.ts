@@ -1,14 +1,16 @@
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { FleetIO } from './io.js';
 
 export interface LiveState {
   pid: number; sessionId: string; cwd: string; name: string | null;
   status: string; statusUpdatedAt: number | null; version: string | null;
 }
 
-export async function readLiveState(configDir: string, pid: number): Promise<LiveState | null> {
+export async function readLiveState(io: FleetIO, configDir: string, pid: number): Promise<LiveState | null> {
+  const content = await io.readFile(path.join(configDir, 'sessions', `${pid}.json`));
+  if (content === null) return null;
   try {
-    const raw = JSON.parse(await readFile(path.join(configDir, 'sessions', `${pid}.json`), 'utf8'));
+    const raw = JSON.parse(content);
     if (typeof raw.sessionId !== 'string') return null;
     return {
       pid, sessionId: raw.sessionId, cwd: String(raw.cwd ?? ''),

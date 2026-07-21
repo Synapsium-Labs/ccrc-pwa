@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { localIO } from '../src/io.js';
 
 const ID = 'claude2-MekWarLive';
 // PNG magic + a few header bytes — the server never inspects content, only the filename ext.
@@ -52,7 +53,7 @@ async function makeApp(opts: { fail?: boolean } = {}): Promise<{
     return opts.fail ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
-  const app = await buildServer({ cfg, run, tmux: new Tmux(run) });
+  const app = await buildServer({ cfg, run, tmux: new Tmux(run), io: localIO });
   return { app, cfg, calls };
 }
 

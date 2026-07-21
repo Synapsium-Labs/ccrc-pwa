@@ -7,6 +7,7 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import type { CcrcConfig } from './config.js';
 import type { Runner, Tmux } from './exec.js';
+import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits } from './limits.js';
 import { Bus, type Notice } from './bus.js';
@@ -23,7 +24,7 @@ import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
 
-export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux; spawnPty?: SpawnPty }
+export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
  *  module — src/ in dev, dist/server/src/ compiled — to the first package.json. */
@@ -48,13 +49,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.get('/health', async () => ({ ok: true }));
 
-  app.get('/api/fleet', async () => ({ sessions: await assembleFleet(deps.cfg, deps.tmux) }));
+  app.get('/api/fleet', async () => ({ sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux) }));
 
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
   // respawns, and swaps. Ordered claude / claude2 / claude-corp / gpt.
   app.get('/api/accounts', async () => {
-    const limits = await readLimits(deps.cfg);
+    const limits = await readLimits(deps.io, deps.cfg);
     const rank = (w: string) => { const i = ACCOUNT_ORDER.indexOf(w); return i < 0 ? 99 : i; };
     const accounts: AccountUsage[] = Object.entries(limits)
       .map(([wrapper, l]): AccountUsage => ({
@@ -68,7 +69,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/ws/fleet', { websocket: true }, (socket) => {
     const onFleet = (sessions: FleetSession[]) => socket.send(JSON.stringify({ type: 'fleet', sessions }));
     const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n }));
-    void assembleFleet(deps.cfg, deps.tmux).then(onFleet);
+    void assembleFleet(deps.io, deps.cfg, deps.tmux).then(onFleet);
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
     socket.on('close', () => {
@@ -135,7 +136,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
   const sendDeps: SendDeps = { tmux: deps.tmux, queue: new KeyedQueue() };
   const knownId = async (id: string): Promise<boolean> =>
-    (await readRegistry(deps.cfg)).some((r) => r.id === id);
+    (await readRegistry(deps.io, deps.cfg)).some((r) => r.id === id);
 
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -168,7 +169,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const res = await interrupt(sendDeps, id, async () => (await liveStatus(deps.cfg, deps.tmux, id)) === 'busy');
+    const res = await interrupt(sendDeps, id, async () => (await liveStatus(deps.io, deps.cfg, deps.tmux, id)) === 'busy');
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -178,7 +179,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   };
 
-  app.get('/api/projects', async () => listProjects(deps.cfg));
+  app.get('/api/projects', async () => listProjects(deps.io, deps.cfg));
 
   app.post('/api/sessions', async (req, reply) => {
     const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown };
@@ -198,7 +199,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const rec = (await readRegistry(deps.cfg)).find((r) => r.id === id);
+    const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
     if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     // ccd stop recomputes the id as `<wrapper>-<project>`, so it needs the
     // ORIGINAL wrapper baked into the id — not rec.wrapper, which a prior swap
@@ -221,7 +222,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(415).send({ ok: false, error: 'unsupported-type' });
     }
     const data = await part.toBuffer();
-    const res = await saveUploadAndClip(deps.run, deps.cfg, id, data, m[1]!.toLowerCase());
+    const res = await saveUploadAndClip(deps.io, deps.run, deps.cfg, id, data, m[1]!.toLowerCase());
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   });
 

@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import type { Deps } from './server.js';
 import { readRegistry } from './registry.js';
 import { readLiveState } from './livestate.js';
@@ -49,23 +48,21 @@ function lastSkillListing(jsonl: string): string {
 
 /** Built-ins plus the session's skills (from its transcript's skill_listing). */
 export async function sessionCommands(deps: Deps, id: string): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
-  const rec = (await readRegistry(deps.cfg)).find((r) => r.id === id);
+  const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
   if (!rec) return { builtins: BUILTINS, skills: [] };
   const cfgDir = deps.cfg.wrappers[rec.wrapper];
   let cwd = rec.workdir;
   if (cfgDir && (await deps.tmux.hasSession(id))) {
     const pid = await deps.tmux.panePid(id);
     if (pid) {
-      const live = await readLiveState(cfgDir, pid);
+      const live = await readLiveState(deps.io, cfgDir, pid);
       if (live?.cwd) cwd = live.cwd;
     }
   }
   let skills: SlashCommand[] = [];
   if (cfgDir) {
-    try {
-      const jsonl = await readFile(transcriptPath(cfgDir, cwd, rec.uuid), 'utf8');
-      skills = parseSkillListing(lastSkillListing(jsonl));
-    } catch { /* no transcript yet → builtins only */ }
+    const jsonl = await deps.io.readFile(transcriptPath(cfgDir, cwd, rec.uuid));
+    if (jsonl !== null) skills = parseSkillListing(lastSkillListing(jsonl));
   }
   return { builtins: BUILTINS, skills };
 }

@@ -1,28 +1,28 @@
-import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
+import type { FleetIO } from './io.js';
 
 export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;
   started: boolean; home: string | null; pool: string[] | null; lastswap: number | null;
 }
 
-async function field(dir: string, id: string, name: string): Promise<string | null> {
-  try { return (await readFile(path.join(dir, `${id}.${name}`), 'utf8')).trim(); }
-  catch { return null; }
+async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
+  const content = await io.readFile(path.join(dir, `${id}.${name}`));
+  return content !== null ? content.trim() : null;
 }
 
-export async function readRegistry(cfg: CcrcConfig): Promise<SessionRecord[]> {
-  let names: string[];
-  try { names = await readdir(cfg.registryDir); } catch { return []; }
+export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {
+  const names = await io.readdir(cfg.registryDir);
+  if (names === null) return [];
   const ids = names.filter((n) => n.endsWith('.uuid')).map((n) => n.slice(0, -'.uuid'.length)).sort();
   const out: SessionRecord[] = [];
   for (const id of ids) {
     const [wrapper, project, workdir, uuid, started, home, pool, lastswap] = await Promise.all([
-      field(cfg.registryDir, id, 'wrapper'), field(cfg.registryDir, id, 'project'),
-      field(cfg.registryDir, id, 'workdir'), field(cfg.registryDir, id, 'uuid'),
-      field(cfg.registryDir, id, 'started'), field(cfg.registryDir, id, 'home'),
-      field(cfg.registryDir, id, 'pool'), field(cfg.registryDir, id, 'lastswap'),
+      field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
+      field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
+      field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
+      field(io, cfg.registryDir, id, 'pool'), field(io, cfg.registryDir, id, 'lastswap'),
     ]);
     if (!wrapper || !workdir || !uuid) continue;   // incomplete registry entry — skip, don't crash
     out.push({

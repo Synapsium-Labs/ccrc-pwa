@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { localIO } from '../src/io.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
@@ -49,7 +50,7 @@ async function makeApp(
     return { code: 0, stdout: '', stderr: '' };
   };
   const bus = new Bus();
-  const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run) }, bus);
+  const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO }, bus);
   return { app, calls, bus };
 }
 

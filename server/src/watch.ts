@@ -33,7 +33,7 @@ export class FleetWatcher {
 
   async tick(): Promise<void> {
     const pending = await this.detectDialogs();
-    const sessions = await assembleFleet(this.deps.cfg, this.deps.tmux, undefined, pending);
+    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending);
     const json = JSON.stringify(sessions);
     if (json === this.lastJson) return;
     this.lastJson = json;
@@ -48,7 +48,7 @@ export class FleetWatcher {
    */
   private async detectDialogs(): Promise<Set<string>> {
     const pending = new Set<string>();
-    const records = await readRegistry(this.deps.cfg);
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
       const pane = await this.deps.tmux.capture(r.id);
       const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;

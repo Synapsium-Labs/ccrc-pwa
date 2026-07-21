@@ -5,6 +5,7 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet, idHomeWrapper } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { localIO } from '../src/io.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -42,7 +43,7 @@ describe('assembleFleet', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
 
-    const fleet = await assembleFleet(loadConfig({ CCRC_HOME: home }), new Tmux(run), now);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), now);
     const mek = fleet.find((s) => s.id === 'claude2-MekWarLive')!;
     expect(mek.status).toBe('busy');
     expect(mek.name).toBe('mekwar-a1');
