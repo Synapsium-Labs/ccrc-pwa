@@ -1,0 +1,7 @@
+● Select the tools to allow
+
+❯ 1. [ ] Bash
+  2. [ ] Edit
+  3. [ ] WebFetch
+
+Space to select · Enter to confirm

@@ -10,7 +10,12 @@ export function idHomeWrapper(id: string): string {
   return 'claude';
 }
 
-export async function assembleFleet(cfg: CcrcConfig, tmux: Tmux, now = Math.floor(Date.now() / 1000)): Promise<FleetSession[]> {
+export async function assembleFleet(
+  cfg: CcrcConfig,
+  tmux: Tmux,
+  now = Math.floor(Date.now() / 1000),
+  pendingDialogs?: Set<string>,
+): Promise<FleetSession[]> {
   const [records, limits] = await Promise.all([readRegistry(cfg), readLimits(cfg, now)]);
   return Promise.all(records.map(async (r): Promise<FleetSession> => {
     const alive = await tmux.hasSession(r.id);
@@ -33,7 +38,7 @@ export async function assembleFleet(cfg: CcrcConfig, tmux: Tmux, now = Math.floo
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
       project: r.project, workdir: r.workdir, name, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
-      dialogPending: false, version,
+      dialogPending: pendingDialogs?.has(r.id) ?? false, version,
     };
   }));
 }

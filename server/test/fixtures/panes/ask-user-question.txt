@@ -1,0 +1,8 @@
+● Which architecture should we go with?
+
+❯ 1. A + B drawer (Recommended)
+  2. A pure
+  3. B first, A later
+  4. Other
+
+Enter to confirm · Esc to cancel

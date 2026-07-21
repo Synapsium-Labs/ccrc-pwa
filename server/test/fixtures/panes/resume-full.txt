@@ -1,0 +1,7 @@
+✻ This session has a summary available.
+
+❯ 1. Resume from summary (recommended)
+  2. Resume full session as-is
+  3. Don't ask me again
+
+Enter to confirm · Esc to cancel
