@@ -12,6 +12,14 @@ export interface FleetSession {
   version: string | null;
 }
 
+/** A `/`-command the composer can autocomplete. `insert` is what gets typed
+ *  (with a trailing space so arguments follow naturally). */
+export interface SlashCommand {
+  name: string;                 // e.g. "compact" or "superpowers:brainstorming"
+  desc: string;
+  kind: 'builtin' | 'skill';
+}
+
 export type ChatEvent =
   | { kind: 'user'; uuid: string; ts: string; text: string }
   | { kind: 'assistant'; uuid: string; ts: string; text: string }

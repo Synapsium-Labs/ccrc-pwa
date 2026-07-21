@@ -10,6 +10,9 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { Sheet } from '../components/Sheet';
 import type { PendingSend } from '../stores/session';
 import { AttachButton } from './AttachButton';
+import { api } from '../lib/api';
+import type { SlashCommand } from '../../../shared/api';
+import { slashQuery, filterCommands } from './slashComplete';
 import './chat.css';
 
 export interface ComposerProps {
@@ -40,7 +43,28 @@ export function Composer({
 }: ComposerProps): ReactNode {
   const [value, setValue] = useState('');
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
+  const [commands, setCommands] = useState<SlashCommand[] | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+
+  // Lazily fetch the session's slash commands (built-ins + skills) the first
+  // time the user starts a `/` command; cache for the rest of the session.
+  const query = slashQuery(value);
+  useEffect(() => {
+    if (query === null || commands !== null || id === undefined) return;
+    let live = true;
+    void api
+      .commands(id)
+      .then((r) => { if (live) setCommands([...r.builtins, ...r.skills]); })
+      .catch(() => { if (live) setCommands([]); });
+    return () => { live = false; };
+  }, [query, commands, id]);
+
+  const matches = query !== null && commands ? filterCommands(commands, query) : [];
+
+  const pickCommand = (name: string): void => {
+    setValue(`/${name} `);
+    box.current?.focus();
+  };
   // Draft conflicts already surfaced (or cancelled) — don't reopen the sheet
   // for the same failure; a retry (state flips to 'sending') re-arms it.
   const handled = useRef(new Set<string>());
@@ -92,6 +116,21 @@ export function Composer({
 
   return (
     <div className="composer" data-disabled={disabled || undefined}>
+      {matches.length > 0 && (
+        <ul className="slash-menu" role="listbox" aria-label="Slash commands">
+          {matches.map((c) => (
+            <li key={`${c.kind}:${c.name}`}>
+              <button type="button" className="slash-item" onClick={() => pickCommand(c.name)}>
+                <span className="slash-name">
+                  /{c.name}
+                  {c.kind === 'skill' && <span className="slash-badge">skill</span>}
+                </span>
+                <span className="slash-desc">{c.desc}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="inputbar">
         <span className="prompt-glyph" aria-hidden="true">
           ❯

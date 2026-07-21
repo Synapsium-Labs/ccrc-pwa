@@ -15,6 +15,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
 import { readRegistry } from './registry.js';
 import { ccd, listProjects } from './lifecycle.js';
+import { sessionCommands } from './commands.js';
 import { saveUploadAndClip } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { FleetSession, SessionStreamMsg } from '../../shared/api.js';
@@ -138,6 +139,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  app.get('/api/sessions/:id/commands', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    return sessionCommands(deps, id);
   });
 
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {

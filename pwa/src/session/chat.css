@@ -642,9 +642,11 @@
 }
 .prompt-glyph {
   flex: none;
-  font: var(--weight-semibold) var(--text-base) / 1 var(--font-mono);
+  /* Match the textarea's first-line box (size / leading / vertical padding) so
+     the glyph sits on the text baseline instead of floating above it. */
+  font: var(--weight-semibold) var(--text-input) / var(--leading-normal) var(--font-mono);
   color: var(--accent);
-  padding: var(--sp-3) 0;
+  padding: 10px 0;
 }
 .composer-input {
   flex: 1;
@@ -1048,4 +1050,64 @@
     animation: none;
     border-color: var(--accent);
   }
+}
+
+/* Slash-command autocomplete — floats above the input bar, phosphor list */
+.slash-menu {
+  list-style: none;
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-1);
+  max-height: 44vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+.slash-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--dur-press) var(--ease-swift);
+}
+.slash-item:hover,
+.slash-item:focus-visible {
+  background: var(--accent-tint);
+  outline: none;
+}
+.slash-item:active { background: var(--accent-tint); }
+.slash-name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+.slash-badge {
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-sm);
+  padding: 0 6px;
+  line-height: 1.5;
+}
+.slash-desc {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  line-height: var(--leading-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
