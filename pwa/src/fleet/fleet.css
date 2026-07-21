@@ -1,0 +1,376 @@
+/* Fleet surface — "Phosphor & Ink". Session-card treatments are ported from
+   the approved design/mockup.html; every color/size/duration is a token from
+   styles/tokens.css. Limit-bar and dot chrome come from components/
+   primitives.css — this file only adds what the fleet screen owns. */
+
+/* ------------------------------------------------------------------ *
+ *  Screen shell — single column, 390px-first; desktop is the same     *
+ *  layout with more air (capped column, centered).                    *
+ * ------------------------------------------------------------------ */
+.fleet {
+  min-height: 100dvh;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4)
+    calc(var(--sp-12) + var(--sp-12) + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.fleet-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--sp-1) var(--sp-1) 0;
+}
+.wordmark {
+  font: var(--weight-medium) var(--text-xl) / 1 var(--font-mono);
+  color: var(--ink-primary);
+}
+.wordmark::before {
+  content: '\276F';
+  color: var(--accent);
+  margin-right: 0.4em;
+}
+.fleet-count {
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+
+.fleet-list {
+  display: grid;
+  gap: var(--sp-3);
+}
+/* Offline: last-known cards stay readable, just visibly stale. */
+.fleet[data-conn='down'] .fleet-list {
+  opacity: 0.75;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Offline banner — slim, persistent, quiet.                          *
+ * ------------------------------------------------------------------ */
+.offline-banner {
+  position: sticky;
+  top: calc(var(--sp-2) + var(--safe-top));
+  z-index: var(--z-header);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: var(--sp-8);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+}
+.offline-banner::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--status-attention);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Notices — dismissible fleet-wide banners (account moves etc.).     *
+ * ------------------------------------------------------------------ */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  color: var(--ink-secondary);
+}
+.notice-msg {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-2) 0;
+}
+.notice-x {
+  flex: none;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  color: var(--ink-tertiary);
+  font: var(--weight-regular) var(--text-lg) / 1 var(--font-ui);
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Session card — surface, hairline, mono title; glow means life.     *
+ * ------------------------------------------------------------------ */
+.card {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-4);
+  display: grid;
+  gap: var(--sp-3);
+}
+.card--busy {
+  border-color: color-mix(in srgb, var(--status-busy) 40%, var(--edge-subtle));
+}
+.card--busy::after,
+.card--attention::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.55;
+  animation: card-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+.card--busy::after {
+  box-shadow: var(--glow-busy);
+}
+.card--attention {
+  border-color: color-mix(in srgb, var(--status-attention) 40%, var(--edge-subtle));
+}
+.card--attention::after {
+  box-shadow: var(--glow-attention);
+  animation-duration: var(--pulse-period);
+}
+@keyframes card-breathe {
+  to {
+    opacity: 1;
+  }
+}
+
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.proj {
+  font: var(--weight-medium) var(--text-lg) / var(--leading-tight) var(--font-mono);
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  color: var(--ink-primary);
+}
+/* The title is the card's open control, stretched over the whole card so the
+   entire surface is one ≥44px target. Inner controls that must stay tappable
+   (restart) sit above the stretch with z-index. */
+.card-open {
+  display: block;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.card-open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-lg);
+}
+.card-restart {
+  position: relative;
+  z-index: 1;
+}
+
+.card-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* Account chip — mono name first, hue second (colors arrive inline from
+   lib/accounts.ts token names; a dead card drains its chip to gray). */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  padding: var(--sp-1) 9px;
+  border-radius: var(--r-full);
+}
+.chip i {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  background: currentColor;
+}
+
+/* Status line — mono readout beside the chip; tabular so ticking relative
+   times never jitter sideways. */
+.status-line {
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.status-line--busy {
+  color: var(--status-busy-text);
+}
+.status-line--idle {
+  color: var(--ink-tertiary);
+}
+.status-line--attention {
+  color: var(--status-attention-text);
+}
+.status-line--dead {
+  color: var(--status-dead-text);
+}
+
+/* The lamp: status dot seated in a darker well — an indicator behind glass.
+   Its `color` carries the current state hue for the one-shot ping ring. */
+.lamp {
+  position: relative;
+  width: var(--lamp-size);
+  height: var(--lamp-size);
+  border-radius: var(--r-full);
+  background: var(--bg-well);
+  box-shadow:
+    inset 0 0 0 1px var(--edge-strong),
+    inset 0 1px 2px var(--scrim);
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin-top: 2px;
+}
+.lamp[data-status='busy'] {
+  color: var(--status-busy);
+}
+.lamp[data-status='dialog'] {
+  color: var(--status-attention);
+}
+.lamp[data-status='idle'] {
+  color: var(--status-idle);
+}
+.lamp[data-status='dead'] {
+  color: var(--status-dead);
+}
+/* One-shot expanding ring when the state changes — the ring takes the NEW
+   state's color via currentColor. */
+.lamp--ping::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--r-full);
+  border: 1.5px solid currentColor;
+  opacity: 0;
+  animation: lamp-ping var(--dur-ping) var(--ease-swift) 1 forwards;
+}
+@keyframes lamp-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+/* Attention badge — never a bare dot to interpret. */
+.card-attn {
+  font: var(--weight-medium) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  color: var(--status-attention-text);
+  background: var(--status-attention-tint);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+/* Dead card — the machine gone cold, via color tokens (never element
+   opacity, which would push ink below AA). */
+.card--dead .proj {
+  color: var(--ink-secondary);
+}
+.card-hint {
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  color: var(--ink-secondary);
+}
+
+/* ------------------------------------------------------------------ *
+ *  First-run block — the friendly empty fleet.                        *
+ * ------------------------------------------------------------------ */
+.first-run {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-3);
+  text-align: center;
+  padding: var(--sp-12) var(--sp-4) var(--sp-8);
+}
+.first-run-mark {
+  font: var(--weight-medium) var(--text-2xl) / 1 var(--font-mono);
+  color: var(--accent);
+}
+.first-run-title {
+  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-primary);
+}
+.first-run-copy {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  max-width: 30ch;
+}
+.first-run .btn-primary {
+  max-width: 280px;
+  margin-top: var(--sp-2);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Floating "+" — bottom-right, thumb reach, phosphor accent.         *
+ * ------------------------------------------------------------------ */
+.fab {
+  position: fixed;
+  /* hugs the column on desktop, the screen edge on mobile */
+  right: max(var(--sp-4), calc(50vw - 320px + var(--sp-4)));
+  bottom: calc(var(--sp-6) + var(--safe-bottom));
+  z-index: var(--z-header);
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  font: var(--weight-medium) var(--text-2xl) / 1 var(--font-ui);
+  box-shadow: var(--shadow-card);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.fab:active {
+  transform: scale(0.94);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Reduced motion — glow freezes at mid-intensity, the ping never     *
+ *  fires. Disable loops outright; never zero their periods.           *
+ * ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .card--busy::after,
+  .card--attention::after {
+    animation: none;
+    opacity: 0.8;
+  }
+  .lamp--ping::after {
+    animation: none;
+    opacity: 0;
+  }
+  .fab,
+  .card-open {
+    transition: none;
+  }
+}

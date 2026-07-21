@@ -1,0 +1,200 @@
+// Session card — the fleet's unit of glance. Glow means life: busy breathes
+// phosphor, a pending dialog pulses amber (with a plain-language badge), dead
+// is matte and cold with one-tap recovery. The whole card is one stretched
+// ≥44px open target; on a dead card, holding it (or the inline button)
+// restarts via api.ensure.
+import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import type { FleetSession, SessionStatus } from '../../../shared/api';
+import { accountColorVar, accountLabel } from '../lib/accounts';
+import { LimitBar } from '../components/LimitBar';
+import { StatusDot } from '../components/StatusDot';
+import { toast } from '../components/Toast';
+import { api } from '../lib/api';
+import './fleet.css';
+
+const LONG_PRESS_MS = 550;
+const LONG_PRESS_SLOP_PX = 12;
+const PING_MS = 400; // --dur-ping plus a little settle
+
+/** Re-render tick so relative times ("2m ago") stay honest while mounted. */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+/** '2m' | '3h' | '5d' — null under a minute (callers phrase that case). */
+function relShort(now: number, then: number | null): string | null {
+  if (then === null) return null;
+  const minutes = Math.floor(Math.max(0, now - then) / 60_000);
+  if (minutes < 1) return null;
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+export function SessionCard({
+  session,
+  onOpen,
+}: {
+  session: FleetSession;
+  onOpen: (id: string) => void;
+}): ReactNode {
+  const now = useNow(30_000);
+  const [restarting, setRestarting] = useState(false);
+
+  const dead = session.status === 'dead';
+  const attention = !dead && session.dialogPending;
+  const busy = !attention && session.status === 'busy';
+  const dotStatus: SessionStatus | 'dialog' = dead ? 'dead' : attention ? 'dialog' : session.status;
+
+  // One-shot ping ring when the lamp changes state.
+  const [ping, setPing] = useState(false);
+  const prevDot = useRef(dotStatus);
+  useEffect(() => {
+    if (prevDot.current === dotStatus) return;
+    prevDot.current = dotStatus;
+    setPing(true);
+    const timer = setTimeout(() => setPing(false), PING_MS);
+    return () => clearTimeout(timer);
+  }, [dotStatus]);
+
+  const restart = async (): Promise<void> => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      await api.ensure(session.id);
+    } catch (err) {
+      toast(`Couldn't restart — ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      setRestarting(false);
+    }
+  };
+
+  // Long-press on a dead card restarts; a short tap still opens the chat.
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+  const longPressed = useRef(false);
+  const cancelPress = (): void => {
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    pressOrigin.current = null;
+  };
+  const onPointerDown = (e: ReactPointerEvent): void => {
+    if (!dead) return;
+    longPressed.current = false;
+    pressOrigin.current = { x: e.clientX, y: e.clientY };
+    pressTimer.current = setTimeout(() => {
+      pressTimer.current = null;
+      longPressed.current = true;
+      void restart();
+    }, LONG_PRESS_MS);
+  };
+  const onPointerMove = (e: ReactPointerEvent): void => {
+    const origin = pressOrigin.current;
+    if (origin && Math.hypot(e.clientX - origin.x, e.clientY - origin.y) > LONG_PRESS_SLOP_PX) {
+      cancelPress(); // it's a scroll, not a hold
+    }
+  };
+  const open = (): void => {
+    if (longPressed.current) {
+      longPressed.current = false;
+      return; // the hold already restarted — don't also navigate
+    }
+    onOpen(session.id);
+  };
+
+  const rel = relShort(now, session.statusUpdatedAt);
+  const statusLine = dead
+    ? rel
+      ? `exited · ${rel} ago`
+      : 'exited · just now'
+    : attention
+      ? rel
+        ? `waiting on you · ${rel}`
+        : 'waiting on you'
+      : busy
+        ? rel
+          ? `working · ${rel}`
+          : 'working'
+        : rel
+          ? `idle · ${rel} ago`
+          : 'idle · just now';
+  const lineVariant = dead ? 'dead' : attention ? 'attention' : busy ? 'busy' : 'idle';
+
+  // Chip colors resolve through the account token names; a dead card's chip
+  // drains to gray — identity stays in the mono name.
+  const acctVar = accountColorVar(session.wrapper);
+  const chipStyle: CSSProperties = dead
+    ? { color: 'var(--ink-secondary)', background: 'var(--bg-raised)' }
+    : {
+        color: `var(${acctVar})`,
+        background: acctVar.startsWith('--acct-') ? `var(${acctVar}-tint)` : 'var(--bg-raised)',
+      };
+
+  const cardClass = dead
+    ? 'card card--dead'
+    : attention
+      ? 'card card--attention'
+      : busy
+        ? 'card card--busy'
+        : 'card';
+
+  return (
+    <article className={cardClass}>
+      <div className="card-top">
+        <h2 className="proj">
+          <button
+            type="button"
+            className="card-open"
+            onClick={open}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={cancelPress}
+            onPointerCancel={cancelPress}
+          >
+            {session.name ?? session.project}
+          </button>
+        </h2>
+        <span className={ping ? 'lamp lamp--ping' : 'lamp'} data-status={dotStatus}>
+          <StatusDot status={dotStatus} />
+        </span>
+      </div>
+
+      <div className="card-sub">
+        <span className="chip" style={chipStyle}>
+          <i aria-hidden="true" />
+          {accountLabel(session.wrapper)}
+        </span>
+        <span className={`status-line status-line--${lineVariant}`}>{statusLine}</span>
+      </div>
+
+      {attention && <p className="card-attn">Claude is asking you something — tap to answer</p>}
+
+      {!dead && (
+        <LimitBar five={session.limits?.five ?? null} seven={session.limits?.seven ?? null} />
+      )}
+
+      {dead && (
+        <>
+          <p className="card-hint">Not running — tap to view, hold to restart</p>
+          <button
+            type="button"
+            className="btn-ghost card-restart"
+            onClick={() => void restart()}
+            disabled={restarting}
+          >
+            {restarting ? 'Restarting…' : 'Restart session'}
+          </button>
+        </>
+      )}
+    </article>
+  );
+}
