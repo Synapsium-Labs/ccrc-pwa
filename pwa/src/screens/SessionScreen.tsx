@@ -6,10 +6,12 @@
 // DialogSheet mounts at the bottom; TerminalDrawer (Task 12) will join it.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
+import { SwapSheet } from '../fleet/SwapSheet';
 import { accountColorVar } from '../lib/accounts';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
@@ -75,6 +77,9 @@ export function SessionScreen({
   const [restarting, setRestarting] = useState(false);
   // TerminalDrawer (Task 12) mounts on this flag.
   const [, setTerminalOpen] = useState(false);
+  // Lifecycle surfaces behind the header's overflow menu.
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [stopOpen, setStopOpen] = useState(false);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
@@ -125,6 +130,24 @@ export function SessionScreen({
     toast('The terminal opens here soon');
   };
 
+  // "Change model": type /model into the session — Claude's picker then
+  // arrives as a normal dialog and renders through DialogSheet.
+  const changeModel = async (): Promise<void> => {
+    try {
+      await api.prompt(id, '/model');
+    } catch (err) {
+      toast(`Couldn't open the model picker — ${apiErrorText(err)}`, 'error');
+    }
+  };
+
+  const stopSession = async (): Promise<void> => {
+    try {
+      await api.stop(id);
+    } catch (err) {
+      toast(`Couldn't stop the session — ${apiErrorText(err)}`, 'error');
+    }
+  };
+
   return (
     <div
       className="chat"
@@ -139,6 +162,9 @@ export function SessionScreen({
         onInterrupt={() => void interrupt()}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
+        onChangeModel={() => void changeModel()}
+        onMoveAccount={() => setSwapOpen(true)}
+        onStopSession={() => setStopOpen(true)}
         fallback={{ title: project, wrapper }}
       />
 
@@ -211,6 +237,20 @@ export function SessionScreen({
       />
 
       <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} />
+      <SwapSheet
+        session={live ?? { id, wrapper, project }}
+        open={swapOpen}
+        onClose={() => setSwapOpen(false)}
+        fleet={useFleet}
+      />
+      <QuickConfirm
+        open={stopOpen}
+        onClose={() => setStopOpen(false)}
+        title="Stop this session?"
+        consequence="The session goes offline until you start it again. Its conversation is kept."
+        confirmLabel="Stop session"
+        onConfirm={() => void stopSession()}
+      />
       {/* TerminalDrawer mounts here (Task 12) — opened via `terminalOpen`. */}
     </div>
   );

@@ -52,6 +52,9 @@ const renderHeader = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProp
     onInterrupt: vi.fn(),
     onOpenTerminal: vi.fn(),
     onBack: vi.fn(),
+    onChangeModel: vi.fn(),
+    onMoveAccount: vi.fn(),
+    onStopSession: vi.fn(),
     ...over,
   };
   render(<SessionHeader {...props} />);

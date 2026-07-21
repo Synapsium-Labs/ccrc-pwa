@@ -21,6 +21,16 @@ export class ApiError extends Error {
   }
 }
 
+/** Human-readable failure text for a caught error: lifecycle routes fail as
+ *  502 { stderr } (ccd's own words) — prefer that over the generic message. */
+export function apiErrorText(err: unknown): string {
+  if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
+    const stderr = (err.body as { stderr?: unknown }).stderr;
+    if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {

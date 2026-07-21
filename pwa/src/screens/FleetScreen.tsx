@@ -1,11 +1,11 @@
 // Fleet screen (route `/`) — a thin renderer over the fleet store. Single
 // column of session cards, offline/notice banners, skeletons while the first
 // snapshot is in flight, a friendly first-run block, and a floating "+"
-// within thumb reach (NewSessionSheet arrives in Task 10 — placeholder now).
-import { useEffect } from 'react';
+// within thumb reach that opens the NewSessionSheet.
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { SessionCard } from '../fleet/SessionCard';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -33,8 +33,8 @@ export function FleetScreen({
   }, [store]);
 
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
-  const newSession =
-    onNewSession ?? (() => toast('Starting sessions from here is coming soon'));
+  const [newOpen, setNewOpen] = useState(false);
+  const newSession = onNewSession ?? (() => setNewOpen(true));
 
   const waiting = sessions.filter((s) => s.dialogPending).length;
   const countLine =
@@ -101,6 +101,8 @@ export function FleetScreen({
       <button type="button" className="fab" aria-label="New session" onClick={newSession}>
         <span aria-hidden="true">+</span>
       </button>
+
+      <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
     </main>
   );
 }

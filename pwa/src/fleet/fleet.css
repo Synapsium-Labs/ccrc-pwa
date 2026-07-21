@@ -356,6 +356,177 @@
 }
 
 /* ------------------------------------------------------------------ *
+ *  Lifecycle sheets — the account picker rows shared by NewSession    *
+ *  and Swap, and the project picker. Rows echo the dialog sheet's     *
+ *  option grammar: 52px hairline-separated, mono machine voice.       *
+ * ------------------------------------------------------------------ */
+.sheet-copy {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  margin-bottom: var(--sp-4);
+}
+.acct-list {
+  display: grid;
+  border-top: 1px solid var(--edge-subtle);
+}
+.acct-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-1);
+  border: none;
+  border-bottom: 1px solid var(--edge-subtle);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.acct-row:active {
+  transform: scale(0.97);
+}
+.acct-suggested {
+  flex: none;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--accent);
+  background: var(--accent-tint);
+  border-radius: var(--r-full);
+  padding: 3px var(--sp-2);
+}
+/* The gauges column rides the right edge — two thin limit tracks (span
+   clones of the LimitBar chrome) or an honest "limits unknown". */
+.acct-gauges {
+  flex: none;
+  margin-left: auto;
+  width: 148px;
+  display: grid;
+  gap: 5px;
+}
+.acct-gauge {
+  display: grid;
+  grid-template-columns: 18px 1fr 34px;
+  align-items: center;
+  gap: var(--sp-1);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+.acct-gauge-pct {
+  text-align: right;
+}
+.acct-unknown {
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary);
+  text-align: right;
+}
+.acct-chev {
+  flex: none;
+  font: var(--weight-regular) var(--text-base) / 1 var(--font-ui);
+  color: var(--ink-tertiary);
+}
+
+/* Step-2 header: the chosen account, tappable to change. */
+.acct-change {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--tap-min);
+  border: none;
+  background: none;
+  padding: 0;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+
+/* Project picker — mono directory listing under a search line. */
+.proj-search {
+  width: 100%;
+  min-height: var(--tap-min);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  padding: 0 var(--sp-3);
+  margin-bottom: var(--sp-2);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-swift);
+}
+.proj-search:focus {
+  border-color: var(--accent);
+}
+.proj-search::placeholder {
+  color: var(--ink-tertiary);
+}
+.proj-list {
+  display: grid;
+  border-top: 1px solid var(--edge-subtle);
+  margin-bottom: var(--sp-2);
+  max-height: 40dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.proj-row {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: var(--sp-2);
+  row-gap: 2px;
+  align-items: center;
+  width: 100%;
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-1);
+  border: none;
+  border-bottom: 1px solid var(--edge-subtle);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.proj-row:active {
+  transform: scale(0.97);
+}
+.proj-row--selected {
+  background: var(--accent-tint);
+  border-radius: var(--r-md);
+  border-bottom-color: transparent;
+}
+.proj-glyph {
+  grid-row: span 2;
+  font: var(--weight-semibold) var(--text-base) / 1 var(--font-mono);
+  color: var(--accent);
+}
+.proj-name {
+  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.proj-dir {
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+.proj-none,
+.proj-error {
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  padding: var(--sp-4) var(--sp-1);
+}
+.proj-error {
+  color: var(--status-dead-text);
+}
+.proj-skel {
+  padding: var(--sp-3) 0;
+}
+.sheet-confirm {
+  margin-top: var(--sp-2);
+}
+
+/* ------------------------------------------------------------------ *
  *  Reduced motion — glow freezes at mid-intensity, the ping never     *
  *  fires. Disable loops outright; never zero their periods.           *
  * ------------------------------------------------------------------ */
@@ -370,7 +541,10 @@
     opacity: 0;
   }
   .fab,
-  .card-open {
+  .card-open,
+  .acct-row,
+  .proj-row,
+  .proj-search {
     transition: none;
   }
 }

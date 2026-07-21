@@ -128,6 +128,44 @@
   cursor: default;
 }
 
+/* Overflow menu — the session's lifecycle actions in one sheet. Rows echo
+   the dialog sheet's grammar; mono hints carry the command truth (/model);
+   the destructive row wears dead-red ink. */
+.menu {
+  border-top: 1px solid var(--edge-subtle);
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-1);
+  border: none;
+  border-bottom: 1px solid var(--edge-subtle);
+  background: none;
+  text-align: left;
+  font: var(--weight-regular) var(--text-base) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-primary);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.menu-item:active {
+  transform: scale(0.97);
+}
+.menu-label {
+  flex: 1;
+  min-width: 0;
+}
+.menu-hint {
+  flex: none;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.menu-item--danger .menu-label {
+  color: var(--status-dead-text);
+}
+
 /* ------------------------------------------------------------------ *
  *  Banners — offline, dead (read-only), missing transcript.           *
  * ------------------------------------------------------------------ */
@@ -835,7 +873,8 @@
   .inputbar,
   .chat-head .keycap,
   .pending-actions button,
-  .opt {
+  .opt,
+  .menu-item {
     transition: none;
   }
 }

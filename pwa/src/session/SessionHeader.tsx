@@ -1,12 +1,15 @@
 // Session header — the chat's sticky, safe-area-padded top strip: back
 // chevron, the session's live name (fleet `name`, falling back to project),
 // status meta (breathing dot + mono word; busy ticks a live elapsed clock),
-// the account chip, and two raised keycaps — `>_` opens the terminal drawer
-// and `esc` interrupts (DIRECTION: "a keycap, not an icon"), enabled only
-// while the session is busy. Confirm-free: pressing esc just sends it.
+// the account chip, and three raised keycaps — `>_` opens the terminal
+// drawer, `⋯` opens the lifecycle overflow menu (change model / move
+// account / stop), and `esc` interrupts (DIRECTION: "a keycap, not an
+// icon"), enabled only while the session is busy. Confirm-free: pressing
+// esc just sends it.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, SessionStatus } from '../../../shared/api';
+import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
 import './chat.css';
@@ -18,6 +21,13 @@ export interface SessionHeaderProps {
   onInterrupt: () => void;
   onOpenTerminal: () => void;
   onBack: () => void;
+  /** Overflow menu: "Change model" — the picker then arrives as a normal
+   *  dialog and renders through DialogSheet. */
+  onChangeModel: () => void;
+  /** Overflow menu: "Move to another account" — opens the SwapSheet. */
+  onMoveAccount: () => void;
+  /** Overflow menu: "Stop session" — opens the stop QuickConfirm. */
+  onStopSession: () => void;
   /** Pre-snapshot identity derived from the session id (`wrapper:project`) —
    *  keeps the header instant on deep links before `/ws/fleet` lands. */
   fallback?: { title: string; wrapper: string };
@@ -62,8 +72,19 @@ export function SessionHeader({
   onInterrupt,
   onOpenTerminal,
   onBack,
+  onChangeModel,
+  onMoveAccount,
+  onStopSession,
   fallback,
 }: SessionHeaderProps): ReactNode {
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Menu taps close the sheet first so the follow-up surface (swap sheet,
+  // stop confirm, arriving model dialog) never fights it for the bottom edge.
+  const menuAct = (fn: () => void): void => {
+    setMenuOpen(false);
+    fn();
+  };
+
   // Live stream status wins; the fleet snapshot fills in before it connects.
   const st: SessionStatus | null = status ?? session?.status ?? null;
   const at = statusUpdatedAt ?? session?.statusUpdatedAt ?? null;
@@ -123,6 +144,14 @@ export function SessionHeader({
       </button>
       <button
         type="button"
+        className="keycap keycap--more"
+        aria-label="More"
+        onClick={() => setMenuOpen(true)}
+      >
+        <span aria-hidden="true">⋯</span>
+      </button>
+      <button
+        type="button"
         className="keycap keycap--esc"
         aria-label="Stop"
         disabled={!busy}
@@ -130,6 +159,27 @@ export function SessionHeader({
       >
         esc
       </button>
+
+      <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
+        <div className="menu">
+          <button type="button" className="menu-item" onClick={() => menuAct(onChangeModel)}>
+            <span className="menu-label">Change model</span>
+            <span className="menu-hint" aria-hidden="true">
+              /model
+            </span>
+          </button>
+          <button type="button" className="menu-item" onClick={() => menuAct(onMoveAccount)}>
+            <span className="menu-label">Move to another account</span>
+          </button>
+          <button
+            type="button"
+            className="menu-item menu-item--danger"
+            onClick={() => menuAct(onStopSession)}
+          >
+            <span className="menu-label">Stop session</span>
+          </button>
+        </div>
+      </Sheet>
     </header>
   );
 }

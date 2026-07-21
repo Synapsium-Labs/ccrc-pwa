@@ -9,6 +9,11 @@ const ACCOUNTS: Record<string, { label: string; colorVar: string }> = {
   gpt: { label: 'gpt', colorVar: '--acct-gpt' },
 };
 
+/** The four accounts in ccd's rotation order — the canonical list for account
+ *  pickers. Callers union in any extra wrapper the fleet reports so a server
+ *  that grows a fifth account still shows up. */
+export const KNOWN_WRAPPERS: readonly string[] = ['claude', 'claude2', 'claude-corp', 'gpt'];
+
 /** Human label for an account, e.g. 'claude2' → 'alt·max'. Unknown wrappers
  *  fall back to the raw name — never hide an account the server reports. */
 export function accountLabel(wrapper: string): string {
