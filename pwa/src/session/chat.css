@@ -1111,3 +1111,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Inline images (markdown images + bare image-URL links) — tap to open full */
+.msg-img-link {
+  display: inline-block;
+  max-width: 100%;
+  margin: var(--sp-2) 0;
+}
+.msg-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-md);
+  border: 1px solid var(--edge-subtle);
+}
+/* Links in user bubbles inherit the on-bubble ink but stay underlined. */
+.msg-user a { color: inherit; text-underline-offset: 3px; }
