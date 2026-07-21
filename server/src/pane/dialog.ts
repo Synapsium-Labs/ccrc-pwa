@@ -16,7 +16,10 @@ export type PaneState = 'busy' | 'prompt' | 'menu' | 'other';
 export function paneState(pane: string): PaneState {
   if (BUSY_RE.test(pane)) return 'busy';
   if (MENU_RE.test(pane)) return 'menu';
-  if (pane.split('\n').some((l) => l.startsWith('❯ '))) return 'prompt';
+  // The input box marker is `❯` followed by either a space or a U+00A0
+  // non-breaking space (empty box), so match the marker alone. Menus are already
+  // handled above, so a bare `❯` here is the prompt.
+  if (pane.split('\n').some((l) => l.startsWith('❯'))) return 'prompt';
   return 'other';
 }
 

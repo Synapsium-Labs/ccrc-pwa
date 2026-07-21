@@ -175,7 +175,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     const rec = (await readRegistry(deps.cfg)).find((r) => r.id === id);
     if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return runCcd(reply, ['stop', rec.wrapper, rec.project]);
+    // ccd stop recomputes the id as `<wrapper>-<project>`, so it needs the
+    // ORIGINAL wrapper baked into the id — not rec.wrapper, which a prior swap
+    // flips to the new account while the id/tmux name keep the old prefix.
+    const originalWrapper = id.endsWith(`-${rec.project}`)
+      ? id.slice(0, id.length - rec.project.length - 1)
+      : rec.wrapper;
+    return runCcd(reply, ['stop', originalWrapper, rec.project]);
   });
 
   // Image upload: save under uploadsDir, then `ccd clip` moves it into

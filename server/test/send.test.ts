@@ -112,6 +112,46 @@ describe('sendPrompt', () => {
     ]);
   });
 
+  it('ignores ❯ history lines; input box is the LAST ❯ line and uses a non-breaking space', async () => {
+    // Real Claude Code panes render past user turns with `❯ ` (regular space)
+    // ABOVE the live input box — and the empty input box renders as `❯` + U+00A0
+    // NON-BREAKING SPACE. The draft check must read the input box (last ❯ line,
+    // nbsp-marked), not the first ❯ history line — else every prompt into a
+    // session with history false-positives as draft-present and is dropped.
+    const NBSP = ' ';
+    const withHistory = (box: string) =>
+      'past context\n' +
+      '❯ /effort ultracode\n' +               // history: ❯ + regular space
+      '  ⎿  Set effort level to ultracode\n' +
+      '❯ SENTINEL ping - reply with pong\n' +  // history: ❯ + regular space
+      '● pong\n' +
+      '─────────────────\n' +
+      `❯${box === '' ? NBSP : ' ' + box}\n` +  // input box: ❯ + nbsp when empty
+      '─────────────────\n' +
+      '  👤 team·max │ 🤖 Fable 5\n';
+    const { tmux, calls } = fakeTmux([
+      withHistory(''),            // empty input box (❯ + nbsp) despite history ❯ lines above
+      withHistory('hello world'), // verify: input box now echoes the text
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', 'cc-myid', 'Enter'],
+    ]);
+  });
+
+  it('detects a real draft in the input box even with history ❯ lines above', async () => {
+    // The clip-path case: ccd clip types a path into the input box (no Enter),
+    // and there is conversation history above. draftOf must return the box text.
+    const pane =
+      'earlier turn\n❯ old submitted prompt\n● a reply\n────\n❯ /home/u/.cc-clips/cctest/clip-1.png \n────\n status';
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: '/home/u/.cc-clips/cctest/clip-1.png' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
   it('verify-failed when the pane never echoes the text; Enter never sent', async () => {
     const { tmux, calls } = fakeTmux(['❯ \n', '❯ \n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'will not appear');

@@ -89,6 +89,32 @@ describe('lifecycle routes', () => {
     await app.close();
   });
 
+  it('POST /api/sessions/:id/stop uses the id-prefix wrapper, not a swapped registry wrapper', async () => {
+    // After `ccd swap`, the registry `wrapper` field flips to the new account but
+    // the session id and tmux name keep the ORIGINAL wrapper prefix
+    // (claude2-cctest). Stop must target the id's prefix wrapper so ccd recomputes
+    // the correct id — using the swapped wrapper would kill a nonexistent session
+    // and leave the real one alive.
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'claude2-cctest', {
+      wrapper: 'claude',            // swapped to claude…
+      project: 'cctest',
+      workdir: '/data/projects/cctest',
+      uuid: '2'.repeat(36),
+      started: '1',
+      lastswap: '1784650000',
+    });
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer({ cfg, run, tmux: new Tmux(run) });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
+    expect(res.statusCode).toBe(200);
+    // …but stop must still target claude2-cctest, not claude-cctest.
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'cctest']]);
+    await app.close();
+  });
+
   it('POST /api/sessions/:id/stop on an unknown id returns 404 without calling ccd', async () => {
     const { app, calls } = await makeApp();
     const res = await app.inject({ method: 'POST', url: '/api/sessions/nope/stop', payload: {} });

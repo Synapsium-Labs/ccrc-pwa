@@ -12,9 +12,19 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const PANE_TAIL = 2000;
 
-/** Text after `❯ ` on the prompt line, trimmed; '' when no prompt line is visible. */
+/**
+ * Text in the live input box, trimmed; '' when empty or no prompt line is visible.
+ * Two real-pane subtleties, both learned from live captures:
+ *  - Claude Code renders past user turns with a `❯ ` prefix in the scrollback
+ *    ABOVE the input box, so the box is the LAST `❯` line, never the first (the
+ *    first is a historical turn and would false-positive as a draft, silently
+ *    dropping every prompt into a session with any conversation history).
+ *  - The EMPTY input box renders as `❯` + U+00A0 NON-BREAKING SPACE, not a plain
+ *    space — so we match the `❯` marker alone and let trim() (which strips U+00A0)
+ *    handle whatever whitespace follows.
+ */
 const draftOf = (pane: string): string =>
-  pane.split('\n').find((l) => l.startsWith('❯ '))?.slice(2).trim() ?? '';
+  pane.split('\n').filter((l) => l.startsWith('❯')).at(-1)?.slice(1).trim() ?? '';
 
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
