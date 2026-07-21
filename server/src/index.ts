@@ -1,11 +1,12 @@
 import { buildServer, type Deps } from './server.js';
 import { loadConfig } from './config.js';
 import { realRunner, Tmux } from './exec.js';
+import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 
 const cfg = loadConfig();
-const deps: Deps = { cfg, run: realRunner, tmux: new Tmux(realRunner) };
+const deps: Deps = { cfg, run: realRunner, tmux: new Tmux(realRunner), spawnPty: attachPty };
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
 
