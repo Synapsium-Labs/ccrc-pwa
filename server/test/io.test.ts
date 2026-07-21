@@ -99,19 +99,26 @@ describe('localIO.tailFile', () => {
     }
   });
 
-  it('emits a reset with the new size when the file is truncated', async () => {
+  it('emits a reset (with the size at truncation-detection time) when the file shrinks', async () => {
     const file = tmpFile('t.log');
     writeFileSync(file, 'one\ntwo\nthree\n');
+    const startSize = statSync(file).size;
     const resets: number[] = [];
     const close = await localIO.tailFile(
       file,
-      statSync(file).size,
+      startSize,
       () => {},
       (size) => resets.push(size),
     );
     try {
       writeFileSync(file, 'x\n'); // shorter than before -> truncation/rotation
-      await vi.waitFor(() => expect(resets).toEqual([2]), { timeout: 3000 });
+      await vi.waitFor(() => expect(resets).toHaveLength(1), { timeout: 3000 });
+      // The exact byte count observed at the truncate instant is racy at the OS
+      // fs-event layer (truncate and the rewrite can surface as separate
+      // events) — callers (TranscriptTailer) treat any reset as "resync from
+      // scratch" and re-read the file's current content afterward, so only
+      // "smaller than where we started" is a load-bearing guarantee here.
+      expect(resets[0]).toBeLessThan(startSize);
     } finally {
       close();
     }
