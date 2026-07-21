@@ -1,0 +1,701 @@
+/* Chat surface — "Phosphor & Ink". Terminal semantics in modern clothes:
+   user turns are input (raised bubbles), assistant turns are output (flush
+   prose), tool cards file the machine's work, wells are the terminal peeking
+   through. Treatments ported from the approved design/mockup.html; every
+   color/size/duration is a token from styles/tokens.css. */
+
+/* ------------------------------------------------------------------ *
+ *  Screen shell — header · banners · list · composer, one column.     *
+ * ------------------------------------------------------------------ */
+.chat {
+  height: 100dvh;
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Header (Task 8 grows this into SessionHeader) — sticky top strip.  *
+ * ------------------------------------------------------------------ */
+.chat-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: calc(var(--sp-2) + var(--safe-top)) var(--sp-3) var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--edge-subtle);
+  background: var(--bg-surface);
+}
+.chat-back {
+  flex: none;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  font: var(--weight-regular) 26px / 1 var(--font-ui);
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+.chat-title-wrap {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.chat-title {
+  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.chat-meta .dot {
+  width: 6px;
+  height: 6px;
+}
+.chat-meta .status-line {
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.chat .status-line--busy {
+  color: var(--status-busy-text);
+}
+.chat .status-line--idle {
+  color: var(--ink-tertiary);
+}
+.chat .status-line--attention {
+  color: var(--status-attention-text);
+}
+.chat .status-line--dead {
+  color: var(--status-dead-text);
+}
+/* Account chip — mono name first, hue second, against the screen-scoped
+   account accent (the [data-acct] rebinding in tokens.css). */
+.chat .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  padding: var(--sp-1) 9px;
+  border-radius: var(--r-full);
+}
+.chat .chip i {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  background: currentColor;
+}
+.chip--active {
+  color: var(--acct-active);
+  background: var(--acct-active-tint);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Banners — offline, dead (read-only), missing transcript.           *
+ * ------------------------------------------------------------------ */
+.chat-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-2) var(--sp-4) 0;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  padding: var(--sp-2) var(--sp-3);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  color: var(--ink-secondary);
+}
+.chat-banner--offline {
+  justify-content: center;
+  min-height: var(--sp-8);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+}
+.chat-banner--offline::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--status-attention);
+}
+.chat-banner--dead {
+  border-color: color-mix(in srgb, var(--status-dead) 35%, var(--edge-subtle));
+  background: var(--status-dead-tint);
+  color: var(--status-dead-text);
+}
+.chat-banner--dead .banner-copy {
+  flex: 1;
+  min-width: 0;
+}
+.chat-banner--dead .btn-ghost {
+  width: auto;
+  flex: none;
+  padding: 0 var(--sp-3);
+  color: var(--ink-primary);
+}
+.chat-banner--missing {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--sp-2);
+  border-color: color-mix(in srgb, var(--status-attention) 35%, var(--edge-subtle));
+  background: var(--status-attention-tint);
+  color: var(--status-attention-text);
+}
+.chat-banner--missing .banner-path {
+  font: var(--weight-regular) var(--text-xs) / var(--leading-mono) var(--font-mono);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+.chat-banner--missing .btn-ghost {
+  width: auto;
+  padding: 0 var(--sp-3);
+  color: var(--ink-primary);
+}
+
+/* ------------------------------------------------------------------ *
+ *  List region — Virtuoso owns the scroll; the shell never does.      *
+ * ------------------------------------------------------------------ */
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.chat-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.chat-scroller {
+  height: 100%;
+  overscroll-behavior: contain;
+}
+.chat-item {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-4);
+}
+
+/* "Jump to latest" pill — appears once the reader scrolls up. */
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: var(--sp-3);
+  z-index: var(--z-header);
+  min-height: var(--tap-min);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  padding: 0 var(--sp-4);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  animation: jump-in var(--dur-fast) var(--ease-swift);
+}
+@keyframes jump-in {
+  from {
+    transform: translate(-50%, var(--sp-2));
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Turn boundaries — mono timestamps and system dividers.             *
+ * ------------------------------------------------------------------ */
+.ts-divider {
+  justify-self: center;
+  text-align: center;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-tertiary);
+  padding: var(--sp-1) 0;
+}
+.sys-divider {
+  justify-self: center;
+  text-align: center;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-tertiary);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  padding: var(--sp-1) var(--sp-3);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ *
+ *  User turns — input: right-aligned raised bubbles + mono receipts.  *
+ * ------------------------------------------------------------------ */
+.msg-user {
+  justify-self: end;
+  max-width: 85%;
+  background: var(--bg-raised);
+  border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  padding: 10px 14px;
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--ink-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg-receipt {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+.msg-receipt--ok b {
+  color: var(--status-busy-text);
+  font-weight: var(--weight-regular);
+}
+.msg-receipt--failed {
+  color: var(--status-dead-text);
+}
+/* Failed sends: the state and its remedy travel together. */
+.msg-user--failed {
+  border: 1px solid color-mix(in srgb, var(--status-dead) 45%, var(--edge-subtle));
+}
+.pending-error {
+  justify-self: end;
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
+  color: var(--status-dead-text);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.pending-actions {
+  justify-self: end;
+  display: flex;
+  gap: var(--sp-2);
+}
+.pending-actions button {
+  min-height: var(--tap-min);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  padding: 0 var(--sp-3);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.pending-actions button:active {
+  transform: scale(0.97);
+}
+.pending-actions .pending-retry {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--edge-strong));
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Assistant turns — output: flush markdown prose, wells for code.    *
+ * ------------------------------------------------------------------ */
+.msg-assist {
+  display: grid;
+  gap: var(--sp-2);
+  font-size: var(--text-base);
+  line-height: var(--leading-mono);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.msg-assist ul,
+.msg-assist ol {
+  padding-left: var(--sp-5);
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--ink-secondary);
+}
+.msg-assist li strong {
+  color: var(--ink-primary);
+  font-weight: var(--weight-semibold);
+}
+.msg-assist h1,
+.msg-assist h2,
+.msg-assist h3,
+.msg-assist h4 {
+  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-primary);
+  margin-top: var(--sp-2);
+}
+.msg-assist h3,
+.msg-assist h4 {
+  font-size: var(--text-base);
+}
+.msg-assist a {
+  color: var(--accent);
+  text-underline-offset: 3px;
+}
+.msg-assist blockquote {
+  border-left: 2px solid var(--edge-strong);
+  padding-left: var(--sp-3);
+  color: var(--ink-secondary);
+}
+.msg-assist hr {
+  border: none;
+  border-top: 1px solid var(--edge-subtle);
+}
+.msg-assist code {
+  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  background: var(--bg-raised);
+  border-radius: var(--r-sm);
+  padding: 2px 5px;
+}
+/* Code blocks are wells — dark in both themes, scrolling inside the glass. */
+.msg-assist pre {
+  background: var(--bg-well);
+  color: var(--ink-on-well);
+  border-radius: var(--r-md);
+  padding: 10px var(--sp-3);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  overflow-x: auto;
+  max-height: var(--well-max);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.msg-assist pre code {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
+.msg-assist table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.msg-assist th,
+.msg-assist td {
+  border: 1px solid var(--edge-subtle);
+  padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+}
+.msg-assist th {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-medium);
+}
+
+/* Streaming caret — the blinking block that means "still talking". */
+.stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  background: var(--accent);
+  vertical-align: -2px;
+  animation: caret-blink var(--caret-period) step-end infinite;
+}
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Tool card — the machine's work, filed neatly.                      *
+ * ------------------------------------------------------------------ */
+.toolcard {
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.tool-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  flex: none;
+}
+.tool-dot--ok {
+  background: var(--status-busy);
+}
+.tool-dot--err {
+  background: var(--status-dead);
+}
+.tool-dot--run {
+  background: var(--status-busy);
+  box-shadow: var(--glow-dot-busy);
+  animation: tool-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+@keyframes tool-breathe {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.tool-name {
+  flex: none;
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  color: var(--ink-primary);
+}
+.tool-sum {
+  flex: 1;
+  min-width: 0;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-dur {
+  flex: none;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+.tool-chev {
+  flex: none;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  transition: transform var(--dur-base) var(--ease-swift);
+}
+.tool-row[aria-expanded='true'] .tool-chev {
+  transform: rotate(90deg);
+}
+.tool-body-wrap {
+  overflow: hidden;
+}
+.tool-body {
+  border-top: 1px solid var(--edge-subtle);
+  padding: var(--sp-3);
+  display: grid;
+  gap: var(--sp-2);
+}
+.tool-eyebrow {
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.well {
+  background: var(--bg-well);
+  color: var(--ink-on-well);
+  border-radius: var(--r-md);
+  padding: 10px var(--sp-3);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  overflow-x: auto;
+  max-height: var(--well-max);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.tool-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font: var(--weight-regular) var(--text-2xs) / 1.5 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+.exit-badge {
+  font: var(--weight-semibold) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--status-dead-text);
+  background: var(--status-dead-tint);
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Composer — the prompt line, docked above the keyboard.             *
+ * ------------------------------------------------------------------ */
+.composer {
+  flex: none;
+  padding: var(--sp-2) var(--sp-4) calc(var(--sp-3) + var(--safe-bottom));
+}
+.inputbar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-xl);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4);
+  transition: border-color var(--dur-fast) var(--ease-swift);
+}
+.inputbar:focus-within {
+  border-color: var(--accent);
+}
+.prompt-glyph {
+  flex: none;
+  font: var(--weight-semibold) var(--text-base) / 1 var(--font-mono);
+  color: var(--accent);
+  padding: var(--sp-3) 0;
+}
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  outline: none;
+  resize: none;
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  padding: 10px 0;
+  /* 1 → 6 lines, then inner scroll (6 × 16px × 1.5 = calc below). */
+  max-height: calc(var(--text-input) * 9);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.composer-input::placeholder {
+  color: var(--ink-tertiary);
+}
+.send-btn {
+  flex: none;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  font: var(--weight-semibold) 18px / 1 var(--font-ui);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), background var(--dur-fast) var(--ease-swift);
+}
+.send-btn:active {
+  transform: scale(0.92);
+}
+.send-btn:disabled {
+  background: var(--edge-subtle);
+  color: var(--ink-disabled);
+  cursor: default;
+}
+.composer[data-disabled='true'] .inputbar {
+  background: var(--bg-surface);
+}
+.composer[data-disabled='true'] .prompt-glyph {
+  color: var(--ink-disabled);
+}
+.composer[data-disabled='true'] .composer-input::placeholder {
+  color: var(--ink-disabled);
+}
+
+/* Draft-conflict sheet body. */
+.draft-copy {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  margin-bottom: var(--sp-3);
+}
+.draft-well {
+  margin-bottom: var(--sp-4);
+}
+.draft-actions {
+  display: grid;
+  gap: var(--sp-2);
+}
+.draft-cancel {
+  min-height: var(--tap-min);
+  border: none;
+  background: none;
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Loading & empty states.                                            *
+ * ------------------------------------------------------------------ */
+.chat-skel {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-4);
+  display: grid;
+  gap: var(--sp-5);
+  align-content: end;
+}
+.chat-skel .skel--user {
+  justify-self: end;
+  width: 60%;
+}
+.chat-skel .skel--assist {
+  width: 90%;
+}
+.chat-empty {
+  flex: 1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--sp-3);
+  text-align: center;
+  padding: var(--sp-8) var(--sp-4);
+}
+.chat-empty-mark {
+  font: var(--weight-medium) var(--text-2xl) / 1 var(--font-mono);
+  color: var(--accent);
+}
+.chat-empty-title {
+  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-primary);
+}
+.chat-empty-copy {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  max-width: 32ch;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Reduced motion — loops disabled outright, opacity pinned; the      *
+ *  caret holds solid (1ms duration overrides cover the transitions).  *
+ * ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .tool-dot--run {
+    animation: none;
+    opacity: 0.8;
+  }
+  .stream-caret {
+    animation: none;
+    opacity: 1;
+  }
+  .jump-latest {
+    animation: none;
+  }
+  .tool-chev,
+  .send-btn,
+  .inputbar,
+  .pending-actions button {
+    transition: none;
+  }
+}

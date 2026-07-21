@@ -1,0 +1,196 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import type { ChatEvent } from '../../shared/api';
+import type { ReactNode } from 'react';
+import { createSessionStore, type SessionStore } from '../src/stores/session';
+import { ChatListInner } from '../src/session/ChatList';
+import { Composer } from '../src/session/Composer';
+import { SessionScreen } from '../src/screens/SessionScreen';
+
+// Virtuoso needs a real viewport to measure; jsdom has none. Screen-level
+// tests render the list through this simple-list stand-in (the plan's
+// prescribed approach); item-level tests use ChatListInner directly.
+vi.mock('react-virtuoso', async () => {
+  const React = await import('react');
+  return {
+    Virtuoso: (props: {
+      totalCount: number;
+      itemContent: (i: number) => ReactNode;
+      computeItemKey?: (i: number) => string | number;
+    }) =>
+      React.createElement(
+        'div',
+        { 'data-testid': 'virtuoso' },
+        Array.from({ length: props.totalCount }, (_, i) =>
+          React.createElement('div', { key: props.computeItemKey?.(i) ?? i }, props.itemContent(i)),
+        ),
+      ),
+  };
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+// — fixtures —
+
+const TS = '2026-07-20T10:00:00.000Z';
+const TS_LATER = '2026-07-20T10:00:12.400Z';
+
+const user = (uuid: string, text: string): ChatEvent => ({ kind: 'user', uuid, ts: TS, text });
+const assistant = (uuid: string, text: string): ChatEvent =>
+  ({ kind: 'assistant', uuid, ts: TS, text });
+const toolUse = (uuid: string, toolId: string, input = 'pnpm test --filter contracts'): ChatEvent =>
+  ({ kind: 'tool_use', uuid, ts: TS, toolId, name: 'Bash', input });
+const toolResult = (toolId: string, text: string, isError = false): ChatEvent =>
+  ({ kind: 'tool_result', ts: TS_LATER, toolId, text, isError });
+
+/** Store whose socket is inert and whose api never reaches the network. */
+const makeStore = (id = 'claude:OpenClawHetzner'): SessionStore =>
+  createSessionStore(id, {
+    makeSocket: () =>
+      ({
+        onopen: null,
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close(): void {},
+      }) as unknown as WebSocket,
+    api: { prompt: vi.fn().mockResolvedValue(undefined) },
+  });
+
+const seed = (store: SessionStore, patch: Partial<ReturnType<SessionStore['getState']>>): void => {
+  act(() => {
+    store.setState(patch);
+  });
+};
+
+// — ChatList (inner, plain-list renderer) —
+
+describe('ChatListInner', () => {
+  it('renders assistant markdown — bold lands as <strong>', () => {
+    render(
+      <ChatListInner
+        events={[user('u1', 'run the tests'), assistant('a1', 'A **bold** move — all green.')]}
+        pending={[]}
+      />,
+    );
+
+    const bold = screen.getByText('bold');
+    expect(bold.tagName).toBe('STRONG');
+    expect(screen.getByText('run the tests')).toBeInTheDocument();
+  });
+
+  it('merges tool_use + tool_result into one ToolCard that expands on tap', () => {
+    render(
+      <ChatListInner
+        events={[toolUse('t1', 'tool-1'), toolResult('tool-1', 'tests: 41 passed')]}
+        pending={[]}
+      />,
+    );
+
+    // One card, not two rows — the result folded into its use.
+    expect(document.querySelectorAll('.toolcard')).toHaveLength(1);
+    expect(screen.queryByText('tests: 41 passed')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Bash/ }));
+    expect(screen.getByText('tests: 41 passed')).toBeInTheDocument();
+  });
+
+  it('renders a failed pending send with Retry and Discard actions', () => {
+    const onRetry = vi.fn();
+    render(
+      <ChatListInner
+        events={[]}
+        pending={[{ key: 'p1', text: 'hello there', state: 'failed', error: 'no pane' }]}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText('hello there')).toBeInTheDocument();
+    expect(screen.getByText('no pane')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledWith('p1');
+  });
+
+  it('renders an in-flight pending send with the sending tick', () => {
+    render(
+      <ChatListInner
+        events={[]}
+        pending={[{ key: 'p2', text: 'on its way', state: 'sending' }]}
+      />,
+    );
+
+    expect(screen.getByText('on its way')).toBeInTheDocument();
+    expect(screen.getByText('sending')).toBeInTheDocument();
+  });
+});
+
+// — Composer —
+
+describe('Composer', () => {
+  it('sends the drafted text and clears the box', () => {
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} />);
+
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    fireEvent.change(box, { target: { value: 'fix the flaky test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(onSend).toHaveBeenCalledWith('fix the flaky test');
+    expect(box).toHaveValue('');
+  });
+
+  it('sends on Cmd/Ctrl+Enter, never on bare Enter', () => {
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} />);
+
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    fireEvent.change(box, { target: { value: 'line one' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    expect(onSend).toHaveBeenCalledWith('line one');
+  });
+
+  it('disables input and send when disabled', () => {
+    render(<Composer onSend={vi.fn()} pending={[]} disabled />);
+
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+  });
+});
+
+// — SessionScreen —
+
+describe('SessionScreen', () => {
+  it('renders skeleton bubbles until the backlog arrives', () => {
+    const store = makeStore();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    // untouched store: uuid null — no backlog yet
+    expect(screen.getAllByRole('status', { name: 'Loading' }).length).toBeGreaterThan(0);
+  });
+
+  it('dead session disables the composer and offers restart', () => {
+    const store = makeStore();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    seed(store, { uuid: 'u1', status: 'dead', events: [user('u1', 'last words')] });
+
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
+    expect(screen.getByText(/read-only/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart session' })).toBeInTheDocument();
+  });
+
+  it('shows the transcript diagnostic banner with the attempted path', () => {
+    const store = makeStore();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    seed(store, { uuid: 'u1', missingFile: '/home/rc/.claude/projects/x/u1.jsonl' });
+
+    expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
+    expect(screen.getByText('/home/rc/.claude/projects/x/u1.jsonl')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open terminal' })).toBeInTheDocument();
+  });
+});
