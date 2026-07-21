@@ -1,0 +1,279 @@
+/* Shared-primitive chrome — "Phosphor & Ink". Every color/size/duration is a
+   token from styles/tokens.css; class treatments are ported from the approved
+   design/mockup.html. Imported by the components that use it (Vite dedupes). */
+
+/* ------------------------------------------------------------------ *
+ *  StatusDot — glow means life: busy breathes phosphor, a pending     *
+ *  dialog pulses amber at double tempo, idle/dead are matte.          *
+ * ------------------------------------------------------------------ */
+.dot {
+  display: inline-block;
+  width: var(--sp-2);
+  height: var(--sp-2);
+  border-radius: var(--r-full);
+  flex: none;
+}
+.dot--busy {
+  background: var(--status-busy);
+  box-shadow: var(--glow-dot-busy);
+  animation: dot-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+.dot--attention {
+  background: var(--status-attention);
+  box-shadow: var(--glow-dot-attention);
+  animation: dot-breathe var(--pulse-period) var(--ease-breathe) infinite alternate;
+}
+.dot--idle {
+  background: var(--status-idle);
+}
+.dot--dead {
+  background: var(--status-dead);
+}
+@keyframes dot-breathe {
+  from { opacity: 0.55; }
+  to   { opacity: 1; }
+}
+
+/* ------------------------------------------------------------------ *
+ *  LimitBar — bands mirror the routing policy (ok < 50, warn 50–75,   *
+ *  critical > 75). Fills glide to new widths over --dur-bar.          *
+ * ------------------------------------------------------------------ */
+.limits {
+  display: grid;
+  gap: 6px;
+}
+.limit-row {
+  display: grid;
+  grid-template-columns: 20px 1fr 40px;
+  align-items: center;
+  gap: var(--sp-2);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+.limit-pct {
+  text-align: right;
+}
+.limit-track {
+  display: block;
+  height: var(--sp-1);
+  border-radius: var(--r-full);
+  background: var(--limit-track);
+  overflow: hidden;
+}
+.limit-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-full);
+  transition: width var(--dur-bar) var(--ease-swift), background-color var(--dur-bar) var(--ease-swift);
+}
+.limit-fill--ok   { background: var(--limit-ok); }
+.limit-fill--warn { background: var(--limit-warn); }
+.limit-fill--crit { background: var(--limit-critical); }
+
+/* ------------------------------------------------------------------ *
+ *  Skeleton — a shimmer that respires at the phosphor's tempo.        *
+ * ------------------------------------------------------------------ */
+.skel {
+  display: grid;
+  gap: var(--sp-2);
+}
+.skel-line {
+  display: block;
+  height: var(--sp-3);
+  border-radius: var(--r-sm);
+  background: linear-gradient(
+    90deg,
+    var(--bg-raised) 25%,
+    var(--edge-subtle) 45%,
+    var(--bg-raised) 65%
+  );
+  background-size: 200% 100%;
+  animation: skel-shimmer var(--breathe-period) var(--ease-breathe) infinite;
+}
+.skel-line:last-child {
+  width: 60%;
+}
+@keyframes skel-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Sheet — vaul drawer in the mockup's dialog-sheet clothes: scrim,   *
+ *  spring-up panel with r-xl top corners, grabber, safe-area padded.  *
+ * ------------------------------------------------------------------ */
+.sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-sheet);
+  background: var(--scrim);
+}
+.sheet-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-sheet);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - var(--sp-12) - var(--safe-top));
+  background: var(--bg-sheet);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: var(--shadow-sheet);
+  padding: var(--sp-2) var(--sp-4) calc(var(--sp-4) + var(--safe-bottom));
+  outline: none;
+}
+/* Spring per tokens: vaul inlines its own transition — retime it. Entrance
+   springs (420ms overshoot), exit leaves swiftly (320ms). */
+.sheet-panel[data-state='open'] {
+  transition-duration: var(--dur-sheet) !important;
+  transition-timing-function: var(--ease-spring) !important;
+}
+.sheet-panel[data-state='closed'] {
+  transition-duration: var(--dur-slow) !important;
+  transition-timing-function: var(--ease-swift) !important;
+}
+.sheet-grabber {
+  flex: none;
+  width: 36px;
+  height: var(--sp-1);
+  border-radius: var(--r-full);
+  background: var(--edge-strong);
+  margin: var(--sp-1) auto var(--sp-4);
+}
+.sheet-title {
+  flex: none;
+  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-primary);
+  margin-bottom: var(--sp-4);
+}
+.sheet-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Buttons shared by sheet flows (QuickConfirm, dead-card restart).   *
+ * ------------------------------------------------------------------ */
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  width: 100%;
+  border: none;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  font: var(--weight-semibold) var(--text-base) / 1 var(--font-ui);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.btn-primary:active {
+  transform: scale(0.97);
+}
+.btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  width: 100%;
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), background var(--dur-fast) var(--ease-swift);
+}
+.btn-ghost:active {
+  transform: scale(0.97);
+  background: var(--bg-raised);
+}
+
+/* QuickConfirm — the consequence sentence carries the weight. */
+.qc-consequence {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  margin-bottom: var(--sp-5);
+}
+.qc-actions {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Toast — a quiet raised slip above the home bar.                    *
+ * ------------------------------------------------------------------ */
+.toast-host {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--sp-6) + var(--safe-bottom));
+  z-index: var(--z-toast);
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4);
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  max-width: min(390px, 100%);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-3) var(--sp-4);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  cursor: pointer;
+  animation: toast-in var(--dur-slow) var(--ease-spring);
+}
+.toast--error {
+  border-color: color-mix(in srgb, var(--status-dead) 45%, var(--edge-strong));
+}
+.toast--error::before {
+  content: '!';
+  font: var(--weight-semibold) var(--text-sm) / 1 var(--font-mono);
+  color: var(--status-dead-text);
+}
+@keyframes toast-in {
+  from {
+    transform: translateY(var(--sp-2));
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Reduced motion — the canonical pattern from DIRECTION.md: disable  *
+ *  the infinite loops outright and pin glow at mid-intensity (the     *
+ *  1ms duration overrides in tokens.css handle one-shot transitions). *
+ *  Never zero the loop periods — a 0s alternate loop strobes.         *
+ * ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .dot--busy,
+  .dot--attention {
+    animation: none;
+    opacity: 0.8;
+  }
+  .skel-line {
+    animation: none;
+    background-position: 0 0;
+  }
+  .toast {
+    animation: none;
+  }
+  .limit-fill,
+  .btn-primary,
+  .btn-ghost {
+    transition: none;
+  }
+}
