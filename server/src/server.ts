@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import type { CcrcConfig } from './config.js';
 import type { Runner, Tmux } from './exec.js';
@@ -9,6 +9,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
 import { readRegistry } from './registry.js';
+import { ccd, listProjects } from './lifecycle.js';
 import type { FleetSession, SessionStreamMsg } from '../../shared/api.js';
 
 export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux }
@@ -74,6 +75,46 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const res = await interrupt(sendDeps, id);
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  // Lifecycle + projects routes: shell out to ccd; failures map to 502 with stderr.
+  const runCcd = async (reply: FastifyReply, args: string[]) => {
+    const res = await ccd(deps.run, deps.cfg, args);
+    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
+  };
+
+  app.get('/api/projects', async () => listProjects(deps.cfg));
+
+  app.post('/api/sessions', async (req, reply) => {
+    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown };
+    if (typeof body.wrapper !== 'string' || body.wrapper.length === 0
+      || typeof body.project !== 'string' || body.project.length === 0) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const sub = body.enable === false ? 'start' : 'enable';   // enable = start + systemd enable
+    const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? [body.workdir] : [];
+    return runCcd(reply, [sub, body.wrapper, body.project, ...workdir]);
+  });
+
+  app.post('/api/sessions/:id/ensure', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    return runCcd(reply, ['ensure', id]);
+  });
+
+  app.post('/api/sessions/:id/stop', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const rec = (await readRegistry(deps.cfg)).find((r) => r.id === id);
+    if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    return runCcd(reply, ['stop', rec.wrapper, rec.project]);
+  });
+
+  app.post('/api/sessions/:id/swap', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { wrapper?: unknown };
+    if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    return runCcd(reply, ['swap', id, body.wrapper]);
   });
 
   if (watcher) app.addHook('onClose', async () => { watcher.stop(); });
