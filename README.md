@@ -4,8 +4,9 @@ A mobile-first, installable PWA to view and drive the `ccd` fleet of
 `--remote-control` Claude Code sessions on server-box, over Tailscale. It follows
 sessions across account swaps — the thing the official claude.ai app can't do.
 
-**Install URL (tailnet only):** `https://server-box.tailnet-example.ts.net:8443/`
+**Install URL (tailnet only):** `https://server-box.tailnet-example.ts.net/`
 Add to home screen in Android Chrome / iOS Safari for the standalone app.
+(Served at 443 root via `tailscale serve`; the claude-docserver moved to `:8443`.)
 
 ## Architecture
 
