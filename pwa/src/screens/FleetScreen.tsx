@@ -7,6 +7,8 @@ import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { SessionCard } from '../fleet/SessionCard';
+import { AccountsStrip } from '../fleet/AccountsStrip';
+import { sortFleet } from '../fleet/sortFleet';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -99,11 +101,14 @@ export function FleetScreen({
           </button>
         </section>
       ) : (
-        <div className="fleet-list">
-          {sessions.map((s) => (
-            <SessionCard key={s.id} session={s} onOpen={open} />
-          ))}
-        </div>
+        <>
+          <AccountsStrip sessions={sessions} />
+          <div className="fleet-list">
+            {sortFleet(sessions).map((s) => (
+              <SessionCard key={s.id} session={s} onOpen={open} />
+            ))}
+          </div>
+        </>
       )}
 
       <button type="button" className="fab" aria-label="New session" onClick={newSession}>

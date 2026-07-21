@@ -5,6 +5,7 @@ import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { SessionCard } from '../src/fleet/SessionCard';
+import { AccountsStrip } from '../src/fleet/AccountsStrip';
 
 afterEach(() => {
   cleanup();
@@ -72,11 +73,12 @@ describe('FleetScreen', () => {
       ],
     });
 
-    // Both cards, titled by project, with jargon-free account labels.
+    // Both cards, titled by project, with jargon-free account labels. The
+    // account label also appears once in the accounts strip, so allow multiples.
     expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
     expect(screen.getByText('mekwarlive')).toBeInTheDocument();
-    expect(screen.getByText('team·max')).toBeInTheDocument();
-    expect(screen.getByText('alt·max')).toBeInTheDocument();
+    expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('alt·max').length).toBeGreaterThan(0);
 
     // Status is dot + word, never dot alone; relative activity rides along.
     expect(screen.getByRole('img', { name: 'working' })).toBeInTheDocument();
@@ -173,10 +175,23 @@ describe('SessionCard', () => {
     expect(onOpen).toHaveBeenCalledWith('claude:OpenClawHetzner');
   });
 
-  it('shows the limits bars with live values on a running session', () => {
-    render(<SessionCard session={session({ limits: { five: 85, seven: 30 } })} onOpen={() => {}} />);
+  it('shows account limit bars once in the accounts strip (not per card)', () => {
+    // Two sessions on the same account → one gauge, not two; a card carries no bars.
+    render(
+      <AccountsStrip
+        sessions={[
+          session({ id: 'a', wrapper: 'claude2', limits: { five: 85, seven: 30 } }),
+          session({ id: 'b', wrapper: 'claude2', limits: { five: 85, seven: 30 } }),
+        ]}
+      />,
+    );
     const fills = document.querySelectorAll('.limit-fill');
-    expect(fills).toHaveLength(2);
+    expect(fills).toHaveLength(2); // one account gauge = 5h + 7d, deduped
     expect(fills[0]).toHaveClass('limit-fill--crit');
+  });
+
+  it('a session card no longer renders its own limit bars', () => {
+    render(<SessionCard session={session({ limits: { five: 85, seven: 30 } })} onOpen={() => {}} />);
+    expect(document.querySelectorAll('.limit-fill')).toHaveLength(0);
   });
 });

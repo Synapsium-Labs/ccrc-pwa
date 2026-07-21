@@ -577,3 +577,33 @@
     transition: none;
   }
 }
+
+/* Accounts strip — per-account usage shown once, above the session list */
+.accounts-strip {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.account-gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+.account-gauge-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+.account-gauge-nodata {
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+@media (min-width: 640px) {
+  .accounts-strip { grid-template-columns: repeat(4, 1fr); }
+}

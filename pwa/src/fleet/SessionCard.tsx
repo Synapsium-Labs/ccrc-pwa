@@ -8,7 +8,6 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from
 import type { FleetSession, SessionStatus } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { useNow } from '../lib/useNow';
-import { LimitBar } from '../components/LimitBar';
 import { StatusDot } from '../components/StatusDot';
 import { toast } from '../components/Toast';
 import { api } from '../lib/api';
@@ -182,12 +181,8 @@ export function SessionCard({
 
       {attention && <p className="card-attn">Claude is asking you something — tap to answer</p>}
 
-      {!dead && (
-        <LimitBar five={session.limits?.five ?? null} seven={session.limits?.seven ?? null} />
-      )}
-
-      {/* DIRECTION: a bar crossing critical narrates its consequence — a red
-          band is a forecast, not an alarm. The tighter window speaks. */}
+      {/* Account usage lives once in the AccountsStrip; the card keeps only the
+          per-session consequence when a window crosses critical. */}
       {critical !== null && (
         <p className="card-limit-note">{critical} limit near — will move to another account</p>
       )}
