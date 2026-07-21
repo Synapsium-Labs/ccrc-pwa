@@ -99,7 +99,9 @@ export function SessionHeader({
           : '';
   const variant = attention ? 'attention' : busy ? 'busy' : st === 'dead' ? 'dead' : 'idle';
 
-  const title = session ? (session.name ?? session.project) : (fallback?.title ?? '…');
+  // Show the clean project name, not Claude Code's auto-derived session name
+  // (e.g. "custom-tools-91"), which reads as noise.
+  const title = session ? session.project : (fallback?.title ?? '…');
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
 
   return (

@@ -84,9 +84,11 @@ describe('SessionHeader', () => {
     expect(screen.getByText(/working/)).toBeInTheDocument();
   });
 
-  it('shows the live session name, falling back to the project', () => {
-    renderHeader({ session: fleetSession({ name: 'auth refactor' }) });
-    expect(screen.getByRole('heading', { name: 'auth refactor' })).toBeInTheDocument();
+  it('shows the clean project name, ignoring the auto-derived session name', () => {
+    // Even when Claude Code supplies a derived name like "openclawhetzner-8f",
+    // the header shows the project ("OpenClawHetzner"), not the noisy name.
+    renderHeader({ session: fleetSession({ name: 'openclawhetzner-8f' }) });
+    expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();
     cleanup();
     renderHeader({ session: fleetSession({ name: null }) });
     expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();

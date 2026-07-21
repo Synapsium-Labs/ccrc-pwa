@@ -164,7 +164,7 @@ export function SessionCard({
             onPointerUp={cancelPress}
             onPointerCancel={cancelPress}
           >
-            {session.name ?? session.project}
+            {session.project}
           </button>
         </h2>
         <span className={ping ? 'lamp lamp--ping' : 'lamp'} data-status={dotStatus}>
