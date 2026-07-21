@@ -17,7 +17,7 @@
 }
 
 /* ------------------------------------------------------------------ *
- *  Header (Task 8 grows this into SessionHeader) — sticky top strip.  *
+ *  Header (SessionHeader) — sticky top strip, safe-area padded.       *
  * ------------------------------------------------------------------ */
 .chat-head {
   flex: none;
@@ -96,6 +96,36 @@
 .chip--active {
   color: var(--acct-active);
   background: var(--acct-active-tint);
+}
+/* Keycaps — the machine's keys surfacing in the chrome (DIRECTION: the
+   interrupt is "a keycap, not an icon"). Raised caps with a heavier bottom
+   edge, mono legends, 44px targets; pressing compresses like a key. `esc`
+   is enabled only while the session is busy — otherwise it sits greyed,
+   a dead key on the board. */
+.chat-head .keycap {
+  flex: none;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  display: grid;
+  place-items: center;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.chat-head .keycap:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.chat-head .keycap:disabled {
+  color: var(--ink-disabled);
+  background: var(--bg-surface);
+  border-color: var(--edge-subtle);
+  cursor: default;
 }
 
 /* ------------------------------------------------------------------ *
@@ -542,6 +572,11 @@
   flex: none;
   padding: var(--sp-2) var(--sp-4) calc(var(--sp-3) + var(--safe-bottom));
 }
+/* Keyboard open (data-kb: the visualViewport inset pads the shell) — the
+   home-bar safe-area is behind the keyboard now, so the composer drops it. */
+.chat[data-kb='true'] .composer {
+  padding-bottom: var(--sp-2);
+}
 .inputbar {
   display: flex;
   align-items: flex-end;
@@ -695,6 +730,7 @@
   .tool-chev,
   .send-btn,
   .inputbar,
+  .chat-head .keycap,
   .pending-actions button {
     transition: none;
   }
