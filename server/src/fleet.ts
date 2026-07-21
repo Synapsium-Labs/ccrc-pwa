@@ -10,6 +10,21 @@ export function idHomeWrapper(id: string): string {
   return 'claude';
 }
 
+/**
+ * Authoritative live status for one session — the same signal the fleet uses:
+ * dead if no tmux session, else busy/idle from the live status file. Used by the
+ * interrupt route, since the --remote-control pane carries no busy marker.
+ */
+export async function liveStatus(cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
+  const rec = (await readRegistry(cfg)).find((r) => r.id === id);
+  if (!rec || !(await tmux.hasSession(id))) return 'dead';
+  const pid = await tmux.panePid(id);
+  const cfgDir = cfg.wrappers[rec.wrapper];
+  if (!pid || !cfgDir) return 'idle';
+  const live = await readLiveState(cfgDir, pid);
+  return live?.status === 'busy' ? 'busy' : 'idle';
+}
+
 export async function assembleFleet(
   cfg: CcrcConfig,
   tmux: Tmux,

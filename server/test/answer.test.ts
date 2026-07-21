@@ -98,23 +98,26 @@ describe('answerDialog', () => {
 });
 
 describe('interrupt', () => {
-  it('busy pane: sends Escape', async () => {
-    const { tmux, calls } = fakeTmux(['✻ Pondering… (esc to interrupt)\n']);
-    const res = await interrupt(deps(tmux), 'x');
+  // Busy-ness comes from an injected resolver (the authoritative live status
+  // file), NOT the pane — a --remote-control pane never renders "esc to
+  // interrupt", so pane-scraping would always report not-busy.
+  it('busy (per resolver): sends Escape', async () => {
+    const { tmux, calls } = fakeTmux(['generation in progress\n❯ \n']);
+    const res = await interrupt(deps(tmux), 'x', async () => true);
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Escape']]);
   });
 
-  it('idle pane: not-busy, no keys sent', async () => {
+  it('idle (per resolver): not-busy, no keys sent', async () => {
     const { tmux, calls } = fakeTmux(['scrollback\n❯ \n']);
-    const res = await interrupt(deps(tmux), 'x');
+    const res = await interrupt(deps(tmux), 'x', async () => false);
     expect(res).toEqual({ ok: false, error: 'not-busy' });
     expect(sendKeysCalls(calls)).toEqual([]);
   });
 
   it('not-alive when capture fails', async () => {
     const { tmux } = fakeTmux([null]);
-    const res = await interrupt(deps(tmux), 'x');
+    const res = await interrupt(deps(tmux), 'x', async () => true);
     expect(res).toEqual({ ok: false, error: 'not-alive' });
   });
 });

@@ -1,5 +1,5 @@
 import type { Tmux } from '../exec.js';
-import { parseDialog, paneState } from '../pane/dialog.js';
+import { parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 
 export interface SendDeps { tmux: Tmux; queue: KeyedQueue; sleep?: (ms: number) => Promise<void> }
@@ -108,15 +108,21 @@ export function answerDialog(
   });
 }
 
-/** Send Escape to a mid-turn session; refuses when the pane isn't busy. */
+/**
+ * Send Escape to a mid-turn session; refuses when it isn't busy. Busy-ness is
+ * resolved by the injected `isBusy` (the authoritative live status file), NOT the
+ * pane: a --remote-control pane never renders "esc to interrupt", so pane-based
+ * busy detection would always (wrongly) report idle.
+ */
 export function interrupt(
   d: SendDeps,
   id: string,
+  isBusy: () => Promise<boolean>,
 ): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'not-busy' }> {
   return d.queue.run(id, async (): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'not-busy' }> => {
     const pane = await d.tmux.capture(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
-    if (paneState(pane) !== 'busy') return { ok: false, error: 'not-busy' };
+    if (!(await isBusy())) return { ok: false, error: 'not-busy' };
     await d.tmux.sendKey(id, 'Escape');
     return { ok: true };
   });

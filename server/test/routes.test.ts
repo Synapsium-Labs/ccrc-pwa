@@ -19,10 +19,23 @@ const seedSession = (home: string, id: string, wrapper: string) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
-/** Server over a seeded one-session registry; capture-pane returns scripted panes in order (last repeats). */
-async function makeApp(panes: (string | null)[]): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus }> {
+/** Server over a seeded one-session registry; capture-pane returns scripted panes in order (last repeats).
+ *  `status` seeds the authoritative live status file (used by the interrupt route). */
+async function makeApp(
+  panes: (string | null)[],
+  opts: { status?: 'busy' | 'idle' } = {},
+): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus }> {
   const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
   seedSession(home, ID, 'claude2');
+  const PANE_PID = 4242;
+  if (opts.status) {
+    const sdir = path.join(home, '.claude-personal', 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(path.join(sdir, `${PANE_PID}.json`), JSON.stringify({
+      pid: PANE_PID, sessionId: '1'.repeat(36), cwd: `/data/projects/${ID}`,
+      name: 'mek', status: opts.status, statusUpdatedAt: 1784600000000, version: '2.1.216',
+    }));
+  }
   const calls: string[][] = [];
   let capIdx = 0;
   const run: Runner = async (cmd, args) => {
@@ -32,6 +45,7 @@ async function makeApp(panes: (string | null)[]): Promise<{ app: FastifyInstance
       capIdx++;
       return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
     }
+    if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
   const bus = new Bus();
@@ -103,8 +117,8 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('POST interrupt on a busy pane sends Escape', async () => {
-    const { app, calls } = await makeApp(['✻ Pondering… (esc to interrupt)\n']);
+  it('POST interrupt on a busy session (live status) sends Escape', async () => {
+    const { app, calls } = await makeApp(['generation…\n❯ \n'], { status: 'busy' });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -112,8 +126,8 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('POST interrupt on an idle pane returns 409 not-busy', async () => {
-    const { app } = await makeApp(['❯ \n']);
+  it('POST interrupt on an idle session returns 409 not-busy', async () => {
+    const { app } = await makeApp(['❯ \n'], { status: 'idle' });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'not-busy' });

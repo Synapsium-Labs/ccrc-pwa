@@ -59,13 +59,17 @@ describe.skipIf(!BASE)('ccrc live e2e (cctest)', () => {
 
   it('4. interrupt returns session to idle', async () => {
     await waitIdle(ID, 60_000);
-    // Kick off a long task, wait for busy, then interrupt.
+    // Keep the session busy with a long GENERATION task — the box harness blocks
+    // bare `sleep`, and a --remote-control pane shows no "esc to interrupt" marker,
+    // so busy-ness is judged from the live status file (see the interrupt route).
     await wsCollect(
       `/ws/session/${ID}`,
       (m) => m.type === 'status' && m.status === 'busy',
       60_000,
-      () => { void post(`/api/sessions/${ID}/prompt`, { text: 'Count slowly from 1 to 200, one number per line, pausing between each.' }); },
+      () => { void post(`/api/sessions/${ID}/prompt`, { text: 'Write out every integer from 1 to 5000, one number per line, and nothing else.' }); },
     );
+    // Settle so the turn is solidly underway before interrupting.
+    await sleep(3000);
     const r = await post(`/api/sessions/${ID}/interrupt`, {});
     expect(r.status).toBe(200);
     const back = await pollUntil(

@@ -7,7 +7,7 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import type { CcrcConfig } from './config.js';
 import type { Runner, Tmux } from './exec.js';
-import { assembleFleet } from './fleet.js';
+import { assembleFleet, liveStatus } from './fleet.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
@@ -143,7 +143,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const res = await interrupt(sendDeps, id);
+    const res = await interrupt(sendDeps, id, async () => (await liveStatus(deps.cfg, deps.tmux, id)) === 'busy');
     return res.ok ? res : reply.code(409).send(res);
   });
 
