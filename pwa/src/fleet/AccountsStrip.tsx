@@ -57,8 +57,9 @@ export function AccountsStrip(): ReactNode {
           <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>
             {accountLabel(a.wrapper)}
           </span>
-          <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} />
-          <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} />
+          {/* Only render a window that exists — gpt (Codex Pro) is weekly-only. */}
+          {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} />}
+          {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} />}
         </div>
       ))}
     </div>
