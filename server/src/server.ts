@@ -6,6 +6,9 @@ import { assembleFleet } from './fleet.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
+import { KeyedQueue } from './inject/queue.js';
+import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
+import { readRegistry } from './registry.js';
 import type { FleetSession, SessionStreamMsg } from '../../shared/api.js';
 
 export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux }
@@ -36,6 +39,41 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
     void stream.start();
     socket.on('close', () => stream.stop());
+  });
+
+  // Write routes: serialized per session through one KeyedQueue; injection
+  // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
+  const sendDeps: SendDeps = { tmux: deps.tmux, queue: new KeyedQueue() };
+  const knownId = async (id: string): Promise<boolean> =>
+    (await readRegistry(deps.cfg)).some((r) => r.id === id);
+
+  app.post('/api/sessions/:id/prompt', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown };
+    if (typeof body.text !== 'string' || body.text.length === 0) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true });
+    return res.ok ? res : reply.code(409).send(res);
+  });
+
+  app.post('/api/sessions/:id/dialog', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown };
+    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
+    return res.ok ? res : reply.code(409).send(res);
+  });
+
+  app.post('/api/sessions/:id/interrupt', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const res = await interrupt(sendDeps, id);
+    return res.ok ? res : reply.code(409).send(res);
   });
 
   if (watcher) app.addHook('onClose', async () => { watcher.stop(); });
