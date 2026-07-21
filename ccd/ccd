@@ -339,6 +339,30 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   exit 1
 }
 
+_sanitize_anthropic() {   # transcript-path — fill EMPTY assistant text blocks (a gpt/Codex-lane
+  # artifact) with a placeholder so the Anthropic API accepts the resumed history.
+  local f="$1"; [[ -f "$f" ]] || return 0
+  python3 - "$f" <<'PY' 2>/dev/null || echo "ccd: warn: transcript sanitize skipped (python3?)" >&2
+import json,sys,os
+f=sys.argv[1]; out=[]; n=0
+for ln in open(f):
+    s=ln.rstrip("\n")
+    try: o=json.loads(s)
+    except: out.append(s); continue
+    c=o.get("message",{}).get("content")
+    if isinstance(c,list):
+        ch=False
+        for b in c:
+            if isinstance(b,dict) and b.get("type")=="text" and b.get("text","").strip()=="":
+                b["text"]="..."; ch=True; n+=1
+        if ch: s=json.dumps(o,ensure_ascii=False)
+    out.append(s)
+if n:
+    open(f+".tmp","w").write("\n".join(out)+"\n"); os.replace(f+".tmp",f)
+    sys.stderr.write(f"ccd: sanitized {n} empty text blocks for Anthropic\n")
+PY
+}
+
 cmd_swap() {   # id target-wrapper — move a session to another account, conversation intact.
   # Transcripts are plain JSONL with no account binding (validated 2026-07-03): copy the
   # current transcript into the target config dir, flip the registry wrapper, restart.
@@ -367,6 +391,13 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
   if [[ -f "$srccfg/projects/$mdir/$uuid.jsonl" ]]; then
     mkdir -p "$dstcfg/projects/$mdir"
     cp "$srccfg/projects/$mdir/$uuid.jsonl" "$dstcfg/projects/$mdir/"
+    # gpt -> Anthropic: the Codex lane (via LiteLLM) writes assistant messages with
+    # EMPTY text blocks, which the Anthropic API rejects on the next turn ("text
+    # content blocks must be non-empty" -> every turn 400s). Fill them so the
+    # resumed session is valid. Anthropic -> Anthropic and *-> gpt need no fixup.
+    if [[ "$cur" == gpt && "$target" != gpt ]]; then
+      _sanitize_anthropic "$dstcfg/projects/$mdir/$uuid.jsonl"
+    fi
   else
     echo "ccd: warn: transcript $uuid.jsonl not found under $cur config; session may resume without history" >&2
   fi

@@ -390,11 +390,24 @@
  * ------------------------------------------------------------------ */
 .msg-assist {
   display: grid;
+  /* minmax(0,1fr): without the 0 min, a long code line or token sizes the grid
+     track to its content and pushes the whole message past the viewport, so
+     prose wraps off-screen and clips. This lets tracks shrink to the container —
+     pre/tables then scroll inside themselves and prose wraps at the visible edge. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
   font-size: var(--text-base);
   line-height: var(--leading-mono);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
+}
+.msg-assist > * { min-width: 0; }
+.msg-assist table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-collapse: collapse;
 }
 .msg-assist ul,
 .msg-assist ol {

@@ -159,7 +159,11 @@ case "$cfg" in
 esac
 if [ -n "$lbl" ] && [ -n "${five_int:-}" ]; then
   mkdir -p "$HOME/.cc-limits"
-  printf '{"five":%s,"seven":%s,"ts":%s}\n' "$five_int" "${seven_int:-0}" "$(date +%s)" \
+  # resets_at are unix-epoch seconds when each window rolls over (may be absent).
+  five_reset=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.resets_at // "null"' 2>/dev/null)
+  seven_reset=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.resets_at // "null"' 2>/dev/null)
+  printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s}\n' \
+    "$five_int" "${seven_int:-0}" "$(date +%s)" "${five_reset:-null}" "${seven_reset:-null}" \
     > "$HOME/.cc-limits/.$lbl.tmp" && mv -f "$HOME/.cc-limits/.$lbl.tmp" "$HOME/.cc-limits/$lbl.json"
 fi
 

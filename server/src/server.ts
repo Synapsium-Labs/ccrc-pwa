@@ -8,6 +8,7 @@ import fastifyStatic from '@fastify/static';
 import type { CcrcConfig } from './config.js';
 import type { Runner, Tmux } from './exec.js';
 import { assembleFleet, liveStatus } from './fleet.js';
+import { readLimits } from './limits.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
@@ -18,7 +19,9 @@ import { ccd, listProjects } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
 import { saveUploadAndClip } from './clip.js';
 import type { SpawnPty } from './pty.js';
-import type { FleetSession, SessionStreamMsg } from '../../shared/api.js';
+import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/api.js';
+
+const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
 
 export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux; spawnPty?: SpawnPty }
 
@@ -46,6 +49,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/health', async () => ({ ok: true }));
 
   app.get('/api/fleet', async () => ({ sessions: await assembleFleet(deps.cfg, deps.tmux) }));
+
+  // Account usage read straight from telemetry (cc-limits), independent of which
+  // sessions are running or where they've swapped — so it survives restarts,
+  // respawns, and swaps. Ordered claude / claude2 / claude-corp / gpt.
+  app.get('/api/accounts', async () => {
+    const limits = await readLimits(deps.cfg);
+    const rank = (w: string) => { const i = ACCOUNT_ORDER.indexOf(w); return i < 0 ? 99 : i; };
+    const accounts: AccountUsage[] = Object.entries(limits)
+      .map(([wrapper, l]): AccountUsage => ({
+        wrapper, five: l.five, seven: l.seven, ts: l.ts,
+        fiveResetAt: l.fiveResetAt, sevenResetAt: l.sevenResetAt,
+      }))
+      .sort((a, b) => rank(a.wrapper) - rank(b.wrapper) || (a.wrapper < b.wrapper ? -1 : 1));
+    return { accounts };
+  });
 
   app.get('/ws/fleet', { websocket: true }, (socket) => {
     const onFleet = (sessions: FleetSession[]) => socket.send(JSON.stringify({ type: 'fleet', sessions }));

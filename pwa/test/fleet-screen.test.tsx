@@ -175,19 +175,21 @@ describe('SessionCard', () => {
     expect(onOpen).toHaveBeenCalledWith('claude:OpenClawHetzner');
   });
 
-  it('shows account limit bars once in the accounts strip (not per card)', () => {
-    // Two sessions on the same account → one gauge, not two; a card carries no bars.
-    render(
-      <AccountsStrip
-        sessions={[
-          session({ id: 'a', wrapper: 'claude2', limits: { five: 85, seven: 30 } }),
-          session({ id: 'b', wrapper: 'claude2', limits: { five: 85, seven: 30 } }),
-        ]}
-      />,
-    );
-    const fills = document.querySelectorAll('.limit-fill');
-    expect(fills).toHaveLength(2); // one account gauge = 5h + 7d, deduped
-    expect(fills[0]).toHaveClass('limit-fill--crit');
+  it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [
+        // gpt has NO active session, yet still shows — telemetry-driven.
+        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400 },
+      ],
+    });
+    render(<AccountsStrip />);
+    // one account gauge → two meters (5h + 7d)
+    await screen.findByText('gpt');
+    expect(document.querySelectorAll('.acct-fill')).toHaveLength(2);
+    // reset countdown rendered ("2h" for the 5h window)
+    expect(screen.getByText(/↻\s*2h/)).toBeInTheDocument();
+    vi.restoreAllMocks();
   });
 
   it('a session card no longer renders its own limit bars', () => {

@@ -12,6 +12,18 @@ export interface FleetSession {
   version: string | null;
 }
 
+/** One account's usage, read from telemetry (cc-limits) independent of whether a
+ *  session is currently on it — so the display survives restarts/respawns/swaps.
+ *  `ts` is epoch seconds of the last report; the UI marks it stale when old. */
+export interface AccountUsage {
+  wrapper: string;
+  five: number | null;
+  seven: number | null;
+  ts: number | null;
+  fiveResetAt: number | null;   // epoch seconds the 5h window resets
+  sevenResetAt: number | null;  // epoch seconds the 7d window resets
+}
+
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */
 export interface SlashCommand {

@@ -102,7 +102,7 @@ export function FleetScreen({
         </section>
       ) : (
         <>
-          <AccountsStrip sessions={sessions} />
+          <AccountsStrip />
           <div className="fleet-list">
             {sortFleet(sessions).map((s) => (
               <SessionCard key={s.id} session={s} onOpen={open} />

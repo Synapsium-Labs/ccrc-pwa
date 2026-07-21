@@ -1,39 +1,64 @@
-// Accounts strip — account limits shown ONCE per account (they're account-scoped,
-// so repeating them on every session card is noise). Derived from the fleet:
-// one gauge per distinct account present, in canonical order.
+// Accounts strip — per-account usage shown ONCE, read straight from telemetry
+// (/api/accounts, backed by ~/.cc-limits) so it survives restarts, respawns and
+// swaps regardless of which sessions are running. Each account shows its 5h and
+// 7d windows with %, a meter, and the countdown to reset.
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
-import { accountLabel, accountColorVar, KNOWN_WRAPPERS } from '../lib/accounts';
-import { LimitBar } from '../components/LimitBar';
+import type { AccountUsage } from '../../../shared/api';
+import { accountLabel, accountColorVar } from '../lib/accounts';
+import { api } from '../lib/api';
+import { useNow } from '../lib/useNow';
+import { formatReset } from './formatReset';
 import './fleet.css';
 
-export function AccountsStrip({ sessions }: { sessions: FleetSession[] }): ReactNode {
-  const byWrapper = new Map<string, FleetSession['limits']>();
-  for (const s of sessions) {
-    if (!byWrapper.has(s.wrapper) || (byWrapper.get(s.wrapper) === null && s.limits !== null)) {
-      byWrapper.set(s.wrapper, s.limits);
-    }
-  }
-  if (byWrapper.size === 0) return null;
+function band(pct: number | null): string {
+  if (pct === null) return 'none';
+  if (pct >= 75) return 'crit';
+  if (pct >= 50) return 'warn';
+  return 'ok';
+}
 
-  const order = (w: string): number => {
-    const i = KNOWN_WRAPPERS.indexOf(w);
-    return i < 0 ? KNOWN_WRAPPERS.length : i;
-  };
-  const accounts = [...byWrapper.entries()].sort((a, b) => order(a[0]) - order(b[0]));
+function LimitRow({ label, pct, resetAt, nowSec }: {
+  label: string; pct: number | null; resetAt: number | null; nowSec: number;
+}): ReactNode {
+  return (
+    <div className="acct-row">
+      <span className="acct-win">{label}</span>
+      <span className="acct-meter" data-band={band(pct)}>
+        <span className="acct-fill" style={{ width: `${Math.min(100, Math.max(0, pct ?? 0))}%` }} />
+      </span>
+      <span className="acct-pct">{pct === null ? '—' : `${pct}%`}</span>
+      <span className="acct-reset" title="time until this window resets">↻ {formatReset(resetAt, nowSec)}</span>
+    </div>
+  );
+}
+
+export function AccountsStrip(): ReactNode {
+  const [accounts, setAccounts] = useState<AccountUsage[] | null>(null);
+  const now = useNow(30_000); // tick the reset countdown
+
+  useEffect(() => {
+    let live = true;
+    const load = (): void => {
+      void api.accounts().then((r) => { if (live) setAccounts(r.accounts); }).catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 20_000);
+    return () => { live = false; clearInterval(t); };
+  }, []);
+
+  if (!accounts || accounts.length === 0) return null;
+  const nowSec = Math.floor(now / 1000);
 
   return (
     <div className="accounts-strip" role="group" aria-label="Account usage">
-      {accounts.map(([wrapper, limits]) => (
-        <div key={wrapper} className="account-gauge">
-          <span className="account-gauge-label" style={{ color: `var(${accountColorVar(wrapper)})` }}>
-            {accountLabel(wrapper)}
+      {accounts.map((a) => (
+        <div key={a.wrapper} className="account-gauge">
+          <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>
+            {accountLabel(a.wrapper)}
           </span>
-          {limits ? (
-            <LimitBar five={limits.five} seven={limits.seven} />
-          ) : (
-            <span className="account-gauge-nodata">no usage data</span>
-          )}
+          <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} />
+          <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} />
         </div>
       ))}
     </div>
