@@ -35,6 +35,20 @@ describe('parseDialog', () => {
     expect(d.title).toBe('Which architecture should we go with?');
   });
 
+  it('parses the REAL AskUserQuestion format: options carry description lines and split across a rule', () => {
+    // Live capture: each numbered option is followed by a description line, and
+    // the option list is split by a horizontal rule (options 1-4 above, 5 below),
+    // all sitting below conversation-history `❯` turns. The parser must collect
+    // the numbered options (1..5) despite the non-adjacent layout.
+    const d = parseDialog(fixture('ask-user-question-real.txt'))!;
+    expect(d).not.toBeNull();
+    expect(d.parsed).toBe(true);
+    expect(d.options.map((o) => o.index)).toEqual([1, 2, 3, 4, 5]);
+    expect(d.options.map((o) => o.label)).toEqual(['Red', 'Green', 'Blue', 'Type something.', 'Chat about this']);
+    expect(d.selectedIndex).toBe(1);
+    expect(d.title).toBe('Which colour do you prefer?');
+  });
+
   it('parses trust-folder: 2 options', () => {
     const d = parseDialog(fixture('trust-folder.txt'))!;
     expect(d.parsed).toBe(true);

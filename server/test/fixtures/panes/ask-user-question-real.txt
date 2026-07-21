@@ -1,0 +1,37 @@
+ ▐▛███▜▌   Claude Code v2.1.216
+▝▜█████▛▘  Opus 4.8 (1M context) with xhigh effort · Claude Max
+  ▘▘ ▝▝    /srv/projects/cctest
+
+ ⚠ 4 MCP servers need authentication · run /mcp
+
+  /remote-control is active · Continue here, on your phone, or at https://claude.ai/code/session_01EXAMPLEEXAMPLEEXAMPLE00
+
+❯ /effort ultracode
+  ⎿  Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration
+
+❯ Reply with exactly the word pong and nothing else.
+
+● pong
+
+✻ Churned for 1s
+
+❯ Use your AskUserQuestion tool to ask me which colour I prefer, with exactly these options: Red, Green, Blue.
+───────────────────────────────────────────────────────────────────────────────────
+ ☐ Colour
+
+Which colour do you prefer?
+
+❯ 1. Red
+     Warm, high-energy, attention-grabbing.
+  2. Green
+     Natural, calm, balanced.
+  3. Blue
+     Cool, calm, trustworthy.
+  4. Type something.
+───────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+

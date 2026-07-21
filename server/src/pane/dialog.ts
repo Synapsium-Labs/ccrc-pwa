@@ -38,32 +38,42 @@ export function parseDialog(pane: string): Dialog | null {
   if (paneState(pane) !== 'menu') return null;
   if (MULTISELECT_RE.test(pane)) return unparsed(pane);
 
-  // First run of ≥2 consecutive option lines.
+  // Collect every numbered-option line. Real AskUserQuestion menus put a
+  // description line under each option and split the list across a horizontal
+  // rule, so options are NOT adjacent — we can't require consecutive lines.
   const lines = pane.split('\n');
-  let start = -1;
-  let end = -1;
+  type Opt = { line: number; index: number; label: string; selected: boolean };
+  const found: Opt[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (!OPTION_RE.test(lines[i]!)) continue;
-    let j = i + 1;
-    while (j < lines.length && OPTION_RE.test(lines[j]!)) j++;
-    if (j - i >= 2) { start = i; end = j; break; }
-    i = j;
+    const m = OPTION_RE.exec(lines[i]!);
+    if (m) found.push({ line: i, index: parseInt(m[2]!, 10), label: m[3]!.trim(), selected: !!m[1] });
   }
-  if (start < 0) return unparsed(pane);
 
-  const options: { index: number; label: string }[] = [];
-  let selectedIndex = 1;
-  for (let i = start; i < end; i++) {
-    const m = OPTION_RE.exec(lines[i]!)!;
-    const index = parseInt(m[2]!, 10);
-    options.push({ index, label: m[3]!.trim() });
-    if (m[1]) selectedIndex = index;
+  // Keep the longest run whose indices count 1,2,3,… — this rejects stray
+  // numbered lines in scrollback and locks onto the actual menu (ties prefer the
+  // later run, i.e. the one nearest the footer). Description/rule lines between
+  // numbered options are simply absent from `found`, so they don't break the run.
+  let best: Opt[] = [];
+  let cur: Opt[] = [];
+  for (const o of found) {
+    if (o.index === cur.length + 1) {
+      cur.push(o);
+    } else {
+      if (cur.length >= best.length) best = cur;
+      cur = o.index === 1 ? [o] : [];
+    }
   }
+  if (cur.length >= best.length) best = cur;
+  if (best.length < 2) return unparsed(pane);
+
+  const options = best.map((o) => ({ index: o.index, label: o.label }));
+  const selectedIndex = best.find((o) => o.selected)?.index ?? 1;
+  const start = best[0]!.line;
 
   let title = '';
   for (let i = start - 1; i >= 0; i--) {
     const t = lines[i]!.trim();
-    if (t) { title = t.replace(/^[●✻]\s*/, ''); break; }
+    if (t) { title = t.replace(/^[●✻☐☑]\s*/, ''); break; }
   }
 
   const id = sha1(options.map((o) => o.label).join('\n') + title);
