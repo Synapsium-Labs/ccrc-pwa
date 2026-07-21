@@ -1,0 +1,9 @@
+{"type":"mode","mode":"normal","sessionId":"126c369b-75eb-4c43-904b-ca081ab9449e"}
+{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}
+{"uuid":"u1","parentUuid":null,"isSidechain":false,"timestamp":"2026-07-20T21:04:17.669Z","type":"user","message":{"role":"user","content":"I want to talk to you about building our own /rc app"}}
+{"uuid":"u2","parentUuid":"u1","isSidechain":false,"timestamp":"2026-07-20T21:04:18.000Z","type":"user","message":{"role":"user","content":"<local-command-caveat>Caveat: ...</local-command-caveat>"}}
+{"uuid":"u3","parentUuid":"u2","isSidechain":false,"timestamp":"2026-07-20T21:04:19.000Z","type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>"}}
+{"uuid":"a1","parentUuid":"u3","isSidechain":false,"timestamp":"2026-07-20T21:04:27.717Z","type":"assistant","message":{"model":"claude-fable-5","id":"msg_1","role":"assistant","content":[{"type":"thinking","thinking":"secret","signature":"x"},{"type":"text","text":"I'll use the brainstorming skill first."}]}}
+{"uuid":"a2","parentUuid":"a1","isSidechain":false,"timestamp":"2026-07-20T21:04:30.000Z","type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"ls /"}}]}}
+{"uuid":"u4","parentUuid":"a2","isSidechain":false,"timestamp":"2026-07-20T21:04:31.000Z","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"bin\netc\nhome"}]}}
+{"uuid":"s1","parentUuid":"a2","isSidechain":true,"timestamp":"2026-07-20T21:04:32.000Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"subagent noise"}]}}

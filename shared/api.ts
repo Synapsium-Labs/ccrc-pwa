@@ -12,4 +12,11 @@ export interface FleetSession {
   version: string | null;
 }
 
-// ChatEvent lands in Task 8; Dialog lands in Task 11.
+export type ChatEvent =
+  | { kind: 'user'; uuid: string; ts: string; text: string }
+  | { kind: 'assistant'; uuid: string; ts: string; text: string }
+  | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string }
+  | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean }
+  | { kind: 'system'; uuid: string; ts: string; text: string };
+
+// Dialog lands in Task 11.
