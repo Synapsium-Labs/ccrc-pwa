@@ -670,6 +670,109 @@
 }
 
 /* ------------------------------------------------------------------ *
+ *  Dialog sheet — the TUI menu gone native. Option rows carry the     *
+ *  same mono index digits ccd's menu answers to; the preselected row  *
+ *  wears the ❯ cursor on the accent tint plus a right-aligned ↵ hint. *
+ *  Treatments ported from the approved design/mockup.html.            *
+ * ------------------------------------------------------------------ */
+.opts {
+  border-top: 1px solid var(--edge-subtle);
+}
+.opt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 52px; /* DIRECTION: dialog option rows run 52+ */
+  padding: var(--sp-2) var(--sp-2);
+  border: none;
+  border-bottom: 1px solid var(--edge-subtle);
+  background: none;
+  text-align: left;
+  font: var(--weight-regular) var(--text-base) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-primary);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.opt:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.opt:disabled {
+  cursor: default;
+}
+/* While one row answers, its siblings recede; the answering row keeps ink. */
+.opt:disabled:not([aria-busy='true']) {
+  color: var(--ink-disabled);
+}
+.opt:disabled:not([aria-busy='true']) .opt-glyph,
+.opt:disabled:not([aria-busy='true']) .opt-idx,
+.opt:disabled:not([aria-busy='true']) .opt-enter {
+  color: var(--ink-disabled);
+}
+.opt--selected {
+  background: var(--accent-tint);
+  border-radius: var(--r-md);
+  border-bottom-color: transparent;
+}
+.opt-glyph {
+  width: 14px;
+  font: var(--weight-semibold) var(--text-base) / 1 var(--font-mono);
+  color: var(--accent);
+  flex: none;
+}
+/* Mono index — mirrors ccd's numbered TUI menu. */
+.opt-idx {
+  width: 14px;
+  text-align: center;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  flex: none;
+}
+.opt-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.opt-enter {
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--accent);
+  flex: none;
+}
+.opt-wait {
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--status-busy-text);
+  flex: none;
+}
+.sheet-foot {
+  text-align: center;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  padding-top: var(--sp-3);
+}
+/* Unparsed dialog — the raw pane in a well plus the terminal escape hatch. */
+.dlg-copy {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  margin-bottom: var(--sp-3);
+}
+.dlg-raw {
+  margin-bottom: var(--sp-4);
+}
+.dlg-actions {
+  display: grid;
+  gap: var(--sp-2);
+}
+.dlg-later {
+  min-height: var(--tap-min);
+  border: none;
+  background: none;
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ *
  *  Loading & empty states.                                            *
  * ------------------------------------------------------------------ */
 .chat-skel {
@@ -731,7 +834,8 @@
   .send-btn,
   .inputbar,
   .chat-head .keycap,
-  .pending-actions button {
+  .pending-actions button,
+  .opt {
     transition: none;
   }
 }

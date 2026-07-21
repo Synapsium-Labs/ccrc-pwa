@@ -142,6 +142,14 @@
   background: var(--edge-strong);
   margin: var(--sp-1) auto var(--sp-4);
 }
+.sheet-eyebrow {
+  flex: none;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+  margin-bottom: var(--sp-2);
+}
 .sheet-title {
   flex: none;
   font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);

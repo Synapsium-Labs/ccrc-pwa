@@ -3,7 +3,7 @@
 // banners for every degraded state (offline, dead/read-only, missing
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
-// DialogSheet (Task 9) and TerminalDrawer (Task 12) mount at the bottom.
+// DialogSheet mounts at the bottom; TerminalDrawer (Task 12) will join it.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
@@ -15,6 +15,7 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
+import { DialogSheet } from '../session/DialogSheet';
 import { SessionHeader } from '../session/SessionHeader';
 import '../session/chat.css';
 
@@ -209,7 +210,7 @@ export function SessionScreen({
         onDiscard={(key) => useStore.getState().discard(key)}
       />
 
-      {/* DialogSheet mounts here (Task 9). */}
+      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} />
       {/* TerminalDrawer mounts here (Task 12) — opened via `terminalOpen`. */}
     </div>
   );

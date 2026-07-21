@@ -12,9 +12,11 @@ export interface SheetProps {
   onClose: () => void;
   children: ReactNode;
   title?: string;
+  /** Mono uppercase kicker above the title, e.g. "claude is asking". */
+  eyebrow?: string;
 }
 
-export function Sheet({ open, onClose, children, title }: SheetProps): ReactNode {
+export function Sheet({ open, onClose, children, title, eyebrow }: SheetProps): ReactNode {
   return (
     <Drawer.Root
       open={open}
@@ -26,6 +28,7 @@ export function Sheet({ open, onClose, children, title }: SheetProps): ReactNode
         <Drawer.Overlay className="sheet-scrim" data-testid="sheet-overlay" onClick={onClose} />
         <Drawer.Content className="sheet-panel" aria-describedby={undefined}>
           <div className="sheet-grabber" aria-hidden="true" />
+          {eyebrow !== undefined && <p className="sheet-eyebrow">{eyebrow}</p>}
           <Drawer.Title className={title ? 'sheet-title' : 'sr-only'}>
             {title ?? 'Sheet'}
           </Drawer.Title>
