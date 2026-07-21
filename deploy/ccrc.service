@@ -5,7 +5,7 @@ After=network-online.target
 [Service]
 Environment=CCRC_HOST=203.0.113.7
 Environment=CCRC_PORT=7788
-ExecStart=/usr/bin/node %h/ccrc/server/dist/server/src/index.js
+ExecStart=/usr/bin/env node %h/ccrc/server/dist/server/src/index.js
 Restart=always
 RestartSec=3
 
