@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { FleetSession, SessionStatus } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
+import { useNow } from '../lib/useNow';
 import { LimitBar } from '../components/LimitBar';
 import { StatusDot } from '../components/StatusDot';
 import { toast } from '../components/Toast';
@@ -16,16 +17,6 @@ import './fleet.css';
 const LONG_PRESS_MS = 550;
 const LONG_PRESS_SLOP_PX = 12;
 const PING_MS = 400; // --dur-ping plus a little settle
-
-/** Re-render tick so relative times ("2m ago") stay honest while mounted. */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(timer);
-  }, [intervalMs]);
-  return now;
-}
 
 /** '2m' | '3h' | '5d' — null under a minute (callers phrase that case). */
 function relShort(now: number, then: number | null): string | null {
@@ -103,11 +94,16 @@ export function SessionCard({
       cancelPress(); // it's a scroll, not a hold
     }
   };
+  // The tapped card's title is the shared element of the card→chat view
+  // transition: stamping the name here (only on the card being opened) pairs
+  // it with the chat header's `view-transition-name: session-title`.
+  const titleRef = useRef<HTMLButtonElement>(null);
   const open = (): void => {
     if (longPressed.current) {
       longPressed.current = false;
       return; // the hold already restarted — don't also navigate
     }
+    if (titleRef.current) titleRef.current.style.viewTransitionName = 'session-title';
     onOpen(session.id);
   };
 
@@ -128,6 +124,13 @@ export function SessionCard({
           ? `idle · ${rel} ago`
           : 'idle · just now';
   const lineVariant = dead ? 'dead' : attention ? 'attention' : busy ? 'busy' : 'idle';
+
+  // Critical limit window (routing policy: > 75%), if any — 5h is the more
+  // urgent forecast when both windows are critical. Dead cards stay silent
+  // (limits are meaningless when nothing runs).
+  const five = session.limits?.five ?? null;
+  const seven = session.limits?.seven ?? null;
+  const critical = dead ? null : five !== null && five > 75 ? '5h' : seven !== null && seven > 75 ? '7d' : null;
 
   // Chip colors resolve through the account token names; a dead card's chip
   // drains to gray — identity stays in the mono name.
@@ -152,6 +155,7 @@ export function SessionCard({
       <div className="card-top">
         <h2 className="proj">
           <button
+            ref={titleRef}
             type="button"
             className="card-open"
             onClick={open}
@@ -180,6 +184,12 @@ export function SessionCard({
 
       {!dead && (
         <LimitBar five={session.limits?.five ?? null} seven={session.limits?.seven ?? null} />
+      )}
+
+      {/* DIRECTION: a bar crossing critical narrates its consequence — a red
+          band is a forecast, not an alarm. The tighter window speaks. */}
+      {critical !== null && (
+        <p className="card-limit-note">{critical} limit near — will move to another account</p>
       )}
 
       {dead && (

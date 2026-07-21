@@ -3,25 +3,15 @@
 // name, truncated input summary and a duration readout (a live elapsed clock
 // while running). Tap expands (animated height, reduced-motion aware) to
 // input/result wells capped at --well-max with inner scroll.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { ChatEvent } from '../../../shared/api';
+import { useNow } from '../lib/useNow';
 import './chat.css';
 
 export type ToolUseEvent = Extract<ChatEvent, { kind: 'tool_use' }>;
 export type ToolResultEvent = Extract<ChatEvent, { kind: 'tool_result' }>;
-
-/** Re-render tick while a tool is running so its elapsed clock stays live. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return now;
-}
 
 /** '0.4s' | '12s' | '1m 4s' between two ISO timestamps; null if unparsable. */
 function durationLabel(from: string, to: string): string | null {
@@ -51,7 +41,7 @@ export function ToolCard({
   const [expanded, setExpanded] = useState(false);
   const reduced = useReducedMotion() ?? false;
   const running = result === undefined;
-  const now = useNow(running);
+  const now = useNow(1_000, running);
 
   const dot = running ? 'tool-dot--run' : result.isError ? 'tool-dot--err' : 'tool-dot--ok';
   const summary = use.input.split('\n', 1)[0] ?? '';

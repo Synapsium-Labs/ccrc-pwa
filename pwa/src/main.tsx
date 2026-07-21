@@ -4,6 +4,11 @@ import { registerSW } from 'virtual:pwa-register';
 import './styles/base.css';
 import { App } from './app';
 import { toast } from './components/Toast';
+import { initTheme } from './lib/theme';
+
+// Theme before first render (index.html pre-stamps the attribute so even the
+// pre-bundle paint is right; this adds the live change listener + meta sync).
+initTheme();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

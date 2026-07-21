@@ -4,8 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="description" content="Drive your Claude Code fleet from anywhere." />
-    <!-- --bg-page (tokens.css); dark-first, so the browser chrome stays glass-dark. -->
+    <!-- --bg-page (tokens.css) for both themes; lib/theme.ts keeps the plain
+         meta in sync with the applied theme after boot. -->
     <meta name="theme-color" content="#0B0D0C" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F6F3" />
+    <!-- Pre-paint theme + no-white-flash guard: stamp the light theme before
+         the bundle loads and paint the page background immediately. Values
+         mirror --bg-page in tokens.css (which can't be loaded yet). -->
+    <style>
+      html {
+        background: #0b0d0c;
+      }
+      html[data-theme='light'] {
+        background: #f4f6f3;
+      }
+    </style>
+    <script>
+      try {
+        if (matchMedia('(prefers-color-scheme: light)').matches)
+          document.documentElement.setAttribute('data-theme', 'light');
+      } catch {}
+    </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

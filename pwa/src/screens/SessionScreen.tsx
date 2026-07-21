@@ -12,6 +12,7 @@ import { toast } from '../components/Toast';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { accountColorVar } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
+import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
@@ -22,35 +23,13 @@ import { SessionHeader } from '../session/SessionHeader';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import '../session/chat.css';
 
-/** Keyboard discipline: the bottom inset (px) the on-screen keyboard covers,
- *  tracked via the visualViewport. The screen pads its shell by this much so
- *  the composer stays above the keyboard and the list shrinks in place —
- *  focusing the box never scrolls the chat away. 0 when no keyboard (or no
- *  visualViewport — desktop browsers without one need no discipline). */
+/** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
+ *  screen pads its shell by this much so the composer stays above the
+ *  keyboard and the list shrinks in place — focusing the box never scrolls
+ *  the chat away. Thin wrapper over the shared lib/keyboard hook (kept as a
+ *  named export — tests and later tasks import it from here). */
 export function useKeyboardInsets(): number {
-  const [inset, setInset] = useState(0);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return undefined;
-    const update = (): void => {
-      const next = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
-      setInset(next);
-      // iOS scrolls the page when the keyboard opens even in a fixed-height
-      // layout — pin it back so the header stays on-screen and the reader's
-      // place in the list survives focusing the composer.
-      if (next > 0 && (document.scrollingElement?.scrollTop ?? 0) > 0) {
-        window.scrollTo(0, 0);
-      }
-    };
-    update();
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
-    return () => {
-      vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
-    };
-  }, []);
-  return inset;
+  return useKeyboardInset({ pinTop: true });
 }
 
 export function SessionScreen({
@@ -94,7 +73,11 @@ export function SessionScreen({
   const acctVar = accountColorVar(wrapper);
   const acct = acctVar.startsWith('--acct-') ? acctVar.slice('--acct-'.length) : undefined;
 
-  const dead = status === 'dead';
+  // The stream sends status only on change — until its first frame the fleet
+  // snapshot speaks for the session (same fallback the header does), so a
+  // dead session is read-only and a busy one wears the caret from first paint.
+  const effectiveStatus = status ?? live?.status ?? null;
+  const dead = effectiveStatus === 'dead';
   const loading = uuid === null && missingFile === null;
   const empty = !loading && events.length === 0 && pending.length === 0;
 
@@ -217,7 +200,7 @@ export function SessionScreen({
           <ChatList
             events={events}
             pending={pending}
-            busy={status === 'busy'}
+            busy={effectiveStatus === 'busy'}
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
           />

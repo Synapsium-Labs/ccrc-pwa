@@ -6,12 +6,13 @@
 // account / stop), and `esc` interrupts (DIRECTION: "a keycap, not an
 // icon"), enabled only while the session is busy. Confirm-free: pressing
 // esc just sends it.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, SessionStatus } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
+import { useNow } from '../lib/useNow';
 import './chat.css';
 
 export interface SessionHeaderProps {
@@ -31,17 +32,6 @@ export interface SessionHeaderProps {
   /** Pre-snapshot identity derived from the session id (`wrapper:project`) —
    *  keeps the header instant on deep links before `/ws/fleet` lands. */
   fallback?: { title: string; wrapper: string };
-}
-
-/** Re-render tick so the busy clock / relative times stay honest.
- *  (Sibling of SessionCard's private hook — Task 14 may consolidate.) */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(timer);
-  }, [intervalMs]);
-  return now;
 }
 
 /** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */

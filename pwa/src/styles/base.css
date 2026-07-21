@@ -120,6 +120,31 @@ body {
   outline-offset: 2px;
 }
 
+/* Route changes ride a view transition (lib/router.ts): a root crossfade at
+   --dur-slow with the tapped card title morphing into the chat header (both
+   sides carry `view-transition-name: session-title`). Reduced motion never
+   starts a transition (router guard); the animation-duration override below
+   is belt and braces. */
+::view-transition-old(root),
+::view-transition-new(root),
+::view-transition-old(session-title),
+::view-transition-new(session-title) {
+  animation-duration: var(--dur-slow);
+  animation-timing-function: var(--ease-swift);
+}
+::view-transition-old(session-title) {
+  /* the morph handles movement; a hard crossfade inside it looks doubled */
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  ::view-transition-old(session-title),
+  ::view-transition-new(session-title) {
+    animation: none;
+  }
+}
+
 ::selection {
   background: var(--accent-tint);
   color: var(--ink-primary);

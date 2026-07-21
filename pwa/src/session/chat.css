@@ -38,6 +38,11 @@
   font: var(--weight-regular) 26px / 1 var(--font-ui);
   color: var(--ink-secondary);
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.chat-back:active {
+  transform: scale(0.88);
+  color: var(--ink-primary);
 }
 .chat-title-wrap {
   flex: 1;
@@ -51,6 +56,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Shared element of the card→chat view transition — pairs with the tapped
+     card title (stamped in SessionCard) across the navigation. */
+  view-transition-name: session-title;
 }
 .chat-meta {
   display: flex;
@@ -274,6 +282,10 @@
   box-shadow: var(--shadow-card);
   cursor: pointer;
   animation: jump-in var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.jump-latest:active {
+  transform: translateX(-50%) scale(0.95);
 }
 @keyframes jump-in {
   from {
@@ -751,6 +763,10 @@
   color: var(--ink-secondary);
   font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-swift);
+}
+.draft-cancel:active {
+  color: var(--ink-primary);
 }
 
 /* ------------------------------------------------------------------ *
@@ -854,6 +870,10 @@
   color: var(--ink-secondary);
   font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-swift);
+}
+.dlg-later:active {
+  color: var(--ink-primary);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1006,6 +1026,10 @@
   .send-btn,
   .attach-btn,
   .inputbar,
+  .chat-back,
+  .jump-latest,
+  .draft-cancel,
+  .dlg-later,
   .chat-head .keycap,
   .term-keys .keycap,
   .pending-actions button,

@@ -12,6 +12,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { Sheet } from '../components/Sheet';
+import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
 import './chat.css';
 
@@ -86,29 +87,6 @@ const QUICK_KEYS: { legend: string; label: string; seq: string }[] = [
   { legend: '⏎', label: 'Enter', seq: '\r' },
 ];
 
-/** Bottom inset (px) the on-screen keyboard covers, via the visualViewport —
- *  the drawer pads by it so the quick-key bar docks above the keyboard.
- *  Private sibling of SessionScreen's useKeyboardInsets (importing that here
- *  would cycle screens ↔ session); Task 14 may consolidate. */
-function useKeyboardInset(active: boolean): number {
-  const [inset, setInset] = useState(0);
-  useEffect(() => {
-    if (!active) return undefined;
-    const vv = window.visualViewport;
-    if (!vv) return undefined;
-    const update = (): void =>
-      setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
-    update();
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
-    return () => {
-      vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
-    };
-  }, [active]);
-  return inset;
-}
-
 type Conn = 'connecting' | 'open' | 'down';
 
 export interface TerminalDrawerProps {
@@ -139,7 +117,7 @@ export function TerminalDrawer({
   const termRef = useRef<DrawerTerm | null>(null);
   const gridRef = useRef({ cols: 80, rows: 24 });
   const refitRef = useRef<(() => void) | null>(null);
-  const kbInset = useKeyboardInset(open);
+  const kbInset = useKeyboardInset({ active: open });
 
   // Frames are inert until the socket reports open — quick keys pressed
   // during attach are dropped, never queued blind into a dead pipe.
@@ -224,7 +202,7 @@ export function TerminalDrawer({
   }, [kbInset, open]);
 
   return (
-    <Sheet open={open} onClose={onClose} full title="Terminal" eyebrow={`tmux · ${id}`}>
+    <Sheet open={open} onClose={onClose} full title="Terminal" eyebrow={`terminal · ${id}`}>
       <div className="term" style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}>
         <div className="term-screen">
           <div ref={setHost} className="term-host" />

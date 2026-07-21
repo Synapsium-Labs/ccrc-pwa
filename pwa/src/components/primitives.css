@@ -210,8 +210,15 @@
   cursor: pointer;
   transition: transform var(--dur-press) var(--ease-swift);
 }
-.btn-primary:active {
+.btn-primary:active:not(:disabled) {
   transform: scale(0.97);
+}
+/* Disabled/loading: the button visibly stands down (an armed-looking accent
+   button that ignores taps reads as broken). */
+.btn-primary:disabled {
+  background: var(--edge-subtle);
+  color: var(--ink-disabled);
+  cursor: default;
 }
 .btn-ghost {
   display: flex;
@@ -227,9 +234,14 @@
   cursor: pointer;
   transition: transform var(--dur-press) var(--ease-swift), background var(--dur-fast) var(--ease-swift);
 }
-.btn-ghost:active {
+.btn-ghost:active:not(:disabled) {
   transform: scale(0.97);
   background: var(--bg-raised);
+}
+.btn-ghost:disabled {
+  color: var(--ink-disabled);
+  border-color: var(--edge-subtle);
+  cursor: default;
 }
 
 /* QuickConfirm — the consequence sentence carries the weight. */
@@ -303,6 +315,10 @@
   padding: 0 var(--sp-2);
   border-radius: var(--r-sm);
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.toast-action:active {
+  transform: scale(0.94);
 }
 
 /* ------------------------------------------------------------------ *
@@ -326,7 +342,8 @@
   }
   .limit-fill,
   .btn-primary,
-  .btn-ghost {
+  .btn-ghost,
+  .toast-action {
     transition: none;
   }
 }

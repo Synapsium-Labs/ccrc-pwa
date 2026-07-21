@@ -1,5 +1,5 @@
 // AttachButton — the composer's image lane. A ghost "+" in the input bar
-// backed by a hidden <input type="file" accept="image/*" capture>; picking an
+// backed by a hidden <input type="file" accept="image/*">; picking an
 // image downscales it client-side (longest edge 2048px, JPEG 0.85 — a phone
 // camera original is 10MB+ and the prompt only needs a legible picture), then
 // uploads through api.upload (the server's `ccd clip` types the file's path
@@ -92,12 +92,14 @@ export function AttachButton({
 
   return (
     <>
+      {/* No `capture` attribute: it forces the camera, and the main lane here
+          is picking an existing screenshot from the gallery — the picker still
+          offers the camera on phones. */}
       <input
         ref={input}
         className="attach-input"
         type="file"
         accept="image/*"
-        capture
         tabIndex={-1}
         aria-hidden="true"
         onChange={onPick}
