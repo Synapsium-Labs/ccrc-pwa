@@ -37,6 +37,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
   });
 
+  // Swap-notice ingestion: ccd's ~/.cc-sessions/notify.sh hook POSTs here.
+  // Every notice fans out fleet-wide; a `cc swap:` message also targets the
+  // moved session's stream so its chat surfaces the account change inline.
+  app.post('/api/notify', async (req, reply) => {
+    const body = (req.body ?? {}) as { message?: unknown };
+    if (typeof body.message !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const message = body.message;
+    bus.emit('notice', { message });
+    const swap = /^cc swap: (\S+) moved (\S+) -> (\S+)/.exec(message);
+    if (swap) bus.emit(`session:${swap[1]}`, { type: 'notice', message });
+    return { ok: true };
+  });
+
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const since = parseSince((req.query as { since?: string }).since);

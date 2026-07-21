@@ -7,6 +7,8 @@ import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { parseDialog } from '../src/pane/dialog.js';
+import { Bus } from '../src/bus.js';
+import type { SessionStreamMsg } from '../../shared/api.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -18,7 +20,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 };
 
 /** Server over a seeded one-session registry; capture-pane returns scripted panes in order (last repeats). */
-async function makeApp(panes: (string | null)[]): Promise<{ app: FastifyInstance; calls: string[][] }> {
+async function makeApp(panes: (string | null)[]): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus }> {
   const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
   seedSession(home, ID, 'claude2');
   const calls: string[][] = [];
@@ -32,8 +34,9 @@ async function makeApp(panes: (string | null)[]): Promise<{ app: FastifyInstance
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run) });
-  return { app, calls };
+  const bus = new Bus();
+  const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run) }, bus);
+  return { app, calls, bus };
 }
 
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
@@ -127,6 +130,38 @@ describe('write routes', () => {
       const res = await app.inject({ method: 'POST', url, payload });
       expect(res.statusCode).toBe(404);
     }
+    await app.close();
+  });
+});
+
+describe('notify ingestion', () => {
+  it('POST /api/notify with a swap message emits notice and the session event', async () => {
+    const { app, bus } = await makeApp(['❯ \n']);
+    const notices: string[] = [];
+    const sessionMsgs: SessionStreamMsg[] = [];
+    bus.on('notice', (n) => notices.push(n.message));
+    bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
+    const message = `cc swap: ${ID} moved claude2 -> claude (limits) — reopen it on claude.ai under the claude account`;
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(notices).toEqual([message]);
+    expect(sessionMsgs).toEqual([{ type: 'notice', message }]);
+    await app.close();
+  });
+
+  it('POST /api/notify with a non-swap message emits only notice', async () => {
+    const { app, bus } = await makeApp(['❯ \n']);
+    const notices: string[] = [];
+    const sessionMsgs: SessionStreamMsg[] = [];
+    bus.on('notice', (n) => notices.push(n.message));
+    bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
+    const message = 'deploy finished on server-box';
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(notices).toEqual([message]);
+    expect(sessionMsgs).toEqual([]);
     await app.close();
   });
 });
