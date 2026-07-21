@@ -307,6 +307,12 @@ describe('session store connect()', () => {
 // — fleet store —
 
 describe('fleet store', () => {
+  beforeEach(() => {
+    // Live fleet messages persist an offline snapshot (lib/offline.ts) and a
+    // fresh store hydrates from it — each test starts from a clean slate.
+    window.localStorage.clear();
+  });
+
   it('applies fleet snapshots and appends dismissible notices', () => {
     const store = createFleetStore({ makeSocket });
 

@@ -2,6 +2,7 @@
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { FleetSession } from '../../../shared/api';
+import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
 export interface FleetNotice {
@@ -53,7 +54,11 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     };
 
     return {
-      sessions: [],
+      // Hydrate from the last persisted snapshot (lib/offline.ts) so a cold
+      // start renders the fleet instantly. conn stays 'connecting' — the
+      // screen stale-marks everything until the socket opens and the live
+      // snapshot replaces this one.
+      sessions: loadFleetSnapshot()?.sessions ?? [],
       conn: 'connecting',
       notices: [],
 
@@ -65,6 +70,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             const msg = asFleetMsg(m);
             if (!msg) return; // unknown frame — ignore
             if (msg.type === 'fleet') {
+              saveFleetSnapshot(msg.sessions); // keep the offline snapshot fresh
               set({ sessions: msg.sessions });
             } else {
               noticeSeq += 1;

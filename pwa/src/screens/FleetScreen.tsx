@@ -54,6 +54,14 @@ export function FleetScreen({
         </div>
       )}
 
+      {conn === 'connecting' && sessions.length > 0 && (
+        // Cold start hydrated from the offline snapshot (lib/offline.ts):
+        // cards render instantly, clearly marked stale until the socket opens.
+        <div className="offline-banner" role="status">
+          Last known state — connecting…
+        </div>
+      )}
+
       {notices.map((n) => (
         <div key={n.id} className="notice" role="status">
           <span className="notice-msg">{n.message}</span>

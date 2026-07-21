@@ -43,8 +43,11 @@
   display: grid;
   gap: var(--sp-3);
 }
-/* Offline: last-known cards stay readable, just visibly stale. */
-.fleet[data-conn='down'] .fleet-list {
+/* Offline / cold-start hydration: last-known cards stay readable, just
+   visibly stale. (The connecting case only ever shows real cards — the
+   skeleton list carries data-loading and stays at full strength.) */
+.fleet[data-conn='down'] .fleet-list,
+.fleet[data-conn='connecting'] .fleet-list:not([data-loading='true']) {
   opacity: 0.75;
 }
 
