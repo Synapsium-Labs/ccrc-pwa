@@ -151,6 +151,43 @@ describe('session WS', () => {
     ws.close();
   });
 
+  it('delivers an ALREADY-pending dialog on connect (menu was up before the client joined)', { timeout: 15_000 }, async () => {
+    // A real AskUserQuestion menu: numbered options with descriptions + footer.
+    const menuPane =
+      'earlier assistant text\n' +
+      '❯ 1. Approve as built\n     do it now\n' +
+      '  2. Reject\n     revert\n' +
+      '  3. Chat about this\n' +
+      '\nEnter to select · ↑/↓ to navigate · Esc to cancel\n';
+    const menuRun: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { code: 0, stdout: menuPane, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const menuApp = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run: menuRun, tmux: new Tmux(menuRun) }, new Bus());
+    await menuApp.listen({ host: '127.0.0.1', port: 0 });
+    const a = menuApp.server.address();
+    const p = typeof a === 'object' && a !== null ? a.port : 0;
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${p}/ws/session/${ID}`);
+      const next = collect(ws);
+      await opened(ws);
+      // backlog first, then the pending dialog (order not otherwise constrained).
+      let dialogMsg: any = null;
+      for (let i = 0; i < 4 && !dialogMsg; i++) {
+        const m = await next(6000);
+        if (m.type === 'dialog') dialogMsg = m;
+      }
+      expect(dialogMsg).not.toBeNull();
+      expect(dialogMsg.dialog.parsed).toBe(true);
+      expect(dialogMsg.dialog.options.map((o: { index: number }) => o.index)).toEqual([1, 2, 3]);
+      ws.close();
+    } finally {
+      await menuApp.close();
+    }
+  });
+
   it('missing transcript sends backlog with missing:true and streams once the file appears', { timeout: 15_000 }, async () => {
     rmSync(fileA);
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);

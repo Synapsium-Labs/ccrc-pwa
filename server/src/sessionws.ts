@@ -5,6 +5,7 @@ import { readRegistry } from './registry.js';
 import { readLiveState } from './livestate.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
+import { paneState, parseDialog } from './pane/dialog.js';
 import type { SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
 const POLL_MS = 2000;
@@ -30,9 +31,18 @@ export class SessionStream {
   private ticking = false;
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
+  private lastDialogId: string | null = null;
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
-  private readonly onSessionMsg = (m: SessionStreamMsg): void => this.send(m);
+  // This stream detects dialogs itself (start + every tick), so it always
+  // delivers a dialog that is ALREADY pending when the client connects — the
+  // global watcher only emits on the appear/clear transition, which a
+  // late-joining client would miss. Ignore the watcher's dialog bus events here
+  // to avoid double-delivery; still forward its notices.
+  private readonly onSessionMsg = (m: SessionStreamMsg): void => {
+    if (m.type === 'dialog' || m.type === 'dialog_cleared') return;
+    this.send(m);
+  };
 
   constructor(
     private readonly deps: Deps,
@@ -59,8 +69,28 @@ export class SessionStream {
       this.send({ type: 'notice', message: `unknown session ${this.id}` });
     }
     if (this.stopped) return;
+    await this.checkDialog(); // deliver an already-pending dialog on connect
+    if (this.stopped) return;
     this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
     this.poll.unref();
+  }
+
+  /** Capture the pane; send `dialog` when a menu appears/changes and
+   *  `dialog_cleared` when it vanishes — tracked per stream so a client that
+   *  joins after the menu appeared still receives it. */
+  private async checkDialog(): Promise<void> {
+    if (this.stopped) return;
+    const pane = await this.deps.tmux.capture(this.id);
+    const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
+    if (dialog) {
+      if (this.lastDialogId !== dialog.id) {
+        this.lastDialogId = dialog.id;
+        this.send({ type: 'dialog', dialog });
+      }
+    } else if (this.lastDialogId !== null) {
+      this.lastDialogId = null;
+      this.send({ type: 'dialog_cleared' });
+    }
   }
 
   stop(): void {
@@ -151,6 +181,8 @@ export class SessionStream {
         this.status = r.status;
         this.send({ type: 'status', status: r.status, statusUpdatedAt: r.statusUpdatedAt });
       }
+      if (this.stopped) return;
+      await this.checkDialog();
     } finally {
       this.ticking = false;
     }
