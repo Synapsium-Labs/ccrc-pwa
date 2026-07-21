@@ -1,0 +1,124 @@
+import { describe, it, expect } from 'vitest';
+import { KeyedQueue } from '../src/inject/queue.js';
+import { sendPrompt } from '../src/inject/send.js';
+import { Tmux, type Runner } from '../src/exec.js';
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const noSleep = async () => {};
+
+/** Tmux backed by a fake runner: capture-pane returns scripted panes in order (last one repeats; null → code 1). */
+function fakeTmux(panes: (string | null)[]) {
+  const calls: string[][] = [];
+  let capIdx = 0;
+  const run: Runner = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    if (args[0] === 'capture-pane') {
+      const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
+      capIdx++;
+      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  return { tmux: new Tmux(run), calls };
+}
+
+const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
+
+describe('KeyedQueue', () => {
+  it('same key runs FIFO even when the first fn is slow', async () => {
+    const q = new KeyedQueue();
+    const order: string[] = [];
+    const p1 = q.run('k', async () => { await wait(30); order.push('a'); return 'a'; });
+    const p2 = q.run('k', async () => { order.push('b'); return 'b'; });
+    expect(await Promise.all([p1, p2])).toEqual(['a', 'b']);
+    expect(order).toEqual(['a', 'b']);
+  });
+
+  it('different keys interleave', async () => {
+    const q = new KeyedQueue();
+    const order: string[] = [];
+    const pa = q.run('a', async () => { await wait(40); order.push('a'); });
+    const pb = q.run('b', async () => { order.push('b'); });
+    await Promise.all([pa, pb]);
+    expect(order).toEqual(['b', 'a']);
+  });
+
+  it('a rejected fn does not block later fns on the same key', async () => {
+    const q = new KeyedQueue();
+    await expect(q.run('k', async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(await q.run('k', async () => 42)).toBe(42);
+  });
+});
+
+describe('sendPrompt', () => {
+  it('happy path: sends -l literal, verifies echo, then Enter', async () => {
+    const { tmux, calls } = fakeTmux([
+      'scrollback\n❯ \n',             // initial capture — empty draft
+      'scrollback\n❯ hello world\n',  // verify capture echoes the text
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', 'cc-myid', 'Enter'],
+    ]);
+  });
+
+  it('not-alive when capture fails; nothing sent', async () => {
+    const { tmux, calls } = fakeTmux([null]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
+    expect(res).toEqual({ ok: false, error: 'not-alive' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('draft-present returns the draft text and sends nothing', async () => {
+    const { tmux, calls } = fakeTmux(['❯ half-typed thought\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'half-typed thought' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('replaceDraft clears with C-u then proceeds', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ old draft\n',  // initial — draft present
+      '❯ \n',           // after C-u — cleared
+      '❯ new text\n',   // verify
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'new text', { replaceDraft: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', 'C-u'],
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'new text'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
+
+  it('draft-clear-failed when C-u leaves the draft; only C-u was sent', async () => {
+    const { tmux, calls } = fakeTmux(['❯ stubborn\n', '❯ stubborn\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true });
+    expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: 'stubborn' });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'C-u']]);
+  });
+
+  it('multiline sends M-Enter between literals', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ a\n  b\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a\nb');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'a'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'b'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
+
+  it('verify-failed when the pane never echoes the text; Enter never sent', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'will not appear');
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect((res as { pane?: string }).pane).toContain('❯');
+    const sk = sendKeysCalls(calls);
+    expect(sk).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', '-l', 'will not appear']);
+    expect(sk.some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+  });
+});
