@@ -652,6 +652,52 @@
 .composer-input::placeholder {
   color: var(--ink-tertiary);
 }
+/* Attach — the image lane: a ghost "+" beside the send circle, its hidden
+   file input off-tree. While the upload runs the button wears an
+   indeterminate phosphor ring (the caret's tempo — the machine is working). */
+.attach-input {
+  display: none;
+}
+.attach-btn {
+  position: relative;
+  flex: none;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  border: none;
+  background: none;
+  border-radius: var(--r-full);
+  color: var(--ink-secondary);
+  font: var(--weight-regular) 24px / 1 var(--font-ui);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.attach-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+.attach-btn:disabled {
+  color: var(--ink-disabled);
+  cursor: default;
+}
+.attach-btn[aria-busy='true'] {
+  color: var(--accent);
+}
+.attach-btn[aria-busy='true']::before {
+  content: '';
+  position: absolute;
+  inset: var(--sp-1);
+  border-radius: var(--r-full);
+  border: 2px solid var(--accent-tint);
+  border-top-color: var(--accent);
+  animation: attach-spin var(--caret-period) linear infinite;
+}
+@keyframes attach-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
 .send-btn {
   flex: none;
   width: var(--tap-min);
@@ -870,11 +916,18 @@
   }
   .tool-chev,
   .send-btn,
+  .attach-btn,
   .inputbar,
   .chat-head .keycap,
   .pending-actions button,
   .opt,
   .menu-item {
     transition: none;
+  }
+  /* The upload ring stops spinning and holds solid — still reads "working"
+     next to the disabled button, nothing strobes. */
+  .attach-btn[aria-busy='true']::before {
+    animation: none;
+    border-color: var(--accent);
   }
 }

@@ -231,6 +231,7 @@ export function SessionScreen({
       <Composer
         onSend={(text, replaceDraft) => void useStore.getState().send(text, replaceDraft)}
         pending={pending}
+        id={id}
         disabled={dead}
         placeholder={dead ? 'Restart the session to send' : `Message ${project}`}
         onDiscard={(key) => useStore.getState().discard(key)}

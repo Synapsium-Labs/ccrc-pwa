@@ -259,6 +259,20 @@
     opacity: 0;
   }
 }
+/* Action toasts (e.g. a failed upload's Retry): an accent text button whose
+   44px hit area overlaps the slip's padding, so the toast stays slim. */
+.toast-action {
+  flex: none;
+  min-height: var(--tap-min);
+  margin: calc(-1 * var(--sp-3)) calc(-1 * var(--sp-2)) calc(-1 * var(--sp-3)) var(--sp-1);
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: var(--weight-semibold) var(--text-sm) / 1 var(--font-ui);
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
 
 /* ------------------------------------------------------------------ *
  *  Reduced motion — the canonical pattern from DIRECTION.md: disable  *

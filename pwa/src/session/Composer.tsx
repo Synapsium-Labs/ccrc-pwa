@@ -1,19 +1,22 @@
 // Composer — the prompt line. Auto-growing textarea (1→6 lines, ≥16px so iOS
-// never zoom-jumps), phosphor send button. Enter is newline (touch-first);
-// Cmd/Ctrl+Enter sends on desktop. When a send bounces off a half-typed
-// server-side draft (409 draft-present), a small sheet shows that draft and
-// offers: Append anyway (draft precedes your text — both send together),
-// Replace draft (replaceDraft: true), or Cancel (the failed bubble keeps its
-// Retry/Discard).
+// never zoom-jumps), image attach lane, phosphor send button. Enter is newline
+// (touch-first); Cmd/Ctrl+Enter sends on desktop. When a send bounces off a
+// half-typed server-side draft (409 draft-present), a small sheet shows that
+// draft and offers: Append anyway (draft precedes your text — both send
+// together), Replace draft (replaceDraft: true), or Cancel (the failed bubble
+// keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Sheet } from '../components/Sheet';
 import type { PendingSend } from '../stores/session';
+import { AttachButton } from './AttachButton';
 import './chat.css';
 
 export interface ComposerProps {
   onSend: (text: string, replaceDraft?: boolean) => void;
   pending: PendingSend[];
+  /** Session id — enables the image-attach lane; without it the lane hides. */
+  id?: string;
   /** Dead session: input and send are disabled (read-only chat). */
   disabled?: boolean;
   placeholder?: string;
@@ -30,6 +33,7 @@ interface DraftConflict {
 export function Composer({
   onSend,
   pending,
+  id,
   disabled = false,
   placeholder = 'Message this session',
   onDiscard,
@@ -103,6 +107,7 @@ export function Composer({
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
         />
+        {id !== undefined && <AttachButton id={id} disabled={disabled} />}
         <button
           type="button"
           className="send-btn"
