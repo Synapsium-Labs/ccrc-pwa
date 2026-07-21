@@ -16,6 +16,12 @@ export interface ReconnectingSocketOpts {
 const MAX_DELAY_MS = 10_000;
 const JITTER = 0.3;
 
+/** Absolute ws(s):// URL for a same-origin path like `/ws/fleet`. */
+export function wsUrl(path: string): string {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}${path}`;
+}
+
 export class ReconnectingSocket {
   private readonly opts: ReconnectingSocketOpts;
   private ws: WebSocket | null = null;
