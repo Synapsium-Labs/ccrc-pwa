@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MessageBubble } from '../src/session/MessageBubble';
 
 afterEach(cleanup);
@@ -26,6 +26,22 @@ describe('MessageBubble link + image rendering', () => {
     assistant('here it is: https://example.com/render.jpg');
     const img = screen.getByRole('img');
     expect(img).toHaveAttribute('src', 'https://example.com/render.jpg');
+  });
+
+  it('clicking a link opens a new browser context via window.open (not in-app nav)', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    assistant('go to https://example.com/docs now');
+    fireEvent.click(screen.getByRole('link', { name: 'https://example.com/docs' }));
+    expect(open).toHaveBeenCalledWith('https://example.com/docs', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
+
+  it('normalizes a scheme-less link so it is not resolved same-origin', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    assistant('[docs](example.com/guide)');
+    fireEvent.click(screen.getByRole('link', { name: 'docs' }));
+    expect(open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
   });
 
   it('makes URLs in a user message tappable', () => {

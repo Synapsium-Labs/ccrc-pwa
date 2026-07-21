@@ -5,7 +5,7 @@
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 import type { ChatEvent } from '../../../shared/api';
 import './chat.css';
 
@@ -14,6 +14,24 @@ export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'sy
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?|#|$)/i;
 const isImageUrl = (href: string | undefined): href is string => href !== undefined && IMG_EXT.test(href);
 
+/** Absolute, scheme-qualified URL — a bare "example.com" would otherwise resolve
+ *  same-origin and get swallowed by the PWA's navigation fallback. */
+function absolute(href: string): string {
+  if (/^https?:\/\//i.test(href)) return href;
+  if (/^[a-z][\w+.-]*:/i.test(href)) return href; // mailto:, tel:, …
+  return `https://${href}`;
+}
+
+/** Open in a real new browser tab/instance. A plain target=_blank in a
+ *  standalone PWA is unreliable (the app window itself can navigate, and the
+ *  service worker's navigateFallback then serves index.html — the "back to the
+ *  landing page" symptom), so force a fresh context via window.open. */
+function openExternal(e: React.MouseEvent, href: string | undefined): void {
+  if (!href) return;
+  e.preventDefault();
+  window.open(absolute(href), '_blank', 'noopener,noreferrer');
+}
+
 /** Open in the external browser (a bare `<a>` in a standalone PWA would try to
  *  navigate the app itself), and render image URLs inline as tap-to-open images. */
 const mdComponents: Components = {
@@ -21,13 +39,13 @@ const mdComponents: Components = {
     if (isImageUrl(href)) {
       const name = href.split('/').pop()?.split(/[?#]/)[0] || 'image';
       return (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link">
+        <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
           <img src={href} alt={name} loading="lazy" className="msg-img" />
         </a>
       );
     }
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer">
+      <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
         {children}
       </a>
     );
@@ -35,7 +53,7 @@ const mdComponents: Components = {
   img({ src, alt }) {
     const href = typeof src === 'string' ? src : undefined;
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link">
+      <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
         <img src={src} alt={alt ?? ''} loading="lazy" className="msg-img" />
       </a>
     );
@@ -49,7 +67,7 @@ const isUrl = (s: string): boolean => /^https?:\/\//.test(s);
 export function linkify(text: string): ReactNode[] {
   return text.split(URL_SPLIT).map((part, i) =>
     isUrl(part) ? (
-      <a key={i} href={part} target="_blank" rel="noopener noreferrer">
+      <a key={i} href={part} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, part)}>
         {part}
       </a>
     ) : (
