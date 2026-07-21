@@ -19,4 +19,14 @@ export type ChatEvent =
   | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean }
   | { kind: 'system'; uuid: string; ts: string; text: string };
 
-// Dialog lands in Task 11.
+/** Placeholder — the full Dialog shape lands in Task 11. */
+export type Dialog = unknown;
+
+export type SessionStreamMsg =
+  | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean }  // missing=true → transcript file not found at `file`; UI shows a diagnostic banner
+  | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
+  | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
+  | { type: 'dialog'; dialog: Dialog }            // Dialog lands in Task 11; placeholder above
+  | { type: 'dialog_cleared' }
+  | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
+  | { type: 'notice'; message: string };

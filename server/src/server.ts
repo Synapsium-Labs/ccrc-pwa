@@ -5,7 +5,8 @@ import type { Runner, Tmux } from './exec.js';
 import { assembleFleet } from './fleet.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
-import type { FleetSession } from '../../shared/api.js';
+import { SessionStream, parseSince } from './sessionws.js';
+import type { FleetSession, SessionStreamMsg } from '../../shared/api.js';
 
 export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux }
 
@@ -27,6 +28,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
     });
+  });
+
+  app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
+    const { id } = req.params as { id: string };
+    const since = parseSince((req.query as { since?: string }).since);
+    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
+    void stream.start();
+    socket.on('close', () => stream.stop());
   });
 
   if (watcher) app.addHook('onClose', async () => { watcher.stop(); });
