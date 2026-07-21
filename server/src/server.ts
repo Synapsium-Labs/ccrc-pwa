@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
+import fastifyMultipart from '@fastify/multipart';
 import type { CcrcConfig } from './config.js';
 import type { Runner, Tmux } from './exec.js';
 import { assembleFleet } from './fleet.js';
@@ -10,6 +11,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
 import { readRegistry } from './registry.js';
 import { ccd, listProjects } from './lifecycle.js';
+import { saveUploadAndClip } from './clip.js';
 import type { FleetSession, SessionStreamMsg } from '../../shared/api.js';
 
 export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux }
@@ -17,6 +19,7 @@ export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux }
 export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWatcher): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
+  await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
 
   app.get('/health', async () => ({ ok: true }));
 
@@ -106,6 +109,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const rec = (await readRegistry(deps.cfg)).find((r) => r.id === id);
     if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     return runCcd(reply, ['stop', rec.wrapper, rec.project]);
+  });
+
+  // Image upload: save under uploadsDir, then `ccd clip` moves it into
+  // ~/.cc-clips/<id>/ and types its path into the session's prompt.
+  app.post('/api/sessions/:id/upload', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const part = await req.file();
+    if (!part) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const m = /\.(png|jpe?g|webp)$/i.exec(part.filename ?? '');
+    if (!m) {
+      part.file.resume();   // drain the rejected stream so the request finishes cleanly
+      return reply.code(415).send({ ok: false, error: 'unsupported-type' });
+    }
+    const data = await part.toBuffer();
+    const res = await saveUploadAndClip(deps.run, deps.cfg, id, data, m[1]!.toLowerCase());
+    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   });
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {
