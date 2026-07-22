@@ -1,0 +1,12 @@
+[Unit]
+Description=ccrc-agent — whitelisted exec/file/tail/pty surface for the ccrc fleet host
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.ccrc/agent.env
+ExecStart=/usr/bin/env node %h/ccrc/agent/dist/agent/src/index.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
