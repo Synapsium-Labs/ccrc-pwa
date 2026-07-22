@@ -40,6 +40,19 @@ export class FleetWatcher {
     }
   }
 
+  /**
+   * The set of session ids that currently have a pending menu dialog. Exposed
+   * so a one-shot fleet assembly (the /api/fleet REST + the initial /ws/fleet
+   * push on connect) can reflect an ALREADY-pending dialog. Without this, a
+   * dialog that appeared before a client connected shows no "needs you" marker
+   * on the fleet overview: the initial push omits it and the watcher only
+   * re-emits 'fleet' when the JSON *changes*, so an unchanged pending state is
+   * never resent to the newcomer.
+   */
+  currentPending(): Set<string> {
+    return new Set(this.dialogIds.keys());
+  }
+
   async tick(): Promise<void> {
     const pending = await this.detectDialogs();
     const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending);

@@ -5,6 +5,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
+import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
@@ -95,6 +96,42 @@ describe('fleet REST + WS', () => {
     const notice = await next();
     expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude2-MekWarLive moved claude2 -> claude' });
 
+    ws.close();
+  });
+
+  it('a NEW /ws/fleet client sees an ALREADY-pending dialog on connect', async () => {
+    const menuPane = [
+      'Which fix?',
+      '❯ 1. Flip the default (Recommended)',
+      '  2. Keep safe-by-default',
+      '',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+    const run: Runner = async (_cmd, args) => {
+      if (args.includes('has-session')) return { code: 0, stdout: '', stderr: '' };
+      if (args.includes('list-panes')) return { code: 0, stdout: '4242\n', stderr: '' };
+      if (args.includes('capture-pane')) return { code: 0, stdout: menuPane, stderr: '' };
+      return { code: 1, stdout: '', stderr: '' };
+    };
+    const deps = testDeps(home, run);
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    app = await buildServer(deps, bus, watcher);
+    await watcher.tick(); // watcher detects the dialog BEFORE any client connects
+
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const next = collect(ws);
+    await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+    const snapshot = await next();
+    expect(snapshot.type).toBe('fleet');
+    const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude2-MekWarLive');
+    // The bug: this was `false` — the initial push omitted pendingDialogs, so the
+    // "needs you" marker never showed on the fleet overview for a pre-existing dialog.
+    expect(s.dialogPending).toBe(true);
     ws.close();
   });
 
