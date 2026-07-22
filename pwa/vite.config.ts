@@ -45,9 +45,12 @@ export default defineConfig({
         // Precache the app shell only: JS/CSS/HTML + icons + manifest. Server
         // state must never be cached — /api and /ws are explicitly
         // network-only (and navigations to them never fall back to the shell).
+        // /docs (docserver) and /fleet (rp-llm preview) are co-tenants at the
+        // root: deny-list them so the PWA's SPA fallback never hijacks their
+        // navigations — they must pass through to the network (tailscale serve).
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//, /^\/docs(\/|$)/, /^\/fleet(\/|$)/],
         runtimeCaching: [{ urlPattern: /\/(?:api|ws)\//, handler: 'NetworkOnly' }],
       },
     }),
