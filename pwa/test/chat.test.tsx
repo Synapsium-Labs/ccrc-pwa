@@ -126,6 +126,19 @@ describe('ChatListInner', () => {
     expect(screen.getByText('on its way')).toBeInTheDocument();
     expect(screen.getByText('sending')).toBeInTheDocument();
   });
+
+  it('shows the working indicator when busy — even when the last item is the user turn', () => {
+    const { rerender } = render(
+      <ChatListInner events={[user('u1', 'run the tests')]} pending={[]} busy={false} />,
+    );
+    // Not working when idle.
+    expect(screen.queryByRole('status', { name: /working/i })).not.toBeInTheDocument();
+
+    // Busy with the user's message as the tail (no assistant bubble to wear the
+    // caret) — the explicit indicator must still appear.
+    rerender(<ChatListInner events={[user('u1', 'run the tests')]} pending={[]} busy />);
+    expect(screen.getByRole('status', { name: /working/i })).toBeInTheDocument();
+  });
 });
 
 // — Composer —

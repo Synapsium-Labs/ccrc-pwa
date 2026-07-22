@@ -506,6 +506,73 @@
   }
 }
 
+/* Working indicator — an explicit "this turn is in flight" pulse at the tail of
+   the chat whenever the session is busy. The caret only rides the last
+   assistant message; this reads clearly whatever the tail is (user just sent,
+   a tool crunching, or Claude thinking with no text yet). */
+.msg-working {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  letter-spacing: var(--tracking-caps);
+}
+.msg-working-glyph {
+  color: var(--accent);
+  animation: working-glyph 1.5s ease-in-out infinite alternate;
+}
+@keyframes working-glyph {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.msg-working-label {
+  text-transform: uppercase;
+}
+.msg-working-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.msg-working-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  animation: working-dot 1.2s ease-in-out infinite;
+}
+.msg-working-dots i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.msg-working-dots i:nth-child(3) {
+  animation-delay: 0.36s;
+}
+@keyframes working-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg-working-glyph,
+  .msg-working-dots i {
+    animation: none;
+  }
+  .msg-working-glyph {
+    opacity: 1;
+  }
+}
+
 /* ------------------------------------------------------------------ *
  *  Tool card — the machine's work, filed neatly.                      *
  * ------------------------------------------------------------------ */

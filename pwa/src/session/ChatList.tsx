@@ -20,7 +20,8 @@ export type ChatItem =
   | { kind: 'divider'; key: string; label: string }
   | { kind: 'message'; key: string; event: MessageEvent; streaming: boolean }
   | { kind: 'tool'; key: string; use: ToolUseEvent; result?: ToolResultEvent }
-  | { kind: 'pending'; key: string; send: PendingSend };
+  | { kind: 'pending'; key: string; send: PendingSend }
+  | { kind: 'working'; key: 'working' };
 
 /** 'today · 14:02' (or '20 Jul · 14:02' across days) for a ts divider. */
 function dividerLabel(ts: string): string | null {
@@ -81,7 +82,28 @@ export function buildChatItems(
   for (const p of pending) {
     items.push({ kind: 'pending', key: `pending-${p.key}`, send: p });
   }
+  // Explicit "Claude is working this turn" indicator. The block caret above only
+  // rides the last assistant message, so it's invisible when the last item is a
+  // user message, a tool still crunching, or Claude is thinking with no text yet.
+  // This trailing pulse makes the working state legible whatever the tail is.
+  if (busy) items.push({ kind: 'working', key: 'working' });
   return items;
+}
+
+/** Animated "Claude is working this turn" pulse — mirrors the terminal's
+ *  cogitating spinner so a reader always knows a turn is in flight. */
+function WorkingIndicator(): ReactNode {
+  return (
+    <p className="msg-working" role="status" aria-label="Claude is working">
+      <span className="msg-working-glyph" aria-hidden="true">❯</span>
+      <span className="msg-working-label">working</span>
+      <span className="msg-working-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+    </p>
+  );
 }
 
 /** Optimistic send bubble: sending `◌` → (confirmed events replace it) →
@@ -144,6 +166,8 @@ function ChatItemView({
       return <ToolCard use={item.use} result={item.result} />;
     case 'pending':
       return <PendingBubble send={item.send} onRetry={onRetry} onDiscard={onDiscard} />;
+    case 'working':
+      return <WorkingIndicator />;
   }
 }
 
