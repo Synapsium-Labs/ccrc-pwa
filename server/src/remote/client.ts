@@ -1,10 +1,21 @@
 import WebSocket from 'ws';
-import type { AgentReq, ResOk, TailData, TailReset } from '../../../shared/agent-protocol.js';
+import type {
+  AgentReq,
+  PtyClose,
+  PtyData,
+  PtyExit,
+  PtyInput,
+  PtyResize,
+  ResOk,
+  TailData,
+  TailReset,
+} from '../../../shared/agent-protocol.js';
 import type { Runner } from '../exec.js';
 import type { FleetIO } from '../io.js';
 import type { SpawnPty } from '../pty.js';
 import { createRunner } from './runner.js';
 import { createIo } from './io.js';
+import { createSpawnPty } from './pty.js';
 
 /**
  * Single authenticated WS connection to a `ccrc-agent` on a REMOTE fleet
@@ -38,6 +49,7 @@ export interface FleetState { connected: boolean; downSince: number | null }
 interface Pending { resolve: (v: ResOk) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
 
 type TailListener = (msg: TailData | TailReset) => void;
+type PtyListener = (msg: PtyData | PtyExit) => void;
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
@@ -76,6 +88,7 @@ export class FleetClient {
 
   private readonly pending = new Map<number, Pending>();
   private readonly tailListeners = new Map<number, TailListener>();
+  private readonly ptyListeners = new Map<number, PtyListener>();
   private readonly stateListeners = new Set<(s: FleetState) => void>();
   private readonly connectListeners = new Set<(isReconnect: boolean) => void>();
 
@@ -122,6 +135,24 @@ export class FleetClient {
     this.tailListeners.delete(tailId);
   }
 
+  onPty(ptyId: number, cb: PtyListener): void {
+    this.ptyListeners.set(ptyId, cb);
+  }
+
+  offPty(ptyId: number): void {
+    this.ptyListeners.delete(ptyId);
+  }
+
+  /** Fire-and-forget pty control frames (input/resize/close) — these carry
+   *  a `ptyId`, not a request `id`, and expect no `res` reply, so they skip
+   *  the request/pending-table machinery entirely. Silently dropped when
+   *  disconnected, same stance as `tailClose` on a dead socket. */
+  sendPty(msg: PtyInput | PtyResize | PtyClose): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+    }
+  }
+
   request(payload: AgentReqPayload, timeoutMs?: number): Promise<ResOk> {
     if (!this.ready || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('disconnected'));
@@ -149,6 +180,7 @@ export class FleetClient {
     this.stopHeartbeat();
     this.rejectAllPending(new Error('disconnected'));
     this.tailListeners.clear();
+    this.ptyListeners.clear();
     const ws = this.ws;
     this.ws = null;
     this.ready = false;
@@ -217,8 +249,13 @@ export class FleetClient {
       const tailId = msg.tailId;
       if (typeof tailId !== 'number') return;
       this.tailListeners.get(tailId)?.(msg as unknown as TailData | TailReset);
+      return;
     }
-    // 'pty' data/exit frames are ignored here until T4 wires pty routing in.
+    if (msg.t === 'pty') {
+      const ptyId = msg.ptyId;
+      if (typeof ptyId !== 'number') return;
+      this.ptyListeners.get(ptyId)?.(msg as unknown as PtyData | PtyExit);
+    }
   }
 
   private onReady(): void {
@@ -240,6 +277,15 @@ export class FleetClient {
     this.ready = false;
     this.stopHeartbeat();
     this.rejectAllPending(new Error('disconnected'));
+    // The agent kills every open pty on disconnect (per its own connection-
+    // close handler) — synthesize the same `exit` locally for anything still
+    // registered so a `RemotePty` never hangs waiting for a frame the dead
+    // socket can no longer deliver. Any pty a caller re-opens after this
+    // reconnects gets a fresh ptyId from the agent, same as tail resubscribe.
+    for (const [ptyId, cb] of this.ptyListeners) {
+      cb({ t: 'pty', ptyId, ev: 'exit' });
+    }
+    this.ptyListeners.clear();
     this.markDown();
     if (this.closed) return;
     this.scheduleReconnect();
@@ -312,18 +358,13 @@ export interface ConnectedFleet {
   close(): Promise<void>;
 }
 
-/** `spawnPty` stub — T4 replaces this with a real `RemotePty` over `ptyOpen`. */
-const spawnPtyStub: SpawnPty = () => {
-  throw new Error('remote spawnPty is not implemented yet (lands in T4)');
-};
-
 export function connectFleet(cfg: RemoteFleetConfig): ConnectedFleet {
   const client = new FleetClient(cfg);
   client.start();
   return {
     runner: createRunner(client),
     io: createIo(client),
-    spawnPty: spawnPtyStub,
+    spawnPty: createSpawnPty(client),
     state: client.state,
     onStateChange: (cb) => client.onStateChange(cb),
     close: () => client.close(),

@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "node-pty": "^1.1.0",
     "ws": "^8.21.1"
   },
   "devDependencies": {
@@ -16,5 +17,8 @@
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }

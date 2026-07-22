@@ -5,6 +5,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type {
   AgentReq,
   ExecReq,
+  PtyData,
+  PtyExit,
   PtyOpenReq,
   Pong,
   ReadFromReq,
@@ -20,6 +22,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import { readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
+import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
 import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
@@ -37,6 +40,7 @@ export interface AgentOpts {
   home?: string;             // whitelist root for .cc-sessions/.cc-limits/.cc-clips/.claude* — default os.homedir()
   projectsRoot?: string;    // whitelist root for fleet project checkouts
   helloTimeoutMs?: number;  // default 3000 — override for fast tests only
+  spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
 }
 
 export interface RunningAgent {
@@ -51,7 +55,7 @@ const EXEC_MAX_BUFFER = 8 * 1024 * 1024;
 const AUTH_CLOSE_CODE = 4401;
 export const DEFAULT_PROJECTS_ROOT = '/srv/projects';
 
-type OutMsg = ResOk | ResErr | TailData | TailReset | Pong | { t: 'ready'; v: 1 };
+type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | { t: 'ready'; v: 1 };
 
 function send(ws: WebSocket, msg: OutMsg): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -85,10 +89,19 @@ function runExec(
   });
 }
 
+interface PtyEntry {
+  proc: PtyProcess;
+  dataSub: { dispose(): void };
+  exitSub: { dispose(): void };
+}
+
 interface ConnCtx {
   cfg: WhitelistConfig;
   tails: Map<number, TailHandle>;
   nextTailId: number;
+  ptys: Map<number, PtyEntry>;
+  nextPtyId: number;
+  spawnPty: PtySpawn;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx): Promise<void> {
@@ -152,9 +165,31 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx): Promise<vo
       send(ws, ok(req.id));
       return;
     }
-    default:
-      // ptyOpen lands here until T4 wires pty handling into this switch.
-      send(ws, fail(req.id, 'not-implemented'));
+    case 'ptyOpen': {
+      if (!isSessionIdAllowed(req.sessionId)) { send(ws, fail(req.id, 'forbidden')); return; }
+      const ptyId = ctx.nextPtyId++;
+      const proc = ctx.spawnPty(req.sessionId, req.cols, req.rows);
+      const dataSub = proc.onData((data) => {
+        send(ws, { t: 'pty', ptyId, ev: 'data', dataB64: Buffer.from(data, 'utf8').toString('base64') });
+      });
+      const exitSub = proc.onExit(() => {
+        send(ws, { t: 'pty', ptyId, ev: 'exit' });
+        ctx.ptys.delete(ptyId);
+      });
+      ctx.ptys.set(ptyId, { proc, dataSub, exitSub });
+      send(ws, ok(req.id, { ptyId }));
+      return;
+    }
+    default: {
+      // Exhaustive today (every `AgentReq` op above), but kept as a
+      // defensive fallback rather than removed — a future protocol variant
+      // added to the union without a case here still gets a clean
+      // `not-implemented` response instead of an unhandled request that
+      // hangs the caller. `req` is `never` per the current union, hence the
+      // cast.
+      const unhandled = req as { id: number };
+      send(ws, fail(unhandled.id, 'not-implemented'));
+    }
   }
 }
 
@@ -238,7 +273,14 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
 
 function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number): void {
   let authed = false;
-  const ctx: ConnCtx = { cfg: { home: opts.home, projectsRoot: opts.projectsRoot }, tails: new Map(), nextTailId: 1 };
+  const ctx: ConnCtx = {
+    cfg: { home: opts.home, projectsRoot: opts.projectsRoot },
+    tails: new Map(),
+    nextTailId: 1,
+    ptys: new Map(),
+    nextPtyId: 1,
+    spawnPty: opts.spawnPty,
+  };
 
   const helloTimer = setTimeout(() => {
     if (!authed) ws.close(AUTH_CLOSE_CODE, 'hello-timeout');
@@ -289,14 +331,38 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       });
       return;
     }
-    // 'pty' input/resize/close frames arrive here once T4 wires pty handling;
-    // any other shape is ignored rather than tearing the connection down.
+    if (msg.t === 'pty') {
+      const p = msg as { ptyId?: unknown; ev?: unknown; dataB64?: unknown; cols?: unknown; rows?: unknown };
+      if (typeof p.ptyId !== 'number') return;
+      const entry = ctx.ptys.get(p.ptyId);
+      if (!entry) return;
+      if (p.ev === 'input' && typeof p.dataB64 === 'string') {
+        entry.proc.write(Buffer.from(p.dataB64, 'base64').toString('utf8'));
+      } else if (p.ev === 'resize' && typeof p.cols === 'number' && typeof p.rows === 'number') {
+        entry.proc.resize(p.cols, p.rows);
+      } else if (p.ev === 'close') {
+        entry.dataSub.dispose();
+        entry.exitSub.dispose();
+        entry.proc.kill();
+        ctx.ptys.delete(p.ptyId);
+      }
+      // any other ev value (or a shape mismatched to the declared ev) is
+      // ignored rather than tearing the connection down.
+      return;
+    }
+    // Any other frame shape is ignored rather than tearing the connection down.
   });
 
   ws.on('close', () => {
     clearTimeout(helloTimer);
     for (const handle of ctx.tails.values()) handle.close();
     ctx.tails.clear();
+    for (const entry of ctx.ptys.values()) {
+      entry.dataSub.dispose();
+      entry.exitSub.dispose();
+      entry.proc.kill();
+    }
+    ctx.ptys.clear();
   });
 }
 
@@ -311,6 +377,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     token: rawOpts.token,
     home: rawOpts.home ?? os.homedir(),
     projectsRoot: rawOpts.projectsRoot ?? DEFAULT_PROJECTS_ROOT,
+    spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
 
