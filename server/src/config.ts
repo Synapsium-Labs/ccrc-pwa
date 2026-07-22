@@ -1,6 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
 
+export type FleetMode = 'local' | 'remote';
+
 export interface CcrcConfig {
   host: string;
   port: number;
@@ -12,6 +14,12 @@ export interface CcrcConfig {
   ccdBin: string;
   projectsRoot: string;
   wrappers: Record<string, string>;
+  /** 'remote' drives the fleet through ccrc-agent instead of local node:fs/exec — see server/src/remote/. */
+  fleetMode: FleetMode;
+  agentUrl: string | null;
+  agentToken: string | null;
+  hetznerToken: string | null;
+  fleetServerId: string | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
@@ -32,5 +40,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
       'claude-corp': path.join(home, '.claude-corp'),
       gpt: path.join(home, '.claude-gpt'),
     },
+    fleetMode: env.CCRC_FLEET === 'remote' ? 'remote' : 'local',
+    agentUrl: env.CCRC_AGENT_URL ?? null,
+    agentToken: env.CCRC_AGENT_TOKEN ?? null,
+    hetznerToken: env.CCRC_HETZNER_TOKEN ?? null,
+    fleetServerId: env.CCRC_FLEET_SERVER_ID ?? null,
   };
 }

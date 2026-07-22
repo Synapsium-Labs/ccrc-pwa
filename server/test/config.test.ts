@@ -19,6 +19,36 @@ describe('loadConfig', () => {
     expect(cfg.port).toBe(9000);
     expect(cfg.projectsRoot).toBe('/data/projects');
   });
+
+  it('defaults fleetMode to local with no agent/hetzner config', () => {
+    const cfg = loadConfig({ CCRC_HOME: '/h' });
+    expect(cfg.fleetMode).toBe('local');
+    expect(cfg.agentUrl).toBeNull();
+    expect(cfg.agentToken).toBeNull();
+    expect(cfg.hetznerToken).toBeNull();
+    expect(cfg.fleetServerId).toBeNull();
+  });
+
+  it('CCRC_FLEET=remote plus agent/hetzner env vars populate the remote fleet config', () => {
+    const cfg = loadConfig({
+      CCRC_HOME: '/h',
+      CCRC_FLEET: 'remote',
+      CCRC_AGENT_URL: 'wss://203.0.113.7:7789',
+      CCRC_AGENT_TOKEN: 'secret-token',
+      CCRC_HETZNER_TOKEN: 'hetzner-secret',
+      CCRC_FLEET_SERVER_ID: '12345',
+    });
+    expect(cfg.fleetMode).toBe('remote');
+    expect(cfg.agentUrl).toBe('wss://203.0.113.7:7789');
+    expect(cfg.agentToken).toBe('secret-token');
+    expect(cfg.hetznerToken).toBe('hetzner-secret');
+    expect(cfg.fleetServerId).toBe('12345');
+  });
+
+  it('any CCRC_FLEET value other than "remote" stays local', () => {
+    const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_FLEET: 'bogus' });
+    expect(cfg.fleetMode).toBe('local');
+  });
 });
 
 describe('mungePath', () => {
