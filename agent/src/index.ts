@@ -1,5 +1,14 @@
 import { startAgent } from './server.js';
 
+// Last-resort backstop: log and keep running rather than let Node's default
+// behavior (terminate the process) turn any missed rejection anywhere in
+// the agent into a fleet-wide outage. The dispatch path in server.ts is the
+// real fix (validated request shapes + a `.catch` on every handler
+// invocation) — this is defense in depth for whatever that misses.
+process.on('unhandledRejection', (reason) => {
+  console.error('ccrc-agent: unhandled rejection (ignored, process stays up):', reason);
+});
+
 const token = process.env.CCRC_AGENT_TOKEN;
 if (!token) {
   console.error('ccrc-agent: CCRC_AGENT_TOKEN is required');

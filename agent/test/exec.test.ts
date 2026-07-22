@@ -48,13 +48,16 @@ describe('ccrc-agent exec whitelist', () => {
     expect(typeof res.code).toBe('number');
   });
 
-  it('runs a whitelisted ccd subcommand', async () => {
+  it('runs a whitelisted ccd subcommand by exact bare command name', async () => {
     fixture = makeFixture();
     agent = await boot(fixture);
     client = new TestClient(agent.port);
     await client.hello();
-    const res = await client.req<ExecRes>(1, { op: 'exec', cmd: '/does/not/exist/ccd', args: ['ensure', 'foo'] });
-    expect(res.ok).toBe(true); // whitelisted by subcommand even though the binary itself 404s
+    // Bare "ccd" — exact match, no basename matching — resolves via PATH.
+    // Even if it 404s (ENOENT) the whitelist check itself must pass, and
+    // execFile's ENOENT still comes back as a real (non-forbidden) result.
+    const res = await client.req<ExecRes>(1, { op: 'exec', cmd: 'ccd', args: ['ensure', 'foo'] });
+    expect(res.ok).toBe(true);
     expect(typeof res.code).toBe('number');
   });
 
@@ -90,18 +93,27 @@ describe('ccrc-agent exec whitelist', () => {
     agent = await boot(fixture);
     client = new TestClient(agent.port);
     await client.hello();
+    // Exec now requires an EXACT bare command name ("tmux"), so to exercise
+    // real process invocation with controlled output we put our stub on
+    // PATH under that exact name rather than passing an absolute path.
     const bin = makeStubBinary('tmux', 'echo "out:$1"; echo "err:$1" 1>&2; exit 7');
-    const res = await client.req<ExecRes>(1, { op: 'exec', cmd: bin, args: ['has-session'] });
-    expect(res).toMatchObject({ ok: true, code: 7, stdout: 'out:has-session\n', stderr: 'err:has-session\n' });
+    const origPath = process.env.PATH;
+    process.env.PATH = `${path.dirname(bin)}${path.delimiter}${origPath ?? ''}`;
+    try {
+      const res = await client.req<ExecRes>(1, { op: 'exec', cmd: 'tmux', args: ['has-session'] });
+      expect(res).toMatchObject({ ok: true, code: 7, stdout: 'out:has-session\n', stderr: 'err:has-session\n' });
+    } finally {
+      process.env.PATH = origPath;
+    }
   });
 
-  it('matches the whitelist by basename, so an absolute binary path counts', async () => {
+  it('rejects an absolute path even when its basename matches a whitelisted command (no basename matching)', async () => {
     fixture = makeFixture();
     agent = await boot(fixture);
     client = new TestClient(agent.port);
     await client.hello();
     const bin = makeStubBinary('ccd', 'exit 0');
     const res = await client.req<ExecRes>(1, { op: 'exec', cmd: bin, args: ['swap', 'x'] });
-    expect(res).toMatchObject({ ok: true, code: 0 });
+    expect(res).toEqual({ t: 'res', id: 1, ok: false, err: 'forbidden' });
   });
 });

@@ -2,7 +2,23 @@ import { execFile } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { AgentReq, Pong, ResErr, ResOk, TailData, TailReset } from '../../shared/agent-protocol.js';
+import type {
+  AgentReq,
+  ExecReq,
+  PtyOpenReq,
+  Pong,
+  ReadFromReq,
+  ReadReq,
+  ReaddirReq,
+  ResErr,
+  ResOk,
+  StatReq,
+  TailCloseReq,
+  TailData,
+  TailOpenReq,
+  TailReset,
+  WriteB64Req,
+} from '../../shared/agent-protocol.js';
 import { readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
 import { openTail, type TailHandle } from './tail.js';
 import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
@@ -146,6 +162,80 @@ function isHelloShaped(msg: unknown): msg is { t: 'hello'; token: unknown } {
   return typeof msg === 'object' && msg !== null && (msg as { t?: unknown }).t === 'hello';
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string');
+}
+
+/**
+ * Runtime shape/type validation for an already-JSON-parsed `req` frame.
+ * `msg as AgentReq` (the old dispatch site) is a *compile-time-only*
+ * assertion — it does nothing at runtime, so a malformed frame from a buggy
+ * or version-skewed client (missing/wrong-typed field) sailed straight into
+ * op handlers whose node:fs/node:path calls throw synchronously on the
+ * wrong type. Since those handlers run inside an async function with no
+ * `.catch` at the call site, that synchronous throw became an unhandled
+ * promise rejection — which crashes the whole ccrc-agent process. This is
+ * the actual gate: every op's required fields are checked here, by type,
+ * before the frame is ever allowed to reach a handler.
+ */
+function validateReq(msg: Record<string, unknown>): AgentReq | null {
+  if (typeof msg.id !== 'number') return null;
+  const id = msg.id;
+  switch (msg.op) {
+    case 'exec': {
+      if (typeof msg.cmd !== 'string') return null;
+      if (!isStringArray(msg.args)) return null;
+      if (msg.timeoutMs !== undefined && typeof msg.timeoutMs !== 'number') return null;
+      const req: ExecReq = { t: 'req', id, op: 'exec', cmd: msg.cmd, args: msg.args };
+      if (typeof msg.timeoutMs === 'number') req.timeoutMs = msg.timeoutMs;
+      return req;
+    }
+    case 'read': {
+      if (typeof msg.path !== 'string') return null;
+      return { t: 'req', id, op: 'read', path: msg.path } satisfies ReadReq;
+    }
+    case 'readFrom': {
+      if (typeof msg.path !== 'string') return null;
+      if (typeof msg.offset !== 'number') return null;
+      return { t: 'req', id, op: 'readFrom', path: msg.path, offset: msg.offset } satisfies ReadFromReq;
+    }
+    case 'readdir': {
+      if (typeof msg.path !== 'string') return null;
+      return { t: 'req', id, op: 'readdir', path: msg.path } satisfies ReaddirReq;
+    }
+    case 'stat': {
+      if (typeof msg.path !== 'string') return null;
+      return { t: 'req', id, op: 'stat', path: msg.path } satisfies StatReq;
+    }
+    case 'writeB64': {
+      if (typeof msg.path !== 'string') return null;
+      if (typeof msg.dataB64 !== 'string') return null;
+      return { t: 'req', id, op: 'writeB64', path: msg.path, dataB64: msg.dataB64 } satisfies WriteB64Req;
+    }
+    case 'tailOpen': {
+      if (typeof msg.path !== 'string') return null;
+      if (typeof msg.offset !== 'number') return null;
+      return { t: 'req', id, op: 'tailOpen', path: msg.path, offset: msg.offset } satisfies TailOpenReq;
+    }
+    case 'tailClose': {
+      if (typeof msg.tailId !== 'number') return null;
+      return { t: 'req', id, op: 'tailClose', tailId: msg.tailId } satisfies TailCloseReq;
+    }
+    case 'ptyOpen': {
+      if (typeof msg.sessionId !== 'string') return null;
+      if (typeof msg.cols !== 'number') return null;
+      if (typeof msg.rows !== 'number') return null;
+      return { t: 'req', id, op: 'ptyOpen', sessionId: msg.sessionId, cols: msg.cols, rows: msg.rows } satisfies PtyOpenReq;
+    }
+    default:
+      return null;
+  }
+}
+
 function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number): void {
   let authed = false;
   const ctx: ConnCtx = { cfg: { home: opts.home, projectsRoot: opts.projectsRoot }, tails: new Map(), nextTailId: 1 };
@@ -175,9 +265,30 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       return;
     }
 
-    const shaped = msg as { t?: unknown };
-    if (shaped.t === 'ping') { send(ws, { t: 'pong' }); return; }
-    if (shaped.t === 'req') { void handleReq(ws, msg as AgentReq, ctx); return; }
+    // Valid JSON can still be a bare number/string/null/array — anything
+    // that isn't an object frame is silently dropped rather than risking a
+    // property access on a non-object.
+    if (!isRecord(msg)) return;
+
+    if (msg.t === 'ping') { send(ws, { t: 'pong' }); return; }
+    if (msg.t === 'req') {
+      const req = validateReq(msg);
+      if (!req) {
+        // Bad shape/types: reply forbidden-style if we at least have a
+        // numeric id to address the response to, otherwise drop the frame
+        // and keep serving this connection — never tear it down over a
+        // malformed request, and never let it reach a handler unvalidated.
+        if (typeof msg.id === 'number') send(ws, fail(msg.id, 'bad-request'));
+        return;
+      }
+      // Defense in depth: even a validated request could hit an unforeseen
+      // rejection downstream — this `.catch` guarantees no rejection from
+      // the fire-and-forget dispatch is ever left unhandled.
+      handleReq(ws, req, ctx).catch((e) => {
+        send(ws, fail(req.id, e instanceof Error ? e.message : String(e)));
+      });
+      return;
+    }
     // 'pty' input/resize/close frames arrive here once T4 wires pty handling;
     // any other shape is ignored rather than tearing the connection down.
   });

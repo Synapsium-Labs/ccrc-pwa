@@ -16,6 +16,15 @@ export interface WhitelistConfig { home: string; projectsRoot: string }
  * (worst case the filesystem root), so callers never need to handle failure.
  */
 export async function canonicalize(p: string): Promise<string> {
+  // Defense in depth: `p` is typed `string`, but the real caller chain
+  // starts at an untrusted, JSON-parsed WS frame (`msg as AgentReq`, a
+  // compile-time-only assertion) — a missing/wrong-typed field can hand a
+  // `string`-typed parameter an actual `undefined`/number/etc at runtime.
+  // node:path APIs throw synchronously on that, which — one layer up, in an
+  // async fire-and-forget dispatch with no `.catch` — becomes an unhandled
+  // promise rejection that crashes the whole process. Fail closed instead:
+  // resolve to a sentinel no whitelist prefix will ever match.
+  if (typeof p !== 'string' || p.length === 0) return path.sep;
   const abs = path.resolve(p);
   const parts = abs.split(path.sep);
   for (let i = parts.length; i >= 0; i--) {
@@ -57,6 +66,10 @@ export async function checkPath(
   cfg: WhitelistConfig,
   mode: PathMode,
 ): Promise<string | null> {
+  // Same defense-in-depth guard as `canonicalize`: never let a
+  // missing/wrong-typed `path` field reach a node:path call unchecked.
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
+
   const [canonicalHome, canonicalRoot, canonicalTarget] = await Promise.all([
     canonicalize(cfg.home),
     canonicalize(cfg.projectsRoot),
@@ -83,11 +96,23 @@ const EXEC_WHITELIST: Record<string, readonly string[]> = {
   ccd: ['start', 'enable', 'ensure', 'stop', 'swap', 'clip'],
 };
 
-/** Matches by basename so an absolute binary path (e.g. `~/.local/bin/ccd`)
- *  whitelists the same as the bare command name. */
+/**
+ * Requires an EXACT match against the bare command name (`tmux`/`ccd`) —
+ * NOT a basename match. Basename matching would let an absolute path like
+ * `/tmp/x/tmux` or a fleet checkout's own `.../some-repo/ccd` whitelist the
+ * same as the real binary, as long as the last path segment happened to
+ * match and the subcommand was whitelisted — weaker than "whitelist"
+ * implies. Any `cmd` containing `/` is rejected outright. Also guards
+ * against non-string/non-array wire values (see `canonicalize`'s comment
+ * for why: an untyped WS frame reaching a node:path call unchecked is a
+ * process-crashing bug class, and `path.basename`/`args[0]` on the wrong
+ * type throws synchronously).
+ */
 export function isExecAllowed(cmd: string, args: string[]): boolean {
-  const allowedSubs = EXEC_WHITELIST[path.basename(cmd)];
+  if (typeof cmd !== 'string' || cmd.length === 0 || cmd.includes('/')) return false;
+  const allowedSubs = EXEC_WHITELIST[cmd];
   if (!allowedSubs) return false;
+  if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) return false;
   const sub = args[0];
   return typeof sub === 'string' && allowedSubs.includes(sub);
 }

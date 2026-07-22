@@ -80,6 +80,14 @@ describe('whitelist.checkPath', () => {
     symlinkSync(secret, link);
     expect(await checkPath(link, cfg, 'read')).toBeNull();
   });
+
+  it('returns null instead of throwing when the path is not a string (malformed request)', async () => {
+    seed();
+    const cfg = { home, projectsRoot };
+    await expect(checkPath(undefined as unknown as string, cfg, 'read')).resolves.toBeNull();
+    await expect(checkPath(42 as unknown as string, cfg, 'read')).resolves.toBeNull();
+    await expect(checkPath(null as unknown as string, cfg, 'write')).resolves.toBeNull();
+  });
 });
 
 describe('whitelist.isExecAllowed', () => {
@@ -88,8 +96,13 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['swap', 'x', 'claude2'])).toBe(true);
   });
 
-  it('matches by basename for an absolute path', () => {
-    expect(isExecAllowed('/home/user/.local/bin/ccd', ['ensure', 'x'])).toBe(true);
+  it('requires an EXACT bare command name — no basename matching', () => {
+    // An absolute path whose *basename* matches ("tmux"/"ccd") must NOT be
+    // treated as the real binary — that would let e.g. /tmp/x/tmux or a
+    // fleet checkout's .../some-repo/ccd pass the whitelist.
+    expect(isExecAllowed('/home/user/.local/bin/ccd', ['ensure', 'x'])).toBe(false);
+    expect(isExecAllowed('/tmp/x/tmux', ['has-session'])).toBe(false);
+    expect(isExecAllowed('/srv/projects/some-repo/ccd', ['swap', 'x'])).toBe(false);
   });
 
   it('rejects unknown commands', () => {
@@ -99,5 +112,14 @@ describe('whitelist.isExecAllowed', () => {
   it('rejects unknown subcommands of a whitelisted command', () => {
     expect(isExecAllowed('tmux', ['kill-server'])).toBe(false);
     expect(isExecAllowed('ccd', [])).toBe(false);
+  });
+
+  it('returns false instead of throwing on malformed wire values (missing/wrong-typed fields)', () => {
+    expect(isExecAllowed(undefined as unknown as string, ['x'])).toBe(false);
+    expect(isExecAllowed(123 as unknown as string, ['x'])).toBe(false);
+    expect(isExecAllowed(null as unknown as string, ['x'])).toBe(false);
+    expect(isExecAllowed('tmux', undefined as unknown as string[])).toBe(false);
+    expect(isExecAllowed('tmux', 'has-session' as unknown as string[])).toBe(false);
+    expect(isExecAllowed('tmux', [123 as unknown as string])).toBe(false);
   });
 });
