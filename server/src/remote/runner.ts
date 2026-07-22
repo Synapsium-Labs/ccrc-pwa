@@ -29,12 +29,21 @@ function asExecResult(res: unknown): ExecResult {
   };
 }
 
+/** The agent's exec whitelist accepts BARE command names only. Local call
+ *  sites pass `cfg.ccdBin` (an absolute `~/.local/bin/ccd` path — correct for
+ *  local exec), so normalize any `…/ccd` to bare `ccd` for the wire; the agent
+ *  re-resolves it against ITS OWN home. Everything else passes unchanged. */
+export function wireCmd(cmd: string): string {
+  return cmd.split('/').pop() === 'ccd' ? 'ccd' : cmd;
+}
+
 export function createRunner(client: FleetClient): Runner {
   return async (cmd, args) => {
-    const timeoutMs = timeoutMsFor(cmd);
+    const sendCmd = wireCmd(cmd);
+    const timeoutMs = timeoutMsFor(sendCmd);
     try {
       const res = await client.request(
-        { t: 'req', op: 'exec', cmd, args, timeoutMs },
+        { t: 'req', op: 'exec', cmd: sendCmd, args, timeoutMs },
         timeoutMs + CLIENT_TIMEOUT_SLACK_MS,
       );
       return asExecResult(res);

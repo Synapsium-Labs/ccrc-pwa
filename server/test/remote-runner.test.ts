@@ -57,3 +57,13 @@ describe('remote Runner — exec over the agent WS', () => {
     expect(res.stderr.length).toBeGreaterThan(0);
   });
 });
+
+describe('wireCmd — absolute ccdBin normalization (agent whitelist takes bare names only)', () => {
+  it('maps any …/ccd path to bare ccd, leaves everything else alone', async () => {
+    const { wireCmd } = await import('../src/remote/runner.js');
+    expect(wireCmd('/home/you/.local/bin/ccd')).toBe('ccd');
+    expect(wireCmd('ccd')).toBe('ccd');
+    expect(wireCmd('tmux')).toBe('tmux');
+    expect(wireCmd('/usr/bin/tmux')).toBe('/usr/bin/tmux'); // only ccd is re-homed
+  });
+});

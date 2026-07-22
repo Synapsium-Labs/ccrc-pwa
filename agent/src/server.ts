@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
+import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
   AgentReq,
@@ -74,6 +75,13 @@ function clampTimeout(ms: number | undefined): number {
   return Math.min(ms, MAX_EXEC_TIMEOUT_MS);
 }
 
+/** Resolve a whitelisted bare command to a spawnable path. `ccd` lives in
+ *  `~/.local/bin`, which is NOT on a systemd user unit's default PATH, so it
+ *  must be resolved explicitly; `tmux` is a distro binary and PATH suffices. */
+export function resolveSpawnCmd(cmd: string, home: string): string {
+  return cmd === 'ccd' ? path.join(home, '.local', 'bin', 'ccd') : cmd;
+}
+
 function runExec(
   cmd: string,
   args: string[],
@@ -108,7 +116,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx): Promise<vo
   switch (req.op) {
     case 'exec': {
       if (!isExecAllowed(req.cmd, req.args)) { send(ws, fail(req.id, 'forbidden')); return; }
-      const result = await runExec(req.cmd, req.args, clampTimeout(req.timeoutMs));
+      const result = await runExec(resolveSpawnCmd(req.cmd, ctx.cfg.home), req.args, clampTimeout(req.timeoutMs));
       send(ws, ok(req.id, result));
       return;
     }

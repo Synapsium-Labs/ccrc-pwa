@@ -117,3 +117,11 @@ describe('ccrc-agent exec whitelist', () => {
     expect(res).toEqual({ t: 'res', id: 1, ok: false, err: 'forbidden' });
   });
 });
+
+describe('resolveSpawnCmd — ccd resolved against the agent home (systemd PATH lacks ~/.local/bin)', () => {
+  it('resolves bare ccd to $HOME/.local/bin/ccd and leaves tmux to PATH', async () => {
+    const { resolveSpawnCmd } = await import('../src/server.js');
+    expect(resolveSpawnCmd('ccd', '/home/you')).toBe('/home/you/.local/bin/ccd');
+    expect(resolveSpawnCmd('tmux', '/home/you')).toBe('tmux');
+  });
+});
