@@ -79,6 +79,34 @@
 }
 
 /* ------------------------------------------------------------------ *
+ *  Fleet host banner — degraded mode: the REMOTE fleet host is        *
+ *  unreachable. Louder than the quiet offline-banner (red-toned, the  *
+ *  same "dead" language as an exited session) since it carries a      *
+ *  destructive action.                                                *
+ * ------------------------------------------------------------------ */
+.fleet-host-banner {
+  position: sticky;
+  top: calc(var(--sp-2) + var(--safe-top));
+  z-index: var(--z-header);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  background: var(--status-dead-tint);
+  border: 1px solid var(--status-dead);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  color: var(--status-dead-text);
+}
+.fleet-host-banner-msg {
+  flex: 1;
+  min-width: 0;
+}
+.fleet-host-banner .btn-primary {
+  flex: none;
+}
+
+/* ------------------------------------------------------------------ *
  *  Notices — dismissible fleet-wide banners (account moves etc.).     *
  * ------------------------------------------------------------------ */
 .notice {

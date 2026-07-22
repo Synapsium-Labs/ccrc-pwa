@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
-import { buildServer } from '../src/server.js';
+import { buildServer, type Deps } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { loadConfig } from '../src/config.js';
+import { loadSnapshot } from '../src/fleetstate.js';
 import { testDeps } from './helpers.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
@@ -94,5 +96,34 @@ describe('fleet REST + WS', () => {
     expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude2-MekWarLive moved claude2 -> claude' });
 
     ws.close();
+  });
+
+  it('FleetWatcher persists a snapshot to the state cache on each poll while remote+connected', async () => {
+    const cacheDir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null }, stateCachePath: cachePath };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick();
+
+    const snap = await loadSnapshot(cachePath);
+    expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('does NOT persist a snapshot while remote+disconnected — the cache keeps the last-known-good data', async () => {
+    const cacheDir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const deps: Deps = {
+      ...testDeps(home), cfg, fleetState: { connected: false, downSince: Date.now() }, stateCachePath: cachePath,
+    };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick();
+
+    expect(await loadSnapshot(cachePath)).toBeNull();
+    rmSync(cacheDir, { recursive: true, force: true });
   });
 });

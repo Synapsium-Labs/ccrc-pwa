@@ -8,6 +8,7 @@ import { Skeleton } from '../components/Skeleton';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { SessionCard } from '../fleet/SessionCard';
 import { AccountsStrip } from '../fleet/AccountsStrip';
+import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { sortFleet } from '../fleet/sortFleet';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -49,6 +50,8 @@ export function FleetScreen({
         <span className="wordmark">ccrc</span>
         {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
       </header>
+
+      <FleetHostBanner />
 
       {conn === 'down' && (
         <div className="offline-banner" role="status">

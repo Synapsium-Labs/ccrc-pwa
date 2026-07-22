@@ -12,6 +12,15 @@ export interface FleetSession {
   version: string | null;
 }
 
+/** `/api/fleet/health` — degraded-mode signal for the remote fleet host.
+ *  `mode: 'local'` is always `{connected: true, downSince: null}` — there is
+ *  no separate fleet host to lose. */
+export interface FleetHealth {
+  mode: 'local' | 'remote';
+  connected: boolean;
+  downSince: number | null;   // epoch ms since the agent connection dropped
+}
+
 /** One account's usage, read from telemetry (cc-limits) independent of whether a
  *  session is currently on it — so the display survives restarts/respawns/swaps.
  *  `ts` is epoch seconds of the last report; the UI marks it stale when old. */

@@ -10,6 +10,7 @@ import type { Runner, Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits } from './limits.js';
+import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
@@ -24,7 +25,14 @@ import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
 
-export interface Deps { cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty }
+export interface Deps {
+  cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
+  /** Remote-mode reachability, straight from `connectFleet().state` — absent
+   *  (or ignored) in local mode, where the fleet is always "connected". */
+  fleetState?: FleetState;
+  /** Override for tests; defaults to `fleetstate.ts`'s `defaultCachePath()`. */
+  stateCachePath?: string;
+}
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
  *  module — src/ in dev, dist/server/src/ compiled — to the first package.json. */
@@ -49,7 +57,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.get('/health', async () => ({ ok: true }));
 
-  app.get('/api/fleet', async () => ({ sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux) }));
+  const stateCachePath = deps.stateCachePath ?? defaultCachePath();
+
+  // Degraded mode: while the remote fleet host is unreachable, serve the
+  // last-known-good snapshot (fleetstate.ts, written by FleetWatcher on every
+  // successful poll) instead of a live assemble that would otherwise read as
+  // an empty fleet. `stale`/`downSince` let the PWA bannner explain why.
+  app.get('/api/fleet', async () => {
+    if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
+      const snap = await loadSnapshot(stateCachePath);
+      if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
+    }
+    return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux) };
+  });
+
+  app.get('/api/fleet/health', async () => {
+    if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
+      return { mode: 'remote', connected: deps.fleetState.connected, downSince: deps.fleetState.downSince };
+    }
+    return { mode: deps.cfg.fleetMode, connected: true, downSince: null };
+  });
+
+  // Fleet-host reboot: guarded to remote mode with Hetzner creds configured.
+  // The fleet box is shared with the rp-llm stack — the PWA's confirm dialog
+  // names that collateral before this ever fires.
+  app.post('/api/fleet/reboot', async (req, reply) => {
+    if (deps.cfg.fleetMode !== 'remote') return reply.code(409).send({ ok: false, error: 'not-remote' });
+    const { hetznerToken, fleetServerId } = deps.cfg;
+    if (!hetznerToken || !fleetServerId) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    try {
+      const res = await fetch(`https://api.hetzner.cloud/v1/servers/${fleetServerId}/actions/reboot`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${hetznerToken}`, 'content-type': 'application/json' },
+      });
+      if (!res.ok) return reply.code(502).send({ ok: false, error: 'hetzner-error' });
+      return reply.code(202).send({ ok: true });
+    } catch {
+      return reply.code(502).send({ ok: false, error: 'hetzner-error' });
+    }
+  });
 
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,

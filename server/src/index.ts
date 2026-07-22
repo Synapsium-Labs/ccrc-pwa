@@ -16,7 +16,7 @@ if (cfg.fleetMode === 'remote') {
     process.exit(1);
   }
   const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken });
-  deps = { cfg, run: fleet.runner, tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty };
+  deps = { cfg, run: fleet.runner, tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty, fleetState: fleet.state };
 } else {
   deps = { cfg, run: realRunner, tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty };
 }
