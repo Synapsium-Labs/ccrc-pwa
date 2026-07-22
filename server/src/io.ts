@@ -42,11 +42,15 @@ export const localIO: FleetIO = {
   },
 
   async readFileFrom(p, offset) {
-    let buf: Buffer;
-    try { buf = await readFile(p); } catch { return null; }
-    const size = buf.byteLength;
+    // Stream only [offset, size) — never load the whole file. Transcripts reach
+    // tens of MB; the old read-whole-then-slice bloated the agent's RSS and
+    // blocked its event loop (base64 + JSON.stringify of the full buffer).
+    let size: number;
+    try { size = (await stat(p)).size; } catch { return null; }
     const from = Math.max(0, Math.min(offset, size));
-    return { data: buf.subarray(from).toString('utf8'), size };
+    if (from >= size) return { data: '', size };
+    try { return { data: (await readRange(p, from, size)).toString('utf8'), size }; }
+    catch { return null; }
   },
 
   async readdir(p) {

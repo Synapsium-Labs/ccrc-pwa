@@ -1,5 +1,17 @@
+import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+
+/** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
+function readRange(file: string, start: number, end: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    createReadStream(file, { start, end: end - 1 })
+      .on('data', (c) => chunks.push(c as Buffer))
+      .on('end', () => resolve(Buffer.concat(chunks)))
+      .on('error', reject);
+  });
+}
 
 /**
  * Raw fs behavior behind the read/readFrom/readdir/stat/writeB64 ops —
@@ -13,11 +25,15 @@ export async function readWhole(p: string): Promise<string | null> {
 }
 
 export async function readFrom(p: string, offset: number): Promise<{ data: string; size: number } | null> {
-  let buf: Buffer;
-  try { buf = await readFile(p); } catch { return null; }
-  const size = buf.byteLength;
+  // Stream only [offset, size) — never load the whole file. A transcript backlog
+  // read of a tens-of-MB file used to slurp the whole thing here, ballooning the
+  // agent's memory and stalling its event loop.
+  let size: number;
+  try { size = (await stat(p)).size; } catch { return null; }
   const from = Math.max(0, Math.min(offset, size));
-  return { data: buf.subarray(from).toString('utf8'), size };
+  if (from >= size) return { data: '', size };
+  try { return { data: (await readRange(p, from, size)).toString('utf8'), size }; }
+  catch { return null; }
 }
 
 export async function listDir(p: string): Promise<string[] | null> {

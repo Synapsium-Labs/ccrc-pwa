@@ -46,6 +46,29 @@ describe('readBacklog', () => {
     const out = await readBacklog(localIO, path.join(tmpdir(), 'ccrc-definitely-missing', 'x.jsonl'), 50);
     expect(out).toEqual({ events: [], offset: 0 });
   });
+
+  it('reads only the file TAIL for a huge transcript (last N events, EOF offset, no partial head)', async () => {
+    // >1 MB of padded user lines so the backlog window (1 MB) starts mid-file:
+    // proves we no longer read the whole (17.9 MB in prod) transcript.
+    const file = tmpFile();
+    let body = '';
+    for (let i = 1; i <= 800; i++) {
+      body += JSON.stringify({
+        uuid: `u${i}`, parentUuid: null, isSidechain: false,
+        timestamp: '2026-07-20T21:00:00.000Z', type: 'user',
+        message: { role: 'user', content: 'x'.repeat(2000) }, // ~2 KB/line → ~1.6 MB total
+      }) + '\n';
+    }
+    writeFileSync(file, body);
+    const total = statSync(file).size;
+    expect(total).toBeGreaterThan(1024 * 1024); // window truly starts mid-file
+
+    const { events, offset } = await readBacklog(localIO, file, 3);
+    expect(offset).toBe(total); // tailer resumes at true EOF
+    expect(events).toHaveLength(3);
+    // last three lines, each a fully-parsed event (no half-JSON head slipped through)
+    expect(events.map((e) => (e.kind === 'user' ? e.uuid : '?'))).toEqual(['u798', 'u799', 'u800']);
+  });
 });
 
 describe('TranscriptTailer', () => {

@@ -3,18 +3,32 @@ import { parseTranscriptLine } from './parse.js';
 import type { FleetIO } from '../io.js';
 import type { ChatEvent } from '../../../shared/api.js';
 
+// Read at most the last 1 MB of a transcript for the backlog, not the whole
+// file. Transcripts reach tens of MB (custom-tools was 17.9 MB for the last 50
+// events); reading them whole through the agent RPC ballooned the agent's RSS
+// to ~1.9 GB and stalled its event loop. 1 MB comfortably covers BACKLOG_N=50
+// events even at large (multi-KB) line sizes.
+const BACKLOG_TAIL_BYTES = 1024 * 1024;
+
 /**
- * Parse the whole transcript file and return the last `lastN` events plus the
- * end-of-file byte offset (where a tailer should resume). Missing file → empty.
+ * Return the last `lastN` events plus the end-of-file byte offset (where a
+ * tailer should resume), reading only the file's tail. Missing/empty → empty.
  */
 export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<{ events: ChatEvent[]; offset: number }> {
-  const content = await io.readFile(file);
-  if (content === null) return { events: [], offset: 0 };
-  const events = content
-    .split('\n')
-    .filter((l) => l.trim() !== '')
-    .flatMap(parseTranscriptLine);
-  return { events: events.slice(-lastN), offset: Buffer.byteLength(content, 'utf8') };
+  const st = await io.stat(file);
+  if (st === null || st.size === 0) return { events: [], offset: st?.size ?? 0 };
+  const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
+  const res = await io.readFileFrom(file, start);
+  if (res === null) return { events: [], offset: st.size };
+  let text = res.data;
+  // A non-zero start almost certainly lands mid-line — drop the partial head so
+  // we never hand half a JSON object to the parser.
+  if (start > 0) {
+    const nl = text.indexOf('\n');
+    text = nl >= 0 ? text.slice(nl + 1) : '';
+  }
+  const events = text.split('\n').filter((l) => l.trim() !== '').flatMap(parseTranscriptLine);
+  return { events: events.slice(-lastN), offset: res.size };
 }
 
 const NL = 0x0a;
