@@ -31,7 +31,20 @@ export async function statPath(p: string): Promise<{ mtimeMs: number; size: numb
   } catch { return null; }
 }
 
-export async function writeB64(p: string, dataB64: string): Promise<void> {
-  await mkdir(path.dirname(p), { recursive: true });
-  await writeFile(p, Buffer.from(dataB64, 'base64'));
+export type WriteResult = { ok: true } | { ok: false; err: string };
+
+/**
+ * Never throws: any fs error (ENOTDIR from a path collision, ENOSPC,
+ * EACCES, …) is caught and reported in the return value instead of becoming
+ * an unhandled rejection in the caller's fire-and-forget dispatch, which
+ * would otherwise crash the whole ccrc-agent process.
+ */
+export async function writeB64(p: string, dataB64: string): Promise<WriteResult> {
+  try {
+    await mkdir(path.dirname(p), { recursive: true });
+    await writeFile(p, Buffer.from(dataB64, 'base64'));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, err: e instanceof Error ? e.message : 'write-failed' };
+  }
 }

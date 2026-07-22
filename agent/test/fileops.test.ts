@@ -148,4 +148,29 @@ describe('ccrc-agent file ops', () => {
     const res = await client!.req<Res>(nextId(), { op: 'writeB64', path: file, dataB64: Buffer.from('x').toString('base64') });
     expect(res).toMatchObject({ ok: false, err: 'forbidden' });
   });
+
+  it('writeB64 replies with a failure response (not a crash) when mkdir hits a real fs error', async () => {
+    await open();
+    // Force ENOTDIR: `blocker` is a regular file, so mkdir-ing a directory
+    // "under" it (a path-collision) fails at the fs layer, not the whitelist.
+    const blocker = path.join(fixture!.home, '.cc-clips', 'blocker-file');
+    writeFileSync(blocker, 'not a directory');
+    const file = path.join(blocker, 'nested', 'clip.png');
+    const res = await client!.req<Res>(nextId(), {
+      op: 'writeB64',
+      path: file,
+      dataB64: Buffer.from('x').toString('base64'),
+    });
+    expect(res.ok).toBe(false);
+    expect(typeof res.err).toBe('string');
+    // The connection must still be alive afterwards — a crashed/dead agent
+    // process would never answer this follow-up request.
+    const other = path.join(fixture!.home, '.cc-clips', 'still-alive.txt');
+    const res2 = await client!.req<Res>(nextId(), {
+      op: 'writeB64',
+      path: other,
+      dataB64: Buffer.from('ok').toString('base64'),
+    });
+    expect(res2).toMatchObject({ ok: true });
+  });
 });

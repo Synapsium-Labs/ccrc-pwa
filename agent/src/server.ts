@@ -112,8 +112,8 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx): Promise<vo
     case 'writeB64': {
       const p = await checkPath(req.path, ctx.cfg, 'write');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      await writeB64(p, req.dataB64);
-      send(ws, ok(req.id));
+      const result = await writeB64(p, req.dataB64);
+      send(ws, result.ok ? ok(req.id) : fail(req.id, result.err));
       return;
     }
     case 'tailOpen': {
