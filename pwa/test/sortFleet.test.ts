@@ -4,7 +4,7 @@ import type { FleetSession } from '../../shared/api';
 
 const s = (over: Partial<FleetSession>): FleetSession => ({
   id: over.id ?? 'x', wrapper: 'claude2', home: 'claude2', project: over.id ?? 'x', workdir: '/w',
-  name: null, status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
+  name: null, status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false, model: null, effort: null, ultracode: false, branch: null, version: null,
   ...over,
 });
 

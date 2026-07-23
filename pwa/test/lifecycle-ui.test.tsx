@@ -44,7 +44,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: Date.now() - 2 * MIN,
   limits: { five: 62, seven: 71 },
-  dialogPending: false,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
   version: null,
   ...patch,
 });
@@ -237,13 +237,25 @@ describe('SessionScreen overflow menu', () => {
     return { store, fleet };
   };
 
-  it('"Change model" sends the /model command to the session', () => {
+  it('"Change model" opens the chooser; picking a model sends /model <alias>', () => {
     const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined);
     renderScreen();
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: /Change model/ }));
-    expect(prompt).toHaveBeenCalledWith('claude:OpenClawHetzner', '/model');
+    // The chooser is open now — tap a model row.
+    fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/ }));
+    expect(prompt).toHaveBeenCalledWith('claude:OpenClawHetzner', '/model opus');
+  });
+
+  it('"Change effort" opens the chooser; picking a level sends /effort <level>', () => {
+    const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined);
+    renderScreen();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: /Change effort/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Ultracode/ }));
+    expect(prompt).toHaveBeenCalledWith('claude:OpenClawHetzner', '/effort ultracode');
   });
 
   it('"Move to another account" opens the swap sheet for this session', () => {

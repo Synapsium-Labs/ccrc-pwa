@@ -85,6 +85,61 @@
 .chat .status-line--dead {
   color: var(--status-dead-text);
 }
+/* Sub-meta row — model / effort / ultracode / branch, from the pane
+   statusline. The model + effort chips are tappable (open their choosers). */
+.chat-submeta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+.metachip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--edge-subtle);
+  background: var(--bg-surface);
+  border-radius: var(--r-full);
+  padding: 3px 9px;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-secondary);
+}
+button.metachip {
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
+}
+button.metachip:active {
+  transform: scale(0.94);
+  border-color: var(--edge-strong);
+}
+.metachip-glyph {
+  flex: none;
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+.metachip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metachip--model {
+  color: var(--ink-primary);
+}
+.metachip--ultra {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--edge-subtle));
+  background: var(--accent-tint);
+}
+.metachip--branch {
+  color: var(--ink-tertiary);
+}
+.metachip--branch .metachip-text {
+  max-width: 22ch;
+}
+
 /* Account chip — mono name first, hue second, against the screen-scoped
    account accent (the [data-acct] rebinding in tokens.css). */
 .chat .chip {
@@ -910,10 +965,33 @@
   color: var(--ink-tertiary);
   flex: none;
 }
-.opt-label {
+.opt-body {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.opt-label {
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+/* The option's sub-text — the fix for choosing options blind. */
+.opt-desc {
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+/* The full question / preamble above the options. Scrolls if long so the
+   options stay reachable. */
+.dlg-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-secondary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  padding: var(--sp-1) var(--sp-1) var(--sp-3);
+  max-height: 38vh;
+  overflow-y: auto;
 }
 .opt-enter {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);

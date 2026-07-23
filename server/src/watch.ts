@@ -3,6 +3,7 @@ import type { Bus } from './bus.js';
 import { assembleFleet } from './fleet.js';
 import { readRegistry } from './registry.js';
 import { paneState, parseDialog } from './pane/dialog.js';
+import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, saveSnapshot } from './fleetstate.js';
 
 /**
@@ -20,6 +21,8 @@ export class FleetWatcher {
   private lastJson: string | null = null;
   /** Last-reported dialog id per session id. */
   private dialogIds = new Map<string, string>();
+  /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
+  private statuslines = new Map<string, Statusline>();
   private readonly cachePath: string;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
@@ -53,9 +56,16 @@ export class FleetWatcher {
     return new Set(this.dialogIds.keys());
   }
 
+  /** Last-seen statuslines — passed into a one-shot fleet assembly (REST +
+   *  initial /ws/fleet push) so model/effort/ultracode/branch show immediately,
+   *  same reasoning as currentPending(). */
+  currentStatuslines(): Map<string, Statusline> {
+    return new Map(this.statuslines);
+  }
+
   async tick(): Promise<void> {
     const pending = await this.detectDialogs();
-    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending);
+    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines);
     if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
       try { await saveSnapshot(sessions, this.cachePath); } catch { /* best-effort cache — never blocks the poll */ }
     }
@@ -76,6 +86,10 @@ export class FleetWatcher {
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
       const pane = await this.deps.tmux.capture(r.id);
+      // Same capture feeds the statusline read — no extra tmux call. Keep the
+      // last-known line on a null capture (dead/booting) rather than blanking.
+      if (pane !== null) this.statuslines.set(r.id, parseStatusline(pane));
+      else this.statuslines.delete(r.id);
       const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
       const last = this.dialogIds.get(r.id);
       if (dialog) {

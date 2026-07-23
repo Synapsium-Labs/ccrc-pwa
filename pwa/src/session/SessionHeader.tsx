@@ -22,9 +22,10 @@ export interface SessionHeaderProps {
   onInterrupt: () => void;
   onOpenTerminal: () => void;
   onBack: () => void;
-  /** Overflow menu: "Change model" — the picker then arrives as a normal
-   *  dialog and renders through DialogSheet. */
+  /** "Change model" — opens the one-tap model chooser. */
   onChangeModel: () => void;
+  /** "Change effort" — opens the one-tap effort chooser. */
+  onChangeEffort: () => void;
   /** Overflow menu: "Move to another account" — opens the SwapSheet. */
   onMoveAccount: () => void;
   /** Overflow menu: "Stop session" — opens the stop QuickConfirm. */
@@ -63,6 +64,7 @@ export function SessionHeader({
   onOpenTerminal,
   onBack,
   onChangeModel,
+  onChangeEffort,
   onMoveAccount,
   onStopSession,
   fallback,
@@ -104,6 +106,14 @@ export function SessionHeader({
   const title = session ? session.project : (fallback?.title ?? '…');
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
 
+  // Model / effort / ultracode / branch — read from the pane statusline the
+  // server already parses. Tapping the model or effort chip opens its chooser.
+  const model = session?.model ?? null;
+  const effort = session?.effort ?? null;
+  const ultracode = session?.ultracode ?? false;
+  const branch = session?.branch ?? null;
+  const hasMeta = st !== 'dead' && (model !== null || branch !== null || effort !== null || ultracode);
+
   return (
     <header className="chat-head">
       <button type="button" className="chat-back" aria-label="Back to fleet" onClick={onBack}>
@@ -125,6 +135,29 @@ export function SessionHeader({
             </span>
           )}
         </div>
+        {hasMeta && (
+          <div className="chat-submeta">
+            {model !== null && (
+              <button type="button" className="metachip metachip--model" onClick={onChangeModel}>
+                <span className="metachip-glyph" aria-hidden="true">🤖</span>
+                <span className="metachip-text">{model}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className={ultracode ? 'metachip metachip--ultra' : 'metachip'}
+              onClick={onChangeEffort}
+            >
+              <span className="metachip-text">{ultracode ? 'ultracode' : (effort ?? 'set effort')}</span>
+            </button>
+            {branch !== null && (
+              <span className="metachip metachip--branch" title={branch}>
+                <span className="metachip-glyph" aria-hidden="true">⎇</span>
+                <span className="metachip-text">{branch}</span>
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <button
         type="button"
@@ -158,6 +191,12 @@ export function SessionHeader({
             <span className="menu-label">Change model</span>
             <span className="menu-hint" aria-hidden="true">
               /model
+            </span>
+          </button>
+          <button type="button" className="menu-item" onClick={() => menuAct(onChangeEffort)}>
+            <span className="menu-label">Change effort</span>
+            <span className="menu-hint" aria-hidden="true">
+              /effort
             </span>
           </button>
           <button type="button" className="menu-item" onClick={() => menuAct(onMoveAccount)}>

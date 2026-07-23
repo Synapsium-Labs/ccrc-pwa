@@ -26,7 +26,7 @@ const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: Date.now() - 2 * MIN,
   limits: { five: 10, seven: 40 },
-  dialogPending: false,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
   version: '2.1.0',
   ...over,
 });

@@ -4,6 +4,7 @@ import type { FleetIO } from './io.js';
 import { readRegistry } from './registry.js';
 import { readLimits } from './limits.js';
 import { readLiveState } from './livestate.js';
+import type { Statusline } from './pane/statusline.js';
 import type { FleetSession, SessionStatus } from '../../shared/api.js';
 
 export function idHomeWrapper(id: string): string {
@@ -32,6 +33,7 @@ export async function assembleFleet(
   tmux: Tmux,
   now = Math.floor(Date.now() / 1000),
   pendingDialogs?: Set<string>,
+  statuslines?: Map<string, Statusline>,
 ): Promise<FleetSession[]> {
   const [records, limits] = await Promise.all([readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(records.map(async (r): Promise<FleetSession> => {
@@ -51,11 +53,14 @@ export async function assembleFleet(
       }
     }
     const acct = limits[r.wrapper];
+    const sl = statuslines?.get(r.id);
     return {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
       project: r.project, workdir: r.workdir, name, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       dialogPending: pendingDialogs?.has(r.id) ?? false, version,
+      model: sl?.model ?? null, effort: sl?.effort ?? null,
+      ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? null,
     };
   }));
 }

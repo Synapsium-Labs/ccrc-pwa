@@ -39,7 +39,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: null,
-  dialogPending: false,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
   version: null,
   ...patch,
 });
@@ -53,6 +53,7 @@ const renderHeader = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProp
     onOpenTerminal: vi.fn(),
     onBack: vi.fn(),
     onChangeModel: vi.fn(),
+    onChangeEffort: vi.fn(),
     onMoveAccount: vi.fn(),
     onStopSession: vi.fn(),
     ...over,

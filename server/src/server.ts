@@ -68,7 +68,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const snap = await loadSnapshot(stateCachePath);
       if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
     }
-    return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending()) };
+    return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines()) };
   });
 
   app.get('/api/fleet/health', async () => {
@@ -115,7 +115,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/ws/fleet', { websocket: true }, (socket) => {
     const onFleet = (sessions: FleetSession[]) => socket.send(JSON.stringify({ type: 'fleet', sessions }));
     const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n }));
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending()).then(onFleet);
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines()).then(onFleet);
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
     socket.on('close', () => {

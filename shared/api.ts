@@ -10,6 +10,11 @@ export interface FleetSession {
   limits: { five: number | null; seven: number | null } | null;  // account of current wrapper
   dialogPending: boolean;                    // watcher saw an unanswered pane menu
   version: string | null;
+  // Read from the pane statusline/mode-line the watcher already captures.
+  model: string | null;                      // display name, e.g. "Opus 4.8 (1M context)"
+  effort: string | null;                     // effort level, e.g. "xhigh"
+  ultracode: boolean;                        // ultracode super-mode active
+  branch: string | null;                     // current git branch
 }
 
 /** `/api/fleet/health` — degraded-mode signal for the remote fleet host.
@@ -51,7 +56,8 @@ export type ChatEvent =
 export interface Dialog {
   id: string;               // sha1 of the option block text
   title: string;            // nearest non-empty line above the options
-  options: { index: number; label: string }[];
+  body?: string;            // the full question / preamble above the options (multi-line)
+  options: { index: number; label: string; description?: string }[]; // description = the option's sub-text
   selectedIndex: number;    // option with the ❯ marker
   parsed: boolean;          // false → render raw + point to terminal drawer
   raw: string;              // full pane tail for the unparsed case

@@ -19,8 +19,10 @@ import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
+import { PickSheet } from '../session/PickSheet';
 import { SessionHeader } from '../session/SessionHeader';
 import { TerminalDrawer } from '../session/TerminalDrawer';
+import { modelOptions, effortOptions } from '../lib/models';
 import '../session/chat.css';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
@@ -59,6 +61,7 @@ export function SessionScreen({
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
+  const [picker, setPicker] = useState<'model' | 'effort' | null>(null);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
@@ -109,13 +112,17 @@ export function SessionScreen({
 
   const openTerminal = (): void => setTerminalOpen(true);
 
-  // "Change model": type /model into the session — Claude's picker then
-  // arrives as a normal dialog and renders through DialogSheet.
-  const changeModel = async (): Promise<void> => {
+  // Model / effort are one-tap: the chooser sheets send `/model <alias>` or
+  // `/effort <level>` directly (a context-window switch surfaces its own
+  // confirm through DialogSheet).
+  const changeModel = (): void => setPicker('model');
+  const changeEffort = (): void => setPicker('effort');
+  const pick = async (command: string): Promise<void> => {
+    setPicker(null);
     try {
-      await api.prompt(id, '/model');
+      await api.prompt(id, command);
     } catch (err) {
-      toast(`Couldn't open the model picker — ${apiErrorText(err)}`, 'error');
+      toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
     }
   };
 
@@ -141,7 +148,8 @@ export function SessionScreen({
         onInterrupt={() => void interrupt()}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
-        onChangeModel={() => void changeModel()}
+        onChangeModel={changeModel}
+        onChangeEffort={changeEffort}
         onMoveAccount={() => setSwapOpen(true)}
         onStopSession={() => setStopOpen(true)}
         fallback={{ title: project, wrapper }}
@@ -217,6 +225,22 @@ export function SessionScreen({
       />
 
       <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} />
+      <PickSheet
+        open={picker === 'model'}
+        onClose={() => setPicker(null)}
+        eyebrow="model"
+        title="Choose a model"
+        options={modelOptions(live?.wrapper ?? wrapperFromId, live?.model ?? null)}
+        onPick={(c) => void pick(c)}
+      />
+      <PickSheet
+        open={picker === 'effort'}
+        onClose={() => setPicker(null)}
+        eyebrow="effort"
+        title="Reasoning effort"
+        options={effortOptions(live?.wrapper ?? wrapperFromId, live?.effort ?? null, live?.ultracode ?? false)}
+        onPick={(c) => void pick(c)}
+      />
       <SwapSheet
         session={live ?? { id, wrapper, project }}
         open={swapOpen}

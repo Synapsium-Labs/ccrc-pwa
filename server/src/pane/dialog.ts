@@ -66,16 +66,52 @@ export function parseDialog(pane: string): Dialog | null {
   if (cur.length >= best.length) best = cur;
   if (best.length < 2) return unparsed(pane);
 
-  const options = best.map((o) => ({ index: o.index, label: o.label }));
-  const selectedIndex = best.find((o) => o.selected)?.index ?? 1;
   const start = best[0]!.line;
+  const bounds = best.map((o) => o.line);
+  // The footer ("Enter to select") bounds the LAST option's description.
+  const footer = lines.findIndex((l, i) => i > bounds[bounds.length - 1]! && MENU_RE.test(l));
 
+  // Each option's description = the (usually wrapped) sub-text between its
+  // numbered line and the next option's (or the footer for the last), with the
+  // box-rule separators dropped. Real AskUserQuestion menus put a paragraph
+  // under every option — without it the reader is choosing labels blind.
+  const options = best.map((o, k) => {
+    const from = o.line + 1;
+    const to = k + 1 < bounds.length ? bounds[k + 1]! : footer >= 0 ? footer : lines.length;
+    const description = lines
+      .slice(from, to)
+      .filter((l) => l.trim() !== '' && !isRule(l))
+      .map((l) => l.trim())
+      .join(' ')
+      .trim();
+    return { index: o.index, label: o.label, description: description || undefined };
+  });
+  const selectedIndex = best.find((o) => o.selected)?.index ?? 1;
+
+  // Title: nearest non-empty line above the options (kept compact for chips).
   let title = '';
   for (let i = start - 1; i >= 0; i--) {
     const t = lines[i]!.trim();
     if (t) { title = t.replace(/^[●✻☐☑]\s*/, ''); break; }
   }
 
+  // Body: the FULL question/preamble — everything from the dialog's upper box
+  // rule down to the first option (capped so we never climb into unrelated
+  // conversation). This is the fix for "I don't get the full question text".
+  const bodyLines: string[] = [];
+  for (let i = start - 1; i >= 0 && start - i <= 20; i--) {
+    if (isRule(lines[i]!)) break;
+    bodyLines.push(lines[i]!.replace(/^\s*[●✻☐☑]\s*/, '').trimEnd());
+  }
+  while (bodyLines.length && bodyLines[bodyLines.length - 1]!.trim() === '') bodyLines.pop();
+  const body = bodyLines.reverse().join('\n').trim() || undefined;
+
   const id = sha1(options.map((o) => o.label).join('\n') + title);
-  return { id, title, options, selectedIndex, parsed: true, raw: pane };
+  return { id, title, body, options, selectedIndex, parsed: true, raw: pane };
+}
+
+/** A box-horizontal rule row (a run of `─`, the AskUserQuestion separators). */
+function isRule(line: string): boolean {
+  const t = line.trim();
+  return t.length >= 8 && [...t].every((c) => c === '─' || c === ' ');
 }

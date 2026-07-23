@@ -116,6 +116,9 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
 
   return (
     <Sheet open={open} onClose={close} eyebrow="claude is asking" title={shown.title}>
+      {shown.body && shown.body !== shown.title && (
+        <p className="dlg-body">{shown.body}</p>
+      )}
       <div className="opts">
         {shown.options.map((o) => {
           const selected = o.index === shown.selectedIndex;
@@ -135,7 +138,10 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
               <span className="opt-idx" aria-hidden="true">
                 {o.index}
               </span>
-              <span className="opt-label">{o.label}</span>
+              <span className="opt-body">
+                <span className="opt-label">{o.label}</span>
+                {o.description && <span className="opt-desc">{o.description}</span>}
+              </span>
               {waiting ? (
                 <span className="opt-wait">answering…</span>
               ) : selected ? (

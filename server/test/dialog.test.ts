@@ -48,6 +48,13 @@ describe('parseDialog', () => {
     expect(d.options.map((o) => o.label)).toEqual(['Red', 'Green', 'Blue', 'Type something.', 'Chat about this']);
     expect(d.selectedIndex).toBe(1);
     expect(d.title).toBe('Which colour do you prefer?');
+    // The full question preamble (header + question), not just the last line.
+    expect(d.body).toBe('Colour\n\nWhich colour do you prefer?');
+    // Each option carries its description paragraph (the fix for choosing blind).
+    expect(d.options[0]!.description).toBe('Warm, high-energy, attention-grabbing.');
+    expect(d.options[1]!.description).toBe('Natural, calm, balanced.');
+    expect(d.options[2]!.description).toBe('Cool, calm, trustworthy.');
+    expect(d.options[3]!.description).toBeUndefined(); // "Type something." has none
   });
 
   it('parses trust-folder: 2 options', () => {
