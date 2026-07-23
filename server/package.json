@@ -11,8 +11,10 @@
     "@fastify/multipart": "^10.1.0",
     "@fastify/static": "^10.1.0",
     "@fastify/websocket": "^11.3.0",
+    "@types/web-push": "^3.6.4",
     "fastify": "^5.10.0",
     "node-pty": "^1.1.0",
+    "web-push": "^3.6.7",
     "ws": "^8.21.1"
   },
   "devDependencies": {

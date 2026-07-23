@@ -20,6 +20,9 @@ export interface CcrcConfig {
   agentToken: string | null;
   hetznerToken: string | null;
   fleetServerId: string | null;
+  vapidPublic: string | null;
+  vapidPrivate: string | null;
+  vapidSubject: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
@@ -45,5 +48,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     agentToken: env.CCRC_AGENT_TOKEN ?? null,
     hetznerToken: env.CCRC_HETZNER_TOKEN ?? null,
     fleetServerId: env.CCRC_FLEET_SERVER_ID ?? null,
+    vapidPublic: env.CCRC_VAPID_PUBLIC ?? null,
+    vapidPrivate: env.CCRC_VAPID_PRIVATE ?? null,
+    vapidSubject: env.CCRC_VAPID_SUBJECT ?? 'mailto:ccrc@server-box',
   };
 }

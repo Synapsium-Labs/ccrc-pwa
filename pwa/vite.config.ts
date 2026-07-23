@@ -51,6 +51,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/ws\//, /^\/docs(\/|$)/, /^\/fleet(\/|$)/],
+        // Web Push handlers (push + notificationclick) live in public/push-sw.js
+        // and are pulled into the generated worker.
+        importScripts: ['/push-sw.js'],
         runtimeCaching: [{ urlPattern: /\/(?:api|ws)\//, handler: 'NetworkOnly' }],
       },
     }),

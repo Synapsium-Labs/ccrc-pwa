@@ -24,7 +24,7 @@ describe('parseStatusline', () => {
       '  👤 gpt │ 🤖 GPT 5.6 · high │ ⎇ main │ 🎯 rp-llm │ ▓ ctx ██░░ 20%',
     ].join('\n');
     const s = parseStatusline(pane);
-    expect(s).toEqual({ model: 'GPT 5.6', effort: 'high', ultracode: false, branch: 'main' });
+    expect(s).toEqual({ model: 'GPT 5.6', effort: 'high', ultracode: false, branch: 'main', workflowActive: false });
   });
 
   it('model without an effort segment still parses', () => {
@@ -36,11 +36,22 @@ describe('parseStatusline', () => {
 
   it('a pane with no statusline (dialog overlay / fresh session) yields empties', () => {
     const s = parseStatusline('❯ 1. Option one\n  2. Option two\nEnter to select');
-    expect(s).toEqual({ model: undefined, effort: undefined, ultracode: false });
+    expect(s).toEqual({ model: undefined, effort: undefined, ultracode: false, branch: undefined, workflowActive: false });
   });
 
   it('does NOT false-positive ultracode from chat text mentioning the word', () => {
     const s = parseStatusline('assistant: we should turn on ultracode for this\n❯ ');
     expect(s.ultracode).toBe(false);
+  });
+
+  it('detects a running workflow from the pane progress line', () => {
+    const pane = [
+      '  👤 team·max │ 🤖 Opus 4.8 · xhigh │ ⎇ main │ 🎯 proj',
+      '',
+      '  ◉ plan-relevance-triage  Re-assess coverage · 0/4 agents done · 37s · ↓ 204.5k tokens',
+    ].join('\n');
+    expect(parseStatusline(pane).workflowActive).toBe(true);
+    // No workflow line → false.
+    expect(parseStatusline('  🤖 Opus 4.8 · xhigh │ ⎇ main').workflowActive).toBe(false);
   });
 });

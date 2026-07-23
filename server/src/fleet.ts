@@ -54,6 +54,9 @@ export async function assembleFleet(
     }
     const acct = limits[r.wrapper];
     const sl = statuslines?.get(r.id);
+    // A running Workflow leaves the orchestrator reporting idle while it waits
+    // on subagents — surface it as busy so it doesn't read as finished.
+    if (sl?.workflowActive && status === 'idle') status = 'busy';
     return {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
       project: r.project, workdir: r.workdir, name, status, statusUpdatedAt,

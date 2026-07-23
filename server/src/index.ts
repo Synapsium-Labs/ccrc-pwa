@@ -6,8 +6,18 @@ import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { connectFleet } from './remote/client.js';
+import { PushService } from './push.js';
+import path from 'node:path';
 
 const cfg = loadConfig();
+
+// Web Push is optional — only wired when a VAPID keypair is configured.
+const push = cfg.vapidPublic && cfg.vapidPrivate
+  ? new PushService(
+      { publicKey: cfg.vapidPublic, privateKey: cfg.vapidPrivate, subject: cfg.vapidSubject },
+      path.join(cfg.home, '.ccrc', 'push-subs.json'),
+    )
+  : undefined;
 
 let deps: Deps;
 if (cfg.fleetMode === 'remote') {
@@ -16,9 +26,9 @@ if (cfg.fleetMode === 'remote') {
     process.exit(1);
   }
   const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken });
-  deps = { cfg, run: fleet.runner, tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty, fleetState: fleet.state };
+  deps = { cfg, run: fleet.runner, tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty, fleetState: fleet.state, push };
 } else {
-  deps = { cfg, run: realRunner, tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty };
+  deps = { cfg, run: realRunner, tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty, push };
 }
 
 const bus = new Bus();

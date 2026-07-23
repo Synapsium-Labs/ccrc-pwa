@@ -20,7 +20,11 @@ export interface Statusline {
   effort?: string; // effort level, e.g. "xhigh"
   ultracode: boolean;
   branch?: string; // current git branch, e.g. "fix/linear-go-live-completion"
+  workflowActive: boolean; // a Workflow is running — orchestrator is idle-waiting on subagents
 }
+
+// The Workflow progress line in the pane: "◉ <name> … N/M agents done · …".
+const WORKFLOW_RE = /\b\d+\/\d+\s+agents?\s+done\b/i;
 
 const ROBOT = '🤖';
 const BRANCH = '⎇'; // U+2387 branch glyph in the statusline
@@ -58,5 +62,9 @@ export function parseStatusline(pane: string): Statusline {
   // that merely mentions "ultracode".
   const ultracode = lines.some((l) => l.includes(BOX_H) && /\bultracode\b/.test(l));
 
-  return { model, effort, ultracode, branch };
+  // A running Workflow leaves the orchestrator reporting "idle" while it waits
+  // on subagents — detect it so the session reads as busy, not finished.
+  const workflowActive = lines.some((l) => WORKFLOW_RE.test(l));
+
+  return { model, effort, ultracode, branch, workflowActive };
 }

@@ -9,6 +9,7 @@ import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { SessionCard } from '../fleet/SessionCard';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { NotificationBell } from '../fleet/NotificationBell';
 import { sortFleet } from '../fleet/sortFleet';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -48,7 +49,10 @@ export function FleetScreen({
     <main className="fleet" data-conn={conn}>
       <header className="fleet-head">
         <span className="wordmark">ccrc</span>
-        {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
+        <div className="fleet-head-right">
+          {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
+          <NotificationBell />
+        </div>
       </header>
 
       <FleetHostBanner />

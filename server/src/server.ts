@@ -21,6 +21,7 @@ import { ccd, listProjects } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
 import { saveUploadAndClip } from './clip.js';
 import type { SpawnPty } from './pty.js';
+import type { PushService } from './push.js';
 import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
@@ -32,6 +33,8 @@ export interface Deps {
   fleetState?: FleetState;
   /** Override for tests; defaults to `fleetstate.ts`'s `defaultCachePath()`. */
   stateCachePath?: string;
+  /** Web Push — present only when VAPID keys are configured. */
+  push?: PushService;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -95,6 +98,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     } catch {
       return reply.code(502).send({ ok: false, error: 'hetzner-error' });
     }
+  });
+
+  // Web Push: the PWA fetches the VAPID public key, then registers its push
+  // subscription here. Notifications fire from the FleetWatcher on a new
+  // question or a busy→idle finish. 501 when push isn't configured.
+  app.get('/api/push/key', async (_req, reply) => {
+    if (!deps.push) return reply.code(501).send({ error: 'not-configured' });
+    return { key: deps.push.publicKey };
+  });
+  app.post('/api/push/subscribe', async (req, reply) => {
+    if (!deps.push) return reply.code(501).send({ error: 'not-configured' });
+    const sub = req.body as { endpoint?: unknown; keys?: unknown };
+    if (typeof sub?.endpoint !== 'string' || typeof sub?.keys !== 'object' || sub.keys === null) {
+      return reply.code(400).send({ error: 'bad-subscription' });
+    }
+    await deps.push.subscribe(sub as never);
+    return reply.code(201).send({ ok: true });
+  });
+  app.post('/api/push/unsubscribe', async (req, reply) => {
+    const ep = (req.body as { endpoint?: unknown })?.endpoint;
+    if (deps.push && typeof ep === 'string') await deps.push.unsubscribe(ep);
+    return { ok: true };
   });
 
   // Account usage read straight from telemetry (cc-limits), independent of which
