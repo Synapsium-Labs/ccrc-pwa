@@ -23,33 +23,65 @@ export async function pushEnabled(): Promise<boolean> {
   return sub != null;
 }
 
-export type EnableResult = 'enabled' | 'denied' | 'unsupported' | 'unconfigured' | 'error';
+// 'pushservice' = the browser accepted permission but the push *transport* is
+// unavailable. Brave is the usual culprit: it disables Google's push messaging
+// by default, so pushManager.subscribe() rejects with AbortError even though
+// permission was granted. Distinguished so the UI can point at the setting.
+export type EnableStatus =
+  | 'enabled'
+  | 'denied'
+  | 'unsupported'
+  | 'unconfigured'
+  | 'pushservice'
+  | 'error';
+
+export interface EnableResult {
+  status: EnableStatus;
+  detail?: string; // human-readable cause, surfaced in the UI + console
+}
+
+/** Compact, readable text for a thrown value (DOMException name+message, etc.). */
+export function errText(e: unknown): string {
+  if (e instanceof Error) return e.name ? `${e.name}: ${e.message}` : e.message;
+  return String(e);
+}
 
 export async function enablePush(): Promise<EnableResult> {
-  if (!pushSupported()) return 'unsupported';
+  if (!pushSupported()) return { status: 'unsupported' };
   const perm = await Notification.requestPermission();
-  if (perm !== 'granted') return 'denied';
+  if (perm !== 'granted') return { status: 'denied' };
   try {
     const reg = await navigator.serviceWorker.ready;
     const keyRes = await fetch('/api/push/key');
-    if (keyRes.status === 501) return 'unconfigured';
-    if (!keyRes.ok) return 'error';
+    if (keyRes.status === 501) return { status: 'unconfigured' };
+    if (!keyRes.ok) return { status: 'error', detail: `key endpoint ${keyRes.status}` };
     const { key } = (await keyRes.json()) as { key: string };
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(key) as unknown as BufferSource,
-      });
+      try {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(key) as unknown as BufferSource,
+        });
+      } catch (e) {
+        // subscribe() failed despite granted permission → the push transport is
+        // blocked (Brave's Google-push toggle off, a proxied/embedded browser,
+        // or aggressive Shields). Attribute it distinctly.
+        const detail = errText(e);
+        console.warn('[ccrc push] subscribe failed:', detail);
+        return { status: 'pushservice', detail };
+      }
     }
     const res = await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(sub),
     });
-    return res.ok ? 'enabled' : 'error';
-  } catch {
-    return 'error';
+    return res.ok ? { status: 'enabled' } : { status: 'error', detail: `subscribe endpoint ${res.status}` };
+  } catch (e) {
+    const detail = errText(e);
+    console.warn('[ccrc push] enable failed:', detail);
+    return { status: 'error', detail };
   }
 }
 

@@ -27,15 +27,23 @@ export function NotificationBell(): ReactNode {
         return;
       }
       const r = await enablePush();
-      if (r === 'enabled') {
+      if (r.status === 'enabled') {
         setOn(true);
         toast("Notifications on — you'll get a ping when a session needs you");
-      } else if (r === 'denied') {
+      } else if (r.status === 'denied') {
         toast('Allow notifications in your browser settings first', 'error');
-      } else if (r === 'unconfigured') {
+      } else if (r.status === 'unconfigured') {
         toast("Push isn't set up on the server", 'error');
+      } else if (r.status === 'pushservice') {
+        // Almost always Brave: Google push messaging is off by default. Sticky
+        // toast (an action keeps it up) so the multi-step fix stays readable.
+        toast(
+          'Your browser blocks web push. In Brave, turn on "Use Google services for push messaging" (Settings → Privacy and security), then tap the bell again.',
+          'error',
+          { label: 'Got it', onClick: () => {} },
+        );
       } else {
-        toast("Couldn't enable notifications", 'error');
+        toast(`Couldn't enable notifications${r.detail ? `: ${r.detail}` : ''}`, 'error');
       }
     } finally {
       setBusy(false);
