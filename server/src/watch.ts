@@ -86,10 +86,15 @@ export class FleetWatcher {
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
       const pane = await this.deps.tmux.capture(r.id);
-      // Same capture feeds the statusline read — no extra tmux call. Keep the
-      // last-known line on a null capture (dead/booting) rather than blanking.
-      if (pane !== null) this.statuslines.set(r.id, parseStatusline(pane));
-      else this.statuslines.delete(r.id);
+      // Same capture feeds the statusline read — no extra tmux call. A tick
+      // whose pane has no statusline (a dialog/permission overlay covers it, or
+      // the session is mid-render) must NOT blank the last-known model/branch —
+      // only update when we actually parsed something; drop only on a dead pane.
+      if (pane === null) this.statuslines.delete(r.id);
+      else {
+        const sl = parseStatusline(pane);
+        if (sl.model || sl.branch || sl.effort) this.statuslines.set(r.id, sl);
+      }
       const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
       const last = this.dialogIds.get(r.id);
       if (dialog) {
