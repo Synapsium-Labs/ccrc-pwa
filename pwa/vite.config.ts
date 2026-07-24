@@ -11,7 +11,11 @@ export default defineConfig({
     // Installable PWA. Update flow is prompt-style: a new SW waits until the
     // user taps the "Update ready" toast (registered in main.tsx).
     VitePWA({
-      registerType: 'prompt',
+      // autoUpdate: a new deploy's worker skip-waits + claims clients and the
+      // page reloads onto it — no stuck-on-old-bundle (the 'prompt' default
+      // needed a full app close to swap). Right for a single-user control app
+      // that should always run the latest.
+      registerType: 'autoUpdate',
       manifest: {
         name: 'ccrc',
         short_name: 'ccrc',

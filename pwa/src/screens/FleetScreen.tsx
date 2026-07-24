@@ -19,10 +19,12 @@ export function FleetScreen({
   store = useFleetStore,
   onOpen,
   onNewSession,
+  selectedId = null,
 }: {
   store?: FleetStore; // injectable for tests
   onOpen?: (id: string) => void;
   onNewSession?: () => void;
+  selectedId?: string | null; // the open session, highlighted in the desktop sidebar
 }): ReactNode {
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
@@ -112,7 +114,7 @@ export function FleetScreen({
           <AccountsStrip />
           <div className="fleet-list">
             {sortFleet(sessions).map((s) => (
-              <SessionCard key={s.id} session={s} onOpen={open} />
+              <SessionCard key={s.id} session={s} onOpen={open} selected={s.id === selectedId} />
             ))}
           </div>
         </>

@@ -188,6 +188,14 @@
 .card:has(.card-open:active) {
   transform: scale(0.98);
 }
+/* Active session in the desktop sidebar — a left accent bar + raised ground.
+   The bar rides its own box-shadow so it composes with the status glows/borders
+   (busy/attention use ::after + border-color); only relevant when a session is
+   open, which on mobile means the sidebar is hidden anyway. */
+.card--active {
+  background: var(--bg-raised);
+  box-shadow: inset 3px 0 0 0 var(--ink-secondary), var(--shadow-card);
+}
 .card--busy {
   border-color: color-mix(in srgb, var(--status-busy) 40%, var(--edge-subtle));
 }

@@ -1,0 +1,107 @@
+/* Responsive app shell.
+ *
+ * Mobile (<900px): the original full-screen swap — the fleet OR the active
+ * session fills the viewport, chosen by [data-view]. Nothing about the phone
+ * experience changes.
+ *
+ * Desktop (>=900px): a two-pane master–detail — a persistent fleet sidebar
+ * beside the active session, both using the full screen. The mobile screens
+ * assume they own the viewport (100dvh, a centered 640 column, a FAB pinned to
+ * the centered column); at the breakpoint we re-contain those to their pane. */
+
+.app-shell {
+  min-height: 100dvh;
+}
+
+/* ---- Mobile: full-screen swap (unchanged) ---------------------------- */
+@media (max-width: 899.98px) {
+  .app-shell[data-view='fleet'] .shell-detail {
+    display: none;
+  }
+  .app-shell[data-view='session'] .shell-nav {
+    display: none;
+  }
+  /* You're on the fleet when nothing is selected, so the empty-detail
+     placeholder is desktop-only. */
+  .shell-placeholder {
+    display: none;
+  }
+}
+
+/* ---- Desktop: two-pane master–detail -------------------------------- */
+@media (min-width: 900px) {
+  .app-shell {
+    display: grid;
+    grid-template-columns: clamp(300px, 25vw, 380px) minmax(0, 1fr);
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .shell-nav {
+    position: relative;
+    height: 100dvh;
+    overflow-y: auto;
+    border-right: 1px solid var(--edge-subtle);
+    background: var(--bg-surface);
+  }
+  .shell-detail {
+    height: 100dvh;
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  /* Fleet as a sidebar: drop the centered 640 cap + 100dvh min so it fills and
+     scrolls within the nav pane. The accounts strip goes back to 2-up — the
+     viewport is wide but the sidebar itself is narrow. */
+  .shell-nav .fleet {
+    max-width: none;
+    min-height: 0;
+  }
+  .shell-nav .accounts-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* The FAB hugs the sidebar's lower-left, not the (now absent) centered column. */
+  .app-shell .fab {
+    right: auto;
+    left: var(--sp-4);
+  }
+  /* The card→chat view transition would collide on desktop (the tapped card and
+     the chat header are both on screen, sharing one view-transition-name); drop
+     it on the sidebar card so the transition never captures a duplicate. */
+  .shell-nav .card-open {
+    view-transition-name: none !important;
+  }
+
+  /* Session fills the detail pane edge-to-edge — use the whole width (the
+     head/body/composer keep their own side padding, so text isn't flush to the
+     pane border). Scrolls internally (.chat-body is the flex:1 scroll region).
+     No back button — the fleet is always visible in the sidebar. */
+  .shell-detail .chat {
+    height: 100%;
+    max-width: none;
+    margin: 0;
+  }
+  .shell-detail .chat-back {
+    display: none;
+  }
+
+  /* Empty-detail placeholder (no session selected). */
+  .shell-placeholder {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+  }
+  .shell-placeholder-mark {
+    font: var(--weight-regular) 40px / 1 var(--font-mono);
+    color: var(--ink-tertiary);
+    opacity: 0.6;
+  }
+  .shell-placeholder-copy {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--ink-secondary);
+  }
+}

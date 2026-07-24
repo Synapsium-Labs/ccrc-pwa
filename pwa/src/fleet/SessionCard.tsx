@@ -31,9 +31,11 @@ function relShort(now: number, then: number | null): string | null {
 export function SessionCard({
   session,
   onOpen,
+  selected = false,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
+  selected?: boolean; // the open session in the desktop sidebar
 }): ReactNode {
   const now = useNow(30_000);
   const [restarting, setRestarting] = useState(false);
@@ -141,13 +143,14 @@ export function SessionCard({
         background: acctVar.startsWith('--acct-') ? `var(${acctVar}-tint)` : 'var(--bg-raised)',
       };
 
-  const cardClass = dead
-    ? 'card card--dead'
-    : attention
-      ? 'card card--attention'
-      : busy
-        ? 'card card--busy'
-        : 'card';
+  const cardClass =
+    (dead
+      ? 'card card--dead'
+      : attention
+        ? 'card card--attention'
+        : busy
+          ? 'card card--busy'
+          : 'card') + (selected ? ' card--active' : '');
 
   return (
     <article className={cardClass}>
