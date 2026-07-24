@@ -13,6 +13,7 @@ VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (ho
 # a 429 writes an exclusion into cc-limits (see _auto_swap_check). ToS-unofficial — the
 # kill-switch is the brake.
 GPT_DISABLE_FILE="$HOME/.cc-sessions/gpt-disabled"   # touch to remove gpt from rotation instantly
+AUTOCOMPACT_DISABLE_FILE="$HOME/.cc-sessions/autocompact-disabled"  # touch to disable proactive /compact fleet-wide
 CLAUDE_AI_BASE="https://claude.ai/code"   # by-name discovery: pick the session whose name == the id
 mkdir -p "$REG"
 
@@ -29,6 +30,13 @@ SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked 
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
+# Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
+# so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
+# non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
+# via AUTOCOMPACT_DISABLE_FILE.
+COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts
+COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also skipped right after a swap)
+COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
 # Fable-unavailable → gpt: a session set to the Fable model can be rate-healthy on its claude
 # account yet unable to run Fable (paid usage credits exhausted). Rate telemetry never shows this,
 # so we detect it from the pane: the 🤖 statusline segment names Fable AND a credit/billing banner
@@ -236,6 +244,47 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   return 0
 }
 
+_pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" statusline segment, or empty.
+  # Anchored to "ctx": the model's "(1M context)" has no "ctx" substring, and the limits/cost %s are
+  # not preceded by "ctx"; the bar glyphs between "ctx" and the number are non-digits.
+  printf '%s\n' "$1" | grep -aoiE 'ctx[^0-9]*[0-9]+%' | grep -oE '[0-9]+' | head -1
+}
+
+_auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
+  # grown past COMPACT_THRESHOLD so it stays lean. Non-destructive: the SessionStart(compact) hook
+  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
+  local id="$1" now last lastswap pane pct wrapper spid sf st sua t cur
+  now=$(date +%s)
+  last=$(_reg_get "$id" lastcompact)
+  [[ -n "$last" && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  lastswap=$(_reg_get "$id" lastswap)   # a swap landing already compacted from summary — don't double up
+  [[ -n "$lastswap" && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
+  [[ -n "$pane" ]] || return 0
+  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || return 0
+  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || return 0
+  # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
+  echo "$pane" | grep -q "esc to interrupt" && return 0     # mid-turn
+  echo "$pane" | grep -q "❯" || return 0                     # not at a prompt yet
+  wrapper=$(_reg_get "$id" wrapper)
+  spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
+  [[ "$st" == "idle" ]] || return 0
+  # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
+  # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition).
+  sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
+  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] || return 0
+  # Don't clobber a half-typed message in the input box.
+  t=$(_tmux "$id")
+  cur=$(tmux capture-pane -t "$t" -p 2>/dev/null | grep -m1 "^❯ " | sed "s/^❯ //; s/[[:space:]]*$//")
+  [[ -n "$cur" ]] && return 0
+  _reg_set "$id" lastcompact "$now"
+  echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${COMPACT_THRESHOLD}% [wrapper=$wrapper]" >> "$REG/swap.log"
+  tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
+}
+
 _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
@@ -358,7 +407,7 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
   cmd_ensure "$id"
-  while _alive "$id"; do _sync_uuid "$id"; _auto_swap_check "$id"; sleep 5; done
+  while _alive "$id"; do _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; sleep 5; done
   echo "session $id ended; exiting for systemd restart" >&2
   exit 1
 }
