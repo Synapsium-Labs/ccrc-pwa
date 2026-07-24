@@ -2,12 +2,15 @@
  *
  * Mobile (<900px): the original full-screen swap — the fleet OR the active
  * session fills the viewport, chosen by [data-view]. Nothing about the phone
- * experience changes.
+ * experience changes (the accounts strip stays inside the fleet screen).
  *
- * Desktop (>=900px): a two-pane master–detail — a persistent fleet sidebar
- * beside the active session, both using the full screen. The mobile screens
- * assume they own the viewport (100dvh, a centered 640 column, a FAB pinned to
- * the centered column); at the breakpoint we re-contain those to their pane. */
+ * Desktop (>=900px): account usage runs along the TOP as a full-width strip,
+ * with a two-pane master–detail below it — a persistent fleet sidebar beside the
+ * active session. The mobile screens assume they own the viewport (100dvh, a
+ * centered 640 column, a FAB pinned to that column); at the breakpoint we
+ * re-contain those to their pane. The accounts strip is rendered at the shell
+ * level only on desktop (app.tsx / useMediaQuery); on mobile it lives in the
+ * fleet screen, so there's only ever one instance. */
 
 .app-shell {
   min-height: 100dvh;
@@ -28,81 +31,102 @@
   }
 }
 
-/* ---- Desktop: two-pane master–detail -------------------------------- */
+/* ---- Desktop: accounts top-bar + two-pane master–detail ------------- */
 @media (min-width: 900px) {
   .app-shell {
     display: grid;
     grid-template-columns: clamp(300px, 25vw, 380px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     height: 100dvh;
     overflow: hidden;
   }
 
+  /* Account usage along the top, full width — each account gets far more room
+     than the narrow sidebar, so meters are long and legible. auto-fit lays the
+     gauges across the width (4-up on wide screens, fewer as it narrows). Hidden
+     until data lands (AccountsStrip renders null while empty → :empty). */
+  .shell-accounts {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    padding: var(--sp-2) var(--sp-4);
+    border-bottom: 1px solid var(--edge-subtle);
+    background: var(--bg-surface);
+  }
+  .shell-accounts:empty {
+    display: none;
+  }
+  .shell-accounts .accounts-strip {
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: var(--sp-2) var(--sp-5);
+    margin: 0;
+  }
+  /* Gauge: account name inline-left of its two windows, higher-contrast numbers
+     (% leads: ink-primary/medium; window + reset secondary), borderless — the
+     bar itself is the surface. */
+  .shell-accounts .account-gauge {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+  }
+  .shell-accounts .account-gauge-label {
+    flex: none;
+    min-width: 5em;
+    font-size: var(--text-sm);
+  }
+  .shell-accounts .acct-rows {
+    flex: 1;
+    min-width: 0;
+    gap: 3px;
+  }
+  .shell-accounts .acct-row {
+    grid-template-columns: 2.2em minmax(0, 1fr) auto auto;
+    gap: var(--sp-2);
+    align-items: center;
+    line-height: 1.35;
+  }
+  .shell-accounts .acct-win {
+    color: var(--ink-secondary);
+    font-size: var(--text-xs);
+  }
+  .shell-accounts .acct-pct {
+    color: var(--ink-primary);
+    font-weight: var(--weight-medium);
+    font-size: var(--text-sm);
+  }
+  .shell-accounts .acct-reset {
+    color: var(--ink-secondary);
+    font-size: var(--text-xs);
+  }
+  .shell-accounts .acct-meter {
+    height: 6px;
+  }
+
   .shell-nav {
     position: relative;
-    height: 100dvh;
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
     overflow-y: auto;
     border-right: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
   .shell-detail {
-    height: 100dvh;
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 0;
     overflow: hidden;
     min-width: 0;
   }
 
   /* Fleet as a sidebar: drop the centered 640 cap + 100dvh min so it fills and
-     scrolls within the nav pane. The accounts strip goes back to 2-up — the
-     viewport is wide but the sidebar itself is narrow. */
+     scrolls within the nav pane. (Accounts now live in the top bar, not here.) */
   .shell-nav .fleet {
     max-width: none;
     min-height: 0;
-  }
-  /* Accounts strip in the sidebar: compact AND legible. The account name sits
-     inline to the left of its two windows (2 lines per account, not 3), the
-     meter runs the remaining width, and the numbers use higher-contrast ink —
-     the % leads (ink-primary, medium, a touch larger), window + reset stay
-     secondary. Tight padding keeps the whole block short. */
-  .shell-nav .accounts-strip {
-    grid-template-columns: 1fr;
-    gap: var(--sp-1);
-  }
-  .shell-nav .account-gauge {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    padding: var(--sp-1) var(--sp-3);
-  }
-  .shell-nav .account-gauge-label {
-    flex: none;
-    min-width: 5em;
-    font-size: var(--text-sm);
-  }
-  .shell-nav .acct-rows {
-    flex: 1;
-    min-width: 0;
-    gap: 3px;
-  }
-  .shell-nav .acct-row {
-    grid-template-columns: 2.2em minmax(0, 1fr) auto auto;
-    gap: var(--sp-2);
-    align-items: center;
-    line-height: 1.3;
-  }
-  .shell-nav .acct-win {
-    color: var(--ink-secondary);
-    font-size: var(--text-xs);
-  }
-  .shell-nav .acct-pct {
-    color: var(--ink-primary);
-    font-weight: var(--weight-medium);
-    font-size: var(--text-sm);
-  }
-  .shell-nav .acct-reset {
-    color: var(--ink-secondary);
-    font-size: var(--text-xs);
-  }
-  .shell-nav .acct-meter {
-    height: 6px;
   }
   /* The FAB hugs the sidebar's lower-left, not the (now absent) centered column. */
   .app-shell .fab {
@@ -129,9 +153,9 @@
     display: none;
   }
 
-  /* Empty-detail placeholder (no session selected). */
+  /* Empty-detail placeholder (no session selected) — fills the detail cell. */
   .shell-placeholder {
-    height: 100dvh;
+    height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
