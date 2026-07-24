@@ -95,6 +95,25 @@
   --diff-del: #F08A78;  /*  8.22:1 on well */
 
   /* ------------------------------------------------------------------ *
+   *  CODE WELLS — syntax spans + chrome. Wells are dark in BOTH themes, *
+   *  so defined once, never overridden in light. Palette reuses the     *
+   *  app's own dark hues so code reads as native "Phosphor & Ink".      *
+   * ------------------------------------------------------------------ */
+  --syn-comment:  #8B948C;   /* muted — also the code-well language label */
+  --syn-keyword:  #C7A7F4;   /* violet */
+  --syn-string:   #57E08B;   /* phosphor green (== --diff-add) */
+  --syn-number:   #F2B84B;   /* amber */
+  --syn-function: #6FD6EA;   /* cyan */
+  --syn-type:     #96B4F4;   /* blue */
+  --syn-tag:      #F0A3C8;   /* magenta */
+  --syn-attr:     #6FD6EA;   /* cyan */
+  --syn-punct:    #ADB6AE;   /* neutral light */
+  --syn-deleted:  var(--diff-del);
+  --syn-inserted: var(--diff-add);
+  --well-bar-bg:   color-mix(in srgb, var(--ink-on-well) 5%,  var(--bg-well));
+  --well-bar-hair: color-mix(in srgb, var(--ink-on-well) 12%, var(--bg-well));
+
+  /* ------------------------------------------------------------------ *
    *  TYPE                                                               *
    * ------------------------------------------------------------------ */
 
@@ -119,6 +138,7 @@
   --leading-tight:  1.25;
   --leading-normal: 1.5;
   --leading-mono:   1.55;
+  --leading-prose:  1.6;    /* long-form assistant prose — looser than mono, distinct from code */
 
   --weight-regular:  400;
   --weight-medium:   500;
@@ -146,6 +166,7 @@
   --tap-min:   44px;   /* minimum touch target (spec acceptance criterion) */
   --lamp-size: 18px;   /* status-dot lamp bezel: --bg-well floor + inset ring */
   --well-max:  240px;  /* tool-output wells cap here and scroll internally */
+  --measure-prose: 72ch;   /* assistant prose caps here; pre/table/img opt out. Inert <640px. */
 
   /* ------------------------------------------------------------------ *
    *  ELEVATION & GLOW                                                   *
