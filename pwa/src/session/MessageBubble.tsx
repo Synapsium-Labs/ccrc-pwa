@@ -228,6 +228,34 @@ export function timeOf(ts: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+// A /compact turn injects a long "This session is being continued …/Summary:"
+// block that's noise to a reader driving the session. Collapse it to a quiet
+// card (like a tool call) — expandable when you actually want the recap.
+const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
+
+function CompactionCard({ text }: { text: string }): ReactNode {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={open ? 'compaction compaction--open' : 'compaction'}>
+      <button
+        type="button"
+        className="compaction-head"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <span className="compaction-glyph" aria-hidden="true">⤺</span>
+        <span className="compaction-label">Context compacted</span>
+        <span className="compaction-hint">{open ? 'hide' : 'show summary'}</span>
+      </button>
+      {open && (
+        <div className="compaction-body msg-assist">
+          <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={mdComponents}>{text}</Markdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MessageBubble({
   event,
   streaming = false,
@@ -238,6 +266,11 @@ export function MessageBubble({
 }): ReactNode {
   if (event.kind === 'system') {
     return <p className="sys-divider">{event.text}</p>;
+  }
+
+  // Compaction recap (user- or assistant-kind): fold it away by default.
+  if (COMPACTION_RE.test(event.text)) {
+    return <CompactionCard text={event.text} />;
   }
 
   if (event.kind === 'user') {

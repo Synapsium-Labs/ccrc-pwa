@@ -725,6 +725,42 @@ button.metachip:active {
 .msg-assist .hljs-emphasis { font-style: italic; }
 .msg-assist .hljs-strong   { font-weight: var(--weight-semibold); }
 
+/* COMPACTION CARD — a /compact recap ("This session is being continued…")
+   folded to a quiet, expandable card so it doesn't bury the conversation. */
+.compaction {
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.compaction-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.compaction-glyph { color: var(--ink-tertiary); }
+.compaction-label { flex: 1; }
+.compaction-hint {
+  color: var(--ink-tertiary);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.compaction-head:hover .compaction-hint { color: var(--accent); }
+.compaction-body {
+  padding: var(--sp-3);
+  border-top: 1px solid var(--edge-subtle);
+}
+
 /* Streaming caret — the blinking block that means "still talking". */
 .stream-caret {
   display: inline-block;
