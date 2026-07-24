@@ -57,8 +57,28 @@
     max-width: none;
     min-height: 0;
   }
+  /* Accounts strip in the sidebar: 1-up so each gauge gets the full width — a
+     long, legible meter instead of the cramped 2-up stub — with a little more
+     type and breathing room than the phone's deliberately-compact strip. */
   .shell-nav .accounts-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+    gap: var(--sp-2);
+  }
+  .shell-nav .account-gauge {
+    padding: var(--sp-2) var(--sp-3) calc(var(--sp-2) + 1px);
+    gap: 3px;
+  }
+  .shell-nav .account-gauge-label {
+    font-size: var(--text-xs);
+  }
+  .shell-nav .acct-row {
+    grid-template-columns: 2.2em minmax(0, 1fr) 3.2em auto;
+    gap: var(--sp-2);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+  }
+  .shell-nav .acct-meter {
+    height: 6px;
   }
   /* The FAB hugs the sidebar's lower-left, not the (now absent) centered column. */
   .app-shell .fab {
