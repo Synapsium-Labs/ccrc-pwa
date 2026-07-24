@@ -29,6 +29,13 @@ SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked 
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
+# Fable-unavailable → gpt: a session set to the Fable model can be rate-healthy on its claude
+# account yet unable to run Fable (paid usage credits exhausted). Rate telemetry never shows this,
+# so we detect it from the pane: the 🤖 statusline segment names Fable AND a credit/billing banner
+# is up. Then route to the gpt overflow lane (a Fable-comparable model, flat-rate). Only fires for
+# sessions actually on Fable, so a broad phrase here can't move a non-Fable session.
+# NOTE: seed patterns — PIN to the exact banner Claude Code shows when Fable can't run (verify live).
+FABLE_BLOCKED_RE="credit balance is too low|insufficient credit|purchase credits|plans & billing|out of credits|fable[^.]{0,30}(unavailable|not available|cannot|can't)"
 
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
@@ -167,6 +174,12 @@ _swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay 
   [[ -n "$best" ]] && echo "$best"
 }
 
+_pane_on_fable() {   # pane -> success if the 🤖 statusline segment names the Fable model.
+  # Split the 🤖-bearing row on the box-vertical and test only the field that holds 🤖, so a
+  # branch/project literally named "fable" (e.g. ⎇ feat/fable-routing) can't false-match.
+  printf '%s\n' "$1" | awk -F'│' '/🤖/{for(i=1;i<=NF;i++) if($i ~ /🤖/ && tolower($i) ~ /fable/) f=1} END{exit !f}'
+}
+
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up) swaps
@@ -177,6 +190,17 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
+  # Fable-unavailable override (orthogonal to rate scores): if this session is on the Fable model
+  # and a credit/billing banner is up, its claude account can't serve Fable — route to gpt, which
+  # can. Fires even when the account is rate-healthy (so _swap_target would otherwise say "stay").
+  if [[ "$wrapper" != gpt ]] && _pane_on_fable "$pane" && echo "$pane" | grep -qiE "$FABLE_BLOCKED_RE"; then
+    if _gpt_enabled && _avail gpt; then
+      _reg_set "$id" lastswap "$now"
+      echo "$(date '+%F %T') fable-rescue $id: $wrapper (Fable unavailable) -> gpt [home=$home]" >> "$REG/swap.log"
+      _dispatch_swap "$id" gpt
+    fi
+    return 0
+  fi
   target=$(_swap_target "$id" "$wrapper" "$home")
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
