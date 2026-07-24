@@ -57,9 +57,13 @@ export function AccountsStrip(): ReactNode {
           <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>
             {accountLabel(a.wrapper)}
           </span>
-          {/* Only render a window that exists — gpt (Codex Pro) is weekly-only. */}
-          {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} />}
-          {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} />}
+          {/* Wrapped so the label can sit inline beside the windows on desktop
+              (a flex row); on mobile this stays a plain block under the label.
+              Only render a window that exists — gpt (Codex Pro) is weekly-only. */}
+          <div className="acct-rows">
+            {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} />}
+            {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} />}
+          </div>
         </div>
       ))}
     </div>

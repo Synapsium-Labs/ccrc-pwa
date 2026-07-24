@@ -660,6 +660,10 @@
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
+.acct-rows {
+  display: grid;
+  gap: 1px;
+}
 .account-gauge-label {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
