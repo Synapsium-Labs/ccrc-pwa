@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import './styles/base.css';
 import { App } from './app';
-import { toast } from './components/Toast';
 import { initTheme } from './lib/theme';
 
 // Theme before first render (index.html pre-stamps the attribute so even the
@@ -16,14 +15,27 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
-// PWA updates are prompt-style (vite.config.ts): the fresh service worker
-// waits until the user opts in. Action toasts stick until answered (ToastHost),
-// so the offer can't vanish mid-reach. In dev this is an inert stub.
-const updateSW = registerSW({
-  onNeedRefresh() {
-    toast('Update ready — tap to refresh', 'info', {
-      label: 'Refresh',
-      onClick: () => void updateSW(true),
+// PWA updates are automatic (registerType: 'autoUpdate', vite.config.ts): a new
+// worker skip-waits, claims the page, and reloads it onto the fresh bundle — so
+// onNeedRefresh never fires and there is no toast to answer.
+//
+// The gap that leaves, and the reason this block exists: a browser only
+// re-fetches sw.js on NAVIGATION (or once a day). This app never navigates — it
+// is one document with client-side routing, typically left open for days on a
+// phone — so a deploy can sit unseen behind a running tab indefinitely, which
+// presents exactly as "the feature you just shipped isn't there". Ask the
+// registration to look for itself: on a timer, and whenever the app comes back
+// to the foreground (the moment a phone user actually returns to it).
+// In dev, registerSW is an inert stub and onRegisteredSW never runs.
+const UPDATE_CHECK_MS = 15 * 60 * 1000;
+
+registerSW({
+  onRegisteredSW(_swUrl, registration) {
+    if (!registration) return;
+    const check = (): void => void registration.update();
+    setInterval(check, UPDATE_CHECK_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') check();
     });
   },
 });

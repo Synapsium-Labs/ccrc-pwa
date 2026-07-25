@@ -8,8 +8,8 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    // Installable PWA. Update flow is prompt-style: a new SW waits until the
-    // user taps the "Update ready" toast (registered in main.tsx).
+    // Installable PWA. Updates apply themselves — main.tsx also drives periodic
+    // update CHECKS, because a never-navigating SPA otherwise never asks.
     VitePWA({
       // autoUpdate: a new deploy's worker skip-waits + claims clients and the
       // page reloads onto it — no stuck-on-old-bundle (the 'prompt' default
