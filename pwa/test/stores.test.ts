@@ -37,7 +37,7 @@ const fleetSession = (id: string, wrapper: string): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null,
   version: '2.1.0',
 });
 
@@ -48,6 +48,7 @@ const emptySnap = (): SessionSnapshot => ({
   status: null,
   statusUpdatedAt: null,
   dialog: null,
+  tasks: [],
   missingFile: null,
 });
 

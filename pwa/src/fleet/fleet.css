@@ -366,6 +366,48 @@
   padding: var(--sp-2) var(--sp-3);
 }
 
+/* Plan progress — a hairline gauge, a tally, and what the session is on right
+   now. Deliberately quieter than the limit bars: this is orientation, not a
+   forecast, so the fill stays matte ink rather than taking a status hue. */
+.card-tasks {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.task-track {
+  flex: none;
+  width: 44px;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--limit-track);
+  overflow: hidden;
+}
+.task-track i {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-full);
+  background: var(--ink-tertiary);
+  transition: width var(--dur-bar) var(--ease-swift);
+}
+.card--busy .task-track i {
+  background: var(--status-busy);
+}
+.task-tally {
+  flex: none;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+}
+.task-active {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-ui);
+  color: var(--ink-tertiary);
+}
+
 /* Critical-limit narration — mono forecast line under the gauges (DIRECTION:
    "a red band is a forecast, not an alarm"). */
 .card-limit-note {

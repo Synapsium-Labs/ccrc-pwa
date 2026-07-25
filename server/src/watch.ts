@@ -5,7 +5,15 @@ import { readRegistry } from './registry.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, saveSnapshot } from './fleetstate.js';
-import type { SessionStatus } from '../../shared/api.js';
+import { readTasks, taskProgress } from './tasks/read.js';
+import type { SessionStatus, TaskProgress } from '../../shared/api.js';
+
+/** Task sweeps read every task file of every session, so they run on their own
+ *  slower clock than the 2 s pane poll — a plan advances on the scale of
+ *  minutes, and the fleet chip is a glance, not a readout. The open session's
+ *  own stream reads its list every tick, so the screen you're looking at stays
+ *  live regardless. */
+const TASK_SWEEP_MS = 10_000;
 
 /**
  * Polls the fleet: captures every registered pane to detect menu dialogs
@@ -26,6 +34,9 @@ export class FleetWatcher {
   private statuslines = new Map<string, Statusline>();
   /** Prior status per session — drives the busy→idle push. */
   private prevStatus = new Map<string, SessionStatus>();
+  /** Last swept task progress per session id, and when the sweep ran. */
+  private taskProgress = new Map<string, TaskProgress>();
+  private lastTaskSweep = 0;
   /** The first tick primes dialog/status state WITHOUT firing pushes, so a ccrc
    *  restart doesn't notify for every already-pending dialog / idle session. */
   private primed = false;
@@ -69,9 +80,15 @@ export class FleetWatcher {
     return new Map(this.statuslines);
   }
 
+  /** Last-swept plan progress — same reasoning as currentPending(). */
+  currentTaskProgress(): Map<string, TaskProgress> {
+    return new Map(this.taskProgress);
+  }
+
   async tick(): Promise<void> {
     const pending = await this.detectDialogs(this.primed);
-    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines);
+    await this.sweepTasks();
+    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress);
     // Push on a busy→idle finish (a session completed a turn). Skip the priming
     // tick — otherwise a restart notifies for every currently-idle session.
     if (this.primed && this.deps.push) {
@@ -90,6 +107,28 @@ export class FleetWatcher {
     if (json === this.lastJson) return;
     this.lastJson = json;
     this.bus.emit('fleet', sessions);
+  }
+
+  /**
+   * Refresh every session's plan progress, at most once per TASK_SWEEP_MS. The
+   * map is rebuilt from the registry each sweep, so a de-registered session's
+   * progress can't linger.
+   */
+  private async sweepTasks(): Promise<void> {
+    const now = Date.now();
+    if (this.lastTaskSweep !== 0 && now - this.lastTaskSweep < TASK_SWEEP_MS) return;
+    this.lastTaskSweep = now;
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const next = new Map<string, TaskProgress>();
+    await Promise.all(
+      records.map(async (r) => {
+        const cfgDir = this.deps.cfg.wrappers[r.wrapper];
+        if (!cfgDir) return;
+        const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
+        if (p) next.set(r.id, p);
+      }),
+    );
+    this.taskProgress = next;
   }
 
   /**

@@ -184,6 +184,30 @@ export function SessionCard({
 
       {attention && <p className="card-attn">Claude is asking you something — tap to answer</p>}
 
+      {/* Plan progress — the same list the session's task strip shows, reduced
+          to what a glance needs: how far along, and what it's on right now.
+          Dead cards stay silent; a stopped session isn't making progress. */}
+      {!dead && session.tasks !== null && (
+        <div className="card-tasks">
+          <span
+            className="task-track"
+            role="progressbar"
+            aria-label="Tasks completed"
+            aria-valuenow={session.tasks.done}
+            aria-valuemin={0}
+            aria-valuemax={session.tasks.total}
+          >
+            <i style={{ width: `${(session.tasks.done / session.tasks.total) * 100}%` }} />
+          </span>
+          <span className="task-tally">
+            {session.tasks.done}/{session.tasks.total}
+          </span>
+          {session.tasks.active !== null && (
+            <span className="task-active">{session.tasks.active}</span>
+          )}
+        </div>
+      )}
+
       {/* Account usage lives once in the AccountsStrip; the card keeps only the
           per-session consequence when a window crosses critical. */}
       {critical !== null && (

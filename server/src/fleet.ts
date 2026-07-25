@@ -3,9 +3,9 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistry } from './registry.js';
 import { readLimits } from './limits.js';
-import { readLiveState } from './livestate.js';
+import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
-import type { FleetSession, SessionStatus } from '../../shared/api.js';
+import type { FleetSession, SessionStatus, TaskProgress } from '../../shared/api.js';
 
 export function idHomeWrapper(id: string): string {
   for (const w of ['claude-corp', 'claude2', 'claude', 'gpt']) if (id.startsWith(`${w}-`)) return w;
@@ -24,7 +24,7 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   const cfgDir = cfg.wrappers[rec.wrapper];
   if (!pid || !cfgDir) return 'idle';
   const live = await readLiveState(io, cfgDir, pid);
-  return live?.status === 'busy' ? 'busy' : 'idle';
+  return live ? liveSessionStatus(live.status) : 'idle';
 }
 
 export async function assembleFleet(
@@ -34,6 +34,7 @@ export async function assembleFleet(
   now = Math.floor(Date.now() / 1000),
   pendingDialogs?: Set<string>,
   statuslines?: Map<string, Statusline>,
+  taskProgress?: Map<string, TaskProgress>,
 ): Promise<FleetSession[]> {
   const [records, limits] = await Promise.all([readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(records.map(async (r): Promise<FleetSession> => {
@@ -47,7 +48,7 @@ export async function assembleFleet(
       if (pid && cfgDir) {
         const live = await readLiveState(io, cfgDir, pid);
         if (live) {
-          status = live.status === 'busy' ? 'busy' : 'idle';
+          status = liveSessionStatus(live.status);
           name = live.name; statusUpdatedAt = live.statusUpdatedAt; version = live.version;
         }
       }
@@ -64,6 +65,7 @@ export async function assembleFleet(
       dialogPending: pendingDialogs?.has(r.id) ?? false, version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,
       ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? null,
+      tasks: taskProgress?.get(r.id) ?? null,
     };
   }));
 }

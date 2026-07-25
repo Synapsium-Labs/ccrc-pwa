@@ -293,6 +293,161 @@ button.metachip:active {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Task strip — the TUI's plan widget, pinned under the header.       *
+ *  Collapsed: one live line. Open: the rows, completed folded last.   *
+ * ------------------------------------------------------------------ */
+.task-strip {
+  flex: none;
+  margin: var(--sp-2) var(--sp-4) 0;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.task-strip--open {
+  border-color: var(--edge-strong);
+}
+
+.task-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--sp-8);
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--ink-primary);
+  cursor: pointer;
+}
+.task-head:active {
+  background: var(--bg-raised);
+}
+
+/* The spinner's asterisk. It only breathes while something is actually
+   running — glow means life, here as everywhere. */
+.task-mark {
+  flex: none;
+  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.task-mark--running {
+  color: var(--status-busy-text);
+  animation: task-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+}
+@keyframes task-breathe {
+  from { opacity: 0.55; }
+  to   { opacity: 1; }
+}
+
+.task-headline {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
+}
+.task-count {
+  flex: none;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+  background: var(--bg-raised);
+  border-radius: var(--r-full);
+  padding: var(--sp-1) 9px;
+}
+.task-chevron {
+  flex: none;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+
+.task-summary {
+  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+
+.task-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 var(--sp-2);
+  border-top: 1px solid var(--edge-subtle);
+}
+.task-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  cursor: pointer;
+}
+.task-line:disabled {
+  cursor: default;
+}
+.task-line:active:not(:disabled) {
+  background: var(--bg-raised);
+}
+.task-glyph {
+  flex: none;
+  width: 1em;
+  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.task-subject {
+  min-width: 0;
+}
+
+/* Running rows carry the accent and the weight; done rows are struck receipts.
+   Never element opacity — that would push ink below AA. */
+.task-row--in_progress .task-glyph {
+  color: var(--status-busy-text);
+}
+.task-row--in_progress .task-subject {
+  font-weight: var(--weight-semibold);
+}
+.task-row--completed .task-subject {
+  color: var(--ink-tertiary);
+  text-decoration: line-through;
+}
+.task-row--completed .task-glyph {
+  color: var(--ink-disabled);
+}
+
+.task-detail {
+  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 1em + var(--sp-2));
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
+  color: var(--ink-secondary);
+}
+
+.task-fold {
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: 0;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  cursor: pointer;
+}
+.task-fold:active {
+  color: var(--ink-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-mark--running {
+    animation: none;
+    opacity: 0.85;
+  }
+}
+
+/* ------------------------------------------------------------------ *
  *  List region — Virtuoso owns the scroll; the shell never does.      *
  * ------------------------------------------------------------------ */
 .chat-body {

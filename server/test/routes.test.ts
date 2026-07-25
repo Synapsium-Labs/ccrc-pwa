@@ -70,7 +70,9 @@ const DIALOG_ID = parseDialog(menuPane(1))!.id;
 
 describe('write routes', () => {
   it('POST prompt happy path returns 200 {ok:true}', async () => {
-    const { app, calls } = await makeApp(['scrollback\n❯ \n', 'scrollback\n❯ hello\n']);
+    // Three panes: empty box, the echo verify, then the emptied box that proves
+    // Enter submitted (see sendPrompt's post-Enter check).
+    const { app, calls } = await makeApp(['scrollback\n❯ \n', 'scrollback\n❯ hello\n', 'scrollback\n❯ \n']);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });

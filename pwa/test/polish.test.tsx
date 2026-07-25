@@ -41,7 +41,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: null,
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null,
   version: null,
   ...patch,
 });

@@ -55,6 +55,7 @@ describe('sendPrompt', () => {
     const { tmux, calls } = fakeTmux([
       'scrollback\n❯ \n',             // initial capture — empty draft
       'scrollback\n❯ hello world\n',  // verify capture echoes the text
+      'scrollback\n❯ \n',             // after Enter — box emptied, turn accepted
     ]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
     expect(res).toEqual({ ok: true });
@@ -83,6 +84,7 @@ describe('sendPrompt', () => {
       '❯ old draft\n',  // initial — draft present
       '❯ \n',           // after C-u — cleared
       '❯ new text\n',   // verify
+      '❯ \n',           // after Enter — box emptied
     ]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'new text', { replaceDraft: true });
     expect(res).toEqual({ ok: true });
@@ -101,7 +103,7 @@ describe('sendPrompt', () => {
   });
 
   it('multiline sends M-Enter between literals', async () => {
-    const { tmux, calls } = fakeTmux(['❯ \n', '❯ a\n  b\n']);
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ a\n  b\n', '❯ \n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a\nb');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
@@ -132,6 +134,7 @@ describe('sendPrompt', () => {
     const { tmux, calls } = fakeTmux([
       withHistory(''),            // empty input box (❯ + nbsp) despite history ❯ lines above
       withHistory('hello world'), // verify: input box now echoes the text
+      withHistory(''),            // after Enter — box emptied
     ]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
     expect(res).toEqual({ ok: true });
@@ -148,7 +151,8 @@ describe('sendPrompt', () => {
     const E = '\x1b';
     const placeholder = `some history\n${E}[39m❯ ${E}[2mcontinue${E}[0m\n`;
     const verify = `some history\n❯ hello\n`;
-    const { tmux, calls } = fakeTmux([placeholder, verify]);
+    // The ghost suggestion reappearing in the emptied box still reads as empty.
+    const { tmux, calls } = fakeTmux([placeholder, verify, placeholder]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
@@ -187,5 +191,41 @@ describe('sendPrompt', () => {
     const sk = sendKeysCalls(calls);
     expect(sk).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', '-l', 'will not appear']);
     expect(sk.some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+  });
+
+  // The silent-drop class: Enter reaches the pane but Claude Code's box does
+  // not submit (an overlay — slash palette, @-mention picker — consumes it, or
+  // the frame was mid-render). Before post-Enter verification this returned
+  // ok:true and the message was simply lost.
+  it('re-presses Enter when the box did not empty, and succeeds if the retry lands', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ \n',            // initial — empty
+      '❯ /model opus\n', // verify — echoed
+      '❯ /model opus\n', // after 1st Enter — STILL in the box (overlay ate it)
+      '❯ /model opus\n',
+      '❯ /model opus\n',
+      '❯ /model opus\n',
+      '❯ /model opus\n',
+      '❯ /model opus\n',
+      '❯ /model opus\n',
+      '❯ /model opus\n',
+      '❯ \n',            // after 2nd Enter — box emptied
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '/model opus');
+    expect(res).toEqual({ ok: true });
+    const enters = sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'Enter');
+    expect(enters).toHaveLength(2);
+  });
+
+  it('enter-ignored — reported as a failure, never as a send, when the text stays put', async () => {
+    const { tmux } = fakeTmux(['❯ \n', '❯ stuck text\n']); // last pane repeats: box never empties
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'stuck text');
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'stuck text' });
+  });
+
+  it('a busy session still counts as submitted — the box empties even while Claude works', async () => {
+    const busy = 'esc to interrupt\n❯ \n';
+    const { tmux } = fakeTmux(['❯ \n', '❯ do the thing\n', busy]);
+    expect(await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'do the thing')).toEqual({ ok: true });
   });
 });

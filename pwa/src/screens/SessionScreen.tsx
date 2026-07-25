@@ -21,6 +21,7 @@ import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { PickSheet } from '../session/PickSheet';
 import { SessionHeader } from '../session/SessionHeader';
+import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions } from '../lib/models';
 import '../session/chat.css';
@@ -52,6 +53,7 @@ export function SessionScreen({
   const uuid = useStore((s) => s.uuid);
   const conn = useStore((s) => s.conn);
   const missingFile = useStore((s) => s.missingFile);
+  const tasks = useStore((s) => s.tasks);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
 
@@ -184,6 +186,8 @@ export function SessionScreen({
           </button>
         </div>
       )}
+
+      <TaskStrip tasks={tasks} />
 
       <div className="chat-body">
         {loading ? (

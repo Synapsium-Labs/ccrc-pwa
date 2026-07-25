@@ -15,6 +15,28 @@ export interface FleetSession {
   effort: string | null;                     // effort level, e.g. "xhigh"
   ultracode: boolean;                        // ultracode super-mode active
   branch: string | null;                     // current git branch
+  tasks: TaskProgress | null;                // plan progress; null = this session has no task list
+}
+
+/** The task list Claude Code keeps for a session, as the TUI's widget shows it:
+ *  `subject` is the row label, `activeForm` the present-participle line the
+ *  spinner wears while the task runs ("Building claude_spend_reader…"). */
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface TaskItem {
+  id: string;            // numeric string — Claude Code's own file name / task number
+  subject: string;
+  activeForm: string;
+  description: string;
+  status: TaskStatus;
+}
+
+/** Card-sized summary of the same list — what a glance needs, without the rows. */
+export interface TaskProgress {
+  total: number;
+  done: number;
+  running: number;
+  active: string | null; // activeForm of the first in-progress task, else null
 }
 
 /** `/api/fleet/health` — degraded-mode signal for the remote fleet host.
@@ -69,5 +91,6 @@ export type SessionStreamMsg =
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer
   | { type: 'dialog_cleared' }
+  | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
   | { type: 'notice'; message: string };

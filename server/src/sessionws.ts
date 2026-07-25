@@ -1,10 +1,11 @@
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { readRegistry } from './registry.js';
-import { readLiveState } from './livestate.js';
+import { liveSessionStatus, readLiveState } from './livestate.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
+import { readTasks } from './tasks/read.js';
 import type { SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
 const POLL_MS = 2000;
@@ -13,6 +14,7 @@ const BACKLOG_N = 50;
 interface Resolved {
   uuid: string;
   file: string;
+  cfgDir: string;
   status: SessionStatus;
   statusUpdatedAt: number | null;
 }
@@ -31,6 +33,8 @@ export class SessionStream {
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
   private lastDialogId: string | null = null;
+  /** Serialized last-sent task list — the change gate for the `tasks` frame. */
+  private lastTasksJson: string | null = null;
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
   // This stream detects dialogs itself (start + every tick), so it always
@@ -70,6 +74,8 @@ export class SessionStream {
     if (this.stopped) return;
     await this.checkDialog(); // deliver an already-pending dialog on connect
     if (this.stopped) return;
+    if (r) await this.checkTasks(r.cfgDir, r.uuid); // and the plan as it stands
+    if (this.stopped) return;
     this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
     this.poll.unref();
   }
@@ -90,6 +96,25 @@ export class SessionStream {
       this.lastDialogId = null;
       this.send({ type: 'dialog_cleared' });
     }
+  }
+
+  /** Read the session's task list and send it when it differs from what this
+   *  client last saw. An empty list is a legitimate value — it's how the strip
+   *  learns a plan was cleared — but the opening no-tasks read is swallowed by
+   *  the initial `lastTasksJson === null` case below, so sessions that never
+   *  keep a task list never send a frame at all. */
+  private async checkTasks(cfgDir: string, uuid: string): Promise<void> {
+    if (this.stopped) return;
+    const tasks = await readTasks(this.deps.io, cfgDir, uuid);
+    if (this.stopped) return;
+    const json = JSON.stringify(tasks);
+    if (json === this.lastTasksJson) return;
+    if (this.lastTasksJson === null && tasks.length === 0) {
+      this.lastTasksJson = json;
+      return;
+    }
+    this.lastTasksJson = json;
+    this.send({ type: 'tasks', tasks });
   }
 
   stop(): void {
@@ -119,12 +144,12 @@ export class SessionStream {
         const live = await readLiveState(this.deps.io, cfgDir, pid);
         if (live) {
           if (live.cwd) cwd = live.cwd;
-          status = live.status === 'busy' ? 'busy' : 'idle';
+          status = liveSessionStatus(live.status);
           statusUpdatedAt = live.statusUpdatedAt;
         }
       }
     }
-    return { uuid: rec.uuid, file: transcriptPath(cfgDir, cwd, rec.uuid), status, statusUpdatedAt };
+    return { uuid: rec.uuid, file: transcriptPath(cfgDir, cwd, rec.uuid), cfgDir, status, statusUpdatedAt };
   }
 
   /**
@@ -182,6 +207,8 @@ export class SessionStream {
       }
       if (this.stopped) return;
       await this.checkDialog();
+      if (this.stopped) return;
+      await this.checkTasks(r.cfgDir, r.uuid);
     } finally {
       this.ticking = false;
     }

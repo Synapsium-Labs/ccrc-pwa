@@ -3,7 +3,7 @@
 // exported for unit tests; the store wraps it with connection wiring and the
 // pending-send lifecycle.
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { ChatEvent, Dialog, SessionStatus, SessionStreamMsg } from '../../../shared/api';
+import type { ChatEvent, Dialog, SessionStatus, SessionStreamMsg, TaskItem } from '../../../shared/api';
 import { api, ApiError, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
@@ -25,6 +25,7 @@ export interface SessionState {
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
   dialog: Dialog | null;
+  tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   missingFile: string | null; // backlog missing:true → the attempted transcript path
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
@@ -38,7 +39,7 @@ export interface SessionState {
 
 export type SessionSnapshot = Pick<
   SessionState,
-  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog'
+  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'tasks'
 > & { missingFile: string | null };
 
 // Locally minted system dividers (rotation markers, notices) — uuid-prefixed so
@@ -104,6 +105,8 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       return { ...s, dialog: msg.dialog };
     case 'dialog_cleared':
       return { ...s, dialog: null };
+    case 'tasks':
+      return { ...s, tasks: msg.tasks };
     case 'rotated':
       return {
         ...s,
@@ -123,6 +126,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   status: s.status,
   statusUpdatedAt: s.statusUpdatedAt,
   dialog: s.dialog,
+  tasks: s.tasks,
   missingFile: s.missingFile,
 });
 
@@ -206,6 +210,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       status: null,
       statusUpdatedAt: null,
       dialog: null,
+      tasks: [],
       missingFile: null,
       pending: [],
       conn: 'connecting',

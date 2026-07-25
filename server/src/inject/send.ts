@@ -6,11 +6,17 @@ export interface SendDeps { tmux: Tmux; queue: KeyedQueue; sleep?: (ms: number) 
 
 export type SendResult =
   | { ok: true }
-  | { ok: false; error: 'not-alive' | 'draft-present' | 'draft-clear-failed' | 'verify-failed'; draft?: string; pane?: string };
+  | { ok: false; error: 'not-alive' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'; draft?: string; pane?: string };
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const PANE_TAIL = 2000;
+
+/** How long to wait for the input box to empty after Enter, and how often to
+ *  look. A busy session accepts the turn just as fast as an idle one — it
+ *  queues the message — so this is bounded by render time, not by Claude. */
+const SUBMIT_POLL_MS = 120;
+const SUBMIT_TRIES = 8;
 
 const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
 const DIM_SPAN = /\x1b\[2m[^\x1b]*\x1b\[0m/g;  // a dim `\e[2m…\e[0m` run = ghost/placeholder text
@@ -35,9 +41,30 @@ const draftOf = (ansiPane: string): string => {
 };
 
 /**
+ * Did the turn actually leave the input box? An emptied box is the only proof
+ * Enter was accepted — a message sent to a BUSY session empties the box too
+ * (Claude Code queues it), and a pane whose box has stopped rendering counts as
+ * gone rather than stuck.
+ */
+async function submitted(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+): Promise<boolean> {
+  for (let i = 0; i < SUBMIT_TRIES; i++) {
+    await sleep(SUBMIT_POLL_MS);
+    const pane = await d.tmux.captureAnsi(id);
+    if (pane === null) return false;
+    if (draftOf(pane) === '') return true;
+  }
+  return false;
+}
+
+/**
  * Inject a prompt into the session's Claude Code input box, serialized per
  * session through the KeyedQueue. Refuses to clobber a half-typed draft
- * unless `replaceDraft`, and verifies the pane echoed the text before Enter.
+ * unless `replaceDraft`, verifies the pane echoed the text before Enter, and
+ * verifies the box emptied after it.
  */
 export function sendPrompt(
   d: SendDeps,
@@ -75,8 +102,20 @@ export function sendPrompt(
       return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
     }
 
+    // Enter is not reliably a submit. Claude Code's box swallows it while an
+    // overlay is up — the slash-command palette, an `@`-mention picker, a
+    // mid-render frame — and the text just sits there. Returning ok:true on the
+    // keystroke alone reported success for messages that were never sent: the
+    // PWA's optimistic bubble then expired on its own timer and the message
+    // vanished with no error anywhere. So: press, confirm the box emptied,
+    // press once more if it didn't (that second Enter is what submits after an
+    // overlay consumed the first), and only then claim it landed.
     await d.tmux.sendKey(id, 'Enter');
-    return { ok: true };
+    if (await submitted(d, id, sleep)) return { ok: true };
+    await d.tmux.sendKey(id, 'Enter');
+    if (await submitted(d, id, sleep)) return { ok: true };
+    const stuck = await d.tmux.capture(id);
+    return { ok: false, error: 'enter-ignored', draft: draftOf(await d.tmux.captureAnsi(id) ?? ''), pane: (stuck ?? '').slice(-PANE_TAIL) };
   });
 }
 
