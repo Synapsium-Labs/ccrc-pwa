@@ -48,6 +48,14 @@ const defaultMakeTerm: MakeTerm = (host) => {
       foreground: tokenValue('--ink-on-well'),
       cursor: tokenValue('--accent'),
       cursorAccent: tokenValue('--bg-well'),
+      // On-brand ANSI palette (Phosphor & Ink) so 16-colour content reads
+      // cohesively. 256/truecolor content bypasses this and paints direct —
+      // Claude emits truecolor once COLORTERM+tmux RGB are in place (ccd spawn).
+      black: '#1B1F1D', red: '#F08A78', green: '#57E08B', yellow: '#F2B84B',
+      blue: '#96B4F4', magenta: '#C7A7F4', cyan: '#6FD6EA', white: '#ADB6AE',
+      brightBlack: '#5A635C', brightRed: '#FF9E8A', brightGreen: '#7BEDA6',
+      brightYellow: '#FFD27A', brightBlue: '#B3C8FF', brightMagenta: '#DDC2FF',
+      brightCyan: '#93E6F5', brightWhite: '#EDF1EE',
     },
     cursorBlink: true,
     scrollback: 4000,

@@ -345,8 +345,11 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   lastswap=$(_reg_get "$id" lastswap)
   [[ -n "$lastswap" && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
+  # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
+  # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
   tmux new-session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
   tmux set-option -t "$tname" set-titles on 2>/dev/null
