@@ -22,6 +22,13 @@ describe('paneState', () => {
     expect(paneState('some output\n❯ \n')).toBe('prompt');
     expect(paneState('plain scrollback\n')).toBe('other');
   });
+
+  it('treats a footer-less confirm (❯ on a numbered option, no "Enter to select") as a menu', () => {
+    const pane = 'Switch model?\n\n❯ 1. Yes, switch to Fable 5\n  2. No, go back\n';
+    expect(paneState(pane)).toBe('menu');
+    // A lone "❯ 1." the user typed at the prompt is NOT a menu (needs a 2nd option).
+    expect(paneState('❯ 1. my note\n')).toBe('prompt');
+  });
 });
 
 describe('parseDialog', () => {
@@ -70,6 +77,52 @@ describe('parseDialog', () => {
     expect(d.options).toHaveLength(3);
     expect(d.options[1]!.label).toBe('Resume full session as-is');
     expect(d.selectedIndex).toBe(1);
+  });
+
+  it('parses a footer-less /model confirm: title from the header, 2 options', () => {
+    const pane = [
+      '──────────────────────────────────────────────',
+      '  Switch model?',
+      '  Your next response will be slower and use more tokens',
+      '',
+      '  This conversation is cached for the current model.',
+      '',
+      '❯ 1. Yes, switch to Fable 5',
+      '  2. No, go back',
+      '──────────────────────────────────────────────',
+    ].join('\n');
+    const d = parseDialog(pane)!;
+    expect(d.parsed).toBe(true);
+    expect(d.title).toBe('Switch model?');
+    expect(d.options.map((o) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
+    expect(d.selectedIndex).toBe(1);
+  });
+
+  it('parses a 2-column menu: clean labels (wrapped joined), no garbled box detail', () => {
+    const pane = [
+      '─────────────────────────────────────────────────────────',
+      '  Rates source',
+      '',
+      '  Where should the rate numbers live?',
+      '',
+      '❯ 1. Checked-in file + CI          ┌─ model_rates.yaml (source of truth)',
+      '     drift-check (Recommended)     │     claude-opus-4-8: {input: 15}',
+      '  2. Auto-sync Lambda from         │     cache_write_5m: 18.75',
+      '     LiteLLM                       │',
+      '  3. Hybrid                        └─ CI weekly: diff vs LiteLLM',
+      '  Enter to select',
+    ].join('\n');
+    const d = parseDialog(pane)!;
+    expect(d.parsed).toBe(true);
+    expect(d.title).toBe('Where should the rate numbers live?');
+    expect(d.options.map((o) => o.label)).toEqual([
+      'Checked-in file + CI drift-check (Recommended)',
+      'Auto-sync Lambda from LiteLLM',
+      'Hybrid',
+    ]);
+    // The box detail is NOT smeared into per-option descriptions (raw carries it).
+    expect(d.options.every((o) => o.description === undefined)).toBe(true);
+    expect(d.raw).toContain('model_rates.yaml');
   });
 
   it('multiselect yields parsed:false with raw pane', () => {

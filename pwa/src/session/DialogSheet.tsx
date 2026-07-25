@@ -34,6 +34,9 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
   const [answering, setAnswering] = useState<number | null>(null);
   // Dialog id the user waved away — it stays hidden until a new question.
   const [dismissedId, setDismissedId] = useState<string | null>(null);
+  // Free-form reply (answer in your own words) + the raw "full question" view.
+  const [reply, setReply] = useState('');
+  const [details, setDetails] = useState(false);
 
   // Remember the last dialog so the sheet has content to animate out with
   // after dialog_cleared empties the store.
@@ -77,6 +80,22 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
           'error',
         );
       }
+    }
+  };
+
+  // Answer in your own words — the same as typing at the prompt, which declines
+  // the menu and sends the text (restores "chat about this", and lets you pick
+  // an option the menu doesn't offer). Reaches the composer's send while the
+  // sheet is covering it.
+  const respond = async (): Promise<void> => {
+    const text = reply.trim();
+    if (text === '' || answering !== null) return;
+    setReply('');
+    hide();
+    try {
+      await useStore.getState().send(text);
+    } catch (err) {
+      toast(`Couldn't send — ${err instanceof Error ? err.message : String(err)}`, 'error');
     }
   };
 
@@ -153,7 +172,46 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
           );
         })}
       </div>
-      <p className="sheet-foot">tap an option — it answers in the session</p>
+
+      {/* Answer in your own words — declines the menu and sends your text. */}
+      <form
+        className="dlg-reply"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void respond();
+        }}
+      >
+        <input
+          className="dlg-reply-input"
+          type="text"
+          value={reply}
+          onChange={(e) => setReply(e.target.value)}
+          placeholder="…or answer in your own words"
+          disabled={answering !== null}
+          aria-label="Answer in your own words"
+        />
+        <button
+          type="submit"
+          className="dlg-reply-send"
+          disabled={answering !== null || reply.trim() === ''}
+        >
+          Send
+        </button>
+      </form>
+
+      {/* Some menus render a side-box of detail the tappable rows can't carry —
+          the raw view shows the whole question exactly as the terminal does. */}
+      <button
+        type="button"
+        className="dlg-details-toggle"
+        onClick={() => setDetails((d) => !d)}
+        aria-expanded={details}
+      >
+        {details ? 'Hide full question' : 'Show full question'}
+      </button>
+      {details && <pre className="well dlg-raw">{shown.raw}</pre>}
+
+      <p className="sheet-foot">tap an option, or answer in your own words</p>
     </Sheet>
   );
 }
