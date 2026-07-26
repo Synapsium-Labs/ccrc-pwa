@@ -186,7 +186,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
     const dispatch = async (key: string, text: string, replaceDraft?: boolean): Promise<void> => {
       try {
-        await apiImpl.prompt(id, text, replaceDraft);
+        await apiImpl.prompt(id, text, { replaceDraft });
         timers.set(key, setTimeout(() => expireConfirmed(key), confirmTimeoutMs));
       } catch (e) {
         const { error, draft } = failureOf(e);

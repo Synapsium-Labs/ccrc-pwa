@@ -206,7 +206,7 @@ describe('session store optimistic send', () => {
 
     await store.getState().send('ship it');
 
-    expect(prompt).toHaveBeenCalledWith('s1', 'ship it', undefined);
+    expect(prompt).toHaveBeenCalledWith('s1', 'ship it', { replaceDraft: undefined });
     expect(store.getState().pending).toEqual([
       expect.objectContaining({ text: 'ship it', state: 'sending' }),
     ]);

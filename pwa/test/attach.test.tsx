@@ -19,6 +19,10 @@ afterEach(() => {
 const ID = 'claude:OpenClawHetzner';
 const SUCCESS_COPY = 'Image attached to the prompt — add your text and send';
 
+/** api.upload now resolves the staged clip (Task 8); these tests only care
+ *  that the promise resolves, not the payload shape. */
+const STAGED_CLIP = { path: '/home/u/.cc-clips/claude:OpenClawHetzner/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
+
 /** The hidden file input backing the attach button. */
 const fileInput = (): HTMLInputElement => {
   const el = document.querySelector<HTMLInputElement>('input[type="file"]');
@@ -34,7 +38,7 @@ const pick = (file: File): void => {
 
 describe('AttachButton', () => {
   it('uploads a small PNG as-is — screenshots skip the lossy downscale', async () => {
-    const upload = vi.spyOn(api, 'upload').mockResolvedValue(undefined);
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(STAGED_CLIP);
     const downscale = vi.fn<(f: File) => Promise<Blob>>();
     render(
       <>
@@ -52,7 +56,7 @@ describe('AttachButton', () => {
   });
 
   it('sends an oversized image through downscaleImage first, as a JPEG blob', async () => {
-    const upload = vi.spyOn(api, 'upload').mockResolvedValue(undefined);
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(STAGED_CLIP);
     const small = new Blob(['downscaled'], { type: 'image/jpeg' });
     const downscale = vi.fn<(f: File) => Promise<Blob>>().mockResolvedValue(small);
     render(
@@ -79,7 +83,7 @@ describe('AttachButton', () => {
   });
 
   it('camera JPEGs go through the downscale regardless of size', async () => {
-    vi.spyOn(api, 'upload').mockResolvedValue(undefined);
+    vi.spyOn(api, 'upload').mockResolvedValue(STAGED_CLIP);
     const downscale = vi
       .fn<(f: File) => Promise<Blob>>()
       .mockResolvedValue(new Blob(['x'], { type: 'image/jpeg' }));
@@ -101,7 +105,7 @@ describe('AttachButton', () => {
     const upload = vi
       .spyOn(api, 'upload')
       .mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'ccd clip: no such session' }))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce(STAGED_CLIP);
     render(
       <>
         <AttachButton id={ID} downscale={vi.fn()} />
