@@ -1136,6 +1136,12 @@ button.metachip:active {
 /* ------------------------------------------------------------------ *
  *  Composer — the prompt line, docked above the keyboard.             *
  * ------------------------------------------------------------------ */
+/* Plain measuring shell around <Composer> — Composer.tsx itself isn't in this
+   task's scope, so SessionScreen wraps it to give ResizeObserver something to
+   watch. Same flex behavior as .composer so wrapping it changes nothing. */
+.composer-measure {
+  flex: none;
+}
 .composer {
   flex: none;
   padding: var(--sp-2) var(--sp-4) calc(var(--sp-3) + var(--safe-bottom));
@@ -1718,6 +1724,39 @@ button.metachip:active {
 }
 /* Links in user bubbles inherit the on-bubble ink but stay underlined. */
 .msg-user a { color: inherit; text-underline-offset: 3px; }
+
+/* Sent screenshots (transcript thumbnails) — the confirmed and optimistic
+   bubbles share this grid. One clip fills a single column; two or more sit
+   two-up. Right-aligned like every other user-turn element. */
+.msg-attach {
+  justify-self: end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1);
+  max-width: 85%;
+}
+.msg-attach[data-count='1'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.msg-attach-img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  border: 1px solid var(--edge-subtle);
+}
+/* A clip deleted off disk degrades to its filename, never a broken-image box. */
+.msg-attach-gone {
+  display: block;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary);
+  background: var(--bg-well);
+  border: 1px dashed var(--edge-subtle);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  overflow-wrap: anywhere;
+}
 
 /* Attachment tray — the chips ARE the confirmation that an image is attached,
    which is why the old "Image attached…" toast is gone. */
