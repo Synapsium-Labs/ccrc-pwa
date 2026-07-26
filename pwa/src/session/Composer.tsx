@@ -6,10 +6,12 @@
 // together), Replace draft (replaceDraft: true), or Cancel (the failed bubble
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { Sheet } from '../components/Sheet';
+import { toast } from '../components/Toast';
 import type { PendingSend } from '../stores/session';
 import { AttachButton } from './AttachButton';
+import { clipboardImage, namedClipboardImage, useAttachImage } from './useAttachImage';
 import { api } from '../lib/api';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
@@ -45,6 +47,23 @@ export function Composer({
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
   const [commands, setCommands] = useState<SlashCommand[] | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  // Paste is the main way a screenshot gets here on desktop — ⌘⇧4 then ⌘V,
+  // without a round trip through the filesystem and the file picker.
+  const { attach } = useAttachImage(id ?? '');
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
+    if (id === undefined || disabled) return;
+    const file = clipboardImage(e.clipboardData);
+    if (file === null) return; // an ordinary text paste — leave it entirely alone
+    // Stop the browser also dropping the image's filename into the box.
+    e.preventDefault();
+    const named = namedClipboardImage(file, Date.now());
+    if (named === null) {
+      toast(`Can't attach ${file.type || 'that'} — PNG, JPEG or WebP only`, 'error');
+      return;
+    }
+    void attach(named);
+  };
 
   // Lazily fetch the session's slash commands (built-ins + skills) the first
   // time the user starts a `/` command; cache for the rest of the session.
@@ -145,6 +164,7 @@ export function Composer({
           disabled={disabled}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
         />
         {id !== undefined && <AttachButton id={id} disabled={disabled} />}
         <button

@@ -149,7 +149,10 @@ describe('downscaleImage', () => {
     };
   };
 
-  it('caps the long edge at 2048px, preserves aspect, encodes JPEG at 0.85', async () => {
+  it('caps the long edge at 2048px, preserves aspect, and keeps a PNG a PNG', async () => {
+    // A pasted screenshot is the main reason this path exists, and its value is
+    // the small text in it — re-encoding UI type as JPEG rings around every
+    // glyph. Size is already bounded by the 2048px cap.
     const close = vi.fn();
     vi.stubGlobal(
       'createImageBitmap',
@@ -161,9 +164,22 @@ describe('downscaleImage', () => {
 
     expect(h.canvas().width).toBe(2048);
     expect(h.canvas().height).toBe(512);
+    expect(h.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', undefined);
+    expect(out.type).toBe('image/png');
+    expect(close).toHaveBeenCalled(); // bitmap memory released
+  });
+
+  it('still encodes non-PNG sources as JPEG 0.85 — photos have no type to smear', async () => {
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(async () => ({ width: 4096, height: 1024, close: vi.fn() })),
+    );
+    const h = stubCanvas();
+
+    const out = await downscaleImage(new File(['x'], 'photo.jpg', { type: 'image/jpeg' }));
+
     expect(h.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/jpeg', 0.85);
     expect(out.type).toBe('image/jpeg');
-    expect(close).toHaveBeenCalled(); // bitmap memory released
   });
 
   it('never upscales an image already inside the cap', async () => {
