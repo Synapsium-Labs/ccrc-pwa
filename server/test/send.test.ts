@@ -228,7 +228,8 @@ describe('sendPrompt', () => {
   it('re-presses Enter when the box did not empty, and succeeds if the retry lands', async () => {
     const { tmux, calls } = fakeTmux([
       '❯ \n',            // initial — empty
-      '❯ /model opus\n', // verify — echoed
+      '❯ /model opus\n', // verify (ansi read) — echoed
+      '❯ /model opus\n', // verify (plain read, taken unconditionally alongside the ansi one)
       '❯ /model opus\n', // after 1st Enter — STILL in the box (overlay ate it)
       '❯ /model opus\n',
       '❯ /model opus\n',
@@ -255,6 +256,48 @@ describe('sendPrompt', () => {
     const busy = 'esc to interrupt\n❯ \n';
     const { tmux } = fakeTmux(['❯ \n', '❯ do the thing\n', busy]);
     expect(await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'do the thing')).toEqual({ ok: true });
+  });
+});
+
+describe('sendPrompt with attachments', () => {
+  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+
+  it('types the paths above the text as one turn', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ \n',        // initial capture — empty draft
+      `❯ ${P}\n`,    // verify capture — box echoes the path (needle from line 1)
+      '❯ \n',        // after Enter — box emptied, turn accepted
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
+    );
+    expect(res).toEqual({ ok: true });
+    // Alt+Enter separates the lines; the path goes first.
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', P],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
+
+  it('verifies the echo against the input box, not the scrollback', async () => {
+    // The identical path sits in scrollback from an earlier turn, but the box is
+    // empty — the send never echoed and must NOT be reported ok.
+    const { tmux, calls } = fakeTmux([`some earlier turn ${P}\n\n❯ \n`]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: [P] },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+  });
+
+  it('clears the box when a send with attachments fails to verify', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n']); // box stays empty — never echoes
+    await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'x', { attachments: [P] });
+    // Otherwise the paths are stranded in the live box — the exact state this
+    // whole design exists to remove.
+    expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
   });
 });
 

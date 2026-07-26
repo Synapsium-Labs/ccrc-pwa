@@ -21,12 +21,15 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 };
 
 /** Server over a seeded one-session registry; capture-pane returns scripted panes in order (last repeats).
- *  `status` seeds the authoritative live status file (used by the interrupt route). */
+ *  `status` seeds the authoritative live status file (used by the interrupt route). `panes` may be a
+ *  function of `home` when a test needs a clip path scripted into the pane text — `home` is a fresh
+ *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
-  panes: (string | null)[],
+  panes: (string | null)[] | ((home: string) => (string | null)[]),
   opts: { status?: 'busy' | 'idle' } = {},
-): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus }> {
+): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+  const resolvedPanes = typeof panes === 'function' ? panes(home) : panes;
   seedSession(home, ID, 'claude2');
   const PANE_PID = 4242;
   if (opts.status) {
@@ -42,7 +45,7 @@ async function makeApp(
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
     if (args[0] === 'capture-pane') {
-      const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
+      const pane = resolvedPanes[Math.min(capIdx, resolvedPanes.length - 1)] ?? null;
       capIdx++;
       return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
     }
@@ -51,10 +54,13 @@ async function makeApp(
   };
   const bus = new Bus();
   const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO }, bus);
-  return { app, calls, bus };
+  return { app, calls, bus, home };
 }
 
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
+
+/** An empty input box — capture-pane before/after any injection attempt. */
+const EMPTY_BOX = '❯ \n';
 
 const OPTS = ['A + B drawer (Recommended)', 'A pure', 'B first, A later', 'Other'];
 function menuPane(selected: number): string {
@@ -147,6 +153,93 @@ describe('write routes', () => {
       const res = await app.inject({ method: 'POST', url, payload });
       expect(res.statusCode).toBe(404);
     }
+    await app.close();
+  });
+});
+
+describe('prompt route attachment handling', () => {
+  it('rejects an attachment outside this session’s clips dir', async () => {
+    const { app, home } = await makeApp([EMPTY_BOX]);
+    for (const bad of [
+      '/etc/passwd',
+      '/home/u/.cc-clips/other-session/clip-20260726-150340-a1b2.png',
+      `${home}/.cc-clips/${ID}/../../x/clip-20260726-150340-a1b2.png`,
+    ]) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/prompt`,
+        payload: { text: 'hi', attachments: [bad] },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('bad-attachment');
+    }
+    await app.close();
+  });
+
+  it('rejects a fifth attachment', async () => {
+    const { app, home } = await makeApp([EMPTY_BOX]);
+    const many = Array.from({ length: 5 }, (_, i) =>
+      `${home}/.cc-clips/${ID}/clip-20260726-15034${i}-a1b2.png`);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hi', attachments: many },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('bad-attachment');
+    await app.close();
+  });
+
+  // `home` is a fresh mkdtemp dir created inside makeApp, so the clip path (which
+  // must resolve under it) can only be built from the `home` the callback receives.
+  const clipOf = (home: string) => `${home}/.cc-clips/${ID}/clip-20260726-150340-a1b2.png`;
+
+  it('accepts a staged attachment alongside text, typed as one turn', async () => {
+    const { app, calls, home } = await makeApp((home) => [
+      'scrollback\n❯ \n',
+      `scrollback\n❯ ${clipOf(home)}\n`,
+      'scrollback\n❯ \n',
+    ]);
+    const clip = clipOf(home);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`,
+      payload: { text: 'what is this', attachments: [clip] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'M-Enter'],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+    ]);
+    await app.close();
+  });
+
+  it('accepts an image-only prompt (no text) when an attachment is present', async () => {
+    const { app, calls, home } = await makeApp((home) => [
+      'scrollback\n❯ \n',
+      `scrollback\n❯ ${clipOf(home)}\n`,
+      'scrollback\n❯ \n',
+    ]);
+    const clip = clipOf(home);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`,
+      payload: { text: '', attachments: [clip] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+    ]);
+    await app.close();
+  });
+
+  it('still rejects an empty prompt with no attachments', async () => {
+    const { app } = await makeApp([EMPTY_BOX]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('bad-request');
     await app.close();
   });
 });

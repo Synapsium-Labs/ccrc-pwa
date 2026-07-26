@@ -19,7 +19,7 @@ import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/sen
 import { readRegistry } from './registry.js';
 import { ccd, listProjects } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
-import { isSafeSessionId, stageUpload } from './clip.js';
+import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/api.js';
@@ -28,6 +28,8 @@ const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+/** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
+const MAX_ATTACHMENTS = 4;
 
 export interface Deps {
   cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
@@ -215,11 +217,32 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown };
-    if (typeof body.text !== 'string' || body.text.length === 0) {
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown };
+    const raw = Array.isArray(body.attachments) ? body.attachments : [];
+    if (raw.length > MAX_ATTACHMENTS) {
+      return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+    }
+    const attachments: string[] = [];
+    for (const a of raw) {
+      if (typeof a !== 'string') return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      const name = a.slice(a.lastIndexOf('/') + 1);
+      if (!CLIP_NAME_RE.test(name)) {
+        return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      }
+      let resolved: string;
+      try {
+        resolved = clipPath(deps.cfg.clipsDir, id, name);
+      } catch {
+        return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      }
+      // The client must name the file that staging returned, in THIS session.
+      if (resolved !== a) return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      attachments.push(resolved);
+    }
+    if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true });
+    const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true, attachments });
     return res.ok ? res : reply.code(409).send(res);
   });
 
