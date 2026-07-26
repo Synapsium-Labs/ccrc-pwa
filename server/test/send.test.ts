@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { sendPrompt } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -63,6 +66,31 @@ describe('sendPrompt', () => {
       ['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello world'],
       ['tmux', 'send-keys', '-t', 'cc-myid', 'Enter'],
     ]);
+  });
+
+  it('refuses to type while a menu owns the keyboard, instead of inventing a draft', async () => {
+    // A live AskUserQuestion pane: the ONLY ❯ line is the cursor on the selected
+    // option, so the old draft read returned "1. Forward-fill per class ┌───…"
+    // and the PWA offered to "replace" it — which would have fired C-u and typed
+    // the message into the menu as raw keystrokes.
+    const pane = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes', 'ask-2col-chat-about.txt'),
+      'utf8',
+    );
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'option 1 please');
+    expect(res).toEqual({ ok: false, error: 'dialog-open' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('still refuses when the menu pane also carries a stale "esc to interrupt" in scrollback', async () => {
+    // paneState() would call this pane busy (BUSY_RE scans the whole capture) and
+    // never reach its menu branch — which is why the guard uses hasMenu().
+    const pane = 'esc to interrupt\n\n❯ 1. Yes\n  2. No\n  Enter to select\n';
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
+    expect(res).toEqual({ ok: false, error: 'dialog-open' });
+    expect(sendKeysCalls(calls)).toEqual([]);
   });
 
   it('not-alive when capture fails; nothing sent', async () => {

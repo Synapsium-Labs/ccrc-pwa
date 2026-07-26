@@ -125,6 +125,35 @@ describe('parseDialog', () => {
     expect(d.raw).toContain('model_rates.yaml');
   });
 
+  it('parses a LIVE 2-column pane: clean labels, no trailing chrome, "Chat about this" offered', () => {
+    // Captured from cc-claude-corp-data-internal while it was actually asking.
+    // Two failures this pane caused: the last option's label ran on into the
+    // right-hand box's chrome ("Ship as-is, alert + runbook Notes: press n to
+    // add notes Chat about this"), and the unnumbered "Chat about this" row
+    // below the rule was invisible to the sheet, so answering in your own words
+    // had no route that didn't go through the terminal.
+    const d = parseDialog(fixture('ask-2col-chat-about.txt'))!;
+    expect(d.parsed).toBe(true);
+    expect(d.options.map((o) => o.label)).toEqual([
+      'Forward-fill per class (Recommended)',
+      'Require completeness, Anthropic only',
+      'Ship as-is, alert + runbook',
+      'Chat about this',
+    ]);
+    expect(d.selectedIndex).toBe(1);
+    expect(d.title).toContain('how should the partial-capture hazard be handled?');
+    // The box detail rides raw, never per-option prose.
+    expect(d.options.every((o) => o.description === undefined)).toBe(true);
+    expect(d.raw).toContain('No model loses pricing it has today.');
+  });
+
+  it('tracks the cursor onto an unnumbered extra row so the walk can verify it landed', () => {
+    const pane = fixture('ask-2col-chat-about.txt').replace('  Chat about this', '❯ Chat about this');
+    const d = parseDialog(pane)!;
+    expect(d.selectedIndex).toBe(4);
+    expect(d.options[3]!.label).toBe('Chat about this');
+  });
+
   it('multiselect yields parsed:false with raw pane', () => {
     const d = parseDialog(fixture('multiselect.txt'))!;
     expect(d).not.toBeNull();

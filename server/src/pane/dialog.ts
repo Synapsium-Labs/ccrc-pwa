@@ -11,6 +11,8 @@ const OPTION_RE = /^\s*(❯)?\s*(\d+)\.\s+(.+)$/;
 const SELECTED_OPTION_RE = /^\s*❯\s*\d+\.\s/;
 /** Any numbered option row, cursor or not. */
 const NUMBERED_OPTION_RE = /^\s*(?:❯\s*)?\d+\.\s/;
+/** The ❯ cursor resting on an UNNUMBERED extra row ("❯ Chat about this"). */
+const SELECTED_EXTRA_RE = /^\s*❯\s*\S/;
 
 export type PaneState = 'busy' | 'prompt' | 'menu' | 'other';
 
@@ -18,25 +20,33 @@ export type PaneState = 'busy' | 'prompt' | 'menu' | 'other';
  * Classify a captured pane. Order matters: busy overrides everything; menu is
  * checked before prompt because menus also use the ❯ marker on the selected row.
  */
-export function paneState(pane: string): PaneState {
-  if (BUSY_RE.test(pane)) return 'busy';
-  if (MENU_RE.test(pane)) return 'menu';
+/**
+ * Is a menu on screen? Deliberately independent of the busy check, because
+ * callers that must not type into a menu (sendPrompt) cannot rely on
+ * `paneState`: BUSY_RE tests the WHOLE pane, so one "esc to interrupt" left in
+ * scrollback classifies a menu pane as busy and the menu branch never runs.
+ */
+export function hasMenu(pane: string): boolean {
+  if (MENU_RE.test(pane)) return true;
   const lines = pane.split('\n');
   // Confirm dialogs (e.g. the /model and /effort switch prompts) put the ❯
   // cursor on a numbered option but have NO "Enter to select" footer, so they'd
   // otherwise read as a plain prompt and never surface in the PWA. Require the
   // cursor AND a second numbered option so a stray "❯ 1. …" typed at the input
   // prompt can't trip it.
-  if (
+  return (
     lines.some((l) => SELECTED_OPTION_RE.test(l)) &&
     lines.filter((l) => NUMBERED_OPTION_RE.test(l)).length >= 2
-  ) {
-    return 'menu';
-  }
+  );
+}
+
+export function paneState(pane: string): PaneState {
+  if (BUSY_RE.test(pane)) return 'busy';
+  if (hasMenu(pane)) return 'menu';
   // The input box marker is `❯` followed by either a space or a U+00A0
   // non-breaking space (empty box), so match the marker alone. Menus are already
   // handled above, so a bare `❯` here is the prompt.
-  if (lines.some((l) => l.startsWith('❯'))) return 'prompt';
+  if (pane.split('\n').some((l) => l.startsWith('❯'))) return 'prompt';
   return 'other';
 }
 
@@ -85,8 +95,19 @@ export function parseDialog(pane: string): Dialog | null {
 
   const start = best[0]!.line;
   const bounds = best.map((o) => o.line);
+  const lastLine = bounds[bounds.length - 1]!;
   // The footer ("Enter to select") bounds the LAST option's description.
-  const footer = lines.findIndex((l, i) => i > bounds[bounds.length - 1]! && MENU_RE.test(l));
+  const footer = lines.findIndex((l, i) => i > lastLine && MENU_RE.test(l));
+  const end = footer >= 0 ? footer : lines.length;
+
+  // Newer AskUserQuestion layouts put extra selectable rows BELOW a horizontal
+  // rule under the numbered list — "Chat about this" is the one that matters,
+  // since it is how you answer in your own words. Everything from that rule to
+  // the footer is therefore NOT the last option's description; treating it as
+  // such appended "Notes: press n to add notes Chat about this" to the final
+  // label. Split the region there: options above, extra rows below.
+  let tail = lines.findIndex((l, i) => i > lastLine && i < end && isRule(l));
+  if (tail < 0) tail = end;
 
   // Some AskUserQuestion layouts are TWO-column: options on the left, and the
   // SELECTED option's detail in a box on the right (│┌└ borders). There the
@@ -94,14 +115,23 @@ export function parseDialog(pane: string): Dialog | null {
   // per option garbles the sheet. Detect the box and, when present, only join
   // the wrapped LEFT-column label; the full detail rides `raw` (the sheet shows
   // it verbatim). One-column menus keep their per-option description prose.
-  const region = lines.slice(start, footer >= 0 ? footer : lines.length).join('\n');
+  const region = lines.slice(start, tail).join('\n');
   const twoColumn = /[│┃┌┐└┘├┤]/.test(region);
+  // Where the right-hand detail box begins. Continuation text at or past it is
+  // that box's content (or chrome aligned to it, like "Notes: press n to add
+  // notes"), never a wrapped label — column position is the only thing that
+  // tells them apart once the box borders are stripped.
+  const gutter = twoColumn ? boxColumn(lines.slice(start, tail)) : Infinity;
   const options = best.map((o, k) => {
     const from = o.line + 1;
-    const to = k + 1 < bounds.length ? bounds[k + 1]! : footer >= 0 ? footer : lines.length;
+    const to = k + 1 < bounds.length ? bounds[k + 1]! : tail;
     const between = lines.slice(from, to).filter((l) => !isRule(l));
     if (twoColumn) {
-      const cont = between.map(leftCol).filter(Boolean).join(' ');
+      const cont = between
+        .filter((l) => indentOf(l) < gutter)
+        .map(leftCol)
+        .filter(Boolean)
+        .join(' ');
       const label = [o.label, cont].filter(Boolean).join(' ');
       return { index: o.index, label, description: undefined };
     }
@@ -112,7 +142,24 @@ export function parseDialog(pane: string): Dialog | null {
       .trim();
     return { index: o.index, label: o.label, description: description || undefined };
   });
-  const selectedIndex = best.find((o) => o.selected)?.index ?? 1;
+
+  // Unnumbered selectable rows between that rule and the footer, numbered on
+  // after the real options so the arrow-walk reaches them the same way the TUI
+  // does (they sit in its ↑/↓ order). "Chat about this" is the important one:
+  // without it the sheet can only offer the canned answers, and answering in
+  // your own words has to go through the terminal.
+  let selectedExtra: number | null = null;
+  for (let i = tail; i < end; i++) {
+    const line = lines[i]!;
+    if (isRule(line) || line.trim() === '') continue;
+    const text = leftCol(line.replace(/^\s*❯\s*/, ''));
+    if (text === '' || indentOf(line) >= gutter) continue;
+    const index = options.length + 1;
+    if (SELECTED_EXTRA_RE.test(line)) selectedExtra = index;
+    options.push({ index, label: text, description: undefined });
+  }
+
+  const selectedIndex = selectedExtra ?? best.find((o) => o.selected)?.index ?? 1;
 
   // Preamble block: everything from the dialog's upper box rule down to the first
   // option (capped so we never climb into unrelated conversation). This is the
@@ -158,6 +205,23 @@ function isRule(line: string): boolean {
  *  box some AskUserQuestion layouts render beside the options (a run of 2+ spaces
  *  or a box-drawing border starts it). One-column labels have neither, so they
  *  pass through unchanged. */
+/** Column of a row's first non-space character; Infinity for a blank row. */
+function indentOf(line: string): number {
+  const i = line.search(/\S/);
+  return i < 0 ? Infinity : i;
+}
+
+/** Column where the right-hand detail box starts, taken as the leftmost box
+ *  border seen anywhere in the option region. Infinity when there is none. */
+function boxColumn(region: string[]): number {
+  let col = Infinity;
+  for (const line of region) {
+    const i = line.search(/[│┃┌┐└┘├┤┬┴┼╭╮╰╯]/);
+    if (i >= 0 && i < col) col = i;
+  }
+  return col;
+}
+
 function leftCol(s: string): string {
   const t = s.replace(/^\s+/, ''); // drop the row's own indent first
   const cut = t.search(/\s{2,}|[│┃┌┐└┘├┤┬┴┼╭╮╰╯]/);

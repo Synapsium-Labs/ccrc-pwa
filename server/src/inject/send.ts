@@ -1,12 +1,12 @@
 import type { Tmux } from '../exec.js';
-import { parseDialog } from '../pane/dialog.js';
+import { hasMenu, parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 
 export interface SendDeps { tmux: Tmux; queue: KeyedQueue; sleep?: (ms: number) => Promise<void> }
 
 export type SendResult =
   | { ok: true }
-  | { ok: false; error: 'not-alive' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'; draft?: string; pane?: string };
+  | { ok: false; error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'; draft?: string; pane?: string };
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -76,6 +76,14 @@ export function sendPrompt(
   return d.queue.run(id, async (): Promise<SendResult> => {
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
+
+    // A menu owns the keyboard and there is no input box to type into — the only
+    // `❯` on screen is the cursor resting on the selected OPTION. draftOf would
+    // read that row ("1. Forward-fill per class ┌────…") as a half-typed draft
+    // and report draft-present, and answering "replace" would fire C-u and then
+    // type the message as raw keystrokes into a live menu. Refuse instead; the
+    // caller's job is to answer the question.
+    if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' };
 
     const draft = draftOf(pane);
     if (draft) {

@@ -178,3 +178,75 @@ describe('DialogSheet dismissal', () => {
     ).toBeInTheDocument();
   });
 });
+
+// — answering in your own words —
+//
+// A menu owns the terminal's keyboard, so free text cannot simply be typed at
+// the pane: the server refuses with dialog-open (see sendPrompt's hasMenu
+// guard). The sheet must instead take the TUI's own "Chat about this" row,
+// wait for the menu to clear, and only then send.
+describe('DialogSheet free-text reply', () => {
+  const withChatRow = () =>
+    parsedDialog({
+      options: [
+        { index: 1, label: 'Forward-fill per class (Recommended)' },
+        { index: 2, label: 'Require completeness, Anthropic only' },
+        { index: 3, label: 'Chat about this' },
+      ],
+    });
+
+  it('selects "Chat about this" first, then sends the text once the menu clears', async () => {
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
+    const dialog = withChatRow();
+    act(() => store.getState().apply({ type: 'dialog', dialog }));
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} />
+        <ToastHost />
+      </>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Answer in your own words'), {
+      target: { value: 'none of these — the rates table is the wrong layer' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    // The escape hatch is taken by its own index, not by guessing.
+    await vi.waitFor(() => expect(answer).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 3));
+    // Nothing is typed while the menu is still up.
+    expect(prompt).not.toHaveBeenCalled();
+
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    await vi.waitFor(() =>
+      expect(prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        'none of these — the rates table is the wrong layer',
+        undefined,
+      ),
+    );
+  });
+
+  it('says so rather than failing silently when the question offers no free-text row', async () => {
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
+    act(() => store.getState().apply({ type: 'dialog', dialog: parsedDialog() }));
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} />
+        <ToastHost />
+      </>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Answer in your own words'), {
+      target: { value: 'something else entirely' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/no free-text option/i)).toBeInTheDocument();
+    expect(answer).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+  });
+});

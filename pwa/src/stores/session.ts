@@ -4,7 +4,7 @@
 // pending-send lifecycle.
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { ChatEvent, Dialog, SessionStatus, SessionStreamMsg, TaskItem } from '../../../shared/api';
-import { api, ApiError, type Api } from '../lib/api';
+import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
 export interface PendingSend {
@@ -151,7 +151,7 @@ const failureOf = (e: unknown): { error: string; draft?: string } => {
         return { error: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
       }
     }
-    return { error: e.message };
+    return { error: sendErrorText(e.message) };
   }
   return { error: e instanceof Error ? e.message : 'send failed' };
 };

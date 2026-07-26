@@ -1,0 +1,50 @@
+  │ 6 × anthropic/*          │ ok    │ ok     │ ok         │ ok      │ ok      │ 5           │
+  ├──────────────────────────┼───────┼────────┼────────────┼─────────┼─────────┼─────────────┤
+  │ anthropic/claude-fable-5 │ ok    │ ok     │ ok         │ ok      │ missing │ 5 (derived) │
+  ├──────────────────────────┼───────┼────────┼────────────┼─────────┼─────────┼─────────────┤
+  │ openai/gpt-5.6-sol       │ ok    │ ok     │ ok         │ ok      │ missing │ 4           │
+  ├──────────────────────────┼───────┼────────┼────────────┼─────────┼─────────┼─────────────┤
+  │ openai/gpt-5.6-terra     │ ok    │ ok     │ ok         │ ok      │ missing │ 4           │
+  ├──────────────────────────┼───────┼────────┼────────────┼─────────┼─────────┼─────────────┤
+  │ openai/gpt-5.5           │ ok    │ ok     │ ok         │ missing │ missing │ 3           │
+  ├──────────────────────────┼───────┼────────┼────────────┼─────────┼─────────┼─────────────┤
+  │ z-ai/glm-5.2             │ ok    │ ok     │ ok         │ missing │ missing │ 3           │
+  └──────────────────────────┴───────┴────────┴────────────┴─────────┴─────────┴─────────────┘
+
+  Because derivation is gated on is_anthropic, Anthropic models always reach 5 (fable-5's missing cache_write_1h gets derived — that path is load-bearing today). The four non-Anthropic ids never will.
+
+  So "require all five classes" would emit zero rows for 7 of the 14 mapped keys, permanently, every day — the 3 OpenAI models plus all 4 GLM spellings. They'd price at $0 outright, where today they correctly price
+  input, output and cache_read — and cache_read is the 96% class. That's a large regression, not a safety improvement.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Revised fix
+
+Given that non-Anthropic models never publish cache-write prices, how should the partial-capture hazard be handled?
+
+❯ 1. Forward-fill per class       ┌────────────────────────────────────────────────┐
+    (Recommended)                 │ 07-01: in,out,cr,cw5,cw1 present               │
+  2. Require completeness,        │ 07-10: in,out only (partial capture)           │
+    Anthropic only                │   -> cr/cw5/cw1 inherit 07-01 -> cost intact   │
+  3. Ship as-is, alert +          │                                                │
+    runbook                       │ glm-5.2 every day: in,out,cr only              │
+                                  │   -> cw5/cw1 never seen -> stay unpriced       │
+                                  │      (correct: no rate exists to inherit)      │
+                                  │                                                │
+                                  │ No model loses pricing it has today.           │
+                                  └────────────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel
+
+  15 tasks (14 done, 1 in progress, 0 open)
+  ◼ SDD T8: CDK wiring + final review + PR
+  ✔ Present model_rates sync design for approval
+  ✔ Write + self-review spec doc
+  ✔ User reviews spec; then writing-plans
+  ✔ Task 1: claude_spend_reader least-priv CH user (migration 058 + chain)
+   … +10 completed
+

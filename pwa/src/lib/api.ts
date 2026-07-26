@@ -21,6 +21,19 @@ export class ApiError extends Error {
   }
 }
 
+/** Send failures the server names by code. Left raw these surfaced as bare
+ *  slugs under the failed bubble ("dialog-open"), which says nothing about what
+ *  to do next. `draft-present` is absent on purpose — it has its own sheet. */
+const SEND_ERROR_TEXT: Record<string, string> = {
+  'dialog-open': "Claude is asking a question — answer that first, then send.",
+  'enter-ignored': "Typed it, but the session didn't accept it — open the terminal to check.",
+  'verify-failed': "The session never showed the text — open the terminal to check.",
+  'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
+  'not-alive': 'That session is not running.',
+};
+
+export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
+
 /** Human-readable failure text for a caught error: lifecycle routes fail as
  *  502 { stderr } (ccd's own words) — prefer that over the generic message. */
 export function apiErrorText(err: unknown): string {

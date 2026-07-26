@@ -14,9 +14,14 @@ import type { ReactNode } from 'react';
 import type { Dialog } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, apiErrorText } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
+
+/** The TUI's free-text escape hatch, however it happens to be worded. */
+const CHAT_ABOUT_RE = /chat about this/i;
+const CLEAR_POLL_MS = 400;
+const CLEAR_TRIES = 20; // ~8 s — the stream polls the pane every 2 s
 
 export interface DialogSheetProps {
   id: string;
@@ -83,19 +88,42 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
     }
   };
 
-  // Answer in your own words — the same as typing at the prompt, which declines
-  // the menu and sends the text (restores "chat about this", and lets you pick
-  // an option the menu doesn't offer). Reaches the composer's send while the
-  // sheet is covering it.
+  /** Wait for the stream to confirm the menu is gone (its poll is ~2 s). */
+  const dialogCleared = async (): Promise<boolean> => {
+    for (let i = 0; i < CLEAR_TRIES; i++) {
+      if (useStore.getState().dialog === null) return true;
+      await new Promise((r) => setTimeout(r, CLEAR_POLL_MS));
+    }
+    return useStore.getState().dialog === null;
+  };
+
+  // Answer in your own words. While a menu is up it owns the keyboard — there
+  // is no input box, and the server refuses to type into one (dialog-open). The
+  // TUI's own escape hatch is its "Chat about this" row, which drops the
+  // session into free text: take that first, wait for the menu to go, then send.
   const respond = async (): Promise<void> => {
     const text = reply.trim();
-    if (text === '' || answering !== null) return;
+    const current = dialog;
+    if (text === '' || answering !== null || current === null) return;
+    const chat = current.options.find((o) => CHAT_ABOUT_RE.test(o.label));
+    if (!chat) {
+      toast("This question has no free-text option — pick one, or use the terminal", 'error');
+      return;
+    }
     setReply('');
-    hide();
+    setAnswering(chat.index);
     try {
+      await api.answerDialog(id, current.id, chat.index);
+      if (!(await dialogCleared())) {
+        toast("The question is still up — answer it in the terminal", 'error');
+        return;
+      }
+      hide();
       await useStore.getState().send(text);
     } catch (err) {
-      toast(`Couldn't send — ${err instanceof Error ? err.message : String(err)}`, 'error');
+      toast(`Couldn't send — ${apiErrorText(err)}`, 'error');
+    } finally {
+      setAnswering(null);
     }
   };
 
