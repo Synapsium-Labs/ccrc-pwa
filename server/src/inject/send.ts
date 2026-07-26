@@ -29,7 +29,15 @@ const ECHO_TRIES = 12;
 const ECHO_NEEDLE = 24;
 
 const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
-const DIM_SPAN = /\x1b\[2m[^\x1b]*\x1b\[0m/g;  // a dim `\e[2m…\e[0m` run = ghost/placeholder text
+// A dim `\e[2m…\e[0m` run = ghost/placeholder text. Real captures interleave
+// OTHER SGR codes inside the run (e.g. Claude Code's queue hint renders as
+// `\e[2m\e[39mPress up to edit queued messages\e[0m` — a colour reset sits
+// right after the dim-on code), so `[^\x1b]*` alone can't span it: the match
+// fails, the hint is never stripped, and draftOf reads it as a real draft —
+// blocking the NEXT send with draft-present for a message that never landed.
+// Allow interleaved `\e[...m` codes inside the span, non-greedily so it can't
+// swallow past the nearest `\e[0m` reset into real trailing content.
+const DIM_SPAN = /\x1b\[2m(?:\x1b\[[0-9;]*m|[^\x1b])*?\x1b\[0m/g;
 
 /**
  * Text the user actually typed into the live input box, trimmed; '' when empty.
@@ -44,7 +52,7 @@ const DIM_SPAN = /\x1b\[2m[^\x1b]*\x1b\[0m/g;  // a dim `\e[2m…\e[0m` run = gh
  *    typing replaces it), so strip dim spans before reading the box — otherwise
  *    every send into a session showing a suggestion fails draft-clear-failed.
  */
-const draftOf = (ansiPane: string): string => {
+export const draftOf = (ansiPane: string): string => {
   const boxLine = ansiPane.split('\n').filter((l) => l.replace(SGR, '').startsWith('❯')).at(-1);
   if (boxLine === undefined) return '';
   return boxLine.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim();
