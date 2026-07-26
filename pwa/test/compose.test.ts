@@ -71,7 +71,21 @@ describe('splitClipPaths', () => {
     expect(splitClipPaths('nothing here')).toEqual({ paths: [], rest: 'nothing here' });
   });
 
-  it('collapses blank lines left behind by removing an interior path', () => {
+  it('keeps a deliberate blank line when there is no path at all', () => {
+    expect(splitClipPaths('paragraph one\n\nparagraph two')).toEqual({
+      paths: [],
+      rest: 'paragraph one\n\nparagraph two',
+    });
+  });
+
+  it('keeps a deliberate blank line in a message that DOES carry a path', () => {
+    expect(splitClipPaths(`${P1}\npara one\n\npara two`)).toEqual({
+      paths: [P1],
+      rest: 'para one\n\npara two',
+    });
+  });
+
+  it('drops the line a path leaves empty, without merging the paragraphs around it', () => {
     expect(splitClipPaths(`line one\n${P1}\nline two`)).toEqual({
       paths: [P1],
       rest: 'line one\nline two',

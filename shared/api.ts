@@ -123,12 +123,32 @@ export function composePrompt(text: string, attachments: readonly string[]): str
  */
 export function splitClipPaths(text: string): { paths: string[]; rest: string } {
   const paths: string[] = [];
-  const rest = text.replace(new RegExp(CLIP_PATH_RE.source, 'g'), (match) => {
-    if (!paths.includes(match)) paths.push(match);
-    return '';
+  const lines = text.split('\n');
+
+  const cleanedLines = lines.map((line) => {
+    // Track if line was non-empty before processing
+    const wasNonEmpty = line.trim() !== '';
+
+    // Remove paths from this line
+    let cleaned = line.replace(new RegExp(CLIP_PATH_RE.source, 'g'), (match) => {
+      if (!paths.includes(match)) paths.push(match);
+      return '';
+    });
+
+    // Clean up intra-line whitespace
+    cleaned = cleaned.replace(/[^\S\n]+/g, ' ').trim();
+
+    // If line was non-empty before but is now empty, it held only a path: drop it.
+    // If line was already empty (deliberate blank line), keep it.
+    if (wasNonEmpty && cleaned === '') {
+      return null; // Mark for removal
+    }
+
+    return cleaned;
   });
-  return {
-    paths,
-    rest: rest.replace(/[^\S\n]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n\n+/g, '\n').trim(),
-  };
+
+  // Filter out null entries (lines that were emptied by path removal)
+  const rest = cleanedLines.filter((line): line is string => line !== null).join('\n').trim();
+
+  return { paths, rest };
 }
