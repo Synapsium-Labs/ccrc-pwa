@@ -583,6 +583,19 @@ cmd_menu() {   # interactive picker → attach. The universal entry point for an
   exec tmux attach -t "$(_tmux "$id")"
 }
 
+# <dir> <src> — destination for a filed clip. Split out of cmd_clip so it can be
+# sourced and asserted: cmd_clip dies at `_alive` long before it gets here.
+# Keeps the SOURCE extension (this used to hardcode .png, so a JPEG lied about
+# its format) and adds a random suffix (the 1s stamp let two clips in the same
+# second mv -f over each other).
+_clip_dest() {
+  local dir="$1" src="$2" ext
+  ext="${src##*.}"
+  ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
+  case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+  printf '%s/clip-%s-%04x.%s\n' "$dir" "$(date +%Y%m%d-%H%M%S)" "$((RANDOM % 65536))" "$ext"
+}
+
 cmd_clip() {   # <png-path> [id] — file an image into a session and inject its path into the prompt.
   # Default target is the session of the most-recently-active ATTACHED client (i.e. the one you're
   # looking at). Pass an explicit id to override. The path is typed (no Enter) so you add your text.
@@ -595,7 +608,7 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
   fi
   _alive "$id" || die "session not alive: $id"
   local dir="$HOME/.cc-clips/$id"; mkdir -p "$dir"
-  local dest="$dir/clip-$(date +%Y%m%d-%H%M%S).png"
+  local dest; dest="$(_clip_dest "$dir" "$png")"
   mv -f "$png" "$dest"
   tmux send-keys -t "$(_tmux "$id")" -l "$dest "
   echo "clip -> $dest (injected into $id)"
