@@ -12,6 +12,10 @@ export function isSafeSessionId(id: string): boolean {
     && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
 }
 
+/** One clip filename: no directory part, no dots to climb with. Exported so the
+ *  prompt and clip routes validate against the same shape the writer produces. */
+export const CLIP_NAME_RE = /^clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)$/;
+
 /** `clip-<YYYYmmdd-HHMMSS>-<rand4>.<ext>`. The random suffix is not decoration:
  *  the old one-second stamp let two clips filed in the same second overwrite
  *  each other. The extension is the REAL one — `ccd clip` called everything
@@ -34,7 +38,14 @@ export function clipName(ext: string, now: number, rand: string): string {
  */
 export function clipPath(clipsDir: string, id: string, name: string): string {
   if (!isSafeSessionId(id)) throw new Error('bad-session-id');
-  return path.join(clipsDir, id, name);
+  if (!CLIP_NAME_RE.test(name)) throw new Error('bad-clip-name');
+  const root = path.resolve(clipsDir);
+  const full = path.resolve(root, id, name);
+  // Belt and braces, and NOT dead: the two guards above are lexical, and this is
+  // the assertion that the composed path actually lands inside the clips dir.
+  // An earlier revision dropped it and the `name` argument could escape.
+  if (!full.startsWith(root + path.sep)) throw new Error('bad-clip-name');
+  return full;
 }
 
 /** Save the upload into the session's clips dir and report its path. Nothing is

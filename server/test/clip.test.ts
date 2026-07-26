@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
-import { clipName, clipPath, stageUpload } from '../src/clip.js';
+import { clipName, clipPath, stageUpload, CLIP_NAME_RE } from '../src/clip.js';
 
 const ID = 'claude2-MekWarLive';
 const cfgFor = () => loadConfig({ CCRC_HOME: mkdtempSync(path.join(tmpdir(), 'ccrc-')) });
@@ -45,6 +45,22 @@ describe('clipPath', () => {
   it('builds the path for a well-formed id', () => {
     expect(clipPath('/home/u/.cc-clips', ID, 'clip-x.png'))
       .toBe(`/home/u/.cc-clips/${ID}/clip-x.png`);
+  });
+
+  it('refuses a name that could climb out of the session directory', () => {
+    for (const bad of ['../../.ssh/authorized_keys', '../x.png', 'a/b.png', '..', '.', '',
+                       'notaclip.png', 'clip-x.exe', 'clip-x.png/../../y.png']) {
+      expect(() => clipPath('/home/u/.cc-clips', 'claude2-Proj', bad)).toThrow(/bad-clip-name|bad-session-id/);
+    }
+  });
+
+  it('accepts the names clipName actually produces', () => {
+    for (const ext of ['png', 'jpg', 'jpeg', 'webp']) {
+      const name = clipName(ext, Date.parse('2026-07-26T15:03:40Z'), 'a1b2');
+      expect(CLIP_NAME_RE.test(name)).toBe(true);
+      expect(clipPath('/home/u/.cc-clips', 'claude2-Proj', name))
+        .toBe(`/home/u/.cc-clips/claude2-Proj/${name}`);
+    }
   });
 });
 
