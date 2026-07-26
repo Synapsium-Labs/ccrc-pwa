@@ -151,6 +151,45 @@ describe('write routes', () => {
   });
 });
 
+describe('upload route id handling', () => {
+  const png = (name = 'shot.png') => {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(8)], { type: 'image/png' }), name);
+    return form;
+  };
+
+  it('stages a picked image and returns where it landed', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/upload`, payload: png(),
+    });
+    expect(res.statusCode).toBe(200);
+    const clip = res.json().clip as { path: string; name: string; bytes: number };
+    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{4}\.png$/);
+    expect(clip.path).toContain(`/.cc-clips/${ID}/`);
+  });
+
+  it('refuses a traversing session id before touching the filesystem', async () => {
+    const { app } = await makeApp([null]);
+    for (const bad of ['..%2F..%2F.ssh', '%2Fetc', '..']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${bad}/upload`, payload: png(),
+      });
+      expect([400, 404]).toContain(res.statusCode);
+      expect(res.json().ok).toBe(false);
+    }
+  });
+
+  it('404s an unknown but well-formed session', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'POST', url: '/api/sessions/claude2-NoSuchProject/upload', payload: png(),
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('unknown-session');
+  });
+});
+
 describe('notify ingestion', () => {
   it('POST /api/notify with a swap message emits notice and the session event', async () => {
     const { app, bus } = await makeApp(['❯ \n']);

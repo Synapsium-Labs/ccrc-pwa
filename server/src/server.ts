@@ -19,12 +19,15 @@ import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/sen
 import { readRegistry } from './registry.js';
 import { ccd, listProjects } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
-import { stageUpload } from './clip.js';
+import { isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
+
+/** Post-downscale ceiling for one attachment. */
+const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 
 export interface Deps {
   cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
@@ -281,10 +284,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcd(reply, ['stop', originalWrapper, rec.project]);
   });
 
-  // Image upload: stage the file into ~/.cc-clips/<id>/ and return the path.
-  // The path enters the prompt once, at send time (Task 3).
+  // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.
+  // Nothing is typed into the session — the prompt route injects it at send.
   app.post('/api/sessions/:id/upload', async (req, reply) => {
     const { id } = req.params as { id: string };
+    // Both gates run BEFORE req.file(). Replying without consuming the multipart
+    // body can cost the client the JSON response, so drain first — same reason
+    // the 415 path below calls part.file.resume().
+    if (!isSafeSessionId(id)) {
+      req.raw.resume();
+      return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    }
+    if (!(await knownId(id))) {
+      req.raw.resume();
+      return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    }
     const part = await req.file();
     if (!part) return reply.code(400).send({ ok: false, error: 'bad-request' });
     const m = /\.(png|jpe?g|webp)$/i.exec(part.filename ?? '');
@@ -293,6 +307,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(415).send({ ok: false, error: 'unsupported-type' });
     }
     const data = await part.toBuffer();
+    if (data.byteLength > MAX_UPLOAD_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'too-large' });
+    }
     const clip = await stageUpload(deps.io, deps.cfg, id, data, m[1]!.toLowerCase());
     return { ok: true, clip };
   });
