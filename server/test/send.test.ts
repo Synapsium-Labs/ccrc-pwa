@@ -257,3 +257,33 @@ describe('sendPrompt', () => {
     expect(await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'do the thing')).toEqual({ ok: true });
   });
 });
+
+describe('sendPrompt echo verification', () => {
+  it('waits for a slow pane to render the text instead of calling it a failed send', async () => {
+    // The bug this covers: one capture 200ms after typing raced the TUI's
+    // re-render. Losing that race reported "the session never showed the text"
+    // and — worse — returned BEFORE pressing Enter, so the message sat in the
+    // box until someone hit Enter by hand.
+    const { tmux, calls } = fakeTmux([
+      '❯ \n',                    // initial — empty box
+      '❯ \n',                    // 1st echo poll: not rendered yet
+      '❯ \n',                    // 2nd: still nothing
+      '❯ a slow but real message\n', // 3rd: there it is
+      '❯ \n',                    // after Enter — submitted
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a slow but real message',
+    );
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(true);
+  });
+
+  it('still reports verify-failed when the text never arrives at all', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ \n']); // last pane repeats: never echoes
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'will not appear',
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+  });
+});

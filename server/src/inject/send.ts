@@ -18,6 +18,15 @@ const PANE_TAIL = 2000;
 const SUBMIT_POLL_MS = 120;
 const SUBMIT_TRIES = 8;
 
+/** How long to wait for the input box to echo the typed text (~2.4 s total).
+ *  A busy pane re-renders lazily; the old single 200 ms check called that a
+ *  failed send. */
+const ECHO_POLL_MS = 200;
+const ECHO_TRIES = 12;
+/** Prefix matched against the pane. Short enough to sit on the box's first
+ *  visual line, so a wrapped message can't split it across a line break. */
+const ECHO_NEEDLE = 24;
+
 const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
 const DIM_SPAN = /\x1b\[2m[^\x1b]*\x1b\[0m/g;  // a dim `\e[2m…\e[0m` run = ghost/placeholder text
 
@@ -103,11 +112,22 @@ export function sendPrompt(
       await d.tmux.sendLiteral(id, parts[i]!);
     }
 
-    await sleep(200);
-    const after = await d.tmux.capture(id);
-    const needle = parts.find((p) => p.trim().length > 0)?.slice(0, 30) ?? '';
-    if (after === null || (needle !== '' && !after.includes(needle))) {
-      return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
+    // Wait for the box to echo what we typed. This POLLS rather than taking one
+    // capture 200ms in: the single shot raced the TUI's re-render, and losing
+    // that race reported "the session never showed the text" for a message that
+    // was sitting in the box perfectly — we then bailed before pressing Enter,
+    // so it stayed there until someone hit Enter by hand. A slow render is not
+    // a failed send. The needle stays short and comes from the FIRST line, which
+    // the box never wraps (it starts at column 2), so wrapping can't split it.
+    const needle = parts.find((p) => p.trim().length > 0)?.slice(0, ECHO_NEEDLE) ?? '';
+    let after: string | null = null;
+    for (let i = 0; i < ECHO_TRIES; i++) {
+      await sleep(ECHO_POLL_MS);
+      after = await d.tmux.capture(id);
+      if (after !== null && (needle === '' || after.includes(needle))) break;
+      if (i === ECHO_TRIES - 1) {
+        return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
+      }
     }
 
     // Enter is not reliably a submit. Claude Code's box swallows it while an

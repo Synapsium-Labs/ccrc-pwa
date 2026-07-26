@@ -64,7 +64,11 @@ function TaskRow({ task }: { task: TaskItem }): ReactNode {
 }
 
 export function TaskStrip({ tasks }: { tasks: TaskItem[] }): ReactNode {
-  const [open, setOpen] = useState(false);
+  // Open by default — the terminal shows the ROWS, and a collapsed headline
+  // reads as "the task list still isn't here". Outstanding work is short by
+  // construction (the completed pile is what grows, and that stays folded), so
+  // the rows cost a few lines, not a screen.
+  const [open, setOpen] = useState(true);
   const [showDone, setShowDone] = useState(false);
   if (tasks.length === 0) return null;
 
@@ -96,7 +100,7 @@ export function TaskStrip({ tasks }: { tasks: TaskItem[] }): ReactNode {
         </span>
       </button>
 
-      {!open && <p className="task-summary">{summarize(tasks)}</p>}
+      <p className="task-summary">{summarize(tasks)}</p>
 
       {open && (
         <ol className="task-rows">
