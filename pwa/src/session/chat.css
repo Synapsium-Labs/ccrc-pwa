@@ -1818,20 +1818,28 @@ button.metachip:active {
 /* Hit area without a 44px box. Reaches the 44px floor in WIDTH (the
    containing block for this inset is .attach-remove's PADDING edge, not its
    border edge — its 1px border shrinks it by 2px, so -5/…/-21 on the
-   right/left, not -4/…/-20, to land on 44 there): measured 44×24px.
-   HEIGHT can't reach 44: .attach-chip's parent, .attach-tray, has
-   overflow-x:auto, which per the CSS overflow spec forces overflow-y to
-   compute to 'auto' too (never 'visible') — confirmed in real Chromium that
-   this clips ANY child content above y=0 or below y=72 (the chip's own
-   72px), full stop, so there is no "extend outward" escape the way the
-   width has (sideways, past the chip, is the direction .attach-tray leaves
-   open for scrolling). The full 72px is shared with .attach-chip-retry
-   below (a failed chip's recovery action), which gets the larger share on
-   purpose — see that rule's comment. 24px vertically is still a real
-   improvement over this button's own 20px circle, just short of the touch
-   floor; the task-10 report has the full grid-verified numbers for both
-   controls and the reasoning for the split. */
-.attach-remove::after { content: ''; position: absolute; inset: -5px -5px -2px -21px; }
+   right/left, not -4/…/-20, to land on 44 there). HEIGHT can't reach 44 on
+   a failed chip only (see the scoped rule below) — everywhere else there is
+   nothing competing for the vertical budget, so the full floor applies.
+   .attach-chip's parent, .attach-tray, has overflow-x:auto, which per the
+   CSS overflow spec forces overflow-y to compute to 'auto' too (never
+   'visible') — confirmed in real Chromium that this clips ANY child content
+   above y=0 or below y=72 (the chip's own 72px), full stop, so there is no
+   "extend outward" escape the way the width has (sideways, past the chip,
+   is the direction .attach-tray leaves open for scrolling). Measured
+   (real Chromium, built CSS): 44×43px on staged/uploading (1px short of the
+   floor purely from that same y=0 clip eating the top of the on-paper -5px
+   inset — not a competing control, just the same clip). See the task-10
+   report for the full grid-verified numbers. */
+.attach-remove::after { content: ''; position: absolute; inset: -5px -5px -21px -21px; }
+/* On a failed chip only, .attach-chip-retry (above) competes for the same
+   72px of vertical room — see its comment for why it gets the larger
+   share. Scoped so staged/uploading chips (the common case, with no retry
+   button to share space with) keep the uncontested inset above; ordered
+   after the general rule, and qualified by [data-state='failed'] (higher
+   specificity than the bare .attach-remove::after), so this wins only
+   where it applies. Measured: 44×24px. */
+.attach-chip[data-state='failed'] .attach-remove::after { inset: -5px -5px -2px -21px; }
 
 /* Desktop drop target. */
 .composer[data-drop='true'] .inputbar {

@@ -109,4 +109,18 @@ describe('AttachTray', () => {
     expect(screen.queryByText('retry')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
   });
+
+  // Regression guard for an Important real-browser finding: the shrunk
+  // .attach-remove hit-box (needed only on a failed chip, to leave room for
+  // .attach-chip-retry) was applied with a bare `.attach-remove::after`
+  // selector, so staged/uploading chips — which have no retry button
+  // competing for anything — silently lost the same height for no reason.
+  // Guard the source directly, same style as the `all: unset` guard above:
+  // the scoped selector must exist, so a later "simplify this CSS" pass
+  // can't quietly flatten it back to one unscoped rule.
+  it('scopes the shrunk remove hit-area to failed chips only', () => {
+    const cssPath = path.resolve(process.cwd(), 'src/session/chat.css');
+    const css = readFileSync(cssPath, 'utf8');
+    expect(css).toMatch(/\.attach-chip\[data-state=['"]failed['"]\]\s+\.attach-remove::after\s*\{[^}]*\}/);
+  });
 });
