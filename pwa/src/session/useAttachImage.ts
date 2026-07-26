@@ -2,7 +2,7 @@
 // pasting a screenshot straight into the prompt. Both end in the same place —
 // downscale if needed, upload, and let the server's `ccd clip` type the saved
 // file's path into the session's input box.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
 
@@ -110,4 +110,124 @@ export function useAttachImage(
   };
 
   return { busy, attach };
+}
+
+// — Staged-images tray: the composer's replacement for the fire-and-forget
+// AttachButton above. Task 10 builds the tray markup, Task 11 wires it into
+// the composer and retires useAttachImage/clipboardImage/AttachButton — until
+// then both hooks live here side by side. —
+
+/** Every image on the clipboard. Text pastes give []. */
+export function clipboardImages(data: DataTransfer | null): File[] {
+  return Array.from(data?.items ?? [])
+    .filter((i) => i.kind === 'file' && i.type.startsWith('image/'))
+    .map((i) => i.getAsFile())
+    .filter((f): f is File => f !== null);
+}
+
+export const MAX_IMAGES = 4;
+
+export interface StagedImage {
+  key: string;
+  file: File;
+  previewUrl: string;
+  state: 'uploading' | 'staged' | 'failed';
+  path?: string;
+  width?: number;
+  height?: number;
+  error?: string;
+}
+
+export interface StagedImages {
+  images: StagedImage[];
+  add: (files: readonly File[]) => void;
+  remove: (key: string) => void;
+  retry: (key: string) => void;
+  /** Empty the tray WITHOUT revoking — send hands the object URLs to the
+   *  PendingSend, which shows them and revokes them when it resolves. */
+  release: () => void;
+  uploading: boolean;
+  hasFailed: boolean;
+}
+
+export function useStagedImages(
+  id: string,
+  downscale: (file: File) => Promise<Blob> = downscaleImage,
+): StagedImages {
+  const [images, setImages] = useState<StagedImage[]>([]);
+  const seq = useRef(0);
+
+  const patch = (key: string, next: Partial<StagedImage>): void =>
+    setImages((cur) => cur.map((i) => (i.key === key ? { ...i, ...next } : i)));
+
+  const upload = async (key: string, file: File): Promise<void> => {
+    try {
+      const keepOriginal = file.type === 'image/png' && file.size < SMALL_PNG_MAX;
+      let payload = file;
+      if (!keepOriginal) {
+        const blob = await downscale(file);
+        const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+        payload = new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, { type: blob.type });
+      }
+      // Measure the PAYLOAD on both branches — the caption answers "did the
+      // downscale ruin my screenshot", and keepOriginal never decodes otherwise.
+      const bitmap = await createImageBitmap(payload);
+      const width = bitmap.width;
+      const height = bitmap.height;
+      bitmap.close();
+      const clip = await api.upload(id, payload);
+      patch(key, { state: 'staged', path: clip.path, width, height, error: undefined });
+    } catch (err) {
+      patch(key, { state: 'failed', error: apiErrorText(err) });
+    }
+  };
+
+  const add = (files: readonly File[]): void => {
+    const accepted: StagedImage[] = [];
+    setImages((cur) => {
+      const room = MAX_IMAGES - cur.length;
+      if (files.length > room) toast(`Four images per message — send these first`, 'error');
+      for (const file of files.slice(0, Math.max(0, room))) {
+        const named = namedClipboardImage(file, Date.now() + accepted.length);
+        if (named === null) {
+          toast(`Can't attach ${file.type || 'that'} — PNG, JPEG or WebP only`, 'error');
+          continue;
+        }
+        seq.current += 1;
+        accepted.push({
+          key: `img${seq.current}`,
+          file: named,
+          previewUrl: URL.createObjectURL(named),
+          state: 'uploading',
+        });
+      }
+      return [...cur, ...accepted];
+    });
+    for (const img of accepted) void upload(img.key, img.file);
+  };
+
+  const remove = (key: string): void =>
+    setImages((cur) => {
+      const gone = cur.find((i) => i.key === key);
+      if (gone) URL.revokeObjectURL(gone.previewUrl);
+      return cur.filter((i) => i.key !== key);
+    });
+
+  const retry = (key: string): void => {
+    const img = images.find((i) => i.key === key);
+    if (!img || img.state !== 'failed') return;
+    patch(key, { state: 'uploading', error: undefined });
+    void upload(key, img.file);
+  };
+
+  // Deliberately does NOT revoke: at send the object URLs pass to the
+  // PendingSend, which renders them in the optimistic bubble and revokes them
+  // when it confirms or is discarded. Revoking here would blank that bubble.
+  const release = (): void => setImages([]);
+
+  return {
+    images, add, remove, retry, release,
+    uploading: images.some((i) => i.state === 'uploading'),
+    hasFailed: images.some((i) => i.state === 'failed'),
+  };
 }

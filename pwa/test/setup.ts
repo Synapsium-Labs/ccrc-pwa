@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest';
+import { vi } from 'vitest';
 
 // jsdom gaps touched by vaul/radix (the Sheet primitive). All guarded so a
 // future jsdom that implements them wins automatically.
@@ -57,3 +58,10 @@ if (typeof window !== 'undefined') {
     return false;
   };
 }
+
+// jsdom has neither object URLs nor an image decoder.
+let objectUrlSeq = 0;
+URL.createObjectURL = vi.fn(() => `blob:mock/${++objectUrlSeq}`);
+URL.revokeObjectURL = vi.fn();
+globalThis.createImageBitmap = vi.fn(async () =>
+  ({ width: 2788, height: 442, close: () => {} }) as unknown as ImageBitmap);
