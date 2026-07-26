@@ -259,6 +259,57 @@ describe('sendPrompt', () => {
   });
 });
 
+// Claude Code 2.1.220 does NOT empty the box on Enter when the session is
+// busy — it queues the turn and swaps the box row for a hint ("Press up to
+// edit queued messages"), captured live against a real busy session. The old
+// emptiness-only proof burned both Enter attempts on every busy-session send
+// and reported a message that WAS delivered as `enter-ignored`. `submitted()`
+// now proves submission by OUR TEXT leaving the box (no longer starting with
+// the echo needle), falling back to the emptiness check only when there is no
+// needle to prove left.
+describe('sendPrompt submission proof survives a busy session queueing the message', () => {
+  it('busy session: box swaps to the queue hint (not empty) — counts as submitted, only one Enter', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ \n',                                    // initial — empty draft
+      '❯ ship it\n',                              // echo verify — box shows our text
+      '❯ Press up to edit queued messages\n',     // after Enter — CC queued it; box never empties
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ship it');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'Enter')).toHaveLength(1);
+  });
+
+  it('genuinely stuck: our text sits unchanged through both attempts — still enter-ignored', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ \n',                    // initial — empty
+      '❯ stuck words here\n',    // echo verify, then repeats: box never changes after either Enter
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'stuck words here');
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'stuck words here' });
+    expect(sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'Enter')).toHaveLength(2);
+  });
+
+  it('ordinary idle send: box empties as before — still ok with a single Enter', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ \n',            // initial — empty
+      '❯ plain send\n',  // echo verify
+      '❯ \n',            // after Enter — box emptied
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'plain send');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'Enter')).toHaveLength(1);
+  });
+
+  it('whitespace-only prompt (empty needle) still uses the emptiness fallback', async () => {
+    // No non-blank line in the composed text, so there is nothing for the box
+    // to "no longer start with" — `submitted` must fall back to `draftOf === ''`.
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ \n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '   ');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'Enter')).toHaveLength(1);
+  });
+});
+
 describe('sendPrompt with attachments', () => {
   const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
 

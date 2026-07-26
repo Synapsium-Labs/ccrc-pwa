@@ -51,21 +51,33 @@ const draftOf = (ansiPane: string): string => {
 };
 
 /**
- * Did the turn actually leave the input box? An emptied box is the only proof
- * Enter was accepted — a message sent to a BUSY session empties the box too
- * (Claude Code queues it), and a pane whose box has stopped rendering counts as
- * gone rather than stuck.
+ * Did the turn actually leave the input box? Proof is that OUR TEXT is gone —
+ * not that the box is empty. Claude Code 2.1.220, when busy, does not empty
+ * the box on Enter: it queues the message and swaps the row for a hint
+ * ("Press up to edit queued messages"), which is not '' and never becomes ''
+ * while the hint is up. Judging success by emptiness alone burned both Enter
+ * attempts on every busy-session send and reported a message that WAS
+ * delivered as `enter-ignored`.
+ *
+ * `needle` is the same prefix the echo check proved landed in the box, so
+ * "no longer starts with needle" means our text left — however the row now
+ * reads: today's queue hint, the dim ghost-suggestion `draftOf` already
+ * strips, or whatever chrome a future Claude Code version puts there. When
+ * `needle` is '' (a prompt with no non-blank line), there is nothing to prove
+ * left, so fall back to the emptiness check exactly as before.
  */
 async function submitted(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
+  needle: string,
 ): Promise<boolean> {
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return false;
-    if (draftOf(pane) === '') return true;
+    const draft = draftOf(pane);
+    if (needle === '' ? draft === '' : !draft.startsWith(needle)) return true;
   }
   return false;
 }
@@ -179,13 +191,14 @@ export function sendPrompt(
     // mid-render frame — and the text just sits there. Returning ok:true on the
     // keystroke alone reported success for messages that were never sent: the
     // PWA's optimistic bubble then expired on its own timer and the message
-    // vanished with no error anywhere. So: press, confirm the box emptied,
-    // press once more if it didn't (that second Enter is what submits after an
-    // overlay consumed the first), and only then claim it landed.
+    // vanished with no error anywhere. So: press, confirm OUR TEXT left the box
+    // (see `submitted`), press once more if it didn't (that second Enter is
+    // what submits after an overlay consumed the first), and only then claim
+    // it landed.
     await d.tmux.sendKey(id, 'Enter');
-    if (await submitted(d, id, sleep)) return { ok: true };
+    if (await submitted(d, id, sleep, needle)) return { ok: true };
     await d.tmux.sendKey(id, 'Enter');
-    if (await submitted(d, id, sleep)) return { ok: true };
+    if (await submitted(d, id, sleep, needle)) return { ok: true };
     const stuck = await d.tmux.capture(id);
     return { ok: false, error: 'enter-ignored', draft: draftOf(await d.tmux.captureAnsi(id) ?? ''), pane: (stuck ?? '').slice(-PANE_TAIL) };
   });
