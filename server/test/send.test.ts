@@ -18,6 +18,22 @@ const noSleep = async () => {};
 const CAPTURED_QUEUE_HINT_ROW =
   '\x1b[38;5;246m❯\xa0\x1b[2m\x1b[39mPress up to edit queued messages\x1b[0m';
 
+/**
+ * A real half-typed draft immediately following a dim run, captured from an
+ * actual tmux 3.4 pane (isolated `-L` socket, `capture-pane -e`; the process
+ * that produced it: `printf '❯ \e[2mghost\e[22m\e[1mBOLD REAL\e[0m\n'` typed
+ * into the pane). tmux normalises the dim-off (`\e[22m`) immediately followed
+ * by another attribute turning on (`\e[1m`) into a single COMBINED code,
+ * `\e[0;1m` — not the bare `\e[0m` any fixture had exercised before. This is
+ * the shape that made the round-2 `DIM_SPAN` swallow real text: its
+ * terminator only matched literal `\e[0m`, but its interleaved-code
+ * alternative matched `\e[0;1m` too, so the non-greedy scan absorbed it as
+ * "just another code inside the span" and kept consuming "BOLD REAL" looking
+ * for a bare `\e[0m` that came only at the very end.
+ */
+const TMUX_CAPTURED_COMBINED_RESET_ROW =
+  '❯ \x1b[2mghost\x1b[0;1mBOLD REAL\x1b[0m';
+
 /** Tmux backed by a fake runner: capture-pane returns scripted panes in order (last one repeats; null → code 1). */
 function fakeTmux(panes: (string | null)[]) {
   const calls: string[][] = [];
@@ -372,6 +388,39 @@ describe('draftOf strips the dim queue hint even with an interleaved SGR code', 
     const boxLine =
       `${E}[38;5;246m❯${NBSP}${E}[2m${E}[39mghost text${E}[0m and real text with ${E}[31mcolor${E}[0m more`;
     expect(draftOf(`history\n${boxLine}\n`)).toBe('and real text with color more');
+  });
+});
+
+// Round-3 finding: the round-2 interleaved-tolerant DIM_SPAN accepted ANY SGR
+// code as "just another code inside the span", including reset-family codes
+// like tmux's combined `\e[0;1m` (dim-off + bold-on emitted as one escape).
+// Its terminator only matched the bare `\e[0m`, so the scan ran straight past
+// the point the dim run actually ended and kept consuming real text looking
+// for a bare reset that came later — silently destroying a user's half-typed
+// draft and letting a send type over it. `DIM_SPAN` now excludes reset codes
+// from the interleaved alternative and accepts any reset-family code
+// (`\e[0m`, `\e[0;1m`, …) as the terminator.
+describe('DIM_SPAN does not swallow real text after a tmux combined reset (\\e[0;Nm)', () => {
+  it('draftOf reads the real text after a tmux-normalised combined reset, not empty', () => {
+    // TMUX_CAPTURED_COMBINED_RESET_ROW came back from an actual tmux 3.4
+    // pane (see its definition above) — not hand-authored escapes.
+    expect(draftOf(`history\n${TMUX_CAPTURED_COMBINED_RESET_ROW}\n`)).toBe('BOLD REAL');
+  });
+
+  it('sendPrompt refuses draft-present for that row — the clobber guard — and sends nothing', async () => {
+    const { tmux, calls } = fakeTmux([`history\n${TMUX_CAPTURED_COMBINED_RESET_ROW}\n`]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'URGENT do not send');
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'BOLD REAL' });
+    // Nothing typed, nothing submitted — the send must not type over the draft.
+    expect(sendKeysCalls(calls).some((c) => c.includes('-l'))).toBe(false);
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('every dim case exercised so far is unaffected by the combined-reset fix', () => {
+    expect(draftOf(`some history\n${CAPTURED_QUEUE_HINT_ROW}\n`)).toBe(''); // captured queue hint
+    const E = '\x1b';
+    expect(draftOf(`some history\n${E}[39m❯ ${E}[2mcontinue${E}[0m\n`)).toBe(''); // ghost suggestion
+    expect(draftOf(`history\n${E}[39m❯ half-typed thought\n`)).toBe('half-typed thought'); // plain draft
   });
 });
 

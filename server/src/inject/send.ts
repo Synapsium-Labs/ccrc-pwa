@@ -36,8 +36,22 @@ const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
 // fails, the hint is never stripped, and draftOf reads it as a real draft —
 // blocking the NEXT send with draft-present for a message that never landed.
 // Allow interleaved `\e[...m` codes inside the span, non-greedily so it can't
-// swallow past the nearest `\e[0m` reset into real trailing content.
-const DIM_SPAN = /\x1b\[2m(?:\x1b\[[0-9;]*m|[^\x1b])*?\x1b\[0m/g;
+// swallow past the nearest reset into real trailing content.
+//
+// The terminator itself must accept ANY reset-family code, not just the bare
+// `\e[0m`: tmux 3.4 normalises a dim-off (`\e[22m`) immediately followed by
+// another attribute turning on into a COMBINED code like `\e[0;1m` — verified
+// live (`\e[2mghost\e[22m\e[1mBOLD REAL\e[0m` typed into a real tmux pane
+// captures back as `\e[2mghost\e[0;1mBOLD REAL\e[0m`). A terminator anchored
+// on the literal `\e[0m` alone doesn't match `\e[0;1m`, but the OLD
+// interleaved alternative (`\x1b\[[0-9;]*m`, unconditionally) DID — so the
+// non-greedy scan swallowed `\e[0;1m` as "just another interleaved code" and
+// kept consuming real text ("BOLD REAL") looking for the next bare `\e[0m`,
+// destroying it. The interleaved alternative below excludes any code that
+// starts with `0` (a reset, bare or combined) via a negative lookahead, so a
+// reset — combined or not — always ends the span instead of being absorbed
+// by it, and the terminator itself accepts the combined form.
+const DIM_SPAN = /\x1b\[2m(?:\x1b\[(?!0[;m])[0-9;]*m|[^\x1b])*?\x1b\[0[0-9;]*m/g;
 
 /**
  * Text the user actually typed into the live input box, trimmed; '' when empty.
