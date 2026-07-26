@@ -1,10 +1,11 @@
 // The Mac hotkey lane. `ccd clip` still types the path — correct for a terminal —
 // but it used to name every destination .png regardless of the real format, and
 // its one-second stamp let two clips in the same second overwrite each other.
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 
 const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let isolatedHome: string;
@@ -13,7 +14,13 @@ beforeEach(() => {
   // Create an isolated HOME directory so sourcing ccd does not touch the real home.
   // ccd has file-scope setup (mkdir -p "$REG" with REG="$HOME/.cc-sessions") that
   // runs even when guarded by BASH_SOURCE[0] == $0. The guard only wraps the dispatch case.
-  isolatedHome = fs.mkdtempSync(path.join(__dirname, '../../../.test-home-'));
+  // Use os.tmpdir() to keep temp directories out of the repo.
+  isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccd-home-'));
+});
+
+afterEach(() => {
+  // Clean up the isolated HOME directory after each test.
+  fs.rmSync(isolatedHome, { recursive: true, force: true });
 });
 
 const dest = (src: string): string =>
