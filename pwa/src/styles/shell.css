@@ -41,99 +41,86 @@
     overflow: hidden;
   }
 
-  /* Account usage along the top, full width — each account gets far more room
-     than the narrow sidebar, so meters are long and legible. auto-fit lays the
-     gauges across the width (4-up on wide screens, fewer as it narrows). Hidden
-     until data lands (AccountsStrip renders null while empty → :empty). */
-  /* Auto-hiding: limits are a thing you CHECK, not a thing you watch, so the
-     gauges shouldn't spend a permanent band of screen on every session. The
-     strip rests as a slim hairline rail and opens on hover — or on keyboard
-     focus, so it isn't mouse-only. Grid-row height animates via max-height
-     (the row itself is auto-sized), and the content is clipped meanwhile. */
+  /* Account usage along the top, full width — and PERMANENT. This strip used to
+     auto-hide to a 7px rail, on the theory that limits are a thing you CHECK
+     rather than a thing you watch. The routing policy makes that false: which
+     band a gauge sits in decides where the next task goes, so it is exactly a
+     thing you watch — and hover-to-reveal put the one always-relevant readout in
+     the app behind a gesture (and behind a mouse, on a touch-capable desktop).
+     So it stays open, paid for by folding each gauge from three stacked lines
+     (name / 5h / 7d) down to two — 46px against the old 158px, cheap enough to
+     keep on screen permanently. Hidden only until data lands (AccountsStrip
+     renders null while empty → :empty). */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
-    padding: 0 var(--sp-4);
+    padding: 4px var(--sp-4);
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
-    max-height: 7px;
-    overflow: hidden;
-    transition: max-height var(--dur-base) var(--ease-swift),
-                padding var(--dur-base) var(--ease-swift);
-  }
-  /* The resting rail: a short centred grabber so there is something to aim at. */
-  .shell-accounts::before {
-    content: '';
-    display: block;
-    width: 46px;
-    height: 3px;
-    margin: 2px auto 0;
-    border-radius: var(--r-full);
-    background: var(--edge-strong);
-    transition: opacity var(--dur-fast) var(--ease-swift);
-  }
-  .shell-accounts:hover,
-  .shell-accounts:focus-within {
-    max-height: 240px;
-    padding: var(--sp-2) var(--sp-4);
-  }
-  .shell-accounts:hover::before,
-  .shell-accounts:focus-within::before {
-    opacity: 0;
-    height: 0;
-    margin: 0;
   }
   .shell-accounts:empty {
     display: none;
   }
-  @media (prefers-reduced-motion: reduce) {
-    .shell-accounts {
-      transition: none;
-    }
-  }
+  /* One gauge per account across the width. 260px is all a gauge needs now that
+     the name sits beside its windows rather than above them, so all four stay
+     side by side down to ~1100px of viewport; below that auto-fit drops to fewer
+     columns and the strip grows a row rather than truncating a readout. */
   .shell-accounts .accounts-strip {
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: var(--sp-3);
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--sp-2);
     margin: 0;
   }
-  /* Gauge: a self-contained little card — account name ABOVE its two windows,
-     higher-contrast numbers (% leads: ink-primary/medium; window + reset
-     secondary). The two window rows sit tight together. */
+  /* Gauge: the account name moves from ABOVE its windows to BESIDE them, which is
+     where the height comes from — three stacked lines become two. The windows
+     stay stacked on purpose. Folding them side by side as well fits in one 30px
+     line, but at this width it starves the meters (43px at 1728px, 18px at
+     1440px), and a gauge you cannot read is not worth the 15px. Stacked, the
+     meters keep ~230px and the whole strip still lands near a quarter of the old
+     open height. */
   .shell-accounts .account-gauge {
-    display: grid;
-    gap: 2px;
-    padding: var(--sp-2) var(--sp-3);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 2px var(--sp-3);
     background: var(--bg-raised);
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-md);
   }
   .shell-accounts .account-gauge-label {
-    font-size: var(--text-sm);
+    flex: none;
+    font-size: var(--text-xs);
   }
   .shell-accounts .acct-rows {
+    flex: 1;
+    min-width: 0;
     gap: 1px;
   }
+  /* The meter is the only elastic column, so it — never a number — is what gives
+     when the window narrows, down to a 40px floor below which it stops reading as
+     a gauge at all. Nothing here needs to reset a height: the 52px touch-target
+     that used to leak into these rows from the account PICKER sharing the class
+     name is scoped away at its source now (`.acct-list .acct-row`, fleet.css). */
   .shell-accounts .acct-row {
-    grid-template-columns: 2.2em minmax(0, 1fr) auto auto;
-    gap: var(--sp-2);
+    min-width: 0;
+    grid-template-columns: auto minmax(40px, 1fr) auto auto;
+    gap: 5px;
     align-items: center;
     line-height: 1.25;
   }
   .shell-accounts .acct-win {
     color: var(--ink-secondary);
-    font-size: var(--text-xs);
   }
+  /* The percentage leads: primary ink, medium, one step up in size. */
   .shell-accounts .acct-pct {
     color: var(--ink-primary);
     font-weight: var(--weight-medium);
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
   }
   .shell-accounts .acct-reset {
     color: var(--ink-secondary);
-    font-size: var(--text-xs);
   }
   .shell-accounts .acct-meter {
-    height: 6px;
+    height: 5px;
   }
 
   .shell-nav {

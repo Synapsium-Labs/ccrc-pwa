@@ -496,7 +496,15 @@
   display: grid;
   border-top: 1px solid var(--edge-subtle);
 }
-.acct-row {
+/* Scoped to the list on purpose. `.acct-row` names two unrelated things: this
+   tappable picker row (52px touch target, hairline separator, press-compress)
+   and the accounts strip's usage readout further down this file. Unscoped, every
+   readout row inherited this 52px floor plus the padding and bottom border — which
+   is where the desktop limits band's height actually went, and the mobile strip's
+   with it. The picker rows are always inside `.acct-list` (SwapSheet, and
+   NewSessionSheet via the same list), so scoping here fixes it at the source and
+   costs the readout nothing. */
+.acct-list .acct-row {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -510,7 +518,7 @@
   cursor: pointer;
   transition: transform var(--dur-press) var(--ease-swift);
 }
-.acct-row:active {
+.acct-list .acct-row:active {
   transform: scale(0.97);
 }
 .acct-suggested {
@@ -675,7 +683,7 @@
   .card-open,
   .notice-x,
   .acct-change,
-  .acct-row,
+  .acct-list .acct-row,
   .proj-row,
   .proj-search {
     transition: none;
