@@ -30,6 +30,18 @@ describe('clipPath', () => {
     expect(() => clipPath('/home/u/.cc-clips', 'a/b', 'clip-x.png')).toThrow('bad-session-id');
   });
 
+  it('refuses an id that is not a single path segment', () => {
+    for (const bad of ['', '.', '..', 'a/b', '/etc', 'a\\b', 'a\0b']) {
+      expect(() => clipPath('/home/u/.cc-clips', bad, 'clip-x.png')).toThrow('bad-session-id');
+    }
+  });
+
+  it('accepts every real session id shape', () => {
+    for (const ok of ['claude2-OpenClawHetzner', 'claude-corp-data-internal', 'gpt-MekWarLive']) {
+      expect(clipPath('/home/u/.cc-clips', ok, 'clip-x.png')).toBe(`/home/u/.cc-clips/${ok}/clip-x.png`);
+    }
+  });
+
   it('builds the path for a well-formed id', () => {
     expect(clipPath('/home/u/.cc-clips', ID, 'clip-x.png'))
       .toBe(`/home/u/.cc-clips/${ID}/clip-x.png`);

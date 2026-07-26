@@ -4,6 +4,14 @@ import type { StagedClip } from '../../shared/api.js';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 
+/** A session id safe to use as a single path component. Exported because the
+ *  upload and clip routes gate on the same rule before any filesystem work —
+ *  one definition, so the two cannot drift. */
+export function isSafeSessionId(id: string): boolean {
+  return id.length > 0 && id !== '.' && id !== '..'
+    && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
+}
+
 /** `clip-<YYYYmmdd-HHMMSS>-<rand4>.<ext>`. The random suffix is not decoration:
  *  the old one-second stamp let two clips filed in the same second overwrite
  *  each other. The extension is the REAL one — `ccd clip` called everything
@@ -25,11 +33,8 @@ export function clipName(ext: string, now: number, rand: string): string {
  * protects every future caller, not one handler.
  */
 export function clipPath(clipsDir: string, id: string, name: string): string {
-  if (id.includes(path.sep) || id.includes('..')) throw new Error('bad-session-id');
-  const root = path.resolve(clipsDir);
-  const full = path.resolve(root, id, name);
-  if (!full.startsWith(root + path.sep)) throw new Error('bad-session-id');
-  return full;
+  if (!isSafeSessionId(id)) throw new Error('bad-session-id');
+  return path.join(clipsDir, id, name);
 }
 
 /** Save the upload into the session's clips dir and report its path. Nothing is

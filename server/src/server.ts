@@ -281,8 +281,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcd(reply, ['stop', originalWrapper, rec.project]);
   });
 
-  // Image upload: save under uploadsDir, then `ccd clip` moves it into
-  // ~/.cc-clips/<id>/ and types its path into the session's prompt.
+  // Image upload: stage the file into ~/.cc-clips/<id>/ and return the path.
+  // The path enters the prompt once, at send time (Task 3).
   app.post('/api/sessions/:id/upload', async (req, reply) => {
     const { id } = req.params as { id: string };
     const part = await req.file();
