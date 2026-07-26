@@ -1718,3 +1718,82 @@ button.metachip:active {
 }
 /* Links in user bubbles inherit the on-bubble ink but stay underlined. */
 .msg-user a { color: inherit; text-underline-offset: 3px; }
+
+/* Attachment tray — the chips ARE the confirmation that an image is attached,
+   which is why the old "Image attached…" toast is gone. */
+.attach-tray {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+.attach-chip {
+  position: relative;
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--edge-subtle);
+  background: var(--bg-well);
+  overflow: hidden;
+  scroll-snap-align: start;
+}
+.attach-chip[data-state='failed'] { border-color: var(--status-dead); }
+.attach-chip-retry { all: unset; display: block; width: 100%; height: 100%; cursor: pointer; }
+.attach-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-chip[data-state='uploading'] .attach-thumb { opacity: 0.55; }
+.attach-chip[data-state='uploading']::before {
+  content: '';
+  position: absolute;
+  inset: 24px;
+  border-radius: var(--r-full);
+  border: 2px solid var(--accent-tint);
+  border-top-color: var(--accent);
+  animation: attach-spin var(--caret-period) linear infinite;
+  z-index: 1;
+}
+.attach-strip {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 2px 4px;
+  background: linear-gradient(transparent, rgba(4, 6, 5, 0.72));
+  color: var(--ink-on-well);
+  font: var(--weight-regular) var(--text-2xs) / 1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.attach-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  border: 1px solid var(--edge-strong);
+  background: var(--bg-sheet);
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  cursor: pointer;
+  z-index: 2;
+}
+/* 44px hit area without a 44px box — the .toast-action trick. */
+.attach-remove::after { content: ''; position: absolute; inset: -12px; }
+
+/* Desktop drop target. */
+.composer[data-drop='true'] .inputbar {
+  border-color: var(--accent);
+  border-style: dashed;
+  background: var(--accent-tint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attach-chip[data-state='uploading']::before {
+    animation: none;
+    border-top-color: var(--accent-tint);
+  }
+}
