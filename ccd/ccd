@@ -593,7 +593,7 @@ _clip_dest() {
   ext="${src##*.}"
   ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
   case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
-  printf '%s/clip-%s-%04x.%s\n' "$dir" "$(date +%Y%m%d-%H%M%S)" "$((RANDOM % 65536))" "$ext"
+  printf '%s/clip-%s-%08x.%s\n' "$dir" "$(date +%Y%m%d-%H%M%S)" "$(( (RANDOM << 15) | RANDOM ))" "$ext"
 }
 
 cmd_clip() {   # <png-path> [id] — file an image into a session and inject its path into the prompt.

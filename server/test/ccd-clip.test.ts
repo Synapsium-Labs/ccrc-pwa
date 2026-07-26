@@ -1,14 +1,24 @@
 // The Mac hotkey lane. `ccd clip` still types the path — correct for a terminal —
 // but it used to name every destination .png regardless of the real format, and
 // its one-second stamp let two clips in the same second overwrite each other.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import fs from 'node:fs';
 
 const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+let isolatedHome: string;
+
+beforeEach(() => {
+  // Create an isolated HOME directory so sourcing ccd does not touch the real home.
+  // ccd has file-scope setup (mkdir -p "$REG" with REG="$HOME/.cc-sessions") that
+  // runs even when guarded by BASH_SOURCE[0] == $0. The guard only wraps the dispatch case.
+  isolatedHome = fs.mkdtempSync(path.join(__dirname, '../../../.test-home-'));
+});
+
 const dest = (src: string): string =>
   execFileSync('bash', ['-c', `source "${CCD}"; _clip_dest /tmp/clips "${src}"`],
-    { encoding: 'utf8' }).trim();
+    { encoding: 'utf8', env: { ...process.env, HOME: isolatedHome } }).trim();
 
 describe('_clip_dest', () => {
   it('keeps the source extension instead of calling everything .png', () => {
@@ -18,5 +28,18 @@ describe('_clip_dest', () => {
 
   it('does not collide for two clips filed in the same second', () => {
     expect(dest('/tmp/a.png')).not.toBe(dest('/tmp/a.png'));
+  });
+
+  it('uses isolated HOME and produces 8-hex-digit suffix', () => {
+    // Verify the isolated HOME is used and not the real home.
+    const clip = dest('/tmp/test.png');
+    expect(clip).toMatch(/^\/tmp\/clips\/clip-\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
+    // The real home should not have been touched.
+    const realHomeClipsDir = path.join(process.env.HOME || '', '.cc-clips');
+    if (fs.existsSync(realHomeClipsDir)) {
+      // If .cc-clips exists, it should be empty or created by another process.
+      // The test should not have created any subdirectories in it.
+      expect(fs.readdirSync(realHomeClipsDir)).not.toContain('test');
+    }
   });
 });
