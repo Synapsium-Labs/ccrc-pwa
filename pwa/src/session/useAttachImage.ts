@@ -156,9 +156,19 @@ export function useStagedImages(
 ): StagedImages {
   const [images, setImages] = useState<StagedImage[]>([]);
   const seq = useRef(0);
+  // React batches state updates, so a second add() in the same tick would not
+  // see the first one's result if we read/write through the functional
+  // setState form. The ref is the single source of truth; state just mirrors
+  // it so renders pick it up.
+  const listRef = useRef<StagedImage[]>([]);
+
+  const commit = (next: StagedImage[]): void => {
+    listRef.current = next;
+    setImages(next);
+  };
 
   const patch = (key: string, next: Partial<StagedImage>): void =>
-    setImages((cur) => cur.map((i) => (i.key === key ? { ...i, ...next } : i)));
+    commit(listRef.current.map((i) => (i.key === key ? { ...i, ...next } : i)));
 
   const upload = async (key: string, file: File): Promise<void> => {
     try {
@@ -183,38 +193,42 @@ export function useStagedImages(
   };
 
   const add = (files: readonly File[]): void => {
+    const cur = listRef.current;
+    const room = MAX_IMAGES - cur.length;
+    if (files.length > room) toast(`Four images per message — send these first`, 'error');
+
+    // Built OUTSIDE any updater: pure, so StrictMode's double-invoke cannot
+    // duplicate chips or leak an extra object URL, and two add() calls in the
+    // same tick each see the other's result via listRef rather than a stale
+    // closure over `cur`.
     const accepted: StagedImage[] = [];
-    setImages((cur) => {
-      const room = MAX_IMAGES - cur.length;
-      if (files.length > room) toast(`Four images per message — send these first`, 'error');
-      for (const file of files.slice(0, Math.max(0, room))) {
-        const named = namedClipboardImage(file, Date.now() + accepted.length);
-        if (named === null) {
-          toast(`Can't attach ${file.type || 'that'} — PNG, JPEG or WebP only`, 'error');
-          continue;
-        }
-        seq.current += 1;
-        accepted.push({
-          key: `img${seq.current}`,
-          file: named,
-          previewUrl: URL.createObjectURL(named),
-          state: 'uploading',
-        });
+    for (const file of files.slice(0, Math.max(0, room))) {
+      const named = namedClipboardImage(file, Date.now() + accepted.length);
+      if (named === null) {
+        toast(`Can't attach ${file.type || 'that'} — PNG, JPEG or WebP only`, 'error');
+        continue;
       }
-      return [...cur, ...accepted];
-    });
+      seq.current += 1;
+      accepted.push({
+        key: `img${seq.current}`,
+        file: named,
+        previewUrl: URL.createObjectURL(named),
+        state: 'uploading',
+      });
+    }
+    if (accepted.length === 0) return;
+    commit([...cur, ...accepted]);
     for (const img of accepted) void upload(img.key, img.file);
   };
 
-  const remove = (key: string): void =>
-    setImages((cur) => {
-      const gone = cur.find((i) => i.key === key);
-      if (gone) URL.revokeObjectURL(gone.previewUrl);
-      return cur.filter((i) => i.key !== key);
-    });
+  const remove = (key: string): void => {
+    const gone = listRef.current.find((i) => i.key === key);
+    if (gone) URL.revokeObjectURL(gone.previewUrl);
+    commit(listRef.current.filter((i) => i.key !== key));
+  };
 
   const retry = (key: string): void => {
-    const img = images.find((i) => i.key === key);
+    const img = listRef.current.find((i) => i.key === key);
     if (!img || img.state !== 'failed') return;
     patch(key, { state: 'uploading', error: undefined });
     void upload(key, img.file);
@@ -223,7 +237,7 @@ export function useStagedImages(
   // Deliberately does NOT revoke: at send the object URLs pass to the
   // PendingSend, which renders them in the optimistic bubble and revokes them
   // when it confirms or is discarded. Revoking here would blank that bubble.
-  const release = (): void => setImages([]);
+  const release = (): void => commit([]);
 
   return {
     images, add, remove, retry, release,

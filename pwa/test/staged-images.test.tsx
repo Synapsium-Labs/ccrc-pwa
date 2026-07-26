@@ -1,5 +1,6 @@
 // The staged-images hook on its own. A tiny harness stands in for the tray so
 // this task does not depend on Task 10's markup or Task 11's composer wiring.
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ToastHost } from '../src/components/Toast';
@@ -13,12 +14,26 @@ const CLIP = { path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', name: 'cl
 const shot = (name = 'shot.png') => new File(['tiny'], name, { type: 'image/png' });
 
 /** Renders the hook's state as plain text, so assertions read the hook and not
- *  a component's styling choices. */
-function Harness({ files }: { files: File[] }): React.ReactNode {
+ *  a component's styling choices. `second`, when given, wires up an
+ *  "add-twice" button that calls `add()` twice synchronously in the same
+ *  handler — the same tick two paste/drop events would land in, and the case
+ *  that silently dropped the second upload before the listRef fix. */
+function Harness({ files, second }: { files: File[]; second?: File[] }): React.ReactNode {
   const s = useStagedImages(ID);
   return (
     <div>
       <button type="button" onClick={() => s.add(files)}>add</button>
+      {second && (
+        <button
+          type="button"
+          onClick={() => {
+            s.add(files);
+            s.add(second);
+          }}
+        >
+          add-twice
+        </button>
+      )}
       <span data-testid="uploading">{String(s.uploading)}</span>
       <span data-testid="failed">{String(s.hasFailed)}</span>
       <ul>
@@ -83,5 +98,54 @@ describe('useStagedImages', () => {
 
     expect(await screen.findByText(/Four images per message/)).toBeInTheDocument();
     expect(screen.queryByTestId('img-s4.png')).not.toBeInTheDocument();
+  });
+
+  // — Regression: two add() calls in the same tick (e.g. paste and drop
+  // landing together) used to lose the second file to React's eager-state
+  // fast path — the first add()'s functional setState updater ran
+  // synchronously, but the second's just enqueued, so its own `accepted`
+  // array was still empty by the time its upload loop ran. Fixed by making
+  // `listRef` — not React state — the single source of truth `add()` reads
+  // and writes through. —
+
+  it('stages both files when add() is called twice in the same tick', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    const x = shot('x.png');
+    const y = shot('y.png');
+    render(<Harness files={[x]} second={[y]} />);
+    fireEvent.click(screen.getByText('add-twice'));
+
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('state-x.png')).toHaveTextContent('staged'));
+    await waitFor(() => expect(screen.getByTestId('state-y.png')).toHaveTextContent('staged'));
+  });
+
+  it('creates exactly one object URL per file under StrictMode', () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    // The shared setup.ts stub persists across this file's tests — clear its
+    // call history so this count reflects only this test's single add().
+    vi.mocked(URL.createObjectURL).mockClear();
+    render(
+      <StrictMode>
+        <Harness files={[shot()]} />
+      </StrictMode>,
+    );
+    fireEvent.click(screen.getByText('add'));
+
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('never leaves a chip stuck uploading with no upload in flight', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    const x = shot('x.png');
+    const y = shot('y.png');
+    render(<Harness files={[x]} second={[y]} />);
+    fireEvent.click(screen.getByText('add-twice'));
+
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByTestId('state-x.png')).not.toHaveTextContent('uploading');
+      expect(screen.getByTestId('state-y.png')).not.toHaveTextContent('uploading');
+    });
   });
 });
