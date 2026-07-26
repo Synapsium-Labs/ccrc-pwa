@@ -31,6 +31,11 @@ const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
 const MAX_ATTACHMENTS = 4;
 
+/** Content-Type for the clip route, keyed by the (real) extension `clipName` wrote. */
+const CLIP_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+};
+
 export interface Deps {
   cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
   /** Remote-mode reachability, straight from `connectFleet().state` — absent
@@ -335,6 +340,31 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const clip = await stageUpload(deps.io, deps.cfg, id, data, m[1]!.toLowerCase());
     return { ok: true, clip };
+  });
+
+  // Thumbnails for sent messages. Names are unique, so the bytes behind one can
+  // never change — hence `immutable`.
+  app.get('/api/sessions/:id/clip/:name', async (req, reply) => {
+    const { id, name } = req.params as { id: string; name: string };
+    if (!isSafeSessionId(id) || !CLIP_NAME_RE.test(name)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // `ccd stop` leaves the registry entry, so a stopped session's thumbnails
+    // still resolve.
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    let file: string;
+    try {
+      file = clipPath(deps.cfg.clipsDir, id, name);
+    } catch {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const b64 = await deps.io.readFileB64(file);
+    if (b64 === null) return reply.code(404).send({ ok: false, error: 'not-found' });
+    const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+    return reply
+      .type(CLIP_MIME[ext] ?? 'application/octet-stream')
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .send(Buffer.from(b64, 'base64'));
   });
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {

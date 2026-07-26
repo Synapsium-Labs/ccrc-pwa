@@ -283,6 +283,57 @@ describe('upload route id handling', () => {
   });
 });
 
+describe('clip route', () => {
+  // Non-repeating, non-zero bytes (including 0x80/0xff, invalid UTF-8 lead/continuation
+  // bytes) so a `send()` that ever touched the buffer as a string would corrupt it.
+  const CLIP_BYTES = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 128, 253, 254, 255]);
+  const pngForm = (name = 'shot.png') => {
+    const form = new FormData();
+    form.append('file', new Blob([CLIP_BYTES], { type: 'image/png' }), name);
+    return form;
+  };
+
+  it('serves a staged clip with an immutable cache header, bytes intact on the wire', async () => {
+    const { app } = await makeApp([null]);
+    const up = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/upload`, payload: pngForm(),
+    });
+    const { name } = up.json().clip as { name: string };
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${name}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['cache-control']).toContain('immutable');
+    // The proof that matters: what actually crossed the wire, byte-for-byte —
+    // not just a 200 with a plausible length.
+    expect(Buffer.compare(res.rawPayload, CLIP_BYTES)).toBe(0);
+  });
+
+  it('refuses a name that is not a clip, and a traversing one', async () => {
+    const { app } = await makeApp([null]);
+    for (const bad of ['..%2F..%2F.ssh%2Fid_rsa', 'notaclip.png', 'clip-x.exe']) {
+      const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${bad}` });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
+  it('404s a clip that is not on disk', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'GET', url: `/api/sessions/${ID}/clip/clip-20260726-150340-a1b2.png`,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('404s a well-formed clip name under an unknown session', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'GET', url: '/api/sessions/claude2-NoSuchProject/clip/clip-20260726-150340-a1b2.png',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('unknown-session');
+  });
+});
+
 describe('notify ingestion', () => {
   it('POST /api/notify with a swap message emits notice and the session event', async () => {
     const { app, bus } = await makeApp(['❯ \n']);
