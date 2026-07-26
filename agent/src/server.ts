@@ -10,6 +10,7 @@ import type {
   PtyExit,
   PtyOpenReq,
   Pong,
+  ReadB64Req,
   ReadFromReq,
   ReadReq,
   ReaddirReq,
@@ -22,7 +23,7 @@ import type {
   TailReset,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
-import { readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
+import { readB64, readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
 import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
@@ -131,6 +132,12 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx): Promise<vo
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
       const result = await readFrom(p, req.offset);
       send(ws, ok(req.id, result ?? { data: null }));
+      return;
+    }
+    case 'readB64': {
+      const p = await checkPath(req.path, ctx.cfg, 'read');
+      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
+      send(ws, ok(req.id, { dataB64: await readB64(p) }));
       return;
     }
     case 'readdir': {
@@ -245,6 +252,10 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
       if (typeof msg.path !== 'string') return null;
       if (typeof msg.offset !== 'number') return null;
       return { t: 'req', id, op: 'readFrom', path: msg.path, offset: msg.offset } satisfies ReadFromReq;
+    }
+    case 'readB64': {
+      if (typeof msg.path !== 'string') return null;
+      return { t: 'req', id, op: 'readB64', path: msg.path } satisfies ReadB64Req;
     }
     case 'readdir': {
       if (typeof msg.path !== 'string') return null;

@@ -45,6 +45,15 @@ describe('remote FleetIO — file ops over the agent WS', () => {
     expect(await f.io.readFileFrom(file, 4)).toEqual({ data: 'efghij', size: 10 });
   });
 
+  it('readFileB64 round-trips binary bytes as base64, null when missing', async () => {
+    const f = await connected();
+    const file = path.join(fixture!.home, '.cc-clips', 'clip.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    writeFileSync(file, bytes);
+    expect(await f.io.readFileB64(file)).toBe(bytes.toString('base64'));
+    expect(await f.io.readFileB64(path.join(fixture!.home, '.cc-clips', 'nope.png'))).toBeNull();
+  });
+
   it('readdir lists names, null when missing', async () => {
     const f = await connected();
     const dir = path.join(fixture!.home, '.cc-sessions', 'sub');

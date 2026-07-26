@@ -11,6 +11,7 @@ import path from 'node:path';
 export interface FleetIO {
   readFile(path: string): Promise<string | null>;                      // null = missing
   readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;
+  readFileB64(path: string): Promise<string | null>;      // null = missing; binary-safe
   readdir(path: string): Promise<string[] | null>;
   stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
   writeFileB64(path: string, dataB64: string): Promise<void>;          // mkdir -p parent
@@ -51,6 +52,10 @@ export const localIO: FleetIO = {
     if (from >= size) return { data: '', size };
     try { return { data: (await readRange(p, from, size)).toString('utf8'), size }; }
     catch { return null; }
+  },
+
+  async readFileB64(p) {
+    try { return (await readFile(p)).toString('base64'); } catch { return null; }
   },
 
   async readdir(p) {

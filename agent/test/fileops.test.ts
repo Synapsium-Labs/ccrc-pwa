@@ -92,6 +92,26 @@ describe('ccrc-agent file ops', () => {
     expect(res).toMatchObject({ ok: false, err: 'forbidden' });
   });
 
+  it('readB64 serves a whitelisted clip as base64, and refuses outside the whitelist', async () => {
+    await open();
+    const bytes = Buffer.from([0x00, 0x01, 0xfe]);
+    const file = path.join(fixture!.home, '.cc-clips', 'clip-x.png');
+    writeFileSync(file, bytes);
+    const res1 = await client!.req<Res>(nextId(), { op: 'readB64', path: file });
+    expect(res1).toMatchObject({ ok: true, dataB64: bytes.toString('base64') });
+    const res2 = await client!.req<Res>(nextId(), { op: 'readB64', path: path.join(fixture!.outside, 'secret.png') });
+    expect(res2).toMatchObject({ ok: false, err: 'forbidden' });
+  });
+
+  it('readB64 returns null for a missing whitelisted file', async () => {
+    await open();
+    const res = await client!.req<Res>(nextId(), {
+      op: 'readB64',
+      path: path.join(fixture!.home, '.cc-clips', 'nope.png'),
+    });
+    expect(res).toMatchObject({ ok: true, dataB64: null });
+  });
+
   it('readdir lists entries for a whitelisted directory', async () => {
     await open();
     const dir = path.join(fixture!.home, '.cc-clips', 'sess1');
