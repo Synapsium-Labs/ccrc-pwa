@@ -42,33 +42,29 @@ describe('TaskStrip', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows the rows by default — the terminal shows a list, not a headline', () => {
+  it('rests as one live line: what is running, the tally, and the counts', () => {
     render(<TaskStrip tasks={PLAN} />);
     expect(screen.getByText('Building claude_spend_reader')).toBeTruthy();
     expect(screen.getByText('2/5')).toBeTruthy();
     expect(screen.getByText('2 running \u00b7 1 left \u00b7 2 \u2713')).toBeTruthy();
-    // Outstanding work is visible without a tap; the completed pile stays folded.
+    // It sits above the composer, so the rows stay out of the way until asked for.
+    expect(screen.queryByText('Task 4: restart poller')).toBeNull();
+  });
+
+  it('expands to the rows, completed folded behind a count', () => {
+    render(<TaskStrip tasks={PLAN} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
     expect(screen.getByText('Task 1: least-priv CH user')).toBeTruthy();
     expect(screen.getByText('Task 4: restart poller')).toBeTruthy();
     expect(screen.getByText('\u2026 +2 completed')).toBeTruthy();
     expect(screen.queryByText('Present design')).toBeNull();
-  });
-
-  it('unfolds the completed pile on request', () => {
-    render(<TaskStrip tasks={PLAN} />);
     fireEvent.click(screen.getByText('\u2026 +2 completed'));
     expect(screen.getByText('Present design')).toBeTruthy();
   });
 
-  it('collapses to a single headline when the rows are in the way', () => {
-    render(<TaskStrip tasks={PLAN} />);
-    fireEvent.click(screen.getByRole('button', { expanded: true }));
-    expect(screen.queryByText('Task 4: restart poller')).toBeNull();
-    expect(screen.getByText('Building claude_spend_reader')).toBeTruthy();
-  });
-
   it('reveals a task\'s description on tap', () => {
     render(<TaskStrip tasks={PLAN} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
     expect(screen.queryByText('why 35')).toBeNull();
     fireEvent.click(screen.getByText('Task 4: restart poller'));
     expect(screen.getByText('why 35')).toBeTruthy();
@@ -115,7 +111,8 @@ describe('SessionScreen shows the plan', () => {
     });
     render(<SessionScreen id="claude:demo" store={store} />);
     expect(screen.getByText('Building claude_spend_reader')).toBeTruthy();
-    expect(screen.getByText('Task 1: least-priv CH user')).toBeTruthy();
     expect(screen.getByText('2/5')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('Task 1: least-priv CH user')).toBeTruthy();
   });
 });

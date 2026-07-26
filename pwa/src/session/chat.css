@@ -60,10 +60,15 @@
      card title (stamped in SessionCard) across the navigation. */
   view-transition-name: session-title;
 }
+/* ONE wrapping row: status, account, model, effort, branch. It was two fixed
+   rows, which spent a line of chat height on every screen to say what fits
+   comfortably on one. Narrow screens wrap it rather than reintroducing the row. */
 .chat-meta {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  flex-wrap: wrap;
+  row-gap: 5px;
 }
 .chat-meta .dot {
   width: 6px;
@@ -85,15 +90,9 @@
 .chat .status-line--dead {
   color: var(--status-dead-text);
 }
-/* Sub-meta row — model / effort / ultracode / branch, from the pane
-   statusline. The model + effort chips are tappable (open their choosers). */
-.chat-submeta {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-  margin-top: 5px;
-}
+/* Model / effort / ultracode / branch chips, from the pane statusline. The
+   model + effort chips are tappable (open their choosers). They share the one
+   .chat-meta row above. */
 .metachip {
   display: inline-flex;
   align-items: center;
@@ -296,13 +295,20 @@ button.metachip:active {
  *  Task strip — the TUI's plan widget, pinned under the header.       *
  *  Collapsed: one live line. Open: the rows, completed folded last.   *
  * ------------------------------------------------------------------ */
+/* Sits directly above the composer, as in the terminal. Because it now eats
+   into the conversation rather than the header, it is capped: a plan with many
+   OPEN tasks scrolls inside itself instead of pushing the chat off screen.
+   (The completed pile stays folded, so this bites rarely.) */
 .task-strip {
   flex: none;
-  margin: var(--sp-2) var(--sp-4) 0;
+  margin: 0 var(--sp-4) var(--sp-2);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   background: var(--bg-surface);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: min(40vh, 320px);
 }
 .task-strip--open {
   border-color: var(--edge-strong);
@@ -376,6 +382,9 @@ button.metachip:active {
   margin: 0;
   padding: 0 0 var(--sp-2);
   border-top: 1px solid var(--edge-subtle);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
 }
 .task-line {
   display: flex;

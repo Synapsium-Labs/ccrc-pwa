@@ -94,15 +94,18 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   return 0
 }
 
-_default_pool() {   # wrapper -> wrappers this session may auto-swap between.
-  # Free swapping across ALL accounts (explicit user decision 2026-07-03).
-  # gpt joins as a normal peer overflow target when enabled (kill-switch off + wrapper present).
+_default_pool() {   # id -> wrappers this session may auto-swap between.
+  # Free swapping across ALL Anthropic accounts (explicit user decision 2026-07-03).
+  # gpt is NOT a general overflow target (user decision 2026-07-26): only a session
+  # whose HOME is gpt may rotate onto it — today that is orchard-api alone.
+  # Everything else stays on Anthropic, so no project silently lands on the Codex
+  # lane with its 272k window and unofficial-client risk.
   # Narrow per session with a space-separated list in the registry `pool` field.
   local pool="${VALID_WRAPPERS[*]}"
-  _gpt_enabled && pool="$pool gpt"
+  [[ "$(_reg_get "$1" home)" == gpt ]] && _gpt_enabled && pool="$pool gpt"
   echo "$pool"
 }
-_pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$(_reg_get "$1" wrapper)"; }
+_pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$1"; }
 
 _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd unit.
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
@@ -476,6 +479,17 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
     fi
   else
     echo "ccd: warn: transcript $uuid.jsonl not found under $cur config; session may resume without history" >&2
+  fi
+  # The task list lives at <configdir>/tasks/<uuid>/ and is keyed by config dir,
+  # so a swap orphans it under the OLD account: the resumed session forgets its
+  # plan entirely (seen 2026-07-26 — custom-tools kept 8 task files under
+  # .claude-gpt while running on claude-corp with an empty list). Carry it over
+  # with the transcript. Copy, don't move: if the swap is reverted the old lane
+  # still has its copy, and a stale dir costs a few KB.
+  if [[ -d "$srccfg/tasks/$uuid" ]]; then
+    mkdir -p "$dstcfg/tasks"
+    cp -r "$srccfg/tasks/$uuid" "$dstcfg/tasks/" 2>/dev/null \
+      || echo "ccd: warn: could not carry the task list across to $target" >&2
   fi
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"

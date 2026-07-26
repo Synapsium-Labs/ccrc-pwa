@@ -187,8 +187,6 @@ export function SessionScreen({
         </div>
       )}
 
-      <TaskStrip tasks={tasks} />
-
       <div className="chat-body">
         {loading ? (
           <div className="chat-skel">
@@ -218,6 +216,10 @@ export function SessionScreen({
           />
         )}
       </div>
+
+      {/* Sits between the conversation and the composer — where the TUI puts it,
+          directly above the prompt you're about to type into. */}
+      <TaskStrip tasks={tasks} />
 
       <Composer
         onSend={(text, replaceDraft) => void useStore.getState().send(text, replaceDraft)}

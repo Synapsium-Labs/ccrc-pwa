@@ -45,15 +45,51 @@
      than the narrow sidebar, so meters are long and legible. auto-fit lays the
      gauges across the width (4-up on wide screens, fewer as it narrows). Hidden
      until data lands (AccountsStrip renders null while empty → :empty). */
+  /* Auto-hiding: limits are a thing you CHECK, not a thing you watch, so the
+     gauges shouldn't spend a permanent band of screen on every session. The
+     strip rests as a slim hairline rail and opens on hover — or on keyboard
+     focus, so it isn't mouse-only. Grid-row height animates via max-height
+     (the row itself is auto-sized), and the content is clipped meanwhile. */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
-    padding: var(--sp-2) var(--sp-4);
+    padding: 0 var(--sp-4);
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
+    max-height: 7px;
+    overflow: hidden;
+    transition: max-height var(--dur-base) var(--ease-swift),
+                padding var(--dur-base) var(--ease-swift);
+  }
+  /* The resting rail: a short centred grabber so there is something to aim at. */
+  .shell-accounts::before {
+    content: '';
+    display: block;
+    width: 46px;
+    height: 3px;
+    margin: 2px auto 0;
+    border-radius: var(--r-full);
+    background: var(--edge-strong);
+    transition: opacity var(--dur-fast) var(--ease-swift);
+  }
+  .shell-accounts:hover,
+  .shell-accounts:focus-within {
+    max-height: 240px;
+    padding: var(--sp-2) var(--sp-4);
+  }
+  .shell-accounts:hover::before,
+  .shell-accounts:focus-within::before {
+    opacity: 0;
+    height: 0;
+    margin: 0;
   }
   .shell-accounts:empty {
     display: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .shell-accounts {
+      transition: none;
+    }
   }
   .shell-accounts .accounts-strip {
     grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

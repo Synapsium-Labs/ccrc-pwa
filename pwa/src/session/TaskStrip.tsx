@@ -1,7 +1,8 @@
-// Task strip — the TUI's plan widget, pinned under the session header. The
-// terminal shows it as a live tree under the spinner; here it collapses to one
-// line (the running task's activeForm plus a count readout) and expands to the
-// rows. Ordering mirrors the terminal exactly: in-progress first, then pending,
+// Task strip — the TUI's plan widget, pinned directly above the composer, which
+// is where the terminal puts it: between the conversation and the prompt you are
+// about to type into. Collapsed to one live line by default — the running task's
+// activeForm plus a count readout — and the header expands it to the rows.
+// Ordering mirrors the terminal exactly: in-progress first, then pending,
 // then completed — struck through and folded behind "… +N completed", because
 // what's left is the news and what's done is the receipt.
 //
@@ -64,11 +65,10 @@ function TaskRow({ task }: { task: TaskItem }): ReactNode {
 }
 
 export function TaskStrip({ tasks }: { tasks: TaskItem[] }): ReactNode {
-  // Open by default — the terminal shows the ROWS, and a collapsed headline
-  // reads as "the task list still isn't here". Outstanding work is short by
-  // construction (the completed pile is what grows, and that stays folded), so
-  // the rows cost a few lines, not a screen.
-  const [open, setOpen] = useState(true);
+  // Collapsed by default: sitting above the composer, an open list spends chat
+  // height on every screen. One live line (what's running + the tally) is the
+  // glance; the rows are one tap away.
+  const [open, setOpen] = useState(false);
   const [showDone, setShowDone] = useState(false);
   if (tasks.length === 0) return null;
 

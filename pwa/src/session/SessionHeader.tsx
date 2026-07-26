@@ -134,10 +134,12 @@ export function SessionHeader({
               {accountLabel(wrapper)}
             </span>
           )}
-        </div>
-        {hasMeta && (
-          <div className="chat-submeta">
-            {model !== null && (
+          {/* Status, account, model, effort and branch share ONE wrapping row —
+              two fixed rows cost a line of chat height on every screen to say
+              what fits comfortably on one. */}
+          {hasMeta && (
+            <>
+              {model !== null && (
               <button type="button" className="metachip metachip--model" onClick={onChangeModel}>
                 <span className="metachip-glyph" aria-hidden="true">🤖</span>
                 <span className="metachip-text">{model}</span>
@@ -156,8 +158,9 @@ export function SessionHeader({
                 <span className="metachip-text">{branch}</span>
               </span>
             )}
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
       <button
         type="button"
