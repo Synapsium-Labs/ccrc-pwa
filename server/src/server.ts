@@ -19,7 +19,7 @@ import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/sen
 import { readRegistry } from './registry.js';
 import { ccd, listProjects } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
-import { saveUploadAndClip } from './clip.js';
+import { stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/api.js';
@@ -293,8 +293,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(415).send({ ok: false, error: 'unsupported-type' });
     }
     const data = await part.toBuffer();
-    const res = await saveUploadAndClip(deps.io, deps.run, deps.cfg, id, data, m[1]!.toLowerCase());
-    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
+    const clip = await stageUpload(deps.io, deps.cfg, id, data, m[1]!.toLowerCase());
+    return { ok: true, clip };
   });
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {

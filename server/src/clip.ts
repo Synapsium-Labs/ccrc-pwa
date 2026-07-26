@@ -1,25 +1,50 @@
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import type { StagedClip } from '../../shared/api.js';
 import type { CcrcConfig } from './config.js';
-import type { Runner } from './exec.js';
 import type { FleetIO } from './io.js';
-import { ccd } from './lifecycle.js';
+
+/** `clip-<YYYYmmdd-HHMMSS>-<rand4>.<ext>`. The random suffix is not decoration:
+ *  the old one-second stamp let two clips filed in the same second overwrite
+ *  each other. The extension is the REAL one — `ccd clip` called everything
+ *  .png, so a downscaled JPEG lied about its format. */
+export function clipName(ext: string, now: number, rand: string): string {
+  const d = new Date(now);
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  const stamp =
+    `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `clip-${stamp}-${rand}.${ext}`;
+}
 
 /**
- * Write the upload to cfg.uploadsDir/upload-<epochms>-<rand6>.<ext>, then hand
- * it to `ccd clip <file> <id>` — ccd moves it into ~/.cc-clips/<id>/ and types
- * its path into the session's prompt.
+ * Where a clip goes, with containment asserted HERE rather than only in the
+ * route. `id` arrives from a URL param, Fastify percent-decodes it, and in local
+ * mode `writeFileB64` is an unguarded `mkdir -p` + write — so an id of
+ * `../../.ssh` would write wherever it liked. Asserting at the write site
+ * protects every future caller, not one handler.
  */
-export async function saveUploadAndClip(
+export function clipPath(clipsDir: string, id: string, name: string): string {
+  if (id.includes(path.sep) || id.includes('..')) throw new Error('bad-session-id');
+  const root = path.resolve(clipsDir);
+  const full = path.resolve(root, id, name);
+  if (!full.startsWith(root + path.sep)) throw new Error('bad-session-id');
+  return full;
+}
+
+/** Save the upload into the session's clips dir and report its path. Nothing is
+ *  typed into the session — the path enters the prompt once, at send. */
+export async function stageUpload(
   io: FleetIO,
-  run: Runner,
   cfg: CcrcConfig,
   id: string,
   data: Buffer,
   ext: string,
-): Promise<{ ok: boolean; stderr?: string }> {
-  const file = path.join(cfg.uploadsDir, `upload-${Date.now()}-${randomBytes(3).toString('hex')}.${ext}`);
-  await io.writeFileB64(file, data.toString('base64'));
-  const r = await ccd(run, cfg, ['clip', file, id]);
-  return r.ok ? { ok: true } : { ok: false, stderr: r.stderr };
+  now: number = Date.now(),
+  rand: string = randomBytes(2).toString('hex'),
+): Promise<StagedClip> {
+  const name = clipName(ext, now, rand);
+  const full = clipPath(cfg.clipsDir, id, name);
+  await io.writeFileB64(full, data.toString('base64'));
+  return { path: full, name, bytes: data.byteLength };
 }
