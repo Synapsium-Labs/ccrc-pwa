@@ -1743,26 +1743,15 @@ button.metachip:active {
 .attach-chip[data-state='failed'] { border-color: var(--status-dead); }
 /* The thumbnail's rounded-corner clip lives here, not on .attach-chip — the
    chip itself must stay unclipped so .attach-remove's 44px hit area (below)
-   isn't cut off. */
+   isn't cut off. On a failed chip the media is inert (no button) — retry
+   lives in the strip below, not spread across the whole thumbnail, so its
+   tap target can never overlap .attach-remove's. */
 .attach-chip-media {
   display: block;
   width: 100%;
   height: 100%;
   overflow: hidden;
   border-radius: inherit;
-}
-.attach-chip-retry {
-  display: block;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  border-radius: inherit;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: inherit;
-  cursor: pointer;
 }
 .attach-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attach-chip[data-state='uploading'] .attach-thumb { opacity: 0.55; }
@@ -1786,6 +1775,30 @@ button.metachip:active {
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
+/* On a failed chip, retry replaces the strip (shares its look via the
+   .attach-strip class on the same element) instead of wrapping the whole
+   72px thumbnail — a whole-chip retry button used to overlap .attach-remove's
+   hit area with no way to tell the two apart. Its own tap target extends
+   past its visible box via ::after, same pattern as .attach-remove, but the
+   two controls compete for the SAME 72px of vertical room (.attach-tray's
+   clip — see the note on .attach-remove below), so retry claims the larger
+   share on purpose: a mis-tap here just retries an upload (idempotent,
+   recoverable), where a mis-tap on .attach-remove silently drops the
+   attachment. Measured (real Chromium, built CSS): 70×46.19px — clears the
+   44px floor in both dimensions. See the task-10 report for the full
+   grid-verified geometry. */
+.attach-chip-retry {
+  border: 0;
+  margin: 0;
+  cursor: pointer;
+  z-index: 2;
+  /* Sitting outside .attach-chip-media's clip (on purpose — see above), this
+     button's own bottom corners would otherwise square off past the chip's
+     rounded ones now that .attach-chip itself no longer clips either. */
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
+.attach-chip-retry::after { content: ''; position: absolute; inset: -28px 0 -4px 0; }
 .attach-remove {
   position: absolute;
   top: 2px;
@@ -1802,15 +1815,23 @@ button.metachip:active {
   cursor: pointer;
   z-index: 2;
 }
-/* 44px hit area without a 44px box. Unlike .toast-action, this button sits
-   inside a chip with rounded-corner clipping, so the overlay can't just be
-   symmetric — biased mostly inward (toward the chip centre) and only a
-   little outward (toward the chip's own corner), so it reaches the touch
-   floor without reaching into the next chip across the --sp-2 (8px) gap.
-   The containing block for this inset is .attach-remove's PADDING edge, not
-   its border edge — its 1px border shrinks it by 2px total, so the inset
-   is -5/-5/-21/-21, not -4/-4/-20/-20, to still land on exactly 44px. */
-.attach-remove::after { content: ''; position: absolute; inset: -5px -5px -21px -21px; }
+/* Hit area without a 44px box. Reaches the 44px floor in WIDTH (the
+   containing block for this inset is .attach-remove's PADDING edge, not its
+   border edge — its 1px border shrinks it by 2px, so -5/…/-21 on the
+   right/left, not -4/…/-20, to land on 44 there): measured 44×24px.
+   HEIGHT can't reach 44: .attach-chip's parent, .attach-tray, has
+   overflow-x:auto, which per the CSS overflow spec forces overflow-y to
+   compute to 'auto' too (never 'visible') — confirmed in real Chromium that
+   this clips ANY child content above y=0 or below y=72 (the chip's own
+   72px), full stop, so there is no "extend outward" escape the way the
+   width has (sideways, past the chip, is the direction .attach-tray leaves
+   open for scrolling). The full 72px is shared with .attach-chip-retry
+   below (a failed chip's recovery action), which gets the larger share on
+   purpose — see that rule's comment. 24px vertically is still a real
+   improvement over this button's own 20px circle, just short of the touch
+   floor; the task-10 report has the full grid-verified numbers for both
+   controls and the reasoning for the split. */
+.attach-remove::after { content: ''; position: absolute; inset: -5px -5px -2px -21px; }
 
 /* Desktop drop target. */
 .composer[data-drop='true'] .inputbar {

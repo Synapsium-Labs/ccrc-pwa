@@ -17,16 +17,15 @@ export function AttachTray({ images, onRemove, onRetry }: AttachTrayProps): Reac
     <ul className="attach-tray" aria-label="Attached images">
       {images.map((img) => (
         <li key={img.key} className="attach-chip" data-state={img.state}>
-          {img.state === 'failed' ? (
-            <button type="button" className="attach-chip-retry" onClick={() => onRetry(img.key)}>
-              <span className="attach-chip-media">
-                <img src={img.previewUrl} alt={img.file.name} className="attach-thumb" />
-                <span className="attach-strip">retry</span>
-              </span>
-            </button>
-          ) : (
-            <span className="attach-chip-media">
-              <img src={img.previewUrl} alt={img.file.name} className="attach-thumb" />
+          {/* The thumbnail's rounded-corner clip. On a failed chip this is
+              deliberately NOT a button — the whole-media retry tap used to
+              overlap the remove button's hit area with no way to tell them
+              apart; retry is now only the strip below, so the thumbnail here
+              is inert on a failed chip (does nothing), same as it is on every
+              other state. */}
+          <span className="attach-chip-media">
+            <img src={img.previewUrl} alt={img.file.name} className="attach-thumb" />
+            {img.state !== 'failed' && (
               <span className="attach-strip">
                 {img.state === 'uploading'
                   ? 'uploading…'
@@ -34,7 +33,16 @@ export function AttachTray({ images, onRemove, onRetry }: AttachTrayProps): Reac
                     ? `${img.width}×${img.height}`
                     : ''}
               </span>
-            </span>
+            )}
+          </span>
+          {img.state === 'failed' && (
+            <button
+              type="button"
+              className="attach-strip attach-chip-retry"
+              onClick={() => onRetry(img.key)}
+            >
+              retry
+            </button>
           )}
           <button
             type="button"

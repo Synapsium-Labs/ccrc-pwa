@@ -75,4 +75,38 @@ describe('AttachTray', () => {
     expect(rule).not.toBe('');
     expect(rule).not.toMatch(/all\s*:\s*unset/);
   });
+
+  // Regression guard for a Critical real-browser finding: retry used to wrap
+  // the WHOLE 72px media area, so its hit region — biased toward the chip
+  // centre by the remove-button fix above — silently stole taps meant for
+  // retry across roughly a third of the chip, including the visual centre.
+  // The fix confines retry to the strip below the (now inert) thumbnail, so
+  // it can never be an ancestor of the media wrapper. jsdom can't hit-test
+  // the actual geometry (no layout engine) — that's verified separately, as
+  // a real-Chromium grid of dispatched clicks over the whole chip at 2px
+  // spacing (see the task-10 report addendum) — but the DOM shape that
+  // makes the overlap possible in the first place is asserted here so it
+  // can't silently come back.
+  it('never lets retry wrap the media it used to overlap remove through', () => {
+    const { container } = render(
+      <AttachTray images={[img({ state: 'failed' })]} onRemove={vi.fn()} onRetry={vi.fn()} />,
+    );
+    const chip = container.querySelector('.attach-chip');
+    const media = container.querySelector('.attach-chip-media');
+    const retry = container.querySelector('.attach-chip-retry');
+    expect(media).not.toBeNull();
+    expect(retry).not.toBeNull();
+    expect(retry?.parentElement).toBe(chip);
+    expect(media?.contains(retry)).toBe(false);
+    expect(retry?.contains(media)).toBe(false);
+  });
+
+  // Confirms nothing regressed for the case with no retry button at all
+  // (staged/uploading chips) — the media area there was never a button and
+  // still isn't.
+  it('renders no retry control on a chip that has not failed', () => {
+    render(<AttachTray images={[img({ state: 'staged' })]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.queryByText('retry')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+  });
 });
