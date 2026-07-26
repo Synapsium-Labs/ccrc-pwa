@@ -102,9 +102,12 @@ export interface StagedClip { path: string; name: string; bytes: number }
 /**
  * A clip path anywhere in a string: `…/.cc-clips/<session>/clip-<stem>.<ext>`.
  * Matched by SHAPE, never by touching the filesystem, so it works client-side.
+ * Exported WITHOUT the `g` flag to avoid stateful `lastIndex` — a g-flagged
+ * module-scope regex returns alternating true/false on successive `.test()` calls.
+ * Internal consumers build their own `new RegExp(CLIP_PATH_RE.source, 'g')`.
  */
 export const CLIP_PATH_RE =
-  /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/g;
+  /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/;
 
 /** Attachment paths first, each on its own line, then the user's text. Paths
  *  lead so the transcript reads image-above-caption. */
@@ -126,6 +129,6 @@ export function splitClipPaths(text: string): { paths: string[]; rest: string } 
   });
   return {
     paths,
-    rest: rest.replace(/[^\S\n]+/g, ' ').replace(/ ?\n ?/g, '\n').trim(),
+    rest: rest.replace(/[^\S\n]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n\n+/g, '\n').trim(),
   };
 }

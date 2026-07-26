@@ -2,7 +2,7 @@
 // PWA that recognises its echo can never disagree — plus its inverse, which has
 // to cope with `ccd clip` typing a path on either side of the user's prose.
 import { describe, expect, it } from 'vitest';
-import { composePrompt, splitClipPaths } from '../../shared/api';
+import { composePrompt, splitClipPaths, CLIP_PATH_RE } from '../../shared/api';
 
 const P1 = '/home/you/.cc-clips/claude2-OpenClawHetzner/clip-20260726-150340-a1b2.png';
 const P2 = '/home/you/.cc-clips/claude2-OpenClawHetzner/clip-20260726-150341-c3d4.jpg';
@@ -19,6 +19,13 @@ describe('composePrompt', () => {
 
   it('omits the blank line when an image is sent with no text', () => {
     expect(composePrompt('', [P1])).toBe(P1);
+  });
+});
+
+describe('CLIP_PATH_RE', () => {
+  it('exports a stateless regex — a g-flagged one would alternate true/false', () => {
+    expect(CLIP_PATH_RE.test(P1)).toBe(true);
+    expect(CLIP_PATH_RE.test(P1)).toBe(true);
   });
 });
 
@@ -62,5 +69,12 @@ describe('splitClipPaths', () => {
 
   it('returns text-only input untouched', () => {
     expect(splitClipPaths('nothing here')).toEqual({ paths: [], rest: 'nothing here' });
+  });
+
+  it('collapses blank lines left behind by removing an interior path', () => {
+    expect(splitClipPaths(`line one\n${P1}\nline two`)).toEqual({
+      paths: [P1],
+      rest: 'line one\nline two',
+    });
   });
 });
