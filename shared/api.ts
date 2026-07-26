@@ -94,3 +94,38 @@ export type SessionStreamMsg =
   | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
   | { type: 'notice'; message: string };
+
+/** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
+ *  server reports no dimensions — it has no image decoder, and never will. */
+export interface StagedClip { path: string; name: string; bytes: number }
+
+/**
+ * A clip path anywhere in a string: `…/.cc-clips/<session>/clip-<stem>.<ext>`.
+ * Matched by SHAPE, never by touching the filesystem, so it works client-side.
+ */
+export const CLIP_PATH_RE =
+  /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/g;
+
+/** Attachment paths first, each on its own line, then the user's text. Paths
+ *  lead so the transcript reads image-above-caption. */
+export function composePrompt(text: string, attachments: readonly string[]): string {
+  return [...attachments, text].filter((part) => part !== '').join('\n');
+}
+
+/**
+ * Inverse of composePrompt, for rendering. Pulls every clip path out wherever it
+ * sits — own line, leading, trailing or mid-line — because `ccd clip` types the
+ * path with no Enter, so the user's prose lands on either side of it. Paths come
+ * back in document order and deduplicated; the prose has the holes closed up.
+ */
+export function splitClipPaths(text: string): { paths: string[]; rest: string } {
+  const paths: string[] = [];
+  const rest = text.replace(new RegExp(CLIP_PATH_RE.source, 'g'), (match) => {
+    if (!paths.includes(match)) paths.push(match);
+    return '';
+  });
+  return {
+    paths,
+    rest: rest.replace(/[^\S\n]+/g, ' ').replace(/ ?\n ?/g, '\n').trim(),
+  };
+}
