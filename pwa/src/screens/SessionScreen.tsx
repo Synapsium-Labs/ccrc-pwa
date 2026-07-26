@@ -222,14 +222,14 @@ export function SessionScreen({
       <TaskStrip tasks={tasks} />
 
       <Composer
-        // The store doesn't carry attachments through the send lifecycle yet
-        // (that's the next task) — only replaceDraft crosses today.
-        onSend={(text, opts) => void useStore.getState().send(text, opts?.replaceDraft)}
+        // send/resolve take the same opts shape the store does, so both cross
+        // straight through — attachments included.
+        onSend={useStore.getState().send}
         pending={pending}
         id={id}
         disabled={dead}
         placeholder={dead ? 'Restart the session to send' : `Message ${project}`}
-        onDiscard={(key) => useStore.getState().discard(key)}
+        onResolve={useStore.getState().resolve}
       />
 
       <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} />

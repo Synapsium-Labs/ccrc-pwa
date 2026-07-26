@@ -3,9 +3,24 @@
 // exported for unit tests; the store wraps it with connection wiring and the
 // pending-send lifecycle.
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { ChatEvent, Dialog, SessionStatus, SessionStreamMsg, TaskItem } from '../../../shared/api';
+import {
+  composePrompt,
+  type ChatEvent,
+  type Dialog,
+  type SessionStatus,
+  type SessionStreamMsg,
+  type TaskItem,
+} from '../../../shared/api';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+
+/** A staged image handed to send(). The path is what the server/dispatch see;
+ *  the preview URL is carried only so the optimistic bubble can render the
+ *  same thumbnail the composer chip did. */
+export interface PendingAttachment {
+  path: string;
+  previewUrl?: string;
+}
 
 export interface PendingSend {
   key: string;
@@ -16,6 +31,9 @@ export interface PendingSend {
   draft?: string;
   /** Remembered so retry() repeats the original call. */
   replaceDraft?: boolean;
+  /** Staged images sent alongside text. Object-URL ownership lives here from
+   *  send() until this pending is confirmed or explicitly abandoned (discard). */
+  attachments?: PendingAttachment[];
 }
 
 export interface SessionState {
@@ -32,8 +50,11 @@ export interface SessionState {
   apply(msg: SessionStreamMsg): void;
   connect(): void;
   disconnect(): void;
-  send(text: string, replaceDraft?: boolean): Promise<void>;
+  send(text: string, opts?: { replaceDraft?: boolean; attachments?: PendingAttachment[] }): Promise<void>;
   retry(key: string): void;
+  /** Re-send a pending in place after a draft conflict — same record, so the
+   *  attachments and their preview URLs survive. */
+  resolve(key: string, text: string, opts: { replaceDraft: boolean }): void;
   discard(key: string): void;
 }
 
@@ -130,14 +151,33 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   missingFile: s.missingFile,
 });
 
-/** Drop 'sending' pendings whose text just arrived back as a real user event. */
+/** Bare paths for dispatch/api.prompt — the only place attachments narrow
+ *  down from the full { path, previewUrl } shape. Takes anything with an
+ *  `attachments` field (a PendingSend, or send()'s own opts) so every caller
+ *  can share this one narrowing rule. */
+const pathsOf = (p: { attachments?: PendingAttachment[] }): string[] | undefined =>
+  p.attachments?.length ? p.attachments.map((a) => a.path) : undefined;
+
+/** Object URLs die with the pending that owned them. */
+const revoke = (p: PendingSend | undefined): void => {
+  for (const a of p?.attachments ?? []) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+};
+
+/** Drop 'sending' pendings whose composed text just arrived back as a real
+ *  user event. The server injects composePrompt(text, paths), so matching on
+ *  p.text alone would never fire for an attachment send. */
 function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingSend[] {
   if (msg.type !== 'events' && msg.type !== 'backlog') return pending;
   let next = pending;
   for (const e of msg.events) {
     if (e.kind !== 'user') continue;
-    const i = next.findIndex((p) => p.state === 'sending' && p.text === e.text);
-    if (i >= 0) next = [...next.slice(0, i), ...next.slice(i + 1)];
+    const i = next.findIndex(
+      (p) => p.state === 'sending' && composePrompt(p.text, pathsOf(p) ?? []) === e.text,
+    );
+    if (i >= 0) {
+      revoke(next[i]);
+      next = [...next.slice(0, i), ...next.slice(i + 1)];
+    }
   }
   return next;
 }
@@ -184,9 +224,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       });
     };
 
-    const dispatch = async (key: string, text: string, replaceDraft?: boolean): Promise<void> => {
+    const dispatch = async (
+      key: string,
+      text: string,
+      opts: { replaceDraft?: boolean; attachments?: string[] } = {},
+    ): Promise<void> => {
       try {
-        await apiImpl.prompt(id, text, { replaceDraft });
+        await apiImpl.prompt(id, text, opts);
         timers.set(key, setTimeout(() => expireConfirmed(key), confirmTimeoutMs));
       } catch (e) {
         const { error, draft } = failureOf(e);
@@ -248,24 +292,43 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         socket = null;
       },
 
-      async send(text, replaceDraft) {
+      async send(text, opts = {}) {
         keySeq += 1;
         const key = `p${keySeq}`;
-        set((s) => ({ pending: [...s.pending, { key, text, state: 'sending', replaceDraft }] }));
-        await dispatch(key, text, replaceDraft);
+        set((s) => ({ pending: [...s.pending, {
+          key, text, state: 'sending',
+          replaceDraft: opts.replaceDraft, attachments: opts.attachments,
+        }] }));
+        await dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(opts) });
       },
 
       retry(key) {
         const p = get().pending.find((x) => x.key === key);
         if (!p || p.state !== 'failed') return;
+        // Spread, never re-list: an object literal here is exactly why
+        // `attachments` used to vanish on retry, and it would swallow every
+        // field added after it too.
+        set((s) => ({
+          pending: s.pending.map((x) =>
+            x.key === key ? { ...x, state: 'sending' as const, error: undefined, draft: undefined } : x),
+        }));
+        void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
+      },
+
+      /** Re-send a pending in place after a draft conflict — same record, so the
+       *  attachments and their preview URLs survive. Replaces the old
+       *  discard-then-send, which dropped both. */
+      resolve(key, text, opts) {
+        const p = get().pending.find((x) => x.key === key);
+        if (!p) return;
         set((s) => ({
           pending: s.pending.map((x) =>
             x.key === key
-              ? { key: x.key, text: x.text, state: 'sending' as const, replaceDraft: x.replaceDraft }
-              : x,
-          ),
+              ? { ...x, text, state: 'sending' as const, error: undefined, draft: undefined,
+                  replaceDraft: opts.replaceDraft }
+              : x),
         }));
-        void dispatch(key, p.text, p.replaceDraft);
+        void dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(p) });
       },
 
       discard(key) {
@@ -274,7 +337,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           clearTimeout(t);
           timers.delete(key);
         }
-        set((s) => ({ pending: s.pending.filter((x) => x.key !== key) }));
+        set((s) => {
+          revoke(s.pending.find((x) => x.key === key));
+          return { pending: s.pending.filter((x) => x.key !== key) };
+        });
       },
     };
   });

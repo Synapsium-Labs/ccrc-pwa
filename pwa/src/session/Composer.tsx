@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { Sheet } from '../components/Sheet';
-import type { PendingSend } from '../stores/session';
+import type { PendingAttachment, PendingSend } from '../stores/session';
 import { AttachButton } from './AttachButton';
 import { AttachTray } from './AttachTray';
 import { clipboardImages, useStagedImages } from './useAttachImage';
@@ -20,7 +20,7 @@ import './chat.css';
 export interface ComposerProps {
   onSend: (
     text: string,
-    opts?: { replaceDraft?: boolean; attachments?: { path: string; previewUrl: string }[] },
+    opts?: { replaceDraft?: boolean; attachments?: PendingAttachment[] },
   ) => void;
   pending: PendingSend[];
   /** Session id — enables the image-attach lane; without it the lane hides. */
@@ -28,8 +28,9 @@ export interface ComposerProps {
   /** Dead session: input and send are disabled (read-only chat). */
   disabled?: boolean;
   placeholder?: string;
-  /** Store discard — resolves a draft conflict by replacing the failed send. */
-  onDiscard?: (key: string) => void;
+  /** Store resolve — re-sends a draft-conflicted pending in place, same
+   *  record, so its attachments and preview URLs survive. */
+  onResolve?: (key: string, text: string, opts: { replaceDraft: boolean }) => void;
 }
 
 interface DraftConflict {
@@ -44,7 +45,7 @@ export function Composer({
   id,
   disabled = false,
   placeholder = 'Message this session',
-  onDiscard,
+  onResolve,
 }: ComposerProps): ReactNode {
   const [value, setValue] = useState('');
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
@@ -140,8 +141,7 @@ export function Composer({
   const closeConflict = (): void => setConflict(null);
   const resolveConflict = (text: string): void => {
     if (!conflict) return;
-    onDiscard?.(conflict.key);
-    onSend(text, { replaceDraft: true });
+    onResolve?.(conflict.key, text, { replaceDraft: true });
     setConflict(null);
   };
 
