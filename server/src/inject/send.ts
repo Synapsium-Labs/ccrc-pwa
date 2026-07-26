@@ -126,35 +126,52 @@ export function sendPrompt(
     // so it stayed there until someone hit Enter by hand. A slow render is not
     // a failed send. The needle stays short and comes from the FIRST line, which
     // the box never wraps (it starts at column 2), so wrapping can't split it.
-    //
-    // Prove the echo against the INPUT BOX, not the whole pane. Attachment
-    // prompts all begin with the same ~24 chars of clips path, so a whole-pane
-    // `includes` would happily match an identical path left in the scrollback by
-    // an earlier turn. The box was verified empty a few lines up, so a needle on
-    // the box row can only be what we just typed.
-    const needle = parts.find((p) => p.trim().length > 0)?.slice(0, ECHO_NEEDLE) ?? '';
-    const squash = (s: string): string => s.replace(/\s+/g, '');
+    // Trimmed: `draftOf` trims the box row, and a trimmed line under 24 chars
+    // can't end in whitespace, so an untrimmed needle would false-negative on
+    // any short first line ending in a space/tab (a markdown hard break, e.g.).
+    const needle = (parts.find((p) => p.trim().length > 0) ?? '').trim().slice(0, ECHO_NEEDLE);
     let after: string | null = null;
-    let echoed = needle === '';
-    for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
-      await sleep(ECHO_POLL_MS);
-      const ansi = await d.tmux.captureAnsi(id);
-      if (ansi === null) continue;
-      after = await d.tmux.capture(id);
-      if (draftOf(ansi).startsWith(needle)) { echoed = true; break; }
-      // Fallback ONLY when the pane has no input-box row to read at all (a very
-      // narrow or mid-render pane): whitespace-blind whole-pane match, so a row
-      // break alone cannot fail an honest send. When a box row IS present it is
-      // authoritative — falling back here is what would let a scrollback hit
-      // pass a send that never echoed.
-      if (!/❯/.test(ansi) && after !== null && squash(after).includes(squash(needle))) {
-        echoed = true;
-        break;
+
+    if (attachments.length > 0) {
+      // Attachment prompts all begin with the same ~24 chars of clips path
+      // (e.g. /home/you/.cc-cli…), so the whole-pane check below would
+      // happily match an identical path left in the scrollback by an earlier
+      // turn. Prove the echo against the INPUT BOX instead: it was verified
+      // empty a few lines up, so a needle on the box row can only be what we
+      // just typed. Ordinary text (the branch below) has no such collision
+      // risk and keeps the battle-tested whole-pane check.
+      let echoed = needle === '';
+      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
+        await sleep(ECHO_POLL_MS);
+        const ansi = await d.tmux.captureAnsi(id);
+        if (ansi === null) continue;
+        if (draftOf(ansi).startsWith(needle)) echoed = true;
       }
-    }
-    if (!echoed) {
-      if (attachments.length > 0) await d.tmux.sendKey(id, 'C-u');
-      return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
+      if (!echoed) {
+        after ??= await d.tmux.capture(id);
+        // A failed send must not stand a bare clip path in the live box — but
+        // C-u can fail just like the replaceDraft clear above can: re-capture
+        // and report what's left rather than assuming it worked.
+        await d.tmux.sendKey(id, 'C-u');
+        await sleep(150);
+        const clearedAnsi = await d.tmux.captureAnsi(id);
+        const left = clearedAnsi === null ? '' : draftOf(clearedAnsi);
+        return {
+          ok: false,
+          error: 'verify-failed',
+          pane: (after ?? '').slice(-PANE_TAIL),
+          ...(left ? { draft: left } : {}),
+        };
+      }
+    } else {
+      for (let i = 0; i < ECHO_TRIES; i++) {
+        await sleep(ECHO_POLL_MS);
+        after = await d.tmux.capture(id);
+        if (after !== null && (needle === '' || after.includes(needle))) break;
+        if (i === ECHO_TRIES - 1) {
+          return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
+        }
+      }
     }
 
     // Enter is not reliably a submit. Claude Code's box swallows it while an

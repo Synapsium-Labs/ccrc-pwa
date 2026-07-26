@@ -299,9 +299,62 @@ describe('sendPrompt with attachments', () => {
     // whole design exists to remove.
     expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
   });
+
+  it('still refuses a scrollback-only match when attachments are present', async () => {
+    // The case the strict box-row check exists for: an identical clip path sits
+    // in scrollback from an earlier turn, but the box never echoes it this send.
+    const { tmux, calls } = fakeTmux([`turn 1: ${P}\n\n❯ \n`]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [P] },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+  });
+
+  it('reports the residual draft when C-u fails to clear after a failed verify', async () => {
+    // C-u is kill-to-line-start; whether it actually clears a multi-line
+    // Claude Code draft is NOT verified here (or anywhere in this suite) — this
+    // only exercises the reporting path for when C-u's clear doesn't take,
+    // mirroring the pre-existing replaceDraft C-u check above.
+    const NONMATCH = '❯ \n'; // empty box — never echoes the attachment path
+    const panes = [
+      ...Array(14).fill(NONMATCH),      // initial + 12 echo polls + the failure-path `after` read
+      '❯ stubborn leftover\n',          // post-C-u re-capture — still holds text
+    ];
+    const { tmux, calls } = fakeTmux(panes);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: [P] },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: 'stubborn leftover' });
+    expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
+  });
 });
 
 describe('sendPrompt echo verification', () => {
+  it('verifies an ordinary multi-line prompt whose first line ends in whitespace', async () => {
+    // 'note:  \nsecond line' — a markdown hard break, which is what the PWA
+    // posts even after its own `value.trim()` (the trim only strips the ends
+    // of the WHOLE message, not an internal line break). An untrimmed needle
+    // ('note:  ') can never match `draftOf`'s trimmed box row ('note:') nor,
+    // coincidentally, the plain-capture path below if the pane renders the
+    // trailing spaces away — so the needle itself must be trimmed.
+    const { tmux, calls } = fakeTmux([
+      '❯ \n',                       // initial — empty draft
+      '❯ note:  \n  second line\n', // verify — echoed
+      '❯ \n',                       // after Enter — box emptied
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'note:  \nsecond line',
+    );
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'note:  '],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'second line'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
+
   it('waits for a slow pane to render the text instead of calling it a failed send', async () => {
     // The bug this covers: one capture 200ms after typing raced the TUI's
     // re-render. Losing that race reported "the session never showed the text"
