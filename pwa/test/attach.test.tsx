@@ -222,27 +222,44 @@ describe('Composer drag-and-drop', () => {
     return event;
   };
 
-  it('stages every dropped image in one add() batch', async () => {
+  it('stages every dropped image in one add() batch, and clears the drop overlay', async () => {
     const upload = vi.spyOn(api, 'upload').mockResolvedValue(
       { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
     const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
     const a = new File(['a'], 'a.png', { type: 'image/png' });
     const b = new File(['b'], 'b.png', { type: 'image/png' });
 
+    fireEvent(composer, dragEvent('dragover', { files: [] }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
     const event = dragEvent('drop', { files: [a, b] });
-    fireEvent(composerEl(container), event);
+    fireEvent(composer, event);
 
     expect(event.defaultPrevented).toBe(true);
+    expect(composer).not.toHaveAttribute('data-drop');
     await screen.findByAltText('a.png');
     await screen.findByAltText('b.png');
     expect(upload).toHaveBeenCalledTimes(2);
   });
 
-  it('leaves a text/URL drop (no files) to the browser instead of swallowing it', () => {
+  // Regression: a real `drop` event is never preceded by a `dragleave` on the
+  // same target (the spec fires `drop` instead), so a files-less drop used to
+  // leave `dropping` stuck true forever — the dashed drop-target border stayed
+  // armed until some later, unrelated drag happened to leave .composer
+  // cleanly. A drop must always end the drag, whatever it carried.
+  it('leaves a text/URL drop (no files) to the browser, and still clears the drop overlay', () => {
     const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
+
+    fireEvent(composer, dragEvent('dragover', { files: [] }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
     const event = dragEvent('drop', { files: [] });
-    fireEvent(composerEl(container), event);
+    fireEvent(composer, event);
+
     expect(event.defaultPrevented).toBe(false);
+    expect(composer).not.toHaveAttribute('data-drop');
   });
 
   it('only clears the drop overlay once the pointer actually leaves .composer', () => {

@@ -164,10 +164,19 @@ export function Composer({
         setDropping(false);
       }}
       onDrop={(e) => {
+        // A drop always ends the drag, no matter what it carried or which
+        // gate below bails out — a real `drop` is never preceded by a
+        // `dragleave` on the same target (the spec fires `drop` instead), so
+        // any return path that skipped this would stick the dashed overlay
+        // on until an unrelated later drag happened to leave .composer
+        // cleanly. Unconditional (ahead of the id/disabled check too): those
+        // props are read fresh on every render, so a re-render mid-drag
+        // (e.g. the session dying) could otherwise leave `dropping` armed
+        // from an earlier dragover with no drop handler branch left to clear it.
+        setDropping(false);
         if (id === undefined || disabled) return;
         if (e.dataTransfer.files.length === 0) return; // a text/URL drop — leave it to the browser
         e.preventDefault();
-        setDropping(false);
         staged.add(Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/')));
       }}
     >
