@@ -198,3 +198,69 @@ describe('Composer attach wiring', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 });
+
+// — Composer drag-and-drop —
+
+describe('Composer drag-and-drop', () => {
+  const composerEl = (container: HTMLElement): HTMLElement => {
+    const el = container.querySelector<HTMLElement>('.composer');
+    if (!el) throw new Error('.composer not rendered');
+    return el;
+  };
+
+  const dragEvent = (
+    type: 'dragover' | 'dragleave' | 'drop',
+    detail: { files?: File[]; relatedTarget?: EventTarget | null },
+  ): Event => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    if (detail.files !== undefined) {
+      Object.defineProperty(event, 'dataTransfer', { value: { files: detail.files } });
+    }
+    if ('relatedTarget' in detail) {
+      Object.defineProperty(event, 'relatedTarget', { value: detail.relatedTarget });
+    }
+    return event;
+  };
+
+  it('stages every dropped image in one add() batch', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(
+      { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const a = new File(['a'], 'a.png', { type: 'image/png' });
+    const b = new File(['b'], 'b.png', { type: 'image/png' });
+
+    const event = dragEvent('drop', { files: [a, b] });
+    fireEvent(composerEl(container), event);
+
+    expect(event.defaultPrevented).toBe(true);
+    await screen.findByAltText('a.png');
+    await screen.findByAltText('b.png');
+    expect(upload).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a text/URL drop (no files) to the browser instead of swallowing it', () => {
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const event = dragEvent('drop', { files: [] });
+    fireEvent(composerEl(container), event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('only clears the drop overlay once the pointer actually leaves .composer', () => {
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
+    const textbox = screen.getByRole('textbox');
+
+    fireEvent(composer, dragEvent('dragover', { files: [] }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
+    // dragleave bubbles from every child on the way out — landing on a child
+    // of .composer (the textarea) must not clear the overlay.
+    fireEvent(composer, dragEvent('dragleave', { relatedTarget: textbox }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
+    // Actually leaving .composer (relatedTarget outside it, or null when the
+    // drag leaves the window) does clear it.
+    fireEvent(composer, dragEvent('dragleave', { relatedTarget: null }));
+    expect(composer).not.toHaveAttribute('data-drop');
+  });
+});

@@ -156,9 +156,16 @@ export function Composer({
           setDropping(true);
         }
       }}
-      onDragLeave={() => setDropping(false)}
+      onDragLeave={(e) => {
+        // dragleave bubbles from every child the pointer crosses on its way
+        // out — only clear the overlay once it has actually left .composer,
+        // not when it lands on a child (the textarea, the attach button…).
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setDropping(false);
+      }}
       onDrop={(e) => {
         if (id === undefined || disabled) return;
+        if (e.dataTransfer.files.length === 0) return; // a text/URL drop — leave it to the browser
         e.preventDefault();
         setDropping(false);
         staged.add(Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/')));

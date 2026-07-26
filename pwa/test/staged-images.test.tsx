@@ -17,9 +17,13 @@ const shot = (name = 'shot.png') => new File(['tiny'], name, { type: 'image/png'
  *  a component's styling choices. `second`, when given, wires up an
  *  "add-twice" button that calls `add()` twice synchronously in the same
  *  handler — the same tick two paste/drop events would land in, and the case
- *  that silently dropped the second upload before the listRef fix. */
-function Harness({ files, second }: { files: File[]; second?: File[] }): React.ReactNode {
-  const s = useStagedImages(ID);
+ *  that silently dropped the second upload before the listRef fix. `downscale`,
+ *  when given, is injected straight through to the hook — lets a test spy on
+ *  whether the downscale branch actually ran. */
+function Harness({
+  files, second, downscale,
+}: { files: File[]; second?: File[]; downscale?: (f: File) => Promise<Blob> }): React.ReactNode {
+  const s = useStagedImages(ID, downscale);
   return (
     <div>
       <button type="button" onClick={() => s.add(files)}>add</button>
@@ -64,6 +68,46 @@ describe('useStagedImages', () => {
     // The small-PNG passthrough skips the downscale entirely — the dimensions
     // must still be there. This is the branch a naive implementation misses.
     expect(screen.getByTestId('dims-shot.png')).toHaveTextContent('2788×442');
+  });
+
+  // — The downscale branch and its extension re-wrap: the client half of the
+  // server's "admits uploads by filename extension" contract. Break the
+  // re-wrap (wrong name, wrong type) and every non-small-PNG upload 400s on a
+  // real server while a test suite that only checks "upload happened" stays
+  // green — so these assert the actual name/type of the uploaded File. —
+
+  it('downscales an oversized PNG and re-wraps the result as a PNG File before upload', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    const downscale = vi
+      .fn<(f: File) => Promise<Blob>>()
+      .mockResolvedValue(new Blob(['small'], { type: 'image/png' }));
+    // Over SMALL_PNG_MAX (1MB) — the passthrough test above only covers the
+    // branch that skips this one.
+    const big = new File([new Uint8Array(1024 * 1024 + 1)], 'shot.png', { type: 'image/png' });
+    render(<Harness files={[big]} downscale={downscale} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    expect(downscale).toHaveBeenCalledWith(big);
+    const uploaded = upload.mock.calls[0]![1];
+    expect(uploaded.name).toBe('shot.png');
+    expect(uploaded.type).toBe('image/png');
+  });
+
+  it('downscales a camera JPEG regardless of size and re-wraps as a JPEG File before upload', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    const downscale = vi
+      .fn<(f: File) => Promise<Blob>>()
+      .mockResolvedValue(new Blob(['x'], { type: 'image/jpeg' }));
+    const photo = new File(['jpeg-bytes'], 'IMG_0042.jpeg', { type: 'image/jpeg' });
+    render(<Harness files={[photo]} downscale={downscale} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    expect(downscale).toHaveBeenCalledWith(photo);
+    const uploaded = upload.mock.calls[0]![1];
+    expect(uploaded.name).toBe('IMG_0042.jpg');
+    expect(uploaded.type).toBe('image/jpeg');
   });
 
   it('removes an image and revokes its object URL', async () => {
