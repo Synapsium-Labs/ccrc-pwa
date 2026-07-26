@@ -19,11 +19,13 @@ export function AttachTray({ images, onRemove, onRetry }: AttachTrayProps): Reac
         <li key={img.key} className="attach-chip" data-state={img.state}>
           {img.state === 'failed' ? (
             <button type="button" className="attach-chip-retry" onClick={() => onRetry(img.key)}>
-              <img src={img.previewUrl} alt={img.file.name} className="attach-thumb" />
-              <span className="attach-strip">retry</span>
+              <span className="attach-chip-media">
+                <img src={img.previewUrl} alt={img.file.name} className="attach-thumb" />
+                <span className="attach-strip">retry</span>
+              </span>
             </button>
           ) : (
-            <>
+            <span className="attach-chip-media">
               <img src={img.previewUrl} alt={img.file.name} className="attach-thumb" />
               <span className="attach-strip">
                 {img.state === 'uploading'
@@ -32,7 +34,7 @@ export function AttachTray({ images, onRemove, onRetry }: AttachTrayProps): Reac
                     ? `${img.width}×${img.height}`
                     : ''}
               </span>
-            </>
+            </span>
           )}
           <button
             type="button"

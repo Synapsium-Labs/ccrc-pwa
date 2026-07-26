@@ -1738,11 +1738,32 @@ button.metachip:active {
   border-radius: var(--r-md);
   border: 1px solid var(--edge-subtle);
   background: var(--bg-well);
-  overflow: hidden;
   scroll-snap-align: start;
 }
 .attach-chip[data-state='failed'] { border-color: var(--status-dead); }
-.attach-chip-retry { all: unset; display: block; width: 100%; height: 100%; cursor: pointer; }
+/* The thumbnail's rounded-corner clip lives here, not on .attach-chip — the
+   chip itself must stay unclipped so .attach-remove's 44px hit area (below)
+   isn't cut off. */
+.attach-chip-media {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.attach-chip-retry {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
 .attach-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attach-chip[data-state='uploading'] .attach-thumb { opacity: 0.55; }
 .attach-chip[data-state='uploading']::before {
@@ -1781,8 +1802,15 @@ button.metachip:active {
   cursor: pointer;
   z-index: 2;
 }
-/* 44px hit area without a 44px box — the .toast-action trick. */
-.attach-remove::after { content: ''; position: absolute; inset: -12px; }
+/* 44px hit area without a 44px box. Unlike .toast-action, this button sits
+   inside a chip with rounded-corner clipping, so the overlay can't just be
+   symmetric — biased mostly inward (toward the chip centre) and only a
+   little outward (toward the chip's own corner), so it reaches the touch
+   floor without reaching into the next chip across the --sp-2 (8px) gap.
+   The containing block for this inset is .attach-remove's PADDING edge, not
+   its border edge — its 1px border shrinks it by 2px total, so the inset
+   is -5/-5/-21/-21, not -4/-4/-20/-20, to still land on exactly 44px. */
+.attach-remove::after { content: ''; position: absolute; inset: -5px -5px -21px -21px; }
 
 /* Desktop drop target. */
 .composer[data-drop='true'] .inputbar {
