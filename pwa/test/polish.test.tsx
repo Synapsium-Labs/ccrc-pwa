@@ -181,7 +181,7 @@ describe('SessionCard limit narration', () => {
 
 describe('AttachButton input', () => {
   it('does not force direct camera capture (gallery screenshots are the main lane)', () => {
-    const { container } = render(<AttachButton id="claude:x" />);
+    const { container } = render(<AttachButton onPick={() => {}} />);
     const input = container.querySelector('input[type="file"]');
     expect(input).not.toBeNull();
     expect(input!.hasAttribute('capture')).toBe(false);

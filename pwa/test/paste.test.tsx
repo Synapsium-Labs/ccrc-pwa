@@ -1,13 +1,13 @@
-// Pasting a screenshot into the composer — ⌘⇧4 then ⌘V, the desktop path that
-// skips the filesystem and the file picker entirely. It reuses the "+" button's
-// pipeline (downscale → api.upload → the server's `ccd clip` types the saved
-// path into the session's input box), so this covers only what paste adds:
-// spotting an image on the clipboard, naming it so the server admits it, and
-// leaving ordinary text pastes completely untouched.
+// Pasting screenshots into the composer — ⌘⇧4 then ⌘V, the desktop path that
+// skips the filesystem and the file picker entirely. It shares the tray's own
+// pipeline (useStagedImages: downscale → api.upload → a chip appears), so this
+// covers only what paste itself adds: spotting every image on the clipboard
+// (plural — a paste can carry more than one), naming each so the server
+// admits it, and leaving ordinary text pastes completely untouched.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Composer } from '../src/session/Composer';
-import { clipboardImage, namedClipboardImage } from '../src/session/useAttachImage';
+import { clipboardImages, namedClipboardImage } from '../src/session/useAttachImage';
 import { api } from '../src/lib/api';
 
 afterEach(() => {
@@ -16,6 +16,7 @@ afterEach(() => {
 });
 
 const ID = 'claude:OpenClawHetzner';
+const STAGED_CLIP = { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
 
 /** A DataTransfer-shaped clipboard carrying `files` plus optional text. */
 const clipboard = (files: File[], text = ''): DataTransfer =>
@@ -30,11 +31,18 @@ const clipboard = (files: File[], text = ''): DataTransfer =>
 const shot = (type = 'image/png', name = 'image.png') =>
   new File([new Uint8Array(64)], name, { type });
 
-describe('clipboardImage', () => {
-  it('finds the image among clipboard items, and ignores text-only pastes', () => {
-    expect(clipboardImage(clipboard([shot()]))?.type).toBe('image/png');
-    expect(clipboardImage(clipboard([], 'just some text'))).toBeNull();
-    expect(clipboardImage(null)).toBeNull();
+describe('clipboardImages', () => {
+  it('finds every image among clipboard items, and ignores text-only pastes', () => {
+    expect(clipboardImages(clipboard([shot()])).map((f) => f.type)).toEqual(['image/png']);
+    expect(clipboardImages(clipboard([], 'just some text'))).toEqual([]);
+    expect(clipboardImages(null)).toEqual([]);
+  });
+
+  it('returns every image when several are pasted at once, in clipboard order', () => {
+    const files = clipboardImages(
+      clipboard([shot('image/png', 'a.png'), shot('image/jpeg', 'b.jpg')]),
+    );
+    expect(files.map((f) => f.name)).toEqual(['a.png', 'b.jpg']);
   });
 });
 
@@ -56,8 +64,8 @@ describe('namedClipboardImage', () => {
 });
 
 describe('Composer paste', () => {
-  it('uploads a pasted screenshot and does not let it fall into the text box', () => {
-    const upload = vi.spyOn(api, 'upload').mockResolvedValue(undefined as never);
+  it('stages a pasted screenshot as a chip and never lets it fall into the text box', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(STAGED_CLIP);
     render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
 
     const box = screen.getByRole('textbox');
@@ -65,10 +73,26 @@ describe('Composer paste', () => {
     Object.defineProperty(event, 'clipboardData', { value: clipboard([shot()]) });
     fireEvent(box, event);
 
-    expect(upload).toHaveBeenCalledTimes(1);
-    expect(upload.mock.calls[0]![0]).toBe(ID);
     expect(event.defaultPrevented).toBe(true);
     expect((box as HTMLTextAreaElement).value).toBe('');
+    await screen.findByAltText('image.png');
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(upload.mock.calls[0]![0]).toBe(ID);
+  });
+
+  it('stages every image from a multi-image paste in one add() batch', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(STAGED_CLIP);
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: clipboard([shot('image/png', 'a.png'), shot('image/png', 'b.png')]),
+    });
+    fireEvent(screen.getByRole('textbox'), event);
+
+    await screen.findByAltText('a.png');
+    await screen.findByAltText('b.png');
+    expect(upload).toHaveBeenCalledTimes(2);
   });
 
   it('leaves an ordinary text paste to the browser', () => {

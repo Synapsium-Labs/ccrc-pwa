@@ -1,7 +1,9 @@
-// The image-attach lane, shared by its two doors: the composer's "+" picker and
-// pasting a screenshot straight into the prompt. Both end in the same place —
-// downscale if needed, upload, and let the server's `ccd clip` type the saved
-// file's path into the session's input box.
+// The staged-images tray's engine: the composer's "+" picker, pasting a
+// screenshot, and dragging one in all end up here — downscale if needed,
+// upload, and hold the result as a chip until the composer sends or the user
+// removes it. (This file used to also hold a fire-and-forget `useAttachImage`
+// that typed the upload's path straight into the textarea; the tray replaced
+// it — see git history around the attachment-tray feature for that path.)
 import { useRef, useState } from 'react';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
@@ -63,59 +65,6 @@ export function namedClipboardImage(file: File, now: number): File | null {
   if (new RegExp(`\\.(png|jpe?g|webp)$`, 'i').test(file.name)) return file;
   return new File([file], `pasted-${now}.${ext}`, { type: file.type });
 }
-
-/** The image on the clipboard, if this paste carried one. Text pastes → null. */
-export function clipboardImage(data: DataTransfer | null): File | null {
-  const items = Array.from(data?.items ?? []);
-  const image = items.find((i) => i.kind === 'file' && i.type.startsWith('image/'));
-  return image?.getAsFile() ?? null;
-}
-
-export interface AttachImage {
-  busy: boolean;
-  attach: (file: File) => Promise<void>;
-}
-
-export function useAttachImage(
-  id: string,
-  downscale: (file: File) => Promise<Blob> = downscaleImage,
-): AttachImage {
-  const [busy, setBusy] = useState(false);
-
-  const attach = async (file: File): Promise<void> => {
-    setBusy(true);
-    try {
-      const keepOriginal = file.type === 'image/png' && file.size < SMALL_PNG_MAX;
-      // Downscaled bytes are re-wrapped as a named File — the server admits
-      // uploads by filename extension, and a bare Blob has none. The extension
-      // follows what the downscale actually produced.
-      let payload = file;
-      if (!keepOriginal) {
-        const blob = await downscale(file);
-        const ext = blob.type === 'image/png' ? 'png' : 'jpg';
-        payload = new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, {
-          type: blob.type,
-        });
-      }
-      await api.upload(id, payload);
-      toast('Image attached to the prompt — add your text and send');
-    } catch (err) {
-      toast(`Couldn't attach the image — ${apiErrorText(err)}`, 'error', {
-        label: 'Retry',
-        onClick: () => void attach(file),
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return { busy, attach };
-}
-
-// — Staged-images tray: the composer's replacement for the fire-and-forget
-// AttachButton above. Task 10 builds the tray markup, Task 11 wires it into
-// the composer and retires useAttachImage/clipboardImage/AttachButton — until
-// then both hooks live here side by side. —
 
 /** Every image on the clipboard. Text pastes give []. */
 export function clipboardImages(data: DataTransfer | null): File[] {

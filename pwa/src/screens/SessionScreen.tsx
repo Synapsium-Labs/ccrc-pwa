@@ -222,7 +222,9 @@ export function SessionScreen({
       <TaskStrip tasks={tasks} />
 
       <Composer
-        onSend={(text, replaceDraft) => void useStore.getState().send(text, replaceDraft)}
+        // The store doesn't carry attachments through the send lifecycle yet
+        // (that's the next task) — only replaceDraft crosses today.
+        onSend={(text, opts) => void useStore.getState().send(text, opts?.replaceDraft)}
         pending={pending}
         id={id}
         disabled={dead}

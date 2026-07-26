@@ -8,17 +8,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
 import type { PendingSend } from '../stores/session';
 import { AttachButton } from './AttachButton';
-import { clipboardImage, namedClipboardImage, useAttachImage } from './useAttachImage';
+import { AttachTray } from './AttachTray';
+import { clipboardImages, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
 import './chat.css';
 
 export interface ComposerProps {
-  onSend: (text: string, replaceDraft?: boolean) => void;
+  onSend: (
+    text: string,
+    opts?: { replaceDraft?: boolean; attachments?: { path: string; previewUrl: string }[] },
+  ) => void;
   pending: PendingSend[];
   /** Session id — enables the image-attach lane; without it the lane hides. */
   id?: string;
@@ -48,21 +51,17 @@ export function Composer({
   const [commands, setCommands] = useState<SlashCommand[] | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   // Paste is the main way a screenshot gets here on desktop — ⌘⇧4 then ⌘V,
-  // without a round trip through the filesystem and the file picker.
-  const { attach } = useAttachImage(id ?? '');
+  // without a round trip through the filesystem and the file picker. Drop and
+  // the file picker feed the same staged-images tray.
+  const staged = useStagedImages(id ?? '');
+  const [dropping, setDropping] = useState(false);
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     if (id === undefined || disabled) return;
-    const file = clipboardImage(e.clipboardData);
-    if (file === null) return; // an ordinary text paste — leave it entirely alone
-    // Stop the browser also dropping the image's filename into the box.
+    const files = clipboardImages(e.clipboardData);
+    if (files.length === 0) return; // an ordinary text paste — leave it alone
     e.preventDefault();
-    const named = namedClipboardImage(file, Date.now());
-    if (named === null) {
-      toast(`Can't attach ${file.type || 'that'} — PNG, JPEG or WebP only`, 'error');
-      return;
-    }
-    void attach(named);
+    staged.add(files);
   };
 
   // Lazily fetch the session's slash commands (built-ins + skills) the first
@@ -110,11 +109,24 @@ export function Composer({
   };
   useEffect(grow, [value]);
 
+  // Carries previewUrl, not just the path: the optimistic bubble renders the
+  // same thumbnails the chips did, so chip -> pending -> confirmed never
+  // flickers empty. Ownership of those URLs passes to the store on send.
+  const attachments = staged.images
+    .filter((i) => i.state === 'staged')
+    .map((i) => ({ path: i.path!, previewUrl: i.previewUrl }));
+  const canSend = !disabled && !staged.hasFailed && !staged.uploading
+    && (value.trim() !== '' || attachments.length > 0);
+
   const send = (): void => {
+    if (!canSend) return;
     const text = value.trim();
-    if (text === '' || disabled) return;
-    onSend(text);
+    // An explicit `undefined` second argument still counts as a 2-arg call to
+    // a caller matching on arity — only pass opts when there is one.
+    if (attachments.length > 0) onSend(text, { attachments });
+    else onSend(text);
     setValue('');
+    staged.release();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -129,12 +141,29 @@ export function Composer({
   const resolveConflict = (text: string): void => {
     if (!conflict) return;
     onDiscard?.(conflict.key);
-    onSend(text, true);
+    onSend(text, { replaceDraft: true });
     setConflict(null);
   };
 
   return (
-    <div className="composer" data-disabled={disabled || undefined}>
+    <div
+      className="composer"
+      data-disabled={disabled || undefined}
+      data-drop={dropping || undefined}
+      onDragOver={(e) => {
+        if (id !== undefined && !disabled) {
+          e.preventDefault();
+          setDropping(true);
+        }
+      }}
+      onDragLeave={() => setDropping(false)}
+      onDrop={(e) => {
+        if (id === undefined || disabled) return;
+        e.preventDefault();
+        setDropping(false);
+        staged.add(Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/')));
+      }}
+    >
       {matches.length > 0 && (
         <ul className="slash-menu" role="listbox" aria-label="Slash commands">
           {matches.map((c) => (
@@ -150,6 +179,7 @@ export function Composer({
           ))}
         </ul>
       )}
+      <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
       <div className="inputbar">
         <span className="prompt-glyph" aria-hidden="true">
           ❯
@@ -166,12 +196,14 @@ export function Composer({
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
-        {id !== undefined && <AttachButton id={id} disabled={disabled} />}
+        {id !== undefined && (
+          <AttachButton disabled={disabled} onPick={(files) => staged.add(files)} />
+        )}
         <button
           type="button"
           className="send-btn"
           aria-label="Send"
-          disabled={disabled || value.trim() === ''}
+          disabled={!canSend}
           onClick={send}
         >
           <span aria-hidden="true">↑</span>
