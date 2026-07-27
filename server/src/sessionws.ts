@@ -115,6 +115,14 @@ export class SessionStream {
         if (ask !== null) dialog = { ...dialog, ask };
       }
     }
+    // The probe is scoped to the menu on screen, so it dies with it — same
+    // lifecycle event that resets `seenDialog` below. A capture can miss a menu
+    // that is still there (tmux returns null, a grab mid-redraw, one stray 'esc
+    // to interrupt' anywhere in the pane flipping it to busy), and on the way
+    // back the ask is unlatched but the transcript is untouched — the agent is
+    // blocked awaiting the answer. Keeping the probe would decline the read the
+    // reappearance needs, and the menu would come back bare and stay bare.
+    if (dialog === null) this.askProbe = null;
     const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
     this.seenDialog = seen;
     if (msg) this.send(msg);

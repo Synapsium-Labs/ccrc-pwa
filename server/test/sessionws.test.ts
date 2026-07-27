@@ -144,14 +144,16 @@ const pollOnce = (s: SessionStream): Promise<void> =>
   (s as unknown as { tick: () => Promise<void> }).tick();
 
 /**
- * Run a SessionStream against a fixed pane and a scripted sequence of transcript
- * contents — one per poll, `null` meaning the file is not there — and collect
- * every frame it sends, plus how many times the transcript was read for an ask.
- * It resumes with `since`, so what comes back is the dialog traffic itself rather
- * than a backlog.
+ * Run a SessionStream against a scripted sequence of pane captures and transcript
+ * contents — one of each per poll, `null` transcript meaning the file is not
+ * there — and collect every frame it sends, plus how many times the transcript
+ * was read for an ask. Either sequence may be shorter than the other; its last
+ * entry then holds for the remaining polls. It resumes with `since`, so what
+ * comes back is the dialog traffic itself rather than a backlog.
  */
 const streamWith = async (opts: {
-  pane: string;
+  pane?: string;
+  paneSequence?: readonly string[];
   transcript?: string | null;
   transcriptSequence?: readonly (string | null)[];
 }): Promise<{ frames: any[]; askReads: number }> => {
@@ -166,10 +168,13 @@ const streamWith = async (opts: {
     if (existsSync(file) && readFileSync(file, 'utf8') === t) return;
     writeFileSync(file, t);
   };
+  const panes = opts.paneSequence ?? [opts.pane ?? ''];
+  let step = 0; // which poll we are on: 0 is start(), then one per tick
+  const at = <T,>(xs: readonly T[], i: number): T => xs[Math.min(i, xs.length - 1)]!;
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: opts.pane, stderr: '' };
+    if (args[0] === 'capture-pane') return { code: 0, stdout: at(panes, step), stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
   // The tailer reads through io.tailFile, and `since` skips the backlog, so a
@@ -184,14 +189,14 @@ const streamWith = async (opts: {
   };
   const deps: Deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io };
   const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
-  put(seq[0] ?? null);
+  put(at(seq, 0));
   const frames: any[] = [];
   const offset = existsSync(file) ? statSync(file).size : 0;
   const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset });
   try {
     await stream.start();
-    for (const t of seq.slice(1)) {
-      put(t);
+    for (step = 1; step < Math.max(seq.length, panes.length); step += 1) {
+      put(at(seq, step));
       await pollOnce(stream);
     }
   } finally {
@@ -272,6 +277,27 @@ describe('dialog enrichment', () => {
       transcriptSequence: [t, t, t],
     });
     expect(askReads).toBe(1);
+  });
+
+  it('re-enriches a menu that flapped off-screen and came back', async () => {
+    // A capture can miss a menu that is still there: tmux returns null, the grab
+    // lands mid-redraw, or BUSY_RE matches one stray 'esc to interrupt' anywhere
+    // in the pane (pane/dialog.ts:24-28). The read-skip memo has to be forgotten
+    // with the menu, or the second appearance is judged against a probe taken for
+    // the first — and since the agent is blocked awaiting the answer, the
+    // transcript never changes to reopen the read. The menu would come back bare
+    // and stay bare for the rest of its life.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const ask = fixture('ask-2col-chat-about.txt');
+    const { frames, askReads } = await streamWith({
+      paneSequence: [ask, fixture('busy.txt'), ask, ask],
+      transcriptSequence: [t],
+    });
+    expect(frames.map((f) => f.type)).toEqual(['dialog', 'dialog_cleared', 'dialog']);
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs[1]!.dialog.ask?.options).toHaveLength(3);
+    // Two appearances, two reads — and the fourth poll re-latches, not re-reads.
+    expect(askReads).toBe(2);
   });
 
   it('leaves a /model-style confirm unenriched', async () => {
