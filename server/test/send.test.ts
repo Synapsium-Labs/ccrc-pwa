@@ -54,20 +54,68 @@ const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-
 const cuPresses = (calls: string[][]) => sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'C-u').length;
 
 /**
+ * SIX CONSECUTIVE REAL FRAMES of a 3-line draft being cleared, `tmux
+ * capture-pane -p -e` between every C-u (2026-07-27, Claude Code 2.1.220 in an
+ * isolated scratch tmux session, 120 columns, 1.2 s settle per press; the draft
+ * was typed with `send-keys -l` + `M-Enter` and never submitted).
+ *
+ * Everything here is verbatim capture bytes, assembled only to avoid repeating
+ * the rows that are identical in all six frames: the two chrome rows below the
+ * box, and the rule above and below it (shortened from 120 `─` to keep the file
+ * readable — a rule carries no `❯` at any length). The frame-varying part is
+ * BOX_ROWS, which is exactly what the pane showed.
+ *
+ * This is here because the clear's termination argument rests on a claim about
+ * layout that had only ever been asserted by a hand-written render(): that the
+ * `❯` marker sits on the box's FIRST row, that continuation rows are indented
+ * and carry no marker, and that nothing BELOW the box starts with `❯` — so
+ * `draftOf`'s `.at(-1)` lands on row one, the last row to empty. If any of that
+ * were wrong the loop could stop on a box that still holds text. The frames
+ * also re-measure the count that the caps are sized from: 5 presses for 3
+ * lines, independently of the run that produced the finding doc.
+ */
+const LIVE_CU_FRAMES = ((): string[] => {
+  const RULE = '\x1b[38;5;244m' + '─'.repeat(24);
+  const CHROME = [
+    '\x1b[39m  \x1b[38;5;246m👤 \x1b[36mteam·max\x1b[38;5;246m \x1b[2m│\x1b[0m\x1b[38;5;246m 🤖 Opus 5 (1M context) · xhigh \x1b[2m│\x1b[0m\x1b[38;5;246m 🎯 cu-probe \x1b[2m│\x1b[0m\x1b[38;5;246m 💲 $0.0000\x1b[39m',
+    '  \x1b[38;5;73m⏸ plan mode on\x1b[38;5;246m (shift+tab to cycle)\x1b[39m',
+  ];
+  // Appears from the first kill onward. Note it does NOT start with `❯`.
+  const YANK_HINT = ' '.repeat(91) + '\x1b[38;5;246mCtrl+Y to paste deleted text\x1b[39m';
+  const BOX_ROWS: string[][] = [
+    ['\x1b[39m❯\xa0AAA first line', '  BBB second line', '  CCC third line'], // typed
+    ['\x1b[39m❯\xa0AAA first line', '  BBB second line', ''],                 // press 1: row 3 killed
+    ['\x1b[39m❯\xa0AAA first line', '  BBB second line'],                     // press 2: joined away
+    ['\x1b[39m❯\xa0AAA first line', ''],                                      // press 3: row 2 killed
+    ['\x1b[39m❯\xa0AAA first line'],                                          // press 4: joined away
+    ['\x1b[39m❯\xa0'],                                                        // press 5: empty
+  ];
+  return BOX_ROWS.map((rows, i) =>
+    [...(i > 0 ? [YANK_HINT] : []), RULE, ...rows, RULE, ...CHROME].join('\n') + '\n');
+})();
+
+/**
  * A MODEL of the Claude Code input box. `fakeTmux` replays scripted frames and
  * so cannot represent state — but the whole correctness of the clear is about
  * state, so the clear needs a pane that answers according to what was actually
  * done to it.
  *
- * C-u semantics measured against the live box in `cc-claude2-OpenClawHetzner`
- * on 2026-07-27 (pane captured between every press, 1.2–1.5 s settle): C-u is
- * kill-to-LINE-start with the caret at the end of the LAST line, and the line
- * it empties then has to be JOINED AWAY by a second press. Text is therefore
- * consumed bottom-up at two presses per line, minus one for the final line —
- * 2N-1, i.e. a 2-line draft takes 3 presses and a 3-line draft 5. Presses
- * against an already-empty box are no-ops.
+ * C-u semantics measured against a live box on 2026-07-27 (pane captured
+ * between every press): C-u is kill-to-ROW-start with the caret at the end of
+ * the LAST row, and a row emptied by a kill still has to be JOINED AWAY by a
+ * second press when a newline made it. Text is therefore consumed bottom-up at
+ * two presses per line, minus one for the final line — 2N-1, i.e. a 2-line
+ * draft takes 3 presses and a 3-line draft 5. Presses against an already-empty
+ * box are no-ops (12 of them left a 2-line draft's box clean).
+ *
+ * Deliberately NOT modelled: wrapping. A logical line too long for the pane
+ * occupies several visual rows and each costs one press with no join (260 chars
+ * at 120 columns = 3 rows = 3 presses, measured), so a wrapped draft is CHEAPER
+ * per row than this model. Production sizes its blind floor at 2 presses per
+ * visual row, which is exact here and over-generous there; over-pressing is a
+ * no-op, under-pressing is the bug.
  */
-function inputBox(initial: readonly string[] = ['']) {
+function inputBox(initial: readonly string[] = [''], width = 120) {
   let lines = [...initial];
   const NBSP = '\xa0';
   return {
@@ -75,46 +123,71 @@ function inputBox(initial: readonly string[] = ['']) {
     isEmpty: (): boolean => lines.length === 1 && lines[0] === '',
     pressCu(): void {
       const last = lines.length - 1;
-      if (lines[last] !== '') lines[last] = '';       // kill to line start
-      else if (lines.length > 1) lines.pop();          // join the emptied line away
-      // single empty line: no-op
+      if (lines[last] !== '') lines[last] = '';       // kill to row start
+      else if (lines.length > 1) lines.pop();          // join the emptied row away
+      // single empty row: no-op
     },
     type: (s: string): void => { lines[lines.length - 1] += s; },
     newline: (): void => { lines.push(''); },
     submit: (): void => { lines = ['']; },
     /**
-     * The pane the way Claude Code draws it: the `❯` marker sits on the FIRST
-     * box row only and continuation rows are indented — so `draftOf` reads row
-     * one, which (kills running bottom-up) is the LAST row to empty.
+     * The pane the way Claude Code really draws it — shape taken from
+     * LIVE_CU_FRAMES: full-width rules, the `❯` marker on the FIRST box row
+     * only, continuation rows indented two spaces, and chrome rows below the
+     * box that carry no marker. `draftOf` therefore reads row one, which (kills
+     * running bottom-up) is the LAST row to empty.
      */
     render: (): string =>
       [
         'earlier turn',
         '● a reply',
-        '───────────────',
+        '─'.repeat(width),
         `❯${lines[0] === '' ? NBSP : ' ' + lines[0]}`,
         ...lines.slice(1).map((l) => '  ' + l),
-        '───────────────',
+        '─'.repeat(width),
+        '  👤 team·max │ 🤖 Opus 5 (1M context) · xhigh',
       ].join('\n') + '\n',
   };
 }
 
 /**
- * `inputBox` wired behind a real `Tmux`. The first `staleFrames` captures come
- * back as the frame the pane showed BEFORE anything was typed — the slow-render
- * failure the echo poll exists for, and precisely the case that strands a clip
- * path in a box the code believes is empty.
+ * `inputBox` wired behind a real `Tmux`, with a VIRTUAL CLOCK: every tmux
+ * invocation costs `SPAWN_MS` and every sleep costs what it sleeps, so a test
+ * can measure the wall clock a clear would really burn — and how long the
+ * session's queue slot is held — without burning it.
+ *
+ * The first `staleFrames` captures come back as the frame the pane showed
+ * BEFORE anything was typed: the slow-render failure the echo poll exists for,
+ * and precisely the case that strands a clip path in a box the code believes is
+ * empty. `Infinity` models a pane that never re-renders at all.
  */
-function boxTmux(opts: { initial?: readonly string[]; staleFrames?: number } = {}) {
-  const box = inputBox(opts.initial);
+const SPAWN_MS = 8;   // measured order of magnitude for a `tmux` subprocess
+function boxTmux(opts: {
+  initial?: readonly string[];
+  staleFrames?: number;
+  width?: number;
+  /** Pane text to answer with instead of the box, from capture `n` onward. */
+  overlayFrom?: number;
+  overlay?: string;
+  /** Capture `n` onward fails (pane died). */
+  dieFrom?: number;
+} = {}) {
+  const box = inputBox(opts.initial, opts.width);
   const stale = opts.staleFrames ?? 0;
-  const frozen = inputBox(opts.initial).render();
+  const frozen = inputBox(opts.initial, opts.width).render();
   const calls: string[][] = [];
   let captures = 0;
+  let ms = 0;
+  const clock = { now: () => ms, sleep: async (n: number) => { ms += n; } };
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
+    ms += SPAWN_MS;
     if (args[0] === 'capture-pane') {
       captures++;
+      if (opts.dieFrom !== undefined && captures >= opts.dieFrom) return { code: 1, stdout: '', stderr: '' };
+      if (opts.overlayFrom !== undefined && captures >= opts.overlayFrom) {
+        return { code: 0, stdout: opts.overlay ?? '', stderr: '' };
+      }
       return { code: 0, stdout: captures <= stale ? frozen : box.render(), stderr: '' };
     }
     if (args[0] === 'send-keys') {
@@ -126,12 +199,13 @@ function boxTmux(opts: { initial?: readonly string[]; staleFrames?: number } = {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  return { tmux: new Tmux(run), calls, box };
+  return { tmux: new Tmux(run), calls, box, clock };
 }
 
-// The double is only worth anything if its C-u behaves like the real one, so
-// pin it to the measured numbers before using it to judge production code.
-describe('the stateful input-box double reproduces the measured C-u semantics', () => {
+// These exercise the DOUBLE, not send.ts — they would stay green if clearBox
+// were gutted. They are here because every production assertion below is only
+// as good as this model, so the model is pinned to real captures first.
+describe('the input-box double is faithful to real captures', () => {
   const pressesToEmpty = (lines: string[]): number => {
     const box = inputBox(lines);
     let n = 0;
@@ -139,9 +213,15 @@ describe('the stateful input-box double reproduces the measured C-u semantics', 
     return n;
   };
 
-  it('2-line draft empties in exactly 3 presses, 3-line in exactly 5 (measured 2026-07-27)', () => {
+  it('reproduces the measured press counts for N = 1..4', () => {
+    // The finding doc's first probe reported "3 lines … empty by p7", which its
+    // re-measurement retracted: the marker string being grepped for appeared in
+    // the echoed command and inflated every count. These are the corrected
+    // numbers, and LIVE_CU_FRAMES below is a third, independent run of N=3.
+    expect(pressesToEmpty(['one'])).toBe(1);
     expect(pressesToEmpty(['first line', 'second line'])).toBe(3);
     expect(pressesToEmpty(['one', 'two', 'three'])).toBe(5);
+    expect(pressesToEmpty(['a', 'b', 'c', 'd'])).toBe(7);
   });
 
   it('further presses on an emptied box are no-ops', () => {
@@ -152,15 +232,36 @@ describe('the stateful input-box double reproduces the measured C-u semantics', 
     expect(box.lines).toEqual(['']);
   });
 
-  it('mid-clear the row draftOf reads still holds line 1 — why "press until draftOf() === \'\'" terminates correctly', () => {
-    const box = inputBox(['first line', 'second line']);
-    box.pressCu();
-    expect(draftOf(box.render())).toBe('first line');
-    box.pressCu();
-    expect(draftOf(box.render())).toBe('first line');
-    box.pressCu();
-    expect(draftOf(box.render())).toBe('');
+  it('steps through the six REAL frames identically, frame for frame', () => {
+    // The model's whole job is to answer draftOf the way the real pane does
+    // while text is being killed out from under it. Same 3-line draft, same
+    // press sequence, compared against verbatim capture bytes.
+    const box = inputBox(['AAA first line', 'BBB second line', 'CCC third line']);
+    const seen: string[] = [];
+    for (let i = 0; i < LIVE_CU_FRAMES.length; i++) {
+      if (i > 0) box.pressCu();
+      expect(draftOf(box.render())).toBe(draftOf(LIVE_CU_FRAMES[i]!));
+      seen.push(draftOf(LIVE_CU_FRAMES[i]!));
+    }
+    // ...and what the real pane showed: row 1 unchanged for four presses, empty
+    // only on the fifth. Progress is invisible to draftOf; emptiness is not.
+    expect(seen).toEqual(['AAA first line', 'AAA first line', 'AAA first line', 'AAA first line', 'AAA first line', '']);
     expect(box.isEmpty()).toBe(true);
+  });
+
+  it('real frames: the caret is on the box\'s FIRST row and nothing below the box carries one', () => {
+    // The assumption `draftOf`'s `.at(-1)` depends on, checked against bytes
+    // rather than against the fixture that was written to satisfy it.
+    for (const frame of LIVE_CU_FRAMES) {
+      const rows = frame.split('\n');
+      const caretRows = rows.map((l, i) => [l, i] as const).filter(([l]) => l.replace(/\x1b\[[0-9;]*m/g, '').startsWith('❯'));
+      expect(caretRows).toHaveLength(1);                       // one marker in the whole pane
+      const [, boxRow] = caretRows[0]!;
+      // every row after it — continuation rows, the rule, both chrome rows
+      for (const below of rows.slice(boxRow + 1)) {
+        expect(below.replace(/\x1b\[[0-9;]*m/g, '').startsWith('❯')).toBe(false);
+      }
+    }
   });
 });
 
@@ -262,16 +363,18 @@ describe('sendPrompt', () => {
 
   it('draft-clear-failed when C-u leaves the draft; only C-u was sent', async () => {
     // Updated with the 2026-07-27 measurement: the clear presses until the box
-    // reads empty, up to a flat cap of 8, so a box that never clears takes all
-    // 8. What this test is really about is unchanged — nothing but C-u is sent,
-    // and the residual draft is reported instead of being typed over.
+    // reads empty, so a box that never clears spends the whole ceiling. What
+    // this test is really about is unchanged — nothing but C-u is sent, and the
+    // residual draft is reported instead of being typed over.
     const { tmux, calls } = fakeTmux(['❯ stubborn\n', '❯ stubborn\n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true });
     expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: 'stubborn' });
     expect(new Set(sendKeysCalls(calls).map((c) => c.join(' ')))).toEqual(
       new Set(['tmux send-keys -t cc-x C-u']),
     );
-    expect(cuPresses(calls)).toBe(8);
+    // The ceiling, reached only because `sleep` is free here; against a real
+    // clock the 3 s budget stops it first (see the budget tests below).
+    expect(cuPresses(calls)).toBe(24);
   });
 
   it('multiline sends M-Enter between literals', async () => {
@@ -595,20 +698,35 @@ describe('sendPrompt with attachments', () => {
     expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
   });
 
-  it('presses C-u until the box reads empty, not a fixed count', async () => {
-    // Was "one C-u per typed line" (3 for a 3-line prompt), which the
-    // 2026-07-27 measurement disproved: clearing N lines costs 2N-1 presses.
-    // The count is no longer encoded at all — the clear looks after every
-    // press — so against a pane that reports an empty box from the start, one
-    // press is the whole job. The real behaviour is pinned against a stateful
-    // box in "the failed-send cleanup actually empties the box" below.
+  it('fires the full 2-per-row floor even when the pane claims the box is already empty', async () => {
+    // The guarantee this test exists to hold is "never fewer presses than the
+    // text costs". Was "one C-u per typed line" (3 for a 3-line prompt), too
+    // few — clearing 3 rows costs 5. But a clear that merely LOOKS after each
+    // press would satisfy any count against this fake, whose box reads empty
+    // from the first frame: it would stop at one press and strand the text,
+    // which is exactly what happens when a stale render is why the echo failed.
+    // So the floor is fired blind, and this pane can't talk it out of it.
     const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
     const { tmux, calls } = fakeTmux(['❯ \n']); // box stays empty — never echoes
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep },
       'x', 'caption', { attachments: [P, P2] },
     );
-    expect(cuPresses(calls)).toBe(1);
+    expect(cuPresses(calls)).toBe(5); // 2 paths + caption = 3 rows → 2*3-1
+  });
+
+  it('sizes the floor by VISUAL rows, so a caption that wraps still gets cleared', async () => {
+    // C-u kills a visual ROW, not a logical line: a 260-char line at 120
+    // columns occupied 3 rows and took 3 presses (measured 2026-07-27). A floor
+    // computed from `split('\n').length` alone would under-press by one per
+    // wrapped row and leave the tail of a long caption — with the clip path
+    // above it — in the box.
+    const long = 'w'.repeat(300);            // 3 rows in a 120-column box
+    const { tmux, calls } = fakeTmux([`${'─'.repeat(120)}\n❯ \n`]);
+    await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', long, { attachments: [P] },
+    );
+    expect(cuPresses(calls)).toBe(7);        // path (1 row) + caption (3) = 4 rows → 2*4-1
   });
 
   it('reports the residual draft when C-u fails to clear after a failed verify', async () => {
@@ -630,33 +748,38 @@ describe('sendPrompt with attachments', () => {
   });
 });
 
-// The defect this file's stateful double was built for. C-u costs 2N-1 presses,
-// not N (measured 2026-07-27), so the old `parts.length` loop under-pressed on
-// EVERY multi-line draft: a 2-line attachment prompt got 2 presses where it
-// needed 3, leaving the bare clip path sitting on line 1 of the live box — the
-// next send then came back `draft-present` carrying exactly the thing this
-// cleanup exists to remove. Judged against box STATE, not against a press count.
+// The defect this file's stateful double was built for. C-u costs 2 presses per
+// row, not one per line (measured 2026-07-27), so the old `parts.length` loop
+// under-pressed on EVERY multi-line draft: a 2-line attachment prompt got 2
+// presses where it needed 3, leaving the bare clip path sitting on line 1 of the
+// live box — the next send then came back `draft-present` carrying exactly the
+// thing this cleanup exists to remove. Judged against box STATE, not a press count.
 describe('the failed-send cleanup actually empties the box', () => {
   const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
 
-  it('a verify-failed attachment send (2-line prompt) leaves the box EMPTY', async () => {
-    // 14 stale frames = the initial draft check + all 12 echo polls + the
-    // failure-path plain capture, so the send gives up believing nothing
-    // echoed while both typed lines are really sitting in the box.
-    const { tmux, calls, box } = boxTmux({ staleFrames: 14 });
+  it('empties the box even though the pane NEVER re-renders — the reason the verify failed', async () => {
+    // `staleFrames: Infinity` is the case that matters: the pane goes on showing
+    // the pre-typing frame forever, which is the commonest reason an echo check
+    // fails in the first place. So every read the cleanup takes says "the box is
+    // empty" while both typed lines are really sitting in it, and a clear that
+    // stops when the box reads empty stops after ONE press and strands the whole
+    // prompt. (A finite `staleFrames: 14` — initial check + 12 echo polls + the
+    // failure-path plain capture — is the largest staleness whose LAST frame is
+    // fresh again, and would hide exactly this.)
+    const { tmux, calls, box } = boxTmux({ staleFrames: Infinity });
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
     );
     expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
-    expect(box.lines).toEqual(['']);
+    expect(box.lines).toEqual(['']);          // ← the assertion. Box state, not the pane's story about it.
     expect(draftOf(box.render())).toBe('');   // no clip path left for the next send to trip on
     expect((res as { draft?: string }).draft).toBeUndefined();
-    expect(cuPresses(calls)).toBe(3);         // 2N-1 for N=2, reached by looking, not by arithmetic
+    expect(cuPresses(calls)).toBe(3);         // 2 rows → 2*2-1, fired blind
   });
 
-  it('a 3-line attachment prompt needs 5 presses and gets them', async () => {
+  it('a 3-line attachment prompt needs 5 presses and gets them, stale pane or not', async () => {
     const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
-    const { tmux, calls, box } = boxTmux({ staleFrames: 14 });
+    const { tmux, calls, box } = boxTmux({ staleFrames: Infinity });
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [P, P2] },
     );
@@ -664,8 +787,8 @@ describe('the failed-send cleanup actually empties the box', () => {
     expect(cuPresses(calls)).toBe(5);
   });
 
-  it('stops as soon as the box reads empty — a 1-line prompt costs a single press', async () => {
-    const { tmux, calls, box } = boxTmux({ staleFrames: 14 });
+  it('a 1-row prompt costs a single press', async () => {
+    const { tmux, calls, box } = boxTmux({ staleFrames: Infinity });
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: [P] },
     );
@@ -687,13 +810,19 @@ describe('the failed-send cleanup actually empties the box', () => {
     expect(typed).toEqual([['tmux', 'send-keys', '-t', 'cc-x', '-l', 'fresh text']]);
   });
 
-  it('gives up rather than hammering forever when the box will not clear', async () => {
-    const { tmux, calls } = fakeTmux(['❯ stubborn\n']); // C-u never takes
+  it('replaceDraft clears a 5-line draft — a pasted stack trace is not an exotic case', async () => {
+    // The old ceiling of 8 was 2N-1 for N=4 exactly, so five lines hit it: the
+    // presses that DID land destroyed four of the user's rows, and the send was
+    // then refused with `draft-clear-failed` reporting the one row left, which
+    // reads to the user as "nothing happened". Nothing was bought by keeping the
+    // ceiling low — the clear exits on the first empty read either way.
+    const { tmux, calls, box } = boxTmux({ initial: ['l1', 'l2', 'l3', 'l4', 'l5'] });
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'fresh', { replaceDraft: true },
     );
-    expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: 'stubborn' });
-    expect(cuPresses(calls)).toBe(8); // flat cap: draftOf sees only the box's first row, so N is unknowable here
+    expect(res).toEqual({ ok: true });
+    expect(cuPresses(calls)).toBe(9);   // 2*5-1
+    expect(box.lines).toEqual(['']);
   });
 
   it('a pane that dies mid-clear is not-alive, not draft-clear-failed', async () => {
@@ -702,6 +831,96 @@ describe('the failed-send cleanup actually empties the box', () => {
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true },
     );
     expect(res).toEqual({ ok: false, error: 'not-alive' });
+  });
+
+  it('a pane that dies mid-cleanup after a failed verify is not-alive too, not a silent "cleared"', async () => {
+    // `verify-failed` with no `draft` is byte-identical to the clean-clear case
+    // above, so reporting a dead pane that way told the caller the box had been
+    // emptied when the truth is "unknown". The two clear sites now agree on what
+    // a null capture means.
+    const { tmux } = boxTmux({ staleFrames: 14, dieFrom: 15 }); // dies on the first post-C-u read
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
+    );
+    expect(res).toEqual({ ok: false, error: 'not-alive' });
+  });
+});
+
+// A dialog can open between the draft check at the top of sendPrompt and the
+// clear — and an attachment prompt's very first keystroke is a literal '/', so
+// the slash-command palette is a live way to get one. With a menu up there is no
+// input box: the only ❯ on screen is the cursor on the selected OPTION, which
+// never empties, so the clear would spend its entire ceiling hammering C-u into
+// the menu and then hand the user "1. Yes" back as their own leftover draft.
+describe('a menu that opens mid-clear stops the clear', () => {
+  const MENU = 'some scrollback\n\n❯ 1. Yes\n  2. No\n  Enter to select\n';
+  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+
+  it('replaceDraft answers dialog-open, the same as a menu that was already up', async () => {
+    // capture 1 = a real draft (passes the guard at the top), everything after
+    // = a live menu.
+    const { tmux, calls } = fakeTmux(['❯ my draft\n', MENU]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'dialog-open' });
+    expect(cuPresses(calls)).toBe(1);  // bails on the first read, instead of 24 into a live menu
+    expect(sendKeysCalls(calls).some((c) => c.includes('-l'))).toBe(false);
+  });
+
+  it('the attachment cleanup stops pressing and reports no residual draft', async () => {
+    const panes = [...Array(14).fill('❯ \n'), MENU];
+    const { tmux, calls } = fakeTmux(panes);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect((res as { draft?: string }).draft).toBeUndefined();  // never "1. Yes"
+    expect(cuPresses(calls)).toBe(3);   // the blind floor, then it sees the menu and stops
+  });
+});
+
+// Everything in sendPrompt runs inside the session's KeyedQueue slot, so a clear
+// that grinds is a session that accepts nothing — not the next prompt, not
+// /interrupt. The old cleanup cap was `2 * parts.length + 2`, sized off the
+// message: a 200-line prompt bought 402 presses and a minute of sleeps, and a
+// 500-line one several minutes, all with the lock held.
+describe('a clear cannot hold the session queue open', () => {
+  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  /** Wall clock the clear itself spent, i.e. from the last typed keystroke on. */
+  const clearElapsed = (clock: { now: () => number }, before: number) => clock.now() - before;
+
+  it('a 500-line attachment prompt is bounded by the 3 s budget, not by its line count', async () => {
+    const text = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n');
+    const { tmux, calls, clock } = boxTmux({ staleFrames: Infinity });
+    let atClear = 0;
+    const sleep = async (ms: number) => {
+      // the clear is the only thing that sleeps CLEAR_POLL_MS after typing
+      if (atClear === 0 && ms === 150) atClear = clock.now();
+      await clock.sleep(ms);
+    };
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep, now: clock.now }, 'x', text, { attachments: [P] },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    // Unbounded, this is 1002 presses; the budget stops the blind burst partway.
+    expect(cuPresses(calls)).toBeLessThan(500);
+    expect(clearElapsed(clock, atClear - 150)).toBeLessThan(3500);
+  });
+
+  it('a box that will not clear releases the queue inside the budget, so /interrupt is not stuck behind it', async () => {
+    const { tmux, clock } = boxTmux({ initial: ['stuck'], overlayFrom: 2, overlay: '❯ stuck forever\n' });
+    const queue = new KeyedQueue();
+    const order: string[] = [];
+    const send = sendPrompt(
+      { tmux, queue, sleep: clock.sleep, now: clock.now }, 'x', 'hi', { replaceDraft: true },
+    ).then((r) => { order.push('send'); return r; });
+    const second = queue.run('x', async () => { order.push('interrupt'); }); // same session key
+    const res = await send;
+    await second;
+    expect(res).toMatchObject({ ok: false, error: 'draft-clear-failed', draft: 'stuck forever' });
+    expect(order).toEqual(['send', 'interrupt']);  // it did wait — that is the point
+    expect(clock.now()).toBeLessThan(3500);        // ...but not for a minute
   });
 });
 
