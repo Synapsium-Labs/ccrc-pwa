@@ -7,7 +7,7 @@ import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
-import type { AskQuestion, Dialog, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
 const POLL_MS = 2000;
 const BACKLOG_N = 50;
@@ -281,7 +281,7 @@ export class SessionStream {
  *  last saw, and the enrichment (if any) that rode along with it. */
 export interface DialogSeen {
   id: string | null;
-  ask: AskQuestion | null;
+  ask: DialogAsk | null;
 }
 
 /**

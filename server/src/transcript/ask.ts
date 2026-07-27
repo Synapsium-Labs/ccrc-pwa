@@ -2,7 +2,7 @@
 // tool inputs at TOOL_INPUT_MAX (4000), and a real question with previews runs
 // past that — the one that motivated this feature serialised to 4572 bytes. So
 // read the JSONL directly, untruncated.
-import type { AskQuestion } from '../../../shared/api.js';
+import type { AskQuestion, DialogAsk } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
 
 /** Enough tail to hold the current turn comfortably. */
@@ -110,21 +110,28 @@ const pairMatches = (a: string, b: string): boolean => {
  * (`4. Type something.`), unnumbered-then-appended in two-column — and nothing in
  * Dialog.options marks them, which is why a "fraction of rows matched" rule has
  * no definable denominator.
+ *
+ * The returned `options` are per POSITION, and a position that did NOT match
+ * comes back `null`: identifying the question is one judgement, and trusting a
+ * given row's copy is another. From four options up a single disagreeing row is
+ * forgiven (a capture taken mid-redraw drops one, and the TUI's own rows slide
+ * up into the hole) — but forgiving it is not the same as believing it, and the
+ * sheet renders by position, so that row keeps the pane's own copy.
  */
 export function alignAsk(
   scraped: readonly { label: string }[],
   questions: readonly AskQuestion[],
-): AskQuestion | null {
-  const fits = questions.filter((q) => {
+): DialogAsk | null {
+  const fits: DialogAsk[] = [];
+  for (const q of questions) {
     const n = q.options.length;
-    if (n === 0 || scraped.length < n) return false;
-    let miss = 0;
-    for (let i = 0; i < n; i++) {
-      if (!pairMatches(scraped[i]!.label, q.options[i]!.label)) miss += 1;
-    }
+    if (n === 0 || scraped.length < n) continue;
+    const matched = q.options.map((o, i) => pairMatches(scraped[i]!.label, o.label));
+    const miss = matched.filter((m) => !m).length;
     // Two-option questions are 29% of the corpus; one coincidental label must
     // never be enough evidence.
-    return n >= 4 ? miss <= 1 : miss === 0;
-  });
+    if (n >= 4 ? miss > 1 : miss > 0) continue;
+    fits.push({ ...q, options: q.options.map((o, i) => (matched[i] ? o : null)) });
+  }
   return fits.length === 1 ? fits[0]! : null;
 }

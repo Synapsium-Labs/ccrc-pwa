@@ -151,6 +151,37 @@ describe('alignAsk', () => {
     expect(alignAsk(rows('A', 'B', 'Z'), [q('Pick', 'A', 'B', 'C')])).toBeNull();
   });
 
+  it('never enriches the position it knows disagrees', () => {
+    // The tolerance above admits the question — but the row it forgave is the
+    // ONE row known to say something else, and the sheet enriches by position.
+    // A capture taken mid-redraw does exactly this: the 4th numbered row hasn't
+    // repainted, so the TUI's own "Chat about this" slides up into its place.
+    // Handing that row the transcript's 4th option labels the free-text escape
+    // hatch with an answer tapping it will never send.
+    const picked = alignAsk(
+      rows('Ship behind a flag', 'Ship to 5% of tenants', 'Ship to everyone at once', 'Chat about this'),
+      [
+        {
+          question: 'How do we ship it?',
+          multiSelect: false,
+          options: [
+            { label: 'Ship behind a flag' },
+            { label: 'Ship to 5% of tenants' },
+            { label: 'Ship to everyone at once' },
+            { label: 'Roll back the migration entirely', description: 'ABANDON THE WORK', preview: 'git revert' },
+          ],
+        },
+      ],
+    );
+    expect(picked?.question).toBe('How do we ship it?');
+    expect(picked?.options).toEqual([
+      { label: 'Ship behind a flag' },
+      { label: 'Ship to 5% of tenants' },
+      { label: 'Ship to everyone at once' },
+      null,
+    ]);
+  });
+
   it('refuses when two questions align — there is no ordering signal', () => {
     // A multi-question call gets ONE tool_result, after the LAST answer, so all
     // of them look pending at once.

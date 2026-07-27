@@ -229,6 +229,13 @@ describe('dialog enrichment', () => {
     expect(withAsk.frames[0]!.dialog.ask).toBeDefined();
     expect(without.frames[0]!.dialog.ask).toBeUndefined();
     expect(withAsk.frames[0]!.dialog.id).toBe(without.frames[0]!.dialog.id);
+    // The whole design rests on enrichment riding ALONGSIDE the scraped menu:
+    // the keystrokes an answer sends come from the pane and nothing else. `id`
+    // cannot witness that — it is sha1'd inside parseDialog, BEFORE the ask is
+    // attached, so a post-parse rewrite of every label leaves it byte-identical.
+    // Pin the rows themselves, and the cursor that decides which one Enter takes.
+    expect(withAsk.frames[0]!.dialog.options).toEqual(without.frames[0]!.dialog.options);
+    expect(withAsk.frames[0]!.dialog.selectedIndex).toBe(without.frames[0]!.dialog.selectedIndex);
   });
 
   it('delivers an ask that only becomes readable on a later poll', async () => {

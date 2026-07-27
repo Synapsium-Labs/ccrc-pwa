@@ -15,7 +15,9 @@
 // box had to truncate. That copy is decoration ONLY — enrichment is matched by
 // POSITION, and the option index typed at the pane always comes from the pane.
 // Rows the transcript doesn't cover (the TUI's own "Chat about this") keep
-// their scraped label.
+// their scraped label — and so do rows the server sends as `null`, the
+// positions it matched loosely enough to accept the question but not loosely
+// enough to believe the copy.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog } from '../../../shared/api';
@@ -201,7 +203,9 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
           const selected = o.index === shown.selectedIndex;
           const waiting = answering === o.index;
           // By POSITION, never by matching text: the keystroke is o.index
-          // whatever the transcript happens to call this row.
+          // whatever the transcript happens to call this row. `null` (the
+          // position the server could not confirm) reads like a missing one —
+          // every field below falls back to the pane's own copy.
           const rich = ask?.options[o.index - 1];
           const label = rich?.label ?? o.label;
           // An empty description is not an override either — fall back to the

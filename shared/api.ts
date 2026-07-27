@@ -83,6 +83,19 @@ export interface AskQuestion {
   options: AskOption[];
 }
 
+/** An AskQuestion as it rides a Dialog: `options` is head-anchored to the PANE's
+ *  rows by POSITION — entry k is the copy for row k+1 — and carries `null`
+ *  wherever that row and the transcript disagreed (as do the rows past its end,
+ *  the TUI's own, by simply not being there). The alignment tolerates one such
+ *  disagreement from four options up — a capture taken mid-redraw loses a row —
+ *  and that row is precisely the one whose copy is known to be wrong. Its index
+ *  still types the pane's option, so the sheet keeps the pane's own label,
+ *  description and no preview there rather than describe an answer the tap does
+ *  not send. */
+export interface DialogAsk extends Omit<AskQuestion, 'options'> {
+  options: (AskOption | null)[];
+}
+
 export interface Dialog {
   id: string;               // sha1 of the option block text
   title: string;            // nearest non-empty line above the options
@@ -94,7 +107,7 @@ export interface Dialog {
   /** The real question, when the live menu is an AskUserQuestion and the
    *  transcript could be matched to it. Absent for scraped confirms (/model,
    *  /effort, permission prompts), which render exactly as they do today. */
-  ask?: AskQuestion;
+  ask?: DialogAsk;
 }
 
 export type SessionStreamMsg =

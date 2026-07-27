@@ -249,6 +249,48 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
     expect(screen.getByText('Emit only complete rows.')).toBeInTheDocument();
   });
 
+  it('puts the question inside the scrolling body, never in the fixed header', () => {
+    renderSheet(ASKED);
+    const heading = screen.getByRole('heading', {
+      name: 'How should the partial-capture hazard be handled?',
+    });
+    // The sheet's header row is flex:none and uncapped, and only .sheet-body
+    // scrolls: a real question runs to 563 chars — ~15 lines on a 390px phone —
+    // so above the body it squeezes the options to zero height on a landscape
+    // viewport with nothing left to scroll to reach them. Inside, the question
+    // scrolls together with the rows it is asking about.
+    const body = document.querySelector('.sheet-body');
+    expect(body).not.toBeNull();
+    expect(body!.contains(heading)).toBe(true);
+    expect(body!.contains(optionRows()[0]!)).toBe(true);
+    // …and it is still what names the dialog.
+    expect(
+      screen.getByRole('dialog', { name: 'How should the partial-capture hazard be handled?' }),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the pane’s own copy for a row the server could not confirm', () => {
+    // alignAsk tolerates one disagreeing row from four options up, and sends
+    // `null` for it: that row's index still types the PANE's option, so wearing
+    // the transcript's copy would describe an answer the tap does not send.
+    renderSheet({
+      ...ASKED,
+      options: [
+        { ...ASKED.options[0]!, description: 'Scraped: inherits the last rate.' },
+        ...ASKED.options.slice(1),
+      ],
+      ask: { ...ASKED.ask!, options: [null, ...ASKED.ask!.options.slice(1)] },
+    });
+    const rows = optionRows();
+
+    expect(rows[0]!.querySelector('.opt-label')?.textContent).toBe('Forward-fill per class');
+    expect(rows[0]!.querySelector('.opt-desc')?.textContent).toBe('Scraped: inherits the last rate.');
+    // Its worked example goes with it — a preview is copy about the row too.
+    expect(previewToggles()).toHaveLength(1);
+    // The rows that did match are untouched.
+    expect(rows[1]!.querySelector('.opt-desc')?.textContent).toBe('Emit only complete rows.');
+  });
+
   it('drops the scraped preamble once the real question is on the sheet', () => {
     renderSheet(ASKED);
     // The pane's preamble is a truncated copy of the title — don't say it twice.
