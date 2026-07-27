@@ -158,9 +158,13 @@ const streamWith = async (opts: {
   const home = mkdtempSync(path.join(tmpdir(), 'ccrc-ask-'));
   seed(home);
   const file = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
+  // Scripted content for one poll. Rewriting identical bytes would bump mtime and
+  // read as transcript growth — which is exactly what the read-skip memo keys on —
+  // so a step that doesn't change the script is a genuine no-op on disk.
   const put = (t: string | null): void => {
-    if (t === null) rmSync(file, { force: true });
-    else writeFileSync(file, t);
+    if (t === null) { rmSync(file, { force: true }); return; }
+    if (existsSync(file) && readFileSync(file, 'utf8') === t) return;
+    writeFileSync(file, t);
   };
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
@@ -238,7 +242,12 @@ describe('dialog enrichment', () => {
       pane: fixture('ask-2col-chat-about.txt'),
       transcriptSequence: [fixture('transcript-ask-2col.jsonl'), null, null],
     });
-    expect(frames.filter((f) => f.type === 'dialog')).toHaveLength(1);
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs).toHaveLength(1);
+    // The frame count alone is satisfied by a stream that never enriches at all,
+    // so pin what the single frame carried: the ask read on poll 1, still whole
+    // after two polls that could not find it.
+    expect(dialogs[0]!.dialog.ask?.options).toHaveLength(3);
   });
 
   it('reads the transcript for a menu once, not once per poll', async () => {
@@ -252,11 +261,29 @@ describe('dialog enrichment', () => {
     expect(askReads).toBe(1);
   });
 
+  it('stops re-reading the transcript for a menu it cannot explain', async () => {
+    // The menus that never latch are the common ones — permission prompts,
+    // /model, trust-folder — and they sit on screen until a human answers. An
+    // unchanged transcript cannot start explaining one, so re-reading its 256 KB
+    // tail every 2 s (over the agent RPC, in remote-fleet mode) buys nothing.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const { askReads } = await streamWith({
+      pane: fixture('model-confirm.txt'),
+      transcriptSequence: [t, t, t],
+    });
+    expect(askReads).toBe(1);
+  });
+
   it('leaves a /model-style confirm unenriched', async () => {
-    const { frames } = await streamWith({
+    const { frames, askReads } = await streamWith({
       pane: fixture('model-confirm.txt'), transcript: fixture('transcript-ask-2col.jsonl'),
     });
-    expect(frames.find((f) => f.type === 'dialog')!.dialog.ask).toBeUndefined();
+    const d = frames.find((f) => f.type === 'dialog')!.dialog;
+    // It looked and alignAsk declined — not "never looked". Without the read the
+    // assertion below holds for any build, enrichment ripped out included.
+    expect(askReads).toBe(1);
+    expect(d.ask).toBeUndefined();
+    expect(d.options.map((o: { label: string }) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
   });
 });
 

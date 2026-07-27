@@ -35,6 +35,9 @@ export class SessionStream {
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
   private seenDialog: DialogSeen = { id: null, ask: null };
+  /** The transcript state that already failed to explain the menu on screen —
+   *  see claimAskRead. */
+  private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
 
@@ -96,20 +99,53 @@ export class SessionStream {
     let dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
-    // nextDialogFrame would suppress the frame anyway.
+    // nextDialogFrame would suppress the frame anyway. Menus that never latch are
+    // held off by claimAskRead instead — they are the majority.
     const latched = dialog !== null && this.seenDialog.id === dialog.id && this.seenDialog.ask !== null;
     if (dialog?.parsed && file !== null && !latched) {
-      const questions = await readPendingAsk(this.deps.io, file);
+      const st = await this.deps.io.stat(file);
       if (this.stopped) return;
-      const ask = questions === null ? null : alignAsk(dialog.options, questions);
-      // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
-      // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
-      // check staleness) and the keystrokes an answer sends stay positional.
-      if (ask !== null) dialog = { ...dialog, ask };
+      if (this.claimAskRead(file, dialog.id, st)) {
+        const questions = await readPendingAsk(this.deps.io, file);
+        if (this.stopped) return;
+        const ask = questions === null ? null : alignAsk(dialog.options, questions);
+        // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
+        // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
+        // check staleness) and the keystrokes an answer sends stay positional.
+        if (ask !== null) dialog = { ...dialog, ask };
+      }
     }
     const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
     this.seenDialog = seen;
     if (msg) this.send(msg);
+  }
+
+  /**
+   * May we spend a transcript tail read on this menu? Records the state we read
+   * at, so the next poll can tell whether anything could have changed.
+   *
+   * The ask latch above only closes on SUCCESS, and most menus never succeed:
+   * permission prompts, /model, trust-folder carry no AskUserQuestion, and they
+   * sit on screen until a human answers. Reading is the expensive half —
+   * `readPendingAsk` pulls up to 256 KB, over the agent RPC in remote-fleet mode
+   * (see transcript/tail.ts:6-11 for what reading whole transcripts once cost
+   * us) — while a stat is cheap and settles it: byte-identical bytes cannot have
+   * started explaining a menu they did not explain last time. A file that grows
+   * (the tool_use line finally flushed) or a different menu re-opens the read.
+   *
+   * The cost: a read that failed for an IO reason rather than an absent ask is
+   * indistinguishable here, so that menu stays unenriched until the transcript
+   * next changes. It still ships, and it is still answerable from the raw sheet.
+   */
+  private claimAskRead(file: string, id: string, st: { size: number; mtimeMs: number } | null): boolean {
+    if (st === null) {              // no transcript yet — nothing to read, nothing to remember
+      this.askProbe = null;
+      return false;
+    }
+    const p = this.askProbe;
+    if (p !== null && p.file === file && p.id === id && p.size === st.size && p.mtimeMs === st.mtimeMs) return false;
+    this.askProbe = { file, id, size: st.size, mtimeMs: st.mtimeMs };
+    return true;
   }
 
   /** Read the session's task list and send it when it differs from what this
