@@ -15,15 +15,20 @@ const TAIL_BYTES = 256 * 1024;
  *  wrongly rejects 6% of real answered asks, and the type list keeps growing. */
 const CONVERSATIONAL = new Set(['user', 'assistant']);
 
+/** The transcript is logged before it is validated, so a node the shape says is an
+ *  object can be null or a primitive. Read properties off an empty object instead
+ *  of throwing on them — every miss then falls through to a null return. */
+const asObject = (v: unknown): object => (v !== null && typeof v === 'object' ? v : {});
+
 function parseQuestions(input: unknown): AskQuestion[] | null {
-  const qs = (input as { questions?: unknown } | null)?.questions;
+  const qs = (asObject(input) as { questions?: unknown }).questions;
   if (!Array.isArray(qs) || qs.length === 0) return null;
   const out: AskQuestion[] = [];
   for (const raw of qs) {
-    const q = raw as { question?: unknown; header?: unknown; multiSelect?: unknown; options?: unknown };
+    const q = asObject(raw) as { question?: unknown; header?: unknown; multiSelect?: unknown; options?: unknown };
     if (typeof q.question !== 'string' || !Array.isArray(q.options)) return null;
     const options = q.options.map((o) => {
-      const opt = o as { label?: unknown; description?: unknown; preview?: unknown };
+      const opt = asObject(o) as { label?: unknown; description?: unknown; preview?: unknown };
       return {
         label: typeof opt.label === 'string' ? opt.label : '',
         description: typeof opt.description === 'string' ? opt.description : undefined,
@@ -63,8 +68,11 @@ export async function readPendingAsk(io: FleetIO, file: string): Promise<AskQues
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === '') continue;
-    let o: { type?: unknown; message?: { content?: unknown } | null };
-    try { o = JSON.parse(line); } catch { continue; }
+    let parsed: unknown;
+    try { parsed = JSON.parse(line); } catch { continue; }
+    // `null` and bare primitives are valid JSON, so the catch above never sees them.
+    if (parsed === null || typeof parsed !== 'object') continue;
+    const o = parsed as { type?: unknown; message?: { content?: unknown } | null };
     const type = typeof o.type === 'string' ? o.type : '';
     if (CONVERSATIONAL.has(type)) conversationalAt.push(i);
     const content = o.message?.content;

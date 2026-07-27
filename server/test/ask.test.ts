@@ -53,6 +53,16 @@ describe('readPendingAsk', () => {
     expect(await readPendingAsk(localIO, fileWith([ASK('t1'), RESULT('t1')]))).toBeNull();
   });
 
+  it('returns null when the tool_result rides a non-conversational line', async () => {
+    // Gate 1 with gate 2 held silent: nothing of type user/assistant follows the
+    // ask, so the answered-set is the only thing keeping this menu off screen.
+    const RESULT_ON_ATTACHMENT = JSON.stringify({
+      type: 'attachment', uuid: 'x1', timestamp: '2026-07-26T15:01:00Z',
+      message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'answered' }] },
+    });
+    expect(await readPendingAsk(localIO, fileWith([ASK('t1'), RESULT_ON_ATTACHMENT]))).toBeNull();
+  });
+
   it('ignores non-conversational lines after the ask', async () => {
     const qs = await readPendingAsk(localIO, fileWith([
       ASK('t1'), LINE('attachment'), LINE('mode'), LINE('ai-title'), LINE('worktree-state'),
@@ -85,5 +95,24 @@ describe('readPendingAsk', () => {
     expect(await readPendingAsk(localIO, fileWith([bad]))).toBeNull();
     expect(await readPendingAsk(localIO, fileWith([LINE('system')]))).toBeNull();
     expect(await readPendingAsk(localIO, '/nope/missing.jsonl')).toBeNull();
+  });
+
+  it('degrades instead of throwing on null nodes', async () => {
+    // `null` is valid JSON, so the try/catch around JSON.parse never sees these.
+    // The poll loop that calls this has no catch and the server installs no
+    // unhandledRejection handler — one TypeError here kills every session stream.
+    const nullQuestion = JSON.stringify({
+      type: 'assistant', uuid: 'a1', timestamp: 't',
+      message: { content: [{ type: 'tool_use', id: 't1', name: 'AskUserQuestion', input: { questions: [null] } }] },
+    });
+    const nullOption = JSON.stringify({
+      type: 'assistant', uuid: 'a1', timestamp: 't',
+      message: { content: [{ type: 'tool_use', id: 't1', name: 'AskUserQuestion',
+        input: { questions: [{ question: 'Which colour?', options: [null] }] } }] },
+    });
+    expect(await readPendingAsk(localIO, fileWith([nullQuestion]))).toBeNull();
+    expect(await readPendingAsk(localIO, fileWith([nullOption]))).toBeNull();
+    // A bare null line is skipped like any other noise — the ask after it still reads.
+    expect(await readPendingAsk(localIO, fileWith(['null', ASK('t1')]))).toHaveLength(1);
   });
 });
