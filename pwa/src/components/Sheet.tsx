@@ -13,7 +13,9 @@ export interface SheetProps {
   children: ReactNode;
   title?: string;
   /** Mono uppercase kicker above the title, e.g. "claude is asking". Accepts an
-   *  element so callers can hang a chip off it (DialogSheet's header badge). */
+   *  element so callers can hang a chip off it (DialogSheet's header badge).
+   *  Falsy (undefined, null, false, '', 0) renders no kicker line at all —
+   *  an empty <p> is invisible but still spends its margin above the title. */
   eyebrow?: ReactNode;
   /** Full-height variant — the terminal drawer's chrome (Task 12): a
    *  --bg-well panel rising to the safe-area line on --z-drawer, body as a

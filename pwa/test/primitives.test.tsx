@@ -107,7 +107,11 @@ describe('Sheet', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts an element eyebrow, not just a string', () => {
+  // The eyebrow's *type* (ReactNode, not string) is pinned by the type-level
+  // suite in sheet.test-d.tsx — types are erased, so nothing here can see a
+  // narrowing. What these two guard is the runtime: where a rich eyebrow lands,
+  // and when the kicker line exists at all.
+  it('hangs an element eyebrow inside the kicker line', () => {
     render(
       <Sheet
         open
@@ -122,7 +126,43 @@ describe('Sheet', () => {
         body
       </Sheet>,
     );
-    expect(screen.getByText('Colour')).toHaveClass('dlg-header-chip');
+    const chip = screen.getByText('Colour');
+    expect(chip).toHaveClass('dlg-header-chip');
+    // Inside the kicker <p>, not loose in the panel — the chip inherits the
+    // eyebrow's mono/uppercase line and sits above the title.
+    expect(chip.closest('p.sheet-eyebrow')).not.toBeNull();
+  });
+
+  it('renders the kicker line only for a truthy eyebrow', () => {
+    const { rerender } = render(
+      <Sheet open onClose={() => {}} title="t">
+        body
+      </Sheet>,
+    );
+    expect(document.querySelector('.sheet-eyebrow')).toBeNull();
+
+    // Falsy eyebrows render nothing at all: an empty kicker is invisible but
+    // still spends its margin, shoving the title down for no reason.
+    rerender(
+      <Sheet open onClose={() => {}} title="t" eyebrow="">
+        body
+      </Sheet>,
+    );
+    expect(document.querySelector('.sheet-eyebrow')).toBeNull();
+
+    rerender(
+      <Sheet open onClose={() => {}} title="t" eyebrow={0}>
+        body
+      </Sheet>,
+    );
+    expect(document.querySelector('.sheet-eyebrow')).toBeNull();
+
+    rerender(
+      <Sheet open onClose={() => {}} title="t" eyebrow="session">
+        body
+      </Sheet>,
+    );
+    expect(document.querySelector('.sheet-eyebrow')).toHaveTextContent('session');
   });
 });
 
