@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 BOX="${CCRC_BOX:-you@203.0.113.7}"
-SSH=(ssh -p 2222 -i "$HOME/.ssh/your-key-a")
-SCP=(scp -P 2222 -i "$HOME/.ssh/your-key-a")
+# The key is per-workstation, not per-fleet: the laptop calls it your-key-a,
+# openclaw itself calls it your-key-b. Overridable so a deploy can be driven from
+# whichever box you happen to be on, including the fleet host deploying to itself.
+CCRC_SSH_KEY="${CCRC_SSH_KEY:-$HOME/.ssh/your-key-a}"
+CCRC_SSH_PORT="${CCRC_SSH_PORT:-2222}"
+SSH=(ssh -p "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
+SCP=(scp -P "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
 HEALTH_URL="${CCRC_HEALTH_URL:-http://203.0.113.7:7788/health}"
 
 # Usage: deploy.sh [server|agent] [host]

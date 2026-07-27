@@ -1,0 +1,4 @@
+{
+  "//": "Not a package — this file exists solely to tell tsc's NodeNext resolver that shared/*.ts is ESM. Without it the nearest package.json above shared/ is nothing at all, so tsc emits CommonJS (`exports.x = ...`) into dist/shared/ while server/ and agent/ are `\"type\": \"module\"` — and the built server dies on startup with 'does not provide an export named'. Only bites value exports; the file was types-only until composePrompt arrived.",
+  "type": "module"
+}
