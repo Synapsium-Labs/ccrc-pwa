@@ -12,8 +12,9 @@ export interface SheetProps {
   onClose: () => void;
   children: ReactNode;
   title?: string;
-  /** Mono uppercase kicker above the title, e.g. "claude is asking". */
-  eyebrow?: string;
+  /** Mono uppercase kicker above the title, e.g. "claude is asking". Accepts an
+   *  element so callers can hang a chip off it (DialogSheet's header badge). */
+  eyebrow?: ReactNode;
   /** Full-height variant — the terminal drawer's chrome (Task 12): a
    *  --bg-well panel rising to the safe-area line on --z-drawer, body as a
    *  flex column. The title goes screen-reader-only so the glass keeps its
@@ -36,7 +37,7 @@ export function Sheet({ open, onClose, children, title, eyebrow, full }: SheetPr
           aria-describedby={undefined}
         >
           <div className="sheet-grabber" aria-hidden="true" />
-          {eyebrow !== undefined && <p className="sheet-eyebrow">{eyebrow}</p>}
+          {eyebrow ? <p className="sheet-eyebrow">{eyebrow}</p> : null}
           <Drawer.Title className={title && !full ? 'sheet-title' : 'sr-only'}>
             {title ?? 'Sheet'}
           </Drawer.Title>

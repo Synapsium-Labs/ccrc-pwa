@@ -106,6 +106,24 @@ describe('Sheet', () => {
     fireEvent.click(screen.getByTestId('sheet-overlay'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('accepts an element eyebrow, not just a string', () => {
+    render(
+      <Sheet
+        open
+        onClose={() => {}}
+        title="t"
+        eyebrow={
+          <>
+            claude is asking <span className="dlg-header-chip">Colour</span>
+          </>
+        }
+      >
+        body
+      </Sheet>,
+    );
+    expect(screen.getByText('Colour')).toHaveClass('dlg-header-chip');
+  });
 });
 
 // — QuickConfirm —
