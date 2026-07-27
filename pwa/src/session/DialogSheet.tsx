@@ -18,7 +18,7 @@
 // their scraped label — and so do rows the server sends as `null`, the
 // positions it matched loosely enough to accept the question but not loosely
 // enough to believe the copy.
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
@@ -303,17 +303,30 @@ function OptionPreview({
   defaultOpen: boolean;
 }): ReactNode {
   const [open, setOpen] = useState(defaultOpen);
+  // Names the region this toggle owns, so aria-expanded is about something a
+  // screen reader can then be taken to.
+  const previewId = useId();
   return (
     <div className="opt-preview-wrap">
       <button
         type="button"
         className="opt-preview-toggle"
         aria-expanded={open}
+        aria-controls={previewId}
         onClick={() => setOpen((o) => !o)}
       >
-        {open ? '▾ preview' : '▸ preview'}
+        {/* The caret is decoration, like .opt-glyph and .opt-enter: inside the
+            name it reads out as "black down-pointing small triangle preview",
+            and the announced NAME would change on every toggle on top of the
+            state change the toggle already announces. */}
+        <span aria-hidden="true">{open ? '▾' : '▸'} </span>
+        preview
       </button>
-      {open && <pre className="well opt-preview">{text}</pre>}
+      {open && (
+        <pre id={previewId} className="well opt-preview">
+          {text}
+        </pre>
+      )}
     </div>
   );
 }

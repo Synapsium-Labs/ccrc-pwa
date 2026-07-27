@@ -339,6 +339,46 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
     expect(toggles[1]).toHaveAttribute('aria-expanded', 'false');
   });
 
+  // The preview toggle is the one affordance on this sheet with no text label
+  // of its own to fall back on, so its name has to survive without the glyph:
+  // in the name, "▸" is announced as "black right-pointing small triangle",
+  // and the NAME then changes on every toggle on top of the aria-expanded
+  // state change — two announcements for one thing. Every other decorative
+  // glyph in this file (.opt-glyph, .opt-idx, .opt-enter) is aria-hidden.
+  it('names the preview toggle without the caret, in both states', () => {
+    renderSheet(ASKED);
+    const [openToggle, shutToggle] = previewToggles();
+
+    // Exact-name lookups: an accessible name of "▾ preview" would not match.
+    expect(screen.getAllByRole('button', { name: 'preview' })).toHaveLength(2);
+    expect(openToggle).toHaveAccessibleName('preview');
+    expect(shutToggle).toHaveAccessibleName('preview');
+    // The caret is still on screen — hidden from the a11y tree, not deleted.
+    expect(openToggle!.textContent).toContain('▾');
+    expect(shutToggle!.textContent).toContain('▸');
+    expect(openToggle!.querySelector('[aria-hidden="true"]')?.textContent?.trim()).toBe('▾');
+
+    // Toggling changes the state, and only the state.
+    fireEvent.click(shutToggle!);
+    expect(shutToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(shutToggle).toHaveAccessibleName('preview');
+  });
+
+  it('points aria-expanded at the region it expands', () => {
+    renderSheet(ASKED);
+    const [openToggle] = previewToggles();
+    const controls = openToggle!.getAttribute('aria-controls');
+
+    // aria-expanded without aria-controls leaves the disclosed block
+    // unassociated with its control — there is nothing to take the reader to.
+    expect(controls).toBeTruthy();
+    const region = document.getElementById(controls!);
+    expect(region).not.toBeNull();
+    expect(region).toHaveTextContent('07-01: in,out,cr');
+    // Distinct per option, so one toggle never claims another's preview.
+    expect(previewToggles()[1]!.getAttribute('aria-controls')).not.toBe(controls);
+  });
+
   it('answers with the pane index even when the transcript relabels the row', () => {
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderSheet(ASKED);
