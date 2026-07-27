@@ -75,6 +75,14 @@ export type ChatEvent =
   | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean }
   | { kind: 'system'; uuid: string; ts: string; text: string };
 
+export interface AskOption { label: string; description?: string; preview?: string }
+export interface AskQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: AskOption[];
+}
+
 export interface Dialog {
   id: string;               // sha1 of the option block text
   title: string;            // nearest non-empty line above the options
@@ -83,6 +91,10 @@ export interface Dialog {
   selectedIndex: number;    // option with the ❯ marker
   parsed: boolean;          // false → render raw + point to terminal drawer
   raw: string;              // full pane tail for the unparsed case
+  /** The real question, when the live menu is an AskUserQuestion and the
+   *  transcript could be matched to it. Absent for scraped confirms (/model,
+   *  /effort, permission prompts), which render exactly as they do today. */
+  ask?: AskQuestion;
 }
 
 export type SessionStreamMsg =
