@@ -1,0 +1,89 @@
+// Which AskUserQuestion is on screen right now. The transcript is append-only and
+// survives restarts, so "has no tool_result" is necessary but nowhere near
+// sufficient — an ask abandoned by a kill stays resultless forever.
+import { describe, it, expect } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { localIO } from '../src/io.js';
+import { readPendingAsk } from '../src/transcript/ask.js';
+
+const ASK = (id: string, question = 'Which colour?') => JSON.stringify({
+  type: 'assistant', uuid: 'a1', timestamp: '2026-07-26T15:00:00Z',
+  message: { id: 'msg_1', role: 'assistant', content: [{
+    type: 'tool_use', id, name: 'AskUserQuestion',
+    input: { questions: [{
+      question, header: 'Colour', multiSelect: false,
+      options: [
+        { label: 'Red', description: 'Warm, high-energy.', preview: '┌──┐\n│  │\n└──┘' },
+        { label: 'Green', description: 'Natural, calm.' },
+      ],
+    }] },
+  }] },
+});
+const RESULT = (id: string) => JSON.stringify({
+  type: 'user', uuid: 'u1', timestamp: '2026-07-26T15:01:00Z',
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'answered' }] },
+});
+const LINE = (type: string) => JSON.stringify({ type, uuid: 'x', timestamp: '2026-07-26T15:00:30Z' });
+const USER_TEXT = JSON.stringify({
+  type: 'user', uuid: 'u9', timestamp: '2026-07-26T15:02:00Z',
+  message: { role: 'user', content: 'something else entirely' },
+});
+
+const fileWith = (lines: string[]): string => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-ask-'));
+  const f = path.join(dir, 't.jsonl');
+  writeFileSync(f, lines.join('\n') + '\n');
+  return f;
+};
+
+describe('readPendingAsk', () => {
+  it('returns the question when the ask is unanswered and last', async () => {
+    const qs = await readPendingAsk(localIO, fileWith([ASK('t1')]));
+    expect(qs).toHaveLength(1);
+    expect(qs![0]!.question).toBe('Which colour?');
+    expect(qs![0]!.header).toBe('Colour');
+    expect(qs![0]!.options[0]).toEqual({
+      label: 'Red', description: 'Warm, high-energy.', preview: '┌──┐\n│  │\n└──┘',
+    });
+  });
+
+  it('returns null once the ask has been answered', async () => {
+    expect(await readPendingAsk(localIO, fileWith([ASK('t1'), RESULT('t1')]))).toBeNull();
+  });
+
+  it('ignores non-conversational lines after the ask', async () => {
+    const qs = await readPendingAsk(localIO, fileWith([
+      ASK('t1'), LINE('attachment'), LINE('mode'), LINE('ai-title'), LINE('worktree-state'),
+    ]));
+    expect(qs).toHaveLength(1);
+  });
+
+  it('treats an ask abandoned by a restart as gone, not pending', async () => {
+    // No tool_result anywhere — but the conversation moved on, so the menu is not
+    // on screen. This is a real shape: session killed while the menu was up.
+    expect(await readPendingAsk(localIO, fileWith([ASK('t1'), USER_TEXT]))).toBeNull();
+  });
+
+  it('parses an input larger than the chat stream’s 4000-char cap', async () => {
+    const big = JSON.parse(ASK('t1')) as Record<string, never>;
+    // Pad a preview past TOOL_INPUT_MAX; the dialog must not read the truncated
+    // chat event, so this has to survive whole.
+    const q = (big as never as { message: { content: { input: { questions: Array<{ options: Array<{ preview?: string }> }> } }[] } })
+      .message.content[0]!.input.questions[0]!;
+    q.options[0]!.preview = 'x'.repeat(6000);
+    const qs = await readPendingAsk(localIO, fileWith([JSON.stringify(big)]));
+    expect(qs![0]!.options[0]!.preview).toHaveLength(6000);
+  });
+
+  it('returns null for a malformed input, a non-ask tool, and a missing file', async () => {
+    const bad = JSON.stringify({
+      type: 'assistant', uuid: 'a1', timestamp: 't',
+      message: { content: [{ type: 'tool_use', id: 't1', name: 'AskUserQuestion', input: { nope: 1 } }] },
+    });
+    expect(await readPendingAsk(localIO, fileWith([bad]))).toBeNull();
+    expect(await readPendingAsk(localIO, fileWith([LINE('system')]))).toBeNull();
+    expect(await readPendingAsk(localIO, '/nope/missing.jsonl')).toBeNull();
+  });
+});
