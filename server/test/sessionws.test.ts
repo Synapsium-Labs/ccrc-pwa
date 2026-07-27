@@ -5,10 +5,12 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
+import { nextDialogFrame, type DialogSeen } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
+import type { AskQuestion, Dialog } from '../../shared/api.js';
 
 const ID = 'claude2-MekWarLive';
 const UUID_A = 'a'.repeat(36);
@@ -69,6 +71,65 @@ const opened = (ws: WebSocket): Promise<void> =>
     ws.on('open', () => resolve());
     ws.on('error', reject);
   });
+
+const ASK: AskQuestion = {
+  question: 'Which fill strategy?',
+  header: 'Backfill',
+  multiSelect: false,
+  options: [{ label: 'Forward-fill per class', description: 'per-class carry', preview: '07-01' }],
+};
+
+const menu = (over: Partial<Dialog> = {}): Dialog => ({
+  id: 'abc123', title: 'Which fill strategy?', options: [
+    { index: 1, label: 'Forward-fill per class' },
+    { index: 2, label: 'Chat about this' },
+  ],
+  selectedIndex: 1, parsed: true, raw: 'pane', ...over,
+});
+
+const NONE: DialogSeen = { id: null, ask: null };
+
+describe('dialog frame gate', () => {
+  it('sends a menu the first time it is seen, and not again unchanged', () => {
+    const first = nextDialogFrame(NONE, menu());
+    expect(first.msg).toEqual({ type: 'dialog', dialog: menu() });
+    expect(nextDialogFrame(first.seen, menu()).msg).toBeNull();
+  });
+
+  it('sends again — same id — when the ask only becomes readable on a later read', () => {
+    const bare = nextDialogFrame(NONE, menu());
+    expect((bare.msg as { dialog: Dialog }).dialog.ask).toBeUndefined();
+    const rich = nextDialogFrame(bare.seen, menu({ ask: ASK }));
+    expect(rich.msg).not.toBeNull();
+    const d = (rich.msg as { dialog: Dialog }).dialog;
+    expect(d.ask).toEqual(ASK);
+    expect(d.id).toBe('abc123'); // id stays purely pane-derived
+    // and the upgrade only fires once
+    expect(nextDialogFrame(rich.seen, menu({ ask: ASK })).msg).toBeNull();
+  });
+
+  it('never downgrades: a read that lost the ask sends nothing and keeps it latched', () => {
+    const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
+    const missed = nextDialogFrame(rich.seen, menu());
+    expect(missed.msg).toBeNull();
+    expect(missed.seen.ask).toEqual(ASK);
+  });
+
+  it('a different menu resets the latch', () => {
+    const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
+    const next = nextDialogFrame(rich.seen, menu({ id: 'def456' }));
+    expect((next.msg as { dialog: Dialog }).dialog.ask).toBeUndefined();
+    expect(next.seen).toEqual({ id: 'def456', ask: null });
+  });
+
+  it('clears once when the menu vanishes, and stays quiet after', () => {
+    const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
+    const cleared = nextDialogFrame(rich.seen, null);
+    expect(cleared.msg).toEqual({ type: 'dialog_cleared' });
+    expect(cleared.seen).toEqual(NONE);
+    expect(nextDialogFrame(cleared.seen, null).msg).toBeNull();
+  });
+});
 
 describe('session WS', () => {
   let home: string;

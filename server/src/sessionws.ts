@@ -6,7 +6,7 @@ import { transcriptPath } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { readTasks } from './tasks/read.js';
-import type { SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import type { AskQuestion, Dialog, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
 const POLL_MS = 2000;
 const BACKLOG_N = 50;
@@ -32,7 +32,8 @@ export class SessionStream {
   private ticking = false;
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
-  private lastDialogId: string | null = null;
+  /** What the client last saw of the pane menu — see nextDialogFrame. */
+  private seenDialog: DialogSeen = { id: null, ask: null };
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
 
@@ -80,22 +81,16 @@ export class SessionStream {
     this.poll.unref();
   }
 
-  /** Capture the pane; send `dialog` when a menu appears/changes and
-   *  `dialog_cleared` when it vanishes — tracked per stream so a client that
-   *  joins after the menu appeared still receives it. */
+  /** Capture the pane; send `dialog` when a menu appears/changes or first comes
+   *  back enriched, and `dialog_cleared` when it vanishes — tracked per stream
+   *  so a client that joins after the menu appeared still receives it. */
   private async checkDialog(): Promise<void> {
     if (this.stopped) return;
     const pane = await this.deps.tmux.capture(this.id);
     const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
-    if (dialog) {
-      if (this.lastDialogId !== dialog.id) {
-        this.lastDialogId = dialog.id;
-        this.send({ type: 'dialog', dialog });
-      }
-    } else if (this.lastDialogId !== null) {
-      this.lastDialogId = null;
-      this.send({ type: 'dialog_cleared' });
-    }
+    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
+    this.seenDialog = seen;
+    if (msg) this.send(msg);
   }
 
   /** Read the session's task list and send it when it differs from what this
@@ -213,6 +208,48 @@ export class SessionStream {
       this.ticking = false;
     }
   }
+}
+
+/** What a client has already been told about the pane menu: the dialog id it
+ *  last saw, and the enrichment (if any) that rode along with it. */
+export interface DialogSeen {
+  id: string | null;
+  ask: AskQuestion | null;
+}
+
+/**
+ * The change gate for the `dialog` frame: given what the client last saw and
+ * what the pane says now, what (if anything) do we send?
+ *
+ * It cannot be keyed on `dialog.id` alone. That id is deliberately pane-derived
+ * only — `answerDialog` re-parses the pane to check staleness and the sheet keys
+ * dismissal off it, so `ask` is excluded from the hash on purpose. But the menu
+ * and the transcript that explains it are read by unrelated clocks, so the same
+ * menu can be captured bare on one poll and enriched on the next: identical
+ * labels, identical title, identical id. An id-only gate calls that a duplicate
+ * and drops it, and the client renders scraped labels for the life of the menu.
+ *
+ * So: send on a new id OR on the first upgrade to an enriched dialog, and never
+ * the other way round — a transient read miss must not strip descriptions off a
+ * sheet the operator is already reading.
+ */
+export function nextDialogFrame(
+  prev: DialogSeen,
+  dialog: Dialog | null,
+): { seen: DialogSeen; msg: SessionStreamMsg | null } {
+  if (!dialog) {
+    if (prev.id === null) return { seen: prev, msg: null };
+    return { seen: { id: null, ask: null }, msg: { type: 'dialog_cleared' } };
+  }
+  const isNew = prev.id !== dialog.id;
+  const latched = isNew ? null : prev.ask;       // a new menu forgets the old ask
+  const ask = dialog.ask ?? latched;             // and a missed read never downgrades
+  const upgraded = ask !== null && latched === null;
+  if (!isNew && !upgraded) return { seen: prev, msg: null };
+  return {
+    seen: { id: dialog.id, ask },
+    msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
+  };
 }
 
 /** Parse the `since=<uuid>:<offset>` query value; malformed → undefined. */
