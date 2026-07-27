@@ -104,6 +104,49 @@ async function submitted(
   return false;
 }
 
+/** How long to let the pane settle after a C-u before reading the box again. */
+const CLEAR_POLL_MS = 150;
+/** Cap for `replaceDraft`, where the draft's line count is unknowable: `draftOf`
+ *  returns the box's first row only, so N could be anything. 8 covers a 4-line
+ *  draft (2N-1 = 7) and bounds the worst case at ~1.2 s on a failure path. */
+const REPLACE_MAX_PRESSES = 8;
+
+/**
+ * Empty the input box, however many kills it takes, and report what is left.
+ *
+ * C-u is kill-to-LINE-start with the caret at the end of the LAST line, and the
+ * line it empties then has to be JOINED AWAY by a second press — so an N-line
+ * draft costs 2N-1 presses, not N (measured against a live Claude Code box on
+ * 2026-07-27: 2 lines → 3, 3 lines → 5; presses on an empty box are no-ops).
+ * Rather than encode that arithmetic, press and re-read: correct for any N, and
+ * it survives the widget changing.
+ *
+ * Terminating on `draftOf() === ''` is sound because kills run bottom-up while
+ * `draftOf` reads the box's FIRST row (the `❯` marker sits there; continuation
+ * rows are indented), so that row is the LAST to empty — the loop cannot stop
+ * on a box that still holds text above the caret.
+ *
+ * Returns '' when the box is empty, the residual draft when `maxPresses` is
+ * spent, or null when the pane died mid-clear.
+ */
+async function clearBox(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  maxPresses: number,
+): Promise<string | null> {
+  let left = '';
+  for (let i = 0; i < maxPresses; i++) {
+    await d.tmux.sendKey(id, 'C-u');
+    await sleep(CLEAR_POLL_MS);
+    const ansi = await d.tmux.captureAnsi(id);
+    if (ansi === null) return null;
+    left = draftOf(ansi);
+    if (left === '') return '';
+  }
+  return left;
+}
+
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
  * session through the KeyedQueue. Refuses to clobber a half-typed draft
@@ -132,11 +175,11 @@ export function sendPrompt(
     const draft = draftOf(pane);
     if (draft) {
       if (!opts.replaceDraft) return { ok: false, error: 'draft-present', draft };
-      await d.tmux.sendKey(id, 'C-u');
-      await sleep(150);
-      const cleared = await d.tmux.captureAnsi(id);
-      if (cleared === null) return { ok: false, error: 'not-alive' };
-      const left = draftOf(cleared);
+      // A single C-u could never clear a draft of two or more lines (see
+      // clearBox), so "replace" failed with draft-clear-failed on any user
+      // draft that had a line break in it.
+      const left = await clearBox(d, id, sleep, REPLACE_MAX_PRESSES);
+      if (left === null) return { ok: false, error: 'not-alive' };
       if (left) return { ok: false, error: 'draft-clear-failed', draft: left };
     }
 
@@ -184,18 +227,22 @@ export function sendPrompt(
       if (!echoed) {
         after ??= await d.tmux.capture(id);
         // A failed send must not stand a bare clip path in the live box — but
-        // C-u can fail just like the replaceDraft clear above can: re-capture
-        // and report what's left rather than assuming it worked.
+        // C-u can fail just like the replaceDraft clear above can, so clearBox
+        // re-reads and reports what's left rather than assuming it worked.
         //
-        // Once PER LINE: C-u is kill-to-line-start, and an attachment prompt is
-        // always ≥2 lines, so a single press would leave every path above the
-        // cursor in the box — and the next send would come back `draft-present`
-        // carrying exactly what this feature exists to keep out of there. On an
-        // already-empty box C-u is a no-op, so the extra presses are free.
-        for (let i = 0; i < parts.length; i++) await d.tmux.sendKey(id, 'C-u');
-        await sleep(150);
-        const clearedAnsi = await d.tmux.captureAnsi(id);
-        const left = clearedAnsi === null ? '' : draftOf(clearedAnsi);
+        // This used to press `parts.length` times, which under-clears every
+        // multi-line prompt: C-u costs 2N-1 presses, so an attachment prompt
+        // (always ≥2 lines) kept its FIRST line — a bare clip path — and the
+        // next send came back `draft-present` carrying exactly what this
+        // feature exists to keep out of the box. N is known exactly here, so
+        // the cap is 2N+2 — a few presses of slack past 2N-1, which cost
+        // nothing on an empty box and are only ever spent on a failure path.
+        //
+        // A pane that dies here stays `verify-failed` (with no residue to
+        // report): the send had already failed, and the captured pane tail is
+        // the more useful diagnostic than swapping the error for not-alive.
+        const cleared = await clearBox(d, id, sleep, 2 * parts.length + 2);
+        const left = cleared ?? '';
         return {
           ok: false,
           error: 'verify-failed',

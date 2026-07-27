@@ -51,6 +51,118 @@ function fakeTmux(panes: (string | null)[]) {
 }
 
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
+const cuPresses = (calls: string[][]) => sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'C-u').length;
+
+/**
+ * A MODEL of the Claude Code input box. `fakeTmux` replays scripted frames and
+ * so cannot represent state — but the whole correctness of the clear is about
+ * state, so the clear needs a pane that answers according to what was actually
+ * done to it.
+ *
+ * C-u semantics measured against the live box in `cc-claude2-OpenClawHetzner`
+ * on 2026-07-27 (pane captured between every press, 1.2–1.5 s settle): C-u is
+ * kill-to-LINE-start with the caret at the end of the LAST line, and the line
+ * it empties then has to be JOINED AWAY by a second press. Text is therefore
+ * consumed bottom-up at two presses per line, minus one for the final line —
+ * 2N-1, i.e. a 2-line draft takes 3 presses and a 3-line draft 5. Presses
+ * against an already-empty box are no-ops.
+ */
+function inputBox(initial: readonly string[] = ['']) {
+  let lines = [...initial];
+  const NBSP = '\xa0';
+  return {
+    get lines(): string[] { return [...lines]; },
+    isEmpty: (): boolean => lines.length === 1 && lines[0] === '',
+    pressCu(): void {
+      const last = lines.length - 1;
+      if (lines[last] !== '') lines[last] = '';       // kill to line start
+      else if (lines.length > 1) lines.pop();          // join the emptied line away
+      // single empty line: no-op
+    },
+    type: (s: string): void => { lines[lines.length - 1] += s; },
+    newline: (): void => { lines.push(''); },
+    submit: (): void => { lines = ['']; },
+    /**
+     * The pane the way Claude Code draws it: the `❯` marker sits on the FIRST
+     * box row only and continuation rows are indented — so `draftOf` reads row
+     * one, which (kills running bottom-up) is the LAST row to empty.
+     */
+    render: (): string =>
+      [
+        'earlier turn',
+        '● a reply',
+        '───────────────',
+        `❯${lines[0] === '' ? NBSP : ' ' + lines[0]}`,
+        ...lines.slice(1).map((l) => '  ' + l),
+        '───────────────',
+      ].join('\n') + '\n',
+  };
+}
+
+/**
+ * `inputBox` wired behind a real `Tmux`. The first `staleFrames` captures come
+ * back as the frame the pane showed BEFORE anything was typed — the slow-render
+ * failure the echo poll exists for, and precisely the case that strands a clip
+ * path in a box the code believes is empty.
+ */
+function boxTmux(opts: { initial?: readonly string[]; staleFrames?: number } = {}) {
+  const box = inputBox(opts.initial);
+  const stale = opts.staleFrames ?? 0;
+  const frozen = inputBox(opts.initial).render();
+  const calls: string[][] = [];
+  let captures = 0;
+  const run: Runner = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    if (args[0] === 'capture-pane') {
+      captures++;
+      return { code: 0, stdout: captures <= stale ? frozen : box.render(), stderr: '' };
+    }
+    if (args[0] === 'send-keys') {
+      const key = args[args.length - 1]!;
+      if (args[3] === '-l') box.type(key);
+      else if (key === 'M-Enter') box.newline();
+      else if (key === 'C-u') box.pressCu();
+      else if (key === 'Enter') box.submit();
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  return { tmux: new Tmux(run), calls, box };
+}
+
+// The double is only worth anything if its C-u behaves like the real one, so
+// pin it to the measured numbers before using it to judge production code.
+describe('the stateful input-box double reproduces the measured C-u semantics', () => {
+  const pressesToEmpty = (lines: string[]): number => {
+    const box = inputBox(lines);
+    let n = 0;
+    while (!box.isEmpty() && n < 20) { box.pressCu(); n++; }
+    return n;
+  };
+
+  it('2-line draft empties in exactly 3 presses, 3-line in exactly 5 (measured 2026-07-27)', () => {
+    expect(pressesToEmpty(['first line', 'second line'])).toBe(3);
+    expect(pressesToEmpty(['one', 'two', 'three'])).toBe(5);
+  });
+
+  it('further presses on an emptied box are no-ops', () => {
+    const box = inputBox(['only line']);
+    box.pressCu();
+    expect(box.isEmpty()).toBe(true);
+    box.pressCu(); box.pressCu();
+    expect(box.lines).toEqual(['']);
+  });
+
+  it('mid-clear the row draftOf reads still holds line 1 — why "press until draftOf() === \'\'" terminates correctly', () => {
+    const box = inputBox(['first line', 'second line']);
+    box.pressCu();
+    expect(draftOf(box.render())).toBe('first line');
+    box.pressCu();
+    expect(draftOf(box.render())).toBe('first line');
+    box.pressCu();
+    expect(draftOf(box.render())).toBe('');
+    expect(box.isEmpty()).toBe(true);
+  });
+});
 
 describe('KeyedQueue', () => {
   it('same key runs FIFO even when the first fn is slow', async () => {
@@ -149,10 +261,17 @@ describe('sendPrompt', () => {
   });
 
   it('draft-clear-failed when C-u leaves the draft; only C-u was sent', async () => {
+    // Updated with the 2026-07-27 measurement: the clear presses until the box
+    // reads empty, up to a flat cap of 8, so a box that never clears takes all
+    // 8. What this test is really about is unchanged — nothing but C-u is sent,
+    // and the residual draft is reported instead of being typed over.
     const { tmux, calls } = fakeTmux(['❯ stubborn\n', '❯ stubborn\n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true });
     expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: 'stubborn' });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'C-u']]);
+    expect(new Set(sendKeysCalls(calls).map((c) => c.join(' ')))).toEqual(
+      new Set(['tmux send-keys -t cc-x C-u']),
+    );
+    expect(cuPresses(calls)).toBe(8);
   });
 
   it('multiline sends M-Enter between literals', async () => {
@@ -476,20 +595,20 @@ describe('sendPrompt with attachments', () => {
     expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
   });
 
-  it('fires one C-u per typed line, because C-u is kill-to-LINE-start', async () => {
-    // An attachment prompt is always ≥2 lines (paths, then text). A single C-u
-    // that only kills the current line would leave the clip paths sitting in
-    // the box, and the next send would hit `draft-present` holding exactly the
-    // thing this feature exists to keep out of the box. C-u on an empty box is
-    // a no-op, so over-pressing costs nothing.
+  it('presses C-u until the box reads empty, not a fixed count', async () => {
+    // Was "one C-u per typed line" (3 for a 3-line prompt), which the
+    // 2026-07-27 measurement disproved: clearing N lines costs 2N-1 presses.
+    // The count is no longer encoded at all — the clear looks after every
+    // press — so against a pane that reports an empty box from the start, one
+    // press is the whole job. The real behaviour is pinned against a stateful
+    // box in "the failed-send cleanup actually empties the box" below.
     const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
     const { tmux, calls } = fakeTmux(['❯ \n']); // box stays empty — never echoes
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep },
       'x', 'caption', { attachments: [P, P2] },
     );
-    const cu = sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'C-u');
-    expect(cu).toHaveLength(3); // two paths + the caption line
+    expect(cuPresses(calls)).toBe(1);
   });
 
   it('reports the residual draft when C-u fails to clear after a failed verify', async () => {
@@ -508,6 +627,81 @@ describe('sendPrompt with attachments', () => {
     );
     expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: 'stubborn leftover' });
     expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
+  });
+});
+
+// The defect this file's stateful double was built for. C-u costs 2N-1 presses,
+// not N (measured 2026-07-27), so the old `parts.length` loop under-pressed on
+// EVERY multi-line draft: a 2-line attachment prompt got 2 presses where it
+// needed 3, leaving the bare clip path sitting on line 1 of the live box — the
+// next send then came back `draft-present` carrying exactly the thing this
+// cleanup exists to remove. Judged against box STATE, not against a press count.
+describe('the failed-send cleanup actually empties the box', () => {
+  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+
+  it('a verify-failed attachment send (2-line prompt) leaves the box EMPTY', async () => {
+    // 14 stale frames = the initial draft check + all 12 echo polls + the
+    // failure-path plain capture, so the send gives up believing nothing
+    // echoed while both typed lines are really sitting in the box.
+    const { tmux, calls, box } = boxTmux({ staleFrames: 14 });
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(box.lines).toEqual(['']);
+    expect(draftOf(box.render())).toBe('');   // no clip path left for the next send to trip on
+    expect((res as { draft?: string }).draft).toBeUndefined();
+    expect(cuPresses(calls)).toBe(3);         // 2N-1 for N=2, reached by looking, not by arithmetic
+  });
+
+  it('a 3-line attachment prompt needs 5 presses and gets them', async () => {
+    const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
+    const { tmux, calls, box } = boxTmux({ staleFrames: 14 });
+    await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [P, P2] },
+    );
+    expect(box.lines).toEqual(['']);
+    expect(cuPresses(calls)).toBe(5);
+  });
+
+  it('stops as soon as the box reads empty — a 1-line prompt costs a single press', async () => {
+    const { tmux, calls, box } = boxTmux({ staleFrames: 14 });
+    await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: [P] },
+    );
+    expect(box.lines).toEqual(['']);
+    expect(cuPresses(calls)).toBe(1);
+  });
+
+  it('replaceDraft clears a 3-line user draft instead of reporting draft-clear-failed', async () => {
+    // The second site of the same bug: one C-u could never clear a draft of two
+    // or more lines, so choosing "replace" in the conflict sheet failed loudly.
+    const { tmux, calls, box } = boxTmux({ initial: ['line one', 'line two', 'line three'] });
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'fresh text', { replaceDraft: true },
+    );
+    expect(res).toEqual({ ok: true });
+    expect(cuPresses(calls)).toBe(5);
+    expect(box.lines).toEqual(['']); // submitted
+    const typed = sendKeysCalls(calls).filter((c) => c.includes('-l'));
+    expect(typed).toEqual([['tmux', 'send-keys', '-t', 'cc-x', '-l', 'fresh text']]);
+  });
+
+  it('gives up rather than hammering forever when the box will not clear', async () => {
+    const { tmux, calls } = fakeTmux(['❯ stubborn\n']); // C-u never takes
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: 'stubborn' });
+    expect(cuPresses(calls)).toBe(8); // flat cap: draftOf sees only the box's first row, so N is unknowable here
+  });
+
+  it('a pane that dies mid-clear is not-alive, not draft-clear-failed', async () => {
+    const { tmux } = fakeTmux(['❯ old draft\n', null]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'not-alive' });
   });
 });
 
