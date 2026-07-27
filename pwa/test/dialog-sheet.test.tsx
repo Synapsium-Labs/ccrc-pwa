@@ -179,6 +179,112 @@ describe('DialogSheet dismissal', () => {
   });
 });
 
+// — the real question (Dialog.ask) —
+//
+// When the live menu is an AskUserQuestion the transcript carries the copy the
+// pane truncated: the question itself, a header chip, per-option descriptions
+// and preview blocks. Enrichment is by POSITION only — the index that gets
+// typed always comes from the pane; rows the transcript doesn't cover (the
+// TUI's own "Chat about this") keep their scraped label.
+describe('DialogSheet (enriched by Dialog.ask)', () => {
+  const renderSheet = (dialog: Dialog) => renderWithDialog(dialog);
+
+  const ASKED: Dialog = {
+    id: 'd1',
+    title: 'Forward-fill per class',
+    parsed: true,
+    selectedIndex: 1,
+    raw: 'RAW PANE',
+    options: [
+      { index: 1, label: 'Forward-fill per class' },
+      { index: 2, label: 'Require completeness, Anthropic only' },
+      { index: 3, label: 'Ship as-is, alert + runbook' },
+      { index: 4, label: 'Chat about this' },
+    ],
+    ask: {
+      question: 'How should the partial-capture hazard be handled?',
+      header: 'Revised fix',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Forward-fill per class (Recommended)',
+          description: 'Inherit the last seen rate.',
+          preview: '07-01: in,out,cr',
+        },
+        {
+          label: 'Require completeness, Anthropic only',
+          description: 'Emit only complete rows.',
+        },
+        { label: 'Ship as-is, alert + runbook', description: 'Change nothing; watch it.' },
+      ],
+    },
+  };
+
+  it('shows the real question, the header chip and every description', () => {
+    renderSheet(ASKED);
+    expect(
+      screen.getByText('How should the partial-capture hazard be handled?'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Revised fix')).toBeInTheDocument();
+    expect(screen.getByText('Inherit the last seen rate.')).toBeInTheDocument();
+    expect(screen.getByText('Emit only complete rows.')).toBeInTheDocument();
+  });
+
+  it('opens the preselected option’s preview and leaves the others collapsed', () => {
+    renderSheet(ASKED);
+    expect(screen.getByText('07-01: in,out,cr')).toBeVisible();
+    expect(screen.getAllByRole('button', { name: /preview/i })).toHaveLength(1);
+  });
+
+  it('answers with the pane index even when the transcript relabels the row', () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderSheet(ASKED);
+
+    fireEvent.click(screen.getByRole('button', { name: /Ship as-is, alert \+ runbook/ }));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd1', 3);
+  });
+
+  it('enriches by position and leaves the TUI’s own row alone', () => {
+    renderSheet(ASKED);
+    // Row 4 has no counterpart in ask.options — it keeps its scraped label.
+    expect(screen.getByText('Chat about this')).toBeInTheDocument();
+  });
+
+  it('does not carry one question’s collapsed preview over to the next', () => {
+    const { store } = renderSheet(ASKED);
+    fireEvent.click(screen.getByRole('button', { name: /preview/i }));
+    expect(screen.queryByText('07-01: in,out,cr')).not.toBeInTheDocument();
+
+    act(() => {
+      store.getState().apply({
+        type: 'dialog',
+        dialog: {
+          ...ASKED,
+          id: 'd2',
+          ask: {
+            ...ASKED.ask!,
+            question: 'And the backfill window?',
+            options: [
+              { ...ASKED.ask!.options[0]!, preview: '06-01: in,out' },
+              ...ASKED.ask!.options.slice(1),
+            ],
+          },
+        },
+      });
+    });
+    // A new question opens its preselected preview afresh.
+    expect(screen.getByText('06-01: in,out')).toBeVisible();
+  });
+
+  it('renders exactly as before when there is no ask', () => {
+    renderSheet({ ...ASKED, ask: undefined });
+    expect(screen.getByRole('button', { name: 'Forward-fill per class' })).toBeInTheDocument();
+    expect(screen.queryByText('Revised fix')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inherit the last seen rate.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /preview/i })).not.toBeInTheDocument();
+  });
+});
+
 // — answering in your own words —
 //
 // A menu owns the terminal's keyboard, so free text cannot simply be typed at

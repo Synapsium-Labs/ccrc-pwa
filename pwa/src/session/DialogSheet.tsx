@@ -9,7 +9,14 @@
 // Scrim/Esc/swipe merely HIDE the sheet — the header badge and fleet card
 // keep signalling dialogPending — and are refused while an answer is in
 // flight.
-import { useEffect, useRef, useState } from 'react';
+//
+// When the pane menu is an AskUserQuestion the server attaches `ask`: the real
+// question, a header chip, and per-option descriptions/previews the 3-line TUI
+// box had to truncate. That copy is decoration ONLY — enrichment is matched by
+// POSITION, and the option index typed at the pane always comes from the pane.
+// Rows the transcript doesn't cover (the TUI's own "Chat about this") keep
+// their scraped label.
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
@@ -161,42 +168,71 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
     );
   }
 
+  // The transcript's copy for this menu, when the two could be matched.
+  const ask = shown.ask;
+  const eyebrow = ask?.header ? (
+    <>
+      claude is asking <span className="dlg-header-chip">{ask.header}</span>
+    </>
+  ) : (
+    'claude is asking'
+  );
+
   return (
-    <Sheet open={open} onClose={close} eyebrow="claude is asking" title={shown.title}>
-      {shown.body && shown.body !== shown.title && (
+    <Sheet
+      open={open}
+      onClose={close}
+      eyebrow={eyebrow}
+      title={ask?.question ?? shown.title}
+    >
+      {/* The scraped preamble is a lossy copy of the question — with `ask` in
+          hand the title already says it properly, so don't say it twice. */}
+      {!ask && shown.body && shown.body !== shown.title && (
         <p className="dlg-body">{shown.body}</p>
       )}
       <div className="opts">
         {shown.options.map((o) => {
           const selected = o.index === shown.selectedIndex;
           const waiting = answering === o.index;
+          // By POSITION, never by matching text: the keystroke is o.index
+          // whatever the transcript happens to call this row.
+          const rich = ask?.options[o.index - 1];
+          const label = rich?.label ?? o.label;
+          const description = rich?.description ?? o.description;
           return (
-            <button
-              key={o.index}
-              type="button"
-              className={selected ? 'opt opt--selected' : 'opt'}
-              disabled={answering !== null}
-              aria-busy={waiting || undefined}
-              onClick={() => void answer(o.index)}
-            >
-              <span className="opt-glyph" aria-hidden="true">
-                {selected ? '❯' : ''}
-              </span>
-              <span className="opt-idx" aria-hidden="true">
-                {o.index}
-              </span>
-              <span className="opt-body">
-                <span className="opt-label">{o.label}</span>
-                {o.description && <span className="opt-desc">{o.description}</span>}
-              </span>
-              {waiting ? (
-                <span className="opt-wait">answering…</span>
-              ) : selected ? (
-                <span className="opt-enter" aria-hidden="true">
-                  ↵
+            // Keyed by the (pane-derived) dialog id as well as the index so a
+            // new question opens its own previews instead of inheriting the
+            // last one's folded state. The id is stable across arrow moves.
+            <Fragment key={`${shown.id}:${o.index}`}>
+              <button
+                type="button"
+                className={selected ? 'opt opt--selected' : 'opt'}
+                disabled={answering !== null}
+                aria-busy={waiting || undefined}
+                onClick={() => void answer(o.index)}
+              >
+                <span className="opt-glyph" aria-hidden="true">
+                  {selected ? '❯' : ''}
                 </span>
-              ) : null}
-            </button>
+                <span className="opt-idx" aria-hidden="true">
+                  {o.index}
+                </span>
+                <span className="opt-body">
+                  <span className="opt-label">{label}</span>
+                  {description && <span className="opt-desc">{description}</span>}
+                </span>
+                {waiting ? (
+                  <span className="opt-wait">answering…</span>
+                ) : selected ? (
+                  <span className="opt-enter" aria-hidden="true">
+                    ↵
+                  </span>
+                ) : null}
+              </button>
+              {rich?.preview && (
+                <OptionPreview text={rich.preview} defaultOpen={selected} />
+              )}
+            </Fragment>
           );
         })}
       </div>
@@ -241,5 +277,31 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
 
       <p className="sheet-foot">tap an option, or answer in your own words</p>
     </Sheet>
+  );
+}
+
+/** An option's worked example, folded away under its row and opened for the
+ *  preselected one. Fixed-width ASCII: it scrolls, it never wraps — the same
+ *  rule code blocks follow. Capped at --well-max with internal scroll. */
+function OptionPreview({
+  text,
+  defaultOpen,
+}: {
+  text: string;
+  defaultOpen: boolean;
+}): ReactNode {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="opt-preview-wrap">
+      <button
+        type="button"
+        className="opt-preview-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? '▾ preview' : '▸ preview'}
+      </button>
+      {open && <pre className="well opt-preview">{text}</pre>}
+    </div>
   );
 }

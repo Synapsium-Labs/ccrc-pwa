@@ -1365,11 +1365,52 @@ button.metachip:active {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-/* The option's sub-text — the fix for choosing options blind. */
+/* The option's sub-text — the fix for choosing options blind. Reads as body
+   copy, not as meta: when Dialog.ask lands this is the transcript's own
+   description, the sentence the 3-line TUI box had to throw away. */
 .opt-desc {
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
-  color: var(--ink-tertiary);
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-secondary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* Which AskUserQuestion this is ("Revised fix") — rides the sheet eyebrow. */
+.dlg-header-chip {
+  display: inline-block;
+  margin-left: var(--sp-2);
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--accent-tint);
+  color: var(--accent);
+  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+/* An option's worked example, folded under its row (open on the preselected
+   one). The toggle keeps a full touch target — this is a phone. */
+.opt-preview-wrap {
+  padding: 0 var(--sp-2) var(--sp-2);
+}
+.opt-preview-toggle {
+  display: block;
+  min-height: var(--tap-min);
+  border: 0;
+  background: none;
+  padding: var(--sp-1) 0;
+  color: var(--accent);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-align: left;
+  cursor: pointer;
+}
+.opt-preview {
+  max-height: var(--well-max);
+  overflow: auto;
+  white-space: pre;               /* ASCII art scrolls; it must not reflow */
+  overflow-wrap: normal;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-mono) var(--font-mono);
 }
 /* The full question / preamble above the options. Scrolls if long so the
    options stay reachable. */
