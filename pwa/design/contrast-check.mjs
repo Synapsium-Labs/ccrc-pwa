@@ -82,6 +82,10 @@ const pairs = (T, name) => [
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
+  // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
+  // (--text-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
+  [`${name} ask header chip / accent-tint`, T.accent, T.accentTint, 4.5],
+  [`${name} preview toggle / sheet`, T.accent, T.sheet, 4.5],
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
   [`${name} diff-del / well`, T.diffDel, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],
