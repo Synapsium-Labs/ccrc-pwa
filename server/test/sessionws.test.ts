@@ -1,15 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
-import { nextDialogFrame, type DialogSeen } from '../src/sessionws.js';
+import { nextDialogFrame, SessionStream, type DialogSeen } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import type { AskQuestion, Dialog } from '../../shared/api.js';
 
 const ID = 'claude2-MekWarLive';
@@ -128,6 +129,134 @@ describe('dialog frame gate', () => {
     expect(cleared.msg).toEqual({ type: 'dialog_cleared' });
     expect(cleared.seen).toEqual(NONE);
     expect(nextDialogFrame(cleared.seen, null).msg).toBeNull();
+  });
+});
+
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+/** Pane captures live in fixtures/panes; transcripts sit at the fixtures root. */
+const fixture = (name: string): string =>
+  readFileSync(path.join(FIXTURES, name.endsWith('.jsonl') ? name : path.join('panes', name)), 'utf8');
+
+/** One poll of a live stream. `tick` is private only to keep it off the class's
+ *  public surface; the harness wants exactly what the 2 s interval does, awaited,
+ *  so these tests never sleep. */
+const pollOnce = (s: SessionStream): Promise<void> =>
+  (s as unknown as { tick: () => Promise<void> }).tick();
+
+/**
+ * Run a SessionStream against a fixed pane and a scripted sequence of transcript
+ * contents — one per poll, `null` meaning the file is not there — and collect
+ * every frame it sends, plus how many times the transcript was read for an ask.
+ * It resumes with `since`, so what comes back is the dialog traffic itself rather
+ * than a backlog.
+ */
+const streamWith = async (opts: {
+  pane: string;
+  transcript?: string | null;
+  transcriptSequence?: readonly (string | null)[];
+}): Promise<{ frames: any[]; askReads: number }> => {
+  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-ask-'));
+  seed(home);
+  const file = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
+  const put = (t: string | null): void => {
+    if (t === null) rmSync(file, { force: true });
+    else writeFileSync(file, t);
+  };
+  const run: Runner = async (_cmd, args) => {
+    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { code: 0, stdout: opts.pane, stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  // The tailer reads through io.tailFile, and `since` skips the backlog, so a
+  // readFileFrom on the transcript is an ask read and nothing else.
+  let askReads = 0;
+  const io: FleetIO = {
+    ...localIO,
+    readFileFrom: (p, off) => {
+      if (p === file) askReads += 1;
+      return localIO.readFileFrom(p, off);
+    },
+  };
+  const deps: Deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io };
+  const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
+  put(seq[0] ?? null);
+  const frames: any[] = [];
+  const offset = existsSync(file) ? statSync(file).size : 0;
+  const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset });
+  try {
+    await stream.start();
+    for (const t of seq.slice(1)) {
+      put(t);
+      await pollOnce(stream);
+    }
+  } finally {
+    stream.stop();
+    rmSync(home, { recursive: true, force: true });
+  }
+  return { frames, askReads };
+};
+
+describe('dialog enrichment', () => {
+  it('carries the structured ask when the pane and transcript agree', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcript: fixture('transcript-ask-2col.jsonl'),
+    });
+    const d = frames.find((f) => f.type === 'dialog')!.dialog;
+    expect(d.ask?.question).toContain('partial-capture hazard');
+    expect(d.ask?.options[0]!.description).toBeTruthy();
+    expect(d.ask?.options[0]!.preview).toContain('07-01');
+    // Enrichment must not disturb the answer path.
+    expect(d.options).toHaveLength(4);            // 3 numbered + "Chat about this"
+    expect(d.options[3]!.label).toBe('Chat about this');
+  });
+
+  it('sends the same dialog id with and without ask', async () => {
+    const withAsk = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'), transcript: fixture('transcript-ask-2col.jsonl'),
+    });
+    const without = await streamWith({ pane: fixture('ask-2col-chat-about.txt'), transcript: null });
+    expect(withAsk.frames[0]!.dialog.ask).toBeDefined();
+    expect(without.frames[0]!.dialog.ask).toBeUndefined();
+    expect(withAsk.frames[0]!.dialog.id).toBe(without.frames[0]!.dialog.id);
+  });
+
+  it('delivers an ask that only becomes readable on a later poll', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcriptSequence: [null, fixture('transcript-ask-2col.jsonl')],
+    });
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs).toHaveLength(2);
+    expect(dialogs[0]!.dialog.ask).toBeUndefined();
+    expect(dialogs[1]!.dialog.ask).toBeDefined();
+  });
+
+  it('does not resend a bare dialog when a later ask read fails', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcriptSequence: [fixture('transcript-ask-2col.jsonl'), null, null],
+    });
+    expect(frames.filter((f) => f.type === 'dialog')).toHaveLength(1);
+  });
+
+  it('reads the transcript for a menu once, not once per poll', async () => {
+    // The enrichment is a latch: a 256 KB tail read every 2 s for an answer that
+    // cannot change the frame (nextDialogFrame would suppress it) is pure cost.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const { askReads } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcriptSequence: [t, t, t],
+    });
+    expect(askReads).toBe(1);
+  });
+
+  it('leaves a /model-style confirm unenriched', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('model-confirm.txt'), transcript: fixture('transcript-ask-2col.jsonl'),
+    });
+    expect(frames.find((f) => f.type === 'dialog')!.dialog.ask).toBeUndefined();
   });
 });
 

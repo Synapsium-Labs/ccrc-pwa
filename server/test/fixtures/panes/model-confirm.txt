@@ -1,0 +1,9 @@
+──────────────────────────────────────────────────────────────────────────────
+  Switch model?
+  Your next response will be slower and use more tokens
+
+  This conversation is cached for the current model.
+
+❯ 1. Yes, switch to Fable 5
+  2. No, go back
+──────────────────────────────────────────────────────────────────────────────

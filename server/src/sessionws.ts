@@ -5,6 +5,7 @@ import { liveSessionStatus, readLiveState } from './livestate.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
+import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import type { AskQuestion, Dialog, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
@@ -73,7 +74,7 @@ export class SessionStream {
       this.send({ type: 'notice', message: `unknown session ${this.id}` });
     }
     if (this.stopped) return;
-    await this.checkDialog(); // deliver an already-pending dialog on connect
+    await this.checkDialog(r?.file ?? null); // deliver an already-pending dialog on connect
     if (this.stopped) return;
     if (r) await this.checkTasks(r.cfgDir, r.uuid); // and the plan as it stands
     if (this.stopped) return;
@@ -83,11 +84,29 @@ export class SessionStream {
 
   /** Capture the pane; send `dialog` when a menu appears/changes or first comes
    *  back enriched, and `dialog_cleared` when it vanishes — tracked per stream
-   *  so a client that joins after the menu appeared still receives it. */
-  private async checkDialog(): Promise<void> {
+   *  so a client that joins after the menu appeared still receives it.
+   *
+   *  `file` is the transcript being tailed, and WHICH file matters: after an
+   *  account swap the same `<uuid>.jsonl` exists under several wrapper config
+   *  dirs, and the ask has to come from the one this session is writing.
+   *  null (unresolvable session) → the menu still ships, unenriched. */
+  private async checkDialog(file: string | null): Promise<void> {
     if (this.stopped) return;
     const pane = await this.deps.tmux.capture(this.id);
-    const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
+    let dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
+    // Read the transcript only while this menu is still unexplained. Once its ask
+    // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
+    // nextDialogFrame would suppress the frame anyway.
+    const latched = dialog !== null && this.seenDialog.id === dialog.id && this.seenDialog.ask !== null;
+    if (dialog?.parsed && file !== null && !latched) {
+      const questions = await readPendingAsk(this.deps.io, file);
+      if (this.stopped) return;
+      const ask = questions === null ? null : alignAsk(dialog.options, questions);
+      // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
+      // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
+      // check staleness) and the keystrokes an answer sends stay positional.
+      if (ask !== null) dialog = { ...dialog, ask };
+    }
     const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
     this.seenDialog = seen;
     if (msg) this.send(msg);
@@ -201,7 +220,7 @@ export class SessionStream {
         this.send({ type: 'status', status: r.status, statusUpdatedAt: r.statusUpdatedAt });
       }
       if (this.stopped) return;
-      await this.checkDialog();
+      await this.checkDialog(r.file);
       if (this.stopped) return;
       await this.checkTasks(r.cfgDir, r.uuid);
     } finally {
