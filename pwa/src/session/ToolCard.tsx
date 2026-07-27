@@ -3,6 +3,10 @@
 // name, truncated input summary and a duration readout (a live elapsed clock
 // while running). Tap expands (animated height, reduced-motion aware) to
 // input/result wells capped at --well-max with inner scroll.
+//
+// AskUserQuestion is the one exception: a question Claude put to the reader is
+// not machine work, and the generic row filed it as a line of raw JSON. It
+// renders instead as the question itself, with the chosen answer once it lands.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -31,7 +35,69 @@ function elapsedLabel(from: string, now: number): string | null {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** The first question's text, or null if the input is unusable — it is capped at
+ *  TOOL_INPUT_MAX upstream, so a big ask arrives truncated and unparseable.
+ *  A blank question counts as unusable: nothing validates it beyond being a
+ *  string, and an empty one would leave a card with no question on it. */
+function askSummary(input: string): string | null {
+  try {
+    const q = (JSON.parse(input) as { questions?: { question?: unknown }[] }).questions?.[0];
+    if (typeof q?.question !== 'string') return null;
+    const question = q.question.trim();
+    return question === '' ? null : question;
+  } catch {
+    return null;
+  }
+}
+
+/** An answered ask's result text comes in two shapes — an option was picked,
+ *  or the reader typed their own reply:
+ *
+ *    …answered: "<question>"="<label>". You can now continue…
+ *    …answered: "<question>"=(no option selected) notes: <reply>. You can now…
+ *
+ *  Both are anchored on the `"=` join, never on the quotes around the question:
+ *  real questions quote things themselves. Only the first question's answer is
+ *  read, to match the first question `askSummary` shows. */
+const ANSWER =
+  /"=(?:"([^"]*)"|\(no option selected\) notes: ([\s\S]*?)(?:\. You can now continue|$))/;
+
+/** The answer to show, or the raw text when the result is neither shape — an
+ *  error, an interrupt, a decline. The raw text says what happened. */
+function answerOf(text: string): string {
+  const m = ANSWER.exec(text);
+  const answer = (m?.[1] ?? m?.[2] ?? '').trim();
+  return answer === '' ? text : answer;
+}
+
+/** An asked question, read as one: the question, then the answer once it lands.
+ *  No expander — unlike a tool call there is no hidden payload worth a tap; the
+ *  question and its answer are the whole event. */
+function AskCard({ question, result }: { question: string; result?: ToolResultEvent }): ReactNode {
+  return (
+    <div className="tool-ask">
+      <span className="tool-ask-glyph" aria-hidden="true">❓</span>
+      <span className="tool-ask-q">{question}</span>
+      {result && <span className="tool-ask-a">{answerOf(result.text)}</span>}
+    </div>
+  );
+}
+
 export function ToolCard({
+  use,
+  result,
+}: {
+  use: ToolUseEvent;
+  result?: ToolResultEvent;
+}): ReactNode {
+  if (use.name === 'AskUserQuestion') {
+    const question = askSummary(use.input);
+    if (question !== null) return <AskCard question={question} result={result} />;
+  }
+  return <GenericToolCard use={use} result={result} />;
+}
+
+function GenericToolCard({
   use,
   result,
 }: {

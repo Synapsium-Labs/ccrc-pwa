@@ -1134,6 +1134,44 @@ button.metachip:active {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Asked question — the one tool call that is prose, not machine work. *
+ *  Two grid rows: glyph + question, then the chosen answer beneath it  *
+ *  as a phosphor-tinted chip. Nothing here is tappable, so no 44px     *
+ *  floor — the sheet is where an ask is answered.                      *
+ * ------------------------------------------------------------------ */
+.tool-ask {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-2);
+  padding: 10px var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+.tool-ask-glyph {
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+.tool-ask-q {
+  font: var(--weight-medium) var(--text-base) / var(--leading-normal) var(--font-ui);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.tool-ask-a {
+  grid-column: 2;
+  justify-self: start;
+  max-width: 100%;
+  padding: 3px var(--sp-2);
+  border-radius: var(--r-sm);
+  /* accent-tint / ink-primary is a gated pair in both themes (13.43:1 dark,
+     14.19:1 light) — the answer reads as the choice that was made. */
+  background: var(--accent-tint);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ *
  *  Composer — the prompt line, docked above the keyboard.             *
  * ------------------------------------------------------------------ */
 /* Plain measuring shell around <Composer> — Composer.tsx itself isn't in this

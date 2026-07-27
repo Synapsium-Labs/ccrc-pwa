@@ -47,6 +47,14 @@ const toolUse = (uuid: string, toolId: string, input = 'pnpm test --filter contr
 const toolResult = (toolId: string, text: string, isError = false): ChatEvent =>
   ({ kind: 'tool_result', ts: TS_LATER, toolId, text, isError });
 
+// A modest AskUserQuestion, as the transcript parser hands it over: `input` is
+// the tool call's JSON, capped at TOOL_INPUT_MAX (4000) upstream.
+const ASK_USE = {
+  kind: 'tool_use', uuid: 'a1', ts: NOW, toolId: 't1', name: 'AskUserQuestion',
+  input: JSON.stringify({ questions: [{ question: 'Which colour?', header: 'Colour',
+    multiSelect: false, options: [{ label: 'Red' }, { label: 'Green' }] }] }),
+} as const;
+
 /** Store whose socket is inert and whose api never reaches the network. */
 const makeStore = (id = 'claude:OpenClawHetzner'): SessionStore =>
   createSessionStore(id, {
@@ -182,6 +190,67 @@ describe('ChatListInner', () => {
     }]} />);
     expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:mock/1');
     expect(screen.getByText('what is this')).toBeInTheDocument();
+  });
+
+  it('shows an asked question as a question, not as JSON', () => {
+    render(<ChatListInner id="s" pending={[]} events={[ASK_USE]} />);
+    expect(screen.getByText('Which colour?')).toBeInTheDocument();
+    expect(screen.queryByText(/"questions"/)).not.toBeInTheDocument();
+  });
+
+  it('shows the answer once it lands', () => {
+    render(<ChatListInner id="s" pending={[]} events={[ASK_USE, {
+      kind: 'tool_result', ts: NOW, toolId: 't1',
+      text: 'Your questions have been answered: "Which colour?"="Green"', isError: false,
+    }]} />);
+    expect(screen.getByText(/Green/)).toBeInTheDocument();
+  });
+
+  it('falls back to the generic row when the input was truncated', () => {
+    render(<ChatListInner id="s" pending={[]} events={[{ ...ASK_USE, input: '{"questions":[{"que' }]} />);
+    expect(screen.getByText('AskUserQuestion')).toBeInTheDocument();
+  });
+
+  // Same hazard the sheet guards: nothing validates `question` beyond it being
+  // a string, and a blank one would render a card with no question on it.
+  it('falls back to the generic row when the question is blank', () => {
+    render(<ChatListInner id="s" pending={[]} events={[{ ...ASK_USE,
+      input: JSON.stringify({ questions: [{ question: '  ', options: [] }] }) }]} />);
+    expect(screen.getByText('AskUserQuestion')).toBeInTheDocument();
+  });
+
+  // The reader took the free-text option the sheet offers — the result says
+  // "(no option selected) notes: …" instead of naming a label.
+  it('shows a typed-in answer when no option was picked', () => {
+    render(<ChatListInner id="s" pending={[]} events={[ASK_USE, {
+      kind: 'tool_result', ts: NOW, toolId: 't1', isError: false,
+      text: 'Your questions have been answered: "Which colour?"=(no option selected)'
+        + ' notes: teal, actually. You can now continue with these answers in mind.',
+    }]} />);
+    expect(screen.getByText('teal, actually')).toBeInTheDocument();
+    expect(screen.queryByText(/You can now continue/)).not.toBeInTheDocument();
+  });
+
+  // Real questions quote things, so the answer must be found by the `"=` join
+  // and never by "the text between the second and third quote".
+  it('finds the answer even when the question quotes something itself', () => {
+    const q = 'By "email validation", did you mean DMARC?';
+    render(<ChatListInner id="s" pending={[]} events={[
+      { ...ASK_USE, input: JSON.stringify({ questions: [{ question: q, multiSelect: false,
+        options: [{ label: 'DMARC + config set' }] }] }) },
+      { kind: 'tool_result', ts: NOW, toolId: 't1', isError: false,
+        text: `Your questions have been answered: "${q}"="DMARC + config set". You can now continue.` },
+    ]} />);
+    expect(screen.getByText(q)).toBeInTheDocument();
+    expect(screen.getByText('DMARC + config set')).toBeInTheDocument();
+  });
+
+  it('shows the raw result text when the ask never got an answer', () => {
+    render(<ChatListInner id="s" pending={[]} events={[ASK_USE, {
+      kind: 'tool_result', ts: NOW, toolId: 't1',
+      text: '[Request interrupted by user]', isError: true,
+    }]} />);
+    expect(screen.getByText('[Request interrupted by user]')).toBeInTheDocument();
   });
 });
 
