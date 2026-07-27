@@ -1135,18 +1135,23 @@ button.metachip:active {
 
 /* ------------------------------------------------------------------ *
  *  Asked question — the one tool call that is prose, not machine work. *
- *  Two grid rows: glyph + question, then the chosen answer beneath it  *
- *  as a phosphor-tinted chip. Nothing here is tappable, so no 44px     *
- *  floor — the sheet is where an ask is answered.                      *
+ *  One block per question the ask put: glyph + question, then that     *
+ *  question's own answer beneath it as a phosphor-tinted chip. An ask  *
+ *  that came back with no answer gets a tappable outcome row instead,  *
+ *  in the failure tokens — see .tool-ask-out.                          *
  * ------------------------------------------------------------------ */
 .tool-ask {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--sp-2);
   padding: 10px var(--sp-3);
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
+}
+.tool-ask-qa {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-2);
 }
 .tool-ask-glyph {
   font-size: var(--text-sm);
@@ -1164,11 +1169,53 @@ button.metachip:active {
   padding: 3px var(--sp-2);
   border-radius: var(--r-sm);
   /* accent-tint / ink-primary is a gated pair in both themes (13.43:1 dark,
-     14.19:1 light) — the answer reads as the choice that was made. */
+     14.19:1 light) — the answer reads as the choice that was made. Only a
+     parsed answer is ever painted with it. */
   background: var(--accent-tint);
   color: var(--ink-primary);
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
   overflow-wrap: anywhere;
+  /* Only the reader's own words land here now (the longest real one is 480
+     chars of typed reply), but the chip caps and scrolls like a well rather
+     than growing without limit. */
+  max-height: var(--well-max);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* No answer came back — declined, interrupted, timed out. The result text is
+   the harness briefing the model (the decline preamble alone runs past 1 kB,
+   newlines and all), so it stays behind a tap in a --well-max well rather than
+   unrolling down the transcript, and it is never tinted as a choice. */
+.tool-ask-out {
+  display: grid;
+  border-top: 1px solid var(--edge-subtle);
+}
+.tool-ask-outrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.tool-ask-outlabel {
+  flex: 1;
+  min-width: 0;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.tool-ask-outrow[aria-expanded='true'] .tool-chev {
+  transform: rotate(90deg);
+}
+.tool-ask-well {
+  margin-bottom: var(--sp-2);
 }
 
 /* ------------------------------------------------------------------ *
