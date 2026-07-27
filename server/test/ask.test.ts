@@ -161,4 +161,33 @@ describe('alignAsk', () => {
   it('returns null when nothing aligns', () => {
     expect(alignAsk(rows('Restart', 'Cancel'), [q('Which colour?', 'Red', 'Green')])).toBeNull();
   });
+
+  it('matches when the pane appended two-column chrome to a label', () => {
+    // The other prefix direction: the SCRAPED row is the longer one. In a
+    // two-column layout `parseDialog` joins every continuation row left of the
+    // gutter onto the label, so the rule row and the "Chat about this" extra
+    // ride along — a real capture emitted exactly this for "Cosmetic only".
+    const picked = alignAsk(
+      rows('Stage-then-send + chips', 'Cosmetic only ───────────────────────────── Chat about this'),
+      [q('How far?', 'Stage-then-send + chips', 'Cosmetic only')],
+    );
+    expect(picked?.question).toBe('How far?');
+  });
+
+  it('never lets a blank label match — an empty string prefixes everything', () => {
+    // A capture taken mid-repaint: OPTION_RE's `(.+)$` backtracks onto a single
+    // space and leftCol trims it away, so parseDialog really does emit ''.
+    expect(alignAsk(rows('', ''), [q('Which colour?', 'Red', 'Green')])).toBeNull();
+    // And the same the other way round, so neither half of the guard is free to go.
+    expect(alignAsk(rows('Red', 'Green'), [q('Which colour?', '', '')])).toBeNull();
+  });
+
+  it('returns null rather than throwing when the pane has fewer rows than options', () => {
+    // Reachable: escape an unanswered 4-option ask and open /model — the ask is
+    // still pending in the transcript while the pane scrapes a 2-row confirm.
+    expect(alignAsk(rows('Yes', 'No'), [q('Pick', 'A', 'B', 'C', 'D')])).toBeNull();
+    // Even a head that matches as far as it goes is short of the evidence bar,
+    // and reading past the end must not throw into the poll loop.
+    expect(alignAsk(rows('A', 'B'), [q('Pick', 'A', 'B', 'C', 'D')])).toBeNull();
+  });
 });
