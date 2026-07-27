@@ -3,7 +3,14 @@ import { hasMenu, parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import { composePrompt } from '../../../shared/api.js';
 
-export interface SendDeps { tmux: Tmux; queue: KeyedQueue; sleep?: (ms: number) => Promise<void> }
+export interface SendDeps {
+  tmux: Tmux;
+  queue: KeyedQueue;
+  sleep?: (ms: number) => Promise<void>;
+  /** Clock behind the clear's wall-clock budget; injectable so a test can prove
+   *  the budget bounds the loop without spending the budget. */
+  now?: () => number;
+}
 
 export type SendResult =
   | { ok: true }
@@ -104,6 +111,145 @@ async function submitted(
   return false;
 }
 
+/** How long to let the pane settle after a C-u before reading the box again. */
+const CLEAR_POLL_MS = 150;
+/**
+ * Wall-clock ceiling on ONE clear, blind presses included.
+ *
+ * The whole of `sendPrompt` runs inside the session's `KeyedQueue` slot, so
+ * every millisecond spent here is a millisecond in which that session accepts
+ * nothing else — not the next prompt, not `/interrupt`. The bound has to be
+ * time, not presses: presses are sized off the message, so a press cap alone
+ * lets a long message hold the lock for minutes (a 200-line prompt at ~150 ms
+ * per look-round is over a minute).
+ */
+const CLEAR_BUDGET_MS = 3000;
+/**
+ * Look-rounds allowed AFTER the blind floor at the attachment site, where the
+ * floor is already sized to the text we typed. Slack for a widget that costs
+ * more presses than measured, not the primary mechanism.
+ */
+const CLEAR_EXTRA_PRESSES = 6;
+/**
+ * Press ceiling for `replaceDraft`, where the draft's size is unknowable
+ * (`draftOf` returns the box's first row only) so there is no floor to compute
+ * and every press has to be paid for with a look. This is a BACKSTOP: at
+ * CLEAR_POLL_MS a round the budget above stops the loop first (~20 rounds), so
+ * the number only matters if polling is free. It was 8 — which is 2N-1 for
+ * N=4, i.e. any 5-line draft (a pasted stack trace, a log excerpt) hit the cap,
+ * lost four of its five rows to the presses that DID land, and came back
+ * `draft-clear-failed` reporting only the one row left. Nothing is saved by
+ * keeping it low: the loop exits on the first empty read, so a high ceiling
+ * costs time only on a box that genuinely will not clear, which the budget
+ * bounds anyway.
+ */
+const REPLACE_MAX_PRESSES = 24;
+
+/**
+ * Pane width, read off the capture itself — `capture-pane` emits one line per
+ * visual row and the box's rules span the full width, so the longest row is the
+ * width. Clamped at both ends: a narrow answer only ever costs extra no-op
+ * presses, so the floor (80, the narrowest real terminal) guards against a
+ * capture with no full-width row in it, and the ceiling keeps an absurd width
+ * from under-counting rows on a genuinely wide pane.
+ */
+const paneWidth = (pane: string): number =>
+  Math.min(400, Math.max(80, ...pane.split('\n').map((l) => l.replace(SGR, '').length)));
+
+/**
+ * How many VISUAL rows `lines` occupies in a box `width` columns wide.
+ *
+ * Kills are per visual row, not per logical line, and WRAPPED rows cost less
+ * than rows made by M-Enter, which each need a second press to join the newline
+ * away. Two independent live measurements on 2026-07-27 disagree by one press
+ * on the wrapped case — a 260-char line in a 120-column pane cleared in 3
+ * presses over 3 rows, while a 611-char line in the 220-column pane this fleet
+ * actually runs took 4 over 3 rows — so treat "1 press per wrapped row" as the
+ * shape and not as an exact cost. Either way it is under 2 per row, where
+ * M-Enter rows are exactly 2N-1 (1→1, 2→3, 3→5, 4→7, measured with a capture
+ * between every press).
+ *
+ * So charging 2 per visual row OVER-estimates a wrapped draft and is exact for
+ * an unwrapped one. That is the direction we want: the floor is fired blind, an
+ * under-estimate would strand text, and over-pressing an empty box is a no-op
+ * (measured: 12 presses at a 2-line draft left a clean box). The look phase
+ * after the floor catches any case where this bound is nonetheless too low.
+ */
+const visualRows = (lines: readonly string[], width: number): number =>
+  lines.reduce((n, l) => n + Math.max(1, Math.ceil(l.length / Math.max(1, width - 2))), 0);
+
+type ClearOutcome =
+  | { state: 'cleared' }
+  | { state: 'residue'; draft: string }
+  | { state: 'menu' }
+  | { state: 'dead' };
+
+/**
+ * Empty the input box and report what is left.
+ *
+ * C-u is kill-to-ROW-start with the caret at the end of the LAST row, and a row
+ * emptied by a kill still has to be JOINED AWAY by a second press when a
+ * newline made it — so an N-line draft costs 2N-1 presses, not N (measured
+ * against a live Claude Code 2.1.220 box on 2026-07-27, capture between every
+ * press: 1→1, 2→3, 3→5, 4→7).
+ *
+ * Two phases, because the two failure modes need opposite things:
+ *
+ *  - `blind`: presses fired back-to-back with NO reads. This is what actually
+ *    clears the box, and it is deliberately render-INDEPENDENT. The clear runs
+ *    on the verify-failed path, and the commonest reason a verify fails is that
+ *    the pane is not rendering what we typed — so a loop that stops when the
+ *    box "reads empty" stops on the FIRST read of exactly that stale frame and
+ *    strands the whole prompt. Bursting is safe on the real widget: 5 back-to-
+ *    back C-u with no settle emptied a 3-line draft completely (measured).
+ *  - the look rounds: press, settle, re-read. Slack for a widget whose cost is
+ *    not what we measured, and the only way to learn what is actually left.
+ *
+ * Terminating a look round on `draftOf() === ''` is sound because kills run
+ * bottom-up while `draftOf` reads the box's FIRST row (the `❯` marker sits
+ * there; continuation rows are indented two spaces and carry no marker — both
+ * confirmed against real `capture-pane -e` bytes, see LIVE_CU_FRAMES in the
+ * tests), so that row is the LAST to empty. Detecting PROGRESS from draftOf is
+ * impossible for the same reason — its value is unchanged for every press but
+ * the last — which is why the bound below is wall-clock and not "presses that
+ * changed nothing".
+ *
+ * Every path is bounded by CLEAR_BUDGET_MS, checked in both phases, because
+ * this runs holding the session's queue slot.
+ */
+async function clearBox(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  opts: { blind: number; look: number },
+): Promise<ClearOutcome> {
+  const now = d.now ?? Date.now;
+  const deadline = now() + CLEAR_BUDGET_MS;
+
+  for (let i = 0; i < Math.max(1, opts.blind); i++) {
+    if (i > 0 && now() >= deadline) break;   // always at least one press
+    await d.tmux.sendKey(id, 'C-u');
+  }
+
+  for (let i = 0; ; i++) {
+    await sleep(CLEAR_POLL_MS);
+    const ansi = await d.tmux.captureAnsi(id);
+    if (ansi === null) return { state: 'dead' };
+    // A dialog can open between the draft check at the top of sendPrompt and
+    // here (a slash-command palette — and an attachment prompt's first
+    // keystroke is a literal '/'). With a menu up there is no input box: the
+    // only `❯` on screen is the cursor on the selected OPTION, so draftOf reads
+    // that row as a draft, it never empties, and we would spend the entire cap
+    // hammering C-u into a live menu and then report the user their own
+    // "1. Yes" as leftover text. Bail and let the caller say so.
+    if (hasMenu(ansi.replace(SGR, ''))) return { state: 'menu' };
+    const left = draftOf(ansi);
+    if (left === '') return { state: 'cleared' };
+    if (i >= opts.look || now() >= deadline) return { state: 'residue', draft: left };
+    await d.tmux.sendKey(id, 'C-u');
+  }
+}
+
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
  * session through the KeyedQueue. Refuses to clobber a half-typed draft
@@ -132,12 +278,17 @@ export function sendPrompt(
     const draft = draftOf(pane);
     if (draft) {
       if (!opts.replaceDraft) return { ok: false, error: 'draft-present', draft };
-      await d.tmux.sendKey(id, 'C-u');
-      await sleep(150);
-      const cleared = await d.tmux.captureAnsi(id);
-      if (cleared === null) return { ok: false, error: 'not-alive' };
-      const left = draftOf(cleared);
-      if (left) return { ok: false, error: 'draft-clear-failed', draft: left };
+      // A single C-u could never clear a draft of two or more lines (see
+      // clearBox), so "replace" failed with draft-clear-failed on any user
+      // draft that had a line break in it. No blind floor is available here —
+      // draftOf sees the box's first row only, so the draft's size is unknown —
+      // so every press is paid for with a look, bounded by the clear's budget.
+      const cleared = await clearBox(d, id, sleep, { blind: 1, look: REPLACE_MAX_PRESSES - 1 });
+      if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
+      // A menu that opened while we were clearing owns the keyboard exactly as
+      // one that was up before we started does, and gets the same answer.
+      if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
+      if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
     }
 
     // Attachment paths go first, each on its own line, then the user's text —
@@ -184,23 +335,37 @@ export function sendPrompt(
       if (!echoed) {
         after ??= await d.tmux.capture(id);
         // A failed send must not stand a bare clip path in the live box — but
-        // C-u can fail just like the replaceDraft clear above can: re-capture
-        // and report what's left rather than assuming it worked.
+        // C-u can fail just like the replaceDraft clear above can, so clearBox
+        // re-reads and reports what's left rather than assuming it worked.
         //
-        // Once PER LINE: C-u is kill-to-line-start, and an attachment prompt is
-        // always ≥2 lines, so a single press would leave every path above the
-        // cursor in the box — and the next send would come back `draft-present`
-        // carrying exactly what this feature exists to keep out of there. On an
-        // already-empty box C-u is a no-op, so the extra presses are free.
-        for (let i = 0; i < parts.length; i++) await d.tmux.sendKey(id, 'C-u');
-        await sleep(150);
-        const clearedAnsi = await d.tmux.captureAnsi(id);
-        const left = clearedAnsi === null ? '' : draftOf(clearedAnsi);
+        // This used to press `parts.length` times, which under-clears every
+        // multi-line prompt: C-u costs 2 presses per row, so an attachment
+        // prompt (always ≥2 lines) kept its FIRST line — a bare clip path —
+        // and the next send came back `draft-present` carrying exactly what
+        // this feature exists to keep out of the box.
+        //
+        // The floor is fired BLIND, because we are here precisely because the
+        // box would not show us what we typed: a clear that stops when the box
+        // "reads empty" believes the same stale frame that failed the echo and
+        // stops after one press. We know exactly what we typed, so we know
+        // what it costs — 2 presses per visual row — and no read is needed to
+        // spend it. The look rounds after it only report residue.
+        const floor = 2 * visualRows(parts, paneWidth(pane)) - 1;
+        const cleared = await clearBox(d, id, sleep, { blind: floor, look: CLEAR_EXTRA_PRESSES });
+        // A pane that died mid-clear is `not-alive`, the same as at the
+        // replaceDraft site: `verify-failed` with no residue is byte-identical
+        // to a clean clear, so reporting it that way told the caller "cleared"
+        // when the truth is "unknown, and the session is gone".
+        if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
         return {
           ok: false,
           error: 'verify-failed',
           pane: (after ?? '').slice(-PANE_TAIL),
-          ...(left ? { draft: left } : {}),
+          // `menu` reports no residue: with a dialog up the row draftOf reads
+          // is the selected OPTION, and handing the user "1. Yes" back as
+          // their leftover draft is worse than saying nothing. The pane tail
+          // shows the menu.
+          ...(cleared.state === 'residue' ? { draft: cleared.draft } : {}),
         };
       }
     } else {
