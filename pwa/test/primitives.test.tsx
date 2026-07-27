@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StatusDot } from '../src/components/StatusDot';
 import { LimitBar } from '../src/components/LimitBar';
@@ -163,6 +165,45 @@ describe('Sheet', () => {
       </Sheet>,
     );
     expect(document.querySelector('.sheet-eyebrow')).toHaveTextContent('session');
+  });
+
+  // jsdom does no layout, so what follows can only be asserted against the
+  // source — as the attach-tray CSS guards already do. The real geometry is
+  // checked in Chromium; these keep the declarations from being dropped again.
+  //
+  // Both surfaces render caller text: DialogSheet puts the real
+  // AskUserQuestion in the title and its header chip in the eyebrow, and those
+  // routinely carry a path, URL, hash or snake_case identifier. .sheet-panel
+  // is position:fixed with no overflow of its own, so an unbroken >40ch token
+  // is clipped at the viewport edge, out of reach. Every other dynamic-text
+  // surface in this codebase (.opt-label, .opt-desc, .well, .dlg-body) sets
+  // `overflow-wrap: anywhere`.
+  describe('sheet header CSS guards', () => {
+    const css = readFileSync(
+      path.resolve(process.cwd(), 'src/components/primitives.css'),
+      'utf8',
+    );
+    const rule = (selector: string): string => {
+      const found = css.match(new RegExp(`^\\${selector}\\s*\\{[^}]*\\}`, 'm'))?.[0] ?? '';
+      expect(found).not.toBe('');
+      return found;
+    };
+
+    it('lets a long unbroken token in the title and the eyebrow wrap', () => {
+      expect(rule('.sheet-title')).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(rule('.sheet-eyebrow')).toMatch(/overflow-wrap:\s*anywhere/);
+    });
+
+    // The markup this replaced rendered the question in .dlg-body, capped at
+    // 38vh with its own scroller "so the options stay reachable". The title
+    // rides inside .sheet-body now, but uncapped it still pushes the option
+    // rows below the fold on a phone — a 600-char question is ~430px of
+    // heading. Short titles never reach the cap, so it stays invisible.
+    it('caps the title with its own scroller, as .dlg-body was', () => {
+      const title = rule('.sheet-title');
+      expect(title).toMatch(/max-height:\s*38vh/);
+      expect(title).toMatch(/overflow-y:\s*auto/);
+    });
   });
 });
 
