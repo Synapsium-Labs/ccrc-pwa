@@ -110,6 +110,17 @@ describe('AttachTray', () => {
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
   });
 
+  // A failed chip used to be a dead end: the only affordance was a retry that,
+  // for a 413, can never succeed, and the reason lived nowhere in the DOM.
+  it('carries the failure reason on the chip', () => {
+    const { container } = render(
+      <AttachTray images={[img({ state: 'failed', error: 'That image is too large — 12 MB max.' })]}
+                  onRemove={vi.fn()} onRetry={vi.fn()} />,
+    );
+    expect(container.querySelector('.attach-chip'))
+      .toHaveAttribute('title', 'That image is too large — 12 MB max.');
+  });
+
   // Regression guard for an Important real-browser finding: the shrunk
   // .attach-remove hit-box (needed only on a failed chip, to leave room for
   // .attach-chip-retry) was applied with a bare `.attach-remove::after`

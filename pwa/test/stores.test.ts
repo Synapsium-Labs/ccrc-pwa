@@ -311,6 +311,20 @@ describe('session store optimistic send', () => {
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
     expect(prompt.mock.calls[1]).toEqual([ID, 'x\nhi', { replaceDraft: true, attachments: [CLIP.path] }]);
   });
+
+  // The rule is that a pending's object URLs live until it is confirmed OR
+  // explicitly abandoned. clearConfirmed and discard both honoured it; the 5s
+  // grace expiry — the echo-mismatch fallback — quietly dropped the pending and
+  // leaked up to four full-size images with it.
+  it('revokes the object URLs when a confirmed send expires without its echo', async () => {
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5 });
+    await store.getState().send('hi', { attachments: [CLIP] });
+
+    await vi.waitFor(() => expect(store.getState().pending).toHaveLength(0));
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(CLIP.previewUrl);
+  });
 });
 
 // — session store: connection —

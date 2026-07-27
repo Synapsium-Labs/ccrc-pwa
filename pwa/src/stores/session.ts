@@ -220,6 +220,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       set((s) => {
         const p = s.pending.find((x) => x.key === key);
         if (!p || p.state !== 'sending') return {};
+        // Abandoning the pending abandons its object URLs with it — the same
+        // rule clearConfirmed and discard follow. Without this the echo-mismatch
+        // fallback leaked up to four full-size images every time it fired.
+        revoke(p);
         return { pending: s.pending.filter((x) => x.key !== key) };
       });
     };

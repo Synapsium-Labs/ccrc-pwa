@@ -258,13 +258,19 @@ describe('upload route id handling', () => {
     });
     expect(res.statusCode).toBe(200);
     const clip = res.json().clip as { path: string; name: string; bytes: number };
-    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{4}\.png$/);
+    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
     expect(clip.path).toContain(`/.cc-clips/${ID}/`);
   });
 
+  // A bare '..' is deliberately absent: the router normalises
+  // `/api/sessions/../upload` to `/api/upload`, so it never reaches this route
+  // and the assertion below was only ever answered by the SPA fallback's 404 —
+  // which exists only when dist-pwa has been built, making the suite pass or
+  // fail on a build artefact. `clip.test.ts` covers '..' at the unit level,
+  // where it is actually the property under test.
   it('refuses a traversing session id before touching the filesystem', async () => {
     const { app } = await makeApp([null]);
-    for (const bad of ['..%2F..%2F.ssh', '%2Fetc', '..']) {
+    for (const bad of ['..%2F..%2F.ssh', '%2Fetc']) {
       const res = await app.inject({
         method: 'POST', url: `/api/sessions/${bad}/upload`, payload: png(),
       });

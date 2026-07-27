@@ -34,6 +34,20 @@ const SEND_ERROR_TEXT: Record<string, string> = {
 
 export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
 
+/** Upload failures the server names by code. Same reason as SEND_ERROR_TEXT,
+ *  sharper consequence: a failed chip's only affordance is retry, and for a 413
+ *  retry can never succeed — so the chip has to say what went wrong, in words
+ *  that imply what to do instead. */
+const UPLOAD_ERROR_TEXT: Record<string, string> = {
+  'too-large': 'That image is too large — 12 MB is the limit.',
+  'unsupported-type': "Can't attach that — PNG, JPEG or WebP only.",
+  'bad-request': "That upload didn't arrive — try attaching it again.",
+  'unknown-session': 'That session is not running.',
+  'bad-session-id': 'That session is not running.',
+};
+
+export const uploadErrorText = (code: string): string => UPLOAD_ERROR_TEXT[code] ?? code;
+
 /** Origin-qualified on purpose: MessageBubble's `absolute()` turns a bare
  *  `/api/...` into `https:///api/...` (empty host), so a root-relative href
  *  would make every thumbnail tap dead. `/api/` is in navigateFallbackDenylist,

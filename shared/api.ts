@@ -120,35 +120,38 @@ export function composePrompt(text: string, attachments: readonly string[]): str
  * sits — own line, leading, trailing or mid-line — because `ccd clip` types the
  * path with no Enter, so the user's prose lands on either side of it. Paths come
  * back in document order and deduplicated; the prose has the holes closed up.
+ *
+ * Whitespace is touched on the lines a path came OUT of and nowhere else. An
+ * earlier revision collapsed space runs on every line, and MessageBubble runs
+ * this over every user turn into a `white-space: pre-wrap` bubble — so every
+ * pasted code block, stack trace, log line and aligned table in the entire
+ * history rendered flattened, attachment or not.
  */
 export function splitClipPaths(text: string): { paths: string[]; rest: string } {
   const paths: string[] = [];
-  const lines = text.split('\n');
 
-  const cleanedLines = lines.map((line) => {
-    // Track if line was non-empty before processing
-    const wasNonEmpty = line.trim() !== '';
-
-    // Remove paths from this line
-    let cleaned = line.replace(new RegExp(CLIP_PATH_RE.source, 'g'), (match) => {
+  const cleanedLines = text.split('\n').map((line) => {
+    let hit = false;
+    const stripped = line.replace(new RegExp(CLIP_PATH_RE.source, 'g'), (match) => {
+      hit = true;
       if (!paths.includes(match)) paths.push(match);
       return '';
     });
-
-    // Clean up intra-line whitespace
-    cleaned = cleaned.replace(/[^\S\n]+/g, ' ').trim();
-
-    // If line was non-empty before but is now empty, it held only a path: drop it.
-    // If line was already empty (deliberate blank line), keep it.
-    if (wasNonEmpty && cleaned === '') {
-      return null; // Mark for removal
-    }
-
-    return cleaned;
+    // No path left this line: hand it back byte-identical, indentation and all.
+    if (!hit) return line;
+    // A path DID leave a hole here — close it up. `ccd clip` types the path with
+    // a trailing space, and pulling one out mid-line would leave a double space.
+    const cleaned = stripped.replace(/[^\S\n]+/g, ' ').trim();
+    // Non-empty before, empty now: the line held only a path. Drop it entirely
+    // rather than leave a blank that merges nothing and separates nothing.
+    return cleaned === '' ? null : cleaned;
   });
 
-  // Filter out null entries (lines that were emptied by path removal)
-  const rest = cleanedLines.filter((line): line is string => line !== null).join('\n').trim();
+  const kept = cleanedLines.filter((line): line is string => line !== null);
+  // Trim by LINE, not by character: a `.trim()` over the joined result would eat
+  // the indentation of a message that opens on an indented line.
+  while (kept.length > 0 && kept[0]!.trim() === '') kept.shift();
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === '') kept.pop();
 
-  return { paths, rest };
+  return { paths, rest: kept.join('\n') };
 }

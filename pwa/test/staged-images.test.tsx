@@ -27,6 +27,7 @@ function Harness({
   return (
     <div>
       <button type="button" onClick={() => s.add(files)}>add</button>
+      <button type="button" onClick={() => s.release()}>release</button>
       {second && (
         <button
           type="button"
@@ -48,6 +49,7 @@ function Harness({
               {i.width && i.height ? `${i.width}×${i.height}` : ''}
             </span>
             <span data-testid={`path-${i.file.name}`}>{i.path ?? ''}</span>
+            <span data-testid={`error-${i.file.name}`}>{i.error ?? ''}</span>
             <button type="button" onClick={() => s.remove(i.key)}>remove {i.file.name}</button>
             <button type="button" onClick={() => s.retry(i.key)}>retry {i.file.name}</button>
           </li>
@@ -177,6 +179,58 @@ describe('useStagedImages', () => {
     fireEvent.click(screen.getByText('add'));
 
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  // — Why a failed upload must speak. The chip's only affordance is retry, and
+  // for a 413 retry can never succeed; the commit that introduced chips removed
+  // the toast that used to carry the reason, so the error string was set on the
+  // image and rendered nowhere. The toast is safe again now that --composer-h
+  // lifts it clear of the input bar. —
+
+  it('says WHY an upload failed, in prose, in a toast and on the chip', async () => {
+    vi.spyOn(api, 'upload').mockRejectedValue(new ApiError(413, { ok: false, error: 'too-large' }));
+    render(<><Harness files={[shot()]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/too large/i);
+    expect(screen.getByTestId('error-shot.png')).toHaveTextContent(/too large/i);
+    expect(screen.getByTestId('error-shot.png')).not.toHaveTextContent('too-large');
+  });
+
+  it('spells out an unsupported type rather than echoing the slug', async () => {
+    vi.spyOn(api, 'upload')
+      .mockRejectedValue(new ApiError(415, { ok: false, error: 'unsupported-type' }));
+    render(<><Harness files={[shot()]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/PNG, JPEG or WebP only/i);
+  });
+
+  // — Object-URL lifetime. `release()` hands the URLs to the PendingSend, which
+  // owns them from then on; everything else the hook still holds is the hook's
+  // to free, including on the way out. —
+
+  it('revokes what is still staged when the composer unmounts', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const { unmount } = render(<Harness files={[shot('a.png')]} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-a.png')).toHaveTextContent('staged'));
+
+    unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT revoke URLs it already handed to a pending send', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const { unmount } = render(<Harness files={[shot('a.png')]} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-a.png')).toHaveTextContent('staged'));
+
+    fireEvent.click(screen.getByText('release'));   // send takes ownership
+    unmount();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
   });
 
   it('never leaves a chip stuck uploading with no upload in flight', async () => {

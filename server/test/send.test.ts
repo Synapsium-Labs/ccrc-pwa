@@ -476,11 +476,27 @@ describe('sendPrompt with attachments', () => {
     expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
   });
 
+  it('fires one C-u per typed line, because C-u is kill-to-LINE-start', async () => {
+    // An attachment prompt is always ≥2 lines (paths, then text). A single C-u
+    // that only kills the current line would leave the clip paths sitting in
+    // the box, and the next send would hit `draft-present` holding exactly the
+    // thing this feature exists to keep out of the box. C-u on an empty box is
+    // a no-op, so over-pressing costs nothing.
+    const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
+    const { tmux, calls } = fakeTmux(['❯ \n']); // box stays empty — never echoes
+    await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep },
+      'x', 'caption', { attachments: [P, P2] },
+    );
+    const cu = sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'C-u');
+    expect(cu).toHaveLength(3); // two paths + the caption line
+  });
+
   it('reports the residual draft when C-u fails to clear after a failed verify', async () => {
-    // C-u is kill-to-line-start; whether it actually clears a multi-line
-    // Claude Code draft is NOT verified here (or anywhere in this suite) — this
-    // only exercises the reporting path for when C-u's clear doesn't take,
-    // mirroring the pre-existing replaceDraft C-u check above.
+    // C-u is kill-to-line-start and is now fired once per typed line (see the
+    // test above), but whether that actually empties a Claude Code draft is not
+    // observable from a fake pane — this only exercises the reporting path for
+    // when the clear doesn't take, mirroring the replaceDraft C-u check above.
     const NONMATCH = '❯ \n'; // empty box — never echoes the attachment path
     const panes = [
       ...Array(14).fill(NONMATCH),      // initial + 12 echo polls + the failure-path `after` read

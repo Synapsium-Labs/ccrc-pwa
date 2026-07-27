@@ -4,9 +4,9 @@
 // removes it. (This file used to also hold a fire-and-forget `useAttachImage`
 // that typed the upload's path straight into the textarea; the tray replaced
 // it — see git history around the attachment-tray feature for that path.)
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from '../components/Toast';
-import { api, apiErrorText } from '../lib/api';
+import { api, apiErrorText, uploadErrorText } from '../lib/api';
 
 /** PNGs under this size upload untouched — lossless screenshots stay lossless. */
 const SMALL_PNG_MAX = 1024 * 1024;
@@ -137,7 +137,14 @@ export function useStagedImages(
       const clip = await api.upload(id, payload);
       patch(key, { state: 'staged', path: clip.path, width, height, error: undefined });
     } catch (err) {
-      patch(key, { state: 'failed', error: apiErrorText(err) });
+      // Say it out loud as well as on the chip. The chip alone was a dead end:
+      // a 413 arrived as a thumbnail whose only affordance was a retry that can
+      // never succeed, with the reason set on the image and rendered nowhere.
+      // (The toast that used to carry this was removed because it covered the
+      // composer; the `--composer-h` offset now lifts toasts clear of it.)
+      const why = uploadErrorText(apiErrorText(err));
+      patch(key, { state: 'failed', error: why });
+      toast(why, 'error');
     }
   };
 
@@ -187,6 +194,14 @@ export function useStagedImages(
   // PendingSend, which renders them in the optimistic bubble and revokes them
   // when it confirms or is discarded. Revoking here would blank that bubble.
   const release = (): void => commit([]);
+
+  // Whatever is STILL staged when the composer goes away is the hook's to free —
+  // navigating back to the fleet with four chips up leaked up to 48 MB of image.
+  // Safe against release(): it empties listRef synchronously, so URLs already
+  // handed to a PendingSend are no longer in the list this reads.
+  useEffect(() => () => {
+    for (const img of listRef.current) URL.revokeObjectURL(img.previewUrl);
+  }, []);
 
   return {
     images, add, remove, retry, release,

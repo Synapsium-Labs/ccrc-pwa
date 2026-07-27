@@ -77,6 +77,28 @@ describe('stageUpload', () => {
     expect(readFileSync(clip.path)).toEqual(data);
   });
 
+  // Multi-image paste makes same-second uploads the DESIGNED flow, and a
+  // collision is not a retry — stageUpload overwrites, both chips report the
+  // same path, and the composed prompt silently carries one image instead of
+  // two. The clip route serves it `immutable`, so a wrong-bytes cache entry is
+  // permanent. 16 bits made that a ~1-in-11,000 event per four-image send.
+  it('defaults to 32 bits of collision suffix, not 16', async () => {
+    const cfg = cfgFor();
+    const clip = await stageUpload(localIO, cfg, ID, Buffer.from('x'), 'png',
+      Date.parse('2026-07-26T15:03:40Z'));
+    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
+  });
+
+  it('does not overwrite a clip filed in the same second', async () => {
+    const cfg = cfgFor();
+    const t = Date.parse('2026-07-26T15:03:40Z');
+    const names = new Set<string>();
+    for (let i = 0; i < 64; i++) {
+      names.add((await stageUpload(localIO, cfg, ID, Buffer.from(`img${i}`), 'png', t)).name);
+    }
+    expect(names.size).toBe(64);
+  });
+
   it('throws rather than writing outside the clips dir', async () => {
     const cfg = cfgFor();
     await expect(stageUpload(localIO, cfg, '../../.ssh', Buffer.from('x'), 'png'))

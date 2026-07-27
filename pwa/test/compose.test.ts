@@ -71,6 +71,45 @@ describe('splitClipPaths', () => {
     expect(splitClipPaths('nothing here')).toEqual({ paths: [], rest: 'nothing here' });
   });
 
+  // The three below are the regression wall for the bug that shipped: this
+  // function used to collapse runs of spaces on EVERY line, and MessageBubble
+  // calls it on every user turn against a `white-space: pre-wrap` bubble — so
+  // every pasted snippet in the whole history rendered flattened.
+  it('leaves an indented code block byte-identical when there is no path', () => {
+    const raw = [
+      'here is the fix:',
+      'function f() {',
+      '    if (x) {',
+      '        return 1;',
+      '    }',
+      '}',
+    ].join('\n');
+    expect(splitClipPaths(raw)).toEqual({ paths: [], rest: raw });
+  });
+
+  it('leaves an aligned table byte-identical', () => {
+    const raw = [
+      'name      | five | seven',
+      '--------- | ---- | -----',
+      'claude2   |  12% |   44%',
+      'server-box |   3% |    9%',
+    ].join('\n');
+    expect(splitClipPaths(raw)).toEqual({ paths: [], rest: raw });
+  });
+
+  it('keeps the OTHER lines byte-identical when one interior line held a path', () => {
+    const raw = `look at this\n${P1}\n    indented   tail`;
+    expect(splitClipPaths(raw)).toEqual({
+      paths: [P1],
+      rest: 'look at this\n    indented   tail',
+    });
+  });
+
+  it('does not eat the indentation of a message that OPENS indented', () => {
+    const raw = '    const x = 1;\n        const y = 2;';
+    expect(splitClipPaths(raw)).toEqual({ paths: [], rest: raw });
+  });
+
   it('keeps a deliberate blank line when there is no path at all', () => {
     expect(splitClipPaths('paragraph one\n\nparagraph two')).toEqual({
       paths: [],

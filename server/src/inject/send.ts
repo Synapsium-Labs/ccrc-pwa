@@ -186,7 +186,13 @@ export function sendPrompt(
         // A failed send must not stand a bare clip path in the live box — but
         // C-u can fail just like the replaceDraft clear above can: re-capture
         // and report what's left rather than assuming it worked.
-        await d.tmux.sendKey(id, 'C-u');
+        //
+        // Once PER LINE: C-u is kill-to-line-start, and an attachment prompt is
+        // always ≥2 lines, so a single press would leave every path above the
+        // cursor in the box — and the next send would come back `draft-present`
+        // carrying exactly what this feature exists to keep out of there. On an
+        // already-empty box C-u is a no-op, so the extra presses are free.
+        for (let i = 0; i < parts.length; i++) await d.tmux.sendKey(id, 'C-u');
         await sleep(150);
         const clearedAnsi = await d.tmux.captureAnsi(id);
         const left = clearedAnsi === null ? '' : draftOf(clearedAnsi);

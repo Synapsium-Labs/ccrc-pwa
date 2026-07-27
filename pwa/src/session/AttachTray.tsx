@@ -15,8 +15,11 @@ export function AttachTray({ images, onRemove, onRetry }: AttachTrayProps): Reac
   if (images.length === 0) return null;
   return (
     <ul className="attach-tray" aria-label="Attached images">
+      {/* `title` is the only place a failure reason survives on the chip itself
+          — the prose also goes out as a toast the moment it happens, but that
+          is gone by the time the user comes back to look at the dead chip. */}
       {images.map((img) => (
-        <li key={img.key} className="attach-chip" data-state={img.state}>
+        <li key={img.key} className="attach-chip" data-state={img.state} title={img.error}>
           {/* The thumbnail's rounded-corner clip. On a failed chip this is
               deliberately NOT a button — the whole-media retry tap used to
               overlap the remove button's hit area with no way to tell them
