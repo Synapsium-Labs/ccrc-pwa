@@ -300,6 +300,28 @@ describe('dialog enrichment', () => {
     expect(askReads).toBe(2);
   });
 
+  it('re-enriches a menu that came back through an unparsed capture', async () => {
+    // The other half of the same hazard: a grab mid-redraw can land with the
+    // option rows erased and the 'Enter to select' footer still up, so the pane
+    // is a menu but fewer than two numbered options survive and parseDialog
+    // returns `unparsed` (pane/dialog.ts:94). That is a dialog, not null, so a
+    // probe kept for `dialog !== null` outlives the menu it was scoped to — and
+    // the parsed menu on the next poll is judged against it and declined,
+    // forever, because the blocked agent never touches the transcript again.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const ask = fixture('ask-2col-chat-about.txt');
+    const { frames, askReads } = await streamWith({
+      paneSequence: [ask, fixture('ask-2col-partial-redraw.txt'), ask, ask],
+      transcriptSequence: [t],
+    });
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs).toHaveLength(3);
+    expect(dialogs[1]!.dialog.parsed).toBe(false); // the half-drawn capture itself
+    expect(dialogs[2]!.dialog.ask?.options).toHaveLength(3);
+    // Two parsed appearances, two reads — the unparsed one is never read for.
+    expect(askReads).toBe(2);
+  });
+
   it('leaves a /model-style confirm unenriched', async () => {
     const { frames, askReads } = await streamWith({
       pane: fixture('model-confirm.txt'), transcript: fixture('transcript-ask-2col.jsonl'),
