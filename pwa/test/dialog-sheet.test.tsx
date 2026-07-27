@@ -189,9 +189,21 @@ describe('DialogSheet dismissal', () => {
 describe('DialogSheet (enriched by Dialog.ask)', () => {
   const renderSheet = (dialog: Dialog) => renderWithDialog(dialog);
 
+  /** The scraped preamble — a lossy copy of the question the transcript has whole. */
+  const PREAMBLE = 'Rates capture is partial for some classes.';
+
+  /** The option rows in DOM order. Position IS the contract here, so these are
+   *  read positionally rather than looked up by the text under test. */
+  const optionRows = (): HTMLElement[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('.opts > .opt'));
+
+  const previewToggles = (): HTMLElement[] =>
+    screen.queryAllByRole('button', { name: /preview/i });
+
   const ASKED: Dialog = {
     id: 'd1',
     title: 'Forward-fill per class',
+    body: PREAMBLE,
     parsed: true,
     selectedIndex: 1,
     raw: 'RAW PANE',
@@ -215,25 +227,74 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
           label: 'Require completeness, Anthropic only',
           description: 'Emit only complete rows.',
         },
-        { label: 'Ship as-is, alert + runbook', description: 'Change nothing; watch it.' },
+        {
+          label: 'Ship as-is, alert + runbook',
+          description: 'Change nothing; watch it.',
+          preview: 'alert: rate-gap > 24h',
+        },
       ],
     },
   };
 
   it('shows the real question, the header chip and every description', () => {
     renderSheet(ASKED);
+    // As the sheet's heading, so the dialog's accessible name is the question.
     expect(
-      screen.getByText('How should the partial-capture hazard be handled?'),
+      screen.getByRole('heading', {
+        name: 'How should the partial-capture hazard be handled?',
+      }),
     ).toBeInTheDocument();
     expect(screen.getByText('Revised fix')).toBeInTheDocument();
     expect(screen.getByText('Inherit the last seen rate.')).toBeInTheDocument();
     expect(screen.getByText('Emit only complete rows.')).toBeInTheDocument();
   });
 
+  it('drops the scraped preamble once the real question is on the sheet', () => {
+    renderSheet(ASKED);
+    // The pane's preamble is a truncated copy of the title — don't say it twice.
+    expect(screen.queryByText(PREAMBLE)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the scraped title and preamble when the question is blank', () => {
+    // The server passes any string through as the question, whitespace included:
+    // a blank one enriches nothing, so the pane's own copy has to survive.
+    renderSheet({ ...ASKED, ask: { ...ASKED.ask!, question: '   ' } });
+
+    expect(screen.getByRole('heading', { name: 'Forward-fill per class' })).toBeInTheDocument();
+    expect(screen.getByText(PREAMBLE)).toBeInTheDocument();
+    // The rest of the enrichment still lands — only the question was missing.
+    expect(screen.getByText('Inherit the last seen rate.')).toBeInTheDocument();
+  });
+
+  it('keeps the scraped description when the transcript sends a blank one', () => {
+    renderSheet({
+      ...ASKED,
+      options: [
+        { ...ASKED.options[0]!, description: 'Scraped: inherits the last rate.' },
+        ...ASKED.options.slice(1),
+      ],
+      ask: {
+        ...ASKED.ask!,
+        options: [
+          { ...ASKED.ask!.options[0]!, description: '' },
+          ...ASKED.ask!.options.slice(1),
+        ],
+      },
+    });
+
+    expect(screen.getByText('Scraped: inherits the last rate.')).toBeInTheDocument();
+  });
+
   it('opens the preselected option’s preview and leaves the others collapsed', () => {
     renderSheet(ASKED);
+    const toggles = previewToggles();
+    expect(toggles).toHaveLength(2);
+
     expect(screen.getByText('07-01: in,out,cr')).toBeVisible();
-    expect(screen.getAllByRole('button', { name: /preview/i })).toHaveLength(1);
+    expect(toggles[0]).toHaveAttribute('aria-expanded', 'true');
+    // Row 3 is not the preselected row: its worked example stays folded away.
+    expect(screen.queryByText('alert: rate-gap > 24h')).not.toBeInTheDocument();
+    expect(toggles[1]).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('answers with the pane index even when the transcript relabels the row', () => {
@@ -246,13 +307,30 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
 
   it('enriches by position and leaves the TUI’s own row alone', () => {
     renderSheet(ASKED);
-    // Row 4 has no counterpart in ask.options — it keeps its scraped label.
-    expect(screen.getByText('Chat about this')).toBeInTheDocument();
+    const rows = optionRows();
+
+    // Rows 1–3 take the transcript's label and the sentence the 3-line pane box
+    // had to throw away — nth row gets nth entry, no text matching involved.
+    expect(rows.map((r) => r.querySelector('.opt-label')?.textContent)).toEqual([
+      'Forward-fill per class (Recommended)',
+      'Require completeness, Anthropic only',
+      'Ship as-is, alert + runbook',
+      'Chat about this',
+    ]);
+    // Row 4 is the TUI's own escape hatch: no counterpart, so no description…
+    expect(rows.map((r) => r.querySelector('.opt-desc')?.textContent ?? null)).toEqual([
+      'Inherit the last seen rate.',
+      'Emit only complete rows.',
+      'Change nothing; watch it.',
+      null,
+    ]);
+    // …and nothing folded under it either.
+    expect(document.querySelector('.opts')?.lastElementChild).toBe(rows[3]);
   });
 
   it('does not carry one question’s collapsed preview over to the next', () => {
     const { store } = renderSheet(ASKED);
-    fireEvent.click(screen.getByRole('button', { name: /preview/i }));
+    fireEvent.click(previewToggles()[0]!);
     expect(screen.queryByText('07-01: in,out,cr')).not.toBeInTheDocument();
 
     act(() => {
@@ -279,6 +357,7 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
   it('renders exactly as before when there is no ask', () => {
     renderSheet({ ...ASKED, ask: undefined });
     expect(screen.getByRole('button', { name: 'Forward-fill per class' })).toBeInTheDocument();
+    expect(screen.getByText(PREAMBLE)).toBeInTheDocument();
     expect(screen.queryByText('Revised fix')).not.toBeInTheDocument();
     expect(screen.queryByText('Inherit the last seen rate.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /preview/i })).not.toBeInTheDocument();

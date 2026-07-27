@@ -170,6 +170,11 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
 
   // The transcript's copy for this menu, when the two could be matched.
   const ask = shown.ask;
+  // Nothing validates the question server-side beyond it being a string, so a
+  // blank one has to degrade to the scraped pane rather than replace it: `??`
+  // would keep the empty string and leave the sheet with no question on it at
+  // all — no title, no preamble, and a dialog with no accessible name.
+  const question = ask?.question.trim() ?? '';
   const eyebrow = ask?.header ? (
     <>
       claude is asking <span className="dlg-header-chip">{ask.header}</span>
@@ -183,11 +188,12 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
       open={open}
       onClose={close}
       eyebrow={eyebrow}
-      title={ask?.question ?? shown.title}
+      title={question || shown.title}
     >
-      {/* The scraped preamble is a lossy copy of the question — with `ask` in
-          hand the title already says it properly, so don't say it twice. */}
-      {!ask && shown.body && shown.body !== shown.title && (
+      {/* The scraped preamble is a lossy copy of the question — once the real
+          one is the title it would only say it twice. Keyed off the question
+          actually shown, so a blank one keeps the pane's copy. */}
+      {!question && shown.body && shown.body !== shown.title && (
         <p className="dlg-body">{shown.body}</p>
       )}
       <div className="opts">
@@ -198,7 +204,9 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
           // whatever the transcript happens to call this row.
           const rich = ask?.options[o.index - 1];
           const label = rich?.label ?? o.label;
-          const description = rich?.description ?? o.description;
+          // An empty description is not an override either — fall back to the
+          // sub-text the pane scraped rather than dropping both.
+          const description = rich?.description || o.description;
           return (
             // Keyed by the (pane-derived) dialog id as well as the index so a
             // new question opens its own previews instead of inheriting the
