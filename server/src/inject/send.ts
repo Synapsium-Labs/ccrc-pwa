@@ -159,13 +159,21 @@ const paneWidth = (pane: string): number =>
 /**
  * How many VISUAL rows `lines` occupies in a box `width` columns wide.
  *
- * Kills are per visual row, not per logical line: a 260-char line typed into a
- * 120-column pane occupied 3 rows and took 3 presses to clear, one per row
- * (measured 2026-07-27 on a live box) — where 3 rows produced by M-Enter take
- * 5, because each newline additionally has to be joined away. Counting rows
- * and charging 2 per row therefore over-estimates a wrapped draft and is exact
- * for an unwrapped one; over-pressing an empty box is a no-op (measured: 12
- * presses at a 2-line draft left a clean box), so erring high is free.
+ * Kills are per visual row, not per logical line, and WRAPPED rows cost less
+ * than rows made by M-Enter, which each need a second press to join the newline
+ * away. Two independent live measurements on 2026-07-27 disagree by one press
+ * on the wrapped case — a 260-char line in a 120-column pane cleared in 3
+ * presses over 3 rows, while a 611-char line in the 220-column pane this fleet
+ * actually runs took 4 over 3 rows — so treat "1 press per wrapped row" as the
+ * shape and not as an exact cost. Either way it is under 2 per row, where
+ * M-Enter rows are exactly 2N-1 (1→1, 2→3, 3→5, 4→7, measured with a capture
+ * between every press).
+ *
+ * So charging 2 per visual row OVER-estimates a wrapped draft and is exact for
+ * an unwrapped one. That is the direction we want: the floor is fired blind, an
+ * under-estimate would strand text, and over-pressing an empty box is a no-op
+ * (measured: 12 presses at a 2-line draft left a clean box). The look phase
+ * after the floor catches any case where this bound is nonetheless too low.
  */
 const visualRows = (lines: readonly string[], width: number): number =>
   lines.reduce((n, l) => n + Math.max(1, Math.ceil(l.length / Math.max(1, width - 2))), 0);
