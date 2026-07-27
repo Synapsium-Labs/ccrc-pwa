@@ -6,7 +6,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
-import { readPendingAsk } from '../src/transcript/ask.js';
+import { readPendingAsk, alignAsk } from '../src/transcript/ask.js';
+import type { AskQuestion } from '../../shared/api.js';
 
 const ASK = (id: string, question = 'Which colour?') => JSON.stringify({
   type: 'assistant', uuid: 'a1', timestamp: '2026-07-26T15:00:00Z',
@@ -114,5 +115,50 @@ describe('readPendingAsk', () => {
     expect(await readPendingAsk(localIO, fileWith([nullOption]))).toBeNull();
     // A bare null line is skipped like any other noise — the ask after it still reads.
     expect(await readPendingAsk(localIO, fileWith(['null', ASK('t1')]))).toHaveLength(1);
+  });
+});
+
+describe('alignAsk', () => {
+  const q = (question: string, ...labels: string[]): AskQuestion =>
+    ({ question, multiSelect: false, options: labels.map((label) => ({ label })) });
+  const rows = (...labels: string[]) => labels.map((label) => ({ label }));
+
+  it('matches head-anchored and ignores the TUI’s own trailing rows', () => {
+    // A 3-option ask scrapes as 5 rows in one-column layout.
+    const picked = alignAsk(
+      rows('Red', 'Green', 'Blue', 'Type something.', 'Chat about this'),
+      [q('Which colour?', 'Red', 'Green', 'Blue')],
+    );
+    expect(picked?.question).toBe('Which colour?');
+  });
+
+  it('matches when the pane truncated a long label', () => {
+    // leftCol cuts at a run of two spaces or the two-column gutter.
+    const picked = alignAsk(
+      rows('Stage-then-send + chips', 'Cosmetic only'),
+      [q('How far?', 'Stage-then-send + chips (Recommended)', 'Cosmetic only')],
+    );
+    expect(picked?.question).toBe('How far?');
+  });
+
+  it('requires every position to match for a small question', () => {
+    // Two options, one coincidental label — the old "half" rule accepted this.
+    expect(alignAsk(rows('Red', 'Purple'), [q('Which colour?', 'Red', 'Green')])).toBeNull();
+  });
+
+  it('tolerates one mismatch only from four options up', () => {
+    expect(alignAsk(rows('A', 'B', 'C', 'Z'), [q('Pick', 'A', 'B', 'C', 'D')])?.question).toBe('Pick');
+    expect(alignAsk(rows('A', 'B', 'Z'), [q('Pick', 'A', 'B', 'C')])).toBeNull();
+  });
+
+  it('refuses when two questions align — there is no ordering signal', () => {
+    // A multi-question call gets ONE tool_result, after the LAST answer, so all
+    // of them look pending at once.
+    expect(alignAsk(rows('Yes', 'No'), [q('First?', 'Yes', 'No'), q('Second?', 'Yes', 'No')]))
+      .toBeNull();
+  });
+
+  it('returns null when nothing aligns', () => {
+    expect(alignAsk(rows('Restart', 'Cancel'), [q('Which colour?', 'Red', 'Green')])).toBeNull();
   });
 });

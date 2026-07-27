@@ -93,3 +93,38 @@ export async function readPendingAsk(io: FleetIO, file: string): Promise<AskQues
   if (conversationalAt.some((at) => at > found!.at)) return null;
   return found.questions;
 }
+
+const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
+/** Either side may be the truncated one: `leftCol` cuts a scraped label at a run
+ *  of two spaces or at the two-column gutter, so compare as prefixes. */
+const pairMatches = (a: string, b: string): boolean => {
+  const [x, y] = [norm(a), norm(b)];
+  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
+};
+
+/**
+ * Which of the pending questions the on-screen menu is showing, or null.
+ *
+ * Head-anchored: only the first `ask.options.length` scraped rows are considered.
+ * Rows past that are the TUI's own — numbered in one-column layout
+ * (`4. Type something.`), unnumbered-then-appended in two-column — and nothing in
+ * Dialog.options marks them, which is why a "fraction of rows matched" rule has
+ * no definable denominator.
+ */
+export function alignAsk(
+  scraped: readonly { label: string }[],
+  questions: readonly AskQuestion[],
+): AskQuestion | null {
+  const fits = questions.filter((q) => {
+    const n = q.options.length;
+    if (n === 0 || scraped.length < n) return false;
+    let miss = 0;
+    for (let i = 0; i < n; i++) {
+      if (!pairMatches(scraped[i]!.label, q.options[i]!.label)) miss += 1;
+    }
+    // Two-option questions are 29% of the corpus; one coincidental label must
+    // never be enough evidence.
+    return n >= 4 ? miss <= 1 : miss === 0;
+  });
+  return fits.length === 1 ? fits[0]! : null;
+}
