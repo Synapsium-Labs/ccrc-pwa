@@ -5,8 +5,9 @@ import { liveSessionStatus, readLiveState } from './livestate.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
+import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
-import type { SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
 const POLL_MS = 2000;
 const BACKLOG_N = 50;
@@ -32,7 +33,11 @@ export class SessionStream {
   private ticking = false;
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
-  private lastDialogId: string | null = null;
+  /** What the client last saw of the pane menu — see nextDialogFrame. */
+  private seenDialog: DialogSeen = { id: null, ask: null };
+  /** The transcript state that already failed to explain the menu on screen —
+   *  see claimAskRead. */
+  private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
 
@@ -72,7 +77,7 @@ export class SessionStream {
       this.send({ type: 'notice', message: `unknown session ${this.id}` });
     }
     if (this.stopped) return;
-    await this.checkDialog(); // deliver an already-pending dialog on connect
+    await this.checkDialog(r?.file ?? null); // deliver an already-pending dialog on connect
     if (this.stopped) return;
     if (r) await this.checkTasks(r.cfgDir, r.uuid); // and the plan as it stands
     if (this.stopped) return;
@@ -80,22 +85,79 @@ export class SessionStream {
     this.poll.unref();
   }
 
-  /** Capture the pane; send `dialog` when a menu appears/changes and
-   *  `dialog_cleared` when it vanishes — tracked per stream so a client that
-   *  joins after the menu appeared still receives it. */
-  private async checkDialog(): Promise<void> {
+  /** Capture the pane; send `dialog` when a menu appears/changes or first comes
+   *  back enriched, and `dialog_cleared` when it vanishes — tracked per stream
+   *  so a client that joins after the menu appeared still receives it.
+   *
+   *  `file` is the transcript being tailed, and WHICH file matters: after an
+   *  account swap the same `<uuid>.jsonl` exists under several wrapper config
+   *  dirs, and the ask has to come from the one this session is writing.
+   *  null (unresolvable session) → the menu still ships, unenriched. */
+  private async checkDialog(file: string | null): Promise<void> {
     if (this.stopped) return;
     const pane = await this.deps.tmux.capture(this.id);
-    const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
-    if (dialog) {
-      if (this.lastDialogId !== dialog.id) {
-        this.lastDialogId = dialog.id;
-        this.send({ type: 'dialog', dialog });
+    let dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
+    // Read the transcript only while this menu is still unexplained. Once its ask
+    // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
+    // nextDialogFrame would suppress the frame anyway. Menus that never latch are
+    // held off by claimAskRead instead — they are the majority.
+    const latched = dialog !== null && this.seenDialog.id === dialog.id && this.seenDialog.ask !== null;
+    if (dialog?.parsed && file !== null && !latched) {
+      const st = await this.deps.io.stat(file);
+      if (this.stopped) return;
+      if (this.claimAskRead(file, dialog.id, st)) {
+        const questions = await readPendingAsk(this.deps.io, file);
+        if (this.stopped) return;
+        const ask = questions === null ? null : alignAsk(dialog.options, questions);
+        // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
+        // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
+        // check staleness) and the keystrokes an answer sends stay positional.
+        if (ask !== null) dialog = { ...dialog, ask };
       }
-    } else if (this.lastDialogId !== null) {
-      this.lastDialogId = null;
-      this.send({ type: 'dialog_cleared' });
     }
+    // The probe is scoped to the PARSED menu on screen, so it dies with it. A
+    // capture can miss a menu that is still there: tmux returns null, one stray
+    // 'esc to interrupt' anywhere in the pane flips it to busy, or the grab lands
+    // mid-redraw and comes back `unparsed` (a menu footer with its option rows
+    // half-erased — dialog.ts:94). That last one is still a dialog, so testing
+    // for null alone would keep the probe alive past the menu it was taken for.
+    // On the way back the ask is unlatched but the transcript is untouched — the
+    // agent is blocked awaiting the answer — so a surviving probe would decline
+    // the read the reappearance needs and the menu would come back bare and stay
+    // bare. Forgetting it costs nothing: the read above is gated on
+    // `dialog?.parsed`, so an unparsed menu never spends one.
+    if (dialog === null || !dialog.parsed) this.askProbe = null;
+    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
+    this.seenDialog = seen;
+    if (msg) this.send(msg);
+  }
+
+  /**
+   * May we spend a transcript tail read on this menu? Records the state we read
+   * at, so the next poll can tell whether anything could have changed.
+   *
+   * The ask latch above only closes on SUCCESS, and most menus never succeed:
+   * permission prompts, /model, trust-folder carry no AskUserQuestion, and they
+   * sit on screen until a human answers. Reading is the expensive half —
+   * `readPendingAsk` pulls up to 256 KB, over the agent RPC in remote-fleet mode
+   * (see transcript/tail.ts:6-11 for what reading whole transcripts once cost
+   * us) — while a stat is cheap and settles it: byte-identical bytes cannot have
+   * started explaining a menu they did not explain last time. A file that grows
+   * (the tool_use line finally flushed) or a different menu re-opens the read.
+   *
+   * The cost: a read that failed for an IO reason rather than an absent ask is
+   * indistinguishable here, so that menu stays unenriched until the transcript
+   * next changes. It still ships, and it is still answerable from the raw sheet.
+   */
+  private claimAskRead(file: string, id: string, st: { size: number; mtimeMs: number } | null): boolean {
+    if (st === null) {              // no transcript yet — nothing to read, nothing to remember
+      this.askProbe = null;
+      return false;
+    }
+    const p = this.askProbe;
+    if (p !== null && p.file === file && p.id === id && p.size === st.size && p.mtimeMs === st.mtimeMs) return false;
+    this.askProbe = { file, id, size: st.size, mtimeMs: st.mtimeMs };
+    return true;
   }
 
   /** Read the session's task list and send it when it differs from what this
@@ -206,13 +268,55 @@ export class SessionStream {
         this.send({ type: 'status', status: r.status, statusUpdatedAt: r.statusUpdatedAt });
       }
       if (this.stopped) return;
-      await this.checkDialog();
+      await this.checkDialog(r.file);
       if (this.stopped) return;
       await this.checkTasks(r.cfgDir, r.uuid);
     } finally {
       this.ticking = false;
     }
   }
+}
+
+/** What a client has already been told about the pane menu: the dialog id it
+ *  last saw, and the enrichment (if any) that rode along with it. */
+export interface DialogSeen {
+  id: string | null;
+  ask: DialogAsk | null;
+}
+
+/**
+ * The change gate for the `dialog` frame: given what the client last saw and
+ * what the pane says now, what (if anything) do we send?
+ *
+ * It cannot be keyed on `dialog.id` alone. That id is deliberately pane-derived
+ * only — `answerDialog` re-parses the pane to check staleness and the sheet keys
+ * dismissal off it, so `ask` is excluded from the hash on purpose. But the menu
+ * and the transcript that explains it are read by unrelated clocks, so the same
+ * menu can be captured bare on one poll and enriched on the next: identical
+ * labels, identical title, identical id. An id-only gate calls that a duplicate
+ * and drops it, and the client renders scraped labels for the life of the menu.
+ *
+ * So: send on a new id OR on the first upgrade to an enriched dialog, and never
+ * the other way round — a transient read miss must not strip descriptions off a
+ * sheet the operator is already reading.
+ */
+export function nextDialogFrame(
+  prev: DialogSeen,
+  dialog: Dialog | null,
+): { seen: DialogSeen; msg: SessionStreamMsg | null } {
+  if (!dialog) {
+    if (prev.id === null) return { seen: prev, msg: null };
+    return { seen: { id: null, ask: null }, msg: { type: 'dialog_cleared' } };
+  }
+  const isNew = prev.id !== dialog.id;
+  const latched = isNew ? null : prev.ask;       // a new menu forgets the old ask
+  const ask = dialog.ask ?? latched;             // and a missed read never downgrades
+  const upgraded = ask !== null && latched === null;
+  if (!isNew && !upgraded) return { seen: prev, msg: null };
+  return {
+    seen: { id: dialog.id, ask },
+    msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
+  };
 }
 
 /** Parse the `since=<uuid>:<offset>` query value; malformed → undefined. */

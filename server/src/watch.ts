@@ -136,6 +136,13 @@ export class FleetWatcher {
    * pane parses to a dialog. Emit `dialog` when the id changed since last tick,
    * `dialog_cleared` when a previously-reported dialog vanished. Returns the
    * set of session ids with a dialog pending, for the fleet assembly.
+   *
+   * The id alone is the right gate HERE, unlike the per-session stream's
+   * (`nextDialogFrame`): this sweep only ever sees the bare pane parse, and its
+   * `dialog` emission is consumed for the push notification and the fleet's
+   * dialogPending flag — the open session's own stream owns the frame the client
+   * renders, and drops these (`sessionws.ts` onSessionMsg). Enrich the parse here
+   * and this gate needs the same upgrade path.
    */
   private async detectDialogs(notify: boolean): Promise<Set<string>> {
     const pending = new Set<string>();

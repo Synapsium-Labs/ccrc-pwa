@@ -179,6 +179,273 @@ describe('DialogSheet dismissal', () => {
   });
 });
 
+// — the real question (Dialog.ask) —
+//
+// When the live menu is an AskUserQuestion the transcript carries the copy the
+// pane truncated: the question itself, a header chip, per-option descriptions
+// and preview blocks. Enrichment is by POSITION only — the index that gets
+// typed always comes from the pane; rows the transcript doesn't cover (the
+// TUI's own "Chat about this") keep their scraped label.
+describe('DialogSheet (enriched by Dialog.ask)', () => {
+  const renderSheet = (dialog: Dialog) => renderWithDialog(dialog);
+
+  /** The scraped preamble — a lossy copy of the question the transcript has whole. */
+  const PREAMBLE = 'Rates capture is partial for some classes.';
+
+  /** The option rows in DOM order. Position IS the contract here, so these are
+   *  read positionally rather than looked up by the text under test. */
+  const optionRows = (): HTMLElement[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('.opts > .opt'));
+
+  const previewToggles = (): HTMLElement[] =>
+    screen.queryAllByRole('button', { name: /preview/i });
+
+  const ASKED: Dialog = {
+    id: 'd1',
+    title: 'Forward-fill per class',
+    body: PREAMBLE,
+    parsed: true,
+    selectedIndex: 1,
+    raw: 'RAW PANE',
+    options: [
+      { index: 1, label: 'Forward-fill per class' },
+      { index: 2, label: 'Require completeness, Anthropic only' },
+      { index: 3, label: 'Ship as-is, alert + runbook' },
+      { index: 4, label: 'Chat about this' },
+    ],
+    ask: {
+      question: 'How should the partial-capture hazard be handled?',
+      header: 'Revised fix',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Forward-fill per class (Recommended)',
+          description: 'Inherit the last seen rate.',
+          preview: '07-01: in,out,cr',
+        },
+        {
+          label: 'Require completeness, Anthropic only',
+          description: 'Emit only complete rows.',
+        },
+        {
+          label: 'Ship as-is, alert + runbook',
+          description: 'Change nothing; watch it.',
+          preview: 'alert: rate-gap > 24h',
+        },
+      ],
+    },
+  };
+
+  it('shows the real question, the header chip and every description', () => {
+    renderSheet(ASKED);
+    // As the sheet's heading, so the dialog's accessible name is the question.
+    expect(
+      screen.getByRole('heading', {
+        name: 'How should the partial-capture hazard be handled?',
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Revised fix')).toBeInTheDocument();
+    expect(screen.getByText('Inherit the last seen rate.')).toBeInTheDocument();
+    expect(screen.getByText('Emit only complete rows.')).toBeInTheDocument();
+  });
+
+  it('puts the question inside the scrolling body, never in the fixed header', () => {
+    renderSheet(ASKED);
+    const heading = screen.getByRole('heading', {
+      name: 'How should the partial-capture hazard be handled?',
+    });
+    // The sheet's header row is flex:none and uncapped, and only .sheet-body
+    // scrolls: a real question runs to 563 chars — ~15 lines on a 390px phone —
+    // so above the body it squeezes the options to zero height on a landscape
+    // viewport with nothing left to scroll to reach them. Inside, the question
+    // scrolls together with the rows it is asking about.
+    const body = document.querySelector('.sheet-body');
+    expect(body).not.toBeNull();
+    expect(body!.contains(heading)).toBe(true);
+    expect(body!.contains(optionRows()[0]!)).toBe(true);
+    // …and it is still what names the dialog.
+    expect(
+      screen.getByRole('dialog', { name: 'How should the partial-capture hazard be handled?' }),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the pane’s own copy for a row the server could not confirm', () => {
+    // alignAsk tolerates one disagreeing row from four options up, and sends
+    // `null` for it: that row's index still types the PANE's option, so wearing
+    // the transcript's copy would describe an answer the tap does not send.
+    renderSheet({
+      ...ASKED,
+      options: [
+        { ...ASKED.options[0]!, description: 'Scraped: inherits the last rate.' },
+        ...ASKED.options.slice(1),
+      ],
+      ask: { ...ASKED.ask!, options: [null, ...ASKED.ask!.options.slice(1)] },
+    });
+    const rows = optionRows();
+
+    expect(rows[0]!.querySelector('.opt-label')?.textContent).toBe('Forward-fill per class');
+    expect(rows[0]!.querySelector('.opt-desc')?.textContent).toBe('Scraped: inherits the last rate.');
+    // Its worked example goes with it — a preview is copy about the row too.
+    expect(previewToggles()).toHaveLength(1);
+    // The rows that did match are untouched.
+    expect(rows[1]!.querySelector('.opt-desc')?.textContent).toBe('Emit only complete rows.');
+  });
+
+  it('drops the scraped preamble once the real question is on the sheet', () => {
+    renderSheet(ASKED);
+    // The pane's preamble is a truncated copy of the title — don't say it twice.
+    expect(screen.queryByText(PREAMBLE)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the scraped title and preamble when the question is blank', () => {
+    // The server passes any string through as the question, whitespace included:
+    // a blank one enriches nothing, so the pane's own copy has to survive.
+    renderSheet({ ...ASKED, ask: { ...ASKED.ask!, question: '   ' } });
+
+    expect(screen.getByRole('heading', { name: 'Forward-fill per class' })).toBeInTheDocument();
+    expect(screen.getByText(PREAMBLE)).toBeInTheDocument();
+    // The rest of the enrichment still lands — only the question was missing.
+    expect(screen.getByText('Inherit the last seen rate.')).toBeInTheDocument();
+  });
+
+  it('keeps the scraped description when the transcript sends a blank one', () => {
+    renderSheet({
+      ...ASKED,
+      options: [
+        { ...ASKED.options[0]!, description: 'Scraped: inherits the last rate.' },
+        ...ASKED.options.slice(1),
+      ],
+      ask: {
+        ...ASKED.ask!,
+        options: [
+          { ...ASKED.ask!.options[0]!, description: '' },
+          ...ASKED.ask!.options.slice(1),
+        ],
+      },
+    });
+
+    expect(screen.getByText('Scraped: inherits the last rate.')).toBeInTheDocument();
+  });
+
+  it('opens the preselected option’s preview and leaves the others collapsed', () => {
+    renderSheet(ASKED);
+    const toggles = previewToggles();
+    expect(toggles).toHaveLength(2);
+
+    expect(screen.getByText('07-01: in,out,cr')).toBeVisible();
+    expect(toggles[0]).toHaveAttribute('aria-expanded', 'true');
+    // Row 3 is not the preselected row: its worked example stays folded away.
+    expect(screen.queryByText('alert: rate-gap > 24h')).not.toBeInTheDocument();
+    expect(toggles[1]).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  // The preview toggle is the one affordance on this sheet with no text label
+  // of its own to fall back on, so its name has to survive without the glyph:
+  // in the name, "▸" is announced as "black right-pointing small triangle",
+  // and the NAME then changes on every toggle on top of the aria-expanded
+  // state change — two announcements for one thing. Every other decorative
+  // glyph in this file (.opt-glyph, .opt-idx, .opt-enter) is aria-hidden.
+  it('names the preview toggle without the caret, in both states', () => {
+    renderSheet(ASKED);
+    const [openToggle, shutToggle] = previewToggles();
+
+    // Exact-name lookups: an accessible name of "▾ preview" would not match.
+    expect(screen.getAllByRole('button', { name: 'preview' })).toHaveLength(2);
+    expect(openToggle).toHaveAccessibleName('preview');
+    expect(shutToggle).toHaveAccessibleName('preview');
+    // The caret is still on screen — hidden from the a11y tree, not deleted.
+    expect(openToggle!.textContent).toContain('▾');
+    expect(shutToggle!.textContent).toContain('▸');
+    expect(openToggle!.querySelector('[aria-hidden="true"]')?.textContent?.trim()).toBe('▾');
+
+    // Toggling changes the state, and only the state.
+    fireEvent.click(shutToggle!);
+    expect(shutToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(shutToggle).toHaveAccessibleName('preview');
+  });
+
+  it('points aria-expanded at the region it expands', () => {
+    renderSheet(ASKED);
+    const [openToggle] = previewToggles();
+    const controls = openToggle!.getAttribute('aria-controls');
+
+    // aria-expanded without aria-controls leaves the disclosed block
+    // unassociated with its control — there is nothing to take the reader to.
+    expect(controls).toBeTruthy();
+    const region = document.getElementById(controls!);
+    expect(region).not.toBeNull();
+    expect(region).toHaveTextContent('07-01: in,out,cr');
+    // Distinct per option, so one toggle never claims another's preview.
+    expect(previewToggles()[1]!.getAttribute('aria-controls')).not.toBe(controls);
+  });
+
+  it('answers with the pane index even when the transcript relabels the row', () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderSheet(ASKED);
+
+    fireEvent.click(screen.getByRole('button', { name: /Ship as-is, alert \+ runbook/ }));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd1', 3);
+  });
+
+  it('enriches by position and leaves the TUI’s own row alone', () => {
+    renderSheet(ASKED);
+    const rows = optionRows();
+
+    // Rows 1–3 take the transcript's label and the sentence the 3-line pane box
+    // had to throw away — nth row gets nth entry, no text matching involved.
+    expect(rows.map((r) => r.querySelector('.opt-label')?.textContent)).toEqual([
+      'Forward-fill per class (Recommended)',
+      'Require completeness, Anthropic only',
+      'Ship as-is, alert + runbook',
+      'Chat about this',
+    ]);
+    // Row 4 is the TUI's own escape hatch: no counterpart, so no description…
+    expect(rows.map((r) => r.querySelector('.opt-desc')?.textContent ?? null)).toEqual([
+      'Inherit the last seen rate.',
+      'Emit only complete rows.',
+      'Change nothing; watch it.',
+      null,
+    ]);
+    // …and nothing folded under it either.
+    expect(document.querySelector('.opts')?.lastElementChild).toBe(rows[3]);
+  });
+
+  it('does not carry one question’s collapsed preview over to the next', () => {
+    const { store } = renderSheet(ASKED);
+    fireEvent.click(previewToggles()[0]!);
+    expect(screen.queryByText('07-01: in,out,cr')).not.toBeInTheDocument();
+
+    act(() => {
+      store.getState().apply({
+        type: 'dialog',
+        dialog: {
+          ...ASKED,
+          id: 'd2',
+          ask: {
+            ...ASKED.ask!,
+            question: 'And the backfill window?',
+            options: [
+              { ...ASKED.ask!.options[0]!, preview: '06-01: in,out' },
+              ...ASKED.ask!.options.slice(1),
+            ],
+          },
+        },
+      });
+    });
+    // A new question opens its preselected preview afresh.
+    expect(screen.getByText('06-01: in,out')).toBeVisible();
+  });
+
+  it('renders exactly as before when there is no ask', () => {
+    renderSheet({ ...ASKED, ask: undefined });
+    expect(screen.getByRole('button', { name: 'Forward-fill per class' })).toBeInTheDocument();
+    expect(screen.getByText(PREAMBLE)).toBeInTheDocument();
+    expect(screen.queryByText('Revised fix')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inherit the last seen rate.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /preview/i })).not.toBeInTheDocument();
+  });
+});
+
 // — answering in your own words —
 //
 // A menu owns the terminal's keyboard, so free text cannot simply be typed at

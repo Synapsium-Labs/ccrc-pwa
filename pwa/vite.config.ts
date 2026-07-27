@@ -78,5 +78,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],
+    // Type-level tests (*.test-d.tsx) run as part of `vitest run`. Props here
+    // are contracts — a widening like Sheet's ReactNode eyebrow is invisible at
+    // runtime, so without this the only thing that catches a revert is a
+    // separate `tsc --noEmit` nobody is obliged to run.
+    typecheck: { enabled: true },
   },
 });

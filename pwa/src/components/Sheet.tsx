@@ -12,8 +12,11 @@ export interface SheetProps {
   onClose: () => void;
   children: ReactNode;
   title?: string;
-  /** Mono uppercase kicker above the title, e.g. "claude is asking". */
-  eyebrow?: string;
+  /** Mono uppercase kicker above the title, e.g. "claude is asking". Accepts an
+   *  element so callers can hang a chip off it (DialogSheet's header badge).
+   *  Falsy (undefined, null, false, '', 0) renders no kicker line at all —
+   *  an empty <p> is invisible but still spends its margin above the title. */
+  eyebrow?: ReactNode;
   /** Full-height variant — the terminal drawer's chrome (Task 12): a
    *  --bg-well panel rising to the safe-area line on --z-drawer, body as a
    *  flex column. The title goes screen-reader-only so the glass keeps its
@@ -22,6 +25,17 @@ export interface SheetProps {
 }
 
 export function Sheet({ open, onClose, children, title, eyebrow, full }: SheetProps): ReactNode {
+  // The visible title rides INSIDE the scroller, above the children it heads.
+  // Outside it, the header row is `flex: none` and uncapped while only
+  // `.sheet-body` scrolls — so a long title (DialogSheet's real
+  // AskUserQuestion runs to ~15 lines on a phone) squeezes the body toward zero
+  // and, on a landscape viewport, leaves nothing scrollable to reach the
+  // options with. Inside, question and options scroll as one. The full variant
+  // keeps its screen-reader-only title out of the terminal's flex column.
+  const inBody = !full && Boolean(title);
+  const heading = (
+    <Drawer.Title className={inBody ? 'sheet-title' : 'sr-only'}>{title ?? 'Sheet'}</Drawer.Title>
+  );
   return (
     <Drawer.Root
       open={open}
@@ -36,11 +50,12 @@ export function Sheet({ open, onClose, children, title, eyebrow, full }: SheetPr
           aria-describedby={undefined}
         >
           <div className="sheet-grabber" aria-hidden="true" />
-          {eyebrow !== undefined && <p className="sheet-eyebrow">{eyebrow}</p>}
-          <Drawer.Title className={title && !full ? 'sheet-title' : 'sr-only'}>
-            {title ?? 'Sheet'}
-          </Drawer.Title>
-          <div className="sheet-body">{children}</div>
+          {eyebrow ? <p className="sheet-eyebrow">{eyebrow}</p> : null}
+          {inBody ? null : heading}
+          <div className="sheet-body">
+            {inBody ? heading : null}
+            {children}
+          </div>
         </Drawer.Content>
       </Drawer.Portal>
     </Drawer.Root>

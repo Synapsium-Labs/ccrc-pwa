@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
+import { nextDialogFrame, SessionStream, type DialogSeen } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
+import type { AskQuestion, Dialog } from '../../shared/api.js';
 
 const ID = 'claude2-MekWarLive';
 const UUID_A = 'a'.repeat(36);
@@ -69,6 +72,275 @@ const opened = (ws: WebSocket): Promise<void> =>
     ws.on('open', () => resolve());
     ws.on('error', reject);
   });
+
+const ASK: AskQuestion = {
+  question: 'Which fill strategy?',
+  header: 'Backfill',
+  multiSelect: false,
+  options: [{ label: 'Forward-fill per class', description: 'per-class carry', preview: '07-01' }],
+};
+
+const menu = (over: Partial<Dialog> = {}): Dialog => ({
+  id: 'abc123', title: 'Which fill strategy?', options: [
+    { index: 1, label: 'Forward-fill per class' },
+    { index: 2, label: 'Chat about this' },
+  ],
+  selectedIndex: 1, parsed: true, raw: 'pane', ...over,
+});
+
+const NONE: DialogSeen = { id: null, ask: null };
+
+describe('dialog frame gate', () => {
+  it('sends a menu the first time it is seen, and not again unchanged', () => {
+    const first = nextDialogFrame(NONE, menu());
+    expect(first.msg).toEqual({ type: 'dialog', dialog: menu() });
+    expect(nextDialogFrame(first.seen, menu()).msg).toBeNull();
+  });
+
+  it('sends again — same id — when the ask only becomes readable on a later read', () => {
+    const bare = nextDialogFrame(NONE, menu());
+    expect((bare.msg as { dialog: Dialog }).dialog.ask).toBeUndefined();
+    const rich = nextDialogFrame(bare.seen, menu({ ask: ASK }));
+    expect(rich.msg).not.toBeNull();
+    const d = (rich.msg as { dialog: Dialog }).dialog;
+    expect(d.ask).toEqual(ASK);
+    expect(d.id).toBe('abc123'); // id stays purely pane-derived
+    // and the upgrade only fires once
+    expect(nextDialogFrame(rich.seen, menu({ ask: ASK })).msg).toBeNull();
+  });
+
+  it('never downgrades: a read that lost the ask sends nothing and keeps it latched', () => {
+    const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
+    const missed = nextDialogFrame(rich.seen, menu());
+    expect(missed.msg).toBeNull();
+    expect(missed.seen.ask).toEqual(ASK);
+  });
+
+  it('a different menu resets the latch', () => {
+    const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
+    const next = nextDialogFrame(rich.seen, menu({ id: 'def456' }));
+    expect((next.msg as { dialog: Dialog }).dialog.ask).toBeUndefined();
+    expect(next.seen).toEqual({ id: 'def456', ask: null });
+  });
+
+  it('clears once when the menu vanishes, and stays quiet after', () => {
+    const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
+    const cleared = nextDialogFrame(rich.seen, null);
+    expect(cleared.msg).toEqual({ type: 'dialog_cleared' });
+    expect(cleared.seen).toEqual(NONE);
+    expect(nextDialogFrame(cleared.seen, null).msg).toBeNull();
+  });
+});
+
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+/** Pane captures live in fixtures/panes; transcripts sit at the fixtures root. */
+const fixture = (name: string): string =>
+  readFileSync(path.join(FIXTURES, name.endsWith('.jsonl') ? name : path.join('panes', name)), 'utf8');
+
+/** One poll of a live stream. `tick` is private only to keep it off the class's
+ *  public surface; the harness wants exactly what the 2 s interval does, awaited,
+ *  so these tests never sleep. */
+const pollOnce = (s: SessionStream): Promise<void> =>
+  (s as unknown as { tick: () => Promise<void> }).tick();
+
+/**
+ * Run a SessionStream against a scripted sequence of pane captures and transcript
+ * contents — one of each per poll, `null` transcript meaning the file is not
+ * there — and collect every frame it sends, plus how many times the transcript
+ * was read for an ask. Either sequence may be shorter than the other; its last
+ * entry then holds for the remaining polls. It resumes with `since`, so what
+ * comes back is the dialog traffic itself rather than a backlog.
+ */
+const streamWith = async (opts: {
+  pane?: string;
+  paneSequence?: readonly string[];
+  transcript?: string | null;
+  transcriptSequence?: readonly (string | null)[];
+}): Promise<{ frames: any[]; askReads: number }> => {
+  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-ask-'));
+  seed(home);
+  const file = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
+  // Scripted content for one poll. Rewriting identical bytes would bump mtime and
+  // read as transcript growth — which is exactly what the read-skip memo keys on —
+  // so a step that doesn't change the script is a genuine no-op on disk.
+  const put = (t: string | null): void => {
+    if (t === null) { rmSync(file, { force: true }); return; }
+    if (existsSync(file) && readFileSync(file, 'utf8') === t) return;
+    writeFileSync(file, t);
+  };
+  const panes = opts.paneSequence ?? [opts.pane ?? ''];
+  let step = 0; // which poll we are on: 0 is start(), then one per tick
+  const at = <T,>(xs: readonly T[], i: number): T => xs[Math.min(i, xs.length - 1)]!;
+  const run: Runner = async (_cmd, args) => {
+    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { code: 0, stdout: at(panes, step), stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  // The tailer reads through io.tailFile, and `since` skips the backlog, so a
+  // readFileFrom on the transcript is an ask read and nothing else.
+  let askReads = 0;
+  const io: FleetIO = {
+    ...localIO,
+    readFileFrom: (p, off) => {
+      if (p === file) askReads += 1;
+      return localIO.readFileFrom(p, off);
+    },
+  };
+  const deps: Deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io };
+  const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
+  put(at(seq, 0));
+  const frames: any[] = [];
+  const offset = existsSync(file) ? statSync(file).size : 0;
+  const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset });
+  try {
+    await stream.start();
+    for (step = 1; step < Math.max(seq.length, panes.length); step += 1) {
+      put(at(seq, step));
+      await pollOnce(stream);
+    }
+  } finally {
+    stream.stop();
+    rmSync(home, { recursive: true, force: true });
+  }
+  return { frames, askReads };
+};
+
+describe('dialog enrichment', () => {
+  it('carries the structured ask when the pane and transcript agree', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcript: fixture('transcript-ask-2col.jsonl'),
+    });
+    const d = frames.find((f) => f.type === 'dialog')!.dialog;
+    expect(d.ask?.question).toContain('partial-capture hazard');
+    expect(d.ask?.options[0]!.description).toBeTruthy();
+    expect(d.ask?.options[0]!.preview).toContain('07-01');
+    // Enrichment must not disturb the answer path.
+    expect(d.options).toHaveLength(4);            // 3 numbered + "Chat about this"
+    expect(d.options[3]!.label).toBe('Chat about this');
+  });
+
+  it('sends the same dialog id with and without ask', async () => {
+    const withAsk = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'), transcript: fixture('transcript-ask-2col.jsonl'),
+    });
+    const without = await streamWith({ pane: fixture('ask-2col-chat-about.txt'), transcript: null });
+    expect(withAsk.frames[0]!.dialog.ask).toBeDefined();
+    expect(without.frames[0]!.dialog.ask).toBeUndefined();
+    expect(withAsk.frames[0]!.dialog.id).toBe(without.frames[0]!.dialog.id);
+    // The whole design rests on enrichment riding ALONGSIDE the scraped menu:
+    // the keystrokes an answer sends come from the pane and nothing else. `id`
+    // cannot witness that — it is sha1'd inside parseDialog, BEFORE the ask is
+    // attached, so a post-parse rewrite of every label leaves it byte-identical.
+    // Pin the rows themselves, and the cursor that decides which one Enter takes.
+    expect(withAsk.frames[0]!.dialog.options).toEqual(without.frames[0]!.dialog.options);
+    expect(withAsk.frames[0]!.dialog.selectedIndex).toBe(without.frames[0]!.dialog.selectedIndex);
+  });
+
+  it('delivers an ask that only becomes readable on a later poll', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcriptSequence: [null, fixture('transcript-ask-2col.jsonl')],
+    });
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs).toHaveLength(2);
+    expect(dialogs[0]!.dialog.ask).toBeUndefined();
+    expect(dialogs[1]!.dialog.ask).toBeDefined();
+  });
+
+  it('does not resend a bare dialog when a later ask read fails', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcriptSequence: [fixture('transcript-ask-2col.jsonl'), null, null],
+    });
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs).toHaveLength(1);
+    // The frame count alone is satisfied by a stream that never enriches at all,
+    // so pin what the single frame carried: the ask read on poll 1, still whole
+    // after two polls that could not find it.
+    expect(dialogs[0]!.dialog.ask?.options).toHaveLength(3);
+  });
+
+  it('reads the transcript for a menu once, not once per poll', async () => {
+    // The enrichment is a latch: a 256 KB tail read every 2 s for an answer that
+    // cannot change the frame (nextDialogFrame would suppress it) is pure cost.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const { askReads } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcriptSequence: [t, t, t],
+    });
+    expect(askReads).toBe(1);
+  });
+
+  it('stops re-reading the transcript for a menu it cannot explain', async () => {
+    // The menus that never latch are the common ones — permission prompts,
+    // /model, trust-folder — and they sit on screen until a human answers. An
+    // unchanged transcript cannot start explaining one, so re-reading its 256 KB
+    // tail every 2 s (over the agent RPC, in remote-fleet mode) buys nothing.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const { askReads } = await streamWith({
+      pane: fixture('model-confirm.txt'),
+      transcriptSequence: [t, t, t],
+    });
+    expect(askReads).toBe(1);
+  });
+
+  it('re-enriches a menu that flapped off-screen and came back', async () => {
+    // A capture can miss a menu that is still there: tmux returns null, the grab
+    // lands mid-redraw, or BUSY_RE matches one stray 'esc to interrupt' anywhere
+    // in the pane (pane/dialog.ts:24-28). The read-skip memo has to be forgotten
+    // with the menu, or the second appearance is judged against a probe taken for
+    // the first — and since the agent is blocked awaiting the answer, the
+    // transcript never changes to reopen the read. The menu would come back bare
+    // and stay bare for the rest of its life.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const ask = fixture('ask-2col-chat-about.txt');
+    const { frames, askReads } = await streamWith({
+      paneSequence: [ask, fixture('busy.txt'), ask, ask],
+      transcriptSequence: [t],
+    });
+    expect(frames.map((f) => f.type)).toEqual(['dialog', 'dialog_cleared', 'dialog']);
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs[1]!.dialog.ask?.options).toHaveLength(3);
+    // Two appearances, two reads — and the fourth poll re-latches, not re-reads.
+    expect(askReads).toBe(2);
+  });
+
+  it('re-enriches a menu that came back through an unparsed capture', async () => {
+    // The other half of the same hazard: a grab mid-redraw can land with the
+    // option rows erased and the 'Enter to select' footer still up, so the pane
+    // is a menu but fewer than two numbered options survive and parseDialog
+    // returns `unparsed` (pane/dialog.ts:94). That is a dialog, not null, so a
+    // probe kept for `dialog !== null` outlives the menu it was scoped to — and
+    // the parsed menu on the next poll is judged against it and declined,
+    // forever, because the blocked agent never touches the transcript again.
+    const t = fixture('transcript-ask-2col.jsonl');
+    const ask = fixture('ask-2col-chat-about.txt');
+    const { frames, askReads } = await streamWith({
+      paneSequence: [ask, fixture('ask-2col-partial-redraw.txt'), ask, ask],
+      transcriptSequence: [t],
+    });
+    const dialogs = frames.filter((f) => f.type === 'dialog');
+    expect(dialogs).toHaveLength(3);
+    expect(dialogs[1]!.dialog.parsed).toBe(false); // the half-drawn capture itself
+    expect(dialogs[2]!.dialog.ask?.options).toHaveLength(3);
+    // Two parsed appearances, two reads — the unparsed one is never read for.
+    expect(askReads).toBe(2);
+  });
+
+  it('leaves a /model-style confirm unenriched', async () => {
+    const { frames, askReads } = await streamWith({
+      pane: fixture('model-confirm.txt'), transcript: fixture('transcript-ask-2col.jsonl'),
+    });
+    const d = frames.find((f) => f.type === 'dialog')!.dialog;
+    // It looked and alignAsk declined — not "never looked". Without the read the
+    // assertion below holds for any build, enrichment ripped out included.
+    expect(askReads).toBe(1);
+    expect(d.ask).toBeUndefined();
+    expect(d.options.map((o: { label: string }) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
+  });
+});
 
 describe('session WS', () => {
   let home: string;

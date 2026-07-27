@@ -173,6 +173,11 @@
   background: var(--edge-strong);
   margin: var(--sp-1) auto var(--sp-4);
 }
+/* The eyebrow carries a caller-supplied chip (DialogSheet's ask header), so
+   its text is as dynamic as the title's: `anywhere`, like every other
+   dynamic-text surface here, or one unbroken token runs past the fixed
+   panel's edge. The chip re-states its own line-height, so wrapping onto a
+   second line clears the strut this rule sets for the static kicker. */
 .sheet-eyebrow {
   flex: none;
   font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
@@ -180,12 +185,22 @@
   text-transform: uppercase;
   color: var(--ink-tertiary);
   margin-bottom: var(--sp-2);
+  overflow-wrap: anywhere;
 }
+/* Titles are dynamic too — DialogSheet hands the real AskUserQuestion here,
+   paths, URLs and snake_case identifiers included, and .sheet-panel is
+   position:fixed with nothing to clip against: an unbroken >40ch token would
+   simply run off the viewport. And a long question must not push the option
+   rows out of reach, so the title scrolls on its own past 38vh, exactly as
+   the .dlg-body it replaced did. Both are invisible on a short title. */
 .sheet-title {
   flex: none;
   font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
   color: var(--ink-primary);
   margin-bottom: var(--sp-4);
+  overflow-wrap: anywhere;
+  max-height: 38vh;
+  overflow-y: auto;
 }
 .sheet-body {
   min-height: 0;
