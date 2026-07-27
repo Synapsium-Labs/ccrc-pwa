@@ -7,15 +7,22 @@
 // CSS while the gate still measured 74 pairs and reported ALL PASS. So the
 // suite runs the gate itself: any FAIL fails here, and the pairs listed below
 // must be among the ones it actually measured, in both themes.
-import { execFileSync } from 'node:child_process';
+//
+// spawnSync, not execFileSync: the gate exits non-zero on a failing pair, and
+// a throw at import time would take the whole file down instead of reporting
+// which pair regressed.
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const out = execFileSync(
+const run = spawnSync(
   process.execPath,
   [path.resolve(process.cwd(), 'design/contrast-check.mjs')],
   { encoding: 'utf8' },
 );
+const out = run.stdout;
 
 /** "PASS 4.58 (min 4.5) LIGHT ask header chip / accent-tint #0E7B3F on #DFF2E5" */
 const measured = (label: string): { ratio: number; min: number } => {
@@ -31,6 +38,25 @@ describe('contrast gate', () => {
   it('passes every pair it measures', () => {
     expect(out).not.toMatch(/^FAIL/m);
     expect(out).toMatch(/\nALL \d+ PASS/);
+  });
+
+  // Docs run the gate standalone (`… && node design/contrast-check.mjs`), so
+  // the exit status — not just the printed summary — has to carry the verdict.
+  // A gate that prints "2 FAILURES" and exits 0 is a gate no chain can trip on.
+  it('exits 0 when every pair passes', () => {
+    expect(run.status).toBe(0);
+  });
+
+  it('exits non-zero when a pair fails', () => {
+    const gate = path.resolve(process.cwd(), 'design/contrast-check.mjs');
+    // Same script, one token swapped for a colour that cannot pass on dark.
+    const broken = readFileSync(gate, 'utf8').replace('inkP: "#ECF0EC"', 'inkP: "#151815"');
+    const injected = path.join(mkdtempSync(path.join(tmpdir(), 'contrast-')), 'contrast-check.mjs');
+    writeFileSync(injected, broken);
+    const bad = spawnSync(process.execPath, [injected], { encoding: 'utf8' });
+
+    expect(bad.stdout).toMatch(/^FAIL/m);
+    expect(bad.status).not.toBe(0);
   });
 
   // 11px text (--text-2xs) is body text, not a UI glyph: 4.5, not 3:1.

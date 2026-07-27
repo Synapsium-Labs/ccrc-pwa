@@ -100,3 +100,8 @@ for (const [label, fg, bg, min] of [...pairs(D, "DARK "), ...pairs(Lt, "LIGHT")]
   console.log(`${ok ? "PASS" : "FAIL"}  ${r.toFixed(2).padStart(6)}  (min ${min})  ${label}  ${fg} on ${bg}`);
 }
 console.log(fail ? `\n${fail} FAILURES of ${n}` : `\nALL ${n} PASS`);
+// The gate is the last link of `npx vitest run && npm run build && node
+// design/contrast-check.mjs`, so a failing pair has to be a non-zero exit —
+// printing "N FAILURES" and exiting 0 makes every chain green over a live
+// violation.
+process.exitCode = fail ? 1 : 0;
