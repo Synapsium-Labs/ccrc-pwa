@@ -21,12 +21,15 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 };
 
 /** Server over a seeded one-session registry; capture-pane returns scripted panes in order (last repeats).
- *  `status` seeds the authoritative live status file (used by the interrupt route). */
+ *  `status` seeds the authoritative live status file (used by the interrupt route). `panes` may be a
+ *  function of `home` when a test needs a clip path scripted into the pane text — `home` is a fresh
+ *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
-  panes: (string | null)[],
+  panes: (string | null)[] | ((home: string) => (string | null)[]),
   opts: { status?: 'busy' | 'idle' } = {},
-): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus }> {
+): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+  const resolvedPanes = typeof panes === 'function' ? panes(home) : panes;
   seedSession(home, ID, 'claude2');
   const PANE_PID = 4242;
   if (opts.status) {
@@ -42,7 +45,7 @@ async function makeApp(
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
     if (args[0] === 'capture-pane') {
-      const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
+      const pane = resolvedPanes[Math.min(capIdx, resolvedPanes.length - 1)] ?? null;
       capIdx++;
       return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
     }
@@ -51,10 +54,13 @@ async function makeApp(
   };
   const bus = new Bus();
   const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO }, bus);
-  return { app, calls, bus };
+  return { app, calls, bus, home };
 }
 
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
+
+/** An empty input box — capture-pane before/after any injection attempt. */
+const EMPTY_BOX = '❯ \n';
 
 const OPTS = ['A + B drawer (Recommended)', 'A pure', 'B first, A later', 'Other'];
 function menuPane(selected: number): string {
@@ -148,6 +154,189 @@ describe('write routes', () => {
       expect(res.statusCode).toBe(404);
     }
     await app.close();
+  });
+});
+
+describe('prompt route attachment handling', () => {
+  it('rejects an attachment outside this session’s clips dir', async () => {
+    const { app, home } = await makeApp([EMPTY_BOX]);
+    for (const bad of [
+      '/etc/passwd',
+      '/home/u/.cc-clips/other-session/clip-20260726-150340-a1b2.png',
+      `${home}/.cc-clips/${ID}/../../x/clip-20260726-150340-a1b2.png`,
+    ]) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/prompt`,
+        payload: { text: 'hi', attachments: [bad] },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('bad-attachment');
+    }
+    await app.close();
+  });
+
+  it('rejects a fifth attachment', async () => {
+    const { app, home } = await makeApp([EMPTY_BOX]);
+    const many = Array.from({ length: 5 }, (_, i) =>
+      `${home}/.cc-clips/${ID}/clip-20260726-15034${i}-a1b2.png`);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hi', attachments: many },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('bad-attachment');
+    await app.close();
+  });
+
+  // `home` is a fresh mkdtemp dir created inside makeApp, so the clip path (which
+  // must resolve under it) can only be built from the `home` the callback receives.
+  const clipOf = (home: string) => `${home}/.cc-clips/${ID}/clip-20260726-150340-a1b2.png`;
+
+  it('accepts a staged attachment alongside text, typed as one turn', async () => {
+    const { app, calls, home } = await makeApp((home) => [
+      'scrollback\n❯ \n',
+      `scrollback\n❯ ${clipOf(home)}\n`,
+      'scrollback\n❯ \n',
+    ]);
+    const clip = clipOf(home);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`,
+      payload: { text: 'what is this', attachments: [clip] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'M-Enter'],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+    ]);
+    await app.close();
+  });
+
+  it('accepts an image-only prompt (no text) when an attachment is present', async () => {
+    const { app, calls, home } = await makeApp((home) => [
+      'scrollback\n❯ \n',
+      `scrollback\n❯ ${clipOf(home)}\n`,
+      'scrollback\n❯ \n',
+    ]);
+    const clip = clipOf(home);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`,
+      payload: { text: '', attachments: [clip] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+    ]);
+    await app.close();
+  });
+
+  it('still rejects an empty prompt with no attachments', async () => {
+    const { app } = await makeApp([EMPTY_BOX]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('bad-request');
+    await app.close();
+  });
+});
+
+describe('upload route id handling', () => {
+  const png = (name = 'shot.png') => {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(8)], { type: 'image/png' }), name);
+    return form;
+  };
+
+  it('stages a picked image and returns where it landed', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/upload`, payload: png(),
+    });
+    expect(res.statusCode).toBe(200);
+    const clip = res.json().clip as { path: string; name: string; bytes: number };
+    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
+    expect(clip.path).toContain(`/.cc-clips/${ID}/`);
+  });
+
+  // A bare '..' is deliberately absent: the router normalises
+  // `/api/sessions/../upload` to `/api/upload`, so it never reaches this route
+  // and the assertion below was only ever answered by the SPA fallback's 404 —
+  // which exists only when dist-pwa has been built, making the suite pass or
+  // fail on a build artefact. `clip.test.ts` covers '..' at the unit level,
+  // where it is actually the property under test.
+  it('refuses a traversing session id before touching the filesystem', async () => {
+    const { app } = await makeApp([null]);
+    for (const bad of ['..%2F..%2F.ssh', '%2Fetc']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${bad}/upload`, payload: png(),
+      });
+      expect([400, 404]).toContain(res.statusCode);
+      expect(res.json().ok).toBe(false);
+    }
+  });
+
+  it('404s an unknown but well-formed session', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'POST', url: '/api/sessions/claude2-NoSuchProject/upload', payload: png(),
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('unknown-session');
+  });
+});
+
+describe('clip route', () => {
+  // Non-repeating, non-zero bytes (including 0x80/0xff, invalid UTF-8 lead/continuation
+  // bytes) so a `send()` that ever touched the buffer as a string would corrupt it.
+  const CLIP_BYTES = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 128, 253, 254, 255]);
+  const pngForm = (name = 'shot.png') => {
+    const form = new FormData();
+    form.append('file', new Blob([CLIP_BYTES], { type: 'image/png' }), name);
+    return form;
+  };
+
+  it('serves a staged clip with an immutable cache header, bytes intact on the wire', async () => {
+    const { app } = await makeApp([null]);
+    const up = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/upload`, payload: pngForm(),
+    });
+    const { name } = up.json().clip as { name: string };
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${name}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['cache-control']).toContain('immutable');
+    // The proof that matters: what actually crossed the wire, byte-for-byte —
+    // not just a 200 with a plausible length.
+    expect(Buffer.compare(res.rawPayload, CLIP_BYTES)).toBe(0);
+  });
+
+  it('refuses a name that is not a clip, and a traversing one', async () => {
+    const { app } = await makeApp([null]);
+    for (const bad of ['..%2F..%2F.ssh%2Fid_rsa', 'notaclip.png', 'clip-x.exe']) {
+      const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${bad}` });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
+  it('404s a clip that is not on disk', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'GET', url: `/api/sessions/${ID}/clip/clip-20260726-150340-a1b2.png`,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('404s a well-formed clip name under an unknown session', async () => {
+    const { app } = await makeApp([null]);
+    const res = await app.inject({
+      method: 'GET', url: '/api/sessions/claude2-NoSuchProject/clip/clip-20260726-150340-a1b2.png',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('unknown-session');
   });
 });
 

@@ -1136,6 +1136,12 @@ button.metachip:active {
 /* ------------------------------------------------------------------ *
  *  Composer — the prompt line, docked above the keyboard.             *
  * ------------------------------------------------------------------ */
+/* Plain measuring shell around <Composer> — Composer.tsx itself isn't in this
+   task's scope, so SessionScreen wraps it to give ResizeObserver something to
+   watch. Same flex behavior as .composer so wrapping it changes nothing. */
+.composer-measure {
+  flex: none;
+}
 .composer {
   flex: none;
   padding: var(--sp-2) var(--sp-4) calc(var(--sp-3) + var(--safe-bottom));
@@ -1718,3 +1724,172 @@ button.metachip:active {
 }
 /* Links in user bubbles inherit the on-bubble ink but stay underlined. */
 .msg-user a { color: inherit; text-underline-offset: 3px; }
+
+/* Sent screenshots (transcript thumbnails) — the confirmed and optimistic
+   bubbles share this grid. One clip fills a single column; two or more sit
+   two-up. Right-aligned like every other user-turn element. */
+.msg-attach {
+  justify-self: end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1);
+  max-width: 85%;
+}
+.msg-attach[data-count='1'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.msg-attach-img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  border: 1px solid var(--edge-subtle);
+}
+/* A clip deleted off disk degrades to its filename, never a broken-image box. */
+.msg-attach-gone {
+  display: block;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary);
+  background: var(--bg-well);
+  border: 1px dashed var(--edge-subtle);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  overflow-wrap: anywhere;
+}
+
+/* Attachment tray — the chips ARE the confirmation that an image is attached,
+   which is why the old "Image attached…" toast is gone. */
+.attach-tray {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+.attach-chip {
+  position: relative;
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--edge-subtle);
+  background: var(--bg-well);
+  scroll-snap-align: start;
+}
+.attach-chip[data-state='failed'] { border-color: var(--status-dead); }
+/* The thumbnail's rounded-corner clip lives here, not on .attach-chip — the
+   chip itself must stay unclipped so .attach-remove's 44px hit area (below)
+   isn't cut off. On a failed chip the media is inert (no button) — retry
+   lives in the strip below, not spread across the whole thumbnail, so its
+   tap target can never overlap .attach-remove's. */
+.attach-chip-media {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.attach-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-chip[data-state='uploading'] .attach-thumb { opacity: 0.55; }
+.attach-chip[data-state='uploading']::before {
+  content: '';
+  position: absolute;
+  inset: 24px;
+  border-radius: var(--r-full);
+  border: 2px solid var(--accent-tint);
+  border-top-color: var(--accent);
+  animation: attach-spin var(--caret-period) linear infinite;
+  z-index: 1;
+}
+.attach-strip {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 2px 4px;
+  background: linear-gradient(transparent, rgba(4, 6, 5, 0.72));
+  color: var(--ink-on-well);
+  font: var(--weight-regular) var(--text-2xs) / 1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+/* On a failed chip, retry replaces the strip (shares its look via the
+   .attach-strip class on the same element) instead of wrapping the whole
+   72px thumbnail — a whole-chip retry button used to overlap .attach-remove's
+   hit area with no way to tell the two apart. Its own tap target extends
+   past its visible box via ::after, same pattern as .attach-remove, but the
+   two controls compete for the SAME 72px of vertical room (.attach-tray's
+   clip — see the note on .attach-remove below), so retry claims the larger
+   share on purpose: a mis-tap here just retries an upload (idempotent,
+   recoverable), where a mis-tap on .attach-remove silently drops the
+   attachment. Measured (real Chromium, built CSS): 70×46.19px — clears the
+   44px floor in both dimensions. See the task-10 report for the full
+   grid-verified geometry. */
+.attach-chip-retry {
+  border: 0;
+  margin: 0;
+  cursor: pointer;
+  z-index: 2;
+  /* Sitting outside .attach-chip-media's clip (on purpose — see above), this
+     button's own bottom corners would otherwise square off past the chip's
+     rounded ones now that .attach-chip itself no longer clips either. */
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
+.attach-chip-retry::after { content: ''; position: absolute; inset: -28px 0 -4px 0; }
+.attach-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  border: 1px solid var(--edge-strong);
+  background: var(--bg-sheet);
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  cursor: pointer;
+  z-index: 2;
+}
+/* Hit area without a 44px box. Reaches the 44px floor in WIDTH (the
+   containing block for this inset is .attach-remove's PADDING edge, not its
+   border edge — its 1px border shrinks it by 2px, so -5/…/-21 on the
+   right/left, not -4/…/-20, to land on 44 there). HEIGHT can't reach 44 on
+   a failed chip only (see the scoped rule below) — everywhere else there is
+   nothing competing for the vertical budget, so the full floor applies.
+   .attach-chip's parent, .attach-tray, has overflow-x:auto, which per the
+   CSS overflow spec forces overflow-y to compute to 'auto' too (never
+   'visible') — confirmed in real Chromium that this clips ANY child content
+   above y=0 or below y=72 (the chip's own 72px), full stop, so there is no
+   "extend outward" escape the way the width has (sideways, past the chip,
+   is the direction .attach-tray leaves open for scrolling). Measured
+   (real Chromium, built CSS): 44×43px on staged/uploading (1px short of the
+   floor purely from that same y=0 clip eating the top of the on-paper -5px
+   inset — not a competing control, just the same clip). See the task-10
+   report for the full grid-verified numbers. */
+.attach-remove::after { content: ''; position: absolute; inset: -5px -5px -21px -21px; }
+/* On a failed chip only, .attach-chip-retry (above) competes for the same
+   72px of vertical room — see its comment for why it gets the larger
+   share. Scoped so staged/uploading chips (the common case, with no retry
+   button to share space with) keep the uncontested inset above; ordered
+   after the general rule, and qualified by [data-state='failed'] (higher
+   specificity than the bare .attach-remove::after), so this wins only
+   where it applies. Measured: 44×24px. */
+.attach-chip[data-state='failed'] .attach-remove::after { inset: -5px -5px -2px -21px; }
+
+/* Desktop drop target. */
+.composer[data-drop='true'] .inputbar {
+  border-color: var(--accent);
+  border-style: dashed;
+  background: var(--accent-tint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attach-chip[data-state='uploading']::before {
+    animation: none;
+    border-top-color: var(--accent-tint);
+  }
+}

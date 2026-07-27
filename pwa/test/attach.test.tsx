@@ -1,13 +1,14 @@
-// Task 11 — image attach: the composer's AttachButton uploads a picked image
-// through api.upload; anything but a small PNG goes through the client-side
-// canvas downscale first (max 2048px long edge, JPEG 0.85) so phone-camera
-// originals never ride the phone's uplink at 10MB; failures toast with a
-// Retry that re-runs the same upload.
+// Task 11 — the composer owns the attachment tray. AttachButton is now a
+// stateless trigger (`onPick` hands back every picked file in one batch); the
+// staging, downscale, and upload pipeline that used to live inside the button
+// lives in useStagedImages (test/staged-images.test.tsx) and is wired into the
+// composer here. The old fire-and-forget path — `useAttachImage`,
+// `clipboardImage`, `AttachImage` — is gone from useAttachImage.ts.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { ToastHost } from '../src/components/Toast';
 import { api, ApiError } from '../src/lib/api';
-import { AttachButton, downscaleImage } from '../src/session/AttachButton';
+import { AttachButton } from '../src/session/AttachButton';
+import { downscaleImage } from '../src/session/useAttachImage';
 import { Composer } from '../src/session/Composer';
 
 afterEach(() => {
@@ -17,7 +18,6 @@ afterEach(() => {
 });
 
 const ID = 'claude:OpenClawHetzner';
-const SUCCESS_COPY = 'Image attached to the prompt — add your text and send';
 
 /** The hidden file input backing the attach button. */
 const fileInput = (): HTMLInputElement => {
@@ -30,100 +30,47 @@ const pick = (file: File): void => {
   fireEvent.change(fileInput(), { target: { files: [file] } });
 };
 
-// — AttachButton upload flow —
+// — AttachButton: a stateless trigger now; the pipeline lives in useStagedImages —
 
 describe('AttachButton', () => {
-  it('uploads a small PNG as-is — screenshots skip the lossy downscale', async () => {
-    const upload = vi.spyOn(api, 'upload').mockResolvedValue(undefined);
-    const downscale = vi.fn<(f: File) => Promise<Blob>>();
-    render(
-      <>
-        <AttachButton id={ID} downscale={downscale} />
-        <ToastHost />
-      </>,
-    );
+  it('hands every picked file to onPick in one batch, never one call per file', () => {
+    const onPick = vi.fn();
+    render(<AttachButton onPick={onPick} />);
 
-    const file = new File(['tiny-png-bytes'], 'shot.png', { type: 'image/png' });
-    pick(file);
+    const a = new File(['a'], 'a.png', { type: 'image/png' });
+    const b = new File(['b'], 'b.png', { type: 'image/png' });
+    fireEvent.change(fileInput(), { target: { files: [a, b] } });
 
-    expect(await screen.findByText(SUCCESS_COPY)).toBeInTheDocument();
-    expect(downscale).not.toHaveBeenCalled();
-    expect(upload).toHaveBeenCalledWith(ID, file);
+    expect(onPick).toHaveBeenCalledTimes(1);
+    expect(onPick).toHaveBeenCalledWith([a, b]);
   });
 
-  it('sends an oversized image through downscaleImage first, as a JPEG blob', async () => {
-    const upload = vi.spyOn(api, 'upload').mockResolvedValue(undefined);
-    const small = new Blob(['downscaled'], { type: 'image/jpeg' });
-    const downscale = vi.fn<(f: File) => Promise<Blob>>().mockResolvedValue(small);
-    render(
-      <>
-        <AttachButton id={ID} downscale={downscale} />
-        <ToastHost />
-      </>,
-    );
-
-    // A PNG over the 1MB skip-threshold must go through the downscale.
-    const big = new File([new Uint8Array(1024 * 1024 + 1)], 'shot.png', { type: 'image/png' });
-    pick(big);
-
-    expect(await screen.findByText(SUCCESS_COPY)).toBeInTheDocument();
-    expect(downscale).toHaveBeenCalledWith(big);
-
-    // The upload carries the downscaled bytes, re-wrapped as a .jpg file so
-    // the server's extension check accepts it.
-    expect(upload).toHaveBeenCalledTimes(1);
-    const sent = upload.mock.calls[0]![1];
-    expect(sent).toBeInstanceOf(Blob);
-    expect(sent.type).toBe('image/jpeg');
-    expect(sent.name).toBe('shot.jpg');
+  it('accepts multiple files at the OS picker level', () => {
+    render(<AttachButton onPick={vi.fn()} />);
+    expect(fileInput()).toHaveAttribute('multiple');
   });
 
-  it('camera JPEGs go through the downscale regardless of size', async () => {
-    vi.spyOn(api, 'upload').mockResolvedValue(undefined);
-    const downscale = vi
-      .fn<(f: File) => Promise<Blob>>()
-      .mockResolvedValue(new Blob(['x'], { type: 'image/jpeg' }));
-    render(
-      <>
-        <AttachButton id={ID} downscale={downscale} />
-        <ToastHost />
-      </>,
-    );
-
-    const photo = new File(['jpeg-bytes'], 'IMG_0042.jpeg', { type: 'image/jpeg' });
-    pick(photo);
-
-    expect(await screen.findByText(SUCCESS_COPY)).toBeInTheDocument();
-    expect(downscale).toHaveBeenCalledWith(photo);
+  it('clears the input value so re-picking the same file still fires change', () => {
+    render(<AttachButton onPick={vi.fn()} />);
+    pick(new File(['a'], 'a.png', { type: 'image/png' }));
+    expect(fileInput().value).toBe('');
   });
 
-  it('a failed upload toasts the server error with a Retry that re-uploads', async () => {
-    const upload = vi
-      .spyOn(api, 'upload')
-      .mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'ccd clip: no such session' }))
-      .mockResolvedValueOnce(undefined);
-    render(
-      <>
-        <AttachButton id={ID} downscale={vi.fn()} />
-        <ToastHost />
-      </>,
-    );
+  it('a dead session disables the button', () => {
+    render(<AttachButton onPick={vi.fn()} disabled />);
+    expect(screen.getByRole('button', { name: 'Attach an image' })).toBeDisabled();
+  });
 
-    const file = new File(['tiny'], 'shot.png', { type: 'image/png' });
-    pick(file);
-
-    // The failure interrupts (role=alert) and carries ccd's own words.
-    const retry = await screen.findByRole('button', { name: 'Retry' });
-    expect(screen.getByRole('alert')).toHaveTextContent(/no such session/);
-
-    fireEvent.click(retry);
-    expect(await screen.findByText(SUCCESS_COPY)).toBeInTheDocument();
-    expect(upload).toHaveBeenCalledTimes(2);
-    expect(upload).toHaveBeenLastCalledWith(ID, file);
+  it('does not force direct camera capture — the gallery is the main lane', () => {
+    render(<AttachButton onPick={vi.fn()} />);
+    expect(fileInput().hasAttribute('capture')).toBe(false);
   });
 });
 
 // — downscaleImage geometry + encoding (canvas mocked; jsdom has no 2d context) —
+// Unchanged from the old fire-and-forget path — useStagedImages calls this
+// same function, just imported from its new home now that AttachButton no
+// longer re-exports it.
 
 describe('downscaleImage', () => {
   const stubCanvas = (): { canvas: () => HTMLCanvasElement; toBlob: ReturnType<typeof vi.spyOn> } => {
@@ -210,5 +157,127 @@ describe('Composer attach wiring', () => {
   it('a dead session disables attach along with the rest of the composer', () => {
     render(<Composer onSend={vi.fn()} pending={[]} id={ID} disabled />);
     expect(screen.getByRole('button', { name: 'Attach an image' })).toBeDisabled();
+  });
+
+  it('sends the staged paths with the text and clears the tray', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(
+      { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} id={ID} />);
+    pick(new File(['tiny'], 'shot.png', { type: 'image/png' }));
+    await screen.findByAltText('shot.png');
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'what is this' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(onSend).toHaveBeenCalledWith('what is this', {
+      attachments: [{ path: '/p/clip-1-a1b2.png', previewUrl: expect.stringMatching(/^blob:/) }],
+    });
+    // Released, not revoked — the pending bubble still needs that URL.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('allows an image with no text — that is a legitimate prompt', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(
+      { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    pick(new File(['tiny'], 'shot.png', { type: 'image/png' }));
+    await screen.findByAltText('shot.png');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('refuses to send while a chip has failed — it would drop the image silently', async () => {
+    vi.spyOn(api, 'upload').mockRejectedValue(new ApiError(502, { error: 'nope' }));
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} id={ID} />);
+    pick(new File(['tiny'], 'shot.png', { type: 'image/png' }));
+    await screen.findByRole('button', { name: /retry/i });
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'hi' } });
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+// — Composer drag-and-drop —
+
+describe('Composer drag-and-drop', () => {
+  const composerEl = (container: HTMLElement): HTMLElement => {
+    const el = container.querySelector<HTMLElement>('.composer');
+    if (!el) throw new Error('.composer not rendered');
+    return el;
+  };
+
+  const dragEvent = (
+    type: 'dragover' | 'dragleave' | 'drop',
+    detail: { files?: File[]; relatedTarget?: EventTarget | null },
+  ): Event => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    if (detail.files !== undefined) {
+      Object.defineProperty(event, 'dataTransfer', { value: { files: detail.files } });
+    }
+    if ('relatedTarget' in detail) {
+      Object.defineProperty(event, 'relatedTarget', { value: detail.relatedTarget });
+    }
+    return event;
+  };
+
+  it('stages every dropped image in one add() batch, and clears the drop overlay', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(
+      { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
+    const a = new File(['a'], 'a.png', { type: 'image/png' });
+    const b = new File(['b'], 'b.png', { type: 'image/png' });
+
+    fireEvent(composer, dragEvent('dragover', { files: [] }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
+    const event = dragEvent('drop', { files: [a, b] });
+    fireEvent(composer, event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(composer).not.toHaveAttribute('data-drop');
+    await screen.findByAltText('a.png');
+    await screen.findByAltText('b.png');
+    expect(upload).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression: a real `drop` event is never preceded by a `dragleave` on the
+  // same target (the spec fires `drop` instead), so a files-less drop used to
+  // leave `dropping` stuck true forever — the dashed drop-target border stayed
+  // armed until some later, unrelated drag happened to leave .composer
+  // cleanly. A drop must always end the drag, whatever it carried.
+  it('leaves a text/URL drop (no files) to the browser, and still clears the drop overlay', () => {
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
+
+    fireEvent(composer, dragEvent('dragover', { files: [] }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
+    const event = dragEvent('drop', { files: [] });
+    fireEvent(composer, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(composer).not.toHaveAttribute('data-drop');
+  });
+
+  it('only clears the drop overlay once the pointer actually leaves .composer', () => {
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
+    const textbox = screen.getByRole('textbox');
+
+    fireEvent(composer, dragEvent('dragover', { files: [] }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
+    // dragleave bubbles from every child on the way out — landing on a child
+    // of .composer (the textarea) must not clear the overlay.
+    fireEvent(composer, dragEvent('dragleave', { relatedTarget: textbox }));
+    expect(composer).toHaveAttribute('data-drop', 'true');
+
+    // Actually leaving .composer (relatedTarget outside it, or null when the
+    // drag leaves the window) does clear it.
+    fireEvent(composer, dragEvent('dragleave', { relatedTarget: null }));
+    expect(composer).not.toHaveAttribute('data-drop');
   });
 });

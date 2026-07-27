@@ -3,7 +3,7 @@ import type { FleetIO } from '../io.js';
 import type { FleetClient } from './client.js';
 
 /**
- * `FleetIO` over the agent's read/readFrom/readdir/stat/writeB64/tailOpen ops.
+ * `FleetIO` over the agent's read/readFrom/readB64/readdir/stat/writeB64/tailOpen ops.
  * Read ops mirror `localIO`'s "never throws, null on any failure" contract —
  * a disconnected agent or a forbidden path both collapse to the same "no
  * data" result callers already handle. `writeFileB64` mirrors `localIO`'s
@@ -32,6 +32,16 @@ export function createIo(client: FleetClient): FleetIO {
         const r = res as { data?: unknown; size?: unknown };
         if (typeof r.data !== 'string') return null;
         return { data: r.data, size: typeof r.size === 'number' ? r.size : Buffer.byteLength(r.data, 'utf8') };
+      } catch {
+        return null;
+      }
+    },
+
+    async readFileB64(path) {
+      try {
+        const res = await client.request({ t: 'req', op: 'readB64', path });
+        const data = (res as { dataB64?: unknown }).dataB64;
+        return typeof data === 'string' ? data : null;
       } catch {
         return null;
       }

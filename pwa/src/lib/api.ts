@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountUsage, FleetHealth, FleetSession, SlashCommand } from '../../../shared/api';
+import type { AccountUsage, FleetHealth, FleetSession, SlashCommand, StagedClip } from '../../../shared/api';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -33,6 +33,28 @@ const SEND_ERROR_TEXT: Record<string, string> = {
 };
 
 export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
+
+/** Upload failures the server names by code. Same reason as SEND_ERROR_TEXT,
+ *  sharper consequence: a failed chip's only affordance is retry, and for a 413
+ *  retry can never succeed — so the chip has to say what went wrong, in words
+ *  that imply what to do instead. */
+const UPLOAD_ERROR_TEXT: Record<string, string> = {
+  'too-large': 'That image is too large — 12 MB is the limit.',
+  'unsupported-type': "Can't attach that — PNG, JPEG or WebP only.",
+  'bad-request': "That upload didn't arrive — try attaching it again.",
+  'unknown-session': 'That session is not running.',
+  'bad-session-id': 'That session is not running.',
+};
+
+export const uploadErrorText = (code: string): string => UPLOAD_ERROR_TEXT[code] ?? code;
+
+/** Origin-qualified on purpose: MessageBubble's `absolute()` turns a bare
+ *  `/api/...` into `https:///api/...` (empty host), so a root-relative href
+ *  would make every thumbnail tap dead. `/api/` is in navigateFallbackDenylist,
+ *  so the SPA shell does not hijack it. */
+export const clipUrl = (id: string, name: string): string =>
+  new URL(`/api/sessions/${encodeURIComponent(id)}/clip/${encodeURIComponent(name)}`,
+    location.origin).href;
 
 /** Human-readable failure text for a caught error: lifecycle routes fail as
  *  502 { stderr } (ccd's own words) — prefer that over the generic message. */
@@ -91,17 +113,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     ensure: (id: string) => post(`${sid(id)}/ensure`),
     stop: (id: string) => post(`${sid(id)}/stop`),
     swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
-    prompt: (id: string, text: string, replaceDraft?: boolean) =>
-      post(`${sid(id)}/prompt`, replaceDraft === undefined ? { text } : { text, replaceDraft }),
+    prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[] } = {}) =>
+      post(`${sid(id)}/prompt`, {
+        text,
+        ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
+        ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+      }),
     answerDialog: (id: string, dialogId: string, optionIndex: number) =>
       post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
     interrupt: (id: string) => post(`${sid(id)}/interrupt`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
-    upload: async (id: string, file: File): Promise<void> => {
+    upload: async (id: string, file: File): Promise<StagedClip> => {
       const form = new FormData();
       form.append('file', file, file.name);
-      await request(`${sid(id)}/upload`, { method: 'POST', body: form });
+      const res = await request(`${sid(id)}/upload`, { method: 'POST', body: form });
+      return ((await res.json()) as { clip: StagedClip }).clip;
     },
   };
 }

@@ -19,12 +19,22 @@ import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/sen
 import { readRegistry } from './registry.js';
 import { ccd, listProjects } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
-import { saveUploadAndClip } from './clip.js';
+import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
+
+/** Post-downscale ceiling for one attachment. */
+const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+/** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
+const MAX_ATTACHMENTS = 4;
+
+/** Content-Type for the clip route, keyed by the (real) extension `clipName` wrote. */
+const CLIP_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+};
 
 export interface Deps {
   cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
@@ -212,11 +222,32 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown };
-    if (typeof body.text !== 'string' || body.text.length === 0) {
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown };
+    const raw = Array.isArray(body.attachments) ? body.attachments : [];
+    if (raw.length > MAX_ATTACHMENTS) {
+      return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+    }
+    const attachments: string[] = [];
+    for (const a of raw) {
+      if (typeof a !== 'string') return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      const name = a.slice(a.lastIndexOf('/') + 1);
+      if (!CLIP_NAME_RE.test(name)) {
+        return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      }
+      let resolved: string;
+      try {
+        resolved = clipPath(deps.cfg.clipsDir, id, name);
+      } catch {
+        return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      }
+      // The client must name the file that staging returned, in THIS session.
+      if (resolved !== a) return reply.code(400).send({ ok: false, error: 'bad-attachment' });
+      attachments.push(resolved);
+    }
+    if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true });
+    const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true, attachments });
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -281,10 +312,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcd(reply, ['stop', originalWrapper, rec.project]);
   });
 
-  // Image upload: save under uploadsDir, then `ccd clip` moves it into
-  // ~/.cc-clips/<id>/ and types its path into the session's prompt.
+  // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.
+  // Nothing is typed into the session — the prompt route injects it at send.
   app.post('/api/sessions/:id/upload', async (req, reply) => {
     const { id } = req.params as { id: string };
+    // Both gates run BEFORE req.file(). Replying without consuming the multipart
+    // body can cost the client the JSON response, so drain first — same reason
+    // the 415 path below calls part.file.resume().
+    if (!isSafeSessionId(id)) {
+      req.raw.resume();
+      return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    }
+    if (!(await knownId(id))) {
+      req.raw.resume();
+      return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    }
     const part = await req.file();
     if (!part) return reply.code(400).send({ ok: false, error: 'bad-request' });
     const m = /\.(png|jpe?g|webp)$/i.exec(part.filename ?? '');
@@ -293,8 +335,36 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(415).send({ ok: false, error: 'unsupported-type' });
     }
     const data = await part.toBuffer();
-    const res = await saveUploadAndClip(deps.io, deps.run, deps.cfg, id, data, m[1]!.toLowerCase());
-    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
+    if (data.byteLength > MAX_UPLOAD_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'too-large' });
+    }
+    const clip = await stageUpload(deps.io, deps.cfg, id, data, m[1]!.toLowerCase());
+    return { ok: true, clip };
+  });
+
+  // Thumbnails for sent messages. Names are unique, so the bytes behind one can
+  // never change — hence `immutable`.
+  app.get('/api/sessions/:id/clip/:name', async (req, reply) => {
+    const { id, name } = req.params as { id: string; name: string };
+    if (!isSafeSessionId(id) || !CLIP_NAME_RE.test(name)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // `ccd stop` leaves the registry entry, so a stopped session's thumbnails
+    // still resolve.
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    let file: string;
+    try {
+      file = clipPath(deps.cfg.clipsDir, id, name);
+    } catch {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const b64 = await deps.io.readFileB64(file);
+    if (b64 === null) return reply.code(404).send({ ok: false, error: 'not-found' });
+    const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+    return reply
+      .type(CLIP_MIME[ext] ?? 'application/octet-stream')
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .send(Buffer.from(b64, 'base64'));
   });
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {

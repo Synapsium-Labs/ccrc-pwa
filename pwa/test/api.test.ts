@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, createApi } from '../src/lib/api';
+import { ApiError, clipUrl, createApi } from '../src/lib/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -12,7 +12,7 @@ describe('api client', () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
-    await api.prompt('x', 'ship it', true);
+    await api.prompt('x', 'ship it', { replaceDraft: true });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
@@ -46,5 +46,30 @@ describe('api client', () => {
     const apiErr = err as ApiError;
     expect(apiErr.status).toBe(409);
     expect(apiErr.body).toEqual(draftBody);
+  });
+});
+
+describe('attachments', () => {
+  it('returns where an upload landed', async () => {
+    const clip = { path: '/home/u/.cc-clips/s/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, clip }), { status: 200 }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.upload('s', new File(['x'], 'a.png', { type: 'image/png' }))).resolves.toEqual(clip);
+  });
+
+  it('posts attachments alongside the text', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.prompt('s', 'hi', { attachments: ['/home/u/.cc-clips/s/clip-1-a1b2.png'] });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      text: 'hi', attachments: ['/home/u/.cc-clips/s/clip-1-a1b2.png'],
+    });
+  });
+
+  it('builds an origin-qualified clip URL — a bare path breaks openExternal', () => {
+    expect(clipUrl('claude2-Proj', 'clip-1-a1b2.png'))
+      .toBe(`${location.origin}/api/sessions/claude2-Proj/clip/clip-1-a1b2.png`);
   });
 });

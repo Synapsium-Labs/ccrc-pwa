@@ -1,58 +1,50 @@
-// AttachButton — the composer's "+" picker: a ghost button backed by a hidden
-// <input type="file" accept="image/*">. The pipeline it feeds (downscale,
-// upload, `ccd clip` typing the path into the prompt) lives in useAttachImage,
-// shared with pasting a screenshot straight into the composer.
+// AttachButton — the composer's "+" picker: a stateless trigger backed by a
+// hidden <input type="file" accept="image/*" multiple>. It only hands back
+// whatever the user picked; the downscale/upload/preview pipeline that used
+// to live here now lives in useStagedImages, shared with paste and
+// drag-and-drop so all three doors hand the whole batch to `add()` at once.
 import { useRef } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { useAttachImage, downscaleImage } from './useAttachImage';
 import './chat.css';
 
-// Re-exported so the canvas downscale keeps its original import path.
-export { downscaleImage };
-
 export interface AttachButtonProps {
-  /** Session id the image lands in. */
-  id: string;
+  /** Every file the user picked, handed over in one batch — never call this
+   *  once per file; the composer's `add()` must see the whole selection. */
+  onPick: (files: File[]) => void;
   /** Dead session: the whole composer is read-only. */
   disabled?: boolean;
-  /** Injectable for tests; defaults to the real canvas downscale. */
-  downscale?: (file: File) => Promise<Blob>;
 }
 
-export function AttachButton({
-  id,
-  disabled = false,
-  downscale = downscaleImage,
-}: AttachButtonProps): ReactNode {
+export function AttachButton({ onPick, disabled = false }: AttachButtonProps): ReactNode {
   const input = useRef<HTMLInputElement>(null);
-  const { busy, attach } = useAttachImage(id, downscale);
 
-  const onPick = (e: ChangeEvent<HTMLInputElement>): void => {
-    const file = e.target.files?.[0] ?? null;
-    e.target.value = ''; // re-picking the same file must fire change again
-    if (file) void attach(file);
+  const onChange = (e: ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ''; // re-picking the same file(s) must fire change again
+    if (files.length > 0) onPick(files);
   };
 
   return (
     <>
       {/* No `capture` attribute: it forces the camera, and the main lane here
-          is picking an existing screenshot from the gallery — the picker still
-          offers the camera on phones. */}
+          is picking existing screenshots from the gallery — the picker still
+          offers the camera on phones. `multiple` lets one pick cover several
+          images up to the tray's own cap. */}
       <input
         ref={input}
         className="attach-input"
         type="file"
         accept="image/*"
+        multiple
         tabIndex={-1}
         aria-hidden="true"
-        onChange={onPick}
+        onChange={onChange}
       />
       <button
         type="button"
         className="attach-btn"
         aria-label="Attach an image"
-        aria-busy={busy || undefined}
-        disabled={disabled || busy}
+        disabled={disabled}
         onClick={() => input.current?.click()}
       >
         <span aria-hidden="true">+</span>

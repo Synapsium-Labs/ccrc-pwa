@@ -157,6 +157,11 @@
   --safe-top:    env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
+  /* Live composer height, published by SessionScreen. The 0px default is
+     load-bearing: an unset var() inside calc() invalidates the whole
+     declaration, which would cost the fleet screen its toast offset entirely. */
+  --composer-h: 0px;
+
   --r-sm:   6px;    /* inline code, keycaps, badges */
   --r-md:   10px;   /* tool cards, buttons, wells */
   --r-lg:   16px;   /* session cards, chat bubbles */

@@ -4,7 +4,7 @@
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
 // DialogSheet and the TerminalDrawer mount at the bottom.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
@@ -64,12 +64,30 @@ export function SessionScreen({
   const [swapOpen, setSwapOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
   const [picker, setPicker] = useState<'model' | 'effort' | null>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
     useStore.getState().connect();
     return () => useStore.getState().disconnect();
   }, [useStore]);
+
+  // Published on :root, not on .chat — ToastHost is not inside this subtree, and
+  // custom properties only inherit downward. Cleared on unmount so the fleet
+  // screen keeps the plain offset.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      document.documentElement.style.setProperty(
+        '--composer-h', `${Math.round(entry!.contentRect.height)}px`);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty('--composer-h');
+    };
+  }, []);
 
   // id is `${wrapper}:${project}` — the header's identity before /ws/fleet lands.
   const wrapperFromId = id.split(':', 1)[0] ?? id;
@@ -208,6 +226,7 @@ export function SessionScreen({
           </div>
         ) : (
           <ChatList
+            id={id}
             events={events}
             pending={pending}
             busy={effectiveStatus === 'busy'}
@@ -221,14 +240,20 @@ export function SessionScreen({
           directly above the prompt you're about to type into. */}
       <TaskStrip tasks={tasks} />
 
-      <Composer
-        onSend={(text, replaceDraft) => void useStore.getState().send(text, replaceDraft)}
-        pending={pending}
-        id={id}
-        disabled={dead}
-        placeholder={dead ? 'Restart the session to send' : `Message ${project}`}
-        onDiscard={(key) => useStore.getState().discard(key)}
-      />
+      {/* Plain measuring shell so ToastHost's --composer-h offset has something
+          to observe — Composer.tsx itself carries no ref to forward. */}
+      <div ref={composerRef} className="composer-measure">
+        <Composer
+          // send/resolve take the same opts shape the store does, so both cross
+          // straight through — attachments included.
+          onSend={useStore.getState().send}
+          pending={pending}
+          id={id}
+          disabled={dead}
+          placeholder={dead ? 'Restart the session to send' : `Message ${project}`}
+          onResolve={useStore.getState().resolve}
+        />
+      </div>
 
       <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} />
       <PickSheet

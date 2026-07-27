@@ -94,3 +94,64 @@ export type SessionStreamMsg =
   | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
   | { type: 'notice'; message: string };
+
+/** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
+ *  server reports no dimensions — it has no image decoder, and never will. */
+export interface StagedClip { path: string; name: string; bytes: number }
+
+/**
+ * A clip path anywhere in a string: `…/.cc-clips/<session>/clip-<stem>.<ext>`.
+ * Matched by SHAPE, never by touching the filesystem, so it works client-side.
+ * Exported WITHOUT the `g` flag to avoid stateful `lastIndex` — a g-flagged
+ * module-scope regex returns alternating true/false on successive `.test()` calls.
+ * Internal consumers build their own `new RegExp(CLIP_PATH_RE.source, 'g')`.
+ */
+export const CLIP_PATH_RE =
+  /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/;
+
+/** Attachment paths first, each on its own line, then the user's text. Paths
+ *  lead so the transcript reads image-above-caption. */
+export function composePrompt(text: string, attachments: readonly string[]): string {
+  return [...attachments, text].filter((part) => part !== '').join('\n');
+}
+
+/**
+ * Inverse of composePrompt, for rendering. Pulls every clip path out wherever it
+ * sits — own line, leading, trailing or mid-line — because `ccd clip` types the
+ * path with no Enter, so the user's prose lands on either side of it. Paths come
+ * back in document order and deduplicated; the prose has the holes closed up.
+ *
+ * Whitespace is touched on the lines a path came OUT of and nowhere else. An
+ * earlier revision collapsed space runs on every line, and MessageBubble runs
+ * this over every user turn into a `white-space: pre-wrap` bubble — so every
+ * pasted code block, stack trace, log line and aligned table in the entire
+ * history rendered flattened, attachment or not.
+ */
+export function splitClipPaths(text: string): { paths: string[]; rest: string } {
+  const paths: string[] = [];
+
+  const cleanedLines = text.split('\n').map((line) => {
+    let hit = false;
+    const stripped = line.replace(new RegExp(CLIP_PATH_RE.source, 'g'), (match) => {
+      hit = true;
+      if (!paths.includes(match)) paths.push(match);
+      return '';
+    });
+    // No path left this line: hand it back byte-identical, indentation and all.
+    if (!hit) return line;
+    // A path DID leave a hole here — close it up. `ccd clip` types the path with
+    // a trailing space, and pulling one out mid-line would leave a double space.
+    const cleaned = stripped.replace(/[^\S\n]+/g, ' ').trim();
+    // Non-empty before, empty now: the line held only a path. Drop it entirely
+    // rather than leave a blank that merges nothing and separates nothing.
+    return cleaned === '' ? null : cleaned;
+  });
+
+  const kept = cleanedLines.filter((line): line is string => line !== null);
+  // Trim by LINE, not by character: a `.trim()` over the joined result would eat
+  // the indentation of a message that opens on an indented line.
+  while (kept.length > 0 && kept[0]!.trim() === '') kept.shift();
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === '') kept.pop();
+
+  return { paths, rest: kept.join('\n') };
+}

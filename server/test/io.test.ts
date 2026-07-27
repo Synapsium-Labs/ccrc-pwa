@@ -39,6 +39,17 @@ describe('localIO.readFileFrom', () => {
   });
 });
 
+describe('localIO.readFileB64', () => {
+  it('reads a binary file back as base64, and null when missing', async () => {
+    const dir = mktempDir();
+    const file = path.join(dir, 'clip.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    writeFileSync(file, bytes);
+    expect(await localIO.readFileB64(file)).toBe(bytes.toString('base64'));
+    expect(await localIO.readFileB64(path.join(dir, 'nope.png'))).toBeNull();
+  });
+});
+
 describe('localIO.readdir', () => {
   it('lists entry names, null when missing/not a directory', async () => {
     const dir = mktempDir();

@@ -9,7 +9,8 @@ import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
-import type { PendingSend } from '../stores/session';
+import { clipUrl } from '../lib/api';
+import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
@@ -106,20 +107,49 @@ function WorkingIndicator(): ReactNode {
   );
 }
 
+/** Optimistic-send thumbnails: rendered straight from the object URL the
+ *  attach tray already created, so chip → pending never flickers empty
+ *  waiting on a server round trip. Falls back to `clipUrl` if a pending ever
+ *  arrives without one (e.g. rehydrated across a reload, where blob URLs
+ *  don't survive). */
+function PendingClipThumbs({ id, attachments }: { id: string; attachments: PendingAttachment[] }): ReactNode {
+  return (
+    <div className="msg-attach" data-count={Math.min(attachments.length, 2)}>
+      {attachments.map((a) => {
+        const name = a.path.slice(a.path.lastIndexOf('/') + 1);
+        return (
+          <img
+            key={a.path}
+            src={a.previewUrl ?? clipUrl(id, name)}
+            alt={name}
+            className="msg-attach-img"
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 /** Optimistic send bubble: sending `◌` → (confirmed events replace it) →
  *  failed red `!` with the error and Retry/Discard. */
 function PendingBubble({
+  id,
   send,
   onRetry,
   onDiscard,
 }: {
+  id: string;
   send: PendingSend;
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
 }): ReactNode {
+  const attachments = send.attachments;
   if (send.state === 'sending') {
     return (
       <>
+        {attachments && attachments.length > 0 && (
+          <PendingClipThumbs id={id} attachments={attachments} />
+        )}
         <div className="msg-user">{send.text}</div>
         <p className="msg-receipt">
           <span aria-hidden="true">◌</span> sending
@@ -129,6 +159,9 @@ function PendingBubble({
   }
   return (
     <>
+      {attachments && attachments.length > 0 && (
+        <PendingClipThumbs id={id} attachments={attachments} />
+      )}
       <div className="msg-user msg-user--failed">{send.text}</div>
       <p className="msg-receipt msg-receipt--failed">
         <span aria-hidden="true">!</span> not sent
@@ -150,10 +183,13 @@ function PendingBubble({
 
 function ChatItemView({
   item,
+  id,
   onRetry,
   onDiscard,
 }: {
   item: ChatItem;
+  /** Session id — threaded down to clip thumbnails (`clipUrl(id, name)`). */
+  id: string;
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
 }): ReactNode {
@@ -161,17 +197,19 @@ function ChatItemView({
     case 'divider':
       return <p className="ts-divider">{item.label}</p>;
     case 'message':
-      return <MessageBubble event={item.event} streaming={item.streaming} />;
+      return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
       return <ToolCard use={item.use} result={item.result} />;
     case 'pending':
-      return <PendingBubble send={item.send} onRetry={onRetry} onDiscard={onDiscard} />;
+      return <PendingBubble id={id} send={item.send} onRetry={onRetry} onDiscard={onDiscard} />;
     case 'working':
       return <WorkingIndicator />;
   }
 }
 
 export interface ChatListProps {
+  /** Session id — clip thumbnails resolve against `clipUrl(id, name)`. */
+  id: string;
   events: ChatEvent[];
   pending: PendingSend[];
   /** Session is mid-turn — the last assistant bubble wears the caret. */
@@ -183,6 +221,7 @@ export interface ChatListProps {
 /** Plain-list renderer — the virtual list's item model without the viewport
  *  machinery. Used directly by unit tests (Virtuoso can't measure in jsdom). */
 export function ChatListInner({
+  id,
   events,
   pending,
   busy = false,
@@ -194,7 +233,7 @@ export function ChatListInner({
     <div className="chat-inner">
       {items.map((item) => (
         <div key={item.key} className="chat-item">
-          <ChatItemView item={item} onRetry={onRetry} onDiscard={onDiscard} />
+          <ChatItemView item={item} id={id} onRetry={onRetry} onDiscard={onDiscard} />
         </div>
       ))}
     </div>
@@ -202,6 +241,7 @@ export function ChatListInner({
 }
 
 export function ChatList({
+  id,
   events,
   pending,
   busy = false,
@@ -227,7 +267,7 @@ export function ChatList({
           if (!item) return null;
           return (
             <div className="chat-item">
-              <ChatItemView item={item} onRetry={onRetry} onDiscard={onDiscard} />
+              <ChatItemView item={item} id={id} onRetry={onRetry} onDiscard={onDiscard} />
             </div>
           );
         }}

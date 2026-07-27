@@ -1,6 +1,7 @@
 import type { Tmux } from '../exec.js';
 import { hasMenu, parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
+import { composePrompt } from '../../../shared/api.js';
 
 export interface SendDeps { tmux: Tmux; queue: KeyedQueue; sleep?: (ms: number) => Promise<void> }
 
@@ -28,7 +29,29 @@ const ECHO_TRIES = 12;
 const ECHO_NEEDLE = 24;
 
 const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
-const DIM_SPAN = /\x1b\[2m[^\x1b]*\x1b\[0m/g;  // a dim `\e[2m…\e[0m` run = ghost/placeholder text
+// A dim `\e[2m…\e[0m` run = ghost/placeholder text. Real captures interleave
+// OTHER SGR codes inside the run (e.g. Claude Code's queue hint renders as
+// `\e[2m\e[39mPress up to edit queued messages\e[0m` — a colour reset sits
+// right after the dim-on code), so `[^\x1b]*` alone can't span it: the match
+// fails, the hint is never stripped, and draftOf reads it as a real draft —
+// blocking the NEXT send with draft-present for a message that never landed.
+// Allow interleaved `\e[...m` codes inside the span, non-greedily so it can't
+// swallow past the nearest reset into real trailing content.
+//
+// The terminator itself must accept ANY reset-family code, not just the bare
+// `\e[0m`: tmux 3.4 normalises a dim-off (`\e[22m`) immediately followed by
+// another attribute turning on into a COMBINED code like `\e[0;1m` — verified
+// live (`\e[2mghost\e[22m\e[1mBOLD REAL\e[0m` typed into a real tmux pane
+// captures back as `\e[2mghost\e[0;1mBOLD REAL\e[0m`). A terminator anchored
+// on the literal `\e[0m` alone doesn't match `\e[0;1m`, but the OLD
+// interleaved alternative (`\x1b\[[0-9;]*m`, unconditionally) DID — so the
+// non-greedy scan swallowed `\e[0;1m` as "just another interleaved code" and
+// kept consuming real text ("BOLD REAL") looking for the next bare `\e[0m`,
+// destroying it. The interleaved alternative below excludes any code that
+// starts with `0` (a reset, bare or combined) via a negative lookahead, so a
+// reset — combined or not — always ends the span instead of being absorbed
+// by it, and the terminator itself accepts the combined form.
+const DIM_SPAN = /\x1b\[2m(?:\x1b\[(?!0[;m])[0-9;]*m|[^\x1b])*?\x1b\[0[0-9;]*m/g;
 
 /**
  * Text the user actually typed into the live input box, trimmed; '' when empty.
@@ -43,28 +66,40 @@ const DIM_SPAN = /\x1b\[2m[^\x1b]*\x1b\[0m/g;  // a dim `\e[2m…\e[0m` run = gh
  *    typing replaces it), so strip dim spans before reading the box — otherwise
  *    every send into a session showing a suggestion fails draft-clear-failed.
  */
-const draftOf = (ansiPane: string): string => {
+export const draftOf = (ansiPane: string): string => {
   const boxLine = ansiPane.split('\n').filter((l) => l.replace(SGR, '').startsWith('❯')).at(-1);
   if (boxLine === undefined) return '';
   return boxLine.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim();
 };
 
 /**
- * Did the turn actually leave the input box? An emptied box is the only proof
- * Enter was accepted — a message sent to a BUSY session empties the box too
- * (Claude Code queues it), and a pane whose box has stopped rendering counts as
- * gone rather than stuck.
+ * Did the turn actually leave the input box? Proof is that OUR TEXT is gone —
+ * not that the box is empty. Claude Code 2.1.220, when busy, does not empty
+ * the box on Enter: it queues the message and swaps the row for a hint
+ * ("Press up to edit queued messages"), which is not '' and never becomes ''
+ * while the hint is up. Judging success by emptiness alone burned both Enter
+ * attempts on every busy-session send and reported a message that WAS
+ * delivered as `enter-ignored`.
+ *
+ * `needle` is the same prefix the echo check proved landed in the box, so
+ * "no longer starts with needle" means our text left — however the row now
+ * reads: today's queue hint, the dim ghost-suggestion `draftOf` already
+ * strips, or whatever chrome a future Claude Code version puts there. When
+ * `needle` is '' (a prompt with no non-blank line), there is nothing to prove
+ * left, so fall back to the emptiness check exactly as before.
  */
 async function submitted(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
+  needle: string,
 ): Promise<boolean> {
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return false;
-    if (draftOf(pane) === '') return true;
+    const draft = draftOf(pane);
+    if (needle === '' ? draft === '' : !draft.startsWith(needle)) return true;
   }
   return false;
 }
@@ -79,7 +114,7 @@ export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { replaceDraft?: boolean } = {},
+  opts: { replaceDraft?: boolean; attachments?: readonly string[] } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   return d.queue.run(id, async (): Promise<SendResult> => {
@@ -105,8 +140,14 @@ export function sendPrompt(
       if (left) return { ok: false, error: 'draft-clear-failed', draft: left };
     }
 
+    // Attachment paths go first, each on its own line, then the user's text —
+    // one atomic turn, so the transcript reads image-above-caption and a send
+    // that fails to verify can't strand a bare path in the box.
+    const attachments = opts.attachments ?? [];
+    const composed = composePrompt(text, attachments);
+
     // Alt+Enter is newline inside the Claude Code input box.
-    const parts = text.split('\n');
+    const parts = composed.split('\n');
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await d.tmux.sendKey(id, 'M-Enter');
       await d.tmux.sendLiteral(id, parts[i]!);
@@ -119,14 +160,57 @@ export function sendPrompt(
     // so it stayed there until someone hit Enter by hand. A slow render is not
     // a failed send. The needle stays short and comes from the FIRST line, which
     // the box never wraps (it starts at column 2), so wrapping can't split it.
-    const needle = parts.find((p) => p.trim().length > 0)?.slice(0, ECHO_NEEDLE) ?? '';
+    // Trimmed: `draftOf` trims the box row, and a trimmed line under 24 chars
+    // can't end in whitespace, so an untrimmed needle would false-negative on
+    // any short first line ending in a space/tab (a markdown hard break, e.g.).
+    const needle = (parts.find((p) => p.trim().length > 0) ?? '').trim().slice(0, ECHO_NEEDLE);
     let after: string | null = null;
-    for (let i = 0; i < ECHO_TRIES; i++) {
-      await sleep(ECHO_POLL_MS);
-      after = await d.tmux.capture(id);
-      if (after !== null && (needle === '' || after.includes(needle))) break;
-      if (i === ECHO_TRIES - 1) {
-        return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
+
+    if (attachments.length > 0) {
+      // Attachment prompts all begin with the same ~24 chars of clips path
+      // (e.g. /home/you/.cc-cli…), so the whole-pane check below would
+      // happily match an identical path left in the scrollback by an earlier
+      // turn. Prove the echo against the INPUT BOX instead: it was verified
+      // empty a few lines up, so a needle on the box row can only be what we
+      // just typed. Ordinary text (the branch below) has no such collision
+      // risk and keeps the battle-tested whole-pane check.
+      let echoed = needle === '';
+      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
+        await sleep(ECHO_POLL_MS);
+        const ansi = await d.tmux.captureAnsi(id);
+        if (ansi === null) continue;
+        if (draftOf(ansi).startsWith(needle)) echoed = true;
+      }
+      if (!echoed) {
+        after ??= await d.tmux.capture(id);
+        // A failed send must not stand a bare clip path in the live box — but
+        // C-u can fail just like the replaceDraft clear above can: re-capture
+        // and report what's left rather than assuming it worked.
+        //
+        // Once PER LINE: C-u is kill-to-line-start, and an attachment prompt is
+        // always ≥2 lines, so a single press would leave every path above the
+        // cursor in the box — and the next send would come back `draft-present`
+        // carrying exactly what this feature exists to keep out of there. On an
+        // already-empty box C-u is a no-op, so the extra presses are free.
+        for (let i = 0; i < parts.length; i++) await d.tmux.sendKey(id, 'C-u');
+        await sleep(150);
+        const clearedAnsi = await d.tmux.captureAnsi(id);
+        const left = clearedAnsi === null ? '' : draftOf(clearedAnsi);
+        return {
+          ok: false,
+          error: 'verify-failed',
+          pane: (after ?? '').slice(-PANE_TAIL),
+          ...(left ? { draft: left } : {}),
+        };
+      }
+    } else {
+      for (let i = 0; i < ECHO_TRIES; i++) {
+        await sleep(ECHO_POLL_MS);
+        after = await d.tmux.capture(id);
+        if (after !== null && (needle === '' || after.includes(needle))) break;
+        if (i === ECHO_TRIES - 1) {
+          return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
+        }
       }
     }
 
@@ -135,13 +219,14 @@ export function sendPrompt(
     // mid-render frame — and the text just sits there. Returning ok:true on the
     // keystroke alone reported success for messages that were never sent: the
     // PWA's optimistic bubble then expired on its own timer and the message
-    // vanished with no error anywhere. So: press, confirm the box emptied,
-    // press once more if it didn't (that second Enter is what submits after an
-    // overlay consumed the first), and only then claim it landed.
+    // vanished with no error anywhere. So: press, confirm OUR TEXT left the box
+    // (see `submitted`), press once more if it didn't (that second Enter is
+    // what submits after an overlay consumed the first), and only then claim
+    // it landed.
     await d.tmux.sendKey(id, 'Enter');
-    if (await submitted(d, id, sleep)) return { ok: true };
+    if (await submitted(d, id, sleep, needle)) return { ok: true };
     await d.tmux.sendKey(id, 'Enter');
-    if (await submitted(d, id, sleep)) return { ok: true };
+    if (await submitted(d, id, sleep, needle)) return { ok: true };
     const stuck = await d.tmux.capture(id);
     return { ok: false, error: 'enter-ignored', draft: draftOf(await d.tmux.captureAnsi(id) ?? ''), pane: (stuck ?? '').slice(-PANE_TAIL) };
   });

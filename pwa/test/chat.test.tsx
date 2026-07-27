@@ -37,6 +37,7 @@ afterEach(() => {
 
 const TS = '2026-07-20T10:00:00.000Z';
 const TS_LATER = '2026-07-20T10:00:12.400Z';
+const NOW = TS;
 
 const user = (uuid: string, text: string): ChatEvent => ({ kind: 'user', uuid, ts: TS, text });
 const assistant = (uuid: string, text: string): ChatEvent =>
@@ -72,6 +73,7 @@ describe('ChatListInner', () => {
   it('renders assistant markdown — bold lands as <strong>', () => {
     render(
       <ChatListInner
+        id="s"
         events={[user('u1', 'run the tests'), assistant('a1', 'A **bold** move — all green.')]}
         pending={[]}
       />,
@@ -85,6 +87,7 @@ describe('ChatListInner', () => {
   it('merges tool_use + tool_result into one ToolCard that expands on tap', () => {
     render(
       <ChatListInner
+        id="s"
         events={[toolUse('t1', 'tool-1'), toolResult('tool-1', 'tests: 41 passed')]}
         pending={[]}
       />,
@@ -102,6 +105,7 @@ describe('ChatListInner', () => {
     const onRetry = vi.fn();
     render(
       <ChatListInner
+        id="s"
         events={[]}
         pending={[{ key: 'p1', text: 'hello there', state: 'failed', error: 'no pane' }]}
         onRetry={onRetry}
@@ -118,6 +122,7 @@ describe('ChatListInner', () => {
   it('renders an in-flight pending send with the sending tick', () => {
     render(
       <ChatListInner
+        id="s"
         events={[]}
         pending={[{ key: 'p2', text: 'on its way', state: 'sending' }]}
       />,
@@ -129,15 +134,54 @@ describe('ChatListInner', () => {
 
   it('shows the working indicator when busy — even when the last item is the user turn', () => {
     const { rerender } = render(
-      <ChatListInner events={[user('u1', 'run the tests')]} pending={[]} busy={false} />,
+      <ChatListInner id="s" events={[user('u1', 'run the tests')]} pending={[]} busy={false} />,
     );
     // Not working when idle.
     expect(screen.queryByRole('status', { name: /working/i })).not.toBeInTheDocument();
 
     // Busy with the user's message as the tail (no assistant bubble to wear the
     // caret) — the explicit indicator must still appear.
-    rerender(<ChatListInner events={[user('u1', 'run the tests')]} pending={[]} busy />);
+    rerender(<ChatListInner id="s" events={[user('u1', 'run the tests')]} pending={[]} busy />);
     expect(screen.getByRole('status', { name: /working/i })).toBeInTheDocument();
+  });
+
+  it('renders a sent clip path as the image, not the path', () => {
+    const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+    render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+      { kind: 'user', uuid: 'u1', ts: NOW, text: `${P}\nwhat is this` },
+    ]} />);
+
+    const img = screen.getByRole('img', { name: 'clip-20260726-150340-a1b2.png' });
+    expect(img).toHaveAttribute('src', `${location.origin}/api/sessions/claude2-Proj/clip/clip-20260726-150340-a1b2.png`);
+    expect(screen.getByText('what is this')).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(P))).not.toBeInTheDocument();
+  });
+
+  it('falls back to the filename when the clip is gone from disk', () => {
+    const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+    render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+      { kind: 'user', uuid: 'u1', ts: NOW, text: P },
+    ]} />);
+    fireEvent.error(screen.getByRole('img'));
+    expect(screen.getByText('clip-20260726-150340-a1b2.png')).toBeInTheDocument();
+  });
+
+  it('leaves a message with no clip path alone', () => {
+    render(<ChatListInner id="s" pending={[]} events={[
+      { kind: 'user', uuid: 'u1', ts: NOW, text: 'just words' },
+    ]} />);
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+
+  it('shows the same thumbnails on the optimistic bubble, from the object URL', () => {
+    // chip -> pending -> confirmed must never flicker empty, so the pending bubble
+    // renders the blob it inherited rather than waiting on a server round trip.
+    render(<ChatListInner id="claude2-Proj" events={[]} pending={[{
+      key: 'p1', text: 'what is this', state: 'sending',
+      attachments: [{ path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', previewUrl: 'blob:mock/1' }],
+    }]} />);
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:mock/1');
+    expect(screen.getByText('what is this')).toBeInTheDocument();
   });
 });
 

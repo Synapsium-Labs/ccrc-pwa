@@ -14,14 +14,31 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
 }
 
 /**
- * Raw fs behavior behind the read/readFrom/readdir/stat/writeB64 ops —
- * intentionally mirrors `server/src/io.ts`'s `localIO` byte-for-byte so a
- * remote fleet behaves identically to a local one. Callers (server.ts) are
- * responsible for running paths through whitelist.checkPath first.
+ * Raw fs behavior behind the read/readFrom/readB64/readdir/stat/writeB64
+ * ops — intentionally mirrors `server/src/io.ts`'s `localIO` byte-for-byte
+ * so a remote fleet behaves identically to a local one. Callers (server.ts)
+ * are responsible for running paths through whitelist.checkPath first.
  */
 
 export async function readWhole(p: string): Promise<string | null> {
   try { return await readFile(p, 'utf8'); } catch { return null; }
+}
+
+/** Same cap as the server's post-downscale upload ceiling (`MAX_UPLOAD_BYTES`
+ *  in server/src/server.ts) — a clip round-trips through both, so neither
+ *  side should accept what the other would reject. */
+const MAX_READ_B64_BYTES = 12 * 1024 * 1024;
+
+/** Binary-safe read: never decodes through a string, so bytes that aren't
+ *  valid UTF-8 (e.g. a PNG header) survive byte-for-byte. `null` for
+ *  missing/unreadable/over-cap files, same never-throw contract as the
+ *  other read ops. */
+export async function readB64(p: string): Promise<string | null> {
+  try {
+    const s = await stat(p);
+    if (s.size > MAX_READ_B64_BYTES) return null;
+    return (await readFile(p)).toString('base64');
+  } catch { return null; }
 }
 
 export async function readFrom(p: string, offset: number): Promise<{ data: string; size: number } | null> {

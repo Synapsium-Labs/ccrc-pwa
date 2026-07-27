@@ -206,7 +206,7 @@ describe('session store optimistic send', () => {
 
     await store.getState().send('ship it');
 
-    expect(prompt).toHaveBeenCalledWith('s1', 'ship it', undefined);
+    expect(prompt).toHaveBeenCalledWith('s1', 'ship it', { replaceDraft: undefined });
     expect(store.getState().pending).toEqual([
       expect.objectContaining({ text: 'ship it', state: 'sending' }),
     ]);
@@ -268,6 +268,62 @@ describe('session store optimistic send', () => {
 
     store.getState().discard(failed.key);
     expect(store.getState().pending).toEqual([]);
+  });
+
+  // Task 12: attachments survive the whole send lifecycle — retry and
+  // draft-conflict resolution both re-dispatch the *same* pending record
+  // (same key, same attachments) instead of dropping them.
+  const ID = 's1';
+  const CLIP = { path: '/p/clip-1-a1b2.png', previewUrl: 'blob:mock/1' };
+
+  it('clears the pending when the echo arrives as paths-plus-text', async () => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore(ID, { api: { prompt } });
+    await store.getState().send('hi', { attachments: [CLIP] });
+
+    store.getState().apply({
+      type: 'events', uuid: 'u1', offset: 1,
+      events: [{ kind: 'user', uuid: 'e1', ts: TS, text: `${CLIP.path}\nhi` }],
+    });
+    expect(store.getState().pending).toHaveLength(0);
+  });
+
+  it('keeps the attachments when a failed send is retried', async () => {
+    const prompt = vi.fn().mockRejectedValueOnce(new ApiError(409, { error: 'dialog-open' }))
+      .mockResolvedValueOnce(undefined);
+    const store = createSessionStore(ID, { api: { prompt } });
+    await store.getState().send('hi', { attachments: [CLIP] });
+    const key = store.getState().pending[0]!.key;
+
+    store.getState().retry(key);
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(prompt.mock.calls[1]).toEqual([ID, 'hi', { attachments: [CLIP.path] }]); // narrowed
+  });
+
+  it('keeps the attachments when a draft conflict is resolved', async () => {
+    const prompt = vi.fn().mockRejectedValueOnce(new ApiError(409, { error: 'draft-present', draft: 'x' }))
+      .mockResolvedValueOnce(undefined);
+    const store = createSessionStore(ID, { api: { prompt } });
+    await store.getState().send('hi', { attachments: [CLIP] });
+    const key = store.getState().pending[0]!.key;
+
+    store.getState().resolve(key, 'x\nhi', { replaceDraft: true });
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(prompt.mock.calls[1]).toEqual([ID, 'x\nhi', { replaceDraft: true, attachments: [CLIP.path] }]);
+  });
+
+  // The rule is that a pending's object URLs live until it is confirmed OR
+  // explicitly abandoned. clearConfirmed and discard both honoured it; the 5s
+  // grace expiry — the echo-mismatch fallback — quietly dropped the pending and
+  // leaked up to four full-size images with it.
+  it('revokes the object URLs when a confirmed send expires without its echo', async () => {
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5 });
+    await store.getState().send('hi', { attachments: [CLIP] });
+
+    await vi.waitFor(() => expect(store.getState().pending).toHaveLength(0));
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(CLIP.previewUrl);
   });
 });
 

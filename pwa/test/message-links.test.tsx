@@ -5,7 +5,7 @@ import { MessageBubble } from '../src/session/MessageBubble';
 afterEach(cleanup);
 
 const assistant = (text: string) =>
-  render(<MessageBubble event={{ kind: 'assistant', uuid: 'a1', ts: '2026-07-21T20:00:00Z', text }} />);
+  render(<MessageBubble id="s" event={{ kind: 'assistant', uuid: 'a1', ts: '2026-07-21T20:00:00Z', text }} />);
 
 describe('MessageBubble link + image rendering', () => {
   it('renders bare URLs as external links (target=_blank, rel=noopener)', () => {
@@ -45,7 +45,7 @@ describe('MessageBubble link + image rendering', () => {
   });
 
   it('makes URLs in a user message tappable', () => {
-    render(<MessageBubble event={{ kind: 'user', uuid: 'u1', ts: '2026-07-21T20:00:00Z', text: 'check https://example.com/x' }} />);
+    render(<MessageBubble id="s" event={{ kind: 'user', uuid: 'u1', ts: '2026-07-21T20:00:00Z', text: 'check https://example.com/x' }} />);
     const a = screen.getByRole('link', { name: 'https://example.com/x' });
     expect(a).toHaveAttribute('target', '_blank');
   });

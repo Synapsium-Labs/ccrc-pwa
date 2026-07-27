@@ -22,6 +22,8 @@ import dockerfile from 'highlight.js/lib/languages/dockerfile';
 import rust from 'highlight.js/lib/languages/rust';
 import go from 'highlight.js/lib/languages/go';
 import type { ChatEvent } from '../../../shared/api';
+import { splitClipPaths } from '../../../shared/api';
+import { clipUrl } from '../lib/api';
 import './chat.css';
 
 export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'system' }>;
@@ -256,11 +258,40 @@ function CompactionCard({ text }: { text: string }): ReactNode {
   );
 }
 
+/** Sent attachments. A clip deleted off disk must degrade to its name, never
+ *  to a broken-image box. */
+function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
+  const [broken, setBroken] = useState<Set<string>>(new Set());
+  return (
+    <div className="msg-attach" data-count={Math.min(paths.length, 2)}>
+      {paths.map((p) => {
+        const name = p.slice(p.lastIndexOf('/') + 1);
+        if (broken.has(p)) return <span key={p} className="msg-attach-gone">{name}</span>;
+        const href = clipUrl(id, name);
+        return (
+          <a key={p} href={href} className="msg-img-link" onClick={(e) => openExternal(e, href)}>
+            <img
+              src={href}
+              alt={name}
+              loading="lazy"
+              className="msg-attach-img"
+              onError={() => setBroken((s) => new Set(s).add(p))}
+            />
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 export function MessageBubble({
   event,
+  id,
   streaming = false,
 }: {
   event: MessageEvent;
+  /** Session id — clip thumbnails resolve against `clipUrl(id, name)`. */
+  id: string;
   /** Last assistant turn while the session is busy — shows the block caret. */
   streaming?: boolean;
 }): ReactNode {
@@ -274,10 +305,12 @@ export function MessageBubble({
   }
 
   if (event.kind === 'user') {
+    const { paths, rest } = splitClipPaths(event.text);
     const time = timeOf(event.ts);
     return (
       <>
-        <div className="msg-user">{linkify(event.text)}</div>
+        {paths.length > 0 && <ClipThumbs id={id} paths={paths} />}
+        {rest !== '' && <div className="msg-user">{linkify(rest)}</div>}
         <p className="msg-receipt msg-receipt--ok">
           {time} <b aria-label="delivered">✓</b>
         </p>

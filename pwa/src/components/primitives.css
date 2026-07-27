@@ -263,7 +263,7 @@
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(var(--sp-6) + var(--safe-bottom));
+  bottom: calc(var(--sp-6) + var(--safe-bottom) + var(--composer-h, 0px));
   z-index: var(--z-toast);
   display: grid;
   justify-items: center;

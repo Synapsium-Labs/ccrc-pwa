@@ -223,7 +223,7 @@ describe('DialogSheet free-text reply', () => {
       expect(prompt).toHaveBeenCalledWith(
         SESSION_ID,
         'none of these — the rates table is the wrong layer',
-        undefined,
+        { replaceDraft: undefined },
       ),
     );
   });
