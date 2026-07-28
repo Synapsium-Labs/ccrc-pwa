@@ -199,3 +199,44 @@ describe('_ws_least_loaded', () => {
     expect(sh('_ws_least_loaded')).toBe('claude2');
   });
 });
+
+describe('ws-rm', () => {
+  const addOne = (): string => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    return path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+  };
+  const RM = `_ws_unsupervise() { :; };`;
+
+  it('removes the worktree, the branch and the registry entry', () => {
+    const wt = addOne();
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    const branches = execFileSync('git',
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
+      { encoding: 'utf8' });
+    expect(branches.trim()).toBe('');
+  });
+
+  it('refuses to remove a session that is not a workspace', () => {
+    sh(`_reg_set claude2-demo wrapper claude2
+        _reg_set claude2-demo project demo
+        _reg_set claude2-demo workdir ${path.join(home, 'projects', 'demo')}
+        _reg_set claude2-demo uuid abc`);
+    expect(() => sh(`${RM} cmd_ws_rm claude2-demo`)).toThrow();
+    expect(reg('claude2-demo', 'uuid')).toBe('abc');
+  });
+
+  it('refuses a dirty worktree and leaves everything in place', () => {
+    const wt = addOne();
+    fs.writeFileSync(path.join(wt, 'scratch.txt'), 'unsaved\n');
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
+  it('refuses an unknown id', () => {
+    expect(() => sh(`${RM} cmd_ws_rm nope-nothing`)).toThrow();
+  });
+});

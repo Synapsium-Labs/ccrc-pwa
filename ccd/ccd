@@ -190,6 +190,36 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   echo "workspace $id on $hw — $wt (branch $slug, from $base)"
 }
 
+cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
+  local id="${1:?usage: ccd ws-rm <id>}"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  local ws project workdir
+  ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  # The absence of a workspace field is what distinguishes a main checkout.
+  [[ -n "$ws" ]] || die "$id is not a workspace — refusing to remove a main checkout"
+  [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  local main="$PROJECTS_ROOT/$project"
+
+  # Read the branch while the worktree still exists; it may have been renamed
+  # since creation, so the slug is not a safe substitute.
+  local branch=""
+  [[ -d "$workdir" ]] && branch=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+  _ws_unsupervise "$id"
+  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+
+  if [[ -d "$workdir" ]]; then
+    # No --force: a dirty tree must stop this, not be bulldozed by it.
+    git -C "$main" worktree remove "$workdir" \
+      || die "worktree not removed (uncommitted changes?) — nothing else was touched"
+  fi
+  # No -D: an unmerged branch must survive.
+  [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null \
+    || true
+  rm -f "$REG/$id".*
+  echo "removed workspace $id"
+}
+
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
   case "$1" in
     claude)      echo "$HOME/.claude" ;;
@@ -791,6 +821,7 @@ case "${1:-}" in
   attach)    shift; cmd_attach "$@" ;;
   clip)      shift; cmd_clip "$@" ;;
   ws-add)    shift; cmd_ws_add "$@" ;;
+  ws-rm)     shift; cmd_ws_rm "$@" ;;
   *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|ws-add|ws-rm} <args>" >&2; exit 1 ;;
 esac
 fi
