@@ -67,6 +67,24 @@ describe('card title', () => {
     expect(screen.getByRole('button', { name: 'fix the C-u under-press' })).toBeInTheDocument();
   });
 
+  it('prefers the branch over the slug — spec order is name ?? branch ?? workspace ?? id', () => {
+    // Identical to workspace-first today, and diverges the moment Phase 2 lands:
+    // the PR flow renames the BRANCH ("git branch -m <proposed>", spec "Raise a
+    // PR" step 4) while `workspace` keeps the slug it was born with. Slug-first
+    // would then title the card `quiet-mesa` forever, next to a branch called
+    // something that says what the work is.
+    render(<SessionCard session={s({ project: 'alpha', workspace: 'quiet-mesa',
+                                     branch: 'fix-c-u-under-press' })}
+                        onOpen={() => {}} inGroup />);
+    expect(screen.getByRole('button', { name: 'fix-c-u-under-press' })).toBeInTheDocument();
+  });
+
+  it('falls back to the workspace slug when there is no branch yet', () => {
+    render(<SessionCard session={s({ project: 'alpha', workspace: 'quiet-mesa', branch: null })}
+                        onOpen={() => {}} inGroup />);
+    expect(screen.getByRole('button', { name: 'quiet-mesa' })).toBeInTheDocument();
+  });
+
   it('falls back to the branch when name and workspace are null', () => {
     render(<SessionCard session={s({ project: 'alpha', branch: 'ccrc/thing' })}
                         onOpen={() => {}} inGroup />);

@@ -171,8 +171,14 @@ export function SessionCard({
 
   // Standalone, the project IS the identity. Inside a group the header already
   // carries the project, so repeating it renders every sibling identical.
+  //
+  // Spec order (line 93): name ?? branch ?? workspace ?? id. Branch outranks
+  // the slug because Phase 2's PR flow renames the branch to something
+  // descriptive while `workspace` keeps the slug it was born with — slug-first
+  // would pin the card to `quiet-mesa` forever. The `id` tail keeps the rule
+  // total for legacy rows, which have no workspace.
   const title = inGroup
-    ? (session.name ?? session.workspace ?? session.branch ?? session.id)
+    ? (session.name ?? session.branch ?? session.workspace ?? session.id)
     : session.project;
 
   return (
