@@ -428,8 +428,67 @@ _ws_gc_scan() {
   done
 }
 
+_ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of origin/HEAD
+  local main="$1" branch="$2" base
+  # No origin/HEAD means there is no base to compare against, so "merged" is
+  # unprovable — and unprovable returns 1, i.e. NOT merged, i.e. do not remove.
+  # Every ambiguous case in this command resolves toward doing nothing.
+  base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) || return 1
+  git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null
+}
+
+# Acts on ONE scanned row. Prints exactly one line per row, whether it acted or
+# not: a silent decline reads as "there was nothing there".
+_ws_gc_prune_row() {   # state project slug path
+  local state="$1" project="$2" slug="$3" p="$4"
+  local main="$PROJECTS_ROOT/$project"
+  case "$state" in
+    stale-meta)
+      if git -C "$main" worktree prune 2>/dev/null; then
+        echo "  reclaimed  stale metadata for $project/$slug"
+      else
+        # Metadata, not data — worth saying, not worth failing over.
+        echo "  declined   could not prune metadata for $project/$slug"
+      fi ;;
+    dead-reg)
+      rm -f "$REG/$project-$slug".*
+      echo "  reclaimed  dead registry entry $project-$slug" ;;
+    orphan)
+      if _ws_gc_dirty "$p"; then
+        echo "  declined   $p has uncommitted changes"; return 0
+      fi
+      local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged "$main" "$branch"; then
+        # The branch would survive `worktree remove`, so nothing is lost either
+        # way — but a sweep should only reclaim what is provably finished, and
+        # someone may be mid-way through this one.
+        echo "  declined   $p is on unmerged branch $branch"; return 0
+      fi
+      if git -C "$main" worktree remove "$p" 2>/dev/null; then
+        echo "  reclaimed  removed orphan worktree $p"
+        # No -D: git refuses an unmerged branch and that refusal is wanted.
+        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null; then
+          echo "  reclaimed  deleted merged branch $branch"
+        fi
+      else
+        echo "  declined   git refused to remove $p"
+      fi ;;
+    dirty)
+      echo "  declined   $p is dirty — never removed, at any flag" ;;
+    foreign)
+      echo "  declined   $p is foreign — ccd removes only what it created" ;;
+    tracked)
+      : ;;   # a live workspace: not a finding to act on
+  esac
+}
+
 cmd_ws_gc() {   # [--prune]
-  [[ -z "${1:-}" ]] || die "usage: ccd ws-gc"
+  local prune=0
+  case "${1:-}" in
+    '')       ;;
+    --prune)  prune=1 ;;
+    *)        die "usage: ccd ws-gc [--prune]" ;;
+  esac
 
   local rows; rows=$(_ws_gc_scan)
   [[ -n "$rows" ]] || { echo "nothing to report — no worktrees found under $PROJECTS_ROOT"; return 0; }
@@ -455,6 +514,21 @@ cmd_ws_gc() {   # [--prune]
   echo
   echo "total $total across $n worktree$( (( n == 1 )) || echo s ) — what removing all of them would free."
   echo "Rows are measured independently, so they can sum to more than the total when workspaces share hardlinks."
+
+  (( prune )) || return 0
+
+  echo
+  echo "pruning:"
+  local reclaimed=0 declined=0 out
+  while IFS=$'\t' read -r state project slug bytes age p; do
+    out=$(_ws_gc_prune_row "$state" "$project" "$slug" "$p")
+    [[ -n "$out" ]] || continue
+    echo "$out"
+    reclaimed=$(( reclaimed + $(grep -c 'reclaimed' <<< "$out") ))
+    declined=$((  declined  + $(grep -c 'declined'  <<< "$out") ))
+  done <<< "$rows"
+  echo
+  echo "reclaimed $reclaimed, declined $declined"
 }
 
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
