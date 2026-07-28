@@ -92,6 +92,9 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
 _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+_ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
+  [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
+}
 
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
   case "$1" in
@@ -459,6 +462,7 @@ cmd_start() {
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
   _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
+  _ws_seed_home "$id" "$wrapper"
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   _spawn "$id" "$mode"; _reg_set "$id" started 1
   echo "started $id ($mode) — discover on claude.ai by name: $id"
