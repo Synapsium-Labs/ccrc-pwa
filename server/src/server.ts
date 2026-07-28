@@ -142,6 +142,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       .map(([wrapper, l]): AccountUsage => ({
         wrapper, five: l.five, seven: l.seven, ts: l.ts,
         fiveResetAt: l.fiveResetAt, sevenResetAt: l.sevenResetAt,
+        fiveRolledOver: l.fiveRolledOver, sevenRolledOver: l.sevenRolledOver,
       }))
       .sort((a, b) => rank(a.wrapper) - rank(b.wrapper) || (a.wrapper < b.wrapper ? -1 : 1));
     return { accounts };

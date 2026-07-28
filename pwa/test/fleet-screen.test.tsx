@@ -180,7 +180,7 @@ describe('SessionCard', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
       accounts: [
         // gpt has NO active session, yet still shows — telemetry-driven.
-        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400 },
+        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false },
       ],
     });
     render(<AccountsStrip />);
