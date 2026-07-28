@@ -72,6 +72,19 @@ export function SessionCard({
     }
   };
 
+  const [removing, setRemoving] = useState(false);
+  const removeWorkspace = async (): Promise<void> => {
+    if (removing) return;
+    setRemoving(true);
+    try {
+      await api.workspaceRemove(session.id);
+    } catch (err) {
+      toast(`Couldn't remove — ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   // Long-press on a dead card restarts; a short tap still opens the chat.
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressOrigin = useRef<{ x: number; y: number } | null>(null);
@@ -222,6 +235,21 @@ export function SessionCard({
           per-session consequence when a window crosses critical. */}
       {critical !== null && (
         <p className="card-limit-note">{critical} limit near — will move to another account</p>
+      )}
+
+      {/* No confirm dialog: ccd ws-rm refuses on a dirty tree or an unmerged
+          branch and says why, so the guard lives where the facts are rather
+          than in a prompt the user learns to dismiss. */}
+      {session.workspace !== null && (
+        <button
+          type="button"
+          className="btn-ghost card-remove"
+          aria-label="Remove workspace"
+          onClick={() => void removeWorkspace()}
+          disabled={removing}
+        >
+          {removing ? 'Removing…' : 'Remove workspace'}
+        </button>
       )}
 
       {dead && (

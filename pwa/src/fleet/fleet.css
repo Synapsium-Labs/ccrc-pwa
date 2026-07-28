@@ -263,6 +263,7 @@
   position: relative;
   z-index: 1;
 }
+.card-remove { align-self: flex-start; color: var(--ink-secondary); }
 
 .card-sub {
   display: flex;
