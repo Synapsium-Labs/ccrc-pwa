@@ -46,9 +46,16 @@ describe('card title', () => {
     expect(screen.getByRole('button', { name: 'fix the C-u under-press' })).toBeInTheDocument();
   });
 
-  it('falls back to the branch, then to main for a grouped main checkout', () => {
+  it('falls back to the branch when name and workspace are null', () => {
     render(<SessionCard session={s({ project: 'alpha', branch: 'ccrc/thing' })}
                         onOpen={() => {}} inGroup />);
     expect(screen.getByRole('button', { name: 'ccrc/thing' })).toBeInTheDocument();
+  });
+
+  it('falls back to the id for a grouped main checkout with no name, workspace, or branch', () => {
+    render(<SessionCard session={s({ project: 'alpha', id: 'claude:alpha-main',
+                                     name: null, workspace: null, branch: null })}
+                        onOpen={() => {}} inGroup />);
+    expect(screen.getByRole('button', { name: 'claude:alpha-main' })).toBeInTheDocument();
   });
 });
