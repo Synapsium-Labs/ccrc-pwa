@@ -93,7 +93,15 @@ export async function checkPath(
 /** cmd -> allowed first-argument subcommands. Anything else is `forbidden`. */
 const EXEC_WHITELIST: Record<string, readonly string[]> = {
   tmux: ['has-session', 'list-panes', 'capture-pane', 'send-keys', 'resize-window'],
-  ccd: ['start', 'enable', 'ensure', 'stop', 'swap', 'clip'],
+  // ws-add/ws-rm are the workspace lifecycle (ccd cmd_ws_add / cmd_ws_rm). In
+  // remote mode every `ccd` call the server makes crosses this list, so
+  // omitting them left both of the PWA's workspace controls answering
+  // `forbidden` on the live fleet. Not a widening in kind: `start` already
+  // creates a session, a tmux server and a systemd unit and `stop` tears all
+  // three down; ws-rm's extra reach is worktree and branch deletion, which ccd
+  // itself refuses on a dirty tree, an unmerged branch, or a session carrying
+  // no `workspace` field.
+  ccd: ['start', 'enable', 'ensure', 'stop', 'swap', 'clip', 'ws-add', 'ws-rm'],
 };
 
 /**
