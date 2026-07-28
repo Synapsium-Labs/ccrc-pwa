@@ -32,18 +32,25 @@ beforeEach(() => {
 
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-const writeLimits = (file: string, json: Record<string, number>): void =>
-  fs.writeFileSync(path.join(home, '.cc-limits', file), JSON.stringify(json));
+const writeLimits = (file: string, content: string): void =>
+  fs.writeFileSync(path.join(home, '.cc-limits', file), content);
+
+const json = (o: Record<string, number>): string => JSON.stringify(o);
+
+/** readLimits says "unknown" with null; _limit_field says it with an empty
+ *  string. Same state, two vocabularies — translate, don't compare literally,
+ *  or `String(null)` quietly demands that bash print the word "null". */
+const asShell = (v: number | null): string => (v === null ? '' : String(v));
 
 describe('_limit_field rollover', () => {
   it('agrees with readLimits on every shared fixture', () => {
     for (const c of rolloverCases(now())) {
       const wrapper = c.file.slice(0, -'.json'.length);
-      writeLimits(c.file, c.json);
+      writeLimits(c.file, c.content);
       expect(sh(`_limit_field ${wrapper} five`), `${c.file} five: ${c.why}`)
-        .toBe(String(c.expect.five));
+        .toBe(asShell(c.expect.five));
       expect(sh(`_limit_field ${wrapper} seven`), `${c.file} seven: ${c.why}`)
-        .toBe(String(c.expect.seven));
+        .toBe(asShell(c.expect.seven));
     }
   });
 
@@ -51,7 +58,7 @@ describe('_limit_field rollover', () => {
     // The maxage gate must win: a caller asking for fresh data gets nothing,
     // not an inferred 0 it did not ask for.
     const t = now();
-    writeLimits('claude.json', { five: 50, seven: 50, ts: t - 9000, fiveResetAt: t - 100, sevenResetAt: t - 100 });
+    writeLimits('claude.json', json({ five: 50, seven: 50, ts: t - 9000, fiveResetAt: t - 100, sevenResetAt: t - 100 }));
     expect(sh('_limit_field claude five 1800')).toBe('');
   });
 });
@@ -60,9 +67,9 @@ describe('the account that was stranded on 2026-07-27', () => {
   const strand = (): void => {
     const t = now();
     // claude: 20h-old sample, 7d window reset 14h ago -> read as 98 before the fix.
-    writeLimits('claude.json', { five: 10, seven: 98, ts: t - 72000, fiveResetAt: t - 72000, sevenResetAt: t - 50000 });
-    writeLimits('claude2.json', { five: 0, seven: 93, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 105000 });
-    writeLimits('claude-corp.json', { five: 9, seven: 57, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 260000 });
+    writeLimits('claude.json', json({ five: 10, seven: 98, ts: t - 72000, fiveResetAt: t - 72000, sevenResetAt: t - 50000 }));
+    writeLimits('claude2.json', json({ five: 0, seven: 93, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 105000 }));
+    writeLimits('claude-corp.json', json({ five: 9, seven: 57, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 260000 }));
     // Registry for a session whose HOME is claude but which sits on gpt.
     const reg = path.join(home, '.cc-sessions');
     fs.mkdirSync(reg, { recursive: true });

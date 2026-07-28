@@ -34,7 +34,7 @@ describe('readLimits — a window that has rolled over', () => {
     mkdirSync(dir, { recursive: true });
     const now = 1785231736;
     const cases = rolloverCases(now);
-    for (const c of cases) writeFileSync(path.join(dir, c.file), JSON.stringify(c.json));
+    for (const c of cases) writeFileSync(path.join(dir, c.file), c.content);
 
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
     for (const c of cases) {

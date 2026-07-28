@@ -109,11 +109,22 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
     || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
 }
 
+_limit_json_num() {   # file key -> that key's number, or "" when absent, null or non-numeric.
+  # Whitespace after the colon is NOT optional to tolerate: the Anthropic accounts'
+  # telemetry is printf'd compact by statusline-command.sh, but gpt.json is written by
+  # Python's json.dump (infra/handoff/ccgpt-usage), whose default separators put a space
+  # after every colon — `{"five": null, "seven": 0, ...}`. A pattern demanding a digit
+  # straight after the colon matched nothing there, so ccd read the one account it can't
+  # get telemetry for any other way as entirely unknown, and the rollover rule below
+  # could never fire on it.
+  grep -oE "\"$2\"[[:space:]]*:[[:space:]]*[0-9]+" "$1" | head -1 | grep -oE '[0-9]+$'
+}
+
 _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if unknown/stale
   local f="$LIMITS_DIR/$1.json" field="$2" maxage="${3:-0}" val ts now reset
   [[ -f "$f" ]] || return 0
-  val=$(grep -oE "\"$field\":[0-9]+" "$f" | cut -d: -f2)
-  ts=$(grep -oE '"ts":[0-9]+' "$f" | cut -d: -f2)
+  val=$(_limit_json_num "$f" "$field")
+  ts=$(_limit_json_num "$f" ts)
   now=$(date +%s)
   if [[ "$maxage" -gt 0 && ( -z "$ts" || $((now - ts)) -gt "$maxage" ) ]]; then return 0; fi
   # A reading whose own window has already reset describes a window that ENDED.
@@ -123,15 +134,19 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if 
   # reporting entirely, so its last sample can outlive its window by days.
   # Observed 2026-07-27: claude read seven=98 for 14h after its 7d window reset,
   # which excluded it from every pool and stranded two sessions on gpt.
-  reset=$(grep -oE "\"${field}ResetAt\":[0-9]+" "$f" | cut -d: -f2)
-  if [[ -n "$reset" && "$now" -ge "$reset" ]]; then
+  # Both rules below rewrite a KNOWN value; neither may conjure one. gpt.json carries
+  # `"five": null` with no 5h window at all, and a reset timestamp for a window nobody
+  # ever measured says nothing about its value — "unknown" has to stay "" (readLimits
+  # keeps it null), or _limit_score's wholly-unknown branch becomes unreachable.
+  reset=$(_limit_json_num "$f" "${field}ResetAt")
+  if [[ -n "$val" && -n "$reset" && "$now" -ge "$reset" ]]; then
     printf '0'; return 0
   fi
   # Fallback when the file carries no resetAt (the gpt 429 exclusion, and files
   # written before those fields existed): a sample older than its own window has
   # certainly rolled over. (7d decays slowly, so a stale seven only zeroes after
   # a full week.)
-  if [[ -n "$ts" ]]; then
+  if [[ -n "$val" && -n "$ts" ]]; then
     [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && val=0
     [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && val=0
   fi
