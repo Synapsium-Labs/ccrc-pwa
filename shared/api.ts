@@ -50,7 +50,9 @@ export interface FleetHealth {
 
 /** One account's usage, read from telemetry (cc-limits) independent of whether a
  *  session is currently on it — so the display survives restarts/respawns/swaps.
- *  `ts` is epoch seconds of the last report; the UI marks it stale when old. */
+ *  `ts` is epoch seconds of the last report. Telemetry is a byproduct of a
+ *  session rendering its statusline, so an idle account simply stops reporting —
+ *  which is why the rolledOver flags exist. */
 export interface AccountUsage {
   wrapper: string;
   five: number | null;
@@ -58,6 +60,8 @@ export interface AccountUsage {
   ts: number | null;
   fiveResetAt: number | null;   // epoch seconds the 5h window resets
   sevenResetAt: number | null;  // epoch seconds the 7d window resets
+  fiveRolledOver: boolean;      // the 5h window reset; the 0 above is inferred, not measured
+  sevenRolledOver: boolean;     // the 7d window reset; the 0 above is inferred, not measured
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed

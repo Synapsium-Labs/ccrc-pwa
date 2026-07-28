@@ -18,8 +18,8 @@ function band(pct: number | null): string {
   return 'ok';
 }
 
-function LimitRow({ label, pct, resetAt, nowSec }: {
-  label: string; pct: number | null; resetAt: number | null; nowSec: number;
+function LimitRow({ label, pct, resetAt, nowSec, rolledOver }: {
+  label: string; pct: number | null; resetAt: number | null; nowSec: number; rolledOver: boolean;
 }): ReactNode {
   return (
     <div className="acct-row">
@@ -27,7 +27,11 @@ function LimitRow({ label, pct, resetAt, nowSec }: {
       <span className="acct-meter" data-band={band(pct)}>
         <span className="acct-fill" style={{ width: `${Math.min(100, Math.max(0, pct ?? 0))}%` }} />
       </span>
-      <span className="acct-pct">{pct === null ? '—' : `${pct}%`}</span>
+      {/* "reset" rather than "0%": the window ended and nothing has measured the
+          new one yet, so the zero is inferred from the reset timestamp. A
+          measured zero — something ran and the account really is empty — still
+          reads 0%, and the two must not look the same. */}
+      <span className="acct-pct">{rolledOver ? 'reset' : pct === null ? '—' : `${pct}%`}</span>
       <span className="acct-reset" title="time until this window resets">↻ {formatReset(resetAt, nowSec)}</span>
     </div>
   );
@@ -61,8 +65,8 @@ export function AccountsStrip(): ReactNode {
               (a flex row); on mobile this stays a plain block under the label.
               Only render a window that exists — gpt (Codex Pro) is weekly-only. */}
           <div className="acct-rows">
-            {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} />}
-            {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} />}
+            {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} />}
+            {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} />}
           </div>
         </div>
       ))}
