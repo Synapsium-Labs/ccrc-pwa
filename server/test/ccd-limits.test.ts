@@ -63,6 +63,30 @@ describe('_limit_field rollover', () => {
   });
 });
 
+describe('_gpt_status on a python-written gpt.json', () => {
+  // ~/.cc-limits/gpt.json is written by infra/handoff/ccgpt-usage (python
+  // json.dump), whose default separators put a space after every colon. Every
+  // other reader in ccd tolerates that; _gpt_status must too, or `ccd ls`
+  // silently drops the cooldown countdown it exists to print.
+  const excludeGpt = (spacing: string): void => {
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    // 30m30s into the 5h cooldown: the remaining minutes floor to 269 for a
+    // full half-minute, so ccd reading its own clock a beat later can't flake.
+    const t = now() - 1830;
+    writeLimits('gpt.json', `{"five":${spacing}100,"seven":${spacing}0,"ts":${spacing}${t}}`);
+  };
+
+  it('reports the remaining cooldown when json.dump spaced the colons', () => {
+    excludeGpt(' ');
+    expect(sh('_gpt_status')).toBe('429-excluded (~269m of 5h cooldown left)');
+  });
+
+  it('still reports it for compact printf-written json', () => {
+    excludeGpt('');
+    expect(sh('_gpt_status')).toBe('429-excluded (~269m of 5h cooldown left)');
+  });
+});
+
 describe('the account that was stranded on 2026-07-27', () => {
   const strand = (): void => {
     const t = now();

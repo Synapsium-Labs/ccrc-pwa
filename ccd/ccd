@@ -50,7 +50,10 @@ _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
   [[ -f "$GPT_DISABLE_FILE" ]] && { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
   if ! _avail gpt; then     # a 429 wrote a cc-limits/gpt.json exclusion
-    local ts rem; ts=$(grep -oE '"ts":[0-9]+' "$LIMITS_DIR/gpt.json" 2>/dev/null | cut -d: -f2)
+    # via _limit_json_num, not a bare grep: gpt.json is the one file written by
+    # python json.dump, so its colons carry a space and a compact pattern reads
+    # nothing — printing "excluded" with no countdown (see _limit_json_num).
+    local ts rem; ts=$(_limit_json_num "$LIMITS_DIR/gpt.json" ts 2>/dev/null)
     if [[ -n "$ts" ]]; then rem=$(( (18000 - ($(date +%s) - ts)) / 60 )); echo "429-excluded (~${rem}m of 5h cooldown left)"; else echo "excluded"; fi
     return
   fi
