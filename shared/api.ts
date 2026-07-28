@@ -67,6 +67,19 @@ export interface AccountUsage {
   sevenRolledOver: boolean;     // the 7d window reset; the 0 above is inferred, not measured
 }
 
+/** The account a new workspace would land on, projected server-side.
+ *
+ *  The routing rule lives in ccd (`_ws_least_loaded`) and the server owns the
+ *  only other copy — the PWA must never compute a third, which would drift
+ *  from both. `score` is the account's pressure, max(5h%, 7d%), so headroom is
+ *  `100 - score`. It can exceed the swap ceiling: the rule returns the least
+ *  loaded account even when every account is pinned, and saying so before the
+ *  tap is the entire point of showing it. */
+export interface ProjectedHome {
+  wrapper: string;
+  score: number;
+}
+
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */
 export interface SlashCommand {

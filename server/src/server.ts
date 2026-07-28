@@ -9,7 +9,7 @@ import type { CcrcConfig } from './config.js';
 import type { Runner, Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
-import { readLimits } from './limits.js';
+import { readLimits, projectHome } from './limits.js';
 import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
@@ -145,7 +145,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         fiveRolledOver: l.fiveRolledOver, sevenRolledOver: l.sevenRolledOver,
       }))
       .sort((a, b) => rank(a.wrapper) - rank(b.wrapper) || (a.wrapper < b.wrapper ? -1 : 1));
-    return { accounts };
+    // Where a new workspace would land, computed HERE from the same telemetry
+    // rather than in the PWA: ccd's `_ws_least_loaded` is the routing rule and
+    // this is already the second implementation of it — a third would drift
+    // from both. The `+` only displays what this says.
+    return { accounts, projected: projectHome(limits) };
   });
 
   app.get('/ws/fleet', { websocket: true }, (socket) => {
