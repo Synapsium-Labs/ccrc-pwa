@@ -5,38 +5,19 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
+import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+let h: CcdHarness;
 let home: string;
 
-const sh = (snippet: string, env: NodeJS.ProcessEnv = {}): string =>
-  execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-    { encoding: 'utf8', env: { ...process.env, HOME: home, ...env } }).trim();
+// Thin aliases so the assertions below read as they always did.
+const sh = (s: string, env: NodeJS.ProcessEnv = {}): string => h.sh(s, env);
+const reg = (id: string, field: string): string | null => h.reg(id, field);
+const calls = (): string[] => h.calls();
+const makeRepo = (name: string): string => h.makeRepo(name);
 
-/** Whatever the stubs below recorded, in order. */
-const calls = (): string[] => {
-  const p = path.join(home, 'ccd-calls');
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
-};
-
-beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccd-ws-'));
-  fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-  fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
-  const bin = path.join(home, '.local', 'bin');
-  fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp']) {
-    fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
-  }
-});
-
-afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
-
-const reg = (id: string, field: string): string | null => {
-  const p = path.join(home, '.cc-sessions', `${id}.${field}`);
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
-};
+beforeEach(() => { h = makeCcdHarness('ccrc-ccd-ws-'); home = h.home; });
+afterEach(() => { h.cleanup(); });
 
 describe('test isolation', () => {
   // The harness overrides HOME and nothing else, so HOME is the ONLY isolation
@@ -116,34 +97,6 @@ describe('slug rules', () => {
     expect(sh(`CCD_WS_SLUG=feat/thing _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
   });
 });
-
-/** A real git repo with one commit and an origin, so worktree/base logic is
- *  exercised for real rather than mocked. */
-const makeRepo = (name: string): string => {
-  const origin = path.join(home, 'origins', `${name}.git`);
-  const main = path.join(home, 'projects', name);
-  execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-  execFileSync('git', ['init', '-b', 'main', main]);
-  const g = (...a: string[]): void => {
-    execFileSync('git', ['-C', main, ...a], {
-      env: { ...process.env, HOME: home, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
-             GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' },
-    });
-  };
-  fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
-  g('add', 'README.md');
-  g('commit', '-m', 'init');
-  g('remote', 'add', 'origin', origin);
-  g('push', '-u', 'origin', 'main');
-  g('remote', 'set-head', 'origin', '-a');
-  return main;
-};
-
-/** ws-add spawns a session; tmux is not available under test, so stub _spawn
- *  and the systemd call. Everything else runs for real. `tmux` is shadowed too,
- *  unconditionally: nothing in ws-add reaches it today, and this is what keeps
- *  that true if something ever does. */
-const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };`;
 
 describe('ws-add', () => {
   it('creates a worktree on a new branch off origin/HEAD', () => {
