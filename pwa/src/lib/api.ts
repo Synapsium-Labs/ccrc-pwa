@@ -99,6 +99,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     );
   };
 
+  const del = async (path: string): Promise<void> => {
+    await request(path, { method: 'DELETE' });
+  };
+
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
   return {
@@ -111,6 +115,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>
       post('/api/sessions', b),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
+    workspaceAdd: (project: string): Promise<void> =>
+      post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    workspaceRemove: (id: string): Promise<void> => del(`${sid(id)}/workspace`),
     stop: (id: string) => post(`${sid(id)}/stop`),
     swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
     prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[] } = {}) =>
