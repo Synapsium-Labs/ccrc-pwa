@@ -162,7 +162,15 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   local wt="$WORKTREES_ROOT/$project/$slug"
   [[ "$wt" != *\'* ]] || die "path must not contain a single quote: $wt"
   mkdir -p "$WORKTREES_ROOT/$project"
-  git -C "$main" worktree add -b "$slug" "$wt" "$base" --quiet \
+  # ws/ namespaces the branch: it sorts with its siblings, matches the type/slug
+  # shape every repo here already uses, and says at a glance that the branch is
+  # machine-created. The directory and the session id keep the BARE slug — a
+  # slash in either would break tmux -t (session:window.pane) and systemd
+  # instance names. --no-track is load-bearing: $base is a remote-tracking ref,
+  # so git's branch.autoSetupMerge default would otherwise make origin/main this
+  # branch's upstream, and `git pull` in the workspace would merge main into it.
+  local branch="ws/$slug"
+  git -C "$main" worktree add -b "$branch" --no-track "$wt" "$base" --quiet \
     || die "git worktree add failed for $wt"
 
   # Shared across every worktree of this repo, local only, never committed.
@@ -176,6 +184,7 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
+  _reg_set "$id" branch "$branch"
   _ws_seed_home "$id" "$hw"
 
   # A failed setup hook leaves a usable-but-unscaffolded workspace. Say so;
@@ -191,7 +200,7 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
 
   _spawn "$id" new; _reg_set "$id" started 1
   _ws_supervise "$id"
-  echo "workspace $id on $hw — $wt (branch $slug, from $base)"
+  echo "workspace $id on $hw — $wt (branch $branch, from $base)"
 }
 
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.

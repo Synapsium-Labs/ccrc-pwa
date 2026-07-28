@@ -153,7 +153,7 @@ describe('ws-add', () => {
     expect(fs.existsSync(path.join(wt, 'README.md'))).toBe(true);
     const branch = execFileSync('git', ['-C', wt, 'rev-parse', '--abbrev-ref', 'HEAD'],
       { encoding: 'utf8' }).trim();
-    expect(branch).toBe('quiet-mesa');
+    expect(branch).toBe('ws/quiet-mesa');
   });
 
   it('registers the workspace with every field the wire needs', () => {
@@ -206,6 +206,45 @@ describe('ws-add', () => {
   it('refuses a project that is not a git repo', () => {
     fs.mkdirSync(path.join(home, 'projects', 'bare'), { recursive: true });
     expect(() => sh(`${WS_ADD} cmd_ws_add bare`)).toThrow();
+  });
+});
+
+describe('ws-add branch naming', () => {
+  // The branch is namespaced; the directory and the session id are NOT. A change
+  // that unified them would break the id -> registry lookup, so assert all three.
+  it('creates the branch as ws/<slug> while the directory and id keep the bare slug', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    expect(fs.existsSync(wt)).toBe(true);                       // directory: bare slug
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();      // id: <project>-<slug>
+    const branch = execFileSync('git', ['-C', wt, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { encoding: 'utf8' }).trim();
+    expect(branch).toBe('ws/quiet-mesa');                       // branch: namespaced
+  });
+
+  it('records the branch in the registry so the fleet need not wait for a pane capture', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  // THE live defect. Without --no-track, autoSetupMerge sets origin/main as the
+  // upstream because the start point is a remote-tracking ref, and `git pull` in
+  // the workspace then merges main into the workspace branch.
+  it('leaves the branch with no upstream', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    const upstream = sh(`git -C '${wt}' rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo NONE`);
+    expect(upstream).toBe('NONE');
+    expect(sh(`git -C '${wt}' config --get branch.ws/quiet-mesa.merge || echo EMPTY`)).toBe('EMPTY');
+  });
+
+  it('still reports the branch it created in the success line', () => {
+    makeRepo('demo');
+    const out = sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(out).toContain('branch ws/quiet-mesa');
   });
 });
 
@@ -271,7 +310,7 @@ describe('ws-rm', () => {
     expect(fs.existsSync(wt)).toBe(false);
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     const branches = execFileSync('git',
-      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'],
       { encoding: 'utf8' });
     expect(branches.trim()).toBe('');
     // The kill went to the stub — i.e. it was intercepted, not merely aimed at
@@ -298,7 +337,7 @@ describe('ws-rm', () => {
     expect(fs.existsSync(wt)).toBe(true);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     const branches = execFileSync('git',
-      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'],
       { encoding: 'utf8' });
     expect(branches.trim()).not.toBe('');
     // The refusal says "nothing was touched", so that has to be true. Killing
@@ -340,7 +379,7 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
 
     const main = path.join(home, 'projects', 'demo');
-    const branches = execFileSync('git', ['-C', main, 'branch', '--list', 'quiet-mesa'], { encoding: 'utf8' });
+    const branches = execFileSync('git', ['-C', main, 'branch', '--list', 'ws/quiet-mesa'], { encoding: 'utf8' });
     expect(branches.trim()).not.toBe('');
     const containing = execFileSync('git', ['-C', main, 'branch', '--contains', sha], { encoding: 'utf8' });
     expect(containing).toContain('quiet-mesa');
