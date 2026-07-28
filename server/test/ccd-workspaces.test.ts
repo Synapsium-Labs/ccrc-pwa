@@ -10,9 +10,15 @@ import os from 'node:os';
 const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let home: string;
 
-const sh = (snippet: string): string =>
+const sh = (snippet: string, env: NodeJS.ProcessEnv = {}): string =>
   execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-    { encoding: 'utf8', env: { ...process.env, HOME: home } }).trim();
+    { encoding: 'utf8', env: { ...process.env, HOME: home, ...env } }).trim();
+
+/** Whatever the stubs below recorded, in order. */
+const calls = (): string[] => {
+  const p = path.join(home, 'ccd-calls');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccd-ws-'));
@@ -31,6 +37,23 @@ const reg = (id: string, field: string): string | null => {
   const p = path.join(home, '.cc-sessions', `${id}.${field}`);
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
 };
+
+describe('test isolation', () => {
+  // The harness overrides HOME and nothing else, so HOME is the ONLY isolation
+  // boundary there is (plan: "Never write to the real ~/.cc-sessions from a
+  // test... all registry paths derive from it"). An inherited PROJECTS_ROOT or
+  // WORKTREES_ROOT would point cmd_ws_rm's `git worktree remove` and
+  // `git branch -d` at REAL repositories from a unit test. REG and WRAPPER_DIR
+  // already take no override; these two must not either.
+  it('derives the project and worktree roots from HOME alone', () => {
+    const out = sh('echo "$PROJECTS_ROOT"; echo "$WORKTREES_ROOT"',
+      { PROJECTS_ROOT: '/data/projects', WORKTREES_ROOT: '/data/worktrees' });
+    expect(out.split('\n')).toEqual([
+      path.join(home, 'projects'),
+      path.join(home, 'worktrees'),
+    ]);
+  });
+});
 
 describe('home is explicit at creation', () => {
   it('writes home when cmd_start registers a new session', () => {
@@ -117,8 +140,10 @@ const makeRepo = (name: string): string => {
 };
 
 /** ws-add spawns a session; tmux is not available under test, so stub _spawn
- *  and the systemd call. Everything else runs for real. */
-const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; };`;
+ *  and the systemd call. Everything else runs for real. `tmux` is shadowed too,
+ *  unconditionally: nothing in ws-add reaches it today, and this is what keeps
+ *  that true if something ever does. */
+const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };`;
 
 describe('ws-add', () => {
   it('creates a worktree on a new branch off origin/HEAD', () => {
@@ -200,13 +225,45 @@ describe('_ws_least_loaded', () => {
   });
 });
 
+describe('cmd_stop', () => {
+  // `ccd stop <wrapper> <project>` recomputes `<wrapper>-<project>`. A workspace
+  // id is `<project>-<slug>` and does not reverse into a wrapper, so any caller
+  // forced to guess one aims the stop at a DIFFERENT live session. The one-arg
+  // form takes the id whole, exactly as `ccd ensure` already does.
+  const STOP = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; `
+    + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
+
+  it('takes a workspace id whole rather than reversing it into a wrapper', () => {
+    expect(sh(`${STOP} cmd_stop rp-llm-quiet-mesa`)).toBe('stopped rp-llm-quiet-mesa');
+    expect(calls()).toEqual([
+      'systemctl --user disable --now claude-session@rp-llm-quiet-mesa',
+      'tmux kill-session -t cc-rp-llm-quiet-mesa',
+    ]);
+  });
+
+  it('still recomputes <wrapper>-<project> for the legacy two-argument form', () => {
+    expect(sh(`${STOP} cmd_stop claude2 demo`)).toBe('stopped claude2-demo');
+    expect(calls()).toEqual([
+      'systemctl --user disable --now claude-session@claude2-demo',
+      'tmux kill-session -t cc-claude2-demo',
+    ]);
+  });
+});
+
 describe('ws-rm', () => {
   const addOne = (): string => {
     makeRepo('demo');
     sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     return path.join(home, 'worktrees', 'demo', 'quiet-mesa');
   };
-  const RM = `_ws_unsupervise() { :; };`;
+  // Both teardown calls are shadowed AND recorded. `tmux kill-session -t` is
+  // the dangerous one: unstubbed it runs against the real host tmux server,
+  // where nine live cc-* sessions are, and `-t` does PREFIX and FNMATCH
+  // matching — so "no test id exactly equals a real session name" is not the
+  // guarantee this needs. Recording (rather than swallowing) also lets the
+  // dirty-tree test below prove neither call ran at all.
+  const RM = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; `
+    + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
 
   it('removes the worktree, the branch and the registry entry', () => {
     const wt = addOne();
@@ -217,6 +274,12 @@ describe('ws-rm', () => {
       ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
       { encoding: 'utf8' });
     expect(branches.trim()).toBe('');
+    // The kill went to the stub — i.e. it was intercepted, not merely aimed at
+    // a name no live session happens to use.
+    expect(calls()).toEqual([
+      'unsupervise demo-quiet-mesa',
+      'tmux kill-session -t cc-demo-quiet-mesa',
+    ]);
   });
 
   it('refuses to remove a session that is not a workspace', () => {
@@ -228,7 +291,7 @@ describe('ws-rm', () => {
     expect(reg('claude2-demo', 'uuid')).toBe('abc');
   });
 
-  it('refuses a dirty worktree and leaves everything in place', () => {
+  it('refuses a dirty worktree BEFORE it tears anything down', () => {
     const wt = addOne();
     fs.writeFileSync(path.join(wt, 'scratch.txt'), 'unsaved\n');
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
@@ -238,6 +301,22 @@ describe('ws-rm', () => {
       ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
       { encoding: 'utf8' });
     expect(branches.trim()).not.toBe('');
+    // The refusal says "nothing was touched", so that has to be true. Killing
+    // the tmux session and disabling the unit first leaves the uncommitted
+    // files intact but the session dead and out of supervision — the worst of
+    // both: the user loses the session AND still has to clean up by hand.
+    expect(calls()).toEqual([]);
+  });
+
+  it('refuses an untracked-only worktree — porcelain counts untracked files', () => {
+    // `git worktree remove` refuses these too, so the pre-check has to agree
+    // with it; a `diff --quiet`-style check would sail past and tear the
+    // session down before git said no.
+    const wt = addOne();
+    fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(fs.existsSync(path.join(wt, 'notes.md'))).toBe(true);
+    expect(calls()).toEqual([]);
   });
 
   it('refuses an unknown id', () => {

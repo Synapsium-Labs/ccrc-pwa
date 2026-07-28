@@ -5,8 +5,12 @@ set -uo pipefail
 
 REG="$HOME/.cc-sessions"
 WRAPPER_DIR="$HOME/.local/bin"
-PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/projects}"   # $HOME/projects -> /data/projects (symlink) in production
-WORKTREES_ROOT="${WORKTREES_ROOT:-$HOME/worktrees}"
+# Derived from HOME with no env override, exactly as REG and WRAPPER_DIR are:
+# HOME is the single isolation boundary the test harness sets, and cmd_ws_rm
+# runs `git worktree remove` / `git branch -d` under these two roots. A stray
+# Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
+PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
+WORKTREES_ROOT="$HOME/worktrees"
 VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (home-able)
 # `gpt` is a 4th lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend), OPT-IN only
 # since 2026-07-26: a session reaches it solely by having gpt as its HOME (`ccd prefer <id>
@@ -203,15 +207,25 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # Read the branch while the worktree still exists; it may have been renamed
   # since creation, so the slug is not a safe substitute.
   local branch=""
-  [[ -d "$workdir" ]] && branch=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [[ -d "$workdir" ]]; then
+    branch=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    # REFUSE FIRST, tear down second. --porcelain counts untracked files, which
+    # is what `git worktree remove` itself objects to. Doing this after the
+    # kill would leave the uncommitted work intact but the session dead and out
+    # of supervision — and the refusal below would be lying about it.
+    local dirty; dirty=$(git -C "$workdir" status --porcelain 2>/dev/null)
+    [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+  fi
 
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
 
   if [[ -d "$workdir" ]]; then
-    # No --force: a dirty tree must stop this, not be bulldozed by it.
+    # Second line of defence, still without --force: the tree can have changed
+    # since the check above, and a locked worktree refuses either way. By here
+    # the session IS stopped, so say that rather than repeat "nothing touched".
     git -C "$main" worktree remove "$workdir" \
-      || die "worktree not removed (uncommitted changes?) — nothing else was touched"
+      || die "worktree not removed: $workdir — the session was stopped; clean the tree and re-run"
   fi
   # No -D: an unmerged branch must survive.
   [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null \
@@ -722,9 +736,19 @@ cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
   fi
 }
 
-cmd_stop() {
-  local wrapper="${1:?}" project="${2:?}"
-  local id; id=$(_id "$wrapper" "$project")
+cmd_stop() {   # <id>  |  <wrapper> <project>
+  # The two-argument form is the legacy one and recomputes `<wrapper>-<project>`.
+  # That only works for ids that ENCODE a wrapper; a workspace id is
+  # `<project>-<slug>`, so a caller forced to reverse one guesses a wrapper and
+  # aims the stop at a different, live session. The one-argument form takes the
+  # id directly, exactly as `ccd ensure` does.
+  local id
+  if [[ $# -ge 2 ]]; then
+    local wrapper="${1:?}" project="${2:?}"
+    id=$(_id "$wrapper" "$project")
+  else
+    id="${1:?usage: ccd stop <id> | ccd stop <wrapper> <project>}"
+  fi
   systemctl --user disable --now "claude-session@$id" 2>/dev/null \
     || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
