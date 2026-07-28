@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountUsage, FleetHealth, FleetSession, SlashCommand, StagedClip } from '../../../shared/api';
+import type { AccountUsage, FleetHealth, FleetSession, ProjectedHome, SlashCommand, StagedClip } from '../../../shared/api';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -109,7 +109,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),
-    accounts: () => getJson<{ accounts: AccountUsage[] }>('/api/accounts'),
+    accounts: () =>
+      getJson<{ accounts: AccountUsage[]; projected: ProjectedHome }>('/api/accounts'),
     projects: () =>
       getJson<{ roots: string[]; projects: { name: string; workdir: string }[] }>('/api/projects'),
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>

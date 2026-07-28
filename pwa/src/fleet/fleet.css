@@ -772,8 +772,24 @@
 }
 .proj-group-attn { color: var(--status-attention); }
 .proj-group-add {
+  display: flex; align-items: center; gap: var(--sp-2);
   min-width: var(--tap-min); min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
   background: none; border: 0; color: var(--ink-secondary);
   font-size: 1.25rem; cursor: pointer;
 }
+.proj-group-add:disabled { opacity: 0.45; cursor: default; }
+/* Where this workspace will land, and how much room is left there — said
+   BEFORE the tap. Ink-tertiary on the page ground until the projected account
+   is near its ceiling, at which point it takes the attention hue: a workspace
+   landing on an exhausted account looks exactly like a stalled one otherwise.
+   Both pairs are gated by design/contrast-check.mjs. */
+.proj-add-acct {
+  font-size: var(--text-2xs); color: var(--ink-tertiary);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.proj-add-acct[data-low] { color: var(--status-attention-text); }
+/* An ungrouped project gets the + and nothing else — no header, no chevron, no
+   indent. The row is the + alone, right-aligned under the single card. */
+.proj-add-bare { display: flex; justify-content: flex-end; }
 .proj-group-body { display: flex; flex-direction: column; gap: var(--sp-2); }

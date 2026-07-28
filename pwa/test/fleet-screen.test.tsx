@@ -206,6 +206,69 @@ describe('FleetScreen', () => {
     await waitFor(() => expect(screen.getByText(/no origin\/HEAD/)).toBeInTheDocument());
   });
 
+  it('offers a + on a project holding a single session', () => {
+    // Every one of the nine live projects holds exactly one session, so a +
+    // that only exists on grouped headers exists nowhere at all.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'solo' })] });
+
+    expect(screen.getByRole('button', { name: /New workspace on solo/i })).toBeInTheDocument();
+  });
+
+  it('disables a + while its own ws-add is in flight, per project', async () => {
+    // ccd does NOT dedupe: ws-add draws a fresh random slug each call and only
+    // checks it against the registry, so two concurrent calls both succeed —
+    // two worktrees, two branches, two systemd units, two of three account
+    // lanes gone. The window is _spawn plus _accept_first_run_prompts, up to
+    // ~15 minutes, with no feedback whatsoever.
+    let release!: () => void;
+    const add = vi.spyOn(api, 'workspaceAdd').mockImplementation(
+      () => new Promise<void>((resolve) => { release = resolve; }),
+    );
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha' }), session({ id: 'b', project: 'beta' })],
+    });
+
+    const alpha = screen.getByRole('button', { name: /New workspace on alpha/i });
+    const beta = screen.getByRole('button', { name: /New workspace on beta/i });
+    fireEvent.click(alpha);
+    await waitFor(() => expect(alpha).toBeDisabled());
+
+    // A second tap on the same project is refused…
+    fireEvent.click(alpha);
+    expect(add).toHaveBeenCalledTimes(1);
+    // …while another project's + is untouched: the guard is per project.
+    expect(beta).not.toBeDisabled();
+
+    await act(async () => { release(); });
+    await waitFor(() => expect(alpha).not.toBeDisabled());
+  });
+
+  it('re-enables the + after a FAILED ws-add, so a refusal is not a dead button', async () => {
+    let reject!: (e: Error) => void;
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(
+      () => new Promise<void>((_resolve, r) => { reject = r; }),
+    );
+    const store = makeStore();
+    render(
+      <>
+        <FleetScreen store={store} />
+        <ToastHost />
+      </>,
+    );
+    seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha' })] });
+
+    const plus = screen.getByRole('button', { name: /New workspace on alpha/i });
+    fireEvent.click(plus);
+    await waitFor(() => expect(plus).toBeDisabled());
+    await act(async () => { reject(new Error('no origin/HEAD')); });
+    await waitFor(() => expect(plus).not.toBeDisabled());
+  });
+
   it("surfaces ccd's stderr from a real 502, not a generic request-failed message", async () => {
     // Goes through the REAL fetch → ApiError path (unlike the mocked-api test
     // above), which is the only way to observe the body.stderr vs body.error
@@ -278,6 +341,9 @@ describe('SessionCard', () => {
         // gpt has NO active session, yet still shows — telemetry-driven.
         { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false },
       ],
+      // gpt is not home-able, so the projection names an Anthropic account
+      // regardless of what telemetry exists — see limits.ts HOME_ABLE.
+      projected: { wrapper: 'claude', score: 0 },
     });
     render(<AccountsStrip />);
     // one account gauge → two meters (5h + 7d)
