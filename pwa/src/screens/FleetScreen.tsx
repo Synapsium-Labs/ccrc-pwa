@@ -6,11 +6,11 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
-import { SessionCard } from '../fleet/SessionCard';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { NotificationBell } from '../fleet/NotificationBell';
-import { sortFleet } from '../fleet/sortFleet';
+import { groupFleet } from '../fleet/groupFleet';
+import { ProjectGroup } from '../fleet/ProjectGroup';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -115,8 +115,13 @@ export function FleetScreen({
         <>
           {showAccounts && <AccountsStrip />}
           <div className="fleet-list">
-            {sortFleet(sessions).map((s) => (
-              <SessionCard key={s.id} session={s} onOpen={open} selected={s.id === selectedId} />
+            {groupFleet(sessions).map((g) => (
+              <ProjectGroup
+                key={g.project}
+                group={g}
+                onOpen={open}
+                selectedId={selectedId}
+              />
             ))}
           </div>
         </>
