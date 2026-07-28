@@ -5,7 +5,8 @@ set -uo pipefail
 
 REG="$HOME/.cc-sessions"
 WRAPPER_DIR="$HOME/.local/bin"
-PROJECTS_ROOT="/data/projects"
+PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/projects}"   # $HOME/projects -> /data/projects (symlink) in production
+WORKTREES_ROOT="${WORKTREES_ROOT:-$HOME/worktrees}"
 VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (home-able)
 # `gpt` is a 4th lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend), OPT-IN only
 # since 2026-07-26: a session reaches it solely by having gpt as its HOME (`ccd prefer <id>
@@ -96,6 +97,13 @@ _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate c
   [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
 }
 
+# The systemd calls live in their own functions (rather than inline in cmd_ws_add)
+# so the test harness can stub them — sourcing ccd and calling cmd_ws_add under
+# vitest would otherwise enable a REAL claude-session@<id> unit on the host.
+_ws_supervise()   { systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
+                      || echo "warn: could not enable unit claude-session@$1" >&2; }
+_ws_unsupervise() { systemctl --user disable --now "claude-session@$1" 2>/dev/null || true; }
+
 # ── workspace slugs ────────────────────────────────────────────────
 # No dots: tmux -t parses `session:window.pane`. No slashes: systemd
 # instance names escape them. Lowercase only, so a slug is never ambiguous
@@ -119,6 +127,67 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
     _ws_slug_free "$project" "$slug" && { echo "$slug"; return 0; }
   done
   return 1
+}
+
+_ws_least_loaded() {   # -> the home-able account with the most headroom
+  local best="" bs=1000 w sc
+  for w in "${VALID_WRAPPERS[@]}"; do
+    sc=$(_limit_score "$w"); [[ -z "$sc" ]] && sc=0
+    (( sc < bs )) && { bs=$sc; best="$w"; }
+  done
+  echo "$best"
+}
+
+cmd_ws_add() {   # project [slug] — new worktree + session for an existing project
+  local project="${1:?usage: ccd ws-add <project> [slug]}" slug="${2:-}"
+  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project'"
+  local main="$PROJECTS_ROOT/$project"
+  [[ -d "$main/.git" ]] || die "not a git repo: $main"
+
+  [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
+                        _ws_slug_free "$project" "$slug" || die "slug in use: $slug"; }
+  [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
+                        || die "could not find a free slug for $project"; }
+
+  git -C "$main" fetch origin --quiet 2>/dev/null || echo "warn: fetch failed; basing on the last known origin" >&2
+  local base
+  base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
+    || die "no origin/HEAD — run: git -C '$main' remote set-head origin -a"
+  base="${base#refs/remotes/}"
+
+  local wt="$WORKTREES_ROOT/$project/$slug"
+  [[ "$wt" != *\'* ]] || die "path must not contain a single quote: $wt"
+  mkdir -p "$WORKTREES_ROOT/$project"
+  git -C "$main" worktree add -b "$slug" "$wt" "$base" --quiet \
+    || die "git worktree add failed for $wt"
+
+  # Shared across every worktree of this repo, local only, never committed.
+  local common; common=$(cd "$main" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  mkdir -p "$common/info"
+  grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
+
+  local id="$project-$slug"
+  local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
+  local hw; hw=$(_ws_least_loaded)
+  _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
+  _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
+  _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
+  _ws_seed_home "$id" "$hw"
+
+  # A failed setup hook leaves a usable-but-unscaffolded workspace. Say so;
+  # never remove work on the strength of a hook's exit code.
+  if [[ -x "$main/.ccrc/workspace.sh" ]]; then
+    if MAIN="$main" WT="$wt" "$main/.ccrc/workspace.sh"; then
+      _reg_set "$id" setup ok
+    else
+      _reg_set "$id" setup failed
+      echo "warn: .ccrc/workspace.sh failed for $id — workspace kept, not scaffolded" >&2
+    fi
+  fi
+
+  _spawn "$id" new; _reg_set "$id" started 1
+  _ws_supervise "$id"
+  echo "workspace $id on $hw — $wt (branch $slug, from $base)"
 }
 
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
@@ -721,6 +790,7 @@ case "${1:-}" in
   menu|pick) cmd_menu ;;
   attach)    shift; cmd_attach "$@" ;;
   clip)      shift; cmd_clip "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip} <args>" >&2; exit 1 ;;
+  ws-add)    shift; cmd_ws_add "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|ws-add|ws-rm} <args>" >&2; exit 1 ;;
 esac
 fi

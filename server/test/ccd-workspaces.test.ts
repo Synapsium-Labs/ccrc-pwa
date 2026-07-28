@@ -93,3 +93,83 @@ describe('slug rules', () => {
     expect(sh(`CCD_WS_SLUG=feat/thing _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
   });
 });
+
+/** A real git repo with one commit and an origin, so worktree/base logic is
+ *  exercised for real rather than mocked. */
+const makeRepo = (name: string): string => {
+  const origin = path.join(home, 'origins', `${name}.git`);
+  const main = path.join(home, 'projects', name);
+  execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
+  execFileSync('git', ['init', '-b', 'main', main]);
+  const g = (...a: string[]): void => {
+    execFileSync('git', ['-C', main, ...a], {
+      env: { ...process.env, HOME: home, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
+             GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' },
+    });
+  };
+  fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
+  g('add', 'README.md');
+  g('commit', '-m', 'init');
+  g('remote', 'add', 'origin', origin);
+  g('push', '-u', 'origin', 'main');
+  g('remote', 'set-head', 'origin', '-a');
+  return main;
+};
+
+/** ws-add spawns a session; tmux is not available under test, so stub _spawn
+ *  and the systemd call. Everything else runs for real. */
+const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; };`;
+
+describe('ws-add', () => {
+  it('creates a worktree on a new branch off origin/HEAD', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    expect(fs.existsSync(path.join(wt, 'README.md'))).toBe(true);
+    const branch = execFileSync('git', ['-C', wt, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { encoding: 'utf8' }).trim();
+    expect(branch).toBe('quiet-mesa');
+  });
+
+  it('registers the workspace with every field the wire needs', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(reg('demo-quiet-mesa', 'project')).toBe('demo');
+    expect(reg('demo-quiet-mesa', 'workspace')).toBe('quiet-mesa');
+    expect(reg('demo-quiet-mesa', 'base')).toBe('origin/main');
+    expect(reg('demo-quiet-mesa', 'workdir'))
+      .toBe(path.join(home, 'worktrees', 'demo', 'quiet-mesa'));
+    expect(reg('demo-quiet-mesa', 'home')).not.toBeNull();
+  });
+
+  it('excludes .ccrc/ so a draft file can never be committed', () => {
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const exclude = fs.readFileSync(path.join(main, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude).toContain('.ccrc/');
+  });
+
+  it('runs .ccrc/workspace.sh with MAIN and WT set', () => {
+    const main = makeRepo('demo');
+    fs.mkdirSync(path.join(main, '.ccrc'));
+    fs.writeFileSync(path.join(main, '.ccrc', 'workspace.sh'),
+      '#!/bin/sh\nprintf "%s\\n%s\\n" "$MAIN" "$WT" > "$WT/setup-ran"\n', { mode: 0o755 });
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    expect(fs.readFileSync(path.join(wt, 'setup-ran'), 'utf8')).toBe(`${main}\n${wt}\n`);
+  });
+
+  it('records setup failure without destroying the workspace', () => {
+    const main = makeRepo('demo');
+    fs.mkdirSync(path.join(main, '.ccrc'));
+    fs.writeFileSync(path.join(main, '.ccrc', 'workspace.sh'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(reg('demo-quiet-mesa', 'setup')).toBe('failed');
+    expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(true);
+  });
+
+  it('refuses a project that is not a git repo', () => {
+    fs.mkdirSync(path.join(home, 'projects', 'bare'), { recursive: true });
+    expect(() => sh(`${WS_ADD} cmd_ws_add bare`)).toThrow();
+  });
+});
