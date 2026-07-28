@@ -68,4 +68,25 @@ describe('groupFleet', () => {
     groupFleet(input);
     expect(input).toEqual(copy);
   });
+
+  it('preserves insertion order under integer-like project names', () => {
+    // This test would fail under Object.keys() iteration (which sorts integer-like keys numerically),
+    // but passes under Map insertion-order. sortFleet puts '99' first (has dialogPending),
+    // '1' second (merely busy), so group order must be ['99', '1'] or Map order is lost.
+    const g = groupFleet([
+      s({ id: 'a', project: '99', dialogPending: true }),
+      s({ id: 'b', project: '1', status: 'busy' }),
+    ]);
+    expect(g.map((x) => x.project)).toEqual(['99', '1']);
+  });
+
+  it('excludes dead sessions from attention, even if they are dialogPending', () => {
+    // A group whose only dialogPending member is dead must report attention: false,
+    // so the screen does not highlight an already-closed session.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true }),
+    ]);
+    expect(g).toHaveLength(1);
+    expect(g[0]!.attention).toBe(false);
+  });
 });
