@@ -96,6 +96,31 @@ _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate c
   [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
 }
 
+# ── workspace slugs ────────────────────────────────────────────────
+# No dots: tmux -t parses `session:window.pane`. No slashes: systemd
+# instance names escape them. Lowercase only, so a slug is never ambiguous
+# on a case-insensitive filesystem.
+WS_ADJ=(quiet swift amber still brisk clear plain warm bright calm keen soft)
+WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove delta)
+
+_ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
+
+_ws_slug_free() { [[ ! -f "$REG/$1-$2.uuid" ]]; }   # project slug
+
+_ws_slug_new() {   # project -> echo a free, valid slug (or fail)
+  local project="$1" slug i
+  if [[ -n "${CCD_WS_SLUG:-}" ]]; then             # tests and manual naming
+    _ws_slug_valid "$CCD_WS_SLUG" || return 1
+    _ws_slug_free "$project" "$CCD_WS_SLUG" || return 1
+    echo "$CCD_WS_SLUG"; return 0
+  fi
+  for ((i = 0; i < 60; i++)); do
+    slug="${WS_ADJ[RANDOM % ${#WS_ADJ[@]}]}-${WS_NOUN[RANDOM % ${#WS_NOUN[@]}]}"
+    _ws_slug_free "$project" "$slug" && { echo "$slug"; return 0; }
+  done
+  return 1
+}
+
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
   case "$1" in
     claude)      echo "$HOME/.claude" ;;

@@ -48,3 +48,43 @@ describe('home is explicit at creation', () => {
     expect(reg('claude2-demo', 'home')).toBe('claude-corp');
   });
 });
+
+describe('slug rules', () => {
+  const ok = (s: string): boolean =>
+    sh(`_ws_slug_valid '${s}' && echo yes || echo no`) === 'yes';
+
+  it('accepts lowercase alphanumeric and hyphens', () => {
+    expect(ok('quiet-mesa')).toBe(true);
+    expect(ok('a1')).toBe(true);
+  });
+
+  it('rejects dots, because tmux -t reads session:window.pane', () => {
+    expect(ok('quiet.mesa')).toBe(false);
+  });
+
+  it('rejects slashes, because systemd instance names escape them', () => {
+    expect(ok('feat/thing')).toBe(false);
+  });
+
+  it('rejects a leading hyphen, uppercase, and over-length', () => {
+    expect(ok('-mesa')).toBe(false);
+    expect(ok('Quiet-Mesa')).toBe(false);
+    expect(ok('a'.repeat(32))).toBe(false);
+  });
+
+  it('generates a slug that is itself valid', () => {
+    const slug = sh(`_ws_slug_new demo`);
+    expect(sh(`_ws_slug_valid '${slug}' && echo yes || echo no`)).toBe('yes');
+  });
+
+  it('never collides with an existing registry entry', () => {
+    // Pin the generator to one candidate, then occupy it.
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');
+    const slug = sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`);
+    expect(slug).toBe('EXHAUSTED');
+  });
+
+  it('honours CCD_WS_SLUG when the name is free', () => {
+    expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');
+  });
+});
