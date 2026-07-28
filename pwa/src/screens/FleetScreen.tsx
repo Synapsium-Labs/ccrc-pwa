@@ -5,12 +5,14 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
+import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { groupFleet } from '../fleet/groupFleet';
 import { ProjectGroup } from '../fleet/ProjectGroup';
+import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -43,6 +45,18 @@ export function FleetScreen({
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const [newOpen, setNewOpen] = useState(false);
   const newSession = onNewSession ?? (() => setNewOpen(true));
+
+  // The fleet socket is the source of truth: no optimistic row here — the new
+  // session appears on the next snapshot, so a refusal (e.g. no origin/HEAD)
+  // never briefly shows a workspace that ccd declined to create.
+  const addWorkspace = async (project: string): Promise<void> => {
+    try {
+      await api.workspaceAdd(project);
+    } catch (err) {
+      toast(`Couldn't create workspace — ${err instanceof Error ? err.message : String(err)}`,
+            'error');
+    }
+  };
 
   const waiting = sessions.filter((s) => s.dialogPending).length;
   const countLine =
@@ -121,6 +135,7 @@ export function FleetScreen({
                 group={g}
                 onOpen={open}
                 selectedId={selectedId}
+                onAddWorkspace={(p) => void addWorkspace(p)}
               />
             ))}
           </div>

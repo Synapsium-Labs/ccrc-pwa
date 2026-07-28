@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { SessionCard } from '../src/fleet/SessionCard';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
+import { ToastHost } from '../src/components/Toast';
 
 afterEach(() => {
   cleanup();
@@ -136,6 +137,46 @@ describe('FleetScreen', () => {
     expect(screen.getByText('OpenClawHetzner moved to alt·max')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByText('OpenClawHetzner moved to alt·max')).not.toBeInTheDocument();
+  });
+
+  it('creates a workspace on the tapped project', async () => {
+    const calls: string[] = [];
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(async (p: string) => {
+      calls.push(p);
+    });
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha' }),
+        session({ id: 'b', project: 'alpha', workspace: 'quiet-mesa' }),
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    await waitFor(() => expect(calls).toEqual(['alpha']));
+  });
+
+  it('surfaces a failure as a toast rather than a silent no-op', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new Error('no origin/HEAD'));
+    const store = makeStore();
+    render(
+      <>
+        <FleetScreen store={store} />
+        <ToastHost />
+      </>,
+    );
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha' }),
+        session({ id: 'b', project: 'alpha', workspace: 'quiet-mesa' }),
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    await waitFor(() => expect(screen.getByText(/no origin\/HEAD/)).toBeInTheDocument());
   });
 });
 
