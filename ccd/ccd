@@ -161,12 +161,19 @@ _limit_has_key() {   # file key -> success if the key is PRESENT, whatever its v
 
 _fmt_eta() {   # epoch-seconds -> "in 42m" / "in 6h" / "in 5d" (coarse on purpose: these
   # are user-facing "when can I use this again" figures, not scheduling input).
-  local target="$1" now d
+  local target="$1" now d m h
   now=$(date +%s); d=$(( target - now ))
   (( d <= 0 )) && { printf 'any moment now'; return; }
-  if   (( d < 7200 ));   then printf 'in %dm' $(( (d + 30) / 60 ))
-  elif (( d < 172800 )); then printf 'in %dh' $(( (d + 1800) / 3600 ))
-  else                        printf 'in %dd' $(( (d + 43200) / 86400 )); fi
+  # Pick the unit from the ROUNDED figure, not from raw seconds. Thresholding on
+  # seconds and rounding afterwards left a seam at each boundary: 7199s rounded to
+  # 120 minutes but stayed in the minutes branch and printed "in 120m", while one
+  # second later it printed "in 2h". Same at 47.99h -> "in 48h" instead of "in 2d".
+  # Rounding first means a figure can never reach its own next unit.
+  m=$(( (d + 30) / 60 ))
+  h=$(( (d + 1800) / 3600 ))
+  if   (( m < 120 )); then printf 'in %dm' "$m"
+  elif (( h < 48 ));  then printf 'in %dh' "$h"
+  else                     printf 'in %dd' $(( (d + 43200) / 86400 )); fi
 }
 
 _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if unknown/stale

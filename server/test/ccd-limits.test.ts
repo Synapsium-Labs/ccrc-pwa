@@ -134,6 +134,31 @@ describe('_gpt_status must not call a Codex weekly cap a 5h cooldown', () => {
   });
 });
 
+describe('_fmt_eta unit boundaries', () => {
+  // The unit used to be chosen from raw seconds and the figure rounded afterwards,
+  // so 7199s rounded to 120 minutes but stayed in the minutes branch and printed
+  // "in 120m" — while 7200s printed "in 2h". Any test landing on that boundary was
+  // a coin flip on whether bash read the clock in the same second the fixture was
+  // built. Every offset here must give the SAME answer either side of the seam, so
+  // a one-second slip cannot change the result.
+  it.each([
+    [7199, 'in 2h'], [7200, 'in 2h'], [7201, 'in 2h'],
+    [172799, 'in 2d'], [172800, 'in 2d'], [172801, 'in 2d'],
+  ])('%ds ahead reads %s', (offset, want) => {
+    expect(sh(`_fmt_eta $(( $(date +%s) + ${offset} ))`)).toBe(want);
+  });
+
+  it('never prints a figure that has reached its own next unit', () => {
+    // 120m and 48h are the strings this guards against; both are reachable only
+    // through the rounding seam.
+    for (const offset of [7100, 7150, 7199, 7200, 171000, 172700, 172799]) {
+      const out = sh(`_fmt_eta $(( $(date +%s) + ${offset} ))`);
+      expect(out, `${offset}s produced ${out}`).not.toBe('in 120m');
+      expect(out, `${offset}s produced ${out}`).not.toBe('in 48h');
+    }
+  });
+});
+
 describe('the account that was stranded on 2026-07-27', () => {
   const strand = (): void => {
     const t = now();
