@@ -4,6 +4,9 @@ export type SessionStatus = 'busy' | 'idle' | 'dead';
 
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
+  /** The worktree slug when this session is a workspace; null for a project's
+   *  main checkout. Grouping and ws-rm both key off its presence. */
+  workspace: string | null;
   name: string | null;                       // live display name from sessions/<pid>.json
   status: SessionStatus;
   statusUpdatedAt: number | null;            // epoch ms
@@ -62,6 +65,19 @@ export interface AccountUsage {
   sevenResetAt: number | null;  // epoch seconds the 7d window resets
   fiveRolledOver: boolean;      // the 5h window reset; the 0 above is inferred, not measured
   sevenRolledOver: boolean;     // the 7d window reset; the 0 above is inferred, not measured
+}
+
+/** The account a new workspace would land on, projected server-side.
+ *
+ *  The routing rule lives in ccd (`_ws_least_loaded`) and the server owns the
+ *  only other copy — the PWA must never compute a third, which would drift
+ *  from both. `score` is the account's pressure, max(5h%, 7d%), so headroom is
+ *  `100 - score`. It can exceed the swap ceiling: the rule returns the least
+ *  loaded account even when every account is pinned, and saying so before the
+ *  tap is the entire point of showing it. */
+export interface ProjectedHome {
+  wrapper: string;
+  score: number;
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed

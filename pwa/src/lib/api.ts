@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountUsage, FleetHealth, FleetSession, SlashCommand, StagedClip } from '../../../shared/api';
+import type { AccountUsage, FleetHealth, FleetSession, ProjectedHome, SlashCommand, StagedClip } from '../../../shared/api';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -99,18 +99,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     );
   };
 
+  const del = async (path: string): Promise<void> => {
+    await request(path, { method: 'DELETE' });
+  };
+
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
   return {
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),
-    accounts: () => getJson<{ accounts: AccountUsage[] }>('/api/accounts'),
+    accounts: () =>
+      getJson<{ accounts: AccountUsage[]; projected: ProjectedHome }>('/api/accounts'),
     projects: () =>
       getJson<{ roots: string[]; projects: { name: string; workdir: string }[] }>('/api/projects'),
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>
       post('/api/sessions', b),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
+    workspaceAdd: (project: string): Promise<void> =>
+      post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    workspaceRemove: (id: string): Promise<void> => del(`${sid(id)}/workspace`),
     stop: (id: string) => post(`${sid(id)}/stop`),
     swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
     prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[] } = {}) =>

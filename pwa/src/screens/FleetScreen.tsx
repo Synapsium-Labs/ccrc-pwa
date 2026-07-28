@@ -5,12 +5,15 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
+import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
-import { SessionCard } from '../fleet/SessionCard';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { NotificationBell } from '../fleet/NotificationBell';
-import { sortFleet } from '../fleet/sortFleet';
+import { groupFleet } from '../fleet/groupFleet';
+import { ProjectGroup } from '../fleet/ProjectGroup';
+import { useProjectedHome } from '../fleet/useProjectedHome';
+import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -43,6 +46,37 @@ export function FleetScreen({
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const [newOpen, setNewOpen] = useState(false);
   const newSession = onNewSession ?? (() => setNewOpen(true));
+
+  // The fleet socket is the source of truth: no optimistic row here — the new
+  // session appears on the next snapshot, so a refusal (e.g. no origin/HEAD)
+  // never briefly shows a workspace that ccd declined to create.
+  //
+  // In-flight per PROJECT, because ccd does not dedupe: ws-add draws a fresh
+  // random slug on every call and only checks it against the registry, so two
+  // concurrent calls both succeed — two worktrees, two branches, two systemd
+  // units, two of three account lanes consumed. And the window is not a
+  // moment: _spawn runs synchronously and _accept_first_run_prompts waits up to
+  // ~15 minutes for a big resume, with nothing on screen to say so.
+  const [adding, setAdding] = useState<ReadonlySet<string>>(() => new Set());
+  const addWorkspace = async (project: string): Promise<void> => {
+    if (adding.has(project)) return;
+    setAdding((s) => new Set(s).add(project));
+    try {
+      await api.workspaceAdd(project);
+    } catch (err) {
+      toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
+    } finally {
+      // finally, not the try tail: a refusal must re-arm the button, or ccd
+      // saying no leaves a `+` that can never be pressed again.
+      setAdding((s) => {
+        const next = new Set(s);
+        next.delete(project);
+        return next;
+      });
+    }
+  };
+
+  const projected = useProjectedHome();
 
   const waiting = sessions.filter((s) => s.dialogPending).length;
   const countLine =
@@ -115,8 +149,16 @@ export function FleetScreen({
         <>
           {showAccounts && <AccountsStrip />}
           <div className="fleet-list">
-            {sortFleet(sessions).map((s) => (
-              <SessionCard key={s.id} session={s} onOpen={open} selected={s.id === selectedId} />
+            {groupFleet(sessions).map((g) => (
+              <ProjectGroup
+                key={g.project}
+                group={g}
+                onOpen={open}
+                selectedId={selectedId}
+                onAddWorkspace={(p) => void addWorkspace(p)}
+                projected={projected}
+                adding={adding.has(g.project)}
+              />
             ))}
           </div>
         </>

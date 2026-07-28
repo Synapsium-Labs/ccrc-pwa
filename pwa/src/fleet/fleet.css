@@ -263,6 +263,7 @@
   position: relative;
   z-index: 1;
 }
+.card-remove { align-self: flex-start; color: var(--ink-secondary); }
 
 .card-sub {
   display: flex;
@@ -748,3 +749,47 @@
 .acct-meter[data-band='none'] .acct-fill { background: var(--edge-subtle); }
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
+
+/* ------------------------------------------------------------------ *
+ *  Project group — a header only when a project holds more than one   *
+ *  session (worktrees). Collapsing hides the cards, never the state:  *
+ *  the header keeps the count and the attention dot regardless.       *
+ * ------------------------------------------------------------------ */
+.proj-group { display: flex; flex-direction: column; gap: var(--sp-2); }
+.proj-group-head { display: flex; align-items: center; gap: var(--sp-2); }
+.proj-group-toggle {
+  flex: 1; display: flex; align-items: center; gap: var(--sp-2);
+  min-height: var(--tap-min); padding: 0 var(--sp-2);
+  background: none; border: 0; color: var(--ink-secondary);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.proj-group-chevron { width: 1em; color: var(--ink-tertiary); }
+.proj-group-name { font-weight: var(--weight-semibold); color: var(--ink-primary); }
+.proj-group-count {
+  padding: 0 var(--sp-1); border-radius: var(--r-full);
+  background: var(--bg-raised); color: var(--ink-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.proj-group-attn { color: var(--status-attention); }
+.proj-group-add {
+  display: flex; align-items: center; gap: var(--sp-2);
+  min-width: var(--tap-min); min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: none; border: 0; color: var(--ink-secondary);
+  font-size: 1.25rem; cursor: pointer;
+}
+.proj-group-add:disabled { opacity: 0.45; cursor: default; }
+/* Where this workspace will land, and how much room is left there — said
+   BEFORE the tap. Ink-tertiary on the page ground until the projected account
+   is near its ceiling, at which point it takes the attention hue: a workspace
+   landing on an exhausted account looks exactly like a stalled one otherwise.
+   Both pairs are gated by design/contrast-check.mjs. */
+.proj-add-acct {
+  font-size: var(--text-2xs); color: var(--ink-tertiary);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.proj-add-acct[data-low] { color: var(--status-attention-text); }
+/* An ungrouped project gets the + and nothing else — no header, no chevron, no
+   indent. The row is the + alone, right-aligned under the single card. */
+.proj-add-bare { display: flex; justify-content: flex-end; }
+.proj-group-body { display: flex; flex-direction: column; gap: var(--sp-2); }

@@ -5,7 +5,12 @@ set -uo pipefail
 
 REG="$HOME/.cc-sessions"
 WRAPPER_DIR="$HOME/.local/bin"
-PROJECTS_ROOT="/data/projects"
+# Derived from HOME with no env override, exactly as REG and WRAPPER_DIR are:
+# HOME is the single isolation boundary the test harness sets, and cmd_ws_rm
+# runs `git worktree remove` / `git branch -d` under these two roots. A stray
+# Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
+PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
+WORKTREES_ROOT="$HOME/worktrees"
 VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (home-able)
 # `gpt` is a 4th lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend), OPT-IN only
 # since 2026-07-26: a session reaches it solely by having gpt as its HOME (`ccd prefer <id>
@@ -92,6 +97,142 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
 _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+_ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
+  [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
+}
+
+# The systemd calls live in their own functions (rather than inline in cmd_ws_add)
+# so the test harness can stub them — sourcing ccd and calling cmd_ws_add under
+# vitest would otherwise enable a REAL claude-session@<id> unit on the host.
+_ws_supervise()   { systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
+                      || echo "warn: could not enable unit claude-session@$1" >&2; }
+_ws_unsupervise() { systemctl --user disable --now "claude-session@$1" 2>/dev/null || true; }
+
+# ── workspace slugs ────────────────────────────────────────────────
+# No dots: tmux -t parses `session:window.pane`. No slashes: systemd
+# instance names escape them. Lowercase only, so a slug is never ambiguous
+# on a case-insensitive filesystem.
+WS_ADJ=(quiet swift amber still brisk clear plain warm bright calm keen soft)
+WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove delta)
+
+_ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
+
+_ws_slug_free() { [[ ! -f "$REG/$1-$2.uuid" ]]; }   # project slug
+
+_ws_slug_new() {   # project -> echo a free, valid slug (or fail)
+  local project="$1" slug i
+  if [[ -n "${CCD_WS_SLUG:-}" ]]; then             # tests and manual naming
+    _ws_slug_valid "$CCD_WS_SLUG" || return 1
+    _ws_slug_free "$project" "$CCD_WS_SLUG" || return 1
+    echo "$CCD_WS_SLUG"; return 0
+  fi
+  for ((i = 0; i < 60; i++)); do
+    slug="${WS_ADJ[RANDOM % ${#WS_ADJ[@]}]}-${WS_NOUN[RANDOM % ${#WS_NOUN[@]}]}"
+    _ws_slug_free "$project" "$slug" && { echo "$slug"; return 0; }
+  done
+  return 1
+}
+
+_ws_least_loaded() {   # -> the home-able account with the most headroom
+  local best="" bs=1000 w sc
+  for w in "${VALID_WRAPPERS[@]}"; do
+    sc=$(_limit_score "$w"); [[ -z "$sc" ]] && sc=0
+    (( sc < bs )) && { bs=$sc; best="$w"; }
+  done
+  echo "$best"
+}
+
+cmd_ws_add() {   # project [slug] — new worktree + session for an existing project
+  local project="${1:?usage: ccd ws-add <project> [slug]}" slug="${2:-}"
+  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project'"
+  local main="$PROJECTS_ROOT/$project"
+  [[ -d "$main/.git" ]] || die "not a git repo: $main"
+
+  [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
+                        _ws_slug_free "$project" "$slug" || die "slug in use: $slug"; }
+  [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
+                        || die "could not find a free slug for $project"; }
+
+  git -C "$main" fetch origin --quiet 2>/dev/null || echo "warn: fetch failed; basing on the last known origin" >&2
+  local base
+  base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
+    || die "no origin/HEAD — run: git -C '$main' remote set-head origin -a"
+  base="${base#refs/remotes/}"
+
+  local wt="$WORKTREES_ROOT/$project/$slug"
+  [[ "$wt" != *\'* ]] || die "path must not contain a single quote: $wt"
+  mkdir -p "$WORKTREES_ROOT/$project"
+  git -C "$main" worktree add -b "$slug" "$wt" "$base" --quiet \
+    || die "git worktree add failed for $wt"
+
+  # Shared across every worktree of this repo, local only, never committed.
+  local common; common=$(cd "$main" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  mkdir -p "$common/info"
+  grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
+
+  local id="$project-$slug"
+  local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
+  local hw; hw=$(_ws_least_loaded)
+  _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
+  _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
+  _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
+  _ws_seed_home "$id" "$hw"
+
+  # A failed setup hook leaves a usable-but-unscaffolded workspace. Say so;
+  # never remove work on the strength of a hook's exit code.
+  if [[ -x "$main/.ccrc/workspace.sh" ]]; then
+    if MAIN="$main" WT="$wt" "$main/.ccrc/workspace.sh"; then
+      _reg_set "$id" setup ok
+    else
+      _reg_set "$id" setup failed
+      echo "warn: .ccrc/workspace.sh failed for $id — workspace kept, not scaffolded" >&2
+    fi
+  fi
+
+  _spawn "$id" new; _reg_set "$id" started 1
+  _ws_supervise "$id"
+  echo "workspace $id on $hw — $wt (branch $slug, from $base)"
+}
+
+cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
+  local id="${1:?usage: ccd ws-rm <id>}"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  local ws project workdir
+  ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  # The absence of a workspace field is what distinguishes a main checkout.
+  [[ -n "$ws" ]] || die "$id is not a workspace — refusing to remove a main checkout"
+  [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  local main="$PROJECTS_ROOT/$project"
+
+  # Read the branch while the worktree still exists; it may have been renamed
+  # since creation, so the slug is not a safe substitute.
+  local branch=""
+  if [[ -d "$workdir" ]]; then
+    branch=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    # REFUSE FIRST, tear down second. --porcelain counts untracked files, which
+    # is what `git worktree remove` itself objects to. Doing this after the
+    # kill would leave the uncommitted work intact but the session dead and out
+    # of supervision — and the refusal below would be lying about it.
+    local dirty; dirty=$(git -C "$workdir" status --porcelain 2>/dev/null)
+    [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+  fi
+
+  _ws_unsupervise "$id"
+  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+
+  if [[ -d "$workdir" ]]; then
+    # Second line of defence, still without --force: the tree can have changed
+    # since the check above, and a locked worktree refuses either way. By here
+    # the session IS stopped, so say that rather than repeat "nothing touched".
+    git -C "$main" worktree remove "$workdir" \
+      || die "worktree not removed: $workdir — the session was stopped; clean the tree and re-run"
+  fi
+  # No -D: an unmerged branch must survive.
+  [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null \
+    || true
+  rm -f "$REG/$id".*
+  echo "removed workspace $id"
+}
 
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
   case "$1" in
@@ -459,6 +600,7 @@ cmd_start() {
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
   _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
+  _ws_seed_home "$id" "$wrapper"
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   _spawn "$id" "$mode"; _reg_set "$id" started 1
   echo "started $id ($mode) — discover on claude.ai by name: $id"
@@ -594,9 +736,19 @@ cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
   fi
 }
 
-cmd_stop() {
-  local wrapper="${1:?}" project="${2:?}"
-  local id; id=$(_id "$wrapper" "$project")
+cmd_stop() {   # <id>  |  <wrapper> <project>
+  # The two-argument form is the legacy one and recomputes `<wrapper>-<project>`.
+  # That only works for ids that ENCODE a wrapper; a workspace id is
+  # `<project>-<slug>`, so a caller forced to reverse one guesses a wrapper and
+  # aims the stop at a different, live session. The one-argument form takes the
+  # id directly, exactly as `ccd ensure` does.
+  local id
+  if [[ $# -ge 2 ]]; then
+    local wrapper="${1:?}" project="${2:?}"
+    id=$(_id "$wrapper" "$project")
+  else
+    id="${1:?usage: ccd stop <id> | ccd stop <wrapper> <project>}"
+  fi
   systemctl --user disable --now "claude-session@$id" 2>/dev/null \
     || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
@@ -692,6 +844,8 @@ case "${1:-}" in
   menu|pick) cmd_menu ;;
   attach)    shift; cmd_attach "$@" ;;
   clip)      shift; cmd_clip "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip} <args>" >&2; exit 1 ;;
+  ws-add)    shift; cmd_ws_add "$@" ;;
+  ws-rm)     shift; cmd_ws_rm "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|ws-add|ws-rm} <args>" >&2; exit 1 ;;
 esac
 fi

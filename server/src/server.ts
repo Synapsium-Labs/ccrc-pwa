@@ -9,7 +9,7 @@ import type { CcrcConfig } from './config.js';
 import type { Runner, Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
-import { readLimits } from './limits.js';
+import { readLimits, projectHome } from './limits.js';
 import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
@@ -145,7 +145,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         fiveRolledOver: l.fiveRolledOver, sevenRolledOver: l.sevenRolledOver,
       }))
       .sort((a, b) => rank(a.wrapper) - rank(b.wrapper) || (a.wrapper < b.wrapper ? -1 : 1));
-    return { accounts };
+    // Where a new workspace would land, computed HERE from the same telemetry
+    // rather than in the PWA: ccd's `_ws_least_loaded` is the routing rule and
+    // this is already the second implementation of it — a third would drift
+    // from both. The `+` only displays what this says.
+    return { accounts, projected: projectHome(limits) };
   });
 
   app.get('/ws/fleet', { websocket: true }, (socket) => {
@@ -300,13 +304,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcd(reply, ['ensure', id]);
   });
 
+  app.post('/api/projects/:project/workspaces', async (req, reply) => {
+    const { project } = req.params as { project: string };
+    return runCcd(reply, ['ws-add', project]);
+  });
+
+  app.delete('/api/sessions/:id/workspace', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    return runCcd(reply, ['ws-rm', id]);
+  });
+
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
     if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    // ccd stop recomputes the id as `<wrapper>-<project>`, so it needs the
-    // ORIGINAL wrapper baked into the id — not rec.wrapper, which a prior swap
-    // flips to the new account while the id/tmux name keep the old prefix.
+    // A workspace id is `<project>-<slug>` and encodes no wrapper at all, so
+    // there is nothing to reverse: the prefix rule below would fall through to
+    // rec.wrapper and ccd would recompute `<wrapper>-<project>` — a DIFFERENT,
+    // live session, killed while the workspace kept running and the PWA
+    // reported success. ccd stop's one-argument form takes the id whole.
+    if (rec.workspace !== null) return runCcd(reply, ['stop', id]);
+    // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
+    // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
+    // rec.wrapper, which a prior swap flips to the new account while the
+    // id/tmux name keep the old prefix.
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
       : rec.wrapper;

@@ -60,7 +60,7 @@ export async function assembleFleet(
     if (sl?.workflowActive && status === 'idle') status = 'busy';
     return {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
-      project: r.project, workdir: r.workdir, name, status, statusUpdatedAt,
+      project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       dialogPending: pendingDialogs?.has(r.id) ?? false, version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,

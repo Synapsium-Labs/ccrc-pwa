@@ -10,7 +10,7 @@ import { accountColorVar, accountLabel } from '../lib/accounts';
 import { useNow } from '../lib/useNow';
 import { StatusDot } from '../components/StatusDot';
 import { toast } from '../components/Toast';
-import { api } from '../lib/api';
+import { api, apiErrorText } from '../lib/api';
 import './fleet.css';
 
 const LONG_PRESS_MS = 550;
@@ -32,10 +32,14 @@ export function SessionCard({
   session,
   onOpen,
   selected = false,
+  inGroup = false,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
   selected?: boolean; // the open session in the desktop sidebar
+  // inside a project group — the header already says the project, so the
+  // card names the workspace instead
+  inGroup?: boolean;
 }): ReactNode {
   const now = useNow(30_000);
   const [restarting, setRestarting] = useState(false);
@@ -62,9 +66,22 @@ export function SessionCard({
     try {
       await api.ensure(session.id);
     } catch (err) {
-      toast(`Couldn't restart — ${err instanceof Error ? err.message : String(err)}`, 'error');
+      toast(`Couldn't restart — ${apiErrorText(err)}`, 'error');
     } finally {
       setRestarting(false);
+    }
+  };
+
+  const [removing, setRemoving] = useState(false);
+  const removeWorkspace = async (): Promise<void> => {
+    if (removing) return;
+    setRemoving(true);
+    try {
+      await api.workspaceRemove(session.id);
+    } catch (err) {
+      toast(`Couldn't remove — ${apiErrorText(err)}`, 'error');
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -152,6 +169,18 @@ export function SessionCard({
           ? 'card card--busy'
           : 'card') + (selected ? ' card--active' : '');
 
+  // Standalone, the project IS the identity. Inside a group the header already
+  // carries the project, so repeating it renders every sibling identical.
+  //
+  // Spec order (line 93): name ?? branch ?? workspace ?? id. Branch outranks
+  // the slug because Phase 2's PR flow renames the branch to something
+  // descriptive while `workspace` keeps the slug it was born with — slug-first
+  // would pin the card to `quiet-mesa` forever. The `id` tail keeps the rule
+  // total for legacy rows, which have no workspace.
+  const title = inGroup
+    ? (session.name ?? session.branch ?? session.workspace ?? session.id)
+    : session.project;
+
   return (
     <article className={cardClass}>
       <div className="card-top">
@@ -166,7 +195,7 @@ export function SessionCard({
             onPointerUp={cancelPress}
             onPointerCancel={cancelPress}
           >
-            {session.project}
+            {title}
           </button>
         </h2>
         <span className={ping ? 'lamp lamp--ping' : 'lamp'} data-status={dotStatus}>
@@ -212,6 +241,21 @@ export function SessionCard({
           per-session consequence when a window crosses critical. */}
       {critical !== null && (
         <p className="card-limit-note">{critical} limit near — will move to another account</p>
+      )}
+
+      {/* No confirm dialog: ccd ws-rm refuses on a dirty tree or an unmerged
+          branch and says why, so the guard lives where the facts are rather
+          than in a prompt the user learns to dismiss. */}
+      {session.workspace !== null && (
+        <button
+          type="button"
+          className="btn-ghost card-remove"
+          aria-label="Remove workspace"
+          onClick={() => void removeWorkspace()}
+          disabled={removing}
+        >
+          {removing ? 'Removing…' : 'Remove workspace'}
+        </button>
       )}
 
       {dead && (
