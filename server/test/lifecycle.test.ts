@@ -116,6 +116,32 @@ describe('lifecycle routes', () => {
     await app.close();
   });
 
+  it('POST /api/sessions/:id/stop passes a WORKSPACE id whole, never a reversed one', async () => {
+    // A workspace id is `<project>-<slug>`, not `<wrapper>-<project>`. Reversing
+    // it cannot work: `rp-llm-quiet-mesa` does not end in `-rp-llm`, so the
+    // prefix rule falls through to rec.wrapper and ccd recomputes
+    // `claude-rp-llm` — a DIFFERENT, live session. It would then kill tmux
+    // cc-claude-rp-llm and disable claude-session@claude-rp-llm, exit 0, and
+    // the PWA would report success while the workspace kept running.
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'rp-llm-quiet-mesa', {
+      wrapper: 'claude',
+      project: 'rp-llm',
+      workspace: 'quiet-mesa',
+      workdir: '/home/rc/worktrees/rp-llm/quiet-mesa',
+      uuid: '3'.repeat(36),
+      started: '1',
+    });
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer({ cfg, run, tmux: new Tmux(run), io: localIO });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa']]);
+    await app.close();
+  });
+
   it('POST /api/sessions/:id/stop on an unknown id returns 404 without calling ccd', async () => {
     const { app, calls } = await makeApp();
     const res = await app.inject({ method: 'POST', url: '/api/sessions/nope/stop', payload: {} });

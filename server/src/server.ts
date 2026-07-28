@@ -314,9 +314,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
     if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    // ccd stop recomputes the id as `<wrapper>-<project>`, so it needs the
-    // ORIGINAL wrapper baked into the id — not rec.wrapper, which a prior swap
-    // flips to the new account while the id/tmux name keep the old prefix.
+    // A workspace id is `<project>-<slug>` and encodes no wrapper at all, so
+    // there is nothing to reverse: the prefix rule below would fall through to
+    // rec.wrapper and ccd would recompute `<wrapper>-<project>` — a DIFFERENT,
+    // live session, killed while the workspace kept running and the PWA
+    // reported success. ccd stop's one-argument form takes the id whole.
+    if (rec.workspace !== null) return runCcd(reply, ['stop', id]);
+    // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
+    // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
+    // rec.wrapper, which a prior swap flips to the new account while the
+    // id/tmux name keep the old prefix.
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
       : rec.wrapper;
