@@ -23,7 +23,13 @@ export function ProjectGroup({
   const [collapsed, setCollapsed] = useState(false);
 
   const cards = group.sessions.map((s) => (
-    <SessionCard key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} />
+    <SessionCard
+      key={s.id}
+      session={s}
+      onOpen={onOpen}
+      selected={s.id === selectedId}
+      inGroup={group.grouped}
+    />
   ));
 
   if (!group.grouped) return <>{cards}</>;

@@ -32,10 +32,14 @@ export function SessionCard({
   session,
   onOpen,
   selected = false,
+  inGroup = false,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
   selected?: boolean; // the open session in the desktop sidebar
+  // inside a project group — the header already says the project, so the
+  // card names the workspace instead
+  inGroup?: boolean;
 }): ReactNode {
   const now = useNow(30_000);
   const [restarting, setRestarting] = useState(false);
@@ -152,6 +156,12 @@ export function SessionCard({
           ? 'card card--busy'
           : 'card') + (selected ? ' card--active' : '');
 
+  // Standalone, the project IS the identity. Inside a group the header already
+  // carries the project, so repeating it renders every sibling identical.
+  const title = inGroup
+    ? (session.name ?? session.workspace ?? session.branch ?? session.id)
+    : session.project;
+
   return (
     <article className={cardClass}>
       <div className="card-top">
@@ -166,7 +176,7 @@ export function SessionCard({
             onPointerUp={cancelPress}
             onPointerCancel={cancelPress}
           >
-            {session.project}
+            {title}
           </button>
         </h2>
         <span className={ping ? 'lamp lamp--ping' : 'lamp'} data-status={dotStatus}>
