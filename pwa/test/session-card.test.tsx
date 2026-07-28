@@ -8,11 +8,29 @@ import { ToastHost } from '../src/components/Toast';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 // — fixtures —
 
 const MIN = 60_000;
+
+/** Stubs the real `fetch` (not the `api` module) so a request runs through
+ *  the actual `ApiError` construction — this is the only way to exercise the
+ *  `body.stderr` vs `body.error` translation that `apiErrorText` handles and
+ *  a raw `err.message` does not. Mirrors the server's real 502 shape for a
+ *  failed lifecycle route (`{ ok: false, stderr }`, no `error` key). */
+const stubFetch502 = (stderr: string): void => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, stderr }), {
+        status: 502,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ),
+  );
+};
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'claude:OpenClawHetzner',
@@ -90,5 +108,45 @@ describe('remove workspace', () => {
     fireEvent.click(screen.getByRole('button', { name: /remove workspace/i }));
     await waitFor(() =>
       expect(screen.getByText(/uncommitted changes/)).toBeInTheDocument());
+  });
+
+  // The test above mocks api.workspaceRemove directly with a plain Error, so
+  // its .message already equals ccd's text by construction — it can never
+  // catch a broken ApiError -> toast translation. This one goes through the
+  // real fetch -> ApiError path with the server's actual 502 shape
+  // ({ ok: false, stderr }, no `error` key) to prove the toast carries
+  // ccd's stderr rather than the generic "request failed (502)".
+  it("surfaces ccd's stderr from a real 502, not a generic request-failed message", async () => {
+    stubFetch502('worktree not removed (uncommitted changes?)');
+    render(
+      <>
+        <SessionCard session={s({ id: 'alpha-quiet-mesa', workspace: 'quiet-mesa' })}
+                     onOpen={() => {}} inGroup />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /remove workspace/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/uncommitted changes/)).toBeInTheDocument());
+    expect(screen.queryByText(/request failed/)).toBeNull();
+  });
+});
+
+describe('restart', () => {
+  // Same defect, same fix, same proof: api.ensure is another runCcd-backed
+  // lifecycle route that fails as a 502 { stderr } — a raw err.message would
+  // show the same opaque "request failed (502)" on a failed restart.
+  it("surfaces ccd's stderr from a real 502, not a generic request-failed message", async () => {
+    stubFetch502('ccd: no such wrapper');
+    render(
+      <>
+        <SessionCard session={s({ status: 'dead' })} onOpen={() => {}} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /restart session/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/no such wrapper/)).toBeInTheDocument());
+    expect(screen.queryByText(/request failed/)).toBeNull();
   });
 });

@@ -10,7 +10,7 @@ import { accountColorVar, accountLabel } from '../lib/accounts';
 import { useNow } from '../lib/useNow';
 import { StatusDot } from '../components/StatusDot';
 import { toast } from '../components/Toast';
-import { api } from '../lib/api';
+import { api, apiErrorText } from '../lib/api';
 import './fleet.css';
 
 const LONG_PRESS_MS = 550;
@@ -66,7 +66,7 @@ export function SessionCard({
     try {
       await api.ensure(session.id);
     } catch (err) {
-      toast(`Couldn't restart — ${err instanceof Error ? err.message : String(err)}`, 'error');
+      toast(`Couldn't restart — ${apiErrorText(err)}`, 'error');
     } finally {
       setRestarting(false);
     }
@@ -79,7 +79,7 @@ export function SessionCard({
     try {
       await api.workspaceRemove(session.id);
     } catch (err) {
-      toast(`Couldn't remove — ${err instanceof Error ? err.message : String(err)}`, 'error');
+      toast(`Couldn't remove — ${apiErrorText(err)}`, 'error');
     } finally {
       setRemoving(false);
     }
