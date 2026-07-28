@@ -4,6 +4,9 @@ export type SessionStatus = 'busy' | 'idle' | 'dead';
 
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
+  /** The worktree slug when this session is a workspace; null for a project's
+   *  main checkout. Grouping and ws-rm both key off its presence. */
+  workspace: string | null;
   name: string | null;                       // live display name from sessions/<pid>.json
   status: SessionStatus;
   statusUpdatedAt: number | null;            // epoch ms

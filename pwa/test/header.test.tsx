@@ -35,6 +35,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   home: '/home/rc',
   project: 'OpenClawHetzner',
   workdir: '/root/projects/OpenClawHetzner',
+  workspace: null,
   name: null,
   status: 'idle',
   statusUpdatedAt: null,

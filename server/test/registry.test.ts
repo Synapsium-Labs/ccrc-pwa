@@ -45,3 +45,30 @@ describe('readRegistry', () => {
     expect(out).toEqual([]);
   });
 });
+
+describe('workspace on the wire', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  });
+
+  it('reads the workspace field when present', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-mesa', {
+      wrapper: 'claude2', project: 'demo', workdir: '/w/demo/quiet-mesa',
+      uuid: 'a'.repeat(36), workspace: 'quiet-mesa',
+    });
+    const [rec] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(rec.workspace).toBe('quiet-mesa');
+  });
+
+  it('leaves workspace null for a legacy main-checkout session', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'claude2-demo', {
+      wrapper: 'claude2', project: 'demo', workdir: '/p/demo', uuid: 'b'.repeat(36),
+    });
+    const [rec] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(rec.workspace).toBeNull();
+  });
+});

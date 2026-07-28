@@ -22,6 +22,7 @@ const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   home: '/home/rc',
   project: 'OpenClawHetzner',
   workdir: '/home/rc/projects/OpenClawHetzner',
+  workspace: null,
   name: null,
   status: 'idle',
   statusUpdatedAt: Date.now() - 2 * MIN,
