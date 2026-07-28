@@ -87,4 +87,9 @@ describe('slug rules', () => {
   it('honours CCD_WS_SLUG when the name is free', () => {
     expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');
   });
+
+  it('rejects an invalid CCD_WS_SLUG rather than passing it through', () => {
+    expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
+    expect(sh(`CCD_WS_SLUG=feat/thing _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
+  });
 });
