@@ -234,9 +234,36 @@ describe('ws-rm', () => {
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
     expect(fs.existsSync(wt)).toBe(true);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    const branches = execFileSync('git',
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
+      { encoding: 'utf8' });
+    expect(branches.trim()).not.toBe('');
   });
 
   it('refuses an unknown id', () => {
     expect(() => sh(`${RM} cmd_ws_rm nope-nothing`)).toThrow();
+  });
+
+  it('keeps an unmerged branch and its commit after removing a clean, ahead-of-base workspace', () => {
+    const wt = addOne();
+    const gitEnv = { ...process.env, HOME: home, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
+                      GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' };
+    // A real commit on the branch, ahead of base, with a CLEAN working tree —
+    // this must exercise `git branch -d`'s refusal-on-unmerged-work, not the
+    // separate dirty-worktree protection above.
+    fs.writeFileSync(path.join(wt, 'unmerged.txt'), 'ahead\n');
+    execFileSync('git', ['-C', wt, 'add', 'unmerged.txt'], { encoding: 'utf8', env: gitEnv });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'ahead of base'], { encoding: 'utf8', env: gitEnv });
+    const sha = execFileSync('git', ['-C', wt, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+
+    const main = path.join(home, 'projects', 'demo');
+    const branches = execFileSync('git', ['-C', main, 'branch', '--list', 'quiet-mesa'], { encoding: 'utf8' });
+    expect(branches.trim()).not.toBe('');
+    const containing = execFileSync('git', ['-C', main, 'branch', '--contains', sha], { encoding: 'utf8' });
+    expect(containing).toContain('quiet-mesa');
   });
 });
