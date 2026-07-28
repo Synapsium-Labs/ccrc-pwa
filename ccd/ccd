@@ -49,12 +49,39 @@ _gpt_enabled() { [[ ! -f "$GPT_DISABLE_FILE" && -x "$WRAPPER_DIR/gpt" ]]; }   # 
 _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
   [[ -f "$GPT_DISABLE_FILE" ]] && { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
-  if ! _avail gpt; then     # a 429 wrote a cc-limits/gpt.json exclusion
+  if ! _avail gpt; then
+    # TWO different files can land here, and only one of them is a 429:
+    #   • the compact exclusion ccd itself writes on a 429 ({"five":100,"seven":0,
+    #     "ts":<when the 429 happened>} — see _auto_swap_check). Here `ts` IS the
+    #     exclusion time and the 5h cooldown story is true.
+    #   • the steady-state usage sample ccgpt-usage rewrites every 20 min (5 keys,
+    #     python json.dump). There `ts` is the POLL time, "five" is usually null
+    #     (Codex Pro is weekly-only) and the blocker is the weekly cap, whose real
+    #     end time is in sevenResetAt — days out, not "~300m of 5h cooldown".
+    # Telling them apart by the *presence* of the resetAt KEYS, not their values:
+    # ccgpt-usage always emits both (often as null), ccd's printf never emits either.
+    local f="$LIMITS_DIR/gpt.json" ts rem
+    if _limit_has_key "$f" fiveResetAt || _limit_has_key "$f" sevenResetAt; then
+      local five seven pct label reset msg
+      five=$(_limit_field gpt five); seven=$(_limit_field gpt seven)
+      : "${five:=0}"; : "${seven:=0}"
+      if (( seven >= five )); then pct="$seven"; label=weekly; reset=$(_limit_json_num "$f" sevenResetAt)
+      else                        pct="$five";  label=5h;     reset=$(_limit_json_num "$f" fiveResetAt); fi
+      msg="Codex ${label} cap reached (${pct}%"
+      [[ -n "$reset" ]] && msg="$msg, resets $(_fmt_eta "$reset")"
+      echo "$msg)"
+      return
+    fi
     # via _limit_json_num, not a bare grep: gpt.json is the one file written by
     # python json.dump, so its colons carry a space and a compact pattern reads
     # nothing — printing "excluded" with no countdown (see _limit_json_num).
-    local ts rem; ts=$(_limit_json_num "$LIMITS_DIR/gpt.json" ts 2>/dev/null)
-    if [[ -n "$ts" ]]; then rem=$(( (18000 - ($(date +%s) - ts)) / 60 )); echo "429-excluded (~${rem}m of 5h cooldown left)"; else echo "excluded"; fi
+    ts=$(_limit_json_num "$f" ts 2>/dev/null)
+    if [[ -n "$ts" ]]; then
+      rem=$(( (18000 - ($(date +%s) - ts)) / 60 )); (( rem < 0 )) && rem=0   # never count down past the window
+      echo "429-excluded (~${rem}m of 5h cooldown left)"
+    else
+      echo "excluded"
+    fi
     return
   fi
   echo "enabled, available"
@@ -121,6 +148,25 @@ _limit_json_num() {   # file key -> that key's number, or "" when absent, null o
   # get telemetry for any other way as entirely unknown, and the rollover rule below
   # could never fire on it.
   grep -oE "\"$2\"[[:space:]]*:[[:space:]]*[0-9]+" "$1" | head -1 | grep -oE '[0-9]+$'
+}
+
+_limit_has_key() {   # file key -> success if the key is PRESENT, whatever its value.
+  # Presence and value are different questions: ccgpt-usage writes fiveResetAt/
+  # sevenResetAt on every poll and they are frequently null (Codex Pro has no 5h
+  # window, and the API omits a reset for a window at 0). _limit_json_num says ""
+  # for both "absent" and "null", so only this can tell the python usage shape
+  # from the compact 3-key exclusion ccd writes itself (_gpt_status depends on it).
+  grep -q "\"$2\"[[:space:]]*:" "$1" 2>/dev/null
+}
+
+_fmt_eta() {   # epoch-seconds -> "in 42m" / "in 6h" / "in 5d" (coarse on purpose: these
+  # are user-facing "when can I use this again" figures, not scheduling input).
+  local target="$1" now d
+  now=$(date +%s); d=$(( target - now ))
+  (( d <= 0 )) && { printf 'any moment now'; return; }
+  if   (( d < 7200 ));   then printf 'in %dm' $(( (d + 30) / 60 ))
+  elif (( d < 172800 )); then printf 'in %dh' $(( (d + 1800) / 3600 ))
+  else                        printf 'in %dd' $(( (d + 43200) / 86400 )); fi
 }
 
 _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if unknown/stale

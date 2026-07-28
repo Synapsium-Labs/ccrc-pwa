@@ -87,6 +87,53 @@ describe('_gpt_status on a python-written gpt.json', () => {
   });
 });
 
+describe('_gpt_status must not call a Codex weekly cap a 5h cooldown', () => {
+  // The 429 exclusion ccd writes itself survives at most 20 minutes: the
+  // ccgpt-usage timer overwrites gpt.json with a usage sample on every poll.
+  // That sample is the shape on disk essentially always, and every word of the
+  // "429-excluded (~Nm of 5h cooldown left)" line is wrong about it — no 429
+  // happened, Codex Pro has no 5h window ("five": null), and `ts` is the poll
+  // time, so the countdown would hover near 300m forever while the real
+  // sevenResetAt sits days out.
+  const usageSample = (o: Record<string, number | null>): void => {
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    // Spaced colons: json.dump's default separators, i.e. what is really on disk.
+    writeLimits('gpt.json',
+      `{${Object.entries(o).map(([k, v]) => `"${k}": ${v}`).join(', ')}}`);
+  };
+
+  it('reports the weekly figure and its reset, not a cooldown', () => {
+    const t = now();
+    usageSample({ five: null, seven: 99, ts: t - 300, fiveResetAt: null, sevenResetAt: t + 397440 });
+    expect(sh('_gpt_status')).toBe('Codex weekly cap reached (99%, resets in 5d)');
+  });
+
+  it('never counts down past zero when the usage timer has stalled', () => {
+    // 6h-old poll: the old arithmetic printed "~-60m of 5h cooldown left".
+    const t = now();
+    usageSample({ five: null, seven: 99, ts: t - 21600, fiveResetAt: null, sevenResetAt: t + 7200 });
+    expect(sh('_gpt_status')).toBe('Codex weekly cap reached (99%, resets in 2h)');
+  });
+
+  it('names the 5h window when the backend really reported one', () => {
+    const t = now();
+    usageSample({ five: 100, seven: 40, ts: t - 120, fiveResetAt: t + 5400, sevenResetAt: t + 200000 });
+    expect(sh('_gpt_status')).toBe('Codex 5h cap reached (100%, resets in 90m)');
+  });
+
+  it('omits the reset when the API gave none for the binding window', () => {
+    const t = now();
+    usageSample({ five: null, seven: 100, ts: t - 120, fiveResetAt: null, sevenResetAt: null });
+    expect(sh('_gpt_status')).toBe('Codex weekly cap reached (100%)');
+  });
+
+  it('still says available when the usage sample is under the ceiling', () => {
+    const t = now();
+    usageSample({ five: null, seven: 12, ts: t - 120, fiveResetAt: null, sevenResetAt: t + 200000 });
+    expect(sh('_gpt_status')).toBe('enabled, available');
+  });
+});
+
 describe('the account that was stranded on 2026-07-27', () => {
   const strand = (): void => {
     const t = now();
