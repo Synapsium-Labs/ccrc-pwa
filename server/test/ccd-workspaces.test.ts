@@ -140,6 +140,16 @@ describe('ws-add', () => {
     expect(reg('demo-quiet-mesa', 'workdir'))
       .toBe(path.join(home, 'worktrees', 'demo', 'quiet-mesa'));
     expect(reg('demo-quiet-mesa', 'home')).not.toBeNull();
+    // wrapper and uuid are what _spawn's own guard demands
+    // (`[[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die ...`, ccd:497-503).
+    // _spawn is stubbed to a no-op under every ws-add test, so that guard never
+    // runs here — these two assertions are what would catch a dropped
+    // `_reg_set` for either field instead of a silent, worktree-already-created
+    // "incomplete registry" death in production. No .cc-limits fixtures exist
+    // in this test's HOME, so _ws_least_loaded is deterministic: every wrapper
+    // scores 0 and the first of VALID_WRAPPERS (claude) wins.
+    expect(reg('demo-quiet-mesa', 'wrapper')).toBe('claude');
+    expect(reg('demo-quiet-mesa', 'uuid')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
   it('excludes .ccrc/ so a draft file can never be committed', () => {
@@ -171,5 +181,21 @@ describe('ws-add', () => {
   it('refuses a project that is not a git repo', () => {
     fs.mkdirSync(path.join(home, 'projects', 'bare'), { recursive: true });
     expect(() => sh(`${WS_ADD} cmd_ws_add bare`)).toThrow();
+  });
+});
+
+describe('_ws_least_loaded', () => {
+  it('picks the account with the most headroom, not VALID_WRAPPERS[0]', () => {
+    // Same fixture shape _limit_score reads, per ccd-limits.test.ts: {"five":N,"seven":N,"ts":epoch}.
+    // claude (first in VALID_WRAPPERS) is made the WORST choice on purpose, so a selector
+    // that just returned the first wrapper (ignoring load) would fail this assertion.
+    const t = Math.floor(Date.now() / 1000);
+    const writeLimits = (wrapper: string, five: number, seven: number): void =>
+      fs.writeFileSync(path.join(home, '.cc-limits', `${wrapper}.json`),
+        JSON.stringify({ five, seven, ts: t }));
+    writeLimits('claude', 80, 40);       // score 80 — worst
+    writeLimits('claude2', 5, 3);        // score 5 — cheapest
+    writeLimits('claude-corp', 90, 95);  // score 95 — worst of all
+    expect(sh('_ws_least_loaded')).toBe('claude2');
   });
 });
