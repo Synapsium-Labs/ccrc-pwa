@@ -142,11 +142,38 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom
   echo "$best"
 }
 
+# CCD_DISK_FLOOR_GB is the one environment override ccd honours, because unlike
+# PROJECTS_ROOT/WORKTREES_ROOT it can only make ccd REFUSE to act — it can never
+# aim a destructive command at a different tree.
+CCD_DISK_FLOOR_GB="${CCD_DISK_FLOOR_GB:-10}"
+
+_ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
+  local d="$1"
+  # WORKTREES_ROOT is created lazily, so walk up to the nearest parent that
+  # exists; df on a missing path just fails.
+  while [[ ! -d "$d" && "$d" != / && -n "$d" ]]; do d=$(dirname "$d"); done
+  # -P guarantees one filesystem per line, so a long device name cannot wrap the
+  # row and shift field 4. -k pins the block size to 1K, which -P alone does not
+  # (GNU df -P reports 512-byte blocks under POSIXLY_CORRECT).
+  # NOT `df --output=avail`: GNU df rejects -P and --output together.
+  local kb; kb=$(df -Pk "$d" 2>/dev/null | awk 'NR==2 {print $4}')
+  [[ "$kb" =~ ^[0-9]+$ ]] || return 1
+  echo $(( kb / 1024 / 1024 ))
+}
+
 cmd_ws_add() {   # project [slug] — new worktree + session for an existing project
   local project="${1:?usage: ccd ws-add <project> [slug]}" slug="${2:-}"
   [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project'"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
+
+  # Before anything is created: no worktree, no branch, no registry entry, no
+  # session. A refusal here must leave the box exactly as it found it.
+  local free
+  free=$(_ws_disk_free_gb "$WORKTREES_ROOT") \
+    || die "could not read free space for $WORKTREES_ROOT"
+  (( free >= CCD_DISK_FLOOR_GB )) \
+    || die "only ${free}G free on $WORKTREES_ROOT, floor is ${CCD_DISK_FLOOR_GB}G — reclaim space first: ccd ws-gc"
 
   [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
                         _ws_slug_free "$project" "$slug" || die "slug in use: $slug"; }

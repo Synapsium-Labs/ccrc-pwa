@@ -264,6 +264,56 @@ describe('_ws_least_loaded', () => {
   });
 });
 
+describe('disk floor', () => {
+  it('reports whole GiB free for a directory that exists', () => {
+    const gb = sh(`_ws_disk_free_gb "$HOME"`);
+    expect(gb).toMatch(/^\d+$/);
+    expect(Number(gb)).toBeGreaterThan(0);
+  });
+
+  it('walks up to the nearest existing parent — WORKTREES_ROOT may not exist yet', () => {
+    // ~/worktrees is created lazily by ws-add, so the floor check runs before it
+    // exists on a fresh box. df on a missing path fails; the helper must not.
+    const gb = sh(`_ws_disk_free_gb "$HOME/worktrees/never/made"`);
+    expect(gb).toMatch(/^\d+$/);
+  });
+
+  it('refuses ws-add below the floor and creates nothing at all', () => {
+    makeRepo('demo');
+    expect(() =>
+      sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`, { CCD_DISK_FLOOR_GB: '999999' })
+    ).toThrow();
+    expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    // The branch must not exist either: a floor check that ran after
+    // `worktree add` would leave a branch behind on every refusal.
+    const branches = execFileSync('git',
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'],
+      { encoding: 'utf8' });
+    expect(branches.trim()).toBe('');
+  });
+
+  it('names the free space and the floor so the refusal is actionable', () => {
+    makeRepo('demo');
+    let stderr = '';
+    try {
+      execFileSync('bash', ['-c', `source "${CCD}"; ${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`],
+        { encoding: 'utf8', env: { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' } });
+    } catch (e) {
+      stderr = String((e as { stderr?: string }).stderr ?? '');
+    }
+    expect(stderr).toContain('999999');
+    expect(stderr).toMatch(/\d+G free/);
+    expect(stderr).toContain('ccd ws-gc');
+  });
+
+  it('proceeds normally at the default floor', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+});
+
 describe('cmd_stop', () => {
   // `ccd stop <wrapper> <project>` recomputes `<wrapper>-<project>`. A workspace
   // id is `<project>-<slug>` and does not reverse into a wrapper, so any caller
