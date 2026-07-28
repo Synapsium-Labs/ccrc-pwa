@@ -11,11 +11,38 @@ import { ToastHost } from '../src/components/Toast';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 // — fixtures —
 
 const MIN = 60_000;
+
+/** Stubs the real `fetch` (not the `api` module) so a request runs through
+ *  the actual `ApiError` construction — this is the only way to exercise the
+ *  `body.stderr` vs `body.error` translation that `apiErrorText` handles and
+ *  a raw `err.message` does not. Mirrors the server's real 502 shape for a
+ *  failed lifecycle route (`{ ok: false, stderr }`, no `error` key).
+ *
+ *  Unlike the sibling helper in session-card.test.tsx, this mounts the full
+ *  FleetScreen tree — AccountsStrip and FleetHostBanner also call fetch on
+ *  mount (api.accounts / api.fleetHealth), and a Response body can only be
+ *  read once. A single shared `mockResolvedValue(response)` would let the
+ *  first of those consume the body, leaving later callers (our click) with
+ *  an empty, already-read stream — so this hands back a fresh Response
+ *  per call instead. */
+const stubFetch502 = (stderr: string): void => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ ok: false, stderr }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        }),
+    ),
+  );
+};
 
 const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'claude:OpenClawHetzner',
@@ -177,6 +204,33 @@ describe('FleetScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
     await waitFor(() => expect(screen.getByText(/no origin\/HEAD/)).toBeInTheDocument());
+  });
+
+  it("surfaces ccd's stderr from a real 502, not a generic request-failed message", async () => {
+    // Goes through the REAL fetch → ApiError path (unlike the mocked-api test
+    // above), which is the only way to observe the body.stderr vs body.error
+    // translation that apiErrorText performs and a raw err.message does not.
+    stubFetch502('no origin/HEAD — run: git -C /repo remote set-head origin -a');
+    const store = makeStore();
+    render(
+      <>
+        <FleetScreen store={store} />
+        <ToastHost />
+      </>,
+    );
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha' }),
+        session({ id: 'b', project: 'alpha', workspace: 'quiet-mesa' }),
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/origin\/HEAD — run: git -C \/repo remote set-head/))
+        .toBeInTheDocument());
+    expect(screen.queryByText(/request failed/)).toBeNull();
   });
 });
 

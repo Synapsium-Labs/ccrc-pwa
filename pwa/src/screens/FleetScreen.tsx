@@ -12,7 +12,7 @@ import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { groupFleet } from '../fleet/groupFleet';
 import { ProjectGroup } from '../fleet/ProjectGroup';
-import { api } from '../lib/api';
+import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -53,8 +53,7 @@ export function FleetScreen({
     try {
       await api.workspaceAdd(project);
     } catch (err) {
-      toast(`Couldn't create workspace — ${err instanceof Error ? err.message : String(err)}`,
-            'error');
+      toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
     }
   };
 
