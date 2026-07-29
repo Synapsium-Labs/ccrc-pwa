@@ -96,3 +96,37 @@ describe('branch precedence', () => {
     expect(fleet.find((s) => s.id === 'claude-demo')!.branch).toBeNull();
   });
 });
+
+describe('derived session handles', () => {
+  const build = async (live: Record<string, unknown>) => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'claude2-MekWarLive', 'claude2');
+    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.claude-personal', 'sessions', '40613.json'),
+      JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', ...live }),
+    );
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run));
+    return fleet.find((s) => s.id === 'claude2-MekWarLive')!;
+  };
+
+  it('drops a name Claude Code declares derived', async () => {
+    expect((await build({ name: 'mekwarlive-e7', nameSource: 'derived' })).name).toBeNull();
+  });
+
+  it('keeps a name with no nameSource at all — an older file, chosen by a human', async () => {
+    // The ONE live session that carries a real name is exactly this shape.
+    // An implementation testing `=== 'chosen'` passes the case above and fails here.
+    expect((await build({ name: 'add-mcp-image-attachments' })).name)
+      .toBe('add-mcp-image-attachments');
+  });
+
+  it('keeps a name whose nameSource is anything but derived', async () => {
+    expect((await build({ name: 'refactor-auth', nameSource: 'user' })).name).toBe('refactor-auth');
+  });
+});
