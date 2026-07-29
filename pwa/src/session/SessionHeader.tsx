@@ -139,6 +139,13 @@ export function SessionHeader({
   const ultracode = session?.ultracode ?? false;
   const branch = session?.branch ?? null;
   const hasMeta = st !== 'dead' && (model !== null || branch !== null || effort !== null || ultracode);
+  // With no chosen `name`, sessionLabel()'s fallback chain lands on `branch` —
+  // so the crumb above and this chip would print the identical string a few
+  // pixels apart. Compare the actual rendered text (crumb vs branch), not the
+  // fields that produced them, so the two can never disagree about what
+  // "duplicate" means. A chosen name, or a main checkout with no crumb at
+  // all, always differ — the chip renders exactly as it does today.
+  const branchDuplicatesCrumb = crumb !== null && branch === crumb;
 
   return (
     <header className="chat-head">
@@ -188,7 +195,7 @@ export function SessionHeader({
             >
               <span className="metachip-text">{ultracode ? 'ultracode' : (effort ?? 'set effort')}</span>
             </button>
-            {branch !== null && (
+            {branch !== null && !branchDuplicatesCrumb && (
               <span className="metachip metachip--branch" title={branch}>
                 <span className="metachip-glyph" aria-hidden="true">⎇</span>
                 <span className="metachip-text">{branch}</span>

@@ -258,6 +258,42 @@ describe('breadcrumb', () => {
       project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
     expect(screen.getByText('refactor-auth')).toBeInTheDocument();
   });
+
+  // The common case: no chosen `name`, so sessionLabel() falls through to
+  // `branch` and the crumb prints the exact same string the branch metachip
+  // would — a few pixels below it. The chip must not repeat it.
+  it('suppresses the branch chip when it would repeat the crumb', () => {
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin' }) })} />);
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+    expect(container.querySelector('.metachip--branch')).toBeNull();
+    // Belt and braces: the branch text appears exactly once in the whole
+    // header, not zero (that would pass against deleting the chip outright)
+    // and not twice (the duplicate this fix removes).
+    expect(screen.getAllByText('ws/quiet-basin')).toHaveLength(1);
+  });
+
+  it('keeps the branch chip once it differs from the crumb — two distinct elements', () => {
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
+    const crumb = container.querySelector('.chat-crumb');
+    const chip = container.querySelector('.metachip--branch');
+    expect(crumb).toHaveTextContent('refactor-auth');
+    expect(chip).toHaveTextContent('ws/quiet-basin');
+    expect(crumb).not.toBe(chip);
+    expect(crumb?.textContent).not.toBe(chip?.textContent);
+  });
+
+  it('keeps the branch chip for a main checkout with no crumb at all', () => {
+    // No workspace -> no crumb -> nothing for the chip to duplicate; it must
+    // render exactly as it always has. (Not the common case in practice —
+    // `branch` is usually only parsed for worktree sessions — but the fix
+    // must not regress it if it ever occurs.)
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: null, name: null, branch: 'main', id: 'demo' }) })} />);
+    expect(container.querySelector('.chat-crumb')).toBeNull();
+    expect(container.querySelector('.metachip--branch')).toHaveTextContent('main');
+  });
 });
 
 describe('useKeyboardInsets', () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ChatEvent } from '../../shared/api';
+import { useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { ChatListInner } from '../src/session/ChatList';
@@ -466,6 +467,101 @@ describe('Enter on touch', () => {
   });
 });
 
+// — Composer autofocus —
+// Opening a session should land the cursor in the composer on a fine
+// pointer (a physical keyboard) — the exact friction reported: tapping a
+// fleet row, or picking one in the desktop sidebar, left focus on the row
+// and cost an extra click. Gated on the same (pointer: fine) predicate as
+// Enter-to-send above; must never pop the on-screen keyboard on touch.
+//
+// The actual focus() call is deferred a tick (see Composer.tsx) so a Sheet
+// already open the instant the screen appears has settled into the DOM
+// before Composer decides whether to take focus — every assertion here
+// waits past that same tick before checking.
+const flushTimers = (): Promise<void> => act(() => new Promise<void>((r) => setTimeout(r, 0)));
+
+/** A sibling field the user is already mid-type in — focused via a layout
+ *  effect so it claims focus strictly before Composer's own (deferred)
+ *  effect runs, regardless of render order. */
+function FieldBesideComposer({ id }: { id: string }): ReactNode {
+  const ref = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <>
+      <input ref={ref} data-testid="other-field" />
+      <Composer id={id} onSend={vi.fn()} pending={[]} />
+    </>
+  );
+}
+
+describe('Composer autofocus', () => {
+  it('focuses the composer when the session opens with a fine pointer', async () => {
+    stubPointer(true);
+    render(<Composer id="s1" onSend={vi.fn()} pending={[]} />);
+    await flushTimers();
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus();
+  });
+
+  it('does not steal focus on a coarse pointer', async () => {
+    stubPointer(false);
+    render(<Composer id="s1" onSend={vi.fn()} pending={[]} />);
+    await flushTimers();
+    expect(screen.getByRole('textbox', { name: 'Message' })).not.toHaveFocus();
+  });
+
+  it('does not focus a disabled (dead/read-only) composer', async () => {
+    stubPointer(true);
+    render(<Composer id="s1" onSend={vi.fn()} pending={[]} disabled />);
+    await flushTimers();
+    expect(screen.getByRole('textbox', { name: 'Message' })).not.toHaveFocus();
+  });
+
+  it('focuses with preventScroll, so opening a session never scrolls the page', async () => {
+    stubPointer(true);
+    const focusSpy = vi.spyOn(HTMLTextAreaElement.prototype, 'focus');
+    render(<Composer id="s1" onSend={vi.fn()} pending={[]} />);
+    await flushTimers();
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('re-focuses when the session id changes — the desktop-sidebar-switch flow', async () => {
+    stubPointer(true);
+    const { rerender } = render(<Composer id="s1" onSend={vi.fn()} pending={[]} />);
+    await flushTimers();
+    const box1 = screen.getByRole('textbox', { name: 'Message' });
+    expect(box1).toHaveFocus();
+
+    // Focus moves on in between, exactly as it does when the user clicks a
+    // different row in the sidebar to open a different session.
+    act(() => { box1.blur(); });
+    expect(box1).not.toHaveFocus();
+
+    rerender(<Composer id="s2" onSend={vi.fn()} pending={[]} />);
+    await flushTimers();
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus();
+  });
+
+  it('does not steal focus from a field the user is already typing in', async () => {
+    stubPointer(true);
+    render(<FieldBesideComposer id="s1" />);
+    await flushTimers();
+    expect(screen.getByTestId('other-field')).toHaveFocus();
+    expect(screen.getByRole('textbox', { name: 'Message' })).not.toHaveFocus();
+  });
+
+  it('does not autofocus while a Sheet/dialog is open over the chat', async () => {
+    stubPointer(true);
+    render(
+      <>
+        <div role="dialog" />
+        <Composer id="s1" onSend={vi.fn()} pending={[]} />
+      </>,
+    );
+    await flushTimers();
+    expect(screen.getByRole('textbox', { name: 'Message' })).not.toHaveFocus();
+  });
+});
+
 // — SessionScreen —
 
 describe('SessionScreen', () => {
@@ -494,5 +590,47 @@ describe('SessionScreen', () => {
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.getByText('/home/rc/.claude/projects/x/u1.jsonl')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open terminal' })).toBeInTheDocument();
+  });
+
+  it('focuses the composer on open with a fine pointer — no second click needed', async () => {
+    stubPointer(true);
+    const store = makeStore();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    await flushTimers();
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus();
+  });
+
+  it('leaves focus alone on a coarse pointer', async () => {
+    const store = makeStore();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    await flushTimers();
+    expect(screen.getByRole('textbox', { name: 'Message' })).not.toHaveFocus();
+  });
+
+  it('does not steal focus from a dialog already open on arrival', async () => {
+    // A real end-to-end version of the Sheet-guard: a pending dialog can be
+    // showing the instant the screen appears (DialogSheet reads it straight
+    // off the store), not just something Composer opens itself.
+    stubPointer(true);
+    const store = makeStore();
+    seed(store, {
+      dialog: {
+        id: 'd1',
+        title: 'Which migration strategy?',
+        options: [{ index: 1, label: 'Expand–contract' }],
+        selectedIndex: 1,
+        parsed: true,
+        raw: '❯ 1. Expand–contract',
+      },
+    });
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    await flushTimers();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // Radix marks the rest of the page aria-hidden while the dialog is open
+    // (correctly — it's inert to assistive tech), which takes the composer's
+    // textarea out of getByRole entirely; query the raw DOM instead.
+    const composerInput = document.querySelector('.composer-input');
+    expect(composerInput).not.toBeNull();
+    expect(composerInput).not.toHaveFocus();
   });
 });

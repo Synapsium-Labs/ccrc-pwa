@@ -138,6 +138,45 @@ export function Composer({
   // on on-screen keyboards, and free to honour where Enter already means newline.
   const finePointer = useMediaQuery('(pointer: fine)');
 
+  // Opening a session should put the cursor here, not leave the user to
+  // click again — the exact friction reported: tapping a fleet row (or
+  // picking one in the desktop sidebar) left focus on the row itself. Keyed
+  // on `id` so switching sessions in the sidebar re-fires this even without
+  // a remount; SessionScreen also happens to remount Composer per session
+  // (`key={sessionId}`), which would fire it anyway, but the id dependency
+  // is what actually earns that behaviour rather than borrowing it.
+  // Fine-pointer only: a physical keyboard exists, so focusing costs nothing.
+  // On glass, autofocusing a textarea pops the on-screen keyboard unprompted
+  // and shoves the whole chat view up before the user has decided to type —
+  // hostile on the phone-first case, so coarse pointers are left alone.
+  useEffect(() => {
+    if (!finePointer || disabled) return;
+    // Deferred a tick: a Sheet already open the instant the screen appears
+    // (a pending dialog waiting on arrival) mounts its own focus trap
+    // through a portal whose effects settle asynchronously — whether ours
+    // or its runs first within the same commit isn't guaranteed, so we wait
+    // for that to resolve before looking at the DOM to decide.
+    const timer = setTimeout(() => {
+      const el = box.current;
+      if (!el) return;
+      // Don't fight the user. A Sheet already open over the chat (this
+      // one's own draft-conflict sheet, or one of SessionScreen's) traps its
+      // own focus and must keep it; a field the user is already mid-type in
+      // elsewhere keeps it too. A stray button — the fleet row just
+      // tapped/clicked to get here — isn't "in use" in that sense: taking
+      // focus from it is the whole point of this fix.
+      const active = document.activeElement;
+      const editingElsewhere = active !== null && active !== el && (
+        active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
+        || (active as HTMLElement).isContentEditable
+      );
+      if (editingElsewhere || document.querySelector('[role="dialog"]') !== null) return;
+      el.focus({ preventScroll: true });
+    }, 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-fire only on a session switch, per spec
+  }, [id]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key !== 'Enter') return;
     if (finePointer) {
