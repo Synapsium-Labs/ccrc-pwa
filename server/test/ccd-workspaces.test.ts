@@ -487,6 +487,65 @@ describe('ws-rm', () => {
     expect(calls()).toEqual([]);
   });
 
+  // The test above hand-picks the one variant of "not our worktree" that the
+  // record cannot lie about: it prunes first, so `registered` is 1. Without the
+  // prune the record is STALE — git still claims this path, so `registered` is
+  // 0 and a guard that only reads the record waves the teardown through and
+  // dies on `worktree remove` afterwards. The directory has to be asked which
+  // repository it belongs to.
+  const recreateWithStaleRecord = (): string => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });   // NO `worktree prune`
+    return wt;
+  };
+  const staleRecordStands = (wt: string): void => {
+    expect(execFileSync('git', ['-C', main(), 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8' })).toContain(wt);
+  };
+
+  it('refuses a stale record whose directory came back as its own repository', () => {
+    const wt = recreateWithStaleRecord();
+    staleRecordStands(wt);
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    // COMMITTED, so `git status --porcelain` in there is clean: the dirty guard
+    // must not be what saves this: it is not the reason ccd should refuse, and
+    // it does not fire for the empty repo two tests below.
+    fs.writeFileSync(path.join(wt, 'PRECIOUS'), 'not ccd’s to remove\n');
+    execFileSync('git', ['-C', wt, 'add', 'PRECIOUS'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
+  it('refuses a stale record whose directory came back as ANOTHER repo’s worktree', () => {
+    const wt = recreateWithStaleRecord();
+    makeRepo('other');
+    execFileSync('git', ['-C', path.join(home, 'projects', 'other'),
+      'worktree', 'add', '-b', 'ws/borrowed', wt], { env: gitEnv() });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(execFileSync('git', ['-C', path.join(home, 'projects', 'other'),
+      'branch', '--list', 'ws/borrowed'], { encoding: 'utf8' }).trim()).not.toBe('');
+  });
+
+  // A refusal that kills first is not merely wrong once: every re-run kills
+  // again. This is what "nothing was touched" has to mean on attempt two.
+  it('kills nothing on a re-run of a refused removal', () => {
+    const wt = recreateWithStaleRecord();
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
   it('deletes no branch for a detached HEAD, and still clears the record', () => {
     const wt = addOne();
     execFileSync('git', ['-C', wt, 'checkout', '--detach'], { env: gitEnv() });
@@ -496,5 +555,21 @@ describe('ws-rm', () => {
     expect(branches('ws/quiet-mesa')).not.toBe('');
     expect(execFileSync('git', ['-C', main(), 'worktree', 'list', '--porcelain'],
       { encoding: 'utf8' })).not.toContain('quiet-mesa');
+  });
+
+  // ...and saying "no branch to delete" is not the whole truth: the registry
+  // named one, it still exists, and after this teardown it has no worktree, no
+  // registration and no registry entry — invisible, which is the state this
+  // whole change exists to prevent. Same rung-3 rule as the uncorroborated
+  // case: name it, hand over the command, delete nothing.
+  it('names the registry branch a detached HEAD would otherwise orphan', () => {
+    const wt = addOne();
+    execFileSync('git', ['-C', wt, 'checkout', '--detach'], { env: gitEnv() });
+    fs.rmSync(wt, { recursive: true, force: true });
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(out).toContain('detached HEAD');
+    expect(out).toContain('ws/quiet-mesa');
+    expect(out).toContain(`branch -d ws/quiet-mesa`);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
   });
 });
