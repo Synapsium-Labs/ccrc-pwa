@@ -524,8 +524,8 @@ cmd_ws_gc() {   # [--prune]
     out=$(_ws_gc_prune_row "$state" "$project" "$slug" "$p")
     [[ -n "$out" ]] || continue
     echo "$out"
-    reclaimed=$(( reclaimed + $(grep -c 'reclaimed' <<< "$out") ))
-    declined=$((  declined  + $(grep -c 'declined'  <<< "$out") ))
+    reclaimed=$(( reclaimed + $(grep -c '^  reclaimed ' <<< "$out") ))
+    declined=$((  declined  + $(grep -c '^  declined '  <<< "$out") ))
   done <<< "$rows"
   echo
   echo "reclaimed $reclaimed, declined $declined"

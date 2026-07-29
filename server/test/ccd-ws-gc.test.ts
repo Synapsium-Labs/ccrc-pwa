@@ -310,4 +310,17 @@ describe('ws-gc --prune', () => {
     expect(out).toContain('STATE');
     expect(out.indexOf('STATE')).toBeLessThan(out.indexOf('removed orphan worktree'));
   });
+
+  it('does not let a path containing "reclaimed" inflate the summary counts', () => {
+    // Regression: the counting grep used to be unanchored and matched the
+    // whole line, path included. A foreign worktree whose path contains the
+    // substring "reclaimed" made a single declined line count as BOTH
+    // reclaimed and declined, even though nothing was ever removed.
+    const main = h.makeRepo('demo');
+    const elsewhere = path.join(h.home, '.handoff', 'wt', 'demo-not-reclaimed-yet');
+    h.git(main, 'worktree', 'add', '-b', 'handoff/not-reclaimed-yet', elsewhere);
+    const out = prune();
+    expect(out).toContain('reclaimed 0');
+    expect(fs.existsSync(elsewhere)).toBe(true);
+  });
 });
