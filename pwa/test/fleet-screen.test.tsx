@@ -5,7 +5,6 @@ import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { FleetScreen } from '../src/screens/FleetScreen';
-import { SessionCard } from '../src/fleet/SessionCard';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '../src/components/Toast';
 
@@ -321,43 +320,24 @@ describe('FleetScreen', () => {
   });
 });
 
-// — SessionCard —
-
-describe('SessionCard', () => {
-  it('opens the session when tapped', () => {
-    const onOpen = vi.fn();
-    render(<SessionCard session={session()} onOpen={onOpen} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'OpenClawHetzner' }));
-    expect(onOpen).toHaveBeenCalledWith('claude:OpenClawHetzner');
-  });
-
-  it('renders the dead card muted with restart affordances', () => {
-    const ensure = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
-    const onOpen = vi.fn();
-    render(
-      <SessionCard
-        session={session({ status: 'dead', statusUpdatedAt: Date.now() - 3 * 60 * MIN })}
-        onOpen={onOpen}
-      />,
-    );
-
-    expect(screen.getByText('Not running — tap to view, hold to restart')).toBeInTheDocument();
-    expect(screen.getByText('exited · 3h ago')).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
-    // Dead cards hide the limits bars — meaningless for a stopped session.
-    expect(document.querySelector('.limits')).not.toBeInTheDocument();
-
-    // The inline restart button calls ensure without also opening the session.
-    fireEvent.click(screen.getByRole('button', { name: 'Restart session' }));
-    expect(ensure).toHaveBeenCalledWith('claude:OpenClawHetzner');
-    expect(onOpen).not.toHaveBeenCalled();
-
-    // Tapping the card still opens the (read-only) chat.
-    fireEvent.click(screen.getByRole('button', { name: 'OpenClawHetzner' }));
-    expect(onOpen).toHaveBeenCalledWith('claude:OpenClawHetzner');
-  });
-
+// — AccountsStrip —
+//
+// Was filed under a `describe('SessionCard', ...)` block alongside three
+// tests that rendered <SessionCard> directly. SessionCard is retired (see
+// SessionLine.tsx); those three were dropped as redundant with coverage that
+// already exists for its replacement:
+//   - "opens the session when tapped" → session-line.test.tsx
+//     ("opens the session on tap")
+//   - "renders the dead card muted with restart affordances" → the dead/exited
+//     state is covered by session-line.test.tsx ("reads exited when dead");
+//     the restart affordance itself by session-actions-sheet.test.tsx
+//     ("restarts through api.ensure") and chat.test.tsx.
+//   - "a session card no longer renders its own limit bars" → superseded by
+//     session-line.test.tsx's own limit-bar-free rendering (SessionLine never
+//     had card-style limit bars to begin with).
+// This test never rendered <SessionCard> — it renders <AccountsStrip />
+// directly — so it survives, renamed to match what it actually tests.
+describe('AccountsStrip', () => {
   it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
     const nowSec = Math.floor(Date.now() / 1000);
     vi.spyOn(api, 'accounts').mockResolvedValue({
@@ -376,10 +356,5 @@ describe('SessionCard', () => {
     // reset countdown rendered ("2h" for the 5h window)
     expect(screen.getByText(/↻\s*2h/)).toBeInTheDocument();
     vi.restoreAllMocks();
-  });
-
-  it('a session card no longer renders its own limit bars', () => {
-    render(<SessionCard session={session({ limits: { five: 85, seven: 30 } })} onOpen={() => {}} />);
-    expect(document.querySelectorAll('.limit-fill')).toHaveLength(0);
   });
 });

@@ -185,95 +185,6 @@
   gap: var(--sp-3);
   transition: transform var(--dur-press) var(--ease-swift);
 }
-/* The whole card is the open control (the stretched title button), so the
-   whole card compresses under the thumb — DIRECTION's 120ms press language. */
-.card:has(.card-open:active) {
-  transform: scale(0.98);
-}
-/* Active session in the desktop sidebar — a left accent bar + raised ground.
-   The bar rides its own box-shadow so it composes with the status glows/borders
-   (busy/attention use ::after + border-color); only relevant when a session is
-   open, which on mobile means the sidebar is hidden anyway. */
-.card--active {
-  background: var(--bg-raised);
-  box-shadow: inset 3px 0 0 0 var(--ink-secondary), var(--shadow-card);
-}
-.card--busy {
-  border-color: color-mix(in srgb, var(--status-busy) 40%, var(--edge-subtle));
-}
-.card--busy::after,
-.card--attention::after {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  pointer-events: none;
-  opacity: 0.55;
-  animation: card-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
-}
-.card--busy::after {
-  box-shadow: var(--glow-busy);
-}
-.card--attention {
-  border-color: color-mix(in srgb, var(--status-attention) 40%, var(--edge-subtle));
-}
-.card--attention::after {
-  box-shadow: var(--glow-attention);
-  animation-duration: var(--pulse-period);
-}
-@keyframes card-breathe {
-  to {
-    opacity: 1;
-  }
-}
-
-.card-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp-3);
-}
-.proj {
-  font: var(--weight-medium) var(--text-lg) / var(--leading-tight) var(--font-mono);
-  letter-spacing: -0.01em;
-  overflow-wrap: anywhere;
-  color: var(--ink-primary);
-}
-/* The title is the card's open control, stretched over the whole card so the
-   entire surface is one ≥44px target. Inner controls that must stay tappable
-   (restart) sit above the stretch with z-index. */
-.card-open {
-  display: block;
-  border: none;
-  background: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  letter-spacing: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  border-radius: var(--r-sm);
-}
-.card-open::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: var(--r-lg);
-}
-.card-restart {
-  position: relative;
-  z-index: 1;
-}
-.card-remove { align-self: flex-start; color: var(--ink-secondary); }
-
-.card-sub {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-}
-
 /* Account chip — mono name first, hue second (colors arrive inline from
    lib/accounts.ts token names; a dead card drains its chip to gray). */
 .chip {
@@ -308,125 +219,6 @@
 }
 .status-line--dead {
   color: var(--status-dead-text);
-}
-
-/* The lamp: status dot seated in a darker well — an indicator behind glass.
-   Its `color` carries the current state hue for the one-shot ping ring. */
-.lamp {
-  position: relative;
-  width: var(--lamp-size);
-  height: var(--lamp-size);
-  border-radius: var(--r-full);
-  background: var(--bg-well);
-  box-shadow:
-    inset 0 0 0 1px var(--edge-strong),
-    inset 0 1px 2px var(--scrim);
-  display: grid;
-  place-items: center;
-  flex: none;
-  margin-top: 2px;
-}
-.lamp[data-status='busy'] {
-  color: var(--status-busy);
-}
-.lamp[data-status='dialog'] {
-  color: var(--status-attention);
-}
-.lamp[data-status='idle'] {
-  color: var(--status-idle);
-}
-.lamp[data-status='dead'] {
-  color: var(--status-dead);
-}
-/* One-shot expanding ring when the state changes — the ring takes the NEW
-   state's color via currentColor. */
-.lamp--ping::after {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: var(--r-full);
-  border: 1.5px solid currentColor;
-  opacity: 0;
-  animation: lamp-ping var(--dur-ping) var(--ease-swift) 1 forwards;
-}
-@keyframes lamp-ping {
-  0% {
-    transform: scale(1);
-    opacity: 0.9;
-  }
-  100% {
-    transform: scale(1.9);
-    opacity: 0;
-  }
-}
-
-/* Attention badge — never a bare dot to interpret. */
-.card-attn {
-  font: var(--weight-medium) var(--text-sm) / var(--leading-normal) var(--font-ui);
-  color: var(--status-attention-text);
-  background: var(--status-attention-tint);
-  border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-3);
-}
-
-/* Plan progress — a hairline gauge, a tally, and what the session is on right
-   now. Deliberately quieter than the limit bars: this is orientation, not a
-   forecast, so the fill stays matte ink rather than taking a status hue. */
-.card-tasks {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-}
-.task-track {
-  flex: none;
-  width: 44px;
-  height: 3px;
-  border-radius: var(--r-full);
-  background: var(--limit-track);
-  overflow: hidden;
-}
-.task-track i {
-  display: block;
-  height: 100%;
-  border-radius: var(--r-full);
-  background: var(--ink-tertiary);
-  transition: width var(--dur-bar) var(--ease-swift);
-}
-.card--busy .task-track i {
-  background: var(--status-busy);
-}
-.task-tally {
-  flex: none;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-secondary);
-}
-.task-active {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-ui);
-  color: var(--ink-tertiary);
-}
-
-/* Critical-limit narration — mono forecast line under the gauges (DIRECTION:
-   "a red band is a forecast, not an alarm"). */
-.card-limit-note {
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--status-dead-text);
-}
-
-/* Dead card — the machine gone cold, via color tokens (never element
-   opacity, which would push ink below AA). */
-.card--dead .proj {
-  color: var(--ink-secondary);
-}
-.card-hint {
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
-  color: var(--ink-secondary);
 }
 
 /* ------------------------------------------------------------------ *
@@ -672,18 +464,8 @@
  *  fires. Disable loops outright; never zero their periods.           *
  * ------------------------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
-  .card--busy::after,
-  .card--attention::after {
-    animation: none;
-    opacity: 0.8;
-  }
-  .lamp--ping::after {
-    animation: none;
-    opacity: 0;
-  }
   .fab,
   .card,
-  .card-open,
   .notice-x,
   .acct-change,
   .acct-list .acct-row,
@@ -752,35 +534,6 @@
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
 
-/* ------------------------------------------------------------------ *
- *  Project group — a header only when a project holds more than one   *
- *  session (worktrees). Collapsing hides the cards, never the state:  *
- *  the header keeps the count and the attention dot regardless.       *
- * ------------------------------------------------------------------ */
-.proj-group { display: flex; flex-direction: column; gap: var(--sp-2); }
-.proj-group-head { display: flex; align-items: center; gap: var(--sp-2); }
-.proj-group-toggle {
-  flex: 1; display: flex; align-items: center; gap: var(--sp-2);
-  min-height: var(--tap-min); padding: 0 var(--sp-2);
-  background: none; border: 0; color: var(--ink-secondary);
-  font: inherit; text-align: left; cursor: pointer;
-}
-.proj-group-chevron { width: 1em; color: var(--ink-tertiary); }
-.proj-group-name { font-weight: var(--weight-semibold); color: var(--ink-primary); }
-.proj-group-count {
-  padding: 0 var(--sp-1); border-radius: var(--r-full);
-  background: var(--bg-raised); color: var(--ink-secondary);
-  font-variant-numeric: tabular-nums;
-}
-.proj-group-attn { color: var(--status-attention); }
-.proj-group-add {
-  display: flex; align-items: center; gap: var(--sp-2);
-  min-width: var(--tap-min); min-height: var(--tap-min);
-  padding: 0 var(--sp-2);
-  background: none; border: 0; color: var(--ink-secondary);
-  font-size: 1.25rem; cursor: pointer;
-}
-.proj-group-add:disabled { opacity: 0.45; cursor: default; }
 /* Where this workspace will land, and how much room is left there — said
    BEFORE the tap. Ink-tertiary on the page ground until the projected account
    is near its ceiling, at which point it takes the attention hue: a workspace
@@ -791,10 +544,6 @@
   white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .proj-add-acct[data-low] { color: var(--status-attention-text); }
-/* An ungrouped project gets the + and nothing else — no header, no chevron, no
-   indent. The row is the + alone, right-aligned under the single card. */
-.proj-add-bare { display: flex; justify-content: flex-end; }
-.proj-group-body { display: flex; flex-direction: column; gap: var(--sp-2); }
 
 /* ── session line ─────────────────────────────────────────────────
    One session inside a project card. Grid rather than flex so the columns
@@ -882,8 +631,8 @@
   min-height: 44px;
 }
 
-/* --danger has no counterpart in this file's tokens; SessionCard's identical
-   "Remove workspace" button (.card-remove) is --ink-secondary, not a red —
+/* --danger has no counterpart in this file's tokens; the retired SessionCard's
+   identical "Remove workspace" button was --ink-secondary too, not a red —
    ws-rm's own refusal already carries the warning, so the button stays calm. */
 .sess-sheet-remove { color: var(--ink-secondary); }
 

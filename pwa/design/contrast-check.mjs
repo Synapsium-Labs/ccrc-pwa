@@ -61,6 +61,9 @@ const pairs = (T, name) => [
   [`${name} ink-tertiary / page`, T.inkT, T.page, 4.5],
   [`${name} ink-on-well / well`, T.inkWell, T.well, 4.5],
   [`${name} ink-on-accent / accent`, T.accentInk, T.accent, 4.5],
+  // Every mono "working" readout on a card ground: the chat header's
+  // .status-line--busy and (this branch) the fleet row's
+  // .sess-state--working — both sit on .chat-head / .proj-card, i.e. surface.
   [`${name} busy-text / surface`, T.busyText, T.surface, 4.5],
   [`${name} busy dot / surface (UI 3:1)`, T.busy, T.surface, 3],
   [`${name} busy dot / page (UI 3:1)`, T.busy, T.page, 3],
@@ -68,19 +71,30 @@ const pairs = (T, name) => [
   [`${name} idle dot / surface (UI 3:1)`, T.idle, T.surface, 3],
   [`${name} idle dot / lamp well (UI 3:1)`, T.idle, T.well, 3],
   [`${name} attention-text / att-tint`, T.attText, T.attTint, 4.5],
+  // Three readouts share this ground now: the chat header's
+  // .status-line--attention, the fleet row's .sess-state--waiting, and the
+  // project card header's .proj-card-attn dot — all sit on .chat-head /
+  // .proj-card, i.e. surface.
   [`${name} attention-text / surface`, T.attText, T.surface, 4.5],
   [`${name} attention dot / surface (UI 3:1)`, T.att, T.surface, 3],
   [`${name} attention dot / lamp well (UI 3:1)`, T.att, T.well, 3],
-  // A project group's attention dot (.proj-group-attn) sits on the bare page:
-  // the group header has no ground of its own. A glyph, so the 3:1 UI floor —
-  // LIGHT clears it at 3.58, which is close enough that a token nudge should
-  // fail the build rather than pass unnoticed.
+  // .proj-card-attn (".proj-group-attn"'s replacement — the project header's
+  // "waiting on you" glyph) sits on the card surface now, not the bare page:
+  // every project always has a card ground since this branch's reshape, so
+  // the literal dot/page scenario this pair was written for no longer has a
+  // live counterpart. Kept anyway as a defensive floor on the raw dot hue
+  // (rather than dropped as "nothing renders this"): test/contrast.test.ts
+  // pins this exact pair, and a future header that DOES land directly on the
+  // page — no card ground, same glyph-at-3:1 shape — should find the gate
+  // already watching rather than silently uncovered.
   [`${name} attention dot / page (UI 3:1)`, T.att, T.page, 3],
   // The `+` affordance's projected-account line when the landing account is
   // near its ceiling (.proj-add-acct[data-low]). 11px, so body text at 4.5 —
   // which is why it takes attention-TEXT and not the dot hue: LIGHT's dot
   // (#B27400) reads 3.58 here and would fail this threshold.
   [`${name} attention-text / page`, T.attText, T.page, 4.5],
+  // The chat header's .status-line--dead and (this branch) the fleet row's
+  // .sess-warn critical-limit glyph both take dead-text on a surface ground.
   [`${name} dead-text / surface`, T.deadText, T.surface, 4.5],
   [`${name} dead dot / surface (UI 3:1)`, T.dead, T.surface, 3],
   [`${name} dead dot / lamp well (UI 3:1)`, T.dead, T.well, 3],
@@ -89,6 +103,13 @@ const pairs = (T, name) => [
   [`${name} acct claude2 / tint`, T.claude2, T.claude2T, 4.5],
   [`${name} acct corp / tint`, T.corp, T.corpT, 4.5],
   [`${name} acct gpt / tint`, T.gpt, T.gptT, 4.5],
+  // The fleet row's .sess-acct label takes the account hue directly (no
+  // tint pill, unlike the pickers above) straight on the project card's
+  // surface ground — a genuinely new combination this branch introduces.
+  [`${name} acct claude / surface (sess-acct)`, T.claude, T.surface, 4.5],
+  [`${name} acct claude2 / surface (sess-acct)`, T.claude2, T.surface, 4.5],
+  [`${name} acct corp / surface (sess-acct)`, T.corp, T.surface, 4.5],
+  [`${name} acct gpt / surface (sess-acct)`, T.gpt, T.surface, 4.5],
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
