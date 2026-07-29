@@ -307,6 +307,12 @@ describe('ws-rm', () => {
   const RM = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; `
     + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
 
+  const main = (): string => path.join(home, 'projects', 'demo');
+  const branches = (glob: string): string =>
+    execFileSync('git', ['-C', main(), 'branch', '--list', glob], { encoding: 'utf8' }).trim();
+  const gitEnv = (): NodeJS.ProcessEnv => ({ ...process.env, HOME: home,
+    GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' });
+
   it('removes the worktree, the branch and the registry entry', () => {
     const wt = addOne();
     sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
@@ -404,5 +410,91 @@ describe('ws-rm', () => {
     expect(branches.trim()).not.toBe('');
     const containing = execFileSync('git', ['-C', main, 'branch', '--contains', sha], { encoding: 'utf8' });
     expect(containing).toContain('quiet-mesa');
+  });
+
+  // THE BUG. A hand-deleted directory left the branch with no worktree, no
+  // registry entry and no ws-gc row — invisible forever. git still holds the
+  // record (marked `prunable`), which is both where the name comes from and
+  // what blocks `branch -d` until `worktree remove` clears it.
+  it('deletes the branch when the worktree directory was removed by hand', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(execFileSync('git', ['-C', main(), 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8' })).not.toContain('quiet-mesa');
+  });
+
+  // Not "delete more": an unmerged branch still survives on that path — and now
+  // says so, instead of being kept in silence by `2>/dev/null || true`.
+  it('keeps an unmerged branch when the directory is gone, and says it kept it', () => {
+    const wt = addOne();
+    fs.writeFileSync(path.join(wt, 'x.txt'), 'ahead\n');
+    execFileSync('git', ['-C', wt, 'add', 'x.txt'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'ahead of base'], { env: gitEnv() });
+    const sha = execFileSync('git', ['-C', wt, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    fs.rmSync(wt, { recursive: true, force: true });
+
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(out).toContain('kept branch ws/quiet-mesa');
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(execFileSync('git', ['-C', main(), 'branch', '--contains', sha],
+      { encoding: 'utf8' })).toContain('quiet-mesa');
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+  });
+
+  // The wrong-branch test. A hand `git branch -m` bypasses ws-rename, so the
+  // registry keeps the OLD name — and a decoy under that old name is merged,
+  // i.e. `branch -d` would happily take it. Git's record wins; the decoy lives.
+  // This is what fails loudly if anyone "simplifies" the fix to "use the
+  // registry field".
+  it('trusts git over the registry when they disagree, and touches nothing else', () => {
+    const wt = addOne();
+    execFileSync('git', ['-C', wt, 'branch', '-m', 'feat/handmade'], { env: gitEnv() });
+    execFileSync('git', ['-C', main(), 'branch', 'ws/quiet-mesa', 'main'], { env: gitEnv() });
+    fs.rmSync(wt, { recursive: true, force: true });
+
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(branches('feat/handmade')).toBe('');
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(out).toContain("registry recorded 'ws/quiet-mesa'");
+  });
+
+  // Rung 3: no worktree record at all. Deleting the wrong branch costs more
+  // than leaving the right one, so ws-rm finishes the teardown and hands over
+  // the command instead of guessing from an uncorroborated registry field.
+  it('will not delete an uncorroborated branch, and names the command instead', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });
+    execFileSync('git', ['-C', main(), 'worktree', 'prune']);
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(out).toContain('branch -d ws/quiet-mesa');
+  });
+
+  // REFUSE FIRST. Previously this killed the session and the unit, then died on
+  // `worktree remove` — the worst of both.
+  it('refuses a directory that is not a worktree of the project, before any teardown', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });
+    execFileSync('git', ['-C', main(), 'worktree', 'prune']);
+    fs.mkdirSync(wt, { recursive: true });
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(calls()).toEqual([]);
+  });
+
+  it('deletes no branch for a detached HEAD, and still clears the record', () => {
+    const wt = addOne();
+    execFileSync('git', ['-C', wt, 'checkout', '--detach'], { env: gitEnv() });
+    fs.rmSync(wt, { recursive: true, force: true });
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(execFileSync('git', ['-C', main(), 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8' })).not.toContain('quiet-mesa');
   });
 });
