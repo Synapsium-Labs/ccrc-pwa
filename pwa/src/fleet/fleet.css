@@ -70,6 +70,9 @@
   gap: var(--sp-3);
   container-type: inline-size;
   container-name: fleetlist;
+  /* The FAB is position:fixed 56px at bottom-right and sat on top of the last
+     card's content in every viewport and both themes. */
+  padding-bottom: calc(56px + var(--sp-6) + var(--safe-bottom));
 }
 /* Offline / cold-start hydration: last-known cards stay readable, just
    visibly stale. (The connecting case only ever shows real cards — the
@@ -540,9 +543,16 @@
    rows read as noise. */
 .sess-line {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  /* lamp · label(flex) · state · tally · warn · account · actions — SEVEN
+     cells, every one always present. The tally and warn tracks are fixed so
+     they hold their column on a row that has nothing to put in them; 3.25rem
+     fits `65/73` at --text-xs in tabular mono, the widest tally on the live
+     fleet. The account track stays auto: wrapper labels differ by about one
+     character, so a fixed width would buy ~6px of alignment at the cost of
+     truncating any account name the server grows later. */
+  grid-template-columns: auto minmax(0, 1fr) auto 3.25rem 1rem auto 44px;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1);
   min-height: 44px; /* thumb target — the row is a tap surface, not a label */
   padding: 0 var(--sp-2);
   border-radius: var(--r-md);
@@ -552,16 +562,21 @@
 
 .sess-open {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--sp-2);
   min-width: 0;
-  min-height: 44px;
+  min-height: 44px;   /* thumb target: the button is what gets tapped */
   padding: 0;
   background: none;
   border: 0;
   text-align: left;
   cursor: pointer;
   color: inherit;
+  /* Baseline alignment lined the 15px label and 12px state up with each other
+     but left the pair flush against the top of the 44px row — measured 10.8px
+     above the row's centre, which is the visible wobble on every line. Centring
+     costs the shared baseline, so both children take one line-height instead. */
+  line-height: var(--leading-tight);
 }
 
 .sess-label {
@@ -581,9 +596,14 @@
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
+  text-align: right;
 }
 
-.sess-warn { font-size: var(--text-xs); color: var(--status-dead-text); }
+.sess-warn {
+  font-size: var(--text-xs);
+  color: var(--status-dead-text);
+  text-align: center;
+}
 
 .sess-acct {
   font-family: var(--font-mono);
@@ -604,12 +624,13 @@
   cursor: pointer;
 }
 
-/* The account chip is the first thing to drop when the row runs out of
-   room — the desktop sidebar is clamp(300px, 25vw, 380px), so it is narrow
-   at every viewport, and a phone is narrower still. Keyed on the container
-   rather than the viewport because the two do not correlate here. */
-@container fleetlist (max-width: 420px) {
-  .sess-acct { display: none; }
+/* Narrow container: the STATE WORD is what goes. The lamp to its left already
+   encodes status by colour and shape, so the word is the redundant cell —
+   whereas .sess-acct is the only place the session's account binding appears
+   on this row. The previous rule had these exactly backwards: it hid the
+   binding and kept a projection that read identically on all nine cards. */
+@container fleetlist (max-width: 380px) {
+  .sess-state { display: none; }
 }
 
 /* ── session actions sheet ────────────────────────────────────────── */
@@ -640,11 +661,18 @@
 .proj-card {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
-  padding: var(--sp-3);
+  gap: 0;
+  padding: var(--sp-2);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-lg);
   background: var(--bg-surface);
+  /* .fleet-list is display:grid, and a grid item's default min-width is `auto`
+     — i.e. min-content — so this card refused to shrink below the 393px its
+     row's content demands, inside a 312px column. Measured on the live page at
+     1440×900: .shell-nav clientWidth 344, scrollWidth 409 — 65px of horizontal
+     scroll in the desktop sidebar. Horizontal scroll in that pane is a defect
+     at every width, not a small-viewport concession. */
+  min-width: 0;
 }
 
 .proj-card--busy { border-color: var(--status-busy-text); }

@@ -70,6 +70,16 @@ describe('state', () => {
     expect(screen.queryByText('4/7')).not.toBeInTheDocument();
   });
 
+  it('renders the tally and warn cells even when empty — the grid needs them', () => {
+    // A conditional cell makes every cell to its right slide, which is what
+    // made 4/5 and 65/73 float mid-row.
+    const { container } = render(
+      <SessionLine session={s({ tasks: null, limits: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-tally')).toBeInTheDocument();
+    expect(container.querySelector('.sess-tally')).toHaveTextContent('');
+    expect(container.querySelector('.sess-warn')).toBeInTheDocument();
+  });
+
   it('warns when a limit window is critical, but never on a dead session', () => {
     const limits = { five: 82, seven: 10 };
     const { rerender } = render(

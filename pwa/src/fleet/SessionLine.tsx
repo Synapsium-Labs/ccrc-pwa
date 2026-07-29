@@ -88,20 +88,24 @@ export function SessionLine({
 
       <button ref={labelRef} type="button" className="sess-open" onClick={open}>
         <span className="sess-label">{label}</span>
-        <span className={`sess-state sess-state--${state}`}>{state}</span>
       </button>
 
-      {!dead && session.tasks !== null && (
-        <span className="sess-tally">
-          {session.tasks.done}/{session.tasks.total}
-        </span>
-      )}
+      <span className={`sess-state sess-state--${state}`}>{state}</span>
 
-      {critical && (
-        <span className="sess-warn" role="img" aria-label="account limit near">
-          ⚠
-        </span>
-      )}
+      {/* Always rendered, empty when silent: a conditional cell makes every
+          cell to its right slide, which is exactly why `4/5` and `65/73`
+          floated mid-row. A fixed track only aligns if something occupies it. */}
+      <span className="sess-tally">
+        {!dead && session.tasks !== null ? `${session.tasks.done}/${session.tasks.total}` : ''}
+      </span>
+
+      <span className="sess-warn">
+        {critical && (
+          <span role="img" aria-label="account limit near">
+            ⚠
+          </span>
+        )}
+      </span>
 
       <span
         className="sess-acct"
