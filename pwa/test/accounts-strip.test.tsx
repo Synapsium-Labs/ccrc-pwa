@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import type { AccountUsage } from '../../shared/api';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { api } from '../src/lib/api';
@@ -9,10 +9,20 @@ const nowSec = Math.floor(Date.now() / 1000);
 const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   wrapper: 'claude', five: 0, seven: 0, ts: nowSec - 3600,
   fiveResetAt: null, sevenResetAt: null,
-  fiveRolledOver: false, sevenRolledOver: false, ...over,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, ...over,
 });
 
-afterEach(() => { vi.restoreAllMocks(); });
+/** Stubs GET /api/accounts the way every test in this file needs it stubbed —
+ *  `projected` is a fixed, irrelevant fixture because AccountsStrip never
+ *  reads it (see useProjectedHome for the component that does). */
+const stubAccounts = (accounts: AccountUsage[]): void => {
+  vi.spyOn(api, 'accounts').mockResolvedValue({
+    accounts,
+    projected: { wrapper: 'claude', score: 0 },
+  });
+};
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('AccountsStrip', () => {
   it('shows an inferred zero as "reset" and a measured zero as 0%', async () => {
@@ -35,5 +45,14 @@ describe('AccountsStrip', () => {
     expect(screen.getByText('0%')).toBeTruthy();
     expect(screen.getByText('57%')).toBeTruthy();
     expect(screen.getByText('93%')).toBeTruthy();
+  });
+
+  it('hides an account whose lane is switched off', async () => {
+    // ccd will not route work there, so showing a gauge invites a tap that
+    // cannot succeed.
+    stubAccounts([acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', disabled: true })]);
+    render(<AccountsStrip />);
+    expect(await screen.findByText('team·max')).toBeInTheDocument();
+    expect(screen.queryByText('gpt')).not.toBeInTheDocument();
   });
 });

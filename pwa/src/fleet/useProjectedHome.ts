@@ -32,3 +32,39 @@ export function useProjectedHome(): ProjectedHome | null {
 
   return projected;
 }
+
+/** Accounts ccd's kill-switch has switched off — swap targets that cannot take
+ *  work. Both callers (SwapSheet, NewSessionSheet) mount their picker
+ *  unconditionally and use `open` only to toggle the inner vaul `Sheet`'s
+ *  visibility — the component itself, and its hooks, keep running underneath.
+ *  Without `active` this would poll /api/accounts forever the moment a
+ *  session screen is visited, whether or not its picker is ever opened. `active`
+ *  is that callers' own `open` prop, so the poll (and its interval) runs only
+ *  while the picker a caller is actually showing. Its own poller rather than a
+ *  prop threaded down from FleetScreen: that is the same trade useProjectedHome
+ *  documents above — one extra GET against a local endpoint reading two small
+ *  JSON files beats coupling two component trees. */
+export function useDisabledWrappers(active: boolean): string[] {
+  const [disabled, setDisabled] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!active) {
+      setDisabled([]);
+      return undefined;
+    }
+    let live = true;
+    const load = (): void => {
+      // Silent on failure, and an empty list on error: showing an account that
+      // turns out to be disabled is recoverable (ccd refuses the swap), while
+      // hiding one because telemetry hiccuped looks like it does not exist.
+      void api.accounts()
+        .then((r) => { if (live) setDisabled((r.accounts ?? []).filter((a) => a.disabled === true).map((a) => a.wrapper)); })
+        .catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 20_000);
+    return () => { live = false; clearInterval(t); };
+  }, [active]);
+
+  return disabled;
+}

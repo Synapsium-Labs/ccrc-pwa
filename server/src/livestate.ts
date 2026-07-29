@@ -4,6 +4,11 @@ import type { SessionStatus } from '../../shared/api.js';
 
 export interface LiveState {
   pid: number; sessionId: string; cwd: string; name: string | null;
+  /** Claude Code's own account of where `name` came from. `'derived'` means it
+   *  built the string from the cwd basename plus a counter — a session handle,
+   *  which is not end-user information. Absent in older files: a name written
+   *  before this field existed was chosen, so absent must NOT read as derived. */
+  nameSource: string | null;
   status: string; statusUpdatedAt: number | null; version: string | null;
 }
 
@@ -34,6 +39,7 @@ export async function readLiveState(io: FleetIO, configDir: string, pid: number)
     return {
       pid, sessionId: raw.sessionId, cwd: String(raw.cwd ?? ''),
       name: typeof raw.name === 'string' ? raw.name : null,
+      nameSource: typeof raw.nameSource === 'string' ? raw.nameSource : null,
       status: String(raw.status ?? 'idle'),
       statusUpdatedAt: typeof raw.statusUpdatedAt === 'number' ? raw.statusUpdatedAt : null,
       version: typeof raw.version === 'string' ? raw.version : null,

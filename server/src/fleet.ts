@@ -49,7 +49,15 @@ export async function assembleFleet(
         const live = await readLiveState(io, cfgDir, pid);
         if (live) {
           status = liveSessionStatus(live.status);
-          name = live.name; statusUpdatedAt = live.statusUpdatedAt; version = live.version;
+          // A derived name is Claude Code's session handle (`openclawhetzner-42`
+          // — cwd basename plus a counter), never a description of the work, so
+          // it is dropped HERE rather than shipped for the PWA to re-judge.
+          // `name` on the wire therefore means "a name worth displaying", and
+          // the fleet line's `name ?? branch ?? workspace ?? id` falls through
+          // to the branch on its own. Only the exact string 'derived' rejects:
+          // an absent nameSource is an older file whose name a human chose.
+          name = live.nameSource === 'derived' ? null : live.name;
+          statusUpdatedAt = live.statusUpdatedAt; version = live.version;
         }
       }
     }

@@ -54,6 +54,17 @@ const pairs = (T, name) => [
   [`${name} ink-primary / sheet`, T.inkP, T.sheet, 4.5],
   [`${name} ink-primary / accent-tint`, T.inkP, T.accentTint, 4.5],
   [`${name} ink-secondary / surface`, T.inkS, T.surface, 4.5],
+  // Also the exact pair the fleet-polish task's two new icon buttons use
+  // (.proj-card-add, .sess-actions: ink-secondary glyph on a bg-raised
+  // fill) — a new USE SITE of an already-gated combination, not a new one.
+  // Their bg-raised/edge-subtle affordance itself (fill vs the surface
+  // behind it, and the 1px border vs either) is deliberately NOT gated
+  // here: both measure ~1.1-1.3:1 in both themes (raised is barely a shade
+  // off surface by design), nowhere near the 3:1 non-text floor, and no
+  // token substitution fixes that without inventing a new one — every
+  // other raised+edge-subtle affordance in this file (.proj-search,
+  // .account-gauge, .notice, .acct-list .acct-row) is exempt for the same
+  // reason tokens.css gives hairlines: "decorative — no contrast claim".
   [`${name} ink-secondary / raised`, T.inkS, T.raised, 4.5],
   [`${name} ink-secondary / sheet`, T.inkS, T.sheet, 4.5],
   [`${name} ink-tertiary / surface`, T.inkT, T.surface, 4.5],
@@ -88,10 +99,15 @@ const pairs = (T, name) => [
   // page — no card ground, same glyph-at-3:1 shape — should find the gate
   // already watching rather than silently uncovered.
   [`${name} attention dot / page (UI 3:1)`, T.att, T.page, 3],
-  // The `+` affordance's projected-account line when the landing account is
-  // near its ceiling (.proj-add-acct[data-low]). 11px, so body text at 4.5 —
-  // which is why it takes attention-TEXT and not the dot hue: LIGHT's dot
-  // (#B27400) reads 3.58 here and would fail this threshold.
+  // Originally the `+` affordance's projected-account line when the landing
+  // account was near its ceiling (.proj-add-acct[data-low], 11px body text at
+  // 4.5 — which is why it took attention-TEXT and not the dot hue: LIGHT's
+  // dot (#B27400) reads 3.58 here and would fail this threshold). That element
+  // is gone (ccrc/fleet-polish Task 4 dropped the visible headroom flag
+  // entirely), but this pair is kept for the same reason as the dot/page pair
+  // above: a defensive floor on the raw attention-text/page combination that
+  // test/contrast.test.ts still pins, so any future text that lands directly
+  // on the page at this size/hue finds the gate already watching.
   [`${name} attention-text / page`, T.attText, T.page, 4.5],
   // The chat header's .status-line--dead and (this branch) the fleet row's
   // .sess-warn critical-limit glyph both take dead-text on a surface ground.

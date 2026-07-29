@@ -18,7 +18,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, pin: 'claude', ...over,
 });
 
 describe('uniform shape', () => {
@@ -52,11 +52,15 @@ describe('folding', () => {
   });
 
   // A fold must never be able to hide the one thing this screen exists to
-  // surface. The header wears the group's urgency either way.
+  // surface. The header wears the group's urgency either way. Two sessions,
+  // not one — the count itself only renders at 2+ (see 'session count' below).
   it('keeps the count and the attention dot while collapsed', () => {
-    const g = grp({ attention: true, sessions: [sess({ dialogPending: true })] });
+    const g = grp({
+      attention: true,
+      sessions: [sess({ dialogPending: true }), sess({ id: 'demo-still-cove', workspace: 'still-cove' })],
+    });
     render(<ProjectCard group={g} collapsed onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByLabelText('waiting on you')).toBeInTheDocument();
   });
 
@@ -69,12 +73,6 @@ describe('folding', () => {
 });
 
 describe('the + button', () => {
-  it('names the projected account and its headroom', () => {
-    render(<ProjectCard group={grp()} projected={{ wrapper: 'claude', score: 9 }}
-                        onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText(/91% free/)).toBeInTheDocument();
-  });
-
   it('still offers a + before any projection has landed', () => {
     // /api/accounts has its own poll; the + must never wait on it.
     render(<ProjectCard group={grp()} projected={null} onAddWorkspace={() => {}}
@@ -91,44 +89,76 @@ describe('the + button', () => {
   });
 
   // Ported from the deleted project-group.test.tsx (git show ab11b66) — the
-  // production code carried over unchanged, but without a test here a future
-  // edit to this aria-label or the LOW_HEADROOM threshold regresses silently.
+  // account and headroom now live only in the accessible name (see 'the + is
+  // icon-only' below), but a second account/score pair here still guards
+  // against the aria-label format regressing unnoticed.
   it('carries the account into the accessible name, not just the pixels', () => {
     render(<ProjectCard group={grp()} projected={{ wrapper: 'claude', score: 18 }}
                         onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByRole('button', { name: /New workspace on demo — team·max, 82% free/i }))
       .toBeInTheDocument();
   });
+});
 
-  it('flags a landing on an exhausted account', () => {
-    // ccd's rule has no availability filter: with every account pinned it
-    // still returns one, and this is the only warning the user gets.
-    render(<ProjectCard group={grp()} onAddWorkspace={() => {}} onOpen={() => {}}
-                        onActions={() => {}} projected={{ wrapper: 'claude-corp', score: 99 }} />);
-    const note = screen.getByText(/team·shared · 1% free/);
-    expect(note).toHaveAttribute('data-low', 'true');
+describe('pinned account', () => {
+  it('shows the account the project is pinned to', () => {
+    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·shared')).toBeInTheDocument();
   });
 
-  it('does not flag a healthy account', () => {
-    render(<ProjectCard group={grp()} projected={{ wrapper: 'claude', score: 18 }}
-                        onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText(/team·max · 82% free/)).not.toHaveAttribute('data-low');
+  it('says "mixed" when the sessions disagree rather than picking one', () => {
+    render(<ProjectCard group={grp({ pin: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('mixed')).toBeInTheDocument();
   });
 
-  // The score: 99 / score: 18 cases above sit far from LOW_HEADROOM (75), so a
-  // `>=` → `>` flip or a 75 → 80 drift in the threshold would pass unnoticed.
-  // These two pin the actual boundary: 75 is the first score that flags,
-  // matching the accounts strip's own `crit` threshold.
-  it('flags exactly at the LOW_HEADROOM boundary (score 75, the first exhausted value)', () => {
-    render(<ProjectCard group={grp()} onAddWorkspace={() => {}} onOpen={() => {}}
-                        onActions={() => {}} projected={{ wrapper: 'claude', score: 75 }} />);
-    const note = screen.getByText(/team·max · 25% free/);
-    expect(note).toHaveAttribute('data-low', 'true');
+  it('names the pin for assistive tech — a bare label reads as decoration', () => {
+    render(<ProjectCard group={grp({ pin: 'claude' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByLabelText('pinned to team·max')).toBeInTheDocument();
+  });
+});
+
+describe('the + is icon-only', () => {
+  const projected = { wrapper: 'claude2', score: 9 };
+
+  it('renders no visible projection text in the header', () => {
+    const { container } = render(
+      <ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
+                   onAddWorkspace={() => {}} projected={projected} />);
+    // Structural, not CSS: the element is gone, not hidden.
+    expect(container.querySelector('.proj-add-acct')).toBeNull();
+    expect(screen.queryByText(/% free/)).not.toBeInTheDocument();
   });
 
-  it('does not flag just below the boundary (score 74)', () => {
-    render(<ProjectCard group={grp()} onAddWorkspace={() => {}} onOpen={() => {}}
-                        onActions={() => {}} projected={{ wrapper: 'claude', score: 74 }} />);
-    expect(screen.getByText(/team·max · 26% free/)).not.toHaveAttribute('data-low');
+  it('keeps the account and headroom in the accessible name', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
+                        onAddWorkspace={() => {}} projected={projected} />);
+    expect(screen.getByLabelText('New workspace on demo — alt·max, 91% free'))
+      .toBeInTheDocument();
+  });
+
+  it('carries them as a tooltip too, for a pointer that can hover', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
+                        onAddWorkspace={() => {}} projected={projected} />);
+    expect(screen.getByLabelText(/New workspace on demo/))
+      .toHaveAttribute('title', 'New workspace on demo — alt·max, 91% free');
+  });
+
+  it('falls back to the plain name before the accounts poll lands', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
+                        onAddWorkspace={() => {}} projected={null} />);
+    expect(screen.getByLabelText('New workspace on demo')).toBeInTheDocument();
+  });
+});
+
+describe('session count', () => {
+  it('is absent when a project holds one — a constant badge says nothing', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('1')).not.toBeInTheDocument();
+  });
+
+  it('renders from two upwards', () => {
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('2')).toBeInTheDocument();
   });
 });

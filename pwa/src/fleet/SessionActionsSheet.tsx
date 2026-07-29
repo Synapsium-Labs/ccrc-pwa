@@ -10,6 +10,7 @@ import type { FleetSession } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
+import { accountLabel } from '../lib/accounts';
 import { SwapSheet } from './SwapSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
@@ -108,6 +109,13 @@ export function SessionActionsSheet({
             >
               {removing ? 'Removing…' : 'Remove workspace'}
             </button>
+          )}
+
+          {session.status !== 'dead' && session.wrapper !== session.home && (
+            <p className="sess-sheet-note">
+              Pinned to {accountLabel(session.home)}, running on{' '}
+              {accountLabel(session.wrapper)} — moved when its account filled up.
+            </p>
           )}
 
           {/* The line only had room for `⚠`; this is where it gets to say what

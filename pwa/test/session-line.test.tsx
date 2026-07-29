@@ -70,6 +70,17 @@ describe('state', () => {
     expect(screen.queryByText('4/7')).not.toBeInTheDocument();
   });
 
+  it('omits the tally and warn cells entirely when there is nothing to show', () => {
+    // .sess-meta is a flex row now, not a grid track — a missing sibling
+    // cannot shift anything, so the always-rendered-but-empty placeholder
+    // that a grid layout needed is dead weight here. Restored to a plain
+    // conditional render.
+    const { container } = render(
+      <SessionLine session={s({ tasks: null, limits: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-tally')).not.toBeInTheDocument();
+    expect(container.querySelector('.sess-warn')).not.toBeInTheDocument();
+  });
+
   it('warns when a limit window is critical, but never on a dead session', () => {
     const limits = { five: 82, seven: 10 };
     const { rerender } = render(
@@ -139,5 +150,34 @@ describe('interaction', () => {
     await userEvent.click(buttonB);
     expect(buttonA.style.viewTransitionName).toBe('');
     expect(buttonB.style.viewTransitionName).toBe('session-title');
+  });
+});
+
+describe('away from home', () => {
+  it('marks the account chip when the session is not on its pinned account', () => {
+    const { container } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-acct')).toHaveAttribute('data-away');
+  });
+
+  it('does not mark it when the session is home', () => {
+    const { container } = render(
+      <SessionLine session={s({ wrapper: 'claude', home: 'claude' })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
+  });
+
+  it('says so for assistive tech, which cannot see a colour', () => {
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByLabelText('running on alt·max, pinned to team·max')).toBeInTheDocument();
+  });
+
+  it('never marks a dead session — it is not running anywhere', () => {
+    const { container } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude', status: 'dead' })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
   });
 });

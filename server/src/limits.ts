@@ -10,6 +10,11 @@ export interface AccountLimits {
    *  is inferred from the reset timestamp rather than observed. Distinct from a
    *  measured 0 (something ran on the account and it really is empty). */
   fiveRolledOver: boolean; sevenRolledOver: boolean;
+  /** ccd's per-lane kill-switch (`~/.cc-sessions/<wrapper>-disabled`) is
+   *  present, so this account cannot take work. A FLAG rather than omitting
+   *  the account: the server knows the difference between "no telemetry" and
+   *  "switched off", and collapsing them loses it. */
+  disabled: boolean;
 }
 
 const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
@@ -57,6 +62,12 @@ export async function readLimits(
   now = Math.floor(Date.now() / 1000),
 ): Promise<Record<string, AccountLimits>> {
   const names = (await io.readdir(cfg.limitsDir)) ?? [];
+  // One readdir, not one stat per account: the registry dir is already being
+  // read on every fleet poll and this rides the same trip.
+  const regNames = (await io.readdir(cfg.registryDir)) ?? [];
+  const disabledLanes = new Set(
+    regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)),
+  );
   const out: Record<string, AccountLimits> = {};
   for (const n of names.filter((n) => n.endsWith('.json') && !n.startsWith('.'))) {
     const wrapper = n.slice(0, -'.json'.length);
@@ -90,10 +101,12 @@ export async function readLimits(
         if (!sevenRolledOver && seven !== null && now - ts > SEVEN_WINDOW) seven = 0;
       }
 
-      out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver };
+      out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
+                       disabled: disabledLanes.has(wrapper) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
-                       sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false };
+                       sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+                       disabled: disabledLanes.has(wrapper) };
     }
   }
   return out;

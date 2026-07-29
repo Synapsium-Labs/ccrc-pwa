@@ -14,14 +14,10 @@
 // without touching localStorage.
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectedHome } from '../../../shared/api';
-import { accountLabel } from '../lib/accounts';
+import { accountColorVar, accountLabel } from '../lib/accounts';
 import type { FleetGroup } from './groupFleet';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
-
-/** Score at which the projected landing account counts as exhausted — the same
- *  threshold the accounts strip calls `crit`. */
-const LOW_HEADROOM = 75;
 
 export function ProjectCard({
   group,
@@ -56,6 +52,10 @@ export function ProjectCard({
   // least-loaded account even when every account is pinned.
   const headroom = projected ? 100 - projected.score : null;
 
+  const addLabel = projected
+    ? `New workspace on ${group.project} — ${accountLabel(projected.wrapper)}, ${headroom}% free`
+    : `New workspace on ${group.project}`;
+
   const cardClass =
     'proj-card' +
     (group.attention ? ' proj-card--attention' : group.busy > 0 ? ' proj-card--busy' : '');
@@ -73,7 +73,24 @@ export function ProjectCard({
             {collapsed ? '▸' : '▾'}
           </span>
           <span className="proj-card-name">{group.project}</span>
-          <span className="proj-card-count">{group.sessions.length}</span>
+          {/* A badge that reads `1` on every card carries no information. Every
+              project on the live fleet holds exactly one session. */}
+          {group.sessions.length > 1 && (
+            <span className="proj-card-count">{group.sessions.length}</span>
+          )}
+          {/* The account this project is PINNED to (ccd `home`), which is not
+              necessarily where any of its sessions is running — that is on the
+              line. `mixed` when the sessions disagree: a header asserting one
+              account while two lines show two different ones would be a lie,
+              and divergent pins across one project is worth noticing. */}
+          <span
+            className="proj-card-pin"
+            data-mixed={group.pin === null || undefined}
+            aria-label={group.pin === null ? 'pinned accounts differ' : `pinned to ${accountLabel(group.pin)}`}
+            style={group.pin === null ? undefined : { color: `var(${accountColorVar(group.pin)})` }}
+          >
+            {group.pin === null ? 'mixed' : accountLabel(group.pin)}
+          </span>
           {/* Collapsed or not: a fold must never be able to hide a pending
               dialog, which is the one thing this screen exists to surface. */}
           {group.attention && (
@@ -87,20 +104,18 @@ export function ProjectCard({
           <button
             type="button"
             className="proj-card-add"
-            aria-label={
-              projected
-                ? `New workspace on ${group.project} — ${accountLabel(projected.wrapper)}, ${headroom}% free`
-                : `New workspace on ${group.project}`
-            }
+            /* The projection lives in the accessible name and the tooltip, not
+               in the layout: it is the SAME string on every card (where the
+               next workspace lands is global, not per project), it was 41% of
+               this header's width, and it was clipped in the desktop sidebar.
+               The headroom % is dropped from the visible UI entirely — the
+               accounts strip above says it, for every account, in more detail. */
+            aria-label={addLabel}
+            title={addLabel}
             onClick={() => onAddWorkspace(group.project)}
             disabled={adding}
           >
             <span aria-hidden="true">+</span>
-            {projected && (
-              <span className="proj-add-acct" data-low={projected.score >= LOW_HEADROOM || undefined}>
-                {accountLabel(projected.wrapper)} · {headroom}% free
-              </span>
-            )}
           </button>
         )}
       </div>

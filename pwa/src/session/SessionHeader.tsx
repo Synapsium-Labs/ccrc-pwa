@@ -1,18 +1,22 @@
 // Session header — the chat's sticky, safe-area-padded top strip: back
 // chevron, the session's live name (fleet `name`, falling back to project),
 // status meta (breathing dot + mono word; busy ticks a live elapsed clock),
-// the account chip, and three raised keycaps — `>_` opens the terminal
-// drawer, `⋯` opens the lifecycle overflow menu (change model / move
-// account / stop), and `esc` interrupts (DIRECTION: "a keycap, not an
-// icon"), enabled only while the session is busy. Confirm-free: pressing
-// esc just sends it.
-import { useState } from 'react';
+// the account chip, and raised keycaps — `>_` opens the terminal drawer,
+// `⋯` opens the lifecycle overflow menu (change model / move account /
+// stop), and `esc` interrupts (DIRECTION: "a keycap, not an icon"), enabled
+// only while the session is busy. Confirm-free: pressing esc just sends it.
+// The esc cap is touch-only: where a physical keyboard exists ((pointer:
+// fine)) it hides and the real Escape key takes over instead, guarded so it
+// never fires while focus is in a text field.
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, SessionStatus } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
+import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
+import { sessionLabel } from '../fleet/sessionLabel';
 import './chat.css';
 
 export interface SessionHeaderProps {
@@ -84,6 +88,27 @@ export function SessionHeader({
   const busy = st === 'busy';
   const now = useNow(busy ? 1_000 : 30_000);
 
+  // The keycap exists because phone keyboards have no Escape key. Where one
+  // exists, the key is the better control and the cap is clutter — but the
+  // binding has to land in the SAME change that hides the cap, or interrupting
+  // simply stops being possible. The PWA had no Escape handler at all before.
+  const finePointer = useMediaQuery('(pointer: fine)');
+
+  useEffect(() => {
+    if (!finePointer || !busy) return;
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      // Escape inside a text field dismisses autocomplete or clears the draft —
+      // it must not reach through and kill the turn.
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return;
+      onInterrupt();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [finePointer, busy, onInterrupt]);
+
   const dot: SessionStatus | 'dialog' | null = attention ? 'dialog' : st;
   const rel = relShort(now, at);
   const word = attention
@@ -101,9 +126,10 @@ export function SessionHeader({
           : '';
   const variant = attention ? 'attention' : busy ? 'busy' : st === 'dead' ? 'dead' : 'idle';
 
-  // Show the clean project name, not Claude Code's auto-derived session name
-  // (e.g. "custom-tools-91"), which reads as noise.
+  // The project is the ground; the second crumb is this particular workspace.
+  // Without it, two workspaces of one project produce two identical headers.
   const title = session ? session.project : (fallback?.title ?? '…');
+  const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
 
   // Model / effort / ultracode / branch — read from the pane statusline the
@@ -113,6 +139,13 @@ export function SessionHeader({
   const ultracode = session?.ultracode ?? false;
   const branch = session?.branch ?? null;
   const hasMeta = st !== 'dead' && (model !== null || branch !== null || effort !== null || ultracode);
+  // With no chosen `name`, sessionLabel()'s fallback chain lands on `branch` —
+  // so the crumb above and this chip would print the identical string a few
+  // pixels apart. Compare the actual rendered text (crumb vs branch), not the
+  // fields that produced them, so the two can never disagree about what
+  // "duplicate" means. A chosen name, or a main checkout with no crumb at
+  // all, always differ — the chip renders exactly as it does today.
+  const branchDuplicatesCrumb = crumb !== null && branch === crumb;
 
   return (
     <header className="chat-head">
@@ -120,7 +153,17 @@ export function SessionHeader({
         ‹
       </button>
       <div className="chat-title-wrap">
-        <h1 className="chat-title">{title}</h1>
+        <h1 className="chat-title">
+          {title}
+          {crumb !== null && (
+            <>
+              <span className="chat-crumb-sep" aria-hidden="true">
+                ›
+              </span>
+              <span className="chat-crumb">{crumb}</span>
+            </>
+          )}
+        </h1>
         <div className="chat-meta">
           {dot !== null && (
             <>
@@ -152,7 +195,7 @@ export function SessionHeader({
             >
               <span className="metachip-text">{ultracode ? 'ultracode' : (effort ?? 'set effort')}</span>
             </button>
-            {branch !== null && (
+            {branch !== null && !branchDuplicatesCrumb && (
               <span className="metachip metachip--branch" title={branch}>
                 <span className="metachip-glyph" aria-hidden="true">⎇</span>
                 <span className="metachip-text">{branch}</span>
@@ -178,15 +221,17 @@ export function SessionHeader({
       >
         <span aria-hidden="true">⋯</span>
       </button>
-      <button
-        type="button"
-        className="keycap keycap--esc"
-        aria-label="Stop"
-        disabled={!busy}
-        onClick={onInterrupt}
-      >
-        esc
-      </button>
+      {!finePointer && (
+        <button
+          type="button"
+          className="keycap keycap--esc"
+          aria-label="Stop"
+          disabled={!busy}
+          onClick={onInterrupt}
+        >
+          esc
+        </button>
+      )}
 
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
         <div className="menu">

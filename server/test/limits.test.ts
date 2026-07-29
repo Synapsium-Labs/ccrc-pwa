@@ -19,11 +19,11 @@ describe('readLimits', () => {
     writeFileSync(path.join(dir, 'gpt.json'), 'not json');
 
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
-    expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400, fiveRolledOver: false, sevenRolledOver: false });
+    expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
     expect(l['claude2'].five).toBe(0);
     expect(l['claude2'].seven).toBe(80);
     expect(l['claude-corp']).toMatchObject({ five: 0, seven: 0 });
-    expect(l['gpt']).toEqual({ five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false });
+    expect(l['gpt']).toEqual({ five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
   });
 });
 
@@ -56,5 +56,37 @@ describe('readLimits — a window that has rolled over', () => {
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
     expect(l['measured']).toMatchObject({ five: 0, fiveRolledOver: false });
     expect(l['inferred']).toMatchObject({ five: 0, fiveRolledOver: true });
+  });
+});
+
+describe('disabled lanes', () => {
+  it('marks an account whose ccd kill-switch file is present', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', 'gpt.json'), JSON.stringify({ five: 10, seven: 20 }));
+    writeFileSync(path.join(home, '.cc-limits', 'claude.json'), JSON.stringify({ five: 10, seven: 20 }));
+    writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l.gpt.disabled).toBe(true);
+    expect(l.claude.disabled).toBe(false);
+  });
+
+  it('treats an absent kill-switch as enabled', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', 'gpt.json'), JSON.stringify({ five: 10, seven: 20 }));
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    // An account wrongly HIDDEN is worse than one wrongly shown: hidden looks
+    // like the account does not exist at all.
+    expect(l.gpt.disabled).toBe(false);
+  });
+
+  it('leaves a malformed limits file enabled', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', 'gpt.json'), 'not json');
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l.gpt.disabled).toBe(false);
   });
 });

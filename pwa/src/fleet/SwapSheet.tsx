@@ -15,17 +15,20 @@ import { toast } from '../components/Toast';
 import { accountColorVar, accountLabel, KNOWN_WRAPPERS } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useDisabledWrappers } from './useProjectedHome';
 import './fleet.css';
 
 export type AccountLimits = { five: number | null; seven: number | null } | null;
 
-/** The known accounts, plus any wrapper the fleet reports beyond them. */
-export function pickableWrappers(sessions: FleetSession[]): string[] {
+/** The accounts a session may be moved to. `disabled` names lanes ccd's
+ *  kill-switch has switched off — they are excluded, because offering a swap
+ *  target that cannot take work is worse than offering none. */
+export function pickableWrappers(sessions: FleetSession[], disabled: readonly string[] = []): string[] {
   const all = [...KNOWN_WRAPPERS];
   for (const s of sessions) {
     if (!all.includes(s.wrapper)) all.push(s.wrapper);
   }
-  return all;
+  return all.filter((w) => !disabled.includes(w));
 }
 
 /** An account's live limits, read off any fleet session on that wrapper —
@@ -136,7 +139,8 @@ export function SwapSheet({
   // The target awaiting its consequence confirm (null = still browsing).
   const [target, setTarget] = useState<string | null>(null);
 
-  const wrappers = pickableWrappers(sessions).filter((w) => w !== session.wrapper);
+  const disabledWrappers = useDisabledWrappers(open);
+  const wrappers = pickableWrappers(sessions, disabledWrappers).filter((w) => w !== session.wrapper);
   const suggested = leastLoaded(sessions, wrappers);
 
   const move = (wrapper: string): void => {

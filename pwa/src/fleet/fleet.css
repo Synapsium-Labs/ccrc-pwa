@@ -68,8 +68,9 @@
 .fleet-list {
   display: grid;
   gap: var(--sp-3);
-  container-type: inline-size;
-  container-name: fleetlist;
+  /* The FAB is position:fixed 56px at bottom-right and sat on top of the last
+     card's content in every viewport and both themes. */
+  padding-bottom: calc(56px + var(--sp-6) + var(--safe-bottom));
 }
 /* Offline / cold-start hydration: last-known cards stay readable, just
    visibly stale. (The connecting case only ever shows real cards — the
@@ -534,45 +535,74 @@
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
 
-/* Where this workspace will land, and how much room is left there — said
-   BEFORE the tap. Ink-tertiary on the page ground until the projected account
-   is near its ceiling, at which point it takes the attention hue: a workspace
-   landing on an exhausted account looks exactly like a stalled one otherwise.
-   Both pairs are gated by design/contrast-check.mjs. */
-.proj-add-acct {
-  font-size: var(--text-2xs); color: var(--ink-tertiary);
-  white-space: nowrap; font-variant-numeric: tabular-nums;
-}
-.proj-add-acct[data-low] { color: var(--status-attention-text); }
-
 /* ── session line ─────────────────────────────────────────────────
-   One session inside a project card. Grid rather than flex so the columns
-   line up across sibling rows: a ragged right edge is what makes a list of
-   rows read as noise. */
+   One session inside a project card, two lines: label (full row width) on
+   top, state/tally/warn/account underneath as a quiet flex row. Fighting
+   for one line's worth of horizontal room made every trailing cell a
+   candidate for squeezing (.sess-acct into a 1rem track) or hiding behind a
+   container-size media query that was always-on in practice (.fleet-list
+   measured 252-343px live, always under any threshold worth setting) — a
+   second line removes the fight instead of refereeing it. Grid, not flex,
+   for the three OUTER cells so the actions button lines up across sibling
+   rows: a ragged right edge is what makes a list of rows read as noise. */
 .sess-line {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  /* lamp · label-block(flex, 2 lines) · actions — THREE cells. State/tally/
+     warn/account live inside .sess-open's second line (.sess-meta), which is
+     a flex row, not a grid track — a missing sibling there just isn't
+     there; it cannot compact anything, so there is no display:none
+     grid-compaction hazard left to guard against. */
+  grid-template-columns: auto minmax(0, 1fr) 44px;
   align-items: center;
   gap: var(--sp-2);
   min-height: 44px; /* thumb target — the row is a tap surface, not a label */
-  padding: 0 var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-md);
 }
 
 .sess-line--active { background: var(--bg-raised); }
 
+/* The dot must sit on the workspace NAME's own line, not the row's centre:
+   .sess-line centres everything on the full two-line ~52px box, but the
+   label is only the TOP line — measured 8.5-9.25px apart live, reading as
+   low. Pin the lamp to the row's start (like .sess-actions below) and give
+   it a box exactly as tall as the label's own line box (--text-base at
+   --leading-tight, .sess-open's line-height), then centre the dot inside
+   that box — measured this alone still lands 4.125px high, because
+   .sess-open centres its whole two-line content block (label + its 2px
+   gap + .sess-meta's own line) inside the --tap-min tap target, which
+   pushes the label down by half of whatever slack is left over. The
+   margin-top below is that exact slack, computed from the same tokens
+   .sess-open's stack uses (plus the 2px gap already hardcoded on
+   .sess-open, not a new magic number) — not a guessed offset, so it tracks
+   any future type-scale or line-height change instead of silently
+   drifting off again. */
+.sess-lamp {
+  grid-column: 1;
+  align-self: start;
+  height: calc(var(--text-base) * var(--leading-tight));
+  display: grid;
+  place-items: center;
+  margin-top: calc(
+    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
+  );
+}
+
 .sess-open {
+  grid-column: 2;
   display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
-  min-height: 44px;
+  min-height: 44px;   /* thumb target: the button is what gets tapped */
   padding: 0;
   background: none;
   border: 0;
   text-align: left;
   cursor: pointer;
   color: inherit;
+  line-height: var(--leading-tight);
 }
 
 .sess-label {
@@ -582,41 +612,84 @@
   font-weight: 500;
 }
 
-.sess-state { font-size: var(--text-xs); color: var(--ink-secondary); }
+/* The second line: state · tally · warn · account, all quiet — the label
+   above carries the row's identity, this carries its status. A flex row,
+   not a grid: a missing child (no tally, no warning) just isn't rendered,
+   instead of needing an empty placeholder to hold a track open. */
+.sess-meta {
+  display: flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  overflow: hidden;
+}
+/* Middot between whichever cells actually render — :not(:first-child)
+   tracks the real DOM, so it never assumes state/tally/warn are all
+   present. */
+.sess-meta > *:not(:first-child)::before {
+  content: '·';
+  margin: 0 var(--sp-1);
+  color: var(--ink-tertiary);
+}
+
 .sess-state--waiting { color: var(--status-attention-text); }
 .sess-state--working { color: var(--status-busy-text); }
 .sess-state--exited  { color: var(--ink-secondary); }
 
 .sess-tally {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
-  color: var(--ink-secondary);
+  flex: none;
 }
 
-.sess-warn { font-size: var(--text-xs); color: var(--status-dead-text); }
+.sess-warn { color: var(--status-dead-text); flex: none; }
 
 .sess-acct {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+/* The arrow, not a colour change: the chip's colour already encodes WHICH
+   account, and overloading it with "and it is the wrong one" would lose that. */
+.sess-acct-away { margin-left: 2px; color: var(--status-attention-text); }
 
+/* .sess-actions and .proj-card-add (below, project card head) are a
+   matched pair of icon buttons — each session's ··· stacked directly
+   under the project's + — so they share one visual treatment: a real
+   32×32 (--sp-8) button, not a bare glyph. Each keeps a >= --tap-min hit
+   area via an invisible ::before overlay instead of growing the visible
+   box; the inset is half the gap between the two tokens, so it stays
+   correct if either one ever moves. */
 .sess-actions {
-  min-width: 44px;
-  min-height: 44px;
+  grid-column: 3;
+  justify-self: end;
+  align-self: start;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  margin-top: calc(
+    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
+  );
   padding: 0;
-  background: none;
-  border: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
   color: var(--ink-secondary);
   cursor: pointer;
 }
-
-/* The account chip is the first thing to drop when the row runs out of
-   room — the desktop sidebar is clamp(300px, 25vw, 380px), so it is narrow
-   at every viewport, and a phone is narrower still. Keyed on the container
-   rather than the viewport because the two do not correlate here. */
-@container fleetlist (max-width: 420px) {
-  .sess-acct { display: none; }
+.sess-actions::before {
+  content: '';
+  position: absolute;
+  /* box-sizing: border-box (tailwindcss preflight, base.css) means the
+     button's own 1px border eats into the box the absolutely-positioned
+     ::before is inset FROM (the padding box, 2px smaller than --sp-8 on
+     each axis) — the naive (--sp-8 - --tap-min)/2 measured a 42px hit area,
+     not 44px. Subtracting the 2px border keeps the overlay at the real
+     --tap-min. */
+  inset: calc((var(--sp-8) - 2px - var(--tap-min)) / 2);
 }
 
 /* ── session actions sheet ────────────────────────────────────────── */
@@ -647,11 +720,18 @@
 .proj-card {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
-  padding: var(--sp-3);
+  gap: 0;
+  padding: var(--sp-2);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-lg);
   background: var(--bg-surface);
+  /* .fleet-list is display:grid, and a grid item's default min-width is `auto`
+     — i.e. min-content — so this card refused to shrink below the 393px its
+     row's content demands, inside a 312px column. Measured on the live page at
+     1440×900: .shell-nav clientWidth 344, scrollWidth 409 — 65px of horizontal
+     scroll in the desktop sidebar. Horizontal scroll in that pane is a defect
+     at every width, not a small-viewport concession. */
+  min-width: 0;
 }
 
 .proj-card--busy { border-color: var(--status-busy-text); }
@@ -661,6 +741,14 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  /* .sess-line (fleet.css, Task 5) carries its own var(--sp-2) right
+     padding INSIDE .proj-card's padding, so its third grid column's right
+     edge sits 16px in from the card's outer edge — 8px further than this
+     header's own right edge (which only has the card's 8px). Matching
+     that here, right-side only, is what makes .proj-card-add and
+     .sess-actions share a right edge instead of the + sitting 8px right
+     of the ···. */
+  padding-right: var(--sp-2);
 }
 
 .proj-card-toggle {
@@ -696,16 +784,45 @@
 
 .proj-card-attn { color: var(--status-attention-text); }
 
+/* Pinned account — mono like every other machine value on this screen, and
+   coloured by account so the card and its lines share one identity language.
+   `mixed` stays neutral: it names a disagreement, not an account. */
+.proj-card-pin {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+.proj-card-pin[data-mixed] { color: var(--ink-tertiary); }
+
+/* A real button, not a bare glyph: bg-raised fill, edge-subtle hairline,
+   r-md corner — the same treatment .sess-actions gives the ··· below, so
+   the two read as one matched pair down the card's right edge. The 44px
+   thumb target survives as an invisible ::before overlay, not by growing
+   the visible 32×32 box. */
 .proj-card-add {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  min-height: 44px;
-  padding: 0 var(--sp-2);
-  background: none;
-  border: 0;
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  padding: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
   color: var(--ink-secondary);
   cursor: pointer;
+}
+.proj-card-add::before {
+  content: '';
+  position: absolute;
+  /* box-sizing: border-box (tailwindcss preflight, base.css) means the
+     button's own 1px border eats into the box the absolutely-positioned
+     ::before is inset FROM (the padding box, 2px smaller than --sp-8 on
+     each axis) — the naive (--sp-8 - --tap-min)/2 measured a 42px hit area,
+     not 44px. Subtracting the 2px border keeps the overlay at the real
+     --tap-min. */
+  inset: calc((var(--sp-8) - 2px - var(--tap-min)) / 2);
 }
 
 .proj-card-body {

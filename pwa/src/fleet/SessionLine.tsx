@@ -1,4 +1,10 @@
-// One session as a compact row: dot · label · state · tally · ⚠ · account · ···
+// One session as a compact two-line row: dot · label, ··· on the first line;
+// state · tally · ⚠ · account on the second, all inside the same tap target.
+// Fighting for one line's worth of horizontal room made every trailing cell
+// a candidate for squeezing or hiding (see fleet.css's history on this file);
+// a second line ends that fight — the label gets the row's full width and
+// the meta cells never need a grid track, a container query, or an
+// always-rendered-but-empty placeholder to stay aligned.
 //
 // Replaces SessionCard in the fleet list. Three things are cut rather than
 // shrunk. The attention SENTENCE ("Claude is asking you something") becomes the
@@ -16,6 +22,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import type { FleetSession, SessionStatus } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
+import { sessionLabel } from './sessionLabel';
 import './fleet.css';
 
 /** Routing policy calls a window critical above this. */
@@ -43,12 +50,7 @@ export function SessionLine({
   const dotStatus: SessionStatus | 'dialog' = dead ? 'dead' : attention ? 'dialog' : session.status;
   const state = dead ? 'exited' : attention ? 'waiting' : busy ? 'working' : 'idle';
 
-  // Spec order: name ?? branch ?? workspace ?? id. Branch outranks the slug
-  // because Phase 2's PR flow renames the branch to something descriptive while
-  // `workspace` keeps the slug it was born with — slug-first would pin the line
-  // to `quiet-mesa` forever. The `id` tail keeps the rule total for legacy rows,
-  // which have no workspace.
-  const label = session.name ?? session.branch ?? session.workspace ?? session.id;
+  const label = sessionLabel(session);
 
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;
@@ -75,6 +77,11 @@ export function SessionLine({
     ? { color: 'var(--ink-secondary)' }
     : { color: `var(${acctVar})` };
 
+  // Running somewhere other than its pinned account — ccd's _auto_swap_check
+  // moved it when `home` crossed the swap threshold. Dead sessions are exempt:
+  // nothing is running, so "away" would describe a journey that ended.
+  const away = !dead && session.wrapper !== session.home;
+
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
       <span className="sess-lamp" data-status={dotStatus}>
@@ -83,24 +90,45 @@ export function SessionLine({
 
       <button ref={labelRef} type="button" className="sess-open" onClick={open}>
         <span className="sess-label">{label}</span>
-        <span className={`sess-state sess-state--${state}`}>{state}</span>
+
+        {/* Second line: a quiet flex row, not a grid track — a missing cell
+            (no tally, no warning) just isn't there, instead of needing to be
+            rendered empty to hold a track open (that was only ever a grid
+            requirement, and this is no longer a grid). */}
+        <span className="sess-meta">
+          <span className={`sess-state sess-state--${state}`}>{state}</span>
+
+          {!dead && session.tasks !== null && (
+            <span className="sess-tally">
+              {session.tasks.done}/{session.tasks.total}
+            </span>
+          )}
+
+          {critical && (
+            <span className="sess-warn" role="img" aria-label="account limit near">
+              ⚠
+            </span>
+          )}
+
+          <span
+            className="sess-acct"
+            style={acctStyle}
+            data-away={away || undefined}
+            aria-label={
+              away
+                ? `running on ${accountLabel(session.wrapper)}, pinned to ${accountLabel(session.home)}`
+                : undefined
+            }
+          >
+            {accountLabel(session.wrapper)}
+            {away && (
+              <span className="sess-acct-away" aria-hidden="true">
+                ↗
+              </span>
+            )}
+          </span>
+        </span>
       </button>
-
-      {!dead && session.tasks !== null && (
-        <span className="sess-tally">
-          {session.tasks.done}/{session.tasks.total}
-        </span>
-      )}
-
-      {critical && (
-        <span className="sess-warn" role="img" aria-label="account limit near">
-          ⚠
-        </span>
-      )}
-
-      <span className="sess-acct" style={acctStyle}>
-        {accountLabel(session.wrapper)}
-      </span>
 
       <button
         type="button"

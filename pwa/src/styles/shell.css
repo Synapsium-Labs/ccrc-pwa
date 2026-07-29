@@ -129,6 +129,14 @@
     grid-row: 2;
     min-height: 0;
     overflow-y: auto;
+    /* Backstop, not the cure: fleet.css's `.proj-card` rule setting
+       min-width to 0 is what actually fixed the 65px horizontal scroll
+       measured here at 1440×900 (a grid item's default min-width is
+       auto/min-content, which refused to let the card shrink below its
+       row's content). This just guarantees the symptom can never
+       resurface in this pane even if a future child regresses that fix —
+       it clips, it doesn't solve. */
+    overflow-x: clip;
     border-right: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }

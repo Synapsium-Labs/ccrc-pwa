@@ -15,8 +15,21 @@ import { createSessionStore } from '../src/stores/session';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   Reflect.deleteProperty(window, 'visualViewport');
 });
+
+// (pointer: fine) stub — the one predicate behind both Enter-sends (Composer)
+// and the esc keycap's touch-only visibility here. Unstubbed, setup.ts's
+// matchMedia shim already answers `false` (touch/coarse).
+const stubPointer = (fine: boolean): void => {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('pointer: fine') ? fine : false,
+    media: q, addEventListener: () => {}, removeEventListener: () => {},
+    addListener: () => {}, removeListener: () => {}, onchange: null,
+    dispatchEvent: () => false,
+  }));
+};
 
 // — fixtures —
 
@@ -45,22 +58,27 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   ...patch,
 });
 
+/** Full SessionHeaderProps with no-op callbacks — build it, don't render it,
+ *  so tests that need to compose SessionHeader alongside sibling elements
+ *  (the Escape-while-typing case) can render for themselves. */
+const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
+  session: fleetSession(),
+  status: 'idle',
+  statusUpdatedAt: null,
+  onInterrupt: vi.fn(),
+  onOpenTerminal: vi.fn(),
+  onBack: vi.fn(),
+  onChangeModel: vi.fn(),
+  onChangeEffort: vi.fn(),
+  onMoveAccount: vi.fn(),
+  onStopSession: vi.fn(),
+  ...over,
+});
+
 const renderHeader = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => {
-  const props: SessionHeaderProps = {
-    session: fleetSession(),
-    status: 'idle',
-    statusUpdatedAt: null,
-    onInterrupt: vi.fn(),
-    onOpenTerminal: vi.fn(),
-    onBack: vi.fn(),
-    onChangeModel: vi.fn(),
-    onChangeEffort: vi.fn(),
-    onMoveAccount: vi.fn(),
-    onStopSession: vi.fn(),
-    ...over,
-  };
-  render(<SessionHeader {...props} />);
-  return props;
+  const p = props(over);
+  render(<SessionHeader {...p} />);
+  return p;
 };
 
 // — SessionHeader —
@@ -114,6 +132,48 @@ describe('SessionHeader', () => {
   });
 });
 
+describe('interrupt control', () => {
+  it('renders the esc keycap on touch, where there is no Escape key', () => {
+    stubPointer(false);
+    render(<SessionHeader {...props({ status: 'busy' })} />);
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+  });
+
+  it('hides the keycap where a real keyboard exists', () => {
+    stubPointer(true);
+    render(<SessionHeader {...props({ status: 'busy' })} />);
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+  });
+
+  it('binds the physical Escape key in its place', () => {
+    // THE test that matters. One asserting only that the cap is hidden would
+    // pass a change that silently removes the ability to interrupt.
+    stubPointer(true);
+    const onInterrupt = vi.fn();
+    render(<SessionHeader {...props({ status: 'busy', onInterrupt })} />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onInterrupt).toHaveBeenCalled();
+  });
+
+  it('does not interrupt an idle session, matching the keycap\'s disabled state', () => {
+    stubPointer(true);
+    const onInterrupt = vi.fn();
+    render(<SessionHeader {...props({ status: 'idle', onInterrupt })} />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onInterrupt).not.toHaveBeenCalled();
+  });
+
+  it('ignores Escape while typing — it dismisses, it does not interrupt', () => {
+    stubPointer(true);
+    const onInterrupt = vi.fn();
+    render(<><textarea data-testid="box" /><SessionHeader {...props({ status: 'busy', onInterrupt })} /></>);
+    const box = screen.getByTestId('box');
+    box.focus();
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(onInterrupt).not.toHaveBeenCalled();
+  });
+});
+
 // — SessionScreen wiring —
 
 describe('SessionScreen interrupt wiring', () => {
@@ -160,6 +220,81 @@ describe('SessionScreen interrupt wiring', () => {
 });
 
 // — keyboard discipline —
+
+describe('breadcrumb', () => {
+  it('names the workspace beside the project', () => {
+    // The header's branch metachip (session/SessionHeader.tsx's `.chat-meta`)
+    // already renders this session's raw branch text, so a bare getByText for
+    // 'ws/quiet-basin' is ambiguous once the crumb exists too — scope to the
+    // crumb span, which is what this test is actually about.
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'custom-tools', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
+    }) })} />);
+    expect(screen.getByText('custom-tools')).toBeInTheDocument();
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+  });
+
+  it('distinguishes two workspaces of one project — the whole point', () => {
+    // Same ambiguity as above: the branch metachip duplicates the crumb text,
+    // so assert against the crumb element specifically.
+    const { container, unmount } = render(<SessionHeader {...props({ session: fleetSession({
+      id: 'a', project: 'demo', workspace: 'quiet-basin', branch: 'ws/quiet-basin' }) })} />);
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+    unmount();
+    const { container: container2 } = render(<SessionHeader {...props({ session: fleetSession({
+      id: 'b', project: 'demo', workspace: 'still-cove', branch: 'ws/still-cove' }) })} />);
+    expect(container2.querySelector('.chat-crumb')).toHaveTextContent('ws/still-cove');
+  });
+
+  it('shows the project alone for a main checkout', () => {
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: null, name: null, branch: null, id: 'demo' }) })} />);
+    expect(screen.getByText('demo')).toBeInTheDocument();
+    expect(container.querySelector('.chat-crumb')).toBeNull();
+  });
+
+  it('prefers a chosen name over the branch, as the fleet line does', () => {
+    render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
+    expect(screen.getByText('refactor-auth')).toBeInTheDocument();
+  });
+
+  // The common case: no chosen `name`, so sessionLabel() falls through to
+  // `branch` and the crumb prints the exact same string the branch metachip
+  // would — a few pixels below it. The chip must not repeat it.
+  it('suppresses the branch chip when it would repeat the crumb', () => {
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin' }) })} />);
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+    expect(container.querySelector('.metachip--branch')).toBeNull();
+    // Belt and braces: the branch text appears exactly once in the whole
+    // header, not zero (that would pass against deleting the chip outright)
+    // and not twice (the duplicate this fix removes).
+    expect(screen.getAllByText('ws/quiet-basin')).toHaveLength(1);
+  });
+
+  it('keeps the branch chip once it differs from the crumb — two distinct elements', () => {
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
+    const crumb = container.querySelector('.chat-crumb');
+    const chip = container.querySelector('.metachip--branch');
+    expect(crumb).toHaveTextContent('refactor-auth');
+    expect(chip).toHaveTextContent('ws/quiet-basin');
+    expect(crumb).not.toBe(chip);
+    expect(crumb?.textContent).not.toBe(chip?.textContent);
+  });
+
+  it('keeps the branch chip for a main checkout with no crumb at all', () => {
+    // No workspace -> no crumb -> nothing for the chip to duplicate; it must
+    // render exactly as it always has. (Not the common case in practice —
+    // `branch` is usually only parsed for worktree sessions — but the fix
+    // must not regress it if it ever occurs.)
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: null, name: null, branch: 'main', id: 'demo' }) })} />);
+    expect(container.querySelector('.chat-crumb')).toBeNull();
+    expect(container.querySelector('.metachip--branch')).toHaveTextContent('main');
+  });
+});
 
 describe('useKeyboardInsets', () => {
   function Probe(): ReactNode {
