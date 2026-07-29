@@ -153,6 +153,34 @@ describe('interaction', () => {
   });
 });
 
+describe('the selected row', () => {
+  it('announces itself to assistive tech, not just to the stylesheet', () => {
+    // Selection reached nothing but a className before this — there is no
+    // other aria-current in src. The row navigates to /s/<id>, so `page` is
+    // the correct token; this is not a listbox option.
+    const { rerender } = render(
+      <SessionLine session={s()} selected onOpen={() => {}} onActions={() => {}} />);
+    const button = screen.getByText('quiet-mesa').closest('button')!;
+    expect(button).toHaveAttribute('aria-current', 'page');
+    rerender(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+    expect(button).not.toHaveAttribute('aria-current');
+  });
+
+  it('DROPS the inline account hue rather than overriding it', () => {
+    // Inline styles beat every selector short of !important, so
+    // .sess-line--active's achromatic override could never win against this
+    // one — and the hue measures 1.46:1 on the dark slab. The account
+    // survives as its mono name. Fails the moment acctStyle goes back to a
+    // plain CSSProperties.
+    const { container, rerender } = render(
+      <SessionLine session={s()} selected onOpen={() => {}} onActions={() => {}} />);
+    const acct = container.querySelector<HTMLElement>('.sess-acct')!;
+    expect(acct.style.color).toBe('');
+    rerender(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector<HTMLElement>('.sess-acct')!.style.color).not.toBe('');
+  });
+});
+
 describe('away from home', () => {
   it('marks the account chip when the session is not on its pinned account', () => {
     const { container } = render(

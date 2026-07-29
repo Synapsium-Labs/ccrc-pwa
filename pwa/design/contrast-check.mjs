@@ -18,7 +18,7 @@ const mix = (fg, bg, a) => {
 
 const D = {
   page: "#0B0D0C", surface: "#141715", raised: "#1C201D", well: "#070808",
-  sheet: "#181C19",
+  sheet: "#181C19", edgeStrong: "#39403A",
   inkP: "#ECF0EC", inkS: "#ADB6AE", inkT: "#8B948C", inkWell: "#DEE4DE",
   accent: "#45D67E", accentInk: "#082312", accentTint: "#12291B",
   busy: "#45D67E", busyText: "#57E08B", idle: "#7C867D",
@@ -33,7 +33,7 @@ const D = {
 };
 const Lt = {
   page: "#F4F6F3", surface: "#FFFFFF", raised: "#EAEEEA", well: "#141715",
-  sheet: "#FFFFFF",
+  sheet: "#FFFFFF", edgeStrong: "#C3CAC2",
   inkP: "#1A201B", inkS: "#4E5850", inkT: "#5F6962", inkWell: "#DEE4DE",
   accent: "#0E7B3F", accentInk: "#FFFFFF", accentTint: "#DFF2E5",
   busy: "#178A48", busyText: "#106E39", idle: "#6C766E",
@@ -136,6 +136,18 @@ const pairs = (T, name) => [
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
   [`${name} diff-del / well`, T.diffDel, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],
+  // The selected fleet row inverts (.sess-line--active: background
+  // --ink-primary), so its 12px meta line takes --edge-strong ON the slab — a
+  // hairline token used as text, which is the ONE genuinely new combination
+  // this treatment introduces. Everything else it needs is already gated and
+  // ratios are symmetric: the label's ink (--bg-page on --ink-primary) is
+  // `ink-primary / page`, the ··· glyph is `ink-secondary / page`, and the four
+  // dots on the lamp plate are the `* dot / lamp well` pairs.
+  // Do NOT add "dot on the selected slab" pairs: pairs() runs every entry in
+  // BOTH themes (line below), and those dots measure 1.55-2.87 in dark, which
+  // would redden the gate for a state that cannot occur — the plate is what
+  // they actually sit on.
+  [`${name} selected-row meta ink / slab`, T.edgeStrong, T.inkP, 4.5],
 ];
 
 let fail = 0, n = 0;

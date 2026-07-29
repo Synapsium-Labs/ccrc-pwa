@@ -3,7 +3,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
-import type { FleetGroup } from '../src/fleet/groupFleet';
+import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
 import { ProjectCard } from '../src/fleet/ProjectCard';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -147,6 +147,119 @@ describe('the + is icon-only', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={null} />);
     expect(screen.getByLabelText('New workspace on demo')).toBeInTheDocument();
+  });
+});
+
+describe('status owns the perimeter only for attention', () => {
+  it('never puts busy on the card border', () => {
+    // On a one-session project (9 of 9 live) `group.busy > 0` is the same
+    // predicate the row already renders three times — the lamp's hue, its
+    // glow + breathe, and the word `working` — and green on a frame was being
+    // read as "this is the project I have selected".
+    const { container } = render(
+      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy' })] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).not.toHaveClass('proj-card--busy');
+  });
+
+  it('still puts attention on it', () => {
+    // Control — green before and after. Attention is the one status that asks
+    // the reader to ACT, and with green gone it is the only coloured
+    // perimeter left, so it reads as an exception rather than as wallpaper.
+    const { container } = render(
+      <ProjectCard group={grp({ attention: true, sessions: [sess({ dialogPending: true })] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).toHaveClass('proj-card--attention');
+  });
+
+  it('says what is running inside a folded card as a WORD, not a second dot', () => {
+    // A green ● beside the amber ● would separate the two most opposite
+    // meanings on this screen by hue alone, at 1.06:1 luminance, with no
+    // tempo and no word. ATTENTION IS A MARK, BUSY IS A WORD.
+    render(
+      <ProjectCard collapsed
+                   group={grp({ busy: 2, sessions: [
+                     sess({ status: 'busy' }),
+                     sess({ id: 'demo-still-cove', workspace: 'still-cove', status: 'busy' }),
+                   ] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('2 working')).toBeInTheDocument();
+    // A dot would also duplicate StatusDot's own role=img/"working" name.
+    expect(screen.queryByRole('img', { name: /working/ })).toBeNull();
+  });
+
+  // These two build the group with the REAL groupFleet rather than the `grp`
+  // literal: the defect lives in the predicate, so a hand-written `busy: 1`
+  // would pin the bug instead of the rule. Folded and expanded are asserted in
+  // one `it` each, because the defect IS the disagreement between them.
+  it('does not say working over a single row that says waiting', () => {
+    // Found in review. `group.busy` counted `status === 'busy'`, while
+    // SessionLine ranks attention first (`busy = !attention && status ===
+    // 'busy'`). One busy session with a pending dialog therefore rendered
+    // `▸ demo … ● working` folded and `waiting` expanded — the amber "act now"
+    // mark and the word "working" describing the SAME session, which reads as
+    // two sessions in opposite states.
+    const [g] = groupFleet([sess({ status: 'busy', dialogPending: true })]);
+    const { rerender } = render(
+      <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('working')).toBeNull();
+    rerender(<ProjectCard group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+  });
+
+  it('counts only the rows that will say working, not every busy status', () => {
+    // The border never carried a count (a boolean over a count); the word does,
+    // so the number is a claim. Two busy sessions, one of them waiting on the
+    // reader, used to fold to `2 working` over rows reading `waiting | working`.
+    const [g] = groupFleet([
+      sess({ status: 'busy', dialogPending: true }),
+      sess({ id: 'demo-still-cove', workspace: 'still-cove', status: 'busy' }),
+    ]);
+    const { rerender } = render(
+      <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('2 working')).toBeNull();
+    expect(screen.getByText('working')).toBeInTheDocument();
+    rerender(<ProjectCard group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getAllByText('working')).toHaveLength(1);
+  });
+
+  it('leaves the header silent about busy while the rows are visible', () => {
+    // Control — green before and after, and the guard that stops anyone
+    // "improving" the word into an always-on header rollup, re-creating the
+    // exact duplication the green border was deleted for.
+    render(
+      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy' })] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getAllByText('working')).toHaveLength(1);
+  });
+});
+
+describe('a fold must not hide the selection either', () => {
+  it('marks a folded card that holds the selected session', () => {
+    // Selection is a fact about the reader, not about the project, so it
+    // never touches the perimeter — but a fold hides the selected row exactly
+    // as it would hide a pending dialog, so the header carries it (as the
+    // slab, at chip scale) while folded.
+    const { container } = render(
+      <ProjectCard collapsed selectedId="demo-quiet-mesa" group={grp()}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).toHaveAttribute('data-holds-selection');
+  });
+
+  it('does not mark an expanded card — the row itself is showing', () => {
+    // Control.
+    const { container } = render(
+      <ProjectCard selectedId="demo-quiet-mesa" group={grp()}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).not.toHaveAttribute('data-holds-selection');
+  });
+
+  it('does not mark a folded card holding no selected session', () => {
+    // Control.
+    const { container } = render(
+      <ProjectCard collapsed selectedId="other-loud-fjord" group={grp()}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).not.toHaveAttribute('data-holds-selection');
   });
 });
 

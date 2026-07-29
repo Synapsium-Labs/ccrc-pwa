@@ -157,6 +157,84 @@ describe('fleet density and alignment', () => {
   });
 });
 
+describe('selection is polarity, status is hue', () => {
+  // The law: selection is achromatic polarity (fill + ink flip), status keeps
+  // hue. Selection never owns a perimeter; status owns one only for attention.
+  // Forced, not chosen: --accent and --status-busy are the same hex (#45D67E)
+  // and the four account hues own the cool half of the wheel, so on THIS
+  // screen any coloured selection is a status or identity collision.
+
+  it('inverts the selected row instead of tinting it', () => {
+    // The old signal was --bg-raised on --bg-surface: 1.10:1 dark / 1.17:1
+    // light — less than the hairline that separates one card from the next.
+    const rule = ruleFor('.sess-line--active');
+    expect(rule).toContain('background: var(--ink-primary)');
+    expect(rule).toContain('color: var(--bg-page)');
+  });
+
+  it('leaves no busy perimeter, and keeps the amber one byte for byte', () => {
+    // Assert the RULE is gone, not the string: the deletion note names the
+    // class, so a text search would find it in the comment and pass.
+    expect(() => ruleFor('.proj-card--busy')).toThrow();
+    // Attention is the only status that asks the reader to act and the one a
+    // fold must never hide — it keeps the perimeter, now monosemous.
+    expect(css).toContain('.proj-card--attention { border-color: var(--status-attention-text); }');
+  });
+
+  it('strips every status and account hue from the slab', () => {
+    // ruleFor anchors on `<sel> {`, so only the LAST selector of a list can
+    // fetch the block; the rest are asserted as members of that same list,
+    // read back from the block's own brace rather than from the whole file —
+    // this is what catches a STRANDED cell when someone adds a new coloured
+    // element to .sess-meta and forgets it here.
+    const last = '.sess-line--active .sess-meta > *:not(:first-child)::before';
+    expect(ruleFor(last)).toContain('color: var(--edge-strong)');
+    const open = css.indexOf(`${last} {`);
+    const list = css.slice(css.lastIndexOf('}', open) + 1, open);
+    for (const cell of ['.sess-meta', '.sess-state', '.sess-tally', '.sess-warn',
+                        '.sess-acct', '.sess-acct-away']) {
+      expect(list).toContain(`.sess-line--active ${cell},`);
+    }
+  });
+
+  it('gives the lamp a --bg-well plate so its dot keeps the hue it was gated on', () => {
+    // Every dot on this row must sit on --bg-well — the one background
+    // design/contrast-check.mjs already verifies all four dots against at 3:1
+    // in BOTH themes. Without it the dark dots die on the near-white slab
+    // (busy 1.63, attention 1.55). Absolutely positioned so the first grid
+    // column does not widen and push this row's label off the shared edge.
+    const plate = ruleFor('.sess-line--active .sess-lamp::before');
+    expect(plate).toContain('position: absolute');
+    expect(plate).toContain('width: var(--lamp-size)');
+    expect(plate).toContain('background: var(--bg-well)');
+    // The plate is positioned; without this it paints over the dot.
+    expect(ruleFor('.sess-line--active .sess-lamp > .dot')).toContain('position: relative');
+  });
+
+  it('keeps the focus ring visible on the row most likely to hold focus', () => {
+    // base.css draws :focus-visible in --accent, which measures 1.63:1 on the
+    // dark slab — an invisible ring exactly where focus lands.
+    expect(ruleFor('.sess-line--active :focus-visible')).toContain('outline-color: var(--bg-page)');
+  });
+
+  it('flips the ··· with the row without touching its box', () => {
+    // Colour only: the 32×32 box, the hairline and the 44px ::before overlay
+    // stay on the base rule, so the matched pair with .proj-card-add survives.
+    const rule = ruleFor('.sess-line--active .sess-actions');
+    expect(rule).toContain('background: var(--bg-page)');
+    expect(rule).not.toContain('width');
+    expect(rule).not.toContain('height');
+  });
+
+  it('survives forced colours, where the polarity channel does not exist', () => {
+    // Canvas/CanvasText flatten fill AND ink, leaving font-weight alone. An
+    // inset border is the channel that survives.
+    const at = css.indexOf('@media (forced-colors: active)');
+    expect(at).toBeGreaterThan(-1);
+    expect(ruleIn(css.slice(at), '.sess-line--active')).toContain('outline: 2px solid CanvasText');
+  });
+});
+
 describe('shell-nav overflow backstop', () => {
   it('clips horizontal overflow on the desktop sidebar as a backstop behind min-width: 0', () => {
     // .proj-card's min-width: 0 (asserted above) is the real fix — this is
