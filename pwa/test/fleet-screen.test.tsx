@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
@@ -7,6 +8,12 @@ import { FleetScreen } from '../src/screens/FleetScreen';
 import { SessionCard } from '../src/fleet/SessionCard';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '../src/components/Toast';
+
+// foldState.ts persists to localStorage — clear it so one test's fold can
+// never leak into the next's initial (expanded) expectation.
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
@@ -109,11 +116,12 @@ describe('FleetScreen', () => {
     expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
     expect(screen.getAllByText('alt·max').length).toBeGreaterThan(0);
 
-    // Status is dot + word, never dot alone; relative activity rides along.
+    // Status is dot + word, never dot alone. SessionLine (unlike the SessionCard
+    // it replaces) carries no relative timestamp — that's cut, not moved.
     expect(screen.getByRole('img', { name: 'working' })).toBeInTheDocument();
-    expect(screen.getByText('working · 4m')).toBeInTheDocument();
+    expect(screen.getByText('working')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'idle' })).toBeInTheDocument();
-    expect(screen.getByText('idle · 2m ago')).toBeInTheDocument();
+    expect(screen.getByText('idle')).toBeInTheDocument();
   });
 
   it('shows the attention badge when a dialog is pending', () => {
@@ -121,10 +129,12 @@ describe('FleetScreen', () => {
     render(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session({ dialogPending: true })] });
 
-    expect(
-      screen.getByText('Claude is asking you something — tap to answer'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'waiting on you' })).toBeInTheDocument();
+    // The attention SENTENCE is gone from the line (SessionLine.tsx) — it
+    // becomes the dot plus the bare word "waiting". The badge now lives twice:
+    // once on the line's own lamp, once on the project header (proj-card-attn),
+    // which is what lets a fold never hide it.
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'waiting on you' })).toHaveLength(2);
   });
 
   it("shows a persistent offline banner when conn is 'down', keeping last-known cards", () => {
@@ -294,6 +304,20 @@ describe('FleetScreen', () => {
       expect(screen.getByText(/origin\/HEAD — run: git -C \/repo remote set-head/))
         .toBeInTheDocument());
     expect(screen.queryByText(/request failed/)).toBeNull();
+  });
+
+  it('keeps a project folded across a remount', async () => {
+    // The whole reason fold state left useState: navigating into a session and
+    // back re-expanded everything.
+    const store = makeStore();
+    const first = render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha' })] });
+
+    await userEvent.click(screen.getByRole('button', { expanded: true }));
+    first.unmount();
+
+    render(<FleetScreen store={store} />);
+    expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument();
   });
 });
 

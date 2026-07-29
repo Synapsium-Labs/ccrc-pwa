@@ -11,11 +11,14 @@ import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { groupFleet } from '../fleet/groupFleet';
-import { ProjectGroup } from '../fleet/ProjectGroup';
+import { ProjectCard } from '../fleet/ProjectCard';
+import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
+import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
@@ -77,6 +80,11 @@ export function FleetScreen({
   };
 
   const projected = useProjectedHome();
+  // Fold state persists across navigation (foldState.ts) — useState here would
+  // re-expand every project on the way back from a session.
+  const [folded, toggleFold] = useFolded();
+  // One sheet for the whole screen, fed by whichever line was tapped.
+  const [actionsFor, setActionsFor] = useState<FleetSession | null>(null);
 
   const waiting = sessions.filter((s) => s.dialogPending).length;
   const countLine =
@@ -150,7 +158,7 @@ export function FleetScreen({
           {showAccounts && <AccountsStrip />}
           <div className="fleet-list">
             {groupFleet(sessions).map((g) => (
-              <ProjectGroup
+              <ProjectCard
                 key={g.project}
                 group={g}
                 onOpen={open}
@@ -158,6 +166,9 @@ export function FleetScreen({
                 onAddWorkspace={(p) => void addWorkspace(p)}
                 projected={projected}
                 adding={adding.has(g.project)}
+                collapsed={folded.has(g.project)}
+                onToggle={toggleFold}
+                onActions={setActionsFor}
               />
             ))}
           </div>
@@ -169,6 +180,13 @@ export function FleetScreen({
       </button>
 
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
+
+      <SessionActionsSheet
+        session={actionsFor}
+        open={actionsFor !== null}
+        onClose={() => setActionsFor(null)}
+        fleet={store}
+      />
     </main>
   );
 }

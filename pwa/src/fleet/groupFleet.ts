@@ -4,10 +4,6 @@ import { sortFleet } from './sortFleet';
 export interface FleetGroup {
   project: string;
   sessions: FleetSession[];
-  /** False for a project holding one session: it renders bare, with no header
-   *  and no chevron. Most projects hold one and always will; the screen must
-   *  not pay for worktrees it does not have. */
-  grouped: boolean;
   /** Any member is waiting on you. A collapsed header wears this, so folding a
    *  project away can never hide the one thing this screen exists to surface. */
   attention: boolean;
@@ -35,7 +31,6 @@ export function groupFleet(sessions: FleetSession[]): FleetGroup[] {
     groups.push({
       project,
       sessions: members,
-      grouped: members.length > 1,
       attention: members.some((m) => m.status !== 'dead' && m.dialogPending),
       busy: members.filter((m) => m.status === 'busy').length,
     });

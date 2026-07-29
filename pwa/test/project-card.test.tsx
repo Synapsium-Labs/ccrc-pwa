@@ -18,7 +18,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, grouped: false, ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, ...over,
 });
 
 describe('uniform shape', () => {
