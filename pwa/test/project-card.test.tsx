@@ -114,4 +114,21 @@ describe('the + button', () => {
                         onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText(/team·max · 82% free/)).not.toHaveAttribute('data-low');
   });
+
+  // The score: 99 / score: 18 cases above sit far from LOW_HEADROOM (75), so a
+  // `>=` → `>` flip or a 75 → 80 drift in the threshold would pass unnoticed.
+  // These two pin the actual boundary: 75 is the first score that flags,
+  // matching the accounts strip's own `crit` threshold.
+  it('flags exactly at the LOW_HEADROOM boundary (score 75, the first exhausted value)', () => {
+    render(<ProjectCard group={grp()} onAddWorkspace={() => {}} onOpen={() => {}}
+                        onActions={() => {}} projected={{ wrapper: 'claude', score: 75 }} />);
+    const note = screen.getByText(/team·max · 25% free/);
+    expect(note).toHaveAttribute('data-low', 'true');
+  });
+
+  it('does not flag just below the boundary (score 74)', () => {
+    render(<ProjectCard group={grp()} onAddWorkspace={() => {}} onOpen={() => {}}
+                        onActions={() => {}} projected={{ wrapper: 'claude', score: 74 }} />);
+    expect(screen.getByText(/team·max · 26% free/)).not.toHaveAttribute('data-low');
+  });
 });
