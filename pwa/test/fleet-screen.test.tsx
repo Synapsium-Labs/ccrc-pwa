@@ -1,12 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { FleetScreen } from '../src/screens/FleetScreen';
-import { SessionCard } from '../src/fleet/SessionCard';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '../src/components/Toast';
+
+// foldState.ts persists to localStorage — clear it so one test's fold can
+// never leak into the next's initial (expanded) expectation.
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
@@ -109,11 +115,12 @@ describe('FleetScreen', () => {
     expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
     expect(screen.getAllByText('alt·max').length).toBeGreaterThan(0);
 
-    // Status is dot + word, never dot alone; relative activity rides along.
+    // Status is dot + word, never dot alone. SessionLine (unlike the SessionCard
+    // it replaces) carries no relative timestamp — that's cut, not moved.
     expect(screen.getByRole('img', { name: 'working' })).toBeInTheDocument();
-    expect(screen.getByText('working · 4m')).toBeInTheDocument();
+    expect(screen.getByText('working')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'idle' })).toBeInTheDocument();
-    expect(screen.getByText('idle · 2m ago')).toBeInTheDocument();
+    expect(screen.getByText('idle')).toBeInTheDocument();
   });
 
   it('shows the attention badge when a dialog is pending', () => {
@@ -121,10 +128,12 @@ describe('FleetScreen', () => {
     render(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session({ dialogPending: true })] });
 
-    expect(
-      screen.getByText('Claude is asking you something — tap to answer'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'waiting on you' })).toBeInTheDocument();
+    // The attention SENTENCE is gone from the line (SessionLine.tsx) — it
+    // becomes the dot plus the bare word "waiting". The badge now lives twice:
+    // once on the line's own lamp, once on the project header (proj-card-attn),
+    // which is what lets a fold never hide it.
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'waiting on you' })).toHaveLength(2);
   });
 
   it("shows a persistent offline banner when conn is 'down', keeping last-known cards", () => {
@@ -295,45 +304,107 @@ describe('FleetScreen', () => {
         .toBeInTheDocument());
     expect(screen.queryByText(/request failed/)).toBeNull();
   });
+
+  it('keeps a project folded across a remount', async () => {
+    // The whole reason fold state left useState: navigating into a session and
+    // back re-expanded everything.
+    const store = makeStore();
+    const first = render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha' })] });
+
+    await userEvent.click(screen.getByRole('button', { expanded: true }));
+    first.unmount();
+
+    render(<FleetScreen store={store} />);
+    expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument();
+  });
+
+  // Whole-branch review, findings 2/3/5: the actions sheet used to be fed a
+  // FleetSession captured at tap time (FleetScreen held `actionsFor` as the
+  // session itself) and unmounted the instant it closed (nulling the session
+  // in the same commit that flipped `open`). That both popped the sheet out
+  // of existence instead of letting vaul animate its exit, AND froze whatever
+  // the line looked like at tap time even if the fleet moved on.
+  describe('actions sheet lifecycle', () => {
+    it('keeps the limit note current with a live fleet update (Finding 5)', async () => {
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [session({
+          id: 'a', project: 'alpha', workspace: 'quiet-mesa',
+          limits: { five: 10, seven: 10 },
+        })],
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+      expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
+
+      // The SAME id, a fresh limits snapshot — the sheet is still open.
+      seed(store, {
+        sessions: [session({
+          id: 'a', project: 'alpha', workspace: 'quiet-mesa',
+          limits: { five: 90, seven: 10 },
+        })],
+      });
+
+      expect(await screen.findByText(/5h limit near/i)).toBeInTheDocument();
+    });
+
+    it(
+      'closes over its last snapshot when its session vanishes, and never leaks ' +
+      'swapOpen to the next session tapped (Findings 2, 3, 5)',
+      async () => {
+        const store = makeStore();
+        render(<FleetScreen store={store} />);
+        seed(store, {
+          conn: 'open',
+          sessions: [
+            session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa' }),
+            session({ id: 'b', project: 'beta', workspace: 'brave-elm' }),
+          ],
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+        fireEvent.click(screen.getByRole('button', { name: /swap account/i }));
+        expect(screen.getByText(/pick where it should live/i)).toBeInTheDocument();
+
+        // Session a is gone from the fleet entirely — nothing left to act on.
+        seed(store, { sessions: [session({ id: 'b', project: 'beta', workspace: 'brave-elm' })] });
+
+        // The sheet (and its stacked SwapSheet) close rather than freezing open
+        // on stale data forever.
+        await waitFor(() =>
+          expect(screen.queryByText(/pick where it should live/i)).not.toBeInTheDocument());
+
+        // A stale swapOpen would show SwapSheet already stacked on the very
+        // next session tapped, rather than the plain actions list.
+        fireEvent.click(screen.getByRole('button', { name: /actions for brave-elm/i }));
+        expect(screen.getByRole('button', { name: /restart session/i })).toBeInTheDocument();
+        expect(screen.queryByText(/pick where it should live/i)).not.toBeInTheDocument();
+      },
+    );
+  });
 });
 
-// — SessionCard —
-
-describe('SessionCard', () => {
-  it('opens the session when tapped', () => {
-    const onOpen = vi.fn();
-    render(<SessionCard session={session()} onOpen={onOpen} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'OpenClawHetzner' }));
-    expect(onOpen).toHaveBeenCalledWith('claude:OpenClawHetzner');
-  });
-
-  it('renders the dead card muted with restart affordances', () => {
-    const ensure = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
-    const onOpen = vi.fn();
-    render(
-      <SessionCard
-        session={session({ status: 'dead', statusUpdatedAt: Date.now() - 3 * 60 * MIN })}
-        onOpen={onOpen}
-      />,
-    );
-
-    expect(screen.getByText('Not running — tap to view, hold to restart')).toBeInTheDocument();
-    expect(screen.getByText('exited · 3h ago')).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
-    // Dead cards hide the limits bars — meaningless for a stopped session.
-    expect(document.querySelector('.limits')).not.toBeInTheDocument();
-
-    // The inline restart button calls ensure without also opening the session.
-    fireEvent.click(screen.getByRole('button', { name: 'Restart session' }));
-    expect(ensure).toHaveBeenCalledWith('claude:OpenClawHetzner');
-    expect(onOpen).not.toHaveBeenCalled();
-
-    // Tapping the card still opens the (read-only) chat.
-    fireEvent.click(screen.getByRole('button', { name: 'OpenClawHetzner' }));
-    expect(onOpen).toHaveBeenCalledWith('claude:OpenClawHetzner');
-  });
-
+// — AccountsStrip —
+//
+// Was filed under a `describe('SessionCard', ...)` block alongside three
+// tests that rendered <SessionCard> directly. SessionCard is retired (see
+// SessionLine.tsx); those three were dropped as redundant with coverage that
+// already exists for its replacement:
+//   - "opens the session when tapped" → session-line.test.tsx
+//     ("opens the session on tap")
+//   - "renders the dead card muted with restart affordances" → the dead/exited
+//     state is covered by session-line.test.tsx ("reads exited when dead");
+//     the restart affordance itself by session-actions-sheet.test.tsx
+//     ("restarts through api.ensure") and chat.test.tsx.
+//   - "a session card no longer renders its own limit bars" → superseded by
+//     session-line.test.tsx's own limit-bar-free rendering (SessionLine never
+//     had card-style limit bars to begin with).
+// This test never rendered <SessionCard> — it renders <AccountsStrip />
+// directly — so it survives, renamed to match what it actually tests.
+describe('AccountsStrip', () => {
   it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
     const nowSec = Math.floor(Date.now() / 1000);
     vi.spyOn(api, 'accounts').mockResolvedValue({
@@ -352,10 +423,5 @@ describe('SessionCard', () => {
     // reset countdown rendered ("2h" for the 5h window)
     expect(screen.getByText(/↻\s*2h/)).toBeInTheDocument();
     vi.restoreAllMocks();
-  });
-
-  it('a session card no longer renders its own limit bars', () => {
-    render(<SessionCard session={session({ limits: { five: 85, seven: 30 } })} onOpen={() => {}} />);
-    expect(document.querySelectorAll('.limit-fill')).toHaveLength(0);
   });
 });

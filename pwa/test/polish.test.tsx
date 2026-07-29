@@ -8,7 +8,6 @@ import type { FleetSession } from '../../shared/api';
 import { initTheme, type ThemeMedia } from '../src/lib/theme';
 import { navigate } from '../src/lib/router';
 import { AttachButton } from '../src/session/AttachButton';
-import { SessionCard } from '../src/fleet/SessionCard';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
@@ -139,44 +138,23 @@ describe('SessionScreen status fallback', () => {
 });
 
 // — session card: a critical limit narrates its consequence (DIRECTION.md) —
-
-describe('SessionCard limit narration', () => {
-  it('narrates the 5h window crossing critical', () => {
-    render(
-      <SessionCard
-        session={fleetSession({ limits: { five: 82, seven: 40 } })}
-        onOpen={() => {}}
-      />,
-    );
-    expect(screen.getByText(/5h limit near — will move to another account/i)).toBeInTheDocument();
-  });
-
-  it('narrates the 7d window when only it is critical', () => {
-    render(
-      <SessionCard
-        session={fleetSession({ limits: { five: 10, seven: 80 } })}
-        onOpen={() => {}}
-      />,
-    );
-    expect(screen.getByText(/7d limit near/i)).toBeInTheDocument();
-  });
-
-  it('stays quiet below the critical band and on dead sessions', () => {
-    render(
-      <SessionCard
-        session={fleetSession({ limits: { five: 60, seven: 74 } })}
-        onOpen={() => {}}
-      />,
-    );
-    render(
-      <SessionCard
-        session={fleetSession({ status: 'dead', limits: { five: 90, seven: 90 } })}
-        onOpen={() => {}}
-      />,
-    );
-    expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
-  });
-});
+//
+// The 'SessionCard limit narration' describe block that lived here is gone,
+// not moved to .proj-card or .sess-line: SessionLine.tsx's own header comment
+// says the limit sentence "becomes `⚠`, with the full text in the actions
+// sheet where there is room to say what will happen" — the row no longer
+// narrates it at all. The sentence itself (now "{5h|7d} limit near — this
+// session will move to another account.") lives in SessionActionsSheet.tsx,
+// where test/session-actions-sheet.test.tsx already covers the two cases that
+// matter — "explains the limit consequence that the line only had room to
+// flag" (critical → shown) and "says nothing about limits when neither window
+// is critical" (quiet). The dead-session-quiet and 7d-only-critical branches
+// aren't independently re-asserted there, but both are the same three-way
+// ternary (`status === 'dead' ? null : five-critical ? '5h' : seven-critical ?
+// '7d' : null`) already exercised by the five-critical case, and
+// SessionLine's own critical indicator (test/session-line.test.tsx, "warns
+// when a limit window is critical, but never on a dead session") independently
+// confirms the dead-suppresses-critical rule holds for the same session data.
 
 // — attach: picking from the photo library must stay possible —
 

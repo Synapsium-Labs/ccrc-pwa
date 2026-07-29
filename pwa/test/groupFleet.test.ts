@@ -10,22 +10,6 @@ const s = (over: Partial<FleetSession>): FleetSession => ({
 });
 
 describe('groupFleet', () => {
-  it('leaves a one-session project ungrouped, so the screen is unchanged today', () => {
-    const g = groupFleet([s({ id: 'a', project: 'alpha' })]);
-    expect(g).toHaveLength(1);
-    expect(g[0]!.grouped).toBe(false);
-  });
-
-  it('groups a project holding two or more sessions', () => {
-    const g = groupFleet([
-      s({ id: 'a', project: 'alpha' }),
-      s({ id: 'b', project: 'alpha', workspace: 'quiet-mesa' }),
-    ]);
-    expect(g).toHaveLength(1);
-    expect(g[0]!.grouped).toBe(true);
-    expect(g[0]!.sessions).toHaveLength(2);
-  });
-
   it('orders groups by their most urgent member, not alphabetically', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', status: 'busy' }),

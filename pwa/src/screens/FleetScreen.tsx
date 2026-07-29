@@ -1,7 +1,8 @@
 // Fleet screen (route `/`) — a thin renderer over the fleet store. Single
-// column of session cards, offline/notice banners, skeletons while the first
-// snapshot is in flight, a friendly first-run block, and a floating "+"
-// within thumb reach that opens the NewSessionSheet.
+// column of project cards, each holding its sessions as compact lines,
+// offline/notice banners, skeletons while the first snapshot is in flight, a
+// friendly first-run block, and a floating "+" within thumb reach that opens
+// the NewSessionSheet.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
@@ -11,11 +12,14 @@ import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { groupFleet } from '../fleet/groupFleet';
-import { ProjectGroup } from '../fleet/ProjectGroup';
+import { ProjectCard } from '../fleet/ProjectCard';
+import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
+import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
@@ -77,6 +81,43 @@ export function FleetScreen({
   };
 
   const projected = useProjectedHome();
+  // Fold state persists across navigation (foldState.ts) — useState here would
+  // re-expand every project on the way back from a session.
+  const [folded, toggleFold] = useFolded();
+  // One sheet for the whole screen, fed by whichever line was tapped. Only
+  // the id is the source of truth (Finding 5 of the whole-branch review):
+  // `actionsSession` is refreshed from the live `sessions` list below rather
+  // than frozen at tap time, so a fleet update while the sheet is open keeps
+  // its limit note and Remove-workspace visibility current. `actionsOpen` is
+  // a separate boolean — matching how NewSessionSheet and SwapSheet are
+  // toggled elsewhere in this file — so closing never clears the session:
+  // SessionActionsSheet stays mounted and vaul gets to play its exit
+  // animation instead of popping out of existence (Finding 2).
+  const [actionsId, setActionsId] = useState<string | null>(null);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionsSession, setActionsSession] = useState<FleetSession | null>(null);
+
+  useEffect(() => {
+    if (actionsId === null) return;
+    const live = sessions.find((s) => s.id === actionsId) ?? null;
+    if (live !== null) {
+      setActionsSession(live);
+    } else if (actionsOpen) {
+      // The session vanished from the fleet entirely (workspace removed,
+      // process gone) while the sheet was open — there is nothing left to
+      // act on. Close it exactly as a manual dismiss would: `actionsSession`
+      // keeps its last known value so the sheet still has something to
+      // animate out over, rather than popping (same class of bug as
+      // Finding 2, from a different trigger).
+      setActionsOpen(false);
+    }
+  }, [sessions, actionsId, actionsOpen]);
+
+  const openActionsFor = (session: FleetSession): void => {
+    setActionsId(session.id);
+    setActionsSession(session);
+    setActionsOpen(true);
+  };
 
   const waiting = sessions.filter((s) => s.dialogPending).length;
   const countLine =
@@ -150,7 +191,7 @@ export function FleetScreen({
           {showAccounts && <AccountsStrip />}
           <div className="fleet-list">
             {groupFleet(sessions).map((g) => (
-              <ProjectGroup
+              <ProjectCard
                 key={g.project}
                 group={g}
                 onOpen={open}
@@ -158,6 +199,9 @@ export function FleetScreen({
                 onAddWorkspace={(p) => void addWorkspace(p)}
                 projected={projected}
                 adding={adding.has(g.project)}
+                collapsed={folded.has(g.project)}
+                onToggle={toggleFold}
+                onActions={openActionsFor}
               />
             ))}
           </div>
@@ -169,6 +213,13 @@ export function FleetScreen({
       </button>
 
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
+
+      <SessionActionsSheet
+        session={actionsSession}
+        open={actionsOpen}
+        onClose={() => setActionsOpen(false)}
+        fleet={store}
+      />
     </main>
   );
 }
