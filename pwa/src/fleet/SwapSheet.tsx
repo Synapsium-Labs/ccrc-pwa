@@ -139,7 +139,7 @@ export function SwapSheet({
   // The target awaiting its consequence confirm (null = still browsing).
   const [target, setTarget] = useState<string | null>(null);
 
-  const disabledWrappers = useDisabledWrappers();
+  const disabledWrappers = useDisabledWrappers(open);
   const wrappers = pickableWrappers(sessions, disabledWrappers).filter((w) => w !== session.wrapper);
   const suggested = leastLoaded(sessions, wrappers);
 

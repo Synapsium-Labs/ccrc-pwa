@@ -190,6 +190,17 @@ describe('NewSessionSheet', () => {
     expect(await screen.findByText(/no such wrapper/)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('excludes a disabled account from the new-session picker', async () => {
+    // The same bug shape as SwapSheet, one layer up: a kill-switched lane
+    // cannot start a session either, so offering it here is just as broken.
+    stubAccounts([acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', disabled: true })]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+
+    expect(await screen.findByRole('button', { name: /alt·max/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /gpt/i })).not.toBeInTheDocument();
+  });
 });
 
 // — SwapSheet —
@@ -249,6 +260,16 @@ describe('SwapSheet', () => {
                       open onClose={() => {}} fleet={storeWith([])} />);
     expect(await screen.findByText('alt·max')).toBeInTheDocument();  // picker rendered
     expect(screen.queryByText('gpt')).not.toBeInTheDocument();
+  });
+
+  it('does not poll /api/accounts while the sheet is closed', () => {
+    // SwapSheet mounts unconditionally from both its callers (open only
+    // toggles the inner vaul Sheet), so without gating useDisabledWrappers on
+    // `open` this would poll forever in the background, visible or not.
+    const accounts = vi.spyOn(api, 'accounts');
+    render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo' }}
+                      open={false} onClose={() => {}} fleet={storeWith([])} />);
+    expect(accounts).not.toHaveBeenCalled();
   });
 });
 

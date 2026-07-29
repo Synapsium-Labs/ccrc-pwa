@@ -15,6 +15,7 @@ import { accountLabel } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { AccountRow, limitsFor, pickableWrappers } from './SwapSheet';
+import { useDisabledWrappers } from './useProjectedHome';
 import './fleet.css';
 
 interface Project {
@@ -35,6 +36,7 @@ export function NewSessionSheet({
   fleet = useFleetStore,
 }: NewSessionSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
+  const disabledWrappers = useDisabledWrappers(open);
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
   const [project, setProject] = useState<Project | null>(null);
@@ -112,7 +114,9 @@ export function NewSessionSheet({
         <>
           <p className="sheet-copy">Pick the account it runs on — you can move it later.</p>
           <div className="acct-list">
-            {pickableWrappers(sessions).map((w) => (
+            {/* A kill-switched lane cannot start a session either — offering
+                it here is the same bug SwapSheet's picker had, one layer up. */}
+            {pickableWrappers(sessions, disabledWrappers).map((w) => (
               <AccountRow
                 key={w}
                 wrapper={w}
