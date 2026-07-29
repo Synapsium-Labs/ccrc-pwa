@@ -237,10 +237,30 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
 _ws_realpath() {   # path -> same path, existing prefix resolved
   local p="$1" head="$1" tail="" real
   while [[ ! -d "$head" && "$head" != / && "$head" != . && -n "$head" ]]; do
-    tail="/$(basename "$head")$tail"; head=$(dirname "$head")
+    tail="/$(basename -- "$head")$tail"; head=$(dirname -- "$head")   # -- : a path may start with -
   done
-  real=$(cd "$head" 2>/dev/null && pwd -P) || { echo "$p"; return 0; }
-  echo "${real%/}$tail"
+  real=$(cd -- "$head" 2>/dev/null && pwd -P) || { echo "$p"; return 0; }
+  # `pwd -P` prints "/" for the root and never a trailing slash anywhere else,
+  # so stripping is only ever right when there is a tail to re-attach: for the
+  # root with no tail, "${real%/}" strips the only character there is.
+  if [[ -n "$tail" ]]; then echo "${real%/}$tail"; else echo "$real"; fi
+}
+
+# Which repository a directory belongs to, as one absolute, symlink-resolved
+# path — the only question that distinguishes "$main's worktree" from "some
+# other repo that was put at that path". `rev-parse --git-common-dir` answers
+# with an absolute path from a linked worktree but a bare `.git` (or `../.git`)
+# from a repo's own checkout, so it is resolved against the directory it was
+# read from rather than compared as printed. Verified on git 2.43.0 for all
+# four states: main checkout, its linked worktree, a standalone `git init`, and
+# another repository's worktree.
+#   exit: non-zero and NO output when the path is in no repository at all —
+#         callers must treat the empty string as "no answer", never as a match.
+_ws_common_dir() {   # dir -> /abs/.../.git
+  local dir="$1" gcd
+  gcd=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null) || return 1
+  [[ -n "$gcd" ]] || return 1
+  (cd -- "$dir" && cd -- "$gcd" && pwd -P) 2>/dev/null
 }
 
 # THE branch source of truth: git's own record of which branch the worktree at
@@ -290,8 +310,18 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # worktree of $main is not ours to remove and its HEAD is not ours to
     # delete: move or delete it by hand and re-run, and the missing-directory
     # path below will finish the job.
-    (( registered == 0 )) \
-      || die "$workdir is not a worktree of $main — nothing was touched; move or delete it by hand, then re-run"
+    #
+    # `registered` cannot decide this on its own: it comes from git's RECORD,
+    # and the record outlives the directory. Delete the directory by hand and
+    # put anything else back at that path — a `git init`, another repo's
+    # worktree — and the record still names it, so `registered` is 0 while the
+    # directory belongs to someone else. Trusting it alone killed the session
+    # and disabled the unit, and only THEN did `worktree remove` refuse. So ask
+    # the directory too, and require both to say $main.
+    local wd_common main_common
+    wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
+    (( registered == 0 )) && [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
+      || die "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)"
     # --porcelain counts untracked files, which is what `git worktree remove`
     # itself objects to. Doing this after the kill would leave the uncommitted
     # work intact but the session dead and out of supervision — and the refusal
@@ -313,8 +343,12 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # Still no --force: the tree can have changed since the check above, and a
     # locked worktree refuses either way. By here the session IS stopped, so say
     # that rather than repeat "nothing touched".
+    # The recovery has to work in the state it is printed in. `worktree prune`
+    # only drops records whose directory is MISSING, so it is named for exactly
+    # that case and not offered as a general remedy — the "directory is there
+    # but is not ours" case refuses above, before anything is torn down.
     git -C "$main" worktree remove "$workdir" \
-      || die "worktree record not cleared for $workdir — the session was stopped; clean the tree (or run: git -C $main worktree prune) and re-run"
+      || die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"
   fi
 
   local reg_branch; reg_branch=$(_reg_get "$id" branch)
@@ -330,6 +364,16 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       || echo "kept branch $branch (unmerged, or still in use) — delete it with: git -C $main branch -D $branch" >&2
   elif (( registered == 0 )); then
     echo "note: $workdir was on a detached HEAD — no branch to delete" >&2
+    # "No branch to delete" is only half the truth when the registry named one:
+    # the teardown above just took away its worktree and its registration, and
+    # the line below takes away its registry entry, leaving it with no ws-gc row
+    # either — invisible, which is the state this whole path exists to prevent.
+    # Same rung-3 rule as the no-record case: git never corroborated that name
+    # for this path (the record it did hold was detached), so name it and hand
+    # over the command rather than delete it unverified.
+    if [[ -n "$reg_branch" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$reg_branch" 2>/dev/null; then
+      echo "warn: registry says branch '$reg_branch', which still exists and now has no worktree — not deleting it unverified. If it is finished: git -C $main branch -d $reg_branch" >&2
+    fi
   elif [[ -n "$reg_branch" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$reg_branch" 2>/dev/null; then
     # No git record at all (someone pruned it by hand). The registry name is
     # uncorroborated — the only thing that ever tied it to this path is now
