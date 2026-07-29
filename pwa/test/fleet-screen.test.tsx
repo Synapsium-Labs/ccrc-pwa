@@ -318,6 +318,73 @@ describe('FleetScreen', () => {
     render(<FleetScreen store={store} />);
     expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument();
   });
+
+  // Whole-branch review, findings 2/3/5: the actions sheet used to be fed a
+  // FleetSession captured at tap time (FleetScreen held `actionsFor` as the
+  // session itself) and unmounted the instant it closed (nulling the session
+  // in the same commit that flipped `open`). That both popped the sheet out
+  // of existence instead of letting vaul animate its exit, AND froze whatever
+  // the line looked like at tap time even if the fleet moved on.
+  describe('actions sheet lifecycle', () => {
+    it('keeps the limit note current with a live fleet update (Finding 5)', async () => {
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [session({
+          id: 'a', project: 'alpha', workspace: 'quiet-mesa',
+          limits: { five: 10, seven: 10 },
+        })],
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+      expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
+
+      // The SAME id, a fresh limits snapshot — the sheet is still open.
+      seed(store, {
+        sessions: [session({
+          id: 'a', project: 'alpha', workspace: 'quiet-mesa',
+          limits: { five: 90, seven: 10 },
+        })],
+      });
+
+      expect(await screen.findByText(/5h limit near/i)).toBeInTheDocument();
+    });
+
+    it(
+      'closes over its last snapshot when its session vanishes, and never leaks ' +
+      'swapOpen to the next session tapped (Findings 2, 3, 5)',
+      async () => {
+        const store = makeStore();
+        render(<FleetScreen store={store} />);
+        seed(store, {
+          conn: 'open',
+          sessions: [
+            session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa' }),
+            session({ id: 'b', project: 'beta', workspace: 'brave-elm' }),
+          ],
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+        fireEvent.click(screen.getByRole('button', { name: /swap account/i }));
+        expect(screen.getByText(/pick where it should live/i)).toBeInTheDocument();
+
+        // Session a is gone from the fleet entirely — nothing left to act on.
+        seed(store, { sessions: [session({ id: 'b', project: 'beta', workspace: 'brave-elm' })] });
+
+        // The sheet (and its stacked SwapSheet) close rather than freezing open
+        // on stale data forever.
+        await waitFor(() =>
+          expect(screen.queryByText(/pick where it should live/i)).not.toBeInTheDocument());
+
+        // A stale swapOpen would show SwapSheet already stacked on the very
+        // next session tapped, rather than the plain actions list.
+        fireEvent.click(screen.getByRole('button', { name: /actions for brave-elm/i }));
+        expect(screen.getByRole('button', { name: /restart session/i })).toBeInTheDocument();
+        expect(screen.queryByText(/pick where it should live/i)).not.toBeInTheDocument();
+      },
+    );
+  });
 });
 
 // — AccountsStrip —

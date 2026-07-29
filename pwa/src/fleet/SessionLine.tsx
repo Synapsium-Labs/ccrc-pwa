@@ -21,6 +21,11 @@ import './fleet.css';
 /** Routing policy calls a window critical above this. */
 const CRITICAL = 75;
 
+// Only ONE element may carry a given view-transition-name — a second aborts
+// the transition entirely. The stamp is never cleared on navigation and these
+// nodes are key-stable, so the previous holder has to be released here.
+let stamped: HTMLElement | null = null;
+
 export function SessionLine({
   session,
   onOpen,
@@ -55,7 +60,12 @@ export function SessionLine({
   // chat header's `view-transition-name: session-title` (session/chat.css:61).
   const labelRef = useRef<HTMLButtonElement>(null);
   const open = (): void => {
-    if (labelRef.current) labelRef.current.style.viewTransitionName = 'session-title';
+    const el = labelRef.current;
+    if (el) {
+      if (stamped !== null && stamped !== el) stamped.style.viewTransitionName = '';
+      el.style.viewTransitionName = 'session-title';
+      stamped = el;
+    }
     onOpen(session.id);
   };
 

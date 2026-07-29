@@ -4,7 +4,7 @@
 //
 // Swap hands off to the existing SwapSheet rather than reimplementing the
 // account picker, its limit gauges and its consequence confirm.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
@@ -32,6 +32,16 @@ export function SessionActionsSheet({
   const [swapOpen, setSwapOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [removing, setRemoving] = useState(false);
+
+  // A closed sheet forgets Swap (mirrors NewSessionSheet's own reset-on-close
+  // effect). FleetScreen now keeps this component mounted across a close
+  // (Finding 2) instead of unmounting it, so `swapOpen` no longer resets for
+  // free the way it used to — left alone, the NEXT session tapped would open
+  // this sheet with SwapSheet already stacked on top of it (Finding 3).
+  useEffect(() => {
+    if (open) return;
+    setSwapOpen(false);
+  }, [open]);
 
   if (!session) return null;
 

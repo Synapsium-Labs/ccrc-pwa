@@ -84,8 +84,40 @@ export function FleetScreen({
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
-  // One sheet for the whole screen, fed by whichever line was tapped.
-  const [actionsFor, setActionsFor] = useState<FleetSession | null>(null);
+  // One sheet for the whole screen, fed by whichever line was tapped. Only
+  // the id is the source of truth (Finding 5 of the whole-branch review):
+  // `actionsSession` is refreshed from the live `sessions` list below rather
+  // than frozen at tap time, so a fleet update while the sheet is open keeps
+  // its limit note and Remove-workspace visibility current. `actionsOpen` is
+  // a separate boolean — matching how NewSessionSheet and SwapSheet are
+  // toggled elsewhere in this file — so closing never clears the session:
+  // SessionActionsSheet stays mounted and vaul gets to play its exit
+  // animation instead of popping out of existence (Finding 2).
+  const [actionsId, setActionsId] = useState<string | null>(null);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionsSession, setActionsSession] = useState<FleetSession | null>(null);
+
+  useEffect(() => {
+    if (actionsId === null) return;
+    const live = sessions.find((s) => s.id === actionsId) ?? null;
+    if (live !== null) {
+      setActionsSession(live);
+    } else if (actionsOpen) {
+      // The session vanished from the fleet entirely (workspace removed,
+      // process gone) while the sheet was open — there is nothing left to
+      // act on. Close it exactly as a manual dismiss would: `actionsSession`
+      // keeps its last known value so the sheet still has something to
+      // animate out over, rather than popping (same class of bug as
+      // Finding 2, from a different trigger).
+      setActionsOpen(false);
+    }
+  }, [sessions, actionsId, actionsOpen]);
+
+  const openActionsFor = (session: FleetSession): void => {
+    setActionsId(session.id);
+    setActionsSession(session);
+    setActionsOpen(true);
+  };
 
   const waiting = sessions.filter((s) => s.dialogPending).length;
   const countLine =
@@ -169,7 +201,7 @@ export function FleetScreen({
                 adding={adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}
-                onActions={setActionsFor}
+                onActions={openActionsFor}
               />
             ))}
           </div>
@@ -183,9 +215,9 @@ export function FleetScreen({
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
 
       <SessionActionsSheet
-        session={actionsFor}
-        open={actionsFor !== null}
-        onClose={() => setActionsFor(null)}
+        session={actionsSession}
+        open={actionsOpen}
+        onClose={() => setActionsOpen(false)}
         fleet={store}
       />
     </main>

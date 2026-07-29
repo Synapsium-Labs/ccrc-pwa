@@ -79,6 +79,15 @@ describe('state', () => {
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByLabelText('account limit near')).not.toBeInTheDocument();
   });
+
+  // The 5h-critical case above never exercises the `seven` half of the `||` —
+  // a mutation there (`seven > CRITICAL` -> `<`) would still leave this
+  // green. Pin it with the 7d window as the ONLY one over threshold.
+  it('warns when only the 7d window is critical', () => {
+    render(<SessionLine session={s({ limits: { five: 10, seven: 82 } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByLabelText('account limit near')).toBeInTheDocument();
+  });
 });
 
 describe('interaction', () => {
@@ -105,5 +114,30 @@ describe('interaction', () => {
     render(<SessionLine session={s()} onOpen={() => {}} onActions={onActions} />);
     await userEvent.click(screen.getByRole('button', { name: /actions for/i }));
     expect(onActions).toHaveBeenCalledWith(expect.objectContaining({ id: 'demo-quiet-mesa' }));
+  });
+
+  // Only one element may hold `view-transition-name: session-title` at a time
+  // — a second aborts the transition entirely. These nodes are key-stable
+  // across navigation and the stamp is never cleared on its own, so tapping a
+  // second line has to release the first's stamp or two lines end up wearing
+  // it (mobile: tap A -> back -> tap B).
+  it('releases the previous stamp when a different line is tapped', async () => {
+    render(
+      <>
+        <SessionLine session={s({ id: 'a', workspace: 'line-a' })}
+                    onOpen={() => {}} onActions={() => {}} />
+        <SessionLine session={s({ id: 'b', workspace: 'line-b' })}
+                    onOpen={() => {}} onActions={() => {}} />
+      </>,
+    );
+    const buttonA = screen.getByText('line-a').closest('button')!;
+    const buttonB = screen.getByText('line-b').closest('button')!;
+
+    await userEvent.click(buttonA);
+    expect(buttonA.style.viewTransitionName).toBe('session-title');
+
+    await userEvent.click(buttonB);
+    expect(buttonA.style.viewTransitionName).toBe('');
+    expect(buttonB.style.viewTransitionName).toBe('session-title');
   });
 });

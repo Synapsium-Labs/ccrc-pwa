@@ -52,8 +52,25 @@ describe('composition', () => {
     expect(screen.getByText(/5h limit near/i)).toBeInTheDocument();
   });
 
+  // The 5h case above never exercises the `seven` half of the ternary chain —
+  // a mutation there (`seven > CRITICAL` -> `<`) would still leave this
+  // green. Pin it with the 7d window as the ONLY one over threshold.
+  it('narrates the 7d window when only it is critical', () => {
+    render(<SessionActionsSheet session={s({ limits: { five: 10, seven: 82 } })}
+                                open onClose={() => {}} />);
+    expect(screen.getByText(/7d limit near/i)).toBeInTheDocument();
+  });
+
   it('says nothing about limits when neither window is critical', () => {
     render(<SessionActionsSheet session={s({ limits: { five: 10, seven: 10 } })}
+                                open onClose={() => {}} />);
+    expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
+  });
+
+  // Dead sessions stay silent about limits (SessionLine does the same): a
+  // session that will never run again has nothing to warn about moving.
+  it('says nothing about limits on a dead session, even past the threshold', () => {
+    render(<SessionActionsSheet session={s({ status: 'dead', limits: { five: 90, seven: 90 } })}
                                 open onClose={() => {}} />);
     expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
   });
@@ -63,6 +80,17 @@ describe('actions', () => {
   it('restarts through api.ensure', async () => {
     render(<SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /restart/i }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(0));
+    const call = vi.mocked(fetch).mock.calls[0]!;
+    expect(String(call[0])).toContain('demo-quiet-mesa');
+  });
+
+  // api.ensure kept its id assertion when SessionCard's tests were dropped;
+  // api.workspaceRemove did not — a hardcoded id in the request would have
+  // shipped unnoticed.
+  it('sends the session id to api.workspaceRemove', async () => {
+    render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /remove workspace/i }));
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(0));
     const call = vi.mocked(fetch).mock.calls[0]!;
     expect(String(call[0])).toContain('demo-quiet-mesa');
