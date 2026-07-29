@@ -75,6 +75,11 @@ export function SessionLine({
     ? { color: 'var(--ink-secondary)' }
     : { color: `var(${acctVar})` };
 
+  // Running somewhere other than its pinned account — ccd's _auto_swap_check
+  // moved it when `home` crossed the swap threshold. Dead sessions are exempt:
+  // nothing is running, so "away" would describe a journey that ended.
+  const away = !dead && session.wrapper !== session.home;
+
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
       <span className="sess-lamp" data-status={dotStatus}>
@@ -98,8 +103,22 @@ export function SessionLine({
         </span>
       )}
 
-      <span className="sess-acct" style={acctStyle}>
+      <span
+        className="sess-acct"
+        style={acctStyle}
+        data-away={away || undefined}
+        aria-label={
+          away
+            ? `running on ${accountLabel(session.wrapper)}, pinned to ${accountLabel(session.home)}`
+            : undefined
+        }
+      >
         {accountLabel(session.wrapper)}
+        {away && (
+          <span className="sess-acct-away" aria-hidden="true">
+            ↗
+          </span>
+        )}
       </span>
 
       <button

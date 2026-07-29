@@ -599,7 +599,11 @@
 .sess-acct {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+  white-space: nowrap;
 }
+/* The arrow, not a colour change: the chip's colour already encodes WHICH
+   account, and overloading it with "and it is the wrong one" would lose that. */
+.sess-acct-away { margin-left: 2px; color: var(--status-attention-text); }
 
 .sess-actions {
   min-width: 44px;

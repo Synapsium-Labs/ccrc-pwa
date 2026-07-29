@@ -141,3 +141,32 @@ describe('interaction', () => {
     expect(buttonB.style.viewTransitionName).toBe('session-title');
   });
 });
+
+describe('away from home', () => {
+  it('marks the account chip when the session is not on its pinned account', () => {
+    const { container } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-acct')).toHaveAttribute('data-away');
+  });
+
+  it('does not mark it when the session is home', () => {
+    const { container } = render(
+      <SessionLine session={s({ wrapper: 'claude', home: 'claude' })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
+  });
+
+  it('says so for assistive tech, which cannot see a colour', () => {
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByLabelText('running on alt·max, pinned to team·max')).toBeInTheDocument();
+  });
+
+  it('never marks a dead session — it is not running anywhere', () => {
+    const { container } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude', status: 'dead' })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
+  });
+});

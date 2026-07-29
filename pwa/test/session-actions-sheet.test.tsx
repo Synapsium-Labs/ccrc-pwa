@@ -123,3 +123,17 @@ describe('actions', () => {
     expect(await screen.findByText(/no such session/i)).toBeInTheDocument();
   });
 });
+
+describe('away note', () => {
+  it('spells out the swap, which the line only marks', () => {
+    render(<SessionActionsSheet session={s({ wrapper: 'claude2', home: 'claude' })}
+                                open onClose={() => {}} />);
+    expect(screen.getByText(/Pinned to team·max, running on alt·max/)).toBeInTheDocument();
+  });
+
+  it('says nothing when the session is home', () => {
+    render(<SessionActionsSheet session={s({ wrapper: 'claude', home: 'claude' })}
+                                open onClose={() => {}} />);
+    expect(screen.queryByText(/Pinned to/)).not.toBeInTheDocument();
+  });
+});
