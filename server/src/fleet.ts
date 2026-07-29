@@ -60,11 +60,13 @@ export async function assembleFleet(
     if (sl?.workflowActive && status === 'idle') status = 'busy';
     return {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
-      project: r.project, workdir: r.workdir, name, status, statusUpdatedAt,
+      project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       dialogPending: pendingDialogs?.has(r.id) ?? false, version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,
-      ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? null,
+      // The statusline wins: it is a live pane capture and knows about a manual
+      // checkout. The registry fills the gap before the first capture lands.
+      ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? r.branch ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
     };
   }));

@@ -114,6 +114,31 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', [])).toBe(false);
   });
 
+  // The workspace lifecycle crosses this boundary like everything else. In
+  // remote mode the ccrc server shells out to ccd THROUGH the agent, so a
+  // subcommand missing from the list is not a hardening measure — it is a PWA
+  // button that answers `forbidden` on the live fleet while every suite stays
+  // green. The capability is not new in kind: `start` already creates a
+  // session, a tmux server and a systemd unit, and `stop` tears all three
+  // down. ws-rm adds worktree and branch deletion, which ccd itself guards —
+  // it refuses a dirty tree, an unmerged branch, and any session with no
+  // `workspace` field.
+  it('allows the workspace lifecycle subcommands', () => {
+    expect(isExecAllowed('ccd', ['ws-add', 'OpenClawHetzner'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-rm', 'OpenClawHetzner-quiet-mesa'])).toBe(true);
+  });
+
+  it('is still a whitelist — plausible adjacent subcommands stay refused', () => {
+    // Pinned in BOTH directions on purpose. The pair above is only worth
+    // anything while this holds: a list that had been widened to accept
+    // anything ws-shaped — or anything at all — would satisfy those two
+    // assertions for entirely the wrong reason.
+    expect(isExecAllowed('ccd', ['ws-nuke', 'OpenClawHetzner-quiet-mesa'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws'])).toBe(false);
+    expect(isExecAllowed('ccd', ['prefer', 'x', 'claude2'])).toBe(false);
+    expect(isExecAllowed('ccd', ['supervise', 'x'])).toBe(false);
+  });
+
   it('returns false instead of throwing on malformed wire values (missing/wrong-typed fields)', () => {
     expect(isExecAllowed(undefined as unknown as string, ['x'])).toBe(false);
     expect(isExecAllowed(123 as unknown as string, ['x'])).toBe(false);

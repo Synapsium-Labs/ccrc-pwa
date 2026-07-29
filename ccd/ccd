@@ -5,7 +5,12 @@ set -uo pipefail
 
 REG="$HOME/.cc-sessions"
 WRAPPER_DIR="$HOME/.local/bin"
-PROJECTS_ROOT="/data/projects"
+# Derived from HOME with no env override, exactly as REG and WRAPPER_DIR are:
+# HOME is the single isolation boundary the test harness sets, and cmd_ws_rm
+# runs `git worktree remove` / `git branch -d` under these two roots. A stray
+# Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
+PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
+WORKTREES_ROOT="$HOME/worktrees"
 VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (home-able)
 # `gpt` is a 4th lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend), OPT-IN only
 # since 2026-07-26: a session reaches it solely by having gpt as its HOME (`ccd prefer <id>
@@ -92,6 +97,470 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
 _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+_ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
+  [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
+}
+
+# The systemd calls live in their own functions (rather than inline in cmd_ws_add)
+# so the test harness can stub them — sourcing ccd and calling cmd_ws_add under
+# vitest would otherwise enable a REAL claude-session@<id> unit on the host.
+_ws_supervise()   { systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
+                      || echo "warn: could not enable unit claude-session@$1" >&2; }
+_ws_unsupervise() { systemctl --user disable --now "claude-session@$1" 2>/dev/null || true; }
+
+# ── workspace slugs ────────────────────────────────────────────────
+# No dots: tmux -t parses `session:window.pane`. No slashes: systemd
+# instance names escape them. Lowercase only, so a slug is never ambiguous
+# on a case-insensitive filesystem.
+WS_ADJ=(quiet swift amber still brisk clear plain warm bright calm keen soft)
+WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove delta)
+
+_ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
+
+_ws_slug_free() { [[ ! -f "$REG/$1-$2.uuid" ]]; }   # project slug
+
+_ws_slug_new() {   # project -> echo a free, valid slug (or fail)
+  local project="$1" slug i
+  if [[ -n "${CCD_WS_SLUG:-}" ]]; then             # tests and manual naming
+    _ws_slug_valid "$CCD_WS_SLUG" || return 1
+    _ws_slug_free "$project" "$CCD_WS_SLUG" || return 1
+    echo "$CCD_WS_SLUG"; return 0
+  fi
+  for ((i = 0; i < 60; i++)); do
+    slug="${WS_ADJ[RANDOM % ${#WS_ADJ[@]}]}-${WS_NOUN[RANDOM % ${#WS_NOUN[@]}]}"
+    _ws_slug_free "$project" "$slug" && { echo "$slug"; return 0; }
+  done
+  return 1
+}
+
+_ws_least_loaded() {   # -> the home-able account with the most headroom
+  local best="" bs=1000 w sc
+  for w in "${VALID_WRAPPERS[@]}"; do
+    sc=$(_limit_score "$w"); [[ -z "$sc" ]] && sc=0
+    (( sc < bs )) && { bs=$sc; best="$w"; }
+  done
+  echo "$best"
+}
+
+# CCD_DISK_FLOOR_GB is the one environment override ccd honours, because unlike
+# PROJECTS_ROOT/WORKTREES_ROOT it can only make ccd REFUSE to act — it can never
+# aim a destructive command at a different tree.
+CCD_DISK_FLOOR_GB="${CCD_DISK_FLOOR_GB:-10}"
+
+_ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
+  local d="$1"
+  # WORKTREES_ROOT is created lazily, so walk up to the nearest parent that
+  # exists; df on a missing path just fails.
+  while [[ ! -d "$d" && "$d" != / && -n "$d" ]]; do d=$(dirname "$d"); done
+  # -P guarantees one filesystem per line, so a long device name cannot wrap the
+  # row and shift field 4. -k pins the block size to 1K, which -P alone does not
+  # (GNU df -P reports 512-byte blocks under POSIXLY_CORRECT).
+  # NOT `df --output=avail`: GNU df rejects -P and --output together.
+  local kb; kb=$(df -Pk "$d" 2>/dev/null | awk 'NR==2 {print $4}')
+  [[ "$kb" =~ ^[0-9]+$ ]] || return 1
+  echo $(( kb / 1024 / 1024 ))
+}
+
+cmd_ws_add() {   # project [slug] — new worktree + session for an existing project
+  local project="${1:?usage: ccd ws-add <project> [slug]}" slug="${2:-}"
+  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project'"
+  local main="$PROJECTS_ROOT/$project"
+  [[ -d "$main/.git" ]] || die "not a git repo: $main"
+
+  # Before anything is created: no worktree, no branch, no registry entry, no
+  # session. A refusal here must leave the box exactly as it found it.
+  local free
+  free=$(_ws_disk_free_gb "$WORKTREES_ROOT") \
+    || die "could not read free space for $WORKTREES_ROOT"
+  (( free >= CCD_DISK_FLOOR_GB )) \
+    || die "only ${free}G free on $WORKTREES_ROOT, floor is ${CCD_DISK_FLOOR_GB}G — reclaim space first: ccd ws-gc"
+
+  [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
+                        _ws_slug_free "$project" "$slug" || die "slug in use: $slug"; }
+  [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
+                        || die "could not find a free slug for $project"; }
+
+  git -C "$main" fetch origin --quiet 2>/dev/null || echo "warn: fetch failed; basing on the last known origin" >&2
+  local base
+  base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
+    || die "no origin/HEAD — run: git -C '$main' remote set-head origin -a"
+  base="${base#refs/remotes/}"
+
+  local wt="$WORKTREES_ROOT/$project/$slug"
+  [[ "$wt" != *\'* ]] || die "path must not contain a single quote: $wt"
+  mkdir -p "$WORKTREES_ROOT/$project"
+  # ws/ namespaces the branch: it sorts with its siblings, matches the type/slug
+  # shape every repo here already uses, and says at a glance that the branch is
+  # machine-created. The directory and the session id keep the BARE slug — a
+  # slash in either would break tmux -t (session:window.pane) and systemd
+  # instance names. --no-track is load-bearing: $base is a remote-tracking ref,
+  # so git's branch.autoSetupMerge default would otherwise make origin/main this
+  # branch's upstream, and `git pull` in the workspace would merge main into it.
+  local branch="ws/$slug"
+  git -C "$main" worktree add -b "$branch" --no-track "$wt" "$base" --quiet \
+    || die "git worktree add failed for $wt"
+
+  # Shared across every worktree of this repo, local only, never committed.
+  local common; common=$(cd "$main" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  mkdir -p "$common/info"
+  grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
+
+  local id="$project-$slug"
+  local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
+  local hw; hw=$(_ws_least_loaded)
+  _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
+  _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
+  _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
+  _reg_set "$id" branch "$branch"
+  _ws_seed_home "$id" "$hw"
+
+  # A failed setup hook leaves a usable-but-unscaffolded workspace. Say so;
+  # never remove work on the strength of a hook's exit code.
+  if [[ -x "$main/.ccrc/workspace.sh" ]]; then
+    if MAIN="$main" WT="$wt" "$main/.ccrc/workspace.sh"; then
+      _reg_set "$id" setup ok
+    else
+      _reg_set "$id" setup failed
+      echo "warn: .ccrc/workspace.sh failed for $id — workspace kept, not scaffolded" >&2
+    fi
+  fi
+
+  _spawn "$id" new; _reg_set "$id" started 1
+  _ws_supervise "$id"
+  echo "workspace $id on $hw — $wt (branch $branch, from $base)"
+}
+
+cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
+  local id="${1:?usage: ccd ws-rm <id>}"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  local ws project workdir
+  ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  # The absence of a workspace field is what distinguishes a main checkout.
+  [[ -n "$ws" ]] || die "$id is not a workspace — refusing to remove a main checkout"
+  [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  local main="$PROJECTS_ROOT/$project"
+
+  # Read the branch while the worktree still exists; it may have been renamed
+  # since creation, so the slug is not a safe substitute.
+  local branch=""
+  if [[ -d "$workdir" ]]; then
+    branch=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    # REFUSE FIRST, tear down second. --porcelain counts untracked files, which
+    # is what `git worktree remove` itself objects to. Doing this after the
+    # kill would leave the uncommitted work intact but the session dead and out
+    # of supervision — and the refusal below would be lying about it.
+    local dirty; dirty=$(git -C "$workdir" status --porcelain 2>/dev/null)
+    [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+  fi
+
+  _ws_unsupervise "$id"
+  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+
+  if [[ -d "$workdir" ]]; then
+    # Second line of defence, still without --force: the tree can have changed
+    # since the check above, and a locked worktree refuses either way. By here
+    # the session IS stopped, so say that rather than repeat "nothing touched".
+    git -C "$main" worktree remove "$workdir" \
+      || die "worktree not removed: $workdir — the session was stopped; clean the tree and re-run"
+  fi
+  # No -D: an unmerged branch must survive.
+  [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null \
+    || true
+  rm -f "$REG/$id".*
+  echo "removed workspace $id"
+}
+
+# ── renaming a workspace branch ────────────────────────────────────
+# The subset of `git check-ref-format` that matters, checked explicitly rather
+# than trusted to git's exit code: an invalid name must be refused BEFORE any
+# git command is run with it as an argument.
+_ws_branch_valid() {
+  local b="$1"
+  [[ -n "$b" ]]                              || return 1
+  [[ "$b" =~ ^[A-Za-z0-9._/-]+$ ]]           || return 1   # no space, colon, glob, ~, ^, @{
+  [[ "$b" != -* ]]                           || return 1   # git would read it as an option
+  [[ "$b" != /* && "$b" != */ ]]             || return 1
+  [[ "$b" != *..* ]]                         || return 1
+  [[ "$b" != *.lock && "$b" != *.lock/* ]]   || return 1   # any component, not just the last
+  return 0
+}
+
+cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is pushed
+  local id="${1:?usage: ccd ws-rename <id> <new-branch>}"
+  local new="${2:?usage: ccd ws-rename <id> <new-branch>}"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+
+  local ws project workdir
+  ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  # The absence of a workspace field is what distinguishes a main checkout.
+  [[ -n "$ws" ]] || die "$id is not a workspace — refusing to rename a main checkout's branch"
+  [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  [[ -d "$workdir" ]] || die "worktree is gone: $workdir"
+  _ws_branch_valid "$new" || die "invalid branch name: $new"
+
+  local main="$PROJECTS_ROOT/$project"
+  local old; old=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  [[ -n "$old" && "$old" != HEAD ]] || die "$id is on a detached HEAD — nothing to rename"
+  [[ "$old" != "$new" ]] || die "already named $new"
+
+  # Renaming after a push leaves the old name on the remote and creates a second
+  # branch there on the next push. An upstream is the evidence that happened.
+  if git -C "$workdir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+    die "$old has an upstream — it is already on the remote; rename before pushing, not after"
+  fi
+
+  git -C "$main" show-ref --verify --quiet "refs/heads/$new" \
+    && die "branch already exists locally: $new"
+
+  # --exit-code: 0 = the head exists, 2 = it does not, anything else = we could
+  # not ask. Unreachable is not the same as taken.
+  local rc; git -C "$main" ls-remote --exit-code --heads origin "$new" >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    0) die "branch already exists on origin: $new" ;;
+    2) : ;;
+    *) echo "warn: could not reach origin to check for '$new' — renaming anyway" >&2 ;;
+  esac
+
+  git -C "$workdir" branch -m "$new" || die "rename failed: $old -> $new"
+  _reg_set "$id" branch "$new"
+  echo "renamed $id: $old -> $new"
+}
+
+# ── reclamation ────────────────────────────────────────────────────
+# ws-gc REPORTS by default and acts only under --prune. 29G of abandoned agent
+# worktrees accumulated on this box over six weeks because no command existed
+# that would have said so; the visibility is the point.
+
+_ws_gc_bytes() {   # path -> size in bytes, or '-'
+  [[ -d "$1" ]] || { echo '-'; return 0; }
+  local b; b=$(du -sb "$1" 2>/dev/null | cut -f1)
+  [[ "$b" =~ ^[0-9]+$ ]] && echo "$b" || echo '-'
+}
+
+_ws_gc_age() {     # path -> whole days since its mtime, or '-'
+  [[ -d "$1" ]] || { echo '-'; return 0; }
+  local m; m=$(stat -c %Y "$1" 2>/dev/null) || { echo '-'; return 0; }
+  [[ "$m" =~ ^[0-9]+$ ]] || { echo '-'; return 0; }
+  echo $(( ( $(date +%s) - m ) / 86400 ))
+}
+
+_ws_gc_human() {   # bytes -> human, or '-' unchanged
+  [[ "$1" =~ ^[0-9]+$ ]] || { echo '-'; return 0; }
+  numfmt --to=iec "$1" 2>/dev/null || echo "$1"
+}
+
+_ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked files,
+                   #            OR when we could not find out
+  local out
+  # `git status` failing means unreadable, corrupt, or not a worktree at all —
+  # NOT clean. Swallowing the exit code and testing an empty string would report
+  # every unreadable tree as safe to delete, which is the one answer that loses
+  # work. Unknown counts as dirty.
+  out=$(git -C "$1" status --porcelain 2>/dev/null) || return 0
+  [[ -n "$out" ]]
+}
+
+# One TSV row per finding: state project slug bytes agedays path
+_ws_gc_row() {   # project mainreal wsroot wt prunable
+  local project="$1" mainreal="$2" wsroot="$3" wt="$4" prunable="$5"
+  [[ -n "$wt" ]] || return 0
+  [[ "$wt" != "$mainreal" ]] || return 0        # the main checkout is not a workspace
+  local slug; slug=$(basename "$wt")
+
+  # Ownership must be settled BEFORE anything prunable is acted on: a stale
+  # registration outside our tree is still someone else's metadata, and
+  # `git worktree prune` on it is exactly the kind of guess this command must
+  # never make. Ours is EXACTLY one level below $wsroot/$project — ws-add
+  # never nests deeper, so anything deeper is a hand-placed or foreign-tool
+  # worktree, not one of ours.
+  local rel="${wt#$wsroot/$project/}"
+  local ours=0
+  [[ "$wt" == "$wsroot/$project/"* && -n "$rel" && "$rel" != */* ]] && ours=1
+
+  if (( prunable )); then
+    if (( ours )); then
+      printf 'stale-meta\t%s\t%s\t-\t-\t%s\n' "$project" "$slug" "$wt"
+    else
+      printf 'foreign-stale\t%s\t%s\t-\t-\t%s\n' "$project" "$slug" "$wt"
+    fi
+    return 0
+  fi
+
+  local bytes age; bytes=$(_ws_gc_bytes "$wt"); age=$(_ws_gc_age "$wt")
+
+  # Anything ccd did not create is FOREIGN: reported so it is visible, never
+  # pruned. Guessing at another tool's lifecycle is how a reclaimer destroys
+  # work it does not understand.
+  if (( ! ours )); then
+    printf 'foreign\t%s\t%s\t%s\t%s\t%s\n' "$project" "$slug" "$bytes" "$age" "$wt"; return 0
+  fi
+
+  local state
+  if   [[ ! -f "$REG/$project-$slug.uuid" ]]; then state=orphan
+  elif _ws_gc_dirty "$wt";                    then state=dirty
+  else                                             state=tracked
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$project" "$slug" "$bytes" "$age" "$wt"
+}
+
+_ws_gc_scan() {
+  local main mainreal project wsroot wt prunable line f id wd p s
+  # git records fully resolved paths (~/projects -> /data/projects -> /mnt/...),
+  # so both roots have to be resolved before any path comparison.
+  wsroot=$(cd "$WORKTREES_ROOT" 2>/dev/null && pwd -P) || wsroot="$WORKTREES_ROOT"
+
+  for main in "$PROJECTS_ROOT"/*; do
+    [[ -e "$main/.git" ]] || continue
+    project=$(basename "$main")
+    mainreal=$(cd "$main" 2>/dev/null && pwd -P) || continue
+    wt=""; prunable=0
+    # Records are blank-line separated; the trailing `echo` flushes the last one
+    # whether or not git emitted a final blank line.
+    while IFS= read -r line; do
+      case "$line" in
+        "worktree "*) wt="${line#worktree }"; prunable=0 ;;
+        "prunable"*)  prunable=1 ;;
+        "")           _ws_gc_row "$project" "$mainreal" "$wsroot" "$wt" "$prunable"
+                      wt=""; prunable=0 ;;
+      esac
+    done < <(git -C "$main" worktree list --porcelain 2>/dev/null; echo)
+  done
+
+  # Registry entries whose worktree is gone. git has no registration for these
+  # at all, so the loop above cannot see them.
+  for f in "$REG"/*.workspace; do
+    [[ -e "$f" ]] || continue
+    id=$(basename "$f" .workspace)
+    [[ -f "$REG/$id.uuid" ]] || continue
+    wd=$(_reg_get "$id" workdir)
+    [[ -n "$wd" && ! -d "$wd" ]] || continue
+    p=$(_reg_get "$id" project); s=$(_reg_get "$id" workspace)
+    # The id is <project>-<slug> by construction. If the registry disagrees with
+    # itself, report it and reconstruct nothing — a prune keyed off a wrong
+    # reconstruction would delete a different session's entry.
+    [[ "$p-$s" == "$id" ]] || { printf 'dead-reg\t%s\t%s\t-\t-\t%s\n' "$id" "?" "$wd"; continue; }
+    printf 'dead-reg\t%s\t%s\t-\t-\t%s\n' "$p" "$s" "$wd"
+  done
+}
+
+_ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of origin/HEAD
+  local main="$1" branch="$2" base
+  # No origin/HEAD means there is no base to compare against, so "merged" is
+  # unprovable — and unprovable returns 1, i.e. NOT merged, i.e. do not remove.
+  # Every ambiguous case in this command resolves toward doing nothing.
+  base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) || return 1
+  git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null
+}
+
+# Acts on ONE scanned row. Prints exactly one line per row, whether it acted or
+# not: a silent decline reads as "there was nothing there".
+_ws_gc_prune_row() {   # state project slug path already-pruned
+  local state="$1" project="$2" slug="$3" p="$4" already="${5:-0}"
+  local main="$PROJECTS_ROOT/$project"
+  case "$state" in
+    stale-meta)
+      if (( already )); then
+        # git worktree prune is repo-wide: the first stale-meta row for this
+        # project already reclaimed every prunable registration in it. Calling
+        # it again would succeed (it is idempotent) and print a SECOND
+        # "reclaimed" line for work that already happened.
+        echo "  covered    stale metadata for $project/$slug — reclaimed with an earlier row in $project"
+      elif git -C "$main" worktree prune 2>/dev/null; then
+        echo "  reclaimed  stale metadata for $project/$slug"
+      else
+        # Metadata, not data — worth saying, not worth failing over.
+        echo "  declined   could not prune metadata for $project/$slug"
+      fi ;;
+    foreign-stale)
+      # A prunable registration outside our tree is still someone else's
+      # metadata. `git worktree repair` may be the owning tool's only way back
+      # to a temporarily-missing worktree; pruning it here would foreclose that.
+      echo "  declined   $project/$slug is foreign metadata — ccd removes only what it created" ;;
+    dead-reg)
+      rm -f "$REG/$project-$slug".*
+      echo "  reclaimed  dead registry entry $project-$slug" ;;
+    orphan)
+      if _ws_gc_dirty "$p"; then
+        echo "  declined   $p has uncommitted changes"; return 0
+      fi
+      local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged "$main" "$branch"; then
+        # The branch would survive `worktree remove`, so nothing is lost either
+        # way — but a sweep should only reclaim what is provably finished, and
+        # someone may be mid-way through this one.
+        echo "  declined   $p is on unmerged branch $branch"; return 0
+      fi
+      if git -C "$main" worktree remove "$p" 2>/dev/null; then
+        echo "  reclaimed  removed orphan worktree $p"
+        # No -D: git refuses an unmerged branch and that refusal is wanted.
+        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null; then
+          echo "  reclaimed  deleted merged branch $branch"
+        fi
+      else
+        echo "  declined   git refused to remove $p"
+      fi ;;
+    dirty)
+      echo "  declined   $p is dirty — never removed, at any flag" ;;
+    foreign)
+      echo "  declined   $p is foreign — ccd removes only what it created" ;;
+    tracked)
+      : ;;   # a live workspace: not a finding to act on
+  esac
+}
+
+cmd_ws_gc() {   # [--prune]
+  local prune=0
+  case "${1:-}" in
+    '')       ;;
+    --prune)  prune=1 ;;
+    *)        die "usage: ccd ws-gc [--prune]" ;;
+  esac
+
+  local rows; rows=$(_ws_gc_scan)
+  [[ -n "$rows" ]] || { echo "nothing to report — no worktrees found under $PROJECTS_ROOT"; return 0; }
+
+  local state project slug bytes age p n=0
+  local -a paths=()
+  printf '%-11s %-18s %-22s %7s %5s  %s\n' STATE PROJECT WORKSPACE SIZE IDLE PATH
+  while IFS=$'\t' read -r state project slug bytes age p; do
+    printf '%-11s %-18s %-22s %7s %5s  %s\n' \
+      "$state" "$project" "$slug" "$(_ws_gc_human "$bytes")" "$age" "$p"
+    n=$(( n + 1 ))
+    [[ -d "$p" ]] && paths+=("$p")
+  done <<< "$rows"
+
+  # One du across every path at once: it de-dupes inodes shared between
+  # worktrees, so this is the exact figure that removing the lot would free.
+  # The per-row sizes are independent measurements and can sum to more.
+  local total='-'
+  if (( ${#paths[@]} > 0 )); then
+    total=$(du -scb "${paths[@]}" 2>/dev/null | awk '$2 == "total" {print $1}')
+    total=$(_ws_gc_human "$total")
+  fi
+  echo
+  echo "total $total across $n worktree$( (( n == 1 )) || echo s ) — what removing all of them would free."
+  echo "Rows are measured independently, so they can sum to more than the total when workspaces share hardlinks."
+
+  (( prune )) || return 0
+
+  echo
+  echo "pruning:"
+  local reclaimed=0 declined=0 out already
+  local -A meta_pruned=()   # projects whose stale metadata this run already reclaimed
+  while IFS=$'\t' read -r state project slug bytes age p; do
+    already=0
+    if [[ "$state" == stale-meta ]]; then
+      if [[ -n "${meta_pruned[$project]:-}" ]]; then already=1; else meta_pruned[$project]=1; fi
+    fi
+    out=$(_ws_gc_prune_row "$state" "$project" "$slug" "$p" "$already")
+    [[ -n "$out" ]] || continue
+    echo "$out"
+    reclaimed=$(( reclaimed + $(grep -c '^  reclaimed ' <<< "$out") ))
+    declined=$((  declined  + $(grep -c '^  declined '  <<< "$out") ))
+  done <<< "$rows"
+  echo
+  echo "reclaimed $reclaimed, declined $declined"
+}
 
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
   case "$1" in
@@ -459,6 +928,7 @@ cmd_start() {
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
   _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
+  _ws_seed_home "$id" "$wrapper"
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   _spawn "$id" "$mode"; _reg_set "$id" started 1
   echo "started $id ($mode) — discover on claude.ai by name: $id"
@@ -594,9 +1064,19 @@ cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
   fi
 }
 
-cmd_stop() {
-  local wrapper="${1:?}" project="${2:?}"
-  local id; id=$(_id "$wrapper" "$project")
+cmd_stop() {   # <id>  |  <wrapper> <project>
+  # The two-argument form is the legacy one and recomputes `<wrapper>-<project>`.
+  # That only works for ids that ENCODE a wrapper; a workspace id is
+  # `<project>-<slug>`, so a caller forced to reverse one guesses a wrapper and
+  # aims the stop at a different, live session. The one-argument form takes the
+  # id directly, exactly as `ccd ensure` does.
+  local id
+  if [[ $# -ge 2 ]]; then
+    local wrapper="${1:?}" project="${2:?}"
+    id=$(_id "$wrapper" "$project")
+  else
+    id="${1:?usage: ccd stop <id> | ccd stop <wrapper> <project>}"
+  fi
   systemctl --user disable --now "claude-session@$id" 2>/dev/null \
     || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
@@ -692,6 +1172,10 @@ case "${1:-}" in
   menu|pick) cmd_menu ;;
   attach)    shift; cmd_attach "$@" ;;
   clip)      shift; cmd_clip "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip} <args>" >&2; exit 1 ;;
+  ws-add)    shift; cmd_ws_add "$@" ;;
+  ws-rm)     shift; cmd_ws_rm "$@" ;;
+  ws-rename) shift; cmd_ws_rename "$@" ;;
+  ws-gc)     shift; cmd_ws_gc "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|ws-add|ws-rm|ws-rename|ws-gc} <args>" >&2; exit 1 ;;
 esac
 fi

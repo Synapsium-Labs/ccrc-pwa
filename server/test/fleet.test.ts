@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config.js';
 import { assembleFleet, idHomeWrapper } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
+import type { Statusline } from '../src/pane/statusline.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -52,5 +53,46 @@ describe('assembleFleet', () => {
     const dead = fleet.find((s) => s.id === 'claude-dead-proj')!;
     expect(dead.status).toBe('dead');
     expect(dead.name).toBeNull();
+  });
+});
+
+describe('branch precedence', () => {
+  const setup = (): { home: string; run: Runner } => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'demo-quiet-mesa', 'claude', {
+      project: 'demo', workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+    });
+    // Alive, but with no live-state file — so no statusline can have been
+    // derived yet. This is a workspace in the seconds after ws-add.
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { home, run };
+  };
+
+  it('falls back to the registry branch before any pane capture has landed', async () => {
+    const { home, run } = setup();
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('ws/quiet-mesa');
+  });
+
+  it('prefers the statusline branch — it reflects a manual checkout the registry cannot know about', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { branch: 'feat/actually-here', ultracode: false, workflowActive: false }],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
+  });
+
+  it('is null when neither source has one', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'claude-demo', 'claude');
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    expect(fleet.find((s) => s.id === 'claude-demo')!.branch).toBeNull();
   });
 });

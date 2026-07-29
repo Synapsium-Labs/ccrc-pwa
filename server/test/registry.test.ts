@@ -44,4 +44,52 @@ describe('readRegistry', () => {
     const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: path.join(home, 'nope') }));
     expect(out).toEqual([]);
   });
+
+  it('reads the branch a workspace was created on', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-mesa', {
+      wrapper: 'claude', project: 'demo',
+      workdir: '/home/x/worktrees/demo/quiet-mesa', uuid: 'c'.repeat(36), started: '1',
+      workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+    });
+    const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(out[0].branch).toBe('ws/quiet-mesa');
+  });
+
+  it('leaves branch null for a main checkout that never had one written', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'claude-demo', {
+      wrapper: 'claude', project: 'demo',
+      workdir: '/data/projects/demo', uuid: 'd'.repeat(36), started: '1',
+    });
+    const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(out[0].branch).toBeNull();
+  });
+});
+
+describe('workspace on the wire', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  });
+
+  it('reads the workspace field when present', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-mesa', {
+      wrapper: 'claude2', project: 'demo', workdir: '/w/demo/quiet-mesa',
+      uuid: 'a'.repeat(36), workspace: 'quiet-mesa',
+    });
+    const [rec] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(rec.workspace).toBe('quiet-mesa');
+  });
+
+  it('leaves workspace null for a legacy main-checkout session', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'claude2-demo', {
+      wrapper: 'claude2', project: 'demo', workdir: '/p/demo', uuid: 'b'.repeat(36),
+    });
+    const [rec] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(rec.workspace).toBeNull();
+  });
 });

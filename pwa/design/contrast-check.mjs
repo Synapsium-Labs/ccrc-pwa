@@ -71,6 +71,16 @@ const pairs = (T, name) => [
   [`${name} attention-text / surface`, T.attText, T.surface, 4.5],
   [`${name} attention dot / surface (UI 3:1)`, T.att, T.surface, 3],
   [`${name} attention dot / lamp well (UI 3:1)`, T.att, T.well, 3],
+  // A project group's attention dot (.proj-group-attn) sits on the bare page:
+  // the group header has no ground of its own. A glyph, so the 3:1 UI floor —
+  // LIGHT clears it at 3.58, which is close enough that a token nudge should
+  // fail the build rather than pass unnoticed.
+  [`${name} attention dot / page (UI 3:1)`, T.att, T.page, 3],
+  // The `+` affordance's projected-account line when the landing account is
+  // near its ceiling (.proj-add-acct[data-low]). 11px, so body text at 4.5 —
+  // which is why it takes attention-TEXT and not the dot hue: LIGHT's dot
+  // (#B27400) reads 3.58 here and would fail this threshold.
+  [`${name} attention-text / page`, T.attText, T.page, 4.5],
   [`${name} dead-text / surface`, T.deadText, T.surface, 4.5],
   [`${name} dead dot / surface (UI 3:1)`, T.dead, T.surface, 3],
   [`${name} dead dot / lamp well (UI 3:1)`, T.dead, T.well, 3],

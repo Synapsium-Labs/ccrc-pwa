@@ -26,6 +26,8 @@ describe('AccountsStrip', () => {
         acct({ wrapper: 'claude', five: 0, fiveResetAt: nowSec - 60, fiveRolledOver: true, seven: 57, sevenRolledOver: false }),
         acct({ wrapper: 'claude2', five: 0, fiveResetAt: nowSec + 9000, fiveRolledOver: false, seven: 93, sevenRolledOver: false }),
       ],
+      // The strip ignores it; the route always sends it (see useProjectedHome).
+      projected: { wrapper: 'claude', score: 57 },
     });
     render(<AccountsStrip />);
     // claude's 5h rolled over; claude2's 5h was really measured at zero.
