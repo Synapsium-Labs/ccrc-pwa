@@ -562,7 +562,31 @@
 
 .sess-line--active { background: var(--bg-raised); }
 
-.sess-lamp { grid-column: 1; }
+/* The dot must sit on the workspace NAME's own line, not the row's centre:
+   .sess-line centres everything on the full two-line ~52px box, but the
+   label is only the TOP line — measured 8.5-9.25px apart live, reading as
+   low. Pin the lamp to the row's start (like .sess-actions below) and give
+   it a box exactly as tall as the label's own line box (--text-base at
+   --leading-tight, .sess-open's line-height), then centre the dot inside
+   that box — measured this alone still lands 4.125px high, because
+   .sess-open centres its whole two-line content block (label + its 2px
+   gap + .sess-meta's own line) inside the --tap-min tap target, which
+   pushes the label down by half of whatever slack is left over. The
+   margin-top below is that exact slack, computed from the same tokens
+   .sess-open's stack uses (plus the 2px gap already hardcoded on
+   .sess-open, not a new magic number) — not a guessed offset, so it tracks
+   any future type-scale or line-height change instead of silently
+   drifting off again. */
+.sess-lamp {
+  grid-column: 1;
+  align-self: start;
+  height: calc(var(--text-base) * var(--leading-tight));
+  display: grid;
+  place-items: center;
+  margin-top: calc(
+    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
+  );
+}
 
 .sess-open {
   grid-column: 2;
@@ -630,15 +654,42 @@
    account, and overloading it with "and it is the wrong one" would lose that. */
 .sess-acct-away { margin-left: 2px; color: var(--status-attention-text); }
 
+/* .sess-actions and .proj-card-add (below, project card head) are a
+   matched pair of icon buttons — each session's ··· stacked directly
+   under the project's + — so they share one visual treatment: a real
+   32×32 (--sp-8) button, not a bare glyph. Each keeps a >= --tap-min hit
+   area via an invisible ::before overlay instead of growing the visible
+   box; the inset is half the gap between the two tokens, so it stays
+   correct if either one ever moves. */
 .sess-actions {
   grid-column: 3;
-  min-width: 44px;
-  min-height: 44px;
+  justify-self: end;
+  align-self: start;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  margin-top: calc(
+    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
+  );
   padding: 0;
-  background: none;
-  border: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
   color: var(--ink-secondary);
   cursor: pointer;
+}
+.sess-actions::before {
+  content: '';
+  position: absolute;
+  /* box-sizing: border-box (tailwindcss preflight, base.css) means the
+     button's own 1px border eats into the box the absolutely-positioned
+     ::before is inset FROM (the padding box, 2px smaller than --sp-8 on
+     each axis) — the naive (--sp-8 - --tap-min)/2 measured a 42px hit area,
+     not 44px. Subtracting the 2px border keeps the overlay at the real
+     --tap-min. */
+  inset: calc((var(--sp-8) - 2px - var(--tap-min)) / 2);
 }
 
 /* ── session actions sheet ────────────────────────────────────────── */
@@ -690,6 +741,14 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  /* .sess-line (fleet.css, Task 5) carries its own var(--sp-2) right
+     padding INSIDE .proj-card's padding, so its third grid column's right
+     edge sits 16px in from the card's outer edge — 8px further than this
+     header's own right edge (which only has the card's 8px). Matching
+     that here, right-side only, is what makes .proj-card-add and
+     .sess-actions share a right edge instead of the + sitting 8px right
+     of the ···. */
+  padding-right: var(--sp-2);
 }
 
 .proj-card-toggle {
@@ -735,15 +794,35 @@
 }
 .proj-card-pin[data-mixed] { color: var(--ink-tertiary); }
 
+/* A real button, not a bare glyph: bg-raised fill, edge-subtle hairline,
+   r-md corner — the same treatment .sess-actions gives the ··· below, so
+   the two read as one matched pair down the card's right edge. The 44px
+   thumb target survives as an invisible ::before overlay, not by growing
+   the visible 32×32 box. */
 .proj-card-add {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 var(--sp-2);
-  background: none;
-  border: 0;
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  padding: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
   color: var(--ink-secondary);
   cursor: pointer;
+}
+.proj-card-add::before {
+  content: '';
+  position: absolute;
+  /* box-sizing: border-box (tailwindcss preflight, base.css) means the
+     button's own 1px border eats into the box the absolutely-positioned
+     ::before is inset FROM (the padding box, 2px smaller than --sp-8 on
+     each axis) — the naive (--sp-8 - --tap-min)/2 measured a 42px hit area,
+     not 44px. Subtracting the 2px border keeps the overlay at the real
+     --tap-min. */
+  inset: calc((var(--sp-8) - 2px - var(--tap-min)) / 2);
 }
 
 .proj-card-body {

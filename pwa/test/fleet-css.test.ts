@@ -7,13 +7,24 @@ import path from 'node:path';
 
 const css = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+const shellCss = readFileSync(
+  path.join(import.meta.dirname, '..', 'src', 'styles', 'shell.css'), 'utf8');
+
+/** The declarations of the first rule whose selector list starts with `sel`
+ *  in `text`, tolerating leading indentation — fleet.css's rules sit at
+ *  column 0, but shell.css nests its desktop rules inside `@media`. */
+function ruleIn(text: string, sel: string): string {
+  const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\n[ \\t]*${escaped} \\{`);
+  const m = re.exec(text);
+  if (!m) throw new Error(`no rule for ${sel}`);
+  const open = text.indexOf('{', m.index);
+  return text.slice(open + 1, text.indexOf('}', open));
+}
 
 /** The declarations of the first rule whose selector list starts with `sel`. */
 function ruleFor(sel: string): string {
-  const i = css.indexOf(`\n${sel} {`);
-  if (i < 0) throw new Error(`no rule for ${sel}`);
-  const open = css.indexOf('{', i);
-  return css.slice(open + 1, css.indexOf('}', open));
+  return ruleIn(css, sel);
 }
 
 describe('fleet density and alignment', () => {
@@ -85,5 +96,74 @@ describe('fleet density and alignment', () => {
     const rule = ruleFor('.proj-card');
     expect(rule).toContain('padding: var(--sp-2)');
     expect(rule).toContain('gap: 0');
+  });
+
+  it("aligns the lamp to the label's own line, not the two-line block's centre", () => {
+    // .sess-line centres everything on the full two-line ~52px box, but the
+    // label is only the TOP line — measured 8.5-9.25px apart live (the
+    // user's sharpest complaint). align-self: start + a box the height of
+    // the label's own line (--text-base at --leading-tight) still lands
+    // 4.125px high, because .sess-open centres its whole two-line content
+    // block inside the tap target — margin-top makes up exactly that
+    // slack, derived from the same tokens .sess-open's stack uses (CDP-
+    // measured 0px gap after this fix, at both 1440 and 390).
+    const rule = ruleFor('.sess-lamp');
+    expect(rule).toContain('align-self: start');
+    expect(rule).toContain('height: calc(var(--text-base) * var(--leading-tight))');
+    expect(rule).toContain('display: grid');
+    expect(rule).toContain('place-items: center');
+    expect(rule).toContain('margin-top: calc(');
+    expect(rule).toContain('var(--tap-min)');
+    expect(rule).toContain('var(--text-xs)');
+  });
+
+  it('gives .proj-card-add and .sess-actions the same real-button treatment', () => {
+    // The two read as a matched pair stacked down the card's right edge:
+    // identical 32×32 (--sp-8) box, bg-raised fill, edge-subtle hairline,
+    // r-md corner — not a bare glyph either.
+    for (const sel of ['.proj-card-add', '.sess-actions']) {
+      const rule = ruleFor(sel);
+      expect(rule).toContain('width: var(--sp-8)');
+      expect(rule).toContain('height: var(--sp-8)');
+      expect(rule).toContain('background: var(--bg-raised)');
+      expect(rule).toContain('border: 1px solid var(--edge-subtle)');
+      expect(rule).toContain('border-radius: var(--r-md)');
+      expect(rule).toContain('position: relative');
+      // The hit area grows via an overlay, never by growing the visible box.
+      expect(rule).not.toContain('min-width: 44px');
+      expect(rule).not.toContain('min-height: 44px');
+    }
+  });
+
+  it('extends each button to --tap-min with an invisible ::before overlay', () => {
+    for (const sel of ['.proj-card-add::before', '.sess-actions::before']) {
+      const rule = ruleFor(sel);
+      expect(rule).toContain('position: absolute');
+      expect(rule).toContain('var(--tap-min)');
+      expect(rule).toContain('var(--sp-8)');
+    }
+  });
+
+  it('right-aligns .sess-actions in its column so it shares an edge with .proj-card-add', () => {
+    // .sess-line's own right padding sits INSIDE .proj-card's padding, so
+    // the header needs the same padding-right to keep the + and ··· on one
+    // vertical line (CDP-measured rightEdgeDelta 0 at 1440 and 390).
+    expect(ruleFor('.sess-actions')).toContain('justify-self: end');
+    expect(ruleFor('.proj-card-head')).toContain('padding-right: var(--sp-2)');
+  });
+
+  it('tops-aligns .sess-actions with the row, like the lamp, instead of floating centred', () => {
+    expect(ruleFor('.sess-actions')).toContain('align-self: start');
+  });
+});
+
+describe('shell-nav overflow backstop', () => {
+  it('clips horizontal overflow on the desktop sidebar as a backstop behind min-width: 0', () => {
+    // .proj-card's min-width: 0 (asserted above) is the real fix — this is
+    // a belt-and-braces guarantee that the sidebar itself can never scroll
+    // sideways even if some future child regresses that fix.
+    const rule = ruleIn(shellCss, '.shell-nav');
+    expect(rule).toContain('overflow-x: clip');
+    expect(rule).toMatch(/backstop/i);
   });
 });

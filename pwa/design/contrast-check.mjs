@@ -54,6 +54,17 @@ const pairs = (T, name) => [
   [`${name} ink-primary / sheet`, T.inkP, T.sheet, 4.5],
   [`${name} ink-primary / accent-tint`, T.inkP, T.accentTint, 4.5],
   [`${name} ink-secondary / surface`, T.inkS, T.surface, 4.5],
+  // Also the exact pair the fleet-polish task's two new icon buttons use
+  // (.proj-card-add, .sess-actions: ink-secondary glyph on a bg-raised
+  // fill) — a new USE SITE of an already-gated combination, not a new one.
+  // Their bg-raised/edge-subtle affordance itself (fill vs the surface
+  // behind it, and the 1px border vs either) is deliberately NOT gated
+  // here: both measure ~1.1-1.3:1 in both themes (raised is barely a shade
+  // off surface by design), nowhere near the 3:1 non-text floor, and no
+  // token substitution fixes that without inventing a new one — every
+  // other raised+edge-subtle affordance in this file (.proj-search,
+  // .account-gauge, .notice, .acct-list .acct-row) is exempt for the same
+  // reason tokens.css gives hairlines: "decorative — no contrast claim".
   [`${name} ink-secondary / raised`, T.inkS, T.raised, 4.5],
   [`${name} ink-secondary / sheet`, T.inkS, T.sheet, 4.5],
   [`${name} ink-tertiary / surface`, T.inkT, T.surface, 4.5],
