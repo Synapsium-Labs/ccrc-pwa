@@ -17,11 +17,17 @@ function ruleFor(sel: string): string {
 }
 
 describe('fleet density and alignment', () => {
-  it('centres the row group instead of baselining it in a taller box', () => {
-    // Measured: .sess-label sat 10.8px above .sess-line's centre, because
-    // baseline alignment does not centre inside a min-height box.
+  it('stacks the two lines and centres them vertically in the 44px box', () => {
+    // The original defect (a single line wobbling 10.8px above .sess-line's
+    // centre because baseline alignment does not centre inside a min-height
+    // box) is now moot: .sess-open holds two full lines, stacked, so it is a
+    // COLUMN flex — justify-content, not align-items, does the vertical
+    // centring on that axis. align-items: baseline would only mean anything
+    // on a single-line ROW flex, so its presence here would be a regression
+    // back to that layout.
     const rule = ruleFor('.sess-open');
-    expect(rule).toContain('align-items: center');
+    expect(rule).toContain('flex-direction: column');
+    expect(rule).toContain('justify-content: center');
     expect(rule).not.toContain('align-items: baseline');
   });
 
@@ -31,13 +37,11 @@ describe('fleet density and alignment', () => {
     expect(ruleFor('.sess-open')).toContain('min-height: 44px');
   });
 
-  it('has one track per always-present cell, with the tally and warn fixed', () => {
-    // SEVEN cells: lamp · label · state · tally · warn · account · actions.
-    // Six tracks for seven children silently collapses the last one, and an
-    // `auto` tally track aligns nothing on a row whose tally is empty.
+  it('gives the row three tracks — lamp, a two-line label block, actions', () => {
+    // state/tally/warn/account moved inside .sess-open's second line
+    // (.sess-meta, a flex row) so they no longer need a grid track each.
     const cols = /grid-template-columns:([^;]+);/.exec(ruleFor('.sess-line'))?.[1] ?? '';
-    expect(cols).toContain('3.25rem');
-    expect(cols.trim().split(/\s+(?![^(]*\))/)).toHaveLength(7);
+    expect(cols.trim().split(/\s+(?![^(]*\))/)).toHaveLength(3);
   });
 
   it('reserves room under the list for the fixed 56px FAB', () => {
@@ -53,32 +57,28 @@ describe('fleet density and alignment', () => {
   });
 
   it('pins every .sess-line child to an explicit grid-column', () => {
-    // CSS Grid drops a display:none item from grid-item generation entirely
-    // (unlike visibility:hidden, which keeps its track) — so auto-placed
-    // children compact one track to the left when a sibling is hidden. That
-    // is exactly what the @container query below did to .sess-acct once
-    // .sess-state vanished at a narrow width: every child after it slid into
-    // the vacated track and .sess-acct was squeezed into .sess-warn's 1rem
-    // track. A test that only checks the @container block's selector would
-    // pass against this bug — pinning every child to its column number is
-    // what actually prevents it, regardless of which sibling gets hidden.
-    const order = [
-      '.sess-lamp', '.sess-open', '.sess-state', '.sess-tally',
-      '.sess-warn', '.sess-acct', '.sess-actions',
-    ];
+    // .sess-line now has only THREE grid children (lamp, the label block,
+    // actions) — state/tally/warn/account moved into .sess-meta, a flex row
+    // inside the label button, so they can never be grid-compacted by a
+    // hidden sibling. The three that remain are still pinned explicitly, on
+    // the same reasoning as before: a test that only checked a selector's
+    // presence somewhere would pass against a wrong-order regression too, so
+    // this checks each child's own column number.
+    const order = ['.sess-lamp', '.sess-open', '.sess-actions'];
     order.forEach((sel, i) => {
       expect(ruleFor(sel)).toContain(`grid-column: ${i + 1}`);
     });
   });
 
-  it('drops the STATE word in a narrow container, never the account chip', () => {
-    // The old query hid .sess-acct — the session's only visible binding —
-    // while keeping a projection identical on every card. Inverted: the lamp
-    // already encodes status by colour and shape, so the word is the redundant
-    // cell, and the account appears nowhere else on the row.
-    const q = css.slice(css.indexOf('@container fleetlist'));
-    expect(q).toContain('.sess-state');
-    expect(q).not.toContain('.sess-acct');
+  it('has no @container query left — .sess-acct can no longer be hidden or squeezed', () => {
+    // The query this repeatedly guarded (first hiding .sess-acct, then
+    // hiding .sess-state, then discovered to compact .sess-acct into a
+    // neighbour's track) is gone along with the one-line layout it existed
+    // to rescue. .fleet-list's own container-type/-name went with it —
+    // nothing else in this file uses them.
+    expect(css).not.toContain('@container');
+    expect(css).not.toContain('container-type');
+    expect(css).not.toContain('container-name');
   });
 
   it('tightens the card padding and closes the header/body gap', () => {

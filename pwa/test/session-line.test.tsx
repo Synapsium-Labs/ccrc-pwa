@@ -70,14 +70,15 @@ describe('state', () => {
     expect(screen.queryByText('4/7')).not.toBeInTheDocument();
   });
 
-  it('renders the tally and warn cells even when empty — the grid needs them', () => {
-    // A conditional cell makes every cell to its right slide, which is what
-    // made 4/5 and 65/73 float mid-row.
+  it('omits the tally and warn cells entirely when there is nothing to show', () => {
+    // .sess-meta is a flex row now, not a grid track — a missing sibling
+    // cannot shift anything, so the always-rendered-but-empty placeholder
+    // that a grid layout needed is dead weight here. Restored to a plain
+    // conditional render.
     const { container } = render(
       <SessionLine session={s({ tasks: null, limits: null })} onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-tally')).toBeInTheDocument();
-    expect(container.querySelector('.sess-tally')).toHaveTextContent('');
-    expect(container.querySelector('.sess-warn')).toBeInTheDocument();
+    expect(container.querySelector('.sess-tally')).not.toBeInTheDocument();
+    expect(container.querySelector('.sess-warn')).not.toBeInTheDocument();
   });
 
   it('warns when a limit window is critical, but never on a dead session', () => {

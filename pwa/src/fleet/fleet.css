@@ -68,8 +68,6 @@
 .fleet-list {
   display: grid;
   gap: var(--sp-3);
-  container-type: inline-size;
-  container-name: fleetlist;
   /* The FAB is position:fixed 56px at bottom-right and sat on top of the last
      card's content in every viewport and both themes. */
   padding-bottom: calc(56px + var(--sp-6) + var(--safe-bottom));
@@ -538,44 +536,40 @@
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
 
 /* ── session line ─────────────────────────────────────────────────
-   One session inside a project card. Grid rather than flex so the columns
-   line up across sibling rows: a ragged right edge is what makes a list of
-   rows read as noise. */
+   One session inside a project card, two lines: label (full row width) on
+   top, state/tally/warn/account underneath as a quiet flex row. Fighting
+   for one line's worth of horizontal room made every trailing cell a
+   candidate for squeezing (.sess-acct into a 1rem track) or hiding behind a
+   container-size media query that was always-on in practice (.fleet-list
+   measured 252-343px live, always under any threshold worth setting) — a
+   second line removes the fight instead of refereeing it. Grid, not flex,
+   for the three OUTER cells so the actions button lines up across sibling
+   rows: a ragged right edge is what makes a list of rows read as noise. */
 .sess-line {
   display: grid;
-  /* lamp · label(flex) · state · tally · warn · account · actions — SEVEN
-     cells, every one always present. The tally and warn tracks are fixed so
-     they hold their column on a row that has nothing to put in them; 3.25rem
-     fits `65/73` at --text-xs in tabular mono, the widest tally on the live
-     fleet. The account track stays auto: wrapper labels differ by about one
-     character, so a fixed width would buy ~6px of alignment at the cost of
-     truncating any account name the server grows later. */
-  grid-template-columns: auto minmax(0, 1fr) auto 3.25rem 1rem auto 44px;
+  /* lamp · label-block(flex, 2 lines) · actions — THREE cells. State/tally/
+     warn/account live inside .sess-open's second line (.sess-meta), which is
+     a flex row, not a grid track — a missing sibling there just isn't
+     there; it cannot compact anything, so there is no display:none
+     grid-compaction hazard left to guard against. */
+  grid-template-columns: auto minmax(0, 1fr) 44px;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   min-height: 44px; /* thumb target — the row is a tap surface, not a label */
-  padding: 0 var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-md);
 }
 
 .sess-line--active { background: var(--bg-raised); }
 
-/* Explicit grid-column on every child — NOT decorative. CSS Grid drops a
-   display:none item from grid-item generation entirely (unlike
-   visibility:hidden, which keeps its track), so auto-placed children
-   compact one track to the left when a sibling vanishes. That is exactly
-   what @container below did to .sess-acct once .sess-state dropped out:
-   every sibling after it slid into the vacated track and .sess-acct was
-   squeezed into .sess-warn's 1rem track. Pinning every child to its column
-   number makes each track's occupant fixed regardless of which siblings
-   are hidden. */
 .sess-lamp { grid-column: 1; }
 
 .sess-open {
   grid-column: 2;
   display: flex;
-  align-items: center;
-  gap: var(--sp-2);
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
   min-height: 44px;   /* thumb target: the button is what gets tapped */
   padding: 0;
@@ -584,10 +578,6 @@
   text-align: left;
   cursor: pointer;
   color: inherit;
-  /* Baseline alignment lined the 15px label and 12px state up with each other
-     but left the pair flush against the top of the 44px row — measured 10.8px
-     above the row's centre, which is the visible wobble on every line. Centring
-     costs the shared baseline, so both children take one line-height instead. */
   line-height: var(--leading-tight);
 }
 
@@ -598,39 +588,50 @@
   font-weight: 500;
 }
 
-.sess-state { grid-column: 3; font-size: var(--text-xs); color: var(--ink-secondary); }
+/* The second line: state · tally · warn · account, all quiet — the label
+   above carries the row's identity, this carries its status. A flex row,
+   not a grid: a missing child (no tally, no warning) just isn't rendered,
+   instead of needing an empty placeholder to hold a track open. */
+.sess-meta {
+  display: flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  overflow: hidden;
+}
+/* Middot between whichever cells actually render — :not(:first-child)
+   tracks the real DOM, so it never assumes state/tally/warn are all
+   present. */
+.sess-meta > *:not(:first-child)::before {
+  content: '·';
+  margin: 0 var(--sp-1);
+  color: var(--ink-tertiary);
+}
+
 .sess-state--waiting { color: var(--status-attention-text); }
 .sess-state--working { color: var(--status-busy-text); }
 .sess-state--exited  { color: var(--ink-secondary); }
 
 .sess-tally {
-  grid-column: 4;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
-  color: var(--ink-secondary);
-  text-align: right;
+  flex: none;
 }
 
-.sess-warn {
-  grid-column: 5;
-  font-size: var(--text-xs);
-  color: var(--status-dead-text);
-  text-align: center;
-}
+.sess-warn { color: var(--status-dead-text); flex: none; }
 
 .sess-acct {
-  grid-column: 6;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The arrow, not a colour change: the chip's colour already encodes WHICH
    account, and overloading it with "and it is the wrong one" would lose that. */
 .sess-acct-away { margin-left: 2px; color: var(--status-attention-text); }
 
 .sess-actions {
-  grid-column: 7;
+  grid-column: 3;
   min-width: 44px;
   min-height: 44px;
   padding: 0;
@@ -638,15 +639,6 @@
   border: 0;
   color: var(--ink-secondary);
   cursor: pointer;
-}
-
-/* Narrow container: the STATE WORD is what goes. The lamp to its left already
-   encodes status by colour and shape, so the word is the redundant cell —
-   whereas .sess-acct is the only place the session's account binding appears
-   on this row. The previous rule had these exactly backwards: it hid the
-   binding and kept a projection that read identically on all nine cards. */
-@container fleetlist (max-width: 380px) {
-  .sess-state { display: none; }
 }
 
 /* ── session actions sheet ────────────────────────────────────────── */

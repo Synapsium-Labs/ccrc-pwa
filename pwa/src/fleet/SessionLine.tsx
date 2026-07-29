@@ -1,4 +1,10 @@
-// One session as a compact row: dot · label · state · tally · ⚠ · account · ···
+// One session as a compact two-line row: dot · label, ··· on the first line;
+// state · tally · ⚠ · account on the second, all inside the same tap target.
+// Fighting for one line's worth of horizontal room made every trailing cell
+// a candidate for squeezing or hiding (see fleet.css's history on this file);
+// a second line ends that fight — the label gets the row's full width and
+// the meta cells never need a grid track, a container query, or an
+// always-rendered-but-empty placeholder to stay aligned.
 //
 // Replaces SessionCard in the fleet list. Three things are cut rather than
 // shrunk. The attention SENTENCE ("Claude is asking you something") becomes the
@@ -88,42 +94,45 @@ export function SessionLine({
 
       <button ref={labelRef} type="button" className="sess-open" onClick={open}>
         <span className="sess-label">{label}</span>
+
+        {/* Second line: a quiet flex row, not a grid track — a missing cell
+            (no tally, no warning) just isn't there, instead of needing to be
+            rendered empty to hold a track open (that was only ever a grid
+            requirement, and this is no longer a grid). */}
+        <span className="sess-meta">
+          <span className={`sess-state sess-state--${state}`}>{state}</span>
+
+          {!dead && session.tasks !== null && (
+            <span className="sess-tally">
+              {session.tasks.done}/{session.tasks.total}
+            </span>
+          )}
+
+          {critical && (
+            <span className="sess-warn" role="img" aria-label="account limit near">
+              ⚠
+            </span>
+          )}
+
+          <span
+            className="sess-acct"
+            style={acctStyle}
+            data-away={away || undefined}
+            aria-label={
+              away
+                ? `running on ${accountLabel(session.wrapper)}, pinned to ${accountLabel(session.home)}`
+                : undefined
+            }
+          >
+            {accountLabel(session.wrapper)}
+            {away && (
+              <span className="sess-acct-away" aria-hidden="true">
+                ↗
+              </span>
+            )}
+          </span>
+        </span>
       </button>
-
-      <span className={`sess-state sess-state--${state}`}>{state}</span>
-
-      {/* Always rendered, empty when silent: a conditional cell makes every
-          cell to its right slide, which is exactly why `4/5` and `65/73`
-          floated mid-row. A fixed track only aligns if something occupies it. */}
-      <span className="sess-tally">
-        {!dead && session.tasks !== null ? `${session.tasks.done}/${session.tasks.total}` : ''}
-      </span>
-
-      <span className="sess-warn">
-        {critical && (
-          <span role="img" aria-label="account limit near">
-            ⚠
-          </span>
-        )}
-      </span>
-
-      <span
-        className="sess-acct"
-        style={acctStyle}
-        data-away={away || undefined}
-        aria-label={
-          away
-            ? `running on ${accountLabel(session.wrapper)}, pinned to ${accountLabel(session.home)}`
-            : undefined
-        }
-      >
-        {accountLabel(session.wrapper)}
-        {away && (
-          <span className="sess-acct-away" aria-hidden="true">
-            ↗
-          </span>
-        )}
-      </span>
 
       <button
         type="button"
