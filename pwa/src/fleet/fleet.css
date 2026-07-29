@@ -869,3 +869,26 @@
 @container fleetlist (max-width: 420px) {
   .sess-acct { display: none; }
 }
+
+/* ── session actions sheet ────────────────────────────────────────── */
+.sess-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sess-sheet .btn-ghost {
+  justify-content: flex-start;
+  min-height: 44px;
+}
+
+/* --danger has no counterpart in this file's tokens; SessionCard's identical
+   "Remove workspace" button (.card-remove) is --ink-secondary, not a red —
+   ws-rm's own refusal already carries the warning, so the button stays calm. */
+.sess-sheet-remove { color: var(--ink-secondary); }
+
+.sess-sheet-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+}
