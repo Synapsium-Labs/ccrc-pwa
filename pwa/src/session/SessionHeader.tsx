@@ -1,17 +1,20 @@
 // Session header — the chat's sticky, safe-area-padded top strip: back
 // chevron, the session's live name (fleet `name`, falling back to project),
 // status meta (breathing dot + mono word; busy ticks a live elapsed clock),
-// the account chip, and three raised keycaps — `>_` opens the terminal
-// drawer, `⋯` opens the lifecycle overflow menu (change model / move
-// account / stop), and `esc` interrupts (DIRECTION: "a keycap, not an
-// icon"), enabled only while the session is busy. Confirm-free: pressing
-// esc just sends it.
-import { useState } from 'react';
+// the account chip, and raised keycaps — `>_` opens the terminal drawer,
+// `⋯` opens the lifecycle overflow menu (change model / move account /
+// stop), and `esc` interrupts (DIRECTION: "a keycap, not an icon"), enabled
+// only while the session is busy. Confirm-free: pressing esc just sends it.
+// The esc cap is touch-only: where a physical keyboard exists ((pointer:
+// fine)) it hides and the real Escape key takes over instead, guarded so it
+// never fires while focus is in a text field.
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, SessionStatus } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
+import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import './chat.css';
 
@@ -83,6 +86,27 @@ export function SessionHeader({
   const attention = session?.dialogPending === true && st !== 'dead';
   const busy = st === 'busy';
   const now = useNow(busy ? 1_000 : 30_000);
+
+  // The keycap exists because phone keyboards have no Escape key. Where one
+  // exists, the key is the better control and the cap is clutter — but the
+  // binding has to land in the SAME change that hides the cap, or interrupting
+  // simply stops being possible. The PWA had no Escape handler at all before.
+  const finePointer = useMediaQuery('(pointer: fine)');
+
+  useEffect(() => {
+    if (!finePointer || !busy) return;
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      // Escape inside a text field dismisses autocomplete or clears the draft —
+      // it must not reach through and kill the turn.
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return;
+      onInterrupt();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [finePointer, busy, onInterrupt]);
 
   const dot: SessionStatus | 'dialog' | null = attention ? 'dialog' : st;
   const rel = relShort(now, at);
@@ -178,15 +202,17 @@ export function SessionHeader({
       >
         <span aria-hidden="true">⋯</span>
       </button>
-      <button
-        type="button"
-        className="keycap keycap--esc"
-        aria-label="Stop"
-        disabled={!busy}
-        onClick={onInterrupt}
-      >
-        esc
-      </button>
+      {!finePointer && (
+        <button
+          type="button"
+          className="keycap keycap--esc"
+          aria-label="Stop"
+          disabled={!busy}
+          onClick={onInterrupt}
+        >
+          esc
+        </button>
+      )}
 
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
         <div className="menu">

@@ -13,6 +13,7 @@ import { AttachButton } from './AttachButton';
 import { AttachTray } from './AttachTray';
 import { clipboardImages, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
+import { useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
 import './chat.css';
@@ -130,9 +131,29 @@ export function Composer({
     staged.release();
   };
 
+  // A physical keyboard exists → Enter is the send key, as in every desktop
+  // chat. On glass it stays a newline: phone keyboards carry no Alt or Cmd, so
+  // a blanket flip would leave no way to type one on the device this app is
+  // built for. Shift+Enter is a newline in BOTH modes — near-universal, present
+  // on on-screen keyboards, and free to honour where Enter already means newline.
+  const finePointer = useMediaQuery('(pointer: fine)');
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Touch keyboards: Enter is newline. Desktop: Cmd/Ctrl+Enter sends.
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key !== 'Enter') return;
+    if (finePointer) {
+      // Enter sends. Any held modifier reverts to a newline — the same
+      // Shift+Enter convention touch already relies on, extended to the
+      // modifiers that used to mean "send" so Enter's new job doesn't
+      // strand a way to type a literal newline.
+      if (!e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+      return;
+    }
+    // Touch: Enter is newline (phone keyboards carry no Alt/Cmd);
+    // Cmd/Ctrl+Enter still sends, as it always has.
+    if (e.metaKey || e.ctrlKey) {
       e.preventDefault();
       send();
     }

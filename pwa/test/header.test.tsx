@@ -15,8 +15,21 @@ import { createSessionStore } from '../src/stores/session';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   Reflect.deleteProperty(window, 'visualViewport');
 });
+
+// (pointer: fine) stub — the one predicate behind both Enter-sends (Composer)
+// and the esc keycap's touch-only visibility here. Unstubbed, setup.ts's
+// matchMedia shim already answers `false` (touch/coarse).
+const stubPointer = (fine: boolean): void => {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('pointer: fine') ? fine : false,
+    media: q, addEventListener: () => {}, removeEventListener: () => {},
+    addListener: () => {}, removeListener: () => {}, onchange: null,
+    dispatchEvent: () => false,
+  }));
+};
 
 // — fixtures —
 
@@ -45,22 +58,27 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   ...patch,
 });
 
+/** Full SessionHeaderProps with no-op callbacks — build it, don't render it,
+ *  so tests that need to compose SessionHeader alongside sibling elements
+ *  (the Escape-while-typing case) can render for themselves. */
+const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
+  session: fleetSession(),
+  status: 'idle',
+  statusUpdatedAt: null,
+  onInterrupt: vi.fn(),
+  onOpenTerminal: vi.fn(),
+  onBack: vi.fn(),
+  onChangeModel: vi.fn(),
+  onChangeEffort: vi.fn(),
+  onMoveAccount: vi.fn(),
+  onStopSession: vi.fn(),
+  ...over,
+});
+
 const renderHeader = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => {
-  const props: SessionHeaderProps = {
-    session: fleetSession(),
-    status: 'idle',
-    statusUpdatedAt: null,
-    onInterrupt: vi.fn(),
-    onOpenTerminal: vi.fn(),
-    onBack: vi.fn(),
-    onChangeModel: vi.fn(),
-    onChangeEffort: vi.fn(),
-    onMoveAccount: vi.fn(),
-    onStopSession: vi.fn(),
-    ...over,
-  };
-  render(<SessionHeader {...props} />);
-  return props;
+  const p = props(over);
+  render(<SessionHeader {...p} />);
+  return p;
 };
 
 // — SessionHeader —
@@ -111,6 +129,48 @@ describe('SessionHeader', () => {
     expect(props.onOpenTerminal).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: 'Back to fleet' }));
     expect(props.onBack).toHaveBeenCalledOnce();
+  });
+});
+
+describe('interrupt control', () => {
+  it('renders the esc keycap on touch, where there is no Escape key', () => {
+    stubPointer(false);
+    render(<SessionHeader {...props({ status: 'busy' })} />);
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+  });
+
+  it('hides the keycap where a real keyboard exists', () => {
+    stubPointer(true);
+    render(<SessionHeader {...props({ status: 'busy' })} />);
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+  });
+
+  it('binds the physical Escape key in its place', () => {
+    // THE test that matters. One asserting only that the cap is hidden would
+    // pass a change that silently removes the ability to interrupt.
+    stubPointer(true);
+    const onInterrupt = vi.fn();
+    render(<SessionHeader {...props({ status: 'busy', onInterrupt })} />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onInterrupt).toHaveBeenCalled();
+  });
+
+  it('does not interrupt an idle session, matching the keycap\'s disabled state', () => {
+    stubPointer(true);
+    const onInterrupt = vi.fn();
+    render(<SessionHeader {...props({ status: 'idle', onInterrupt })} />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onInterrupt).not.toHaveBeenCalled();
+  });
+
+  it('ignores Escape while typing — it dismisses, it does not interrupt', () => {
+    stubPointer(true);
+    const onInterrupt = vi.fn();
+    render(<><textarea data-testid="box" /><SessionHeader {...props({ status: 'busy', onInterrupt })} /></>);
+    const box = screen.getByTestId('box');
+    box.focus();
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(onInterrupt).not.toHaveBeenCalled();
   });
 });
 

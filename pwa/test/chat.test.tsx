@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ChatEvent } from '../../shared/api';
 import type { ReactNode } from 'react';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
@@ -31,7 +32,20 @@ vi.mock('react-virtuoso', async () => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
+
+// (pointer: fine) stub — the one predicate behind both Enter-sends and the
+// esc keycap's touch-only visibility. Unstubbed, setup.ts's matchMedia shim
+// already answers `false` (touch), so only the fine-pointer path needs it.
+const stubPointer = (fine: boolean): void => {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('pointer: fine') ? fine : false,
+    media: q, addEventListener: () => {}, removeEventListener: () => {},
+    addListener: () => {}, removeListener: () => {}, onchange: null,
+    dispatchEvent: () => false,
+  }));
+};
 
 // — fixtures —
 
@@ -404,6 +418,51 @@ describe('Composer', () => {
 
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+  });
+});
+
+describe('Enter with a physical keyboard', () => {
+  it('sends on plain Enter', async () => {
+    stubPointer(true);
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} />);
+    const box = screen.getByRole('textbox');
+    await userEvent.type(box, 'hello');
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('hello');
+  });
+
+  it.each(['altKey', 'metaKey', 'ctrlKey', 'shiftKey'] as const)(
+    'inserts a newline on %s+Enter', async (mod) => {
+      stubPointer(true);
+      const onSend = vi.fn();
+      render(<Composer onSend={onSend} pending={[]} />);
+      const box = screen.getByRole('textbox');
+      await userEvent.type(box, 'hello');
+      fireEvent.keyDown(box, { key: 'Enter', [mod]: true });
+      expect(onSend).not.toHaveBeenCalled();
+    });
+});
+
+describe('Enter on touch', () => {
+  it('inserts a newline — phone keyboards have no Alt or Cmd', async () => {
+    stubPointer(false);
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} />);
+    const box = screen.getByRole('textbox');
+    await userEvent.type(box, 'hello');
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('still sends on Cmd+Enter, as it does today', async () => {
+    stubPointer(false);
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} />);
+    const box = screen.getByRole('textbox');
+    await userEvent.type(box, 'hello');
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    expect(onSend).toHaveBeenCalledWith('hello');
   });
 });
 
