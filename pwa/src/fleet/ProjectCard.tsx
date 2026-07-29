@@ -14,7 +14,7 @@
 // without touching localStorage.
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectedHome } from '../../../shared/api';
-import { accountLabel } from '../lib/accounts';
+import { accountColorVar, accountLabel } from '../lib/accounts';
 import type { FleetGroup } from './groupFleet';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
@@ -74,6 +74,19 @@ export function ProjectCard({
           </span>
           <span className="proj-card-name">{group.project}</span>
           <span className="proj-card-count">{group.sessions.length}</span>
+          {/* The account this project is PINNED to (ccd `home`), which is not
+              necessarily where any of its sessions is running — that is on the
+              line. `mixed` when the sessions disagree: a header asserting one
+              account while two lines show two different ones would be a lie,
+              and divergent pins across one project is worth noticing. */}
+          <span
+            className="proj-card-pin"
+            data-mixed={group.pin === null || undefined}
+            aria-label={group.pin === null ? 'pinned accounts differ' : `pinned to ${accountLabel(group.pin)}`}
+            style={group.pin === null ? undefined : { color: `var(${accountColorVar(group.pin)})` }}
+          >
+            {group.pin === null ? 'mixed' : accountLabel(group.pin)}
+          </span>
           {/* Collapsed or not: a fold must never be able to hide a pending
               dialog, which is the one thing this screen exists to surface. */}
           {group.attention && (

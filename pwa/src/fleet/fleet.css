@@ -696,6 +696,16 @@
 
 .proj-card-attn { color: var(--status-attention-text); }
 
+/* Pinned account — mono like every other machine value on this screen, and
+   coloured by account so the card and its lines share one identity language.
+   `mixed` stays neutral: it names a disagreement, not an account. */
+.proj-card-pin {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+.proj-card-pin[data-mixed] { color: var(--ink-tertiary); }
+
 .proj-card-add {
   display: flex;
   align-items: center;

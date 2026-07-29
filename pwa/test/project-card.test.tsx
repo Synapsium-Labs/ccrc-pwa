@@ -18,7 +18,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, pin: 'claude', ...over,
 });
 
 describe('uniform shape', () => {
@@ -130,5 +130,22 @@ describe('the + button', () => {
     render(<ProjectCard group={grp()} onAddWorkspace={() => {}} onOpen={() => {}}
                         onActions={() => {}} projected={{ wrapper: 'claude', score: 74 }} />);
     expect(screen.getByText(/team·max · 26% free/)).not.toHaveAttribute('data-low');
+  });
+});
+
+describe('pinned account', () => {
+  it('shows the account the project is pinned to', () => {
+    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·shared')).toBeInTheDocument();
+  });
+
+  it('says "mixed" when the sessions disagree rather than picking one', () => {
+    render(<ProjectCard group={grp({ pin: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('mixed')).toBeInTheDocument();
+  });
+
+  it('names the pin for assistive tech — a bare label reads as decoration', () => {
+    render(<ProjectCard group={grp({ pin: 'claude' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByLabelText('pinned to team·max')).toBeInTheDocument();
   });
 });

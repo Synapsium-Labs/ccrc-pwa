@@ -74,3 +74,23 @@ describe('groupFleet', () => {
     expect(g[0]!.attention).toBe(false);
   });
 });
+
+describe('pin', () => {
+  const at = (id: string, home: string): FleetSession =>
+    ({ ...s({ id, project: 'demo' }), home });
+
+  it('is the account all of a project\'s sessions call home', () => {
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude')]);
+    expect(g!.pin).toBe('claude');
+  });
+
+  it('is null when they disagree — the card must not claim one of them', () => {
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude2')]);
+    expect(g!.pin).toBeNull();
+  });
+
+  it('is the lone session\'s home for a single-session project', () => {
+    const [g] = groupFleet([at('demo-a', 'claude-corp')]);
+    expect(g!.pin).toBe('claude-corp');
+  });
+});
