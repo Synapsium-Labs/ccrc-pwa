@@ -52,6 +52,25 @@ describe('fleet density and alignment', () => {
     expect(ruleFor('.proj-card')).toContain('min-width: 0');
   });
 
+  it('pins every .sess-line child to an explicit grid-column', () => {
+    // CSS Grid drops a display:none item from grid-item generation entirely
+    // (unlike visibility:hidden, which keeps its track) — so auto-placed
+    // children compact one track to the left when a sibling is hidden. That
+    // is exactly what the @container query below did to .sess-acct once
+    // .sess-state vanished at a narrow width: every child after it slid into
+    // the vacated track and .sess-acct was squeezed into .sess-warn's 1rem
+    // track. A test that only checks the @container block's selector would
+    // pass against this bug — pinning every child to its column number is
+    // what actually prevents it, regardless of which sibling gets hidden.
+    const order = [
+      '.sess-lamp', '.sess-open', '.sess-state', '.sess-tally',
+      '.sess-warn', '.sess-acct', '.sess-actions',
+    ];
+    order.forEach((sel, i) => {
+      expect(ruleFor(sel)).toContain(`grid-column: ${i + 1}`);
+    });
+  });
+
   it('drops the STATE word in a narrow container, never the account chip', () => {
     // The old query hid .sess-acct — the session's only visible binding —
     // while keeping a projection identical on every card. Inverted: the lamp
