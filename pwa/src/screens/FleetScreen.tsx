@@ -1,7 +1,8 @@
 // Fleet screen (route `/`) — a thin renderer over the fleet store. Single
-// column of session cards, offline/notice banners, skeletons while the first
-// snapshot is in flight, a friendly first-run block, and a floating "+"
-// within thumb reach that opens the NewSessionSheet.
+// column of project cards, each holding its sessions as compact lines,
+// offline/notice banners, skeletons while the first snapshot is in flight, a
+// friendly first-run block, and a floating "+" within thumb reach that opens
+// the NewSessionSheet.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';

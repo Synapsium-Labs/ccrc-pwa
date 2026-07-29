@@ -89,4 +89,29 @@ describe('the + button', () => {
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByRole('button', { name: /new workspace on demo/i })).toBeDisabled();
   });
+
+  // Ported from the deleted project-group.test.tsx (git show ab11b66) — the
+  // production code carried over unchanged, but without a test here a future
+  // edit to this aria-label or the LOW_HEADROOM threshold regresses silently.
+  it('carries the account into the accessible name, not just the pixels', () => {
+    render(<ProjectCard group={grp()} projected={{ wrapper: 'claude', score: 18 }}
+                        onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo — team·max, 82% free/i }))
+      .toBeInTheDocument();
+  });
+
+  it('flags a landing on an exhausted account', () => {
+    // ccd's rule has no availability filter: with every account pinned it
+    // still returns one, and this is the only warning the user gets.
+    render(<ProjectCard group={grp()} onAddWorkspace={() => {}} onOpen={() => {}}
+                        onActions={() => {}} projected={{ wrapper: 'claude-corp', score: 99 }} />);
+    const note = screen.getByText(/team·shared · 1% free/);
+    expect(note).toHaveAttribute('data-low', 'true');
+  });
+
+  it('does not flag a healthy account', () => {
+    render(<ProjectCard group={grp()} projected={{ wrapper: 'claude', score: 18 }}
+                        onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText(/team·max · 82% free/)).not.toHaveAttribute('data-low');
+  });
 });
