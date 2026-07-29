@@ -150,6 +150,84 @@ describe('the + is icon-only', () => {
   });
 });
 
+describe('status owns the perimeter only for attention', () => {
+  it('never puts busy on the card border', () => {
+    // On a one-session project (9 of 9 live) `group.busy > 0` is the same
+    // predicate the row already renders three times — the lamp's hue, its
+    // glow + breathe, and the word `working` — and green on a frame was being
+    // read as "this is the project I have selected".
+    const { container } = render(
+      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy' })] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).not.toHaveClass('proj-card--busy');
+  });
+
+  it('still puts attention on it', () => {
+    // Control — green before and after. Attention is the one status that asks
+    // the reader to ACT, and with green gone it is the only coloured
+    // perimeter left, so it reads as an exception rather than as wallpaper.
+    const { container } = render(
+      <ProjectCard group={grp({ attention: true, sessions: [sess({ dialogPending: true })] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).toHaveClass('proj-card--attention');
+  });
+
+  it('says what is running inside a folded card as a WORD, not a second dot', () => {
+    // A green ● beside the amber ● would separate the two most opposite
+    // meanings on this screen by hue alone, at 1.06:1 luminance, with no
+    // tempo and no word. ATTENTION IS A MARK, BUSY IS A WORD.
+    render(
+      <ProjectCard collapsed
+                   group={grp({ busy: 2, sessions: [
+                     sess({ status: 'busy' }),
+                     sess({ id: 'demo-still-cove', workspace: 'still-cove', status: 'busy' }),
+                   ] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('2 working')).toBeInTheDocument();
+    // A dot would also duplicate StatusDot's own role=img/"working" name.
+    expect(screen.queryByRole('img', { name: /working/ })).toBeNull();
+  });
+
+  it('leaves the header silent about busy while the rows are visible', () => {
+    // Control — green before and after, and the guard that stops anyone
+    // "improving" the word into an always-on header rollup, re-creating the
+    // exact duplication the green border was deleted for.
+    render(
+      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy' })] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getAllByText('working')).toHaveLength(1);
+  });
+});
+
+describe('a fold must not hide the selection either', () => {
+  it('marks a folded card that holds the selected session', () => {
+    // Selection is a fact about the reader, not about the project, so it
+    // never touches the perimeter — but a fold hides the selected row exactly
+    // as it would hide a pending dialog, so the header carries it (as the
+    // slab, at chip scale) while folded.
+    const { container } = render(
+      <ProjectCard collapsed selectedId="demo-quiet-mesa" group={grp()}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).toHaveAttribute('data-holds-selection');
+  });
+
+  it('does not mark an expanded card — the row itself is showing', () => {
+    // Control.
+    const { container } = render(
+      <ProjectCard selectedId="demo-quiet-mesa" group={grp()}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).not.toHaveAttribute('data-holds-selection');
+  });
+
+  it('does not mark a folded card holding no selected session', () => {
+    // Control.
+    const { container } = render(
+      <ProjectCard collapsed selectedId="other-loud-fjord" group={grp()}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).not.toHaveAttribute('data-holds-selection');
+  });
+});
+
 describe('session count', () => {
   it('is absent when a project holds one — a constant badge says nothing', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
