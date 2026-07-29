@@ -546,6 +546,51 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
   });
 
+  // CDPATH — `export CDPATH=.` is an ordinary .bashrc line, and the guard above
+  // is resolved with `cd`. `rev-parse --git-common-dir` prints a RELATIVE `.git`
+  // from a repo's own checkout — i.e. always for $main — and bash's `cd` searches
+  // a relative operand through CDPATH and PRINTS the directory it landed on. So
+  // the resolution has to opt out of CDPATH, not merely redirect stderr.
+  // Both tests are ONE fixture each away from the two already above; what is new
+  // is only the environment ccd is run in.
+  it('removes a healthy workspace with CDPATH exported', () => {
+    const wt = addOne();
+    // `CDPATH=.` finds `./.git` and echoes it, so $main's side comes back as the
+    // right path TWICE while the worktree's (absolute `--git-common-dir`) side
+    // comes back once: the guard's own comparison fails and ws-rm refuses a
+    // perfectly healthy workspace, offering only "delete the directory by hand".
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`, { CDPATH: '.' });
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(calls()).toEqual([
+      'unsupervise demo-quiet-mesa',
+      'tmux kill-session -t cc-demo-quiet-mesa',
+    ]);
+  });
+
+  it('refuses the squatter even when CDPATH holds a decoy .git', () => {
+    const wt = recreateWithStaleRecord();
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    fs.writeFileSync(path.join(wt, 'PRECIOUS'), 'not ccd’s to remove\n');
+    execFileSync('git', ['-C', wt, 'add', 'PRECIOUS'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
+    // The dangerous direction. Both the squatter and $main answer with a relative
+    // `.git`, so under this CDPATH BOTH resolutions land on the decoy: two wrong
+    // answers that compare EQUAL, the guard passes, and the session is killed and
+    // the unit disabled before `worktree remove` dies — verbatim the kill-then-die
+    // the guard exists to close. Requiring a non-empty $main side does not help;
+    // only never consulting CDPATH does.
+    const decoy = path.join(home, 'cdp');
+    fs.mkdirSync(path.join(decoy, '.git'), { recursive: true });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, { CDPATH: decoy })).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
   it('deletes no branch for a detached HEAD, and still clears the record', () => {
     const wt = addOne();
     execFileSync('git', ['-C', wt, 'checkout', '--detach'], { env: gitEnv() });
