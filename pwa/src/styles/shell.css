@@ -153,8 +153,8 @@
   }
   /* The card→chat view transition would collide on desktop (the tapped card and
      the chat header are both on screen, sharing one view-transition-name); drop
-     it on the sidebar card so the transition never captures a duplicate. */
-  .shell-nav .card-open {
+     it on the sidebar line so the transition never captures a duplicate. */
+  .shell-nav .sess-open {
     view-transition-name: none !important;
   }
 

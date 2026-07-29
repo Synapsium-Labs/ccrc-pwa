@@ -56,8 +56,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Shared element of the card→chat view transition — pairs with the tapped
-     card title (stamped in SessionCard) across the navigation. */
+  /* Shared element of the line→chat view transition — pairs with the tapped
+     session line's label (stamped in SessionLine, .sess-open) across the
+     navigation. */
   view-transition-name: session-title;
 }
 /* ONE wrapping row: status, account, model, effort, branch. It was two fixed
