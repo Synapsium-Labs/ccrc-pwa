@@ -367,8 +367,23 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   [[ "$wt" != "$mainreal" ]] || return 0        # the main checkout is not a workspace
   local slug; slug=$(basename "$wt")
 
+  # Ownership must be settled BEFORE anything prunable is acted on: a stale
+  # registration outside our tree is still someone else's metadata, and
+  # `git worktree prune` on it is exactly the kind of guess this command must
+  # never make. Ours is EXACTLY one level below $wsroot/$project — ws-add
+  # never nests deeper, so anything deeper is a hand-placed or foreign-tool
+  # worktree, not one of ours.
+  local rel="${wt#$wsroot/$project/}"
+  local ours=0
+  [[ "$wt" == "$wsroot/$project/"* && -n "$rel" && "$rel" != */* ]] && ours=1
+
   if (( prunable )); then
-    printf 'stale-meta\t%s\t%s\t-\t-\t%s\n' "$project" "$slug" "$wt"; return 0
+    if (( ours )); then
+      printf 'stale-meta\t%s\t%s\t-\t-\t%s\n' "$project" "$slug" "$wt"
+    else
+      printf 'foreign-stale\t%s\t%s\t-\t-\t%s\n' "$project" "$slug" "$wt"
+    fi
+    return 0
   fi
 
   local bytes age; bytes=$(_ws_gc_bytes "$wt"); age=$(_ws_gc_age "$wt")
@@ -376,7 +391,7 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   # Anything ccd did not create is FOREIGN: reported so it is visible, never
   # pruned. Guessing at another tool's lifecycle is how a reclaimer destroys
   # work it does not understand.
-  if [[ "$wt" != "$wsroot/$project/"* ]]; then
+  if (( ! ours )); then
     printf 'foreign\t%s\t%s\t%s\t%s\t%s\n' "$project" "$slug" "$bytes" "$age" "$wt"; return 0
   fi
 
@@ -439,17 +454,28 @@ _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of ori
 
 # Acts on ONE scanned row. Prints exactly one line per row, whether it acted or
 # not: a silent decline reads as "there was nothing there".
-_ws_gc_prune_row() {   # state project slug path
-  local state="$1" project="$2" slug="$3" p="$4"
+_ws_gc_prune_row() {   # state project slug path already-pruned
+  local state="$1" project="$2" slug="$3" p="$4" already="${5:-0}"
   local main="$PROJECTS_ROOT/$project"
   case "$state" in
     stale-meta)
-      if git -C "$main" worktree prune 2>/dev/null; then
+      if (( already )); then
+        # git worktree prune is repo-wide: the first stale-meta row for this
+        # project already reclaimed every prunable registration in it. Calling
+        # it again would succeed (it is idempotent) and print a SECOND
+        # "reclaimed" line for work that already happened.
+        echo "  covered    stale metadata for $project/$slug — reclaimed with an earlier row in $project"
+      elif git -C "$main" worktree prune 2>/dev/null; then
         echo "  reclaimed  stale metadata for $project/$slug"
       else
         # Metadata, not data — worth saying, not worth failing over.
         echo "  declined   could not prune metadata for $project/$slug"
       fi ;;
+    foreign-stale)
+      # A prunable registration outside our tree is still someone else's
+      # metadata. `git worktree repair` may be the owning tool's only way back
+      # to a temporarily-missing worktree; pruning it here would foreclose that.
+      echo "  declined   $project/$slug is foreign metadata — ccd removes only what it created" ;;
     dead-reg)
       rm -f "$REG/$project-$slug".*
       echo "  reclaimed  dead registry entry $project-$slug" ;;
@@ -519,9 +545,14 @@ cmd_ws_gc() {   # [--prune]
 
   echo
   echo "pruning:"
-  local reclaimed=0 declined=0 out
+  local reclaimed=0 declined=0 out already
+  local -A meta_pruned=()   # projects whose stale metadata this run already reclaimed
   while IFS=$'\t' read -r state project slug bytes age p; do
-    out=$(_ws_gc_prune_row "$state" "$project" "$slug" "$p")
+    already=0
+    if [[ "$state" == stale-meta ]]; then
+      if [[ -n "${meta_pruned[$project]:-}" ]]; then already=1; else meta_pruned[$project]=1; fi
+    fi
+    out=$(_ws_gc_prune_row "$state" "$project" "$slug" "$p" "$already")
     [[ -n "$out" ]] || continue
     echo "$out"
     reclaimed=$(( reclaimed + $(grep -c '^  reclaimed ' <<< "$out") ))

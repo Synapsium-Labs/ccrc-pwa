@@ -324,6 +324,24 @@ describe('ws-rm', () => {
     ]);
   });
 
+  // FINDING 4: ws-rm reads the branch off HEAD live, at removal time — not off
+  // the slug it was created with. A regression that hardcoded `ws/$slug` would
+  // stay green against every other test in this file, since none of them ever
+  // rename first.
+  it('removes the RENAMED branch after ws-rename, leaving no ws/<slug> branch behind', () => {
+    const wt = addOne();
+    sh(`cmd_ws_rename demo-quiet-mesa feat/renamed`);
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(fs.existsSync(wt)).toBe(false);
+    const main = path.join(home, 'projects', 'demo');
+    const renamed = execFileSync('git',
+      ['-C', main, 'branch', '--list', 'feat/renamed'], { encoding: 'utf8' });
+    expect(renamed.trim()).toBe('');
+    const slugBranch = execFileSync('git',
+      ['-C', main, 'branch', '--list', 'ws/quiet-mesa'], { encoding: 'utf8' });
+    expect(slugBranch.trim()).toBe('');
+  });
+
   it('refuses to remove a session that is not a workspace', () => {
     sh(`_reg_set claude2-demo wrapper claude2
         _reg_set claude2-demo project demo

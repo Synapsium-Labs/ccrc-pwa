@@ -92,6 +92,33 @@ describe('_ws_gc_scan', () => {
     expect(states).toEqual(['dead-reg', 'stale-meta']);
   });
 
+  // FINDING 1: ownership must be settled BEFORE a prunable registration is
+  // classified. A foreign worktree whose directory disappeared is still
+  // foreign — its stale git metadata is the owning tool's, and `git worktree
+  // repair` may be its only way back to it. Reported here, never as
+  // stale-meta, so --prune (below) never touches it.
+  it('classifies a foreign worktree whose directory is gone as foreign-stale, not stale-meta', () => {
+    const main = h.makeRepo('demo');
+    const elsewhere = path.join(h.home, '.handoff', 'wt', 'demo-foreign');
+    h.git(main, 'worktree', 'add', '-b', 'handoff/foreign', elsewhere);
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+    const r = find(scan(), 'demo-foreign')!;
+    expect(r.state).toBe('foreign-stale');
+  });
+
+  // FINDING 2: ours is EXACTLY one level below $WORKTREES_ROOT/$project.
+  // ws-add never nests deeper, so a worktree two levels down is a hand-placed
+  // or foreign-tool worktree, not one of ours — orphan would let --prune
+  // remove it and its branch on nothing more than a directory-depth guess.
+  it('classifies a worktree nested more than one level under WORKTREES_ROOT as foreign, not orphan', () => {
+    const main = h.makeRepo('demo');
+    const deep = path.join(h.home, 'worktrees', 'demo', 'sub', 'deep');
+    h.git(main, 'worktree', 'add', '-b', 'ws/deep', deep);
+    const r = find(scan(), 'deep')!;
+    expect(r.state).toBe('foreign');
+    expect(r.path).toBe(deep);
+  });
+
   it('treats a worktree it cannot read as dirty, not as clean', () => {
     // A tree whose git metadata is unreadable produces no `status --porcelain`
     // output. If that were taken as "clean", --prune would delete exactly the
@@ -276,6 +303,38 @@ describe('ws-gc --prune', () => {
     prune();
     const list = h.git(path.join(h.home, 'projects', 'demo'), 'worktree', 'list', '--porcelain');
     expect(list).not.toContain('quiet-mesa');
+  });
+
+  // FINDING 1(b): a foreign worktree's registration must survive --prune even
+  // once its directory is gone — the owning tool's `git worktree repair` path
+  // depends on that registration still being there.
+  it('declines to prune a foreign worktree\'s stale git metadata', () => {
+    const main = h.makeRepo('demo');
+    const elsewhere = path.join(h.home, '.handoff', 'wt', 'demo-foreign');
+    h.git(main, 'worktree', 'add', '-b', 'handoff/foreign', elsewhere);
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+    const out = prune();
+    expect(out).toContain('foreign');
+    const list = h.git(main, 'worktree', 'list', '--porcelain');
+    expect(list).toContain('demo-foreign');
+  });
+
+  // FINDING 3: `git worktree prune` is repo-wide — the first stale-meta row
+  // for a project already reclaims every prunable registration in it. A
+  // second row for the same project must not claim a second reclaim.
+  it('prunes a project\'s stale metadata at most once, even with two stale rows', () => {
+    h.makeRepo('demo');
+    const wtA = addOrphan('demo', 'quiet-mesa');
+    const wtB = addOrphan('demo', 'still-cove');
+    fs.rmSync(wtA, { recursive: true, force: true });
+    fs.rmSync(wtB, { recursive: true, force: true });
+    const out = prune();
+    const m = out.match(/reclaimed (\d+), declined (\d+)/);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe('1');
+    const list = h.git(path.join(h.home, 'projects', 'demo'), 'worktree', 'list', '--porcelain');
+    expect(list).not.toContain('quiet-mesa');
+    expect(list).not.toContain('still-cove');
   });
 
   it('removes a dead registry entry', () => {
