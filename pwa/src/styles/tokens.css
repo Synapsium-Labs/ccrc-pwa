@@ -35,6 +35,8 @@
   --edge-strong: #39403A;
 
   /* Text. "Ink" is warm off-white with the same green cast as the glass. */
+  /* --ink-primary is deliberately also a BACKGROUND: the selected fleet row reverses out
+     (.sess-line--active, fleet.css), filling with this and inking with --bg-page. Not a mistake. */
   --ink-primary:   #ECF0EC;  /* 15.68:1 on surface, 14.32:1 on raised — AAA */
   --ink-secondary: #ADB6AE;  /* 8.67:1 on surface, 7.91:1 on raised */
   --ink-tertiary:  #8B948C;  /* timestamps, meta: 5.77:1 surface, 5.27:1 raised */
@@ -241,6 +243,8 @@
   --edge-subtle: #DDE2DC;
   --edge-strong: #C3CAC2;
 
+  /* Also a BACKGROUND here, same as in dark: .sess-line--active fills with it, inks with
+     --bg-page. The pair flips together, so the inversion is maximal in both themes. */
   --ink-primary:   #1A201B;  /* 16.58:1 on surface, 14.15:1 on raised */
   --ink-secondary: #4E5850;  /* 7.41:1 on surface, 6.32:1 on raised */
   --ink-tertiary:  #5F6962;  /* 5.70:1 on surface, 4.86:1 on raised */
