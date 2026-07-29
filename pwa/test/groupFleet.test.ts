@@ -37,6 +37,33 @@ describe('groupFleet', () => {
     expect(g[0]!.busy).toBe(2);
   });
 
+  it('does not count a member the row itself calls waiting', () => {
+    // SessionLine ranks attention above busy (`busy = !attention && status ===
+    // 'busy'`), so a busy session holding a pending dialog renders the word
+    // `waiting`. `busy` feeds the folded card's WORD, and a word that counts
+    // rows the rows themselves count differently is simply wrong: this group
+    // would have said `working` over one row saying `waiting`.
+    // `dialogPending` is derived server-side from a separate pending-dialog set
+    // (server/src/fleet.ts) with no coupling to `status`, so this is reachable.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', status: 'busy', dialogPending: true }),
+    ]);
+    expect(g).toHaveLength(1);
+    expect(g[0]!.busy).toBe(0);
+    // The MARK is unaffected — attention still fires. Different form, different
+    // predicate, both true of this session.
+    expect(g[0]!.attention).toBe(true);
+  });
+
+  it('counts the merely-busy members alongside a waiting one', () => {
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', status: 'busy', dialogPending: true }),
+      s({ id: 'b', project: 'alpha', status: 'busy' }),
+    ]);
+    expect(g).toHaveLength(1);
+    expect(g[0]!.busy).toBe(1);
+  });
+
   it('sorts within a group by the fleet rule', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', status: 'busy' }),

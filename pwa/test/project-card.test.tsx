@@ -3,7 +3,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
-import type { FleetGroup } from '../src/fleet/groupFleet';
+import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
 import { ProjectCard } from '../src/fleet/ProjectCard';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -186,6 +186,41 @@ describe('status owns the perimeter only for attention', () => {
     expect(screen.getByText('2 working')).toBeInTheDocument();
     // A dot would also duplicate StatusDot's own role=img/"working" name.
     expect(screen.queryByRole('img', { name: /working/ })).toBeNull();
+  });
+
+  // These two build the group with the REAL groupFleet rather than the `grp`
+  // literal: the defect lives in the predicate, so a hand-written `busy: 1`
+  // would pin the bug instead of the rule. Folded and expanded are asserted in
+  // one `it` each, because the defect IS the disagreement between them.
+  it('does not say working over a single row that says waiting', () => {
+    // Found in review. `group.busy` counted `status === 'busy'`, while
+    // SessionLine ranks attention first (`busy = !attention && status ===
+    // 'busy'`). One busy session with a pending dialog therefore rendered
+    // `▸ demo … ● working` folded and `waiting` expanded — the amber "act now"
+    // mark and the word "working" describing the SAME session, which reads as
+    // two sessions in opposite states.
+    const [g] = groupFleet([sess({ status: 'busy', dialogPending: true })]);
+    const { rerender } = render(
+      <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('working')).toBeNull();
+    rerender(<ProjectCard group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+  });
+
+  it('counts only the rows that will say working, not every busy status', () => {
+    // The border never carried a count (a boolean over a count); the word does,
+    // so the number is a claim. Two busy sessions, one of them waiting on the
+    // reader, used to fold to `2 working` over rows reading `waiting | working`.
+    const [g] = groupFleet([
+      sess({ status: 'busy', dialogPending: true }),
+      sess({ id: 'demo-still-cove', workspace: 'still-cove', status: 'busy' }),
+    ]);
+    const { rerender } = render(
+      <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('2 working')).toBeNull();
+    expect(screen.getByText('working')).toBeInTheDocument();
+    rerender(<ProjectCard group={g!} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getAllByText('working')).toHaveLength(1);
   });
 
   it('leaves the header silent about busy while the rows are visible', () => {
