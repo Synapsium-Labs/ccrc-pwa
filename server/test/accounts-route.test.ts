@@ -57,12 +57,12 @@ describe('GET /api/accounts', () => {
     expect(byWrapper['claude']).toEqual({
       wrapper: 'claude', five: 0, seven: 93, ts: t - 120,
       fiveResetAt: t - 60, sevenResetAt: t + 200000,
-      fiveRolledOver: true, sevenRolledOver: false,
+      fiveRolledOver: true, sevenRolledOver: false, disabled: false,
     });
     expect(byWrapper['claude2']).toEqual({
       wrapper: 'claude2', five: 0, seven: 12, ts: t - 60,
       fiveResetAt: t + 9000, sevenResetAt: t + 400000,
-      fiveRolledOver: false, sevenRolledOver: false,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: false,
     });
     // The whole point: two accounts both reading five=0, told apart only by
     // the flag. If the map drops it, these two become indistinguishable.
@@ -114,5 +114,17 @@ describe('GET /api/accounts', () => {
 
     const accounts = await getAccounts(home);
     expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude2', 'claude-corp', 'gpt']);
+  });
+
+  // The handler rebuilds each AccountUsage field by field, so a field it forgets
+  // to copy is a silent wire loss, not a type error — which is this whole file's
+  // reason to exist. `disabled` is exactly that shape of field.
+  it('carries the disabled flag onto the wire', async () => {
+    const home = seedLimits({ gpt: { five: 1, seven: 1 }, claude: { five: 2, seven: 3 } });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
+    const accounts = await getAccounts(home);
+    expect(accounts.find((a) => a.wrapper === 'gpt')!.disabled).toBe(true);
+    expect(accounts.find((a) => a.wrapper === 'claude')!.disabled).toBe(false);
   });
 });

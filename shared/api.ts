@@ -65,6 +65,7 @@ export interface AccountUsage {
   sevenResetAt: number | null;  // epoch seconds the 7d window resets
   fiveRolledOver: boolean;      // the 5h window reset; the 0 above is inferred, not measured
   sevenRolledOver: boolean;     // the 7d window reset; the 0 above is inferred, not measured
+  disabled: boolean;            // ccd's kill-switch for this lane is on
 }
 
 /** The account a new workspace would land on, projected server-side.

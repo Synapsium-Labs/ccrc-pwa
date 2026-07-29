@@ -410,7 +410,7 @@ describe('AccountsStrip', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
       accounts: [
         // gpt has NO active session, yet still shows — telemetry-driven.
-        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false },
+        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false },
       ],
       // gpt is not home-able, so the projection names an Anthropic account
       // regardless of what telemetry exists — see limits.ts HOME_ABLE.

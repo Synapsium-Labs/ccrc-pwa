@@ -52,11 +52,16 @@ export function AccountsStrip(): ReactNode {
   }, []);
 
   if (!accounts || accounts.length === 0) return null;
+  // `disabled` is optional on the wire in the sense that an older server omits
+  // it — `a.disabled === true` treats that as enabled, so the PWA never needs
+  // a server upgrade to render.
+  const live = accounts.filter((a) => a.disabled !== true);
+  if (live.length === 0) return null;
   const nowSec = Math.floor(now / 1000);
 
   return (
     <div className="accounts-strip" role="group" aria-label="Account usage">
-      {accounts.map((a) => (
+      {live.map((a) => (
         <div key={a.wrapper} className="account-gauge">
           <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>
             {accountLabel(a.wrapper)}

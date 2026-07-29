@@ -80,9 +80,13 @@ describe('actions', () => {
   it('restarts through api.ensure', async () => {
     render(<SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /restart/i }));
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(0));
-    const call = vi.mocked(fetch).mock.calls[0]!;
-    expect(String(call[0])).toContain('demo-quiet-mesa');
+    // SwapSheet is mounted (hidden) alongside every SessionActionsSheet and
+    // polls /api/accounts on its own effect (useDisabledWrappers), so the
+    // restart call is no longer necessarily the first fetch recorded — find
+    // it by the id it must carry, rather than assume its position.
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('demo-quiet-mesa'))).toBe(true),
+    );
   });
 
   // api.ensure kept its id assertion when SessionCard's tests were dropped;
@@ -91,9 +95,11 @@ describe('actions', () => {
   it('sends the session id to api.workspaceRemove', async () => {
     render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /remove workspace/i }));
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(0));
-    const call = vi.mocked(fetch).mock.calls[0]!;
-    expect(String(call[0])).toContain('demo-quiet-mesa');
+    // Same reason as the restart test above: the hidden SwapSheet's own
+    // /api/accounts poll can land first.
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('demo-quiet-mesa'))).toBe(true),
+    );
   });
 
   // THE regression this project has shipped twice. The server answers

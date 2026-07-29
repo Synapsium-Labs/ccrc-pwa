@@ -7,13 +7,13 @@
 // dialog stream).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { FleetSession } from '../../shared/api';
+import type { AccountUsage, FleetSession } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { api, ApiError } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
-import { SwapSheet } from '../src/fleet/SwapSheet';
+import { SwapSheet, pickableWrappers } from '../src/fleet/SwapSheet';
 import { SessionScreen } from '../src/screens/SessionScreen';
 
 afterEach(() => {
@@ -71,6 +71,28 @@ const makeFleet = (): FleetStore => {
     });
   });
   return store;
+};
+
+/** Fleet store seeded with exactly the given sessions — for SwapSheet cases
+ *  that need a specific (or empty) fleet rather than makeFleet()'s fixed pair. */
+const storeWith = (sessions: FleetSession[]): FleetStore => {
+  const store = createFleetStore({ makeSocket: fakeSocket });
+  act(() => { store.setState({ conn: 'open', sessions }); });
+  return store;
+};
+
+const acct = (over: Partial<AccountUsage>): AccountUsage => ({
+  wrapper: 'claude', five: 0, seven: 0, ts: null,
+  fiveResetAt: null, sevenResetAt: null,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, ...over,
+});
+
+/** Stubs GET /api/accounts — the endpoint useDisabledWrappers polls. */
+const stubAccounts = (accounts: AccountUsage[]): void => {
+  vi.spyOn(api, 'accounts').mockResolvedValue({
+    accounts,
+    projected: { wrapper: 'claude', score: 0 },
+  });
 };
 
 const PROJECTS = {
@@ -209,6 +231,24 @@ describe('SwapSheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move' }));
     expect(swap).toHaveBeenCalledWith('claude:OpenClawHetzner', 'claude2');
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it('excludes a disabled account from the swap picker', () => {
+    // The bug a display-only fix leaves behind: the strip stops showing gpt
+    // while the picker still offers it as a swap target.
+    expect(pickableWrappers([], ['gpt'])).not.toContain('gpt');
+  });
+
+  it('keeps every account when none is disabled', () => {
+    expect(pickableWrappers([], [])).toEqual(['claude', 'claude2', 'claude-corp', 'gpt']);
+  });
+
+  it('does not offer a disabled account in the rendered picker', async () => {
+    stubAccounts([acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', disabled: true })]);
+    render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo' }}
+                      open onClose={() => {}} fleet={storeWith([])} />);
+    expect(await screen.findByText('alt·max')).toBeInTheDocument();  // picker rendered
+    expect(screen.queryByText('gpt')).not.toBeInTheDocument();
   });
 });
 
