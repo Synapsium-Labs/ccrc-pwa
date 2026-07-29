@@ -16,6 +16,7 @@ import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
+import { sessionLabel } from '../fleet/sessionLabel';
 import './chat.css';
 
 export interface SessionHeaderProps {
@@ -125,9 +126,10 @@ export function SessionHeader({
           : '';
   const variant = attention ? 'attention' : busy ? 'busy' : st === 'dead' ? 'dead' : 'idle';
 
-  // Show the clean project name, not Claude Code's auto-derived session name
-  // (e.g. "custom-tools-91"), which reads as noise.
+  // The project is the ground; the second crumb is this particular workspace.
+  // Without it, two workspaces of one project produce two identical headers.
   const title = session ? session.project : (fallback?.title ?? '…');
+  const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
 
   // Model / effort / ultracode / branch — read from the pane statusline the
@@ -144,7 +146,17 @@ export function SessionHeader({
         ‹
       </button>
       <div className="chat-title-wrap">
-        <h1 className="chat-title">{title}</h1>
+        <h1 className="chat-title">
+          {title}
+          {crumb !== null && (
+            <>
+              <span className="chat-crumb-sep" aria-hidden="true">
+                ›
+              </span>
+              <span className="chat-crumb">{crumb}</span>
+            </>
+          )}
+        </h1>
         <div className="chat-meta">
           {dot !== null && (
             <>

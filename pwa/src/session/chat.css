@@ -61,6 +61,15 @@
      navigation. */
   view-transition-name: session-title;
 }
+/* The workspace crumb is secondary to the project: same line, lighter ink,
+   and it truncates first when the header is tight. */
+.chat-crumb-sep { margin: 0 var(--sp-1); color: var(--ink-tertiary); }
+.chat-crumb {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-regular);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* ONE wrapping row: status, account, model, effort, branch. It was two fixed
    rows, which spent a line of chat height on every screen to say what fits
    comfortably on one. Narrow screens wrap it rather than reintroducing the row. */

@@ -22,6 +22,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import type { FleetSession, SessionStatus } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
+import { sessionLabel } from './sessionLabel';
 import './fleet.css';
 
 /** Routing policy calls a window critical above this. */
@@ -49,12 +50,7 @@ export function SessionLine({
   const dotStatus: SessionStatus | 'dialog' = dead ? 'dead' : attention ? 'dialog' : session.status;
   const state = dead ? 'exited' : attention ? 'waiting' : busy ? 'working' : 'idle';
 
-  // Spec order: name ?? branch ?? workspace ?? id. Branch outranks the slug
-  // because Phase 2's PR flow renames the branch to something descriptive while
-  // `workspace` keeps the slug it was born with — slug-first would pin the line
-  // to `quiet-mesa` forever. The `id` tail keeps the rule total for legacy rows,
-  // which have no workspace.
-  const label = session.name ?? session.branch ?? session.workspace ?? session.id;
+  const label = sessionLabel(session);
 
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;

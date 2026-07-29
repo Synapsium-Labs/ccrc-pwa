@@ -221,6 +221,45 @@ describe('SessionScreen interrupt wiring', () => {
 
 // — keyboard discipline —
 
+describe('breadcrumb', () => {
+  it('names the workspace beside the project', () => {
+    // The header's branch metachip (session/SessionHeader.tsx's `.chat-meta`)
+    // already renders this session's raw branch text, so a bare getByText for
+    // 'ws/quiet-basin' is ambiguous once the crumb exists too — scope to the
+    // crumb span, which is what this test is actually about.
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'custom-tools', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
+    }) })} />);
+    expect(screen.getByText('custom-tools')).toBeInTheDocument();
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+  });
+
+  it('distinguishes two workspaces of one project — the whole point', () => {
+    // Same ambiguity as above: the branch metachip duplicates the crumb text,
+    // so assert against the crumb element specifically.
+    const { container, unmount } = render(<SessionHeader {...props({ session: fleetSession({
+      id: 'a', project: 'demo', workspace: 'quiet-basin', branch: 'ws/quiet-basin' }) })} />);
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
+    unmount();
+    const { container: container2 } = render(<SessionHeader {...props({ session: fleetSession({
+      id: 'b', project: 'demo', workspace: 'still-cove', branch: 'ws/still-cove' }) })} />);
+    expect(container2.querySelector('.chat-crumb')).toHaveTextContent('ws/still-cove');
+  });
+
+  it('shows the project alone for a main checkout', () => {
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: null, name: null, branch: null, id: 'demo' }) })} />);
+    expect(screen.getByText('demo')).toBeInTheDocument();
+    expect(container.querySelector('.chat-crumb')).toBeNull();
+  });
+
+  it('prefers a chosen name over the branch, as the fleet line does', () => {
+    render(<SessionHeader {...props({ session: fleetSession({
+      project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
+    expect(screen.getByText('refactor-auth')).toBeInTheDocument();
+  });
+});
+
 describe('useKeyboardInsets', () => {
   function Probe(): ReactNode {
     return <div data-testid="inset">{useKeyboardInsets()}</div>;
