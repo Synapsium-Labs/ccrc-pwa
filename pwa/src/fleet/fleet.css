@@ -560,7 +560,107 @@
   border-radius: var(--r-md);
 }
 
-.sess-line--active { background: var(--bg-raised); }
+/* ── SELECTION — reverse video ────────────────────────────────────
+   Selection takes the two loudest channels a row has — the fill and the
+   POLARITY of its ink — and status is evicted from both. It cannot be
+   chromatic here: --accent and --status-busy are the same hex (#45D67E,
+   tokens.css) and the four account hues own the cool half of the wheel, so
+   any coloured selection on THIS screen is a status or identity collision by
+   construction. Polarity is the one channel status does not use and cannot
+   use, and it reads in every vision type and in greyscale.
+   The old signal was --bg-raised on --bg-surface: 1.10:1 dark / 1.17:1 light
+   — less than the hairline that merely separates one card from the next
+   (1.25 / 1.31), and the same fill the ··· button already wears on every row.
+   The new one is 15.68:1 dark / 16.58:1 light.
+   Desktop-only by construction: shell.css hides .shell-nav below 900px once a
+   session is open, so no phone ever renders a selected row. */
+.sess-line--active {
+  background: var(--ink-primary);
+  color: var(--bg-page);               /* 16.94:1 dark / 15.26:1 light */
+}
+
+/* .sess-open is color: inherit, so the label inherits the flip. Weight is the
+   second, non-colour channel. */
+.sess-line--active .sess-label { font-weight: var(--weight-semibold); }
+
+/* The meta line goes achromatic. --status-*-text and the account hues are
+   tuned for --bg-surface and die on the slab (busy-text 1.47:1 dark / 2.61:1
+   light; acct claude 1.46 / 2.42). The SEMANTICS survive: the state is still
+   the word working/waiting/exited, ⚠ is still a shape, the account is still
+   its mono name (tokens.css: "colour is the secondary cue"), and the status
+   hue survives in the lamp two cells left. --edge-strong rather than
+   --bg-raised: it flips polarity with the pair (#39403A dark, #C3CAC2 light)
+   and lands at 9.27:1 / 9.91:1, which keeps a REAL ink step under the 16.94:1
+   label instead of two maximal inks pretending to be a hierarchy. */
+.sess-line--active .sess-meta,
+.sess-line--active .sess-state,
+.sess-line--active .sess-tally,
+.sess-line--active .sess-warn,
+.sess-line--active .sess-acct,
+.sess-line--active .sess-acct-away,
+.sess-line--active .sess-meta > *:not(:first-child)::before {
+  color: var(--edge-strong);
+}
+
+/* The lamp keeps its hue by keeping its floor. --lamp-size (18px) has sat in
+   tokens.css since day one, documented as exactly this ("status-dot lamp
+   bezel: --bg-well floor") and used nowhere. The plate is what makes every dot
+   on this row sit on --bg-well — the one background design/contrast-check.mjs
+   already verifies all four dots against at 3:1 in BOTH themes (dark 10.67 /
+   11.20 / 5.31 / 6.08; light 4.10 / 4.64 / 3.83 / 3.15). Without it the
+   dark-theme dots die on the near-white slab (busy 1.63, attention 1.55).
+   Absolutely positioned so it costs the first grid column nothing: widening
+   .sess-lamp would push this row's label ~10px right of every sibling's and
+   break the shared left edge. At 18px centred on an 8px dot it overhangs 5px
+   per side into the row's own 8px padding and 8px gap — no reflow, no tap
+   target moves. */
+.sess-line--active .sess-lamp { position: relative; }
+.sess-line--active .sess-lamp::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--lamp-size);
+  height: var(--lamp-size);
+  margin: calc(var(--lamp-size) / -2) 0 0 calc(var(--lamp-size) / -2);
+  border-radius: var(--r-full);
+  background: var(--bg-well);
+}
+/* The plate is positioned; without this it paints over the unpositioned dot. */
+.sess-line--active .sess-lamp > .dot { position: relative; }
+
+/* The ··· keeps its 32×32 box, hairline and tap overlay — it flips polarity
+   with the row instead of dissolving into it. Its normal --bg-raised fill is
+   14.32:1 against the slab, i.e. a bright chip punched into the bar, the
+   inverse of its shipped identity. Re-grounding to --bg-page keeps the matched
+   pair with .proj-card-add intact in form (glyph 9.36:1 dark / 6.81:1 light on
+   that fill). The hairline stays exempt as a hairline, exactly as
+   --edge-subtle on --bg-raised is. */
+.sess-line--active .sess-actions {
+  background: var(--bg-page);
+  border-color: var(--edge-strong);
+  color: var(--ink-secondary);
+}
+
+/* base.css draws :focus-visible in --accent, which measures 1.63:1 on the dark
+   slab — an invisible ring on exactly the row most likely to hold focus.
+   Colour only, plus a 1px offset so the ring's outer edge lands 3px out,
+   inside the row's own 4px padding, instead of flush with the slab's edge
+   where subpixel rounding can drop 1px onto --bg-surface. */
+.sess-line--active :focus-visible {
+  outline-color: var(--bg-page);
+  outline-offset: 1px;
+}
+
+/* Forced colours flatten fill AND ink to Canvas/CanvasText: the polarity
+   channel does not exist there, and the row would be left with font-weight
+   alone. An inset border is the channel that survives. */
+@media (forced-colors: active) {
+  .sess-line--active {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+}
 
 /* The dot must sit on the workspace NAME's own line, not the row's centre:
    .sess-line centres everything on the full two-line ~52px box, but the
@@ -734,7 +834,15 @@
   min-width: 0;
 }
 
-.proj-card--busy { border-color: var(--status-busy-text); }
+/* .proj-card--busy is DELETED. Green on the perimeter is what was being read
+   as "selected project", and on a one-session project (9 of 9 live)
+   `group.busy > 0` is the same predicate the row already renders three times:
+   the lamp's hue, its glow + breathe, and the word "working".
+   Amber STAYS, byte for byte. Attention is the only status that asks the
+   reader to act and the one a fold must never hide; with green gone it is the
+   only coloured perimeter on the screen, so it reads as an exception rather
+   than as wallpaper (it fires on 0 of 9 live cards). Selection never touches a
+   perimeter under this design, so the two can never contend for it. */
 .proj-card--attention { border-color: var(--status-attention-text); }
 
 .proj-card-head {
@@ -783,6 +891,34 @@
 }
 
 .proj-card-attn { color: var(--status-attention-text); }
+
+/* The one thing the green perimeter said that a row cannot: something is
+   running inside a FOLDED card. It comes back as a WORD, never a second dot.
+   A green ● beside the amber ● would separate the two most opposite meanings
+   on this screen by hue alone, at 1.06:1 luminance in dark and 1.07:1 in
+   light, with no tempo (neither glyph is a .dot, so neither breathes or
+   pulses) and no word — unreadable in greyscale, under deuteranopia, and under
+   prefers-reduced-motion. The rule instead: ATTENTION IS A MARK, BUSY IS A
+   WORD. Different form, so the distinction survives with no colour at all.
+   --status-busy-text / --bg-surface is an already-gated pair (10.70:1 dark,
+   6.34:1 light). */
+.proj-card-busy {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--status-busy-text);
+}
+
+/* A fold hides the selected row exactly as it would hide a pending dialog, so
+   the card name wears the slab at chip scale — one idiom at two scales, so
+   "inverted = the one you are in" reads the same on a row and on a folded
+   card. Costs 8px of a nowrap+ellipsis name, on one card, only while folded. */
+.proj-card[data-holds-selection] .proj-card-name {
+  background: var(--ink-primary);
+  color: var(--bg-page);
+  border-radius: var(--r-sm);
+  padding: 0 var(--sp-1);
+}
 
 /* Pinned account — mono like every other machine value on this screen, and
    coloured by account so the card and its lines share one identity language.

@@ -56,12 +56,25 @@ export function ProjectCard({
     ? `New workspace on ${group.project} — ${accountLabel(projected.wrapper)}, ${headroom}% free`
     : `New workspace on ${group.project}`;
 
-  const cardClass =
-    'proj-card' +
-    (group.attention ? ' proj-card--attention' : group.busy > 0 ? ' proj-card--busy' : '');
+  // Status never owns the card's perimeter except for attention (the one state
+  // that asks the reader to ACT). Busy lost it: on a one-session project the
+  // rollup was a strict duplicate of the row's own lamp + word, and green on a
+  // frame was being read as "selected".
+  const cardClass = 'proj-card' + (group.attention ? ' proj-card--attention' : '');
+
+  // Selection is a fact about the reader, not about the project, so it never
+  // touches the perimeter — but a fold can hide it exactly as it can hide a
+  // pending dialog, so the header carries it (as the slab, at chip scale)
+  // while folded. This is the only place the card itself reads selectedId.
+  const holdsSelection =
+    collapsed && selectedId !== null && group.sessions.some((s) => s.id === selectedId);
 
   return (
-    <section className={cardClass} data-collapsed={collapsed || undefined}>
+    <section
+      className={cardClass}
+      data-collapsed={collapsed || undefined}
+      data-holds-selection={holdsSelection || undefined}
+    >
       <div className="proj-card-head">
         <button
           type="button"
@@ -96,6 +109,16 @@ export function ProjectCard({
           {group.attention && (
             <span className="proj-card-attn" aria-label="waiting on you" role="img">
               ●
+            </span>
+          )}
+          {/* Attention is an interrupt and shows folded or not; busy is ambient
+              and shows only when the fold has hidden the rows that carry it.
+              A WORD, never a second dot — two ● glyphs differing only in hue
+              sit at 1.06:1 luminance and would make "quietly working, ignore"
+              and "blocked, waiting on you" indistinguishable in greyscale. */}
+          {collapsed && group.busy > 0 && (
+            <span className="proj-card-busy">
+              {group.busy > 1 ? `${group.busy} working` : 'working'}
             </span>
           )}
         </button>

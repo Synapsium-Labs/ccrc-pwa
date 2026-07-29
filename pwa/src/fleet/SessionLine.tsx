@@ -73,9 +73,15 @@ export function SessionLine({
 
   // Identity stays in the name; a dead line's account drains to gray.
   const acctVar = accountColorVar(session.wrapper);
-  const acctStyle: CSSProperties = dead
-    ? { color: 'var(--ink-secondary)' }
-    : { color: `var(${acctVar})` };
+  // Inline styles beat every selector short of !important, so the account hue
+  // has to be dropped HERE on the selected row: .sess-line--active's achromatic
+  // override could never win against it, and the hue measures 1.46:1 on the
+  // dark slab. The account survives as its mono name.
+  const acctStyle: CSSProperties | undefined = selected
+    ? undefined
+    : dead
+      ? { color: 'var(--ink-secondary)' }
+      : { color: `var(${acctVar})` };
 
   // Running somewhere other than its pinned account — ccd's _auto_swap_check
   // moved it when `home` crossed the swap threshold. Dead sessions are exempt:
@@ -88,7 +94,16 @@ export function SessionLine({
         <StatusDot status={dotStatus} />
       </span>
 
-      <button ref={labelRef} type="button" className="sess-open" onClick={open}>
+      {/* Selection reached nothing but a className before this: there is no
+          other aria-current in src. The row navigates to /s/<id>, so `page`
+          is the correct token — this is not a listbox option. */}
+      <button
+        ref={labelRef}
+        type="button"
+        className="sess-open"
+        aria-current={selected ? 'page' : undefined}
+        onClick={open}
+      >
         <span className="sess-label">{label}</span>
 
         {/* Second line: a quiet flex row, not a grid track — a missing cell
