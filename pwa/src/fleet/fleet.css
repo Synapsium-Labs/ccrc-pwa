@@ -892,3 +892,74 @@
   font-size: var(--text-xs);
   color: var(--ink-secondary);
 }
+
+/* ── project card ─────────────────────────────────────────────────
+   The card is the project, at every session count. */
+.proj-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+}
+
+.proj-card--busy { border-color: var(--status-busy-text); }
+.proj-card--attention { border-color: var(--status-attention-text); }
+
+.proj-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.proj-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.proj-card-chevron { color: var(--ink-secondary); }
+
+.proj-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.proj-card-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+}
+
+.proj-card-attn { color: var(--status-attention-text); }
+
+.proj-card-add {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 44px;
+  padding: 0 var(--sp-2);
+  background: none;
+  border: 0;
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+
+.proj-card-body {
+  display: flex;
+  flex-direction: column;
+}
