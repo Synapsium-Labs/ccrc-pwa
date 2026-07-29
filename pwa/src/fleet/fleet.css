@@ -534,17 +534,6 @@
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
 
-/* Where this workspace will land, and how much room is left there — said
-   BEFORE the tap. Ink-tertiary on the page ground until the projected account
-   is near its ceiling, at which point it takes the attention hue: a workspace
-   landing on an exhausted account looks exactly like a stalled one otherwise.
-   Both pairs are gated by design/contrast-check.mjs. */
-.proj-add-acct {
-  font-size: var(--text-2xs); color: var(--ink-tertiary);
-  white-space: nowrap; font-variant-numeric: tabular-nums;
-}
-.proj-add-acct[data-low] { color: var(--status-attention-text); }
-
 /* ── session line ─────────────────────────────────────────────────
    One session inside a project card. Grid rather than flex so the columns
    line up across sibling rows: a ragged right edge is what makes a list of
@@ -713,7 +702,6 @@
 .proj-card-add {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
   min-height: 44px;
   padding: 0 var(--sp-2);
   background: none;

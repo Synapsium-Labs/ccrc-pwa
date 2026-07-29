@@ -76,9 +76,12 @@ describe('contrast gate', () => {
   // Same omission as the ask sheet's two pairs above: live in the CSS,
   // invisible to the gate. The dot (now .proj-card-attn, on a card surface —
   // kept here as a defensive floor on the raw hue/page combination) is a
-  // glyph at 3:1; the projected-account line (.proj-add-acct[data-low]) is
-  // 11px text at 4.5, which is exactly why it takes --status-attention-TEXT —
-  // LIGHT's dot hue reads 3.58 on the page and would fail the body threshold.
+  // glyph at 3:1; the projected-account line (.proj-add-acct[data-low], now
+  // deleted — ccrc/fleet-polish Task 4 dropped the visible headroom flag
+  // entirely) was 11px text at 4.5, which is exactly why it took
+  // --status-attention-TEXT — LIGHT's dot hue reads 3.58 on the page and
+  // would fail the body threshold. Both pairs stay as defensive floors, same
+  // rationale as the dot/page pair.
   it.each([
     ['DARK  attention dot / page', 3],
     ['LIGHT attention dot / page', 3],

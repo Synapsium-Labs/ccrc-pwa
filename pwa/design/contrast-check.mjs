@@ -88,10 +88,15 @@ const pairs = (T, name) => [
   // page — no card ground, same glyph-at-3:1 shape — should find the gate
   // already watching rather than silently uncovered.
   [`${name} attention dot / page (UI 3:1)`, T.att, T.page, 3],
-  // The `+` affordance's projected-account line when the landing account is
-  // near its ceiling (.proj-add-acct[data-low]). 11px, so body text at 4.5 —
-  // which is why it takes attention-TEXT and not the dot hue: LIGHT's dot
-  // (#B27400) reads 3.58 here and would fail this threshold.
+  // Originally the `+` affordance's projected-account line when the landing
+  // account was near its ceiling (.proj-add-acct[data-low], 11px body text at
+  // 4.5 — which is why it took attention-TEXT and not the dot hue: LIGHT's
+  // dot (#B27400) reads 3.58 here and would fail this threshold). That element
+  // is gone (ccrc/fleet-polish Task 4 dropped the visible headroom flag
+  // entirely), but this pair is kept for the same reason as the dot/page pair
+  // above: a defensive floor on the raw attention-text/page combination that
+  // test/contrast.test.ts still pins, so any future text that lands directly
+  // on the page at this size/hue finds the gate already watching.
   [`${name} attention-text / page`, T.attText, T.page, 4.5],
   // The chat header's .status-line--dead and (this branch) the fleet row's
   // .sess-warn critical-limit glyph both take dead-text on a surface ground.
