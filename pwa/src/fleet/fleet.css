@@ -68,6 +68,8 @@
 .fleet-list {
   display: grid;
   gap: var(--sp-3);
+  container-type: inline-size;
+  container-name: fleetlist;
 }
 /* Offline / cold-start hydration: last-known cards stay readable, just
    visibly stale. (The connecting case only ever shows real cards — the
@@ -860,8 +862,10 @@
   cursor: pointer;
 }
 
-/* The desktop sidebar is narrow. The account chip is the first thing to go;
-   the dot, the label and the ··· are not negotiable. */
-@media (max-width: 1100px) and (min-width: 900px) {
+/* The account chip is the first thing to drop when the row runs out of
+   room — the desktop sidebar is clamp(300px, 25vw, 380px), so it is narrow
+   at every viewport, and a phone is narrower still. Keyed on the container
+   rather than the viewport because the two do not correlate here. */
+@container fleetlist (max-width: 420px) {
   .sess-acct { display: none; }
 }
