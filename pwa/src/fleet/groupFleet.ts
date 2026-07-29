@@ -7,6 +7,12 @@ export interface FleetGroup {
   /** Any member is waiting on you. A collapsed header wears this, so folding a
    *  project away can never hide the one thing this screen exists to surface. */
   attention: boolean;
+  /** How many members a row would render the word `working` for. Not "how many
+   *  hold status: 'busy'" — SessionLine ranks attention first
+   *  (`busy = !attention && status === 'busy'`), so a busy session with a
+   *  pending dialog reads `waiting`. This count is rendered as a WORD on a
+   *  folded card, so it is a claim about what the hidden rows say; counting a
+   *  waiting session here makes the head contradict them. */
   busy: number;
   /** The account every session in this project calls home, or null when they
    *  disagree. Pinning is per session (`ccd prefer <id> <wrapper>`), so a
@@ -42,7 +48,10 @@ export function groupFleet(sessions: FleetSession[]): FleetGroup[] {
       project,
       sessions: members,
       attention: members.some((m) => m.status !== 'dead' && m.dialogPending),
-      busy: members.filter((m) => m.status === 'busy').length,
+      // Same predicate SessionLine renders, attention-first — see the field's
+      // doc. Dead sessions need no clause: `dead` and `busy` are exclusive
+      // statuses, which is also why `attention` needs its explicit one.
+      busy: members.filter((m) => m.status === 'busy' && !m.dialogPending).length,
       pin,
     });
   }
