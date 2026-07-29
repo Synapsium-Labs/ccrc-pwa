@@ -5,38 +5,19 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
+import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+let h: CcdHarness;
 let home: string;
 
-const sh = (snippet: string, env: NodeJS.ProcessEnv = {}): string =>
-  execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-    { encoding: 'utf8', env: { ...process.env, HOME: home, ...env } }).trim();
+// Thin aliases so the assertions below read as they always did.
+const sh = (s: string, env: NodeJS.ProcessEnv = {}): string => h.sh(s, env);
+const reg = (id: string, field: string): string | null => h.reg(id, field);
+const calls = (): string[] => h.calls();
+const makeRepo = (name: string): string => h.makeRepo(name);
 
-/** Whatever the stubs below recorded, in order. */
-const calls = (): string[] => {
-  const p = path.join(home, 'ccd-calls');
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
-};
-
-beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccd-ws-'));
-  fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-  fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
-  const bin = path.join(home, '.local', 'bin');
-  fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp']) {
-    fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
-  }
-});
-
-afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
-
-const reg = (id: string, field: string): string | null => {
-  const p = path.join(home, '.cc-sessions', `${id}.${field}`);
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
-};
+beforeEach(() => { h = makeCcdHarness('ccrc-ccd-ws-'); home = h.home; });
+afterEach(() => { h.cleanup(); });
 
 describe('test isolation', () => {
   // The harness overrides HOME and nothing else, so HOME is the ONLY isolation
@@ -117,34 +98,6 @@ describe('slug rules', () => {
   });
 });
 
-/** A real git repo with one commit and an origin, so worktree/base logic is
- *  exercised for real rather than mocked. */
-const makeRepo = (name: string): string => {
-  const origin = path.join(home, 'origins', `${name}.git`);
-  const main = path.join(home, 'projects', name);
-  execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-  execFileSync('git', ['init', '-b', 'main', main]);
-  const g = (...a: string[]): void => {
-    execFileSync('git', ['-C', main, ...a], {
-      env: { ...process.env, HOME: home, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
-             GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' },
-    });
-  };
-  fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
-  g('add', 'README.md');
-  g('commit', '-m', 'init');
-  g('remote', 'add', 'origin', origin);
-  g('push', '-u', 'origin', 'main');
-  g('remote', 'set-head', 'origin', '-a');
-  return main;
-};
-
-/** ws-add spawns a session; tmux is not available under test, so stub _spawn
- *  and the systemd call. Everything else runs for real. `tmux` is shadowed too,
- *  unconditionally: nothing in ws-add reaches it today, and this is what keeps
- *  that true if something ever does. */
-const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };`;
-
 describe('ws-add', () => {
   it('creates a worktree on a new branch off origin/HEAD', () => {
     makeRepo('demo');
@@ -153,7 +106,7 @@ describe('ws-add', () => {
     expect(fs.existsSync(path.join(wt, 'README.md'))).toBe(true);
     const branch = execFileSync('git', ['-C', wt, 'rev-parse', '--abbrev-ref', 'HEAD'],
       { encoding: 'utf8' }).trim();
-    expect(branch).toBe('quiet-mesa');
+    expect(branch).toBe('ws/quiet-mesa');
   });
 
   it('registers the workspace with every field the wire needs', () => {
@@ -209,6 +162,45 @@ describe('ws-add', () => {
   });
 });
 
+describe('ws-add branch naming', () => {
+  // The branch is namespaced; the directory and the session id are NOT. A change
+  // that unified them would break the id -> registry lookup, so assert all three.
+  it('creates the branch as ws/<slug> while the directory and id keep the bare slug', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    expect(fs.existsSync(wt)).toBe(true);                       // directory: bare slug
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();      // id: <project>-<slug>
+    const branch = execFileSync('git', ['-C', wt, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { encoding: 'utf8' }).trim();
+    expect(branch).toBe('ws/quiet-mesa');                       // branch: namespaced
+  });
+
+  it('records the branch in the registry so the fleet need not wait for a pane capture', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  // THE live defect. Without --no-track, autoSetupMerge sets origin/main as the
+  // upstream because the start point is a remote-tracking ref, and `git pull` in
+  // the workspace then merges main into the workspace branch.
+  it('leaves the branch with no upstream', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    const upstream = sh(`git -C '${wt}' rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo NONE`);
+    expect(upstream).toBe('NONE');
+    expect(sh(`git -C '${wt}' config --get branch.ws/quiet-mesa.merge || echo EMPTY`)).toBe('EMPTY');
+  });
+
+  it('still reports the branch it created in the success line', () => {
+    makeRepo('demo');
+    const out = sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(out).toContain('branch ws/quiet-mesa');
+  });
+});
+
 describe('_ws_least_loaded', () => {
   it('picks the account with the most headroom, not VALID_WRAPPERS[0]', () => {
     // Same fixture shape _limit_score reads, per ccd-limits.test.ts: {"five":N,"seven":N,"ts":epoch}.
@@ -222,6 +214,56 @@ describe('_ws_least_loaded', () => {
     writeLimits('claude2', 5, 3);        // score 5 — cheapest
     writeLimits('claude-corp', 90, 95);  // score 95 — worst of all
     expect(sh('_ws_least_loaded')).toBe('claude2');
+  });
+});
+
+describe('disk floor', () => {
+  it('reports whole GiB free for a directory that exists', () => {
+    const gb = sh(`_ws_disk_free_gb "$HOME"`);
+    expect(gb).toMatch(/^\d+$/);
+    expect(Number(gb)).toBeGreaterThan(0);
+  });
+
+  it('walks up to the nearest existing parent — WORKTREES_ROOT may not exist yet', () => {
+    // ~/worktrees is created lazily by ws-add, so the floor check runs before it
+    // exists on a fresh box. df on a missing path fails; the helper must not.
+    const gb = sh(`_ws_disk_free_gb "$HOME/worktrees/never/made"`);
+    expect(gb).toMatch(/^\d+$/);
+  });
+
+  it('refuses ws-add below the floor and creates nothing at all', () => {
+    makeRepo('demo');
+    expect(() =>
+      sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`, { CCD_DISK_FLOOR_GB: '999999' })
+    ).toThrow();
+    expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    // The branch must not exist either: a floor check that ran after
+    // `worktree add` would leave a branch behind on every refusal.
+    const branches = execFileSync('git',
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'],
+      { encoding: 'utf8' });
+    expect(branches.trim()).toBe('');
+  });
+
+  it('names the free space and the floor so the refusal is actionable', () => {
+    makeRepo('demo');
+    let stderr = '';
+    try {
+      execFileSync('bash', ['-c', `source "${CCD}"; ${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`],
+        { encoding: 'utf8', env: { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' } });
+    } catch (e) {
+      stderr = String((e as { stderr?: string }).stderr ?? '');
+    }
+    expect(stderr).toContain('999999');
+    expect(stderr).toMatch(/\d+G free/);
+    expect(stderr).toContain('ccd ws-gc');
+  });
+
+  it('proceeds normally at the default floor', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
   });
 });
 
@@ -271,7 +313,7 @@ describe('ws-rm', () => {
     expect(fs.existsSync(wt)).toBe(false);
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     const branches = execFileSync('git',
-      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'],
       { encoding: 'utf8' });
     expect(branches.trim()).toBe('');
     // The kill went to the stub — i.e. it was intercepted, not merely aimed at
@@ -280,6 +322,24 @@ describe('ws-rm', () => {
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
     ]);
+  });
+
+  // FINDING 4: ws-rm reads the branch off HEAD live, at removal time — not off
+  // the slug it was created with. A regression that hardcoded `ws/$slug` would
+  // stay green against every other test in this file, since none of them ever
+  // rename first.
+  it('removes the RENAMED branch after ws-rename, leaving no ws/<slug> branch behind', () => {
+    const wt = addOne();
+    sh(`cmd_ws_rename demo-quiet-mesa feat/renamed`);
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(fs.existsSync(wt)).toBe(false);
+    const main = path.join(home, 'projects', 'demo');
+    const renamed = execFileSync('git',
+      ['-C', main, 'branch', '--list', 'feat/renamed'], { encoding: 'utf8' });
+    expect(renamed.trim()).toBe('');
+    const slugBranch = execFileSync('git',
+      ['-C', main, 'branch', '--list', 'ws/quiet-mesa'], { encoding: 'utf8' });
+    expect(slugBranch.trim()).toBe('');
   });
 
   it('refuses to remove a session that is not a workspace', () => {
@@ -298,7 +358,7 @@ describe('ws-rm', () => {
     expect(fs.existsSync(wt)).toBe(true);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     const branches = execFileSync('git',
-      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'quiet-mesa'],
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'],
       { encoding: 'utf8' });
     expect(branches.trim()).not.toBe('');
     // The refusal says "nothing was touched", so that has to be true. Killing
@@ -340,7 +400,7 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
 
     const main = path.join(home, 'projects', 'demo');
-    const branches = execFileSync('git', ['-C', main, 'branch', '--list', 'quiet-mesa'], { encoding: 'utf8' });
+    const branches = execFileSync('git', ['-C', main, 'branch', '--list', 'ws/quiet-mesa'], { encoding: 'utf8' });
     expect(branches.trim()).not.toBe('');
     const containing = execFileSync('git', ['-C', main, 'branch', '--contains', sha], { encoding: 'utf8' });
     expect(containing).toContain('quiet-mesa');

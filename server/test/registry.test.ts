@@ -44,6 +44,27 @@ describe('readRegistry', () => {
     const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: path.join(home, 'nope') }));
     expect(out).toEqual([]);
   });
+
+  it('reads the branch a workspace was created on', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-mesa', {
+      wrapper: 'claude', project: 'demo',
+      workdir: '/home/x/worktrees/demo/quiet-mesa', uuid: 'c'.repeat(36), started: '1',
+      workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+    });
+    const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(out[0].branch).toBe('ws/quiet-mesa');
+  });
+
+  it('leaves branch null for a main checkout that never had one written', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'claude-demo', {
+      wrapper: 'claude', project: 'demo',
+      workdir: '/data/projects/demo', uuid: 'd'.repeat(36), started: '1',
+    });
+    const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(out[0].branch).toBeNull();
+  });
 });
 
 describe('workspace on the wire', () => {
