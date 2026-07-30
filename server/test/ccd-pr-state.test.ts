@@ -591,6 +591,39 @@ describe('--project', () => {
     expect(out).toHaveLength(1);
   });
 
+  it('applies the id regex to what it read off the directory, not only to argv', () => {
+    // `--session` validates its argv and `--project` validates its own, but the
+    // ids on THIS path come from a directory listing and had every `$REG/$id.*`
+    // path built from them unchecked. The plan's rule is "before any path is
+    // built from an id", with no exception for ids ccd wrote itself: a
+    // filename cannot hold a `/`, so nothing traversable is reachable and every
+    // read here is read-only — this is the rule, applied where it was skipped.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const reg = path.join(h.home, '.cc-sessions');
+    for (const f of ['workspace', 'uuid', 'project']) {
+      fs.writeFileSync(path.join(reg, `de mo.${f}`), f === 'project' ? 'demo' : 'x');
+    }
+    h.ghRows([]);
+    const out = h.sh(`${GH_STUB} cmd_pr_state --project demo`).split('\n').filter(Boolean);
+    expect(out.map((l) => JSON.parse(l).id)).toEqual(['demo-quiet-basin']);
+  });
+
+  it('refuses a registry project it cannot build a path from', () => {
+    // `--session` validates the id it was handed; `$main` is then built from a
+    // registry VALUE that nothing checked. Same class as the id, same regex,
+    // and it `die`s rather than answering, because that is what this verb
+    // already does for every other registry-identity error (`no such session`,
+    // `not a workspace`).
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.project'), '../../etc');
+    const r = h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/bad project/);
+    expect(h.ghPoison()).toEqual([]);            // and it died before any gh call
+  });
+
   it('names the SESSION in a per-session failure, so it cannot poison its siblings', () => {
     // A workspace whose registry lost its `branch` is one broken session, not
     // a broken repo. The server backs a whole PROJECT off on the id-LESS

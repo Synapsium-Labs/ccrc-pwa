@@ -1253,6 +1253,13 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
       # and fails too — an accident of two guards, not one guard doing two jobs.
       [[ -e "$f" ]] || continue
       id=$(basename "$f" .workspace)
+      # The same regex `--session` applies to its argv, applied to what the
+      # directory listing handed back — every `$REG/$id.*` path below is built
+      # from it. The plan's rule is "before any path is built from an id", with
+      # no exception for ids ccd wrote itself; a filename cannot hold a `/` so
+      # nothing traversable is reachable and every read here is read-only, which
+      # makes this the rule rather than a hole being closed.
+      [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || continue
       [[ -f "$REG/$id.uuid" ]] || continue
       [[ "$(_reg_get "$id" project)" == "$arg" ]] || continue
       ids+=("$id")
@@ -1262,6 +1269,12 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 
   local project main repo rows
   project=$(_reg_get "${ids[0]}" project)
+  # A registry VALUE, and `$main` is built from it. `--session` validated the id
+  # it was handed and nothing validated this. `die`, not an answer object,
+  # because a project name ccd cannot build a path from is a registry-IDENTITY
+  # error — the class this verb already dies on (`no such session`, `not a
+  # workspace`) — and it costs the repo's one gh call per sweep to proceed.
+  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project in registry for ${ids[0]}"
   main="$PROJECTS_ROOT/$project"
   repo=$(_gh_repo_slug "$main") || { printf '{"phase":"unknown","reason":"no-remote"}\n'; return 0; }
   # The answer object _gh_pr_list printed IS the output on failure: one repo
