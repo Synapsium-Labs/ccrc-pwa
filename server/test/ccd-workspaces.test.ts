@@ -141,6 +141,39 @@ describe('ws-add', () => {
     expect(excludeOf(main)).toContain('.ccrc/');
   });
 
+  // ...and the environment does not get to redirect that write. The test above
+  // pins the normal path and can only ever pass, because it never runs under a
+  // hostile environment: the line it is the control for could be reverted and it
+  // would stay green. `$common` is resolved from `--git-common-dir`, which
+  // answers with a bare `.git` here (this IS the repo's own checkout), and ccd
+  // then WRITES through it — so the two ways a captured `cd` can prepend its own
+  // print to that path are the two ways this line silently stops ignoring
+  // `.ccrc/` in every worktree of the repo. Both shapes below are red if the
+  // resolution goes back to `$(cd "$main" && cd -- "$(git rev-parse
+  // --git-common-dir)" && pwd -P)`; the second is red for the `CDPATH=`-prefixed
+  // version too, which is why the line asks git instead.
+  it('writes the exclude to the project itself when the environment shadows cd', () => {
+    // Shape 1: a real repository on CDPATH, so bash's own `cd .git` lands there
+    // and prints it. Measured on the unhardened line: `$common` comes back TWO
+    // lines, so `mkdir -p` creates a junk directory whose name ends in a newline
+    // and `.ccrc/` is written inside that — neither repo's exclude gets the line.
+    const decoy = path.join(home, 'cdp');
+    execFileSync('git', ['init', '-b', 'main', decoy]);
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`, { CDPATH: decoy });
+    expect(excludeOf(main)).toContain('.ccrc/');
+    expect(excludeOf(decoy)).not.toContain('.ccrc/');
+
+    // Shape 2: `cd` itself replaced by an exported shell function that echoes.
+    // No assignment on the `cd` line can stop this one — the function is not
+    // bash's cd. Second project so the `grep -qxF` short-circuit above cannot
+    // make this half pass for free.
+    const two = makeRepo('two');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add two`,
+      { 'BASH_FUNC_cd%%': '() { builtin cd "$@" && echo "[cd hook] now in $PWD"; }' });
+    expect(excludeOf(two)).toContain('.ccrc/');
+  });
+
   it('runs .ccrc/workspace.sh with MAIN and WT set', () => {
     const main = makeRepo('demo');
     fs.mkdirSync(path.join(main, '.ccrc'));
