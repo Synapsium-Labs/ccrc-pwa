@@ -751,6 +751,15 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # $main answered rev-parse a moment ago — rc 0 or a clean "no such ref", both
   # of which are answers — so its stash list is readable; the count is the only
   # field whose repository has already been proven healthy.
+  #
+  # Scoped to the `branch` field, NOT to `worktreeHead`: it is the count of
+  # entries whose subject names that branch, and pairing it with any other name
+  # would make the record two things at once. So on a drifted worktree this can
+  # read 0 while `worktreeHead`'s branch holds stashes — which is safe in the one
+  # direction that matters, because `ws-reap` refuses drift (`registry-branch-drift`,
+  # `detached-head`, `branch-missing`) before it ever consults a stash count, and
+  # recomputes the count itself when it does. `worktreeHead` beside it is what
+  # tells a reader which question the number answered.
   stashes=$(_ws_stash_count "$main" "$branch")
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
   pr=$(_reg_get "$id" prnumber); [[ "$pr" =~ ^[0-9]+$ ]] || pr=null
