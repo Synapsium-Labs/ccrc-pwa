@@ -182,6 +182,28 @@ describe('binding', () => {
     expect(o.number).toBeNull();
   });
 
+  it.each([
+    ['a branch name', 'main'],
+    ['a SHORT hex-looking ref, which is why the regex floor is 7', 'abc'],
+  ])('never lets gh hand it %s to resolve as a revision', (_what, ref) => {
+    // `headRefOid` is a GitHub-sourced string and `is_ours` concatenates it into
+    // `<oid>^{commit}` for `cat-file -e` and hands it to `merge-base`. §7 is that
+    // no GitHub-sourced string is ever placed in an argv, and the OID regex is
+    // what enforces it here — without it gh can name ANY revision this
+    // repository can resolve, and a row saying `headRefOid: "main"` would bind
+    // and report merged, because main really is an ancestor of our tip. The
+    // second row is why the floor is 7 and not 1: `abc` is hex, resolvable, and
+    // three characters long.
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    // `main` is already there and already an ancestor of our tip; `abc` is made.
+    if (ref !== 'main') h.git(main, 'branch', ref, tip);
+    expect(h.git(main, 'rev-parse', '--verify', ref)).toMatch(/^[0-9a-f]{40}$/);
+    h.ghRows([mergedRow({ headRefOid: ref })]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.rows[0].ours).toBe(false);
+    expect(o.phase).toBe('none');
+  });
+
   it('refuses a PR on a different branch, however well the rest matches', () => {
     // There is no --head filter on the call: it lists the repo's last 100 PRs
     // and this is what selects ours out of them.

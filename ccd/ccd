@@ -254,12 +254,14 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper
 import json, os, re, subprocess, sys, time
 
 mode = sys.argv[1]
-# `{7,40}` survives mutation and is an EQUIVALENT mutant, disclosed rather than
-# pinned: `{1,40}` accepts every string a real `headRefOid` or `mergeCommit.oid`
-# can be, so no fixture can distinguish them. It bounds a GitHub-sourced string
-# rather than deciding anything — what actually rejects a value is `cat-file -e`
-# in `is_ours`, and `is_merged` reading `mergeCommit.oid` as an oid-SHAPED
-# string is a shape check, never an identity (two PRs can share a merge commit).
+# `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED, and `is_ours` puts the
+# first of them in a git argv. Spec §7: no GitHub-sourced string is ever placed
+# in a prompt, an argv, or a shell — so this is the boundary, not a formality.
+# Both ends are anchored and the floor is 7, and both are pinned: a row saying
+# `headRefOid: "main"` otherwise resolves as a REVISION and binds (main really
+# is an ancestor of our tip), and `{1,40}` would let a three-character hex ref
+# like `abc` do the same. `is_merged` reads `mergeCommit.oid` through it as a
+# SHAPE check only — a merge commit is never an identity, two PRs can share one.
 OID = re.compile(r'^[0-9a-f]{7,40}$')
 
 def rows_in():
@@ -401,9 +403,10 @@ if mode == 'state':
 
     commits = []
     if tip and base:
-        # `--` AFTER the revisions, per Global Constraints. Not exploitable
-        # today — `$base` comes from the registry and always yields a
-        # `..`-bearing operand, so git can only read it as a range — but the
+        # `--` AFTER the revisions, per Global Constraints. SURVIVES mutation by
+        # construction, exactly as the `rev-list` one does: `$base` comes from
+        # the registry and always yields a `..`-bearing operand, so git can only
+        # read it as a range and no fixture can distinguish the two forms. The
         # rule exists because git's own disambiguation is positional, and
         # `git diff --quiet -- A B` silently treats both shas as PATHSPECS
         # (verified: exit 0, where the same call with `--` last exits 1).
@@ -1182,11 +1185,19 @@ _pr_state_one() {   # id main repo rows -> one JSON line
   # resolve has not been measured against anything. _pr_py reads "" as null.
   ahead=""
   if [[ -n "$tip" ]] && git -C "$main" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
+    # `--` after the revisions per Global Constraints, and it SURVIVES mutation
+    # by construction: `$base` comes from the registry and always yields a
+    # `..`-bearing operand, which git can only read as a range, so no fixture can
+    # distinguish the two forms. Followed anyway — git's disambiguation is
+    # positional, and the rule is cheaper than re-deciding it per call site.
     ahead=$(git -C "$main" rev-list --count "$base..refs/heads/$branch" -- 2>/dev/null)
-    # Survives mutation — both revisions were just verified, so rev-list has no
-    # reason to fail here today. Kept because the value is handed to `int(ahead)`
-    # in _pr_py, where a non-numeric string is an uncaught ValueError and this
-    # session's whole line disappears from the sweep's output.
+    # The GUARD and its FALLBACK VALUE both survive mutation, and for the same
+    # reason: both revisions were verified a line ago, so rev-list has no way to
+    # fail here today and nothing can observe which value the guard would have
+    # written. Kept because `int(ahead)` in _pr_py raises on a non-numeric string
+    # and this session's whole line then disappears from the sweep's output; `""`
+    # rather than `0` because an unwritten count is UNMEASURED, which is what the
+    # rest of this function now says, and `0` would say "level with base".
     [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=""
   fi
   # THE ONE READ IN THIS VERB THAT IS ABOUT A DIRECTORY. ccrc asks $main;
@@ -1212,6 +1223,19 @@ _pr_state_one() {   # id main repo rows -> one JSON line
   # silent-empty-stream defect, one task later in the same file. `registered` and
   # the status are read from `$?` on their own lines: `local x=$(cmd)` returns
   # local's status, not the command's.
+  #
+  # Two of the three rungs survive mutation and are kept rather than pinned,
+  # because each is redundant only GIVEN the others and the rule names all three:
+  #   - `registered != 0` — a path whose common dir equals `$main`'s is inside
+  #     `$main`'s repository, and `git status` from anywhere in a worktree
+  #     reports that worktree, so the count is the same with or without this
+  #     rung today. It is the rung the plan's rule names FIRST, and it is the one
+  #     that stops answering if `_ws_common_dir` is ever loosened.
+  #   - `-z "$main_common"` — an unreadable `$main` makes both sides empty and
+  #     therefore equal, which is the fail-OPEN this guard exists to stop; it is
+  #     unreachable only because the tip read above already returned on rc 128.
+  # The `wd_common != main_common` rung is the one that catches the squatter, and
+  # it is pinned.
   local wthead registered wd_common main_common porcelain prc
   dirty=""
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
