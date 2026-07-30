@@ -2,12 +2,12 @@
 // survives restarts, so "has no tool_result" is necessary but nowhere near
 // sufficient — an ask abandoned by a kill stays resultless forever.
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
 import { readPendingAsk, alignAsk } from '../src/transcript/ask.js';
 import type { AskQuestion } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const ASK = (id: string, question = 'Which colour?') => JSON.stringify({
   type: 'assistant', uuid: 'a1', timestamp: '2026-07-26T15:00:00Z',
@@ -33,7 +33,7 @@ const USER_TEXT = JSON.stringify({
 });
 
 const fileWith = (lines: string[]): string => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-ask-'));
+  const dir = mkTmp('ccrc-ask-');
   const f = path.join(dir, 't.jsonl');
   writeFileSync(f, lines.join('\n') + '\n');
   return f;

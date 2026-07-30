@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
@@ -9,6 +8,7 @@ import { localIO } from '../src/io.js';
 import { saveSnapshot, type FleetState } from '../src/fleetstate.js';
 import { testDeps } from './helpers.js';
 import type { FleetSession } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -22,7 +22,7 @@ function remoteDeps(
   fleetState?: FleetState,
   stateCachePath?: string,
 ): Deps {
-  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+  const home = mkTmp('ccrc-');
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote', ...env });
   return { cfg, run: deadRunner, tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath };
 }
@@ -62,7 +62,7 @@ describe('GET /api/fleet/health', () => {
 
 describe('GET /api/fleet — degraded mode', () => {
   it('serves the cached snapshot with stale:true + downSince when disconnected', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'state-cache.json');
     const cachedSessions = [session('claude-Cached')];
     await saveSnapshot(cachedSessions, cachePath);
@@ -76,7 +76,7 @@ describe('GET /api/fleet — degraded mode', () => {
   });
 
   it('falls back to a live assemble (no stale flag) when disconnected but no cache exists yet', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'never-written.json');
     const deps = remoteDeps({}, { connected: false, downSince: Date.now() }, cachePath);
     const app = await buildServer(deps);
@@ -89,7 +89,7 @@ describe('GET /api/fleet — degraded mode', () => {
     // The whole point of the degraded route is that this file survives a server
     // upgrade. What it serves is what the PWA renders, and `archivedAt: undefined`
     // on the wire is `archivedAt !== null` — every workspace reads as archived.
-    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'state-cache.json');
     writeFileSync(cachePath, JSON.stringify({
       savedAt: 1785300000001,
@@ -113,7 +113,7 @@ describe('GET /api/fleet — degraded mode', () => {
   });
 
   it('ignores the cache and assembles live when connected', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'state-cache.json');
     await saveSnapshot([session('claude-Stale')], cachePath);
 

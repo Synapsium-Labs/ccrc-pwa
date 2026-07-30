@@ -7,6 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let isolatedHome: string;
@@ -16,7 +17,7 @@ beforeEach(() => {
   // ccd has file-scope setup (mkdir -p "$REG" with REG="$HOME/.cc-sessions") that
   // runs even when guarded by BASH_SOURCE[0] == $0. The guard only wraps the dispatch case.
   // Use os.tmpdir() to keep temp directories out of the repo.
-  isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccd-home-'));
+  isolatedHome = mkTmp('ccrc-ccd-home-');
 });
 
 afterEach(() => {

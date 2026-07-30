@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { startAgent, type AgentOpts, type RunningAgent } from '../../agent/src/server.js';
 import { connectFleet, type ConnectedFleet, type RemoteFleetConfig } from '../src/remote/client.js';
+import { mkTmp } from './tmpHelpers.js';
 
 /** Test-only helpers for the RemoteFleet client suite — boots a real
  *  in-process ccrc-agent against a tmp fixture $HOME, and connects a real
@@ -13,11 +13,11 @@ export const TOKEN = 'remote-fleet-test-token';
 export interface RemoteFixture { home: string; projectsRoot: string }
 
 export function makeFixture(): RemoteFixture {
-  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-remote-home-'));
+  const home = mkTmp('ccrc-remote-home-');
   for (const dir of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude']) {
     mkdirSync(path.join(home, dir), { recursive: true });
   }
-  const projectsRoot = mkdtempSync(path.join(tmpdir(), 'ccrc-remote-projects-'));
+  const projectsRoot = mkTmp('ccrc-remote-projects-');
   return { home, projectsRoot };
 }
 

@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { readTasks, taskProgress, tasksDir } from '../src/tasks/read.js';
 import { liveSessionStatus } from '../src/livestate.js';
 import { localIO } from '../src/io.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const UUID = '72be9ee2-fe16-4bcc-b60b-0cfc0dc3d199';
 
 /** A config dir with a task dir seeded from `files` (name → raw file body). */
 function seed(files: Record<string, string>): string {
-  const cfg = mkdtempSync(path.join(tmpdir(), 'ccrc-tasks-'));
+  const cfg = mkTmp('ccrc-tasks-');
   const dir = tasksDir(cfg, UUID);
   mkdirSync(dir, { recursive: true });
   for (const [name, body] of Object.entries(files)) writeFileSync(path.join(dir, name), body);
@@ -55,7 +55,7 @@ describe('readTasks', () => {
   });
 
   it('returns [] when the session has no task dir at all', async () => {
-    const cfg = mkdtempSync(path.join(tmpdir(), 'ccrc-tasks-'));
+    const cfg = mkTmp('ccrc-tasks-');
     expect(await readTasks(localIO, cfg, UUID)).toEqual([]);
   });
 });

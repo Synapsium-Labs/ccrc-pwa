@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
@@ -12,6 +11,7 @@ import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { AskQuestion, Dialog } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const ID = 'claude2-MekWarLive';
 const UUID_A = 'a'.repeat(36);
@@ -157,7 +157,7 @@ const streamWith = async (opts: {
   transcript?: string | null;
   transcriptSequence?: readonly (string | null)[];
 }): Promise<{ frames: any[]; askReads: number }> => {
-  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-ask-'));
+  const home = mkTmp('ccrc-ask-');
   seed(home);
   const file = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
   // Scripted content for one poll. Rewriting identical bytes would bump mtime and
@@ -350,7 +350,7 @@ describe('session WS', () => {
   let fileB: string;
 
   beforeEach(async () => {
-    home = mkdtempSync(path.join(tmpdir(), 'ccrc-sws-'));
+    home = mkTmp('ccrc-sws-');
     seed(home);
     fileA = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
     fileB = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_B}.jsonl`);

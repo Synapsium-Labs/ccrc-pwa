@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -8,6 +7,7 @@ import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { listProjects } from '../src/lifecycle.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -33,7 +33,7 @@ async function makeApp(opts: { fail?: boolean; projectsRoot?: string } = {}): Pr
   cfg: CcrcConfig;
   home: string;
 }> {
-  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+  const home = mkTmp('ccrc-');
   seedDefault(home);
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
@@ -96,7 +96,7 @@ describe('lifecycle routes', () => {
     // (claude2-cctest). Stop must target the id's prefix wrapper so ccd recomputes
     // the correct id — using the swapped wrapper would kill a nonexistent session
     // and leave the real one alive.
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'claude2-cctest', {
       wrapper: 'claude',            // swapped to claude…
       project: 'cctest',
@@ -123,7 +123,7 @@ describe('lifecycle routes', () => {
     // `claude-rp-llm` — a DIFFERENT, live session. It would then kill tmux
     // cc-claude-rp-llm and disable claude-session@claude-rp-llm, exit 0, and
     // the PWA would report success while the workspace kept running.
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'rp-llm-quiet-mesa', {
       wrapper: 'claude',
       project: 'rp-llm',
@@ -177,7 +177,7 @@ describe('lifecycle routes', () => {
 
 describe('listProjects', () => {
   it('merges projects-root directories with registry workdirs, deduped by workdir', async () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'ccrc-projects-'));
+    const root = mkTmp('ccrc-projects-');
     mkdirSync(path.join(root, 'alpha'));
     mkdirSync(path.join(root, 'mekwar'));
     mkdirSync(path.join(root, '.hidden'));               // dotfile — skipped

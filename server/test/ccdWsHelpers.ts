@@ -5,7 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
+import { mkTmp } from './tmpHelpers.js';
 
 export const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 
@@ -71,7 +71,7 @@ export interface CcdHarness {
 }
 
 export function makeCcdHarness(prefix: string): CcdHarness {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const home = mkTmp(prefix);
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');

@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
@@ -11,6 +10,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { loadSnapshot } from '../src/fleetstate.js';
 import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -42,7 +42,7 @@ describe('fleet REST + WS', () => {
   let app: FastifyInstance | undefined;
 
   beforeEach(() => {
-    home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    home = mkTmp('ccrc-');
     seedSession(home, 'claude2-MekWarLive', 'claude2');
   });
 
@@ -136,7 +136,7 @@ describe('fleet REST + WS', () => {
   });
 
   it('FleetWatcher persists a snapshot to the state cache on each poll while remote+connected', async () => {
-    const cacheDir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const cacheDir = mkTmp('ccrc-cache-');
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null }, stateCachePath: cachePath };
@@ -150,7 +150,7 @@ describe('fleet REST + WS', () => {
   });
 
   it('does NOT persist a snapshot while remote+disconnected — the cache keeps the last-known-good data', async () => {
-    const cacheDir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const cacheDir = mkTmp('ccrc-cache-');
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = {

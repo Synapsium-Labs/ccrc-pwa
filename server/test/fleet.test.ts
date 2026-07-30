@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet, idHomeWrapper } from '../src/fleet.js';
@@ -8,6 +7,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import type { PrState } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -27,7 +27,7 @@ describe('idHomeWrapper', () => {
 
 describe('assembleFleet', () => {
   it('joins registry, live state, limits, and tmux aliveness', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'claude2-MekWarLive', 'claude2');
     seedSession(home, 'claude-dead-proj', 'claude');
     mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
@@ -59,7 +59,7 @@ describe('assembleFleet', () => {
 
 describe('branch precedence', () => {
   const setup = (): { home: string; run: Runner } => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'demo-quiet-mesa', 'claude', {
       project: 'demo', workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
     });
@@ -90,7 +90,7 @@ describe('branch precedence', () => {
   });
 
   it('is null when neither source has one', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'claude-demo', 'claude');
     const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
@@ -100,7 +100,7 @@ describe('branch precedence', () => {
 
 describe('derived session handles', () => {
   const build = async (live: Record<string, unknown>) => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'claude2-MekWarLive', 'claude2');
     mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
     writeFileSync(
@@ -142,7 +142,7 @@ describe('PR state on the wire', () => {
   it('falls back to the persisted registry values when no sweep has run', async () => {
     // The whole reason the fields are on disk: a server restart must degrade
     // to "merged, last checked 40 minutes ago", never to "no PR".
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'demo-quiet-basin', 'claude');
     seedPr(home, 'demo-quiet-basin', {
       workspace: 'quiet-basin', branch: 'ws/quiet-basin',
@@ -157,7 +157,7 @@ describe('PR state on the wire', () => {
   });
 
   it('gives a workspace that was never checked an unchecked phase, not null', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'demo-still-cove', 'claude');
     seedPr(home, 'demo-still-cove', { workspace: 'still-cove' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
@@ -165,14 +165,14 @@ describe('PR state on the wire', () => {
   });
 
   it('gives a MAIN CHECKOUT no pr object at all — no workspace, no cap', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'claude-demo', 'claude');
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'claude-demo')!.pr).toBeNull();
   });
 
   it('prefers a live swept state over the persisted one', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'demo-quiet-basin', 'claude');
     seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', prphase: 'open', prnumber: '7' });
     const live = new Map<string, PrState>([['demo-quiet-basin', {
@@ -186,7 +186,7 @@ describe('PR state on the wire', () => {
   });
 
   it('carries archivedAt straight through', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'demo-quiet-basin', 'claude');
     seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', archived: '1785300123' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));

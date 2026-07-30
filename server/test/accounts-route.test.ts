@@ -5,18 +5,18 @@
 // strip renders "0%" where it should render "reset". These tests drive the real
 // Fastify handler over a real ~/.cc-limits so a dropped field goes red.
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AccountUsage, ProjectedHome } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 /** The route calls readLimits without a clock, so fixtures live against real now. */
 const now = (): number => Math.floor(Date.now() / 1000);
 
 function seedLimits(files: Record<string, unknown>): string {
-  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-accounts-'));
+  const home = mkTmp('ccrc-accounts-');
   const dir = path.join(home, '.cc-limits');
   mkdirSync(dir, { recursive: true });
   for (const [name, body] of Object.entries(files)) {

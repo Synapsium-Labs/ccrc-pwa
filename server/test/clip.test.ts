@@ -1,15 +1,15 @@
 // Staging, not clipping: the upload lands in ~/.cc-clips/<id>/ and its path is
 // RETURNED. Nothing is typed into the session — that happens once, at send.
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { clipName, clipPath, stageUpload, CLIP_NAME_RE } from '../src/clip.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const ID = 'claude2-MekWarLive';
-const cfgFor = () => loadConfig({ CCRC_HOME: mkdtempSync(path.join(tmpdir(), 'ccrc-')) });
+const cfgFor = () => loadConfig({ CCRC_HOME: mkTmp('ccrc-') });
 
 describe('clipName', () => {
   it('keeps the real extension — a JPEG must not be named .png', () => {

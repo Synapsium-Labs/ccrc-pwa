@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { readRegistry } from '../src/registry.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
@@ -13,7 +13,7 @@ const seed = (dir: string, id: string, fields: Record<string, string>) => {
 describe('readRegistry', () => {
   let home: string;
   beforeEach(() => {
-    home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    home = mkTmp('ccrc-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   });
 
@@ -70,7 +70,7 @@ describe('readRegistry', () => {
 describe('workspace on the wire', () => {
   let home: string;
   beforeEach(() => {
-    home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    home = mkTmp('ccrc-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   });
 
@@ -96,7 +96,7 @@ describe('workspace on the wire', () => {
 
 describe('PR and archive fields', () => {
   it('reads base, prphase, prnumber, prcheckedat and archived off disk', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const put = (f: string, v: string): void => writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v);
@@ -116,7 +116,7 @@ describe('PR and archive fields', () => {
     // The file is written by ccd on another box. A version skew that writes a
     // phase this build does not know must degrade to "unchecked", never leak a
     // string the PWA will switch on and render as nothing.
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', '/w'], ['prphase', 'exploded']]) {
@@ -133,7 +133,7 @@ describe('PR and archive fields', () => {
     // workspace whose archive never finished. A non-numeric field is NaN, which
     // JSON.stringify puts on the wire as `null` while the type still says
     // `number` — the silent lie the comment on numOrNull claims to prevent.
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const put = (f: string, v: string): void => writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v);
@@ -147,7 +147,7 @@ describe('PR and archive fields', () => {
   });
 
   it('leaves every new field null on a session that has none of them', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', '/w']]) {

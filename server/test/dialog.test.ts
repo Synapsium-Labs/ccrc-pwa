@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDialog, paneState } from '../src/pane/dialog.js';
@@ -10,6 +9,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import type { Dialog, FleetSession, SessionStreamMsg } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
 const fixture = (name: string) => readFileSync(path.join(panesDir, name), 'utf8');
@@ -187,7 +187,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 
 describe('FleetWatcher dialog detection', () => {
   it('emits dialog once, marks dialogPending, then clears', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const home = mkTmp('ccrc-');
     seedSession(home, 'claude2-MekWarLive', 'claude2');
     let pane = fixture('ask-user-question.txt');
     const run: Runner = async (_cmd, args) => {

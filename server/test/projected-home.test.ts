@@ -11,11 +11,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { readLimits, projectHome } from '../src/limits.js';
 import { leastLoadedCases } from './fixtures/leastLoaded.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let home: string;
@@ -28,7 +28,7 @@ const sh = (snippet: string): string =>
     { encoding: 'utf8', env: { ...process.env, HOME: home } }).trim();
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-projected-'));
+  home = mkTmp('ccrc-projected-');
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });

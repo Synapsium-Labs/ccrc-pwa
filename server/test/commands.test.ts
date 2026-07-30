@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { parseSkillListing, BUILTINS } from '../src/commands.js';
+import { mkTmp } from './tmpHelpers.js';
 
 describe('parseSkillListing', () => {
   it('parses "- name: desc" lines, keeping plugin:skill names', () => {
@@ -24,7 +24,7 @@ describe('parseSkillListing', () => {
 
 describe('GET /api/sessions/:id/commands', () => {
   it('returns builtins + skills parsed from the session transcript', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-cmd-'));
+    const home = mkTmp('ccrc-cmd-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const id = 'claude2-rp-llm';
@@ -54,7 +54,7 @@ describe('GET /api/sessions/:id/commands', () => {
   });
 
   it('unknown session id returns 404', async () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-cmd-'));
+    const home = mkTmp('ccrc-cmd-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO });

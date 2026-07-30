@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -10,6 +9,7 @@ import { localIO } from '../src/io.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -28,7 +28,7 @@ async function makeApp(
   panes: (string | null)[] | ((home: string) => (string | null)[]),
   opts: { status?: 'busy' | 'idle' } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
-  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+  const home = mkTmp('ccrc-');
   const resolvedPanes = typeof panes === 'function' ? panes(home) : panes;
   seedSession(home, ID, 'claude2');
   const PANE_PID = 4242;

@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
 import type { FleetSession } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
-const tmpDir = (): string => mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+const tmpDir = (): string => mkTmp('ccrc-cache-');
 
 // A COMPLETE FleetSession. It was missing eight fields while claiming the type —
 // harmless until loadSnapshot started validating what it reads, and invisible

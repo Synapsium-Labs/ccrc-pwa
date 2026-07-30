@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, appendFileSync, statSync } from 'node:fs';
+import { writeFileSync, appendFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { readBacklog, TranscriptTailer } from '../src/transcript/tail.js';
 import { localIO } from '../src/io.js';
 import type { ChatEvent } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const userLine = (uuid: string, text: string): string =>
   JSON.stringify({
@@ -16,7 +17,7 @@ const userLine = (uuid: string, text: string): string =>
     message: { role: 'user', content: text },
   }) + '\n';
 
-const tmpFile = (): string => path.join(mkdtempSync(path.join(tmpdir(), 'ccrc-tail-')), 'transcript.jsonl');
+const tmpFile = (): string => path.join(mkTmp('ccrc-tail-'), 'transcript.jsonl');
 
 const onceEvents = (t: TranscriptTailer, timeoutMs = 3000): Promise<{ events: ChatEvent[]; offset: number }> =>
   new Promise((resolve, reject) => {

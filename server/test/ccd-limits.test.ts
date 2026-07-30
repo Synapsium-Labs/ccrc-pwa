@@ -6,9 +6,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import { rolloverCases } from './fixtures/rollover.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let home: string;
@@ -24,7 +24,7 @@ const sh = (snippet: string): string =>
     { encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home }) }).trim();
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccd-limits-'));
+  home = mkTmp('ccrc-ccd-limits-');
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   // _avail requires the wrapper binary to exist and be executable.
   const bin = path.join(home, '.local', 'bin');

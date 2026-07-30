@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { appendFileSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
+import { mkTmp } from './tmpHelpers.js';
 
-const mktempDir = (): string => mkdtempSync(path.join(tmpdir(), 'ccrc-io-'));
+const mktempDir = (): string => mkTmp('ccrc-io-');
 const tmpFile = (name = 'x.txt'): string => path.join(mktempDir(), name);
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
