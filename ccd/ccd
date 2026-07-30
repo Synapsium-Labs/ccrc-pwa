@@ -522,17 +522,63 @@ cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is p
   # The absence of a workspace field is what distinguishes a main checkout.
   [[ -n "$ws" ]] || die "$id is not a workspace — refusing to rename a main checkout's branch"
   [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  # KEPT deliberately, now that the branch no longer has to be read out of the
+  # directory. The record does survive a hand-deletion, so this rename WOULD
+  # work — but ws-rename exists for a workspace still being worked in, and a
+  # vanished directory is a broken one. Renaming would print a success line and
+  # say nothing about the breakage, hiding exactly what ws-gc exists to surface;
+  # refusing names it, and ws-rm already handles a gone directory deliberately.
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir"
   _ws_branch_valid "$new" || die "invalid branch name: $new"
 
   local main="$PROJECTS_ROOT/$project"
-  local old; old=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
-  [[ -n "$old" && "$old" != HEAD ]] || die "$id is on a detached HEAD — nothing to rename"
+  # THE branch source of truth, same as cmd_ws_rm: git's own record for that
+  # path, read from $main. Never `rev-parse` inside $workdir — that answers from
+  # whatever repository owns the DIRECTORY, and a hand-deletion plus a stray
+  # `git init` made that a stranger, whose branch was then read AND renamed.
+  # Two statements: with no `set -e`, `local old=$(...)` returns local's status.
+  local old registered
+  old=$(_ws_wt_branch "$main" "$workdir"); registered=$?
+  # Three rungs, because "no record at all" and "recorded detached" are different
+  # states with different remedies, and only one of them is about a broken record.
+  #   3: no registration at all (a botched hand cleanup that deleted
+  #      $main/.git/worktrees/<name>). Nothing corroborates the registry's name
+  #      any more, so there is no name to rename — same rule as ws-rm's
+  #      uncorroborated case, and the registry field is named, never used.
+  #      `git worktree repair` is NOT offered: measured on git 2.43.0 it exits 1
+  #      here ("unable to locate repository") — it cannot rebuild a record that
+  #      was deleted. Re-adding the worktree can, once the orphaned checkout is
+  #      out of the way (measured: rc 0, and no prune needed — no record stands).
+  local reg_branch; reg_branch=$(_reg_get "$id" branch)
+  (( registered == 0 )) \
+    || die "no worktree record for $workdir in $main — nothing renamed; with no registration no branch name is corroborated (the registry says '${reg_branch:-?}', which nothing now ties to that path): move the leftover directory aside, then git -C $main worktree add $workdir ${reg_branch:-<branch>}"
+  #   2: registered, and the registration says `detached`. The remedy is to check
+  #      a branch out, not to repair anything.
+  [[ -n "$old" ]] || die "$id is on a detached HEAD — nothing to rename"
+  #   1: registered, with a branch — $old is git's own name for it.
+  # ...but a registration outlives its directory, so it can be STALE: delete the
+  # directory by hand, put anything else at that path, and git still names it —
+  # `registered` is still 0 and $old is still ccrc's branch, so nothing above
+  # notices that the workspace this rename is *about* has been taken over. Ask
+  # the directory too and require both to say $main, exactly as cmd_ws_rm does.
+  # (The stranger is never written to either way, now that both the read and the
+  # rename are scoped to $main; what this guard refuses is renaming on behalf of
+  # a workspace that no longer exists.) Recovery measured on git 2.43.0: the
+  # stale record makes `worktree add` refuse until `prune` clears it, and prune
+  # only drops records whose directory is missing — hence both, in that order.
+  local wd_common main_common
+  wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
+  [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
+    || die "$workdir is not a worktree of $main — nothing renamed; move or delete the directory by hand, then git -C $main worktree prune && git -C $main worktree add $workdir $old"
   [[ "$old" != "$new" ]] || die "already named $new"
 
   # Renaming after a push leaves the old name on the remote and creates a second
   # branch there on the next push. An upstream is the evidence that happened.
-  if git -C "$workdir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+  # Asked in $main and about $old by name: branch config is shared across a
+  # repo's worktrees, so this is the same answer $workdir would give — from the
+  # repo that actually owns the branch. Measured on git 2.43.0: rc 0 printing
+  # `origin/<old>` with an upstream, rc 128 without one.
+  if git -C "$main" rev-parse --abbrev-ref "$old@{u}" >/dev/null 2>&1; then
     die "$old has an upstream — it is already on the remote; rename before pushing, not after"
   fi
 
@@ -548,7 +594,13 @@ cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is p
     *) echo "warn: could not reach origin to check for '$new' — renaming anyway" >&2 ;;
   esac
 
-  git -C "$workdir" branch -m "$new" || die "rename failed: $old -> $new"
+  # Scoped to the repo that owns the branch, and named on both sides so it can
+  # never resolve against whatever HEAD $workdir happens to have. Measured on git
+  # 2.43.0: this works on a branch checked out in a linked worktree and retargets
+  # that worktree's HEAD and its registration with it (before `branch
+  # refs/heads/feat/a`, after `branch refs/heads/feat/b`, rc 0) — which is what
+  # lets ws-rm read the new name back out of the record afterwards.
+  git -C "$main" branch -m "$old" "$new" || die "rename failed: $old -> $new"
   _reg_set "$id" branch "$new"
   echo "renamed $id: $old -> $new"
 }
