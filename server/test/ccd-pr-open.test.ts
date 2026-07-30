@@ -195,6 +195,31 @@ describe('refusals that protect the remote', () => {
     expect(open('', 'nope-nothing').stderr).toMatch(/no such session/);
     expect(h.ghCalls()).toEqual([]);
   });
+
+  it('refuses an incomplete registry instead of pushing with the fields it did find', () => {
+    // Without the guard `base` is empty, `baseShort` is empty, `head equals
+    // base` cannot fire, and the verb pushes and then asks gh to open a PR
+    // against `--base ""`.
+    workspace('demo', 'quiet-basin');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.base'));
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/incomplete registry for 'demo-quiet-basin'/);
+    expect(h.ghCalls()).toEqual([]);
+    expect(() => h.git(path.join(h.home, 'origins', 'demo.git'), 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin'))
+      .toThrow();
+  });
+
+  it('refuses a project whose main checkout has no origin', () => {
+    // `_gh_repo_slug` answers non-zero and prints nothing, so without the
+    // `|| die` the slug is the empty string and `--repo ""` is what reaches gh.
+    workspace('demo', 'quiet-basin');
+    h.git(path.join(h.home, 'projects', 'demo'), 'remote', 'remove', 'origin');
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/no origin remote for demo/);
+    expect(h.ghCalls()).toEqual([]);
+  });
 });
 
 describe('the happy path', () => {
