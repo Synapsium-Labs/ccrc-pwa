@@ -226,6 +226,20 @@ describe('ws-attic', () => {
   });
 
   it('rejects any mode word other than --session or --drop', () => {
-    expect(shFail('cmd_ws_attic --list demo-quiet-basin').code).toBe(1);
+    // The session has to EXIST for the mode word to be what is under test.
+    // Without it `_attic_project` fails and the command dies at `no such
+    // session` (ccd:634) before the case is reached, so the assertion cannot
+    // tell a rejected mode from a missing session: deleting the `*)` arm left
+    // the whole 456-test suite green, while `ccd ws-attic --frobnicate <real
+    // id>` then fell out of the case and exited 0 with no output — a mistyped
+    // mode reading as success.
+    workspace('demo', 'quiet-basin');
+    const r = shFail('cmd_ws_attic --frobnicate demo-quiet-basin');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/usage: ccd ws-attic/);
+    expect(r.stderr).not.toMatch(/no such session/);
+    // ...and the arity rung is not what caught it.
+    expect(shFail('cmd_ws_attic --session').code).toBe(1);
+    expect(shFail('cmd_ws_attic --session a b').code).toBe(1);
   });
 });
