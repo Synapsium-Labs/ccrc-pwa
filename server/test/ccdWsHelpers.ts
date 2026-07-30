@@ -21,6 +21,9 @@ export interface CcdHarness {
   reg(id: string, field: string): string | null;
   calls(): string[];
   makeRepo(name: string): string;
+  /** Like `makeRepo`, but with an origin `ccd`'s `_gh_repo_slug` resolves to
+   *  `<slug>` — required by every pr-state/pr-open/ws-audit/ws-reap test. */
+  makeGhRepo(name: string, slug?: string): string;
   git(cwd: string, ...args: string[]): string;
   cleanup(): void;
 }
@@ -43,6 +46,22 @@ export function makeCcdHarness(prefix: string): CcdHarness {
 
   const git = (cwd: string, ...args: string[]): string =>
     execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: gitEnv() }).trim();
+
+  /** A real git repo with one commit and an origin, so worktree/base logic is
+   *  exercised for real rather than mocked. */
+  const makeRepoAt = (name: string): string => {
+    const origin = path.join(home, 'origins', `${name}.git`);
+    const main = path.join(home, 'projects', name);
+    execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
+    execFileSync('git', ['init', '-b', 'main', main]);
+    fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
+    git(main, 'add', 'README.md');
+    git(main, 'commit', '-m', 'init');
+    git(main, 'remote', 'add', 'origin', origin);
+    git(main, 'push', '-u', 'origin', 'main');
+    git(main, 'remote', 'set-head', 'origin', '-a');
+    return main;
+  };
 
   return {
     home,
@@ -67,19 +86,31 @@ export function makeCcdHarness(prefix: string): CcdHarness {
       const p = path.join(home, 'ccd-calls');
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
     },
-    /** A real git repo with one commit and an origin, so worktree/base logic is
-     *  exercised for real rather than mocked. */
-    makeRepo: (name) => {
+    makeRepo: makeRepoAt,
+    /** A repo that reads as GitHub and behaves as a local bare repo.
+     *
+     *  `_gh_repo_slug` reads `remote.origin.url` and requires OWNER/NAME, so a
+     *  bare local path (what `makeRepo` sets) makes it return non-zero and
+     *  every PR verb answer `no-remote`. Three keys:
+     *    - `url`      -> the https string `_gh_repo_slug` parses
+     *    - `insteadOf`-> rewrites fetch AND push back to the local bare repo.
+     *      Without it `cmd_ws_add`'s `git fetch origin` (ccd:269) and
+     *      `_ws_reap_eval`'s mandatory fetch would both leave the box for the
+     *      real github.com. `git config --get remote.origin.url` is NOT
+     *      affected by insteadOf, which is the whole point.
+     *    - `pushurl`  -> the same bare repo, said out loud. Measured: insteadOf
+     *      alone already routes the push locally, so this is not what makes
+     *      pr-open's "the branch really landed in $HOME/origins/demo.git" work
+     *      — it is here so `git remote -v` names the push target without the
+     *      reader having to reason about rewrite precedence.
+     *  Configured AFTER the initial push/set-head, so the repo is built with
+     *  a plain local origin exactly as makeRepo builds it. */
+    makeGhRepo: (name, slug = 'o/r') => {
+      const main = makeRepoAt(name);
       const origin = path.join(home, 'origins', `${name}.git`);
-      const main = path.join(home, 'projects', name);
-      execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-      execFileSync('git', ['init', '-b', 'main', main]);
-      fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
-      git(main, 'add', 'README.md');
-      git(main, 'commit', '-m', 'init');
-      git(main, 'remote', 'add', 'origin', origin);
-      git(main, 'push', '-u', 'origin', 'main');
-      git(main, 'remote', 'set-head', 'origin', '-a');
+      git(main, 'config', 'remote.origin.url', `https://github.com/${slug}`);
+      git(main, 'config', `url.${origin}.insteadOf`, `https://github.com/${slug}`);
+      git(main, 'config', 'remote.origin.pushurl', origin);
       return main;
     },
     git,

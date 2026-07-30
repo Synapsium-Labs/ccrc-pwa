@@ -194,6 +194,205 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   printf '%s\n' "$d"
 }
 
+PR_GH_TIMEOUT=12          # gh pr list has no --timeout of its own; a blocking
+                          # DNS hang is 30 s, so this is the only bound there is
+PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,statusCheckRollup
+
+_gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
+  # Three guards, and the mutation sweep says the last one subsumes the first
+  # two: with no origin `git config --get` exits 1 AND prints nothing, so both
+  # `|| return 1` and `[[ -n "$url" ]]` can be deleted with the suite still
+  # green — the regex rejects "" on its own. They stay because the fall-through
+  # only holds while the regex is anchored at both ends, and this function's
+  # answer is spent as `--repo` on a WRITE-scoped token: each guard states the
+  # case it is about rather than relying on a later line to catch it.
+  local url
+  url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
+  [[ -n "$url" ]] || return 1
+  url="${url%.git}"; url="${url#git@github.com:}"
+  url="${url#ssh://git@github.com/}"; url="${url#https://github.com/}"
+  [[ "$url" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+  printf '%s\n' "$url"
+}
+
+_gh_pr_list() {   # repo -> rows JSON on stdout; on failure prints the answer
+                  # object instead and returns non-zero. NEVER partially prints.
+  local repo="$1" errf out rc err
+  errf=$(mktemp)
+  out=$(timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --state all --limit 100 \
+          --json "$PR_JSON_FIELDS" 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 124 )); then printf '{"phase":"unknown","reason":"timeout"}\n'; return 1; fi
+  if (( rc != 0 )); then
+    # `gh auth status` is NOT probed first: it is another network call on the
+    # unhappy path. The stderr we already have is the cheaper signal.
+    case "$err" in
+      *"gh auth login"*|*"not logged in"*|*"HTTP 401"*) printf '{"phase":"unknown","reason":"unauthenticated"}\n' ;;
+      *"rate limit"*|*"HTTP 403"*)                      printf '{"phase":"unknown","reason":"rate-limit"}\n' ;;
+      *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '{"phase":"unknown","reason":"offline"}\n' ;;
+      *)                                                printf '{"phase":"unknown","reason":"error"}\n' ;;
+    esac
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+_pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper.
+  # Embedded rather than a sibling file on purpose: ~/.local/bin/ccd is a COPY,
+  # so a second file is a second deployment step and a new failure mode in
+  # which `ccd caps` advertises a verb whose helper is missing.
+  #
+  # The program arrives on fd 3, NOT on stdin: `python3 - <<'PY'` reads the
+  # program FROM stdin, so the heredoc and the piped rows are the same channel
+  # and python consumes the whole of it as source — `sys.stdin.read()` then
+  # returns '' at EOF, `rows_in()` answers [], and every PR in the fixture
+  # vanishes into `phase:"none"` at exit 0. Measured both forms side by side:
+  # `python3 - "$@" <<PY` gives stdin='', `python3 /dev/fd/3 "$@" 3<<PY` gives
+  # the rows, with sys.argv identical. The rows cannot move to argv instead —
+  # spec §7 is that no GitHub-sourced string is ever placed in an argv.
+  python3 /dev/fd/3 "$@" 3<<'PY'
+import json, os, re, subprocess, sys, time
+
+mode = sys.argv[1]
+OID = re.compile(r'^[0-9a-f]{7,40}$')
+
+def rows_in():
+    raw = sys.stdin.read().strip()
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+    except Exception:
+        return []
+    return v if isinstance(v, list) else []
+
+def git(main, *args):
+    return subprocess.run(['git', '-C', main, *args], capture_output=True, text=True)
+
+def is_ours(main, tip, oid):
+    """Proof 0 — the PR's head commit exists locally AND is reachable from our
+    branch tip. This is what a recycled slug and a stranger's fork both fail.
+
+    The cat-file rung survives mutation and is kept deliberately: `merge-base
+    --is-ancestor` on an object this repository does not have exits 128 and so
+    already answers False. Kept because 128 is git's *"I could not do this"*
+    and 1 is its *"no"*, and this function must not start reading a fatal as an
+    answer if the ancestry call is ever changed."""
+    if not tip or not isinstance(oid, str) or not OID.match(oid):
+        return False
+    if git(main, 'cat-file', '-e', oid + '^{commit}').returncode != 0:
+        return False
+    return git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
+
+def annotate(rows, main, tip, branch, base_short):
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        r['ours'] = is_ours(main, tip, r.get('headRefOid'))
+        out.append(r)
+    return out
+
+def bound(r, branch, base_short):
+    """The workspace<->PR binding. Branch name alone is not it."""
+    return (r.get('isCrossRepository') is False
+            and r.get('baseRefName') == base_short
+            and r.get('headRefName') == branch
+            and r.get('ours') is True)
+
+def is_merged(r, branch, base_short):
+    # The trailing `bound(...)` conjunct survives mutation: every caller today
+    # passes a row `pick` already filtered by `bound`. It stays so the predicate
+    # is true of ANY row rather than only of a pre-filtered one — Task 5's
+    # `pick` mode calls it too, and "merged" is the answer that fires the
+    # archive trigger, which is not a fact to infer from the caller's habits.
+    oid = (r.get('mergeCommit') or {}).get('oid')
+    return (r.get('state') == 'MERGED'
+            and isinstance(r.get('mergedAt'), str)
+            and isinstance(oid, str) and OID.match(oid) is not None
+            and bound(r, branch, base_short))
+
+def pick(rows, branch, base_short):
+    """Highest number AFTER the binding check, never before."""
+    cands = [r for r in rows if bound(r, branch, base_short)]
+    cands.sort(key=lambda r: r.get('number') if isinstance(r.get('number'), int) else 0)
+    return cands[-1] if cands else None
+
+if mode == 'state':
+    (id_, project, main, repo, branch, base, base_short, tip, ahead, dirty, template, reg) = sys.argv[2:14]
+    ahead, dirty = int(ahead), int(dirty)
+    rows = annotate(rows_in(), main, tip, branch, base_short)
+    chosen = pick(rows, branch, base_short)
+    # `reason` accompanies `phase` and stays None for every phase but one, so
+    # that prstate.ts's phaseFor can be pinned equal to this on BOTH fields.
+    reason = None
+    if chosen is None:
+        phase, number = ('no-commits' if ahead == 0 else 'none'), None
+    elif is_merged(chosen, branch, base_short):
+        phase, number = 'merged', chosen.get('number')
+    elif chosen.get('state') == 'MERGED':
+        # gh says MERGED but a conjunct failed. Never claim merged on a partial
+        # match: the archive trigger and the cleanup offer both hang off it.
+        # `merge-unproven`, NOT `error`: the gh read succeeded, and calling this
+        # `error` puts "GitHub could not be read" on a phone about a read that
+        # worked. phaseFor answers the same token for the same row.
+        phase, number, reason = 'unknown', chosen.get('number'), 'merge-unproven'
+    elif chosen.get('state') == 'CLOSED':
+        phase, number = 'closed', chosen.get('number')
+    elif chosen.get('isDraft') is True:
+        phase, number = 'draft', chosen.get('number')
+    else:
+        phase, number = 'open', chosen.get('number')
+
+    commits = []
+    if tip and base:
+        r = git(main, 'log', '--format=%H%x1f%s%x1f%b%x1e', base + '..refs/heads/' + branch)
+        if r.returncode == 0:
+            for rec in r.stdout.split('\x1e'):
+                rec = rec.strip('\n')
+                if not rec:
+                    continue
+                parts = (rec.split('\x1f') + ['', '', ''])[:3]
+                commits.append({'sha': parts[0], 'subject': parts[1], 'body': parts[2].strip()})
+
+    checked_at = int(time.time() * 1000)
+    def put(field, value):
+        with open(os.path.join(reg, id_ + '.' + field), 'w') as f:
+            f.write(str(value))
+
+    def clear(field):
+        try:
+            os.remove(os.path.join(reg, id_ + '.' + field))
+        except FileNotFoundError:
+            pass
+
+    put('prphase', phase)
+    # phase and number are ONE answer, so a writer that persists half of it
+    # lies. A PR that is deleted, force-pushed out of reachability, or whose
+    # slug ws-reap has recycled leaves {phase:'none', number:42} on disk if the
+    # number is merely left alone: fleet.ts hands that pair straight to the
+    # wire, so the cap renders `#42` under a phase whose own copy is "no pull
+    # request yet", and ws-archive reads the same field and files
+    # `archivedreason merged:#42` for a PR that no longer binds to this
+    # workspace. REMOVED rather than blanked, so the field is absent exactly as
+    # it is for a workspace that never had a PR. A read that FAILED never
+    # reaches here at all — _gh_pr_list returns before _pr_py is called — so
+    # this cannot turn an unreadable GitHub into a cleared number.
+    if number is None:
+        clear('prnumber')
+    else:
+        put('prnumber', number)
+    put('prcheckedat', checked_at)
+
+    sys.stdout.write(json.dumps({
+        'id': id_, 'project': project, 'repo': repo, 'branch': branch, 'base': base,
+        'baseShort': base_short, 'tip': tip, 'ahead': ahead, 'dirty': dirty,
+        'commits': commits, 'template': template or None, 'rows': rows,
+        'phase': phase, 'number': number, 'checkedAt': checked_at, 'reason': reason,
+    }) + '\n')
+PY
+}
+
 # ── workspace slugs ────────────────────────────────────────────────
 # No dots: tmux -t parses `session:window.pane`. No slashes: systemd
 # instance names escape them. Lowercase only, so a slug is never ambiguous
@@ -628,6 +827,7 @@ ensure
 list
 menu
 pick
+pr-state
 prefer
 start
 stop
@@ -872,6 +1072,81 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
       ;;
     *) die "usage: ccd ws-attic --session <id> | ccd ws-attic --drop <id>" ;;
   esac
+}
+
+_pr_state_one() {   # id main repo rows -> one JSON line
+  local id="$1" main="$2" repo="$3" rows="$4"
+  local project branch base baseShort tip ahead workdir dirty tmpl
+  project=$(_reg_get "$id" project); branch=$(_reg_get "$id" branch)
+  base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
+  # CARRIES THE ID. A per-session failure and a whole-repo failure are
+  # different events: the server backs a PROJECT off on the id-less shape
+  # (which only `_gh_repo_slug`/`_gh_pr_list` emit, and which really does mean
+  # every session of that repo is unreadable), so an id-less object here would
+  # let one registry-incomplete workspace mark its seven siblings `unknown` and
+  # silence the whole project's lane. §6's "Partial sweep" row promises
+  # per-session honesty; this is where that is kept.
+  [[ -n "$branch" ]] || { printf '{"id":%s,"phase":"unknown","reason":"error"}\n' "$(_json_str "$id")"; return 0; }
+  [[ -n "$base" ]] || base="origin/HEAD"
+  baseShort="${base#origin/}"
+  tip=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) || tip=""
+  ahead=0
+  if [[ -n "$tip" ]] && git -C "$main" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
+    ahead=$(git -C "$main" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)
+    # Survives mutation — both revisions were just verified, so rev-list has no
+    # reason to fail here today. Kept because the value is handed to `int(ahead)`
+    # in _pr_py, where an empty string is an uncaught ValueError and this
+    # session's whole line disappears from the sweep's output.
+    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0
+  fi
+  dirty=$(git -C "$workdir" status --porcelain 2>/dev/null | grep -c . || true)
+  tmpl=""
+  [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
+  printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
+    "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG"
+}
+
+cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
+  # ONE gh call per repo, whichever form. Read-only apart from the three
+  # registry fields it persists so a ccrc restart degrades to honest stale.
+  [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>"
+  local mode=$1 arg=$2
+  case "$mode" in
+    --session) [[ $arg =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id" ;;
+    --project) [[ $arg =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project" ;;
+    *)         die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>" ;;
+  esac
+
+  local -a ids=()
+  if [[ $mode == --session ]]; then
+    [[ -f "$REG/$arg.uuid" ]] || die "no such session: $arg"
+    [[ -n "$(_reg_get "$arg" workspace)" ]] || die "not a workspace: $arg"
+    ids=("$arg")
+  else
+    local f id
+    for f in "$REG"/*.workspace; do
+      # An empty registry leaves the glob unexpanded. Survives mutation because
+      # the `.uuid` test below then looks for a file literally named `*.uuid`
+      # and fails too — an accident of two guards, not one guard doing two jobs.
+      [[ -e "$f" ]] || continue
+      id=$(basename "$f" .workspace)
+      [[ -f "$REG/$id.uuid" ]] || continue
+      [[ "$(_reg_get "$id" project)" == "$arg" ]] || continue
+      ids+=("$id")
+    done
+  fi
+  (( ${#ids[@]} )) || return 0
+
+  local project main repo rows
+  project=$(_reg_get "${ids[0]}" project)
+  main="$PROJECTS_ROOT/$project"
+  repo=$(_gh_repo_slug "$main") || { printf '{"phase":"unknown","reason":"no-remote"}\n'; return 0; }
+  # The answer object _gh_pr_list printed IS the output on failure: one repo
+  # failing marks that repo's sessions unknown and touches no other project.
+  rows=$(_gh_pr_list "$repo") || { printf '%s\n' "$rows"; return 0; }
+
+  local id
+  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows"; done
 }
 
 # ── reclamation ────────────────────────────────────────────────────
@@ -1731,6 +2006,7 @@ case "${1:-}" in
   ws-archive) shift; cmd_ws_archive "$@" ;;
   ws-restore) shift; cmd_ws_restore "$@" ;;
   ws-attic)   shift; cmd_ws_attic "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic} <args>" >&2; exit 1 ;;
+  pr-state)  shift; cmd_pr_state "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|pr-state} <args>" >&2; exit 1 ;;
 esac
 fi

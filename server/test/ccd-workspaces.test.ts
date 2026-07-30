@@ -733,3 +733,33 @@ describe('ws-rm', () => {
     expect(branches('ws/quiet-mesa')).not.toBe('');
   });
 });
+
+describe('makeGhRepo — the fixture the PR verbs need', () => {
+  it('reads as github.com/o/r and fetches from the local bare repo', () => {
+    const main = h.makeGhRepo('demo');
+    const origin = path.join(h.home, 'origins', 'demo.git');
+    // What _gh_repo_slug will read: the raw config value, NOT the rewritten one.
+    expect(h.git(main, 'config', '--get', 'remote.origin.url')).toBe('https://github.com/o/r');
+    // What git will actually contact. Both directions must be the bare repo, or
+    // this suite talks to the real GitHub: fetch via insteadOf, push via
+    // pushurl. If either of these ever comes back as an https url, stop —
+    // every fetch in ws-add and every reap Phase C is then a network call.
+    expect(h.git(main, 'remote', 'get-url', 'origin')).toBe(origin);
+    expect(h.git(main, 'remote', 'get-url', '--push', 'origin')).toBe(origin);
+    // Rewritten, so this touches no network. It is also fast: a fetch that
+    // starts taking seconds means insteadOf stopped applying.
+    expect(h.git(main, 'fetch', 'origin', '--quiet')).toBe('');
+    // ...and a push really lands in $HOME/origins/demo.git.
+    h.git(main, 'push', 'origin', 'main');
+    expect(h.git(origin, 'rev-parse', '--verify', 'refs/heads/main')).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('makes _gh_repo_slug resolve, which makeRepo does NOT', () => {
+    // The reason this builder exists. `makeRepo`'s origin is a local bare
+    // path, so the slug regex rejects it and every PR verb answers no-remote.
+    h.makeGhRepo('demo');
+    h.makeRepo('plain');
+    expect(h.sh('_gh_repo_slug "$HOME/projects/demo"')).toBe('o/r');
+    expect(() => h.sh('_gh_repo_slug "$HOME/projects/plain"')).toThrow();
+  });
+});
