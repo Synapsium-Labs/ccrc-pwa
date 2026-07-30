@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -60,7 +60,7 @@ describe('pr-state argv', () => {
     let stderr = '';
     try {
       execFileSync('bash', [CCD, 'no-such-verb'],
-        { encoding: 'utf8', cwd: h.home, env: { ...process.env, HOME: h.home } });
+        { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }) });
       throw new Error('a verb ccd does not have must exit non-zero');
     } catch (e) {
       stderr = String((e as { stderr?: string }).stderr ?? '');

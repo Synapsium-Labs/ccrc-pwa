@@ -1,7 +1,9 @@
-// The isolated-HOME bash harness for every PR/reap ccd test, modelled on
-// ccdWsHelpers.ts. `gh` is a SHELL FUNCTION, so nothing here can reach the
-// network or the host's real `gho_` tokens; `timeout` is shadowed too, because
-// ccd wraps every gh call in it and the stub must not be bypassed.
+// The stub layer for every PR/reap ccd test, on top of `ccdWsHelpers.ts`'s
+// harness. `gh` here is a SHELL FUNCTION and bash resolves functions before
+// PATH, so it answers whenever a snippet includes GH_STUB; when one does not,
+// the base harness's poisoned `gh` answers and the host's real `gho_` token is
+// still unreachable. `timeout` is shadowed too, because ccd wraps every gh call
+// in it and the stub must not be bypassed.
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -34,40 +36,26 @@ export interface PrHarness extends CcdHarness {
   /** Make the stubbed gh fail: rc plus the stderr it prints. 124 = timeout. */
   ghFail(rc: number, stderr: string): void;
   ghCalls(): string[];
-  /** Every argv the POISONED gh on PATH saw — i.e. every call that escaped
-   *  GH_STUB. Must be empty in any test that includes the stub. */
-  ghPoison(): string[];
   /** Run a snippet, returning the failure instead of throwing. */
   run(snippet: string): { code: number; stdout: string; stderr: string };
 }
 
 export function makePrHarness(prefix: string): PrHarness {
+  // The poisoned `gh` and the PATH that puts it first are the BASE harness's
+  // (`ccdWsHelpers.ts`), not this file's: `makeGhRepo` — the fixture that makes
+  // every PR verb functional — lives there too, so containment has to live
+  // wherever a gh call can be written, which is all six ccd test files. What
+  // this harness adds on top is the STUB and its logging: GH_STUB is a shell
+  // function, and bash resolves functions before PATH, so it wins whenever a
+  // snippet includes it and the poison answers whenever one forgets.
   const h = makeCcdHarness(prefix);
   const at = (n: string): string => path.join(h.home, n);
-
-  // The gh stub above is a shell FUNCTION, and bash resolves functions before
-  // PATH — so it wins whenever a snippet includes GH_STUB. This is what answers
-  // when a snippet does not. It is deliberately structural rather than a rule to
-  // remember: /usr/bin/gh exists on this box and ~/.config/gh/hosts.yml holds a
-  // real `gho_` token with repo WRITE scope, so ONE test written without the
-  // stub is a live call against the real github.com/o/r — or worse, a write. The
-  // isolated HOME does not close it (GH_TOKEN/GH_HOST/GH_CONFIG_DIR are inherited
-  // from the parent env, and an unauthenticated call still leaves the box). HOME
-  // is isolated by construction in the harness rather than by discipline at each
-  // call site; so is this.
-  const bin = path.join(h.home, '.local', 'bin');
-  fs.writeFileSync(path.join(bin, 'gh'),
-    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
-    + 'echo "ccd tests must never reach the real gh" >&2\nexit 97\n', { mode: 0o755 });
-  const withBin = (env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
-    ({ ...env, PATH: `${bin}:${env['PATH'] ?? process.env['PATH'] ?? ''}` });
-  const sh = (snippet: string, env: NodeJS.ProcessEnv = {}): string => h.sh(snippet, withBin(env));
+  const sh = h.sh;
   const lines = (n: string): string[] => (fs.existsSync(at(n))
     ? fs.readFileSync(at(n), 'utf8').split('\n').filter(Boolean) : []);
 
   return {
     ...h,
-    sh,
     ghRows: (rows) => { fs.writeFileSync(at('gh-rows.json'), JSON.stringify(rows)); },
     ghRaw: (body) => { fs.writeFileSync(at('gh-rows.json'), body); },
     ghFail: (rc, stderr) => {
@@ -75,7 +63,6 @@ export function makePrHarness(prefix: string): PrHarness {
       fs.writeFileSync(at('gh-err'), stderr);
     },
     ghCalls: () => lines('gh-calls'),
-    ghPoison: () => lines('gh-poison'),
     run: (snippet) => {
       try { return { code: 0, stdout: sh(snippet), stderr: '' }; }
       catch (e) {

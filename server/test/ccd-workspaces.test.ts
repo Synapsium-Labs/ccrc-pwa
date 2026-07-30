@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 let home: string;
@@ -288,7 +288,7 @@ describe('disk floor', () => {
     let stderr = '';
     try {
       execFileSync('bash', ['-c', `source "${CCD}"; ${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`],
-        { encoding: 'utf8', env: { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' } });
+        { encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' }) });
     } catch (e) {
       stderr = String((e as { stderr?: string }).stderr ?? '');
     }
@@ -761,5 +761,53 @@ describe('makeGhRepo — the fixture the PR verbs need', () => {
     h.makeRepo('plain');
     expect(h.sh('_gh_repo_slug "$HOME/projects/demo"')).toBe('o/r');
     expect(() => h.sh('_gh_repo_slug "$HOME/projects/plain"')).toThrow();
+  });
+});
+
+describe('gh containment is the harness\'s, not the caller\'s', () => {
+  // Task 3 put `makeGhRepo` — the fixture that makes every PR verb functional —
+  // into the BASE harness while leaving the poisoned `gh` in `makePrHarness`
+  // only, so containment became a rule to remember (use the PR harness) rather
+  // than a property of the harness. /usr/bin/gh is installed on this box and
+  // ~/.config/gh/hosts.yml holds a real `gho_` token with repo WRITE scope: one
+  // test in ANY of the six ccd files that grows a gh call is otherwise a live
+  // call to the real github.com, or a write to it. HOME is isolated by
+  // construction here and so is this.
+  it('answers every gh from the base harness with the poison, never the host', () => {
+    h.makeGhRepo('demo');
+    const out = h.sh('_gh_pr_list o/r || true');
+    expect(JSON.parse(out)).toEqual({ phase: 'unknown', reason: 'error' });
+    expect(h.ghPoison()).toHaveLength(1);
+    expect(h.ghPoison()[0]).toContain('pr list --repo o/r');
+  });
+
+  it('routes EVERY bash call site in every ccd test file through it', () => {
+    // A behavioural test can only pin the call sites that exist today, and the
+    // failure mode this whole boundary exists for is the one written tomorrow:
+    // four sites already built their own env (`ccd-limits` and `ccd-clip`
+    // predate `makeCcdHarness` entirely, and `ccd-archive`'s `runCcd` supplies a
+    // PATH of its own, which would have DISPLACED the poison). So the invariant
+    // is checked in the source: a bash spawn in a ccd test file goes through
+    // `ghContainedEnv`, which prepends and therefore cannot be displaced.
+    const dir = __dirname;
+    const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));
+    expect(files.length).toBeGreaterThanOrEqual(7);
+    for (const f of files) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
+      src.forEach((ln, i) => {
+        if (!ln.includes("execFileSync('bash'")) return;
+        // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
+        // object several lines above the spawn.
+        const window = src.slice(Math.max(0, i - 12), i + 8).join('\n');
+        expect(window, `${f}:${i + 1} spawns bash without ghContainedEnv`).toContain('ghContainedEnv(');
+      });
+    }
+  });
+
+  it('puts the harness bin FIRST on PATH, whatever the caller passes', () => {
+    // A caller-supplied PATH must not be able to displace it — the ordering is
+    // what makes this structural rather than advisory.
+    expect(h.sh('command -v gh')).toBe(path.join(h.home, '.local', 'bin', 'gh'));
+    expect(h.sh('command -v gh', { PATH: '/usr/bin:/bin' })).toBe(path.join(h.home, '.local', 'bin', 'gh'));
   });
 });

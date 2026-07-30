@@ -15,11 +15,53 @@ export const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
  *  that true if something ever does. */
 export const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };`;
 
+/**
+ * THE SECOND ISOLATION BOUNDARY, beside HOME: a `gh` that logs its argv and
+ * refuses, first on the PATH of every snippet that sources ccd.
+ *
+ * `/usr/bin/gh` is installed on this box and `~/.config/gh/hosts.yml` holds a
+ * real `gho_` token with repo WRITE scope. Isolating HOME does not close it —
+ * `GH_TOKEN`/`GH_HOST`/`GH_CONFIG_DIR` are inherited from the parent env, and
+ * even an unauthenticated call still leaves the box. So this is a property of
+ * the harness rather than a rule each test file remembers: `makeGhRepo` makes
+ * every PR verb functional from the BASE harness, so any ccd test file can grow
+ * a gh call. Measured before it moved here: a bare
+ * `makeCcdHarness(…).sh('_gh_pr_list o/r')` ran `/usr/bin/gh`.
+ *
+ * Exported because two ccd test files (`ccd-limits`, `ccd-clip`) predate
+ * `makeCcdHarness` and build their own HOME; containment cannot be structural
+ * in one harness while a second one exists beside it. A shell-function stub
+ * (`GH_STUB`) still wins over this — bash resolves functions before PATH — so
+ * this is what answers when a snippet has no stub.
+ */
+export function ghContainedEnv(home: string, env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const bin = path.join(home, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'gh'),
+    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
+    + 'echo "ccd tests must never reach the real gh" >&2\nexit 97\n', { mode: 0o755 });
+  // Prepended to whatever the caller passed, never the other way round: a
+  // snippet that supplies its own PATH must not be able to displace the poison,
+  // which is the difference between structural and advisory.
+  return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+}
+
+/** Every argv the poisoned `gh` at `<home>` saw. */
+export const ghPoisonAt = (home: string): string[] => {
+  const p = path.join(home, 'gh-poison');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
+
 export interface CcdHarness {
   home: string;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;
   reg(id: string, field: string): string | null;
   calls(): string[];
+  /** Every argv the POISONED `gh` saw — i.e. every gh call that was not
+   *  shadowed by a stub shell function. In a test that means to reach gh at all
+   *  this is the assertion that it reached OURS; in every other test it must be
+   *  empty. */
+  ghPoison(): string[];
   makeRepo(name: string): string;
   /** Like `makeRepo`, but with an origin `ccd`'s `_gh_repo_slug` resolves to
    *  `<slug>` — required by every pr-state/pr-open/ws-audit/ws-reap test. */
@@ -37,6 +79,9 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   for (const w of ['claude', 'claude2', 'claude-corp']) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
+
+  // Beside HOME, and for the same reason — see `ghContainedEnv` above.
+  ghContainedEnv(home);
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
     ...process.env, HOME: home,
@@ -77,7 +122,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     // claims if the process starts inside it.
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-        { encoding: 'utf8', cwd: home, env: { ...process.env, HOME: home, ...env } }).trim(),
+        { encoding: 'utf8', cwd: home, env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
@@ -86,6 +131,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
       const p = path.join(home, 'ccd-calls');
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
     },
+    ghPoison: () => ghPoisonAt(home),
     makeRepo: makeRepoAt,
     /** A repo that reads as GitHub and behaves as a local bare repo.
      *

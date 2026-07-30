@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 
 const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let isolatedHome: string;
@@ -25,7 +26,9 @@ afterEach(() => {
 
 const dest = (src: string): string =>
   execFileSync('bash', ['-c', `source "${CCD}"; _clip_dest /tmp/clips "${src}"`],
-    { encoding: 'utf8', env: { ...process.env, HOME: isolatedHome } }).trim();
+    // See ccd-limits.test.ts: the gh boundary belongs to every file that
+    // sources ccd, not only to the ones using `makeCcdHarness`.
+    { encoding: 'utf8', env: ghContainedEnv(isolatedHome, { ...process.env, HOME: isolatedHome }) }).trim();
 
 describe('_clip_dest', () => {
   it('keeps the source extension instead of calling everything .png', () => {

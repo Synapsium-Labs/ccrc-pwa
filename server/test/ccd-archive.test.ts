@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
@@ -56,7 +56,10 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
     '#!/bin/sh\necho "systemctl $*" >> "$HOME/ccd-calls"\nexit 0\n', { mode: 0o755 });
   const opts = {
     encoding: 'utf8' as const, cwd: h.home,
-    env: { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` },
+    // Through `ghContainedEnv`, so this caller-supplied PATH cannot displace
+    // the poisoned `gh`: it is prepended, and the tmux/systemctl stubs below
+    // it are still found.
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {
