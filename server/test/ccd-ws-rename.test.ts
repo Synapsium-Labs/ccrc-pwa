@@ -128,4 +128,95 @@ describe('ws-rename', () => {
     addOne();
     expect(h.sh(`"${CCD}" ws-rename demo-quiet-mesa feat/real-name`)).toContain('feat/real-name');
   });
+
+  // ── the branch name comes from git's worktree record, not from the directory ──
+  // Every read and every write below used to be aimed at $workdir, i.e. at
+  // whatever repository owns that DIRECTORY. Hand-delete the worktree and let
+  // anything else land at that path and ws-rename read a STRANGER's branch name
+  // and then renamed the stranger's branch, after which the registry recorded
+  // the stranger's new name as ccrc's own.
+  const mainDir = (): string => path.join(h.home, 'projects', 'demo');
+  const branches = (glob: string): string => h.git(mainDir(), 'branch', '--list', glob);
+
+  it('refuses a stale record whose directory came back as its own repository, and renames nothing', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });   // NO `worktree prune`: the record stands
+    h.git(h.home, 'init', '-b', 'stranger', wt);
+    fs.writeFileSync(path.join(wt, 'PRECIOUS'), 'not ccd’s to rename\n');
+    h.git(wt, 'add', 'PRECIOUS');
+    h.git(wt, 'commit', '-m', 'someone else lives here');
+
+    expect(() => h.sh(`cmd_ws_rename demo-quiet-mesa feat/real-name`)).toThrow();
+    // The stranger keeps its own branch, and never gains ours.
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('stranger');
+    expect(h.git(wt, 'branch', '--list', 'feat/real-name')).toBe('');
+    // ...and ccrc's own branch and registry row are exactly as they were.
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(branches('feat/real-name')).toBe('');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  it('refuses a stale record whose directory came back as ANOTHER repo’s worktree', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });   // NO `worktree prune`
+    h.makeRepo('other');
+    h.git(path.join(h.home, 'projects', 'other'), 'worktree', 'add', '-b', 'ws/borrowed', wt);
+
+    expect(() => h.sh(`cmd_ws_rename demo-quiet-mesa feat/real-name`)).toThrow();
+    expect(h.git(path.join(h.home, 'projects', 'other'), 'branch', '--list', 'ws/borrowed'))
+      .not.toBe('');
+    expect(h.git(path.join(h.home, 'projects', 'other'), 'branch', '--list', 'feat/real-name'))
+      .toBe('');
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  // Rung 2 of three. Git HAS a registration for the path and it says `detached`:
+  // a real state with a real, different remedy from rung 3, so it gets its own
+  // words.
+  it('refuses a recorded detached HEAD', () => {
+    const wt = addOne();
+    h.git(wt, 'checkout', '--detach');
+    expect(() => h.sh(`cmd_ws_rename demo-quiet-mesa feat/real-name`)).toThrow(/detached HEAD/);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  // Rung 3 of three: no registration at all. Reachable by hand — a botched
+  // manual cleanup that deletes the worktree's admin directory leaves the
+  // checkout in place with nothing in $main naming it. Nothing corroborates the
+  // registry's branch name any more, so there is no name to rename; that is a
+  // different sentence from "recorded, detached".
+  it('refuses when git has no worktree record for the path', () => {
+    addOne();
+    fs.rmSync(path.join(mainDir(), '.git', 'worktrees', 'quiet-mesa'),
+      { recursive: true, force: true });
+    expect(() => h.sh(`cmd_ws_rename demo-quiet-mesa feat/real-name`))
+      .toThrow(/no worktree record/);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  // Rung 1, stated against the record rather than against the directory: the
+  // rename runs in $main, and git's own registration for the worktree must come
+  // out of it naming the new branch — that is what ws-rm later reads.
+  it('renames in the project and leaves git’s record naming the new branch', () => {
+    const wt = addOne();
+    const out = h.sh(`cmd_ws_rename demo-quiet-mesa feat/real-name`);
+    expect(out).toBe('renamed demo-quiet-mesa: ws/quiet-mesa -> feat/real-name');
+    expect(h.sh(`_ws_wt_branch "${mainDir()}" "${wt}"`)).toBe('feat/real-name');
+    expect(branches('ws/quiet-mesa')).toBe('');
+  });
+
+  // The ruling on the missing-directory guard, pinned: ws-rename still REFUSES.
+  // See the comment on the guard itself for why.
+  it('refuses when the worktree directory is gone, though the record survives', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });
+    expect(() => h.sh(`cmd_ws_rename demo-quiet-mesa feat/real-name`))
+      .toThrow(/worktree is gone/);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(branches('feat/real-name')).toBe('');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
 });
