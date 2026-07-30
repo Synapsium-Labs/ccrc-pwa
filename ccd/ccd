@@ -487,6 +487,27 @@ if mode == 'state':
         'commits': commits, 'template': template or None, 'rows': rows,
         'phase': phase, 'number': number, 'checkedAt': checked_at, 'reason': reason,
     }) + '\n')
+
+elif mode == 'pick':
+    (main, branch, base_short, tip) = sys.argv[2:6]
+    rows = annotate(rows_in(), main, tip, branch, base_short)
+    # A row that matches the branch and base but whose head is NOT reachable
+    # from our tip gets its own token: "no PR at all" and "a PR that is not
+    # ours" are different sentences, and only one of them is about a stranger.
+    near = [r for r in rows
+            if r.get('headRefName') == branch and r.get('baseRefName') == base_short
+            and r.get('isCrossRepository') is False]
+    chosen = pick(rows, branch, base_short)
+    if chosen is None:
+        sys.stdout.write('!pr-head-not-ours\n' if near else '')
+    elif not is_merged(chosen, branch, base_short):
+        sys.stdout.write('!not-merged\n')
+    else:
+        sys.stdout.write('\t'.join([
+            str(chosen.get('number') or ''), str(chosen.get('url') or ''),
+            str((chosen.get('mergeCommit') or {}).get('oid') or ''),
+            str(chosen.get('headRefOid') or ''),
+        ]) + '\n')
 PY
 }
 
@@ -935,6 +956,7 @@ swap-self
 ws-add
 ws-archive
 ws-attic
+ws-audit
 ws-gc
 ws-rename
 ws-restore
@@ -1487,6 +1509,402 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   _gh_rows_ok "$opened" \
     || die "the PR was opened, but gh answered something that is not a list of PRs"
   printf '%s\n' "$opened"
+}
+
+# ── reap guards ────────────────────────────────────────────────────
+# Evaluated by ws-audit to PRODUCE a verdict, and again by ws-reap to RE-PROVE
+# it at the instant of deletion. One implementation, two evaluations at two
+# times: the audit's verdict is never trusted, it is recomputed.
+
+_ws_sensitive_match() {   # path -> 0 when it is secret-shaped
+  # Small, non-rotting and permanent. `.ccrc/` deliberately does NOT match: it
+  # is listed and destroyed like any other ignored directory, because ccd
+  # itself put it in info/exclude and exempting it would be a blind spot ccd
+  # manufactured.
+  local b="${1%/}"; b="${b##*/}"
+  case "$b" in
+    .env*|*.pem|*.key|*.p12|id_[dre]*|*.kdbx|credentials*|*.sqlite*|*.db|*.dump|*.sql|secrets*) return 0 ;;
+  esac
+  return 1
+}
+
+_ws_collect_ignored() {   # workdir — fills REAP_IGNORED / REAP_SENSITIVE / REAP_IGNDIGEST
+  # NON-ZERO when the ignored set could not be READ, and both of its reads are
+  # checked. Neither failure can be allowed to look like "there is nothing
+  # ignored here", because that is the answer that authorises the delete:
+  #
+  #   - The DIGEST half forges the token. `_ws_ignored_digest` signals a failed
+  #     read on its exit code (Task 2, deviation 6) precisely because a failure
+  #     and an empty set hash identically; discarding that status here puts ""
+  #     into REAP_IGNDIGEST on the audit side AND on the reap side, so the
+  #     fingerprints match and D2's consent check passes. Measured with only
+  #     `status --ignored=matching` failing: both sides produce
+  #     `igndigest='' … token=17af9144…`, an exact match, from a read that never
+  #     happened.
+  #   - The ENUMERATION half is worse, because it needs no token at all: an empty
+  #     REAP_SENSITIVE means `sensitive-ignored` cannot fire, and the resume path
+  #     (Task 6 Step 4) reads that array directly. Same measurement:
+  #     `sensitive=()` for a worktree holding a gitignored `secrets/creds.env`.
+  #
+  # The read is therefore ONE `git status` whose status is checked, and the loop
+  # filters `!! ` itself rather than piping through grep — a pipeline's exit code
+  # would be grep's, and grep exits 1 on a legitimately empty ignored set.
+  # `_ws_ignored_digest` is still the only implementation of the digest (it is
+  # what the archive manifest records too), so it is called rather than inlined,
+  # and its failure is propagated the same way.
+  local wd="$1" line p b out
+  REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""
+  out=$(git -C "$wd" status --porcelain --ignored=matching 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in '!! '*) ;; *) continue ;; esac
+    p="${line#!! }"
+    [[ -n "$p" ]] || continue
+    b=$(_ws_gc_bytes "$wd/$p"); [[ "$b" =~ ^[0-9]+$ ]] || b=0
+    if _ws_sensitive_match "$p"; then REAP_SENSITIVE+=("$p"); REAP_IGNORED+=("$p"$'\t'"$b"$'\t'1)
+    else                              REAP_IGNORED+=("$p"$'\t'"$b"$'\t'0); fi
+  done <<< "$out"
+  REAP_IGNDIGEST=$(_ws_ignored_digest "$wd") || return 1
+}
+
+_ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
+  local main="$1" M="$2" tip="$3" Pm mb a b cout
+  _WS_PROOF=""
+  # ancestor — a true merge commit contains our tip.
+  git -C "$main" merge-base --is-ancestor -- "$tip" "$M" 2>/dev/null && { _WS_PROOF=ancestor; return 0; }
+  # tree — a squash whose base did not move. `--` AFTER the revisions is a
+  # CORRECTNESS requirement: `diff --quiet -- A B` makes the shas pathspecs and
+  # exits 0 for any pair (verified).
+  git -C "$main" diff --quiet "$M" "$tip" -- 2>/dev/null && { _WS_PROOF=tree; return 0; }
+  # patch-id — a squash whose base DID move, i.e. the majority case on a busy
+  # repo. Whole-branch diff, NOT git cherry: cherry compares per-commit
+  # patch-ids and reports + for every commit of a multi-commit squash.
+  Pm=$(git -C "$main" rev-parse --verify "${M}^1" 2>/dev/null) || Pm=""
+  if [[ -n "$Pm" ]]; then
+    mb=$(git -C "$main" merge-base -- "$tip" "$Pm" 2>/dev/null) || mb=""
+    if [[ -n "$mb" ]]; then
+      a=$(git -C "$main" diff --binary "$mb" "$tip" -- 2>/dev/null | git -C "$main" patch-id --stable | cut -d' ' -f1)
+      b=$(git -C "$main" diff --binary "$Pm" "$M"   -- 2>/dev/null | git -C "$main" patch-id --stable | cut -d' ' -f1)
+      [[ -n "$a" && "$a" == "$b" ]] && { _WS_PROOF=patch-id; return 0; }
+    fi
+  fi
+  # cherry — the rebase-merge rung. Requires cherry to SUCCEED: swallowing its
+  # exit code and testing an empty string would pass every broken invocation.
+  if cout=$(git -C "$main" cherry "$M" "$tip" 2>/dev/null); then
+    grep -q '^+' <<< "$cout" || { _WS_PROOF=cherry; return 0; }
+  fi
+  return 1
+}
+
+_ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid
+  printf '%s\n' "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
+    "dirtyCount=$7" "ignoredDigest=$8" "sensitiveDigest=$9" "stashCount=${10}" \
+    "worktreeHead=${11}" "baseOid=${12}" | sha256sum | cut -d' ' -f1
+}
+
+_ws_reap_reset() {
+  REAP_VERDICT=""; REAP_DETAIL=""; REAP_PROOF=""; REAP_TOKEN=""
+  REAP_TIP=""; REAP_HEADOID=""; REAP_MERGE=""; REAP_BASEOID=""; REAP_WTHEAD=""
+  REAP_DIRTY=0; REAP_STASHES=0; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""
+  REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=0
+  REAP_IGNORED=(); REAP_SENSITIVE=()
+}
+
+_reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
+
+_ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
+  _ws_reap_reset
+  local id="$1" ws project workdir branch base baseShort main wthead common mainreal
+  local st up ahead repo rows row registered
+
+  # ── Phase A: identity ────────────────────────────────────────────
+  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  ws=$(_reg_get "$id" workspace)
+  [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout"; return 1; }
+  [[ -f "$REG/$id.archived" ]] \
+    || { _reap_refuse not-archived "archive first — that is the staging"; return 1; }
+  # Registry FIRST, git's record second — and "second" is a veto, not a
+  # fallback. This used to read "the reverse of ws-rm, which reads only the
+  # worktree" — no longer true: ws-rm reads its branch from git's worktree
+  # record too (_ws_wt_branch, ccd:706-717), which survives the directory being
+  # hand-deleted, so the specific mechanism that made ws/swift-harbor an orphan
+  # invisible to ccd ls, the PWA and ws-gc alike is fixed there. Reap still
+  # reads the registry first, for its own reasons: it needs `base` and `project`
+  # too, and it must be able to REFUSE for want of a name
+  # (incomplete-registry) rather than proceed with a partial one. What it does
+  # NOT do is trust that name — the same _ws_wt_branch has to corroborate it
+  # below, and after that the two are equal by construction, so which one the
+  # rest of this function operates on is no longer a question anyone can get
+  # wrong.
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); branch=$(_reg_get "$id" branch)
+  base=$(_reg_get "$id" base); [[ -n "$base" ]] || base="origin/HEAD"
+  baseShort="${base#origin/}"
+  [[ -n "$project" && -n "$workdir" && -n "$branch" ]] \
+    || { _reap_refuse incomplete-registry "project='$project' workdir='$workdir' branch='$branch'"; return 1; }
+  main="$PROJECTS_ROOT/$project"
+  if [[ ! -d "$workdir" ]]; then
+    # A missing worktree is a refusal when the USER removed it and a resume
+    # when WE did. The breadcrumb is what tells the two apart.
+    [[ -f "$REG/$id.reaping" ]] \
+      || { _reap_refuse worktree-missing "$workdir is gone"; return 1; }
+  fi
+
+  if [[ -d "$workdir" ]]; then
+    # THE branch question, asked of $main and of nothing else. `_ws_wt_branch`
+    # (ccd:706-717) reads `git -C "$main" worktree list --porcelain`, so the
+    # answer is $main's own registration for this path; it cannot leave $main, it
+    # survives the directory being gone, and it follows a rename whether ccd or
+    # the user did it. NOT `git -C "$workdir" rev-parse --abbrev-ref HEAD`, which
+    # the spec's A6/A7 spell and an earlier draft of this plan used: that answers
+    # from whatever repository owns that DIRECTORY, and after a hand-deletion and
+    # a stray `git init` that need not be $main at all. Measured on git 2.43: a
+    # stranger `git init`ed at the workdir with one commit on `attacker/main`
+    # makes the directory read answer `attacker/main` while $main's record still
+    # says `ws/quiet-basin`. Reap does not delete the name it reads here — it
+    # deletes the registry's, by CAS, in _ws_reap_tail — but the verdict it
+    # reaches and the names it prints would both have been decided by a
+    # stranger's HEAD, and the file now has ONE rule instead of two: git's
+    # worktree record is the authority, in ws-rm and here alike.
+    #
+    # TWO statements, deliberately, exactly as cmd_ws_rm writes it (ccd:733-734):
+    # `local x=$(cmd)` returns LOCAL's status, so a one-line form would read $?
+    # from the declaration and `registered` would be 0 for every path, registered
+    # or not — turning the no-record rung below into dead code. `wthead` is
+    # declared with the other locals at the top of this function for that reason.
+    wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
+    # The three rungs cmd_ws_rm walks (ccd:783, :793, :805), in refusal form,
+    # outermost first.
+    #
+    # Rung 3 — exit 1: $main holds NO registration for this path. Nothing here is
+    # $main's to remove and no name is corroborated, which is the reading that
+    # deletes nothing. It gets its own token rather than being folded into
+    # `foreign-worktree`: a hand-deleted or hand-pruned admin directory is not
+    # "a different repository", and telling someone their worktree belongs to
+    # another repo when it belongs to none would be false. Measured on git 2.43:
+    # `rm -rf $main/.git/worktrees/<slug>` leaves the directory and the branch
+    # both intact while every read of the directory fails `not a git repository`
+    # — the state the old `rev-parse` form reported as `detached-head`, about a
+    # HEAD it had not managed to read.
+    (( registered == 0 )) \
+      || { _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
+    # Rung 2 — registered, and the record says detached. `_ws_wt_branch` reports
+    # this as empty-with-exit-0, which is why emptiness alone cannot stand in for
+    # both rungs. Unlike the old form this can no longer fire because a read
+    # failed: it fires only when git positively recorded a detached HEAD.
+    [[ -n "$wthead" ]] \
+      || { _reap_refuse detached-head "$main records $workdir on a detached HEAD"; return 1; }
+    # Rung 1 — registered, on a branch, and it has to be the branch the registry
+    # names. Both sides of this comparison are now RECORDS — ccrc's registry and
+    # git's registration — which is what the token is named for. ws-rm can let
+    # git win and merely note the divergence (ccd:787-788) because it deletes
+    # whatever git had checked out there; reap cannot, because the registry's
+    # name is what its stash count, its upstream check, its tip, its PR bind and
+    # its CAS delete are all built from. So a disagreement here is never
+    # resolved, it is refused, and both names are printed as §6 requires.
+    [[ "$wthead" == "$branch" ]] \
+      || { _reap_refuse registry-branch-drift "the registry says $branch, git's worktree record for $workdir says $wthead"; return 1; }
+    # STILL REQUIRED — and now for a different reason, which is why it is worth
+    # saying out loud rather than leaving in place by inertia. It used to sit
+    # immediately after the branch read in order to CONTAIN a name that might
+    # have come from another repository; with `_ws_wt_branch` no name can, so
+    # containment is no longer its job and the ordering above no longer turns on
+    # it. What is left is the DIRECTORY, and that is not the weaker reason — it
+    # is ccd's own (ccd:737-752). Everything below this line reads or destroys
+    # `$workdir`: Phase B asks it for `status --porcelain` and for its ignored
+    # set, so a stranger's clean tree would certify OUR workspace as safe to
+    # delete; and `_ws_reap_tail` hands the same path to `git worktree remove`,
+    # which in ws-rm killed the session and disabled the unit BEFORE git got
+    # round to refusing. `registered` cannot decide it either — the record
+    # outlives the directory, and measured on git 2.43 a `git init` at that path
+    # leaves the record reading healthy with no `prunable` marker, because the
+    # record's gitdir file now points at the stranger's own `.git`. Hence: both
+    # sides must say $main, and this must run BEFORE Phase B rather than merely
+    # somewhere after the branch read.
+    #
+    # `_ws_common_dir` (ccd:687-692), never a `cd` inside a command substitution.
+    # An earlier draft of this plan wrote the cd form; `ccrc/ws-rm-fix` deleted
+    # exactly that pattern from cmd_ws_add and cmd_ws_rm and documented why at
+    # _ws_common_dir, so writing it back here would reintroduce a bug main has
+    # already fixed. The reason, restated because it decides an irreversible
+    # refusal: ccd does not control the stdout of a captured `cd`. Plain
+    # `--git-common-dir` prints a bare `.git` from a repo's own checkout, so the
+    # cd form is load-bearing rather than cosmetic — and bash's own cd prints the
+    # directory it landed on when a relative operand hits CDPATH, while a `cd`
+    # exported as a shell function (bash imports those from the environment)
+    # prints whatever it likes. `2>/dev/null` catches neither. Both sides then
+    # compare multi-line garbage: two wrong answers that happen to match wave a
+    # squatter through, two that differ refuse a healthy workspace.
+    # Empty is NO ANSWER, never a match — the helper's own contract — so both
+    # sides are required non-empty before the comparison means anything.
+    common=$(_ws_common_dir "$workdir") || common=""
+    mainreal=$(_ws_common_dir "$main")  || mainreal=""
+    [[ -n "$common" && -n "$mainreal" && "$common" == "$mainreal" ]] \
+      || { _reap_refuse foreign-worktree "$workdir belongs to ${common:-no repository}, not ${mainreal:-no repository}"; return 1; }
+    # Still called WTHEAD, still fingerprinted as `worktreeHead=`, still on the
+    # wire as `headMatchesRegistry`, all deliberately unrenamed: `worktree list
+    # --porcelain` reports each worktree's HEAD (git reads it out of
+    # `$GIT_DIR/worktrees/<slug>/HEAD`), so the VALUE is the same fact it always
+    # was. Only the repository the question is put to changed. One thing about
+    # the value did change and is worth knowing while reading the fingerprint: a
+    # detached worktree now yields "" where `rev-parse` yielded the literal
+    # `HEAD` — unobservable, because rung 2 refuses before this line.
+    REAP_WTHEAD="$wthead"
+
+    # ── Phase B: nothing local is lost ─────────────────────────────
+    # TWO statements, and the pipeline's status is not the read's. `status
+    # --porcelain | grep -c .` counts ZERO lines for a tree nobody could read, so
+    # the one-line form passes the `dirty-tree` guard on an unreadable worktree —
+    # the same defect the archive manifest shipped and deviation 6 closed there
+    # (`_ws_gc_dirty` states the rule for the file: a status we could not read is
+    # not a clean one). An index.lock contention or a permission change mid-flight
+    # is enough, and this guard is one §5.3 forbids overriding.
+    REAP_DIRTY=$(git -C "$workdir" status --porcelain 2>/dev/null) \
+      || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
+    REAP_DIRTY=$(printf '%s' "$REAP_DIRTY" | grep -c . || true)
+    (( REAP_DIRTY == 0 )) \
+      || { _reap_refuse dirty-tree "$REAP_DIRTY uncommitted or untracked file(s)"; return 1; }
+    _ws_collect_ignored "$workdir" \
+      || { _reap_refuse tree-unreadable "could not read the ignored set at $workdir"; return 1; }
+    (( ${#REAP_SENSITIVE[@]} == 0 )) \
+      || { _reap_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
+  fi
+
+  REAP_STASHES=$(_ws_stash_count "$main" "$branch")
+  (( REAP_STASHES == 0 )) \
+    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) on $branch"; return 1; }
+  up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null) \
+    || { _reap_refuse no-upstream "$branch was never pushed"; return 1; }
+  ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
+  [[ "$ahead" == 0 ]] \
+    || { _reap_refuse unpushed-commits "$ahead commit(s) are not on the remote"; return 1; }
+
+  # ── Phase C: the work is genuinely in main ─────────────────────
+  REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
+    || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
+  repo=$(_gh_repo_slug "$main") || { _reap_refuse no-remote "no origin remote for $project"; return 1; }
+  rows=$(_gh_pr_list "$repo")   || { _reap_refuse gh-unreadable "$rows"; return 1; }
+  row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
+  case "$row" in
+    '')                   _reap_refuse no-bound-pr "no merged PR binds to $branch"; return 1 ;;
+    '!pr-head-not-ours')  _reap_refuse pr-head-not-ours "the PR head commit is not reachable from $branch"; return 1 ;;
+    '!'*)                 _reap_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
+  esac
+  IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
+
+  # Mergedness is NEVER proven against an unfetched ref. Six repos on this box
+  # have never been fetched; one is 24 days stale.
+  timeout 60 git -C "$main" fetch --quiet origin \
+    || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
+  REAP_FETCHED=$(date +%s)
+  git -C "$main" cat-file -e "${REAP_MERGE}^{commit}" 2>/dev/null \
+    || { _reap_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
+  REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) || REAP_BASEOID=""
+  if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
+    REAP_PROOF="$_WS_PROOF"
+  else
+    _reap_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
+    return 1
+  fi
+
+  # ── Phase D1: the session ──────────────────────────────────────
+  st=$(_ws_status "$id") || { _reap_refuse status-unknown "cannot read the wrapper status file"; return 1; }
+  [[ "$st" != busy ]] || { _reap_refuse session-busy "the session is working — a model turn, a Bash tool command, or a status this ccd does not recognise"; return 1; }
+
+  REAP_SENSDIGEST=$(printf '%s\n' "${REAP_SENSITIVE[@]-}" | sort | sha256sum | cut -d' ' -f1)
+  REAP_TOKEN=$(_ws_fingerprint "$id" "$branch" "$REAP_TIP" "$REAP_HEADOID" "$REAP_MERGE" "$REAP_PROOF" \
+                 "$REAP_DIRTY" "$REAP_IGNDIGEST" "$REAP_SENSDIGEST" "$REAP_STASHES" "$REAP_WTHEAD" "$REAP_BASEOID")
+  REAP_VERDICT=reapable
+  return 0
+}
+
+cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's source
+  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-audit --session <id>"
+  local id=$2
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+
+  _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
+  local project workdir branch base repo transcript reaping
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  branch=$(_reg_get "$id" branch);   base=$(_reg_get "$id" base)
+  repo=$(_gh_repo_slug "$PROJECTS_ROOT/$project" 2>/dev/null) || repo=""
+  transcript=$(_transcript_path "$id") || transcript=""
+  reaping=$(_reg_get "$id" reaping)
+
+  # Sensitive-first, then bytes descending. Counts and total bytes are NEVER
+  # truncated — the whole judgement this design rests on is the human reading
+  # a filename, and a truncated list makes it structurally unavailable.
+  local ign_json="[" first=1 total=0 count=0 line p b s
+  if (( ${#REAP_IGNORED[@]} )); then
+    while IFS=$'\t' read -r p b s; do
+      [[ -n "$p" ]] || continue
+      (( first )) || ign_json+=","; first=0
+      ign_json+="{\"path\":$(_json_str "$p"),\"bytes\":$b,\"sensitive\":$( ((s)) && echo true || echo false)}"
+      total=$(( total + b )); count=$(( count + 1 ))
+    done < <(printf '%s\n' "${REAP_IGNORED[@]}" | sort -t$'\t' -k3,3nr -k2,2nr)
+  fi
+  ign_json+="]"
+
+  local sens_json="[" sfirst=1 sp
+  for sp in "${REAP_SENSITIVE[@]-}"; do
+    [[ -n "$sp" ]] || continue
+    (( sfirst )) || sens_json+=","; sfirst=0
+    sens_json+="$(_json_str "$sp")"
+  done
+  sens_json+="]"
+
+  local dirty_json="[" dfirst=1 dl
+  if [[ -d "$workdir" ]]; then
+    while IFS= read -r dl; do
+      [[ -n "$dl" ]] || continue
+      (( dfirst )) || dirty_json+=","; dfirst=0
+      dirty_json+="$(_json_str "$dl")"
+    done < <(git -C "$workdir" status --porcelain 2>/dev/null)
+  fi
+  dirty_json+="]"
+
+  local exists=false headmatch=false ahead=0 bytes=0
+  [[ -d "$workdir" ]] && exists=true
+  [[ -n "$REAP_WTHEAD" && "$REAP_WTHEAD" == "$branch" ]] && headmatch=true
+  if [[ -n "$branch" ]] && git -C "$PROJECTS_ROOT/$project" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
+    ahead=$(git -C "$PROJECTS_ROOT/$project" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)
+    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0
+  fi
+  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+
+  printf '{"id":%s,"branch":%s,"base":%s,"workdir":%s,"project":%s,"repo":%s,' \
+    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$base")" \
+    "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
+  printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
+    "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
+  printf '"dirty":%s,"ignored":%s,"ignoredCount":%s,"ignoredBytes":%s,"sensitive":%s,' \
+    "$dirty_json" "$ign_json" "$count" "$total" "$sens_json"
+  printf '"stashes":%s,"worktreeBytes":%s,"commitsAheadOfBase":%s,' \
+    "$REAP_STASHES" "$bytes" "$ahead"
+  printf '"pr":{"number":%s,"url":%s,"mergeCommit":%s,"headRefOid":%s},' \
+    "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" \
+    "$(_json_str "$REAP_PRURL")" "$(_json_str "$REAP_MERGE")" "$(_json_str "$REAP_HEADOID")"
+  printf '"merge":{"proof":%s,"fetchedAt":%s},"transcript":%s,' \
+    "$( [[ -n "$REAP_PROOF" ]] && _json_str "$REAP_PROOF" || echo null)" \
+    "$REAP_FETCHED" "$(_json_str "$transcript")"
+  # `token` is present ONLY when the verdict is reapable AND the tree was
+  # actually read. The second half is not a belt-and-braces restatement of the
+  # first: with the worktree gone and a `reaping` breadcrumb explaining why,
+  # `_ws_reap_eval` skips the whole of Phase B on purpose — that is the RESUME
+  # of a killed reap, and refusing it would strand the workspace half-deleted
+  # forever — so it reaches `reapable` with `REAP_DIRTY=0`, `REAP_IGNDIGEST=""`,
+  # `REAP_SENSITIVE=()` and `REAP_WTHEAD=""` straight out of `_ws_reap_reset`.
+  # Those are the reset defaults, not measurements, and `dirty-tree` and
+  # `sensitive-ignored` — the two guards §7 forbids overriding — were never
+  # evaluated at all. A fingerprint over them is deviation 6's digest forgery
+  # with more fields: ws-reap recomputes the same unmeasured values and the
+  # consent check matches, so the token would certify a tree nobody ever looked
+  # at. The audit therefore reports the state (`exists:false`, `reaping`) and
+  # hands out nothing to confirm against; resuming a killed reap is ws-reap's
+  # own path, not a token-carrying delete.
+  if [[ "$REAP_VERDICT" == reapable && "$exists" == true ]]; then
+    printf '"verdict":"reapable","detail":"","token":%s}\n' "$(_json_str "$REAP_TOKEN")"
+  else
+    printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
+  fi
 }
 
 # ── reclamation ────────────────────────────────────────────────────
@@ -2346,8 +2764,9 @@ case "${1:-}" in
   ws-archive) shift; cmd_ws_archive "$@" ;;
   ws-restore) shift; cmd_ws_restore "$@" ;;
   ws-attic)   shift; cmd_ws_attic "$@" ;;
+  ws-audit)  shift; cmd_ws_audit "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|pr-open|pr-state} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|pr-open|pr-state} <args>" >&2; exit 1 ;;
 esac
 fi
