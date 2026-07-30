@@ -266,6 +266,74 @@ describe('phases without a PR', () => {
   });
 });
 
+describe('a branch the registry names that no longer resolves', () => {
+  // `git branch -m` inside the worktree. Deviation 7 measured this exact state
+  // for `ws-archive` and calls it ORDINARY — it is what a user comparing two
+  // names, or renaming outside ccd, leaves behind — and changed the manifest to
+  // RECORD it (`tip: null`) rather than refuse. The same fact must not make
+  // pr-state destroy a merge.
+  const renameAway = (): { tip: string } => {
+    const r = workspaceWithCommit('demo', 'quiet-basin');
+    h.git(r.wt, 'branch', '-m', 'ws/renamed');
+    return r;
+  };
+
+  it('keeps a bound MERGED answer, and every persisted field with it', () => {
+    // The local tip is a LOCAL fact. It cannot demote gh's answer about a PR
+    // that binds on the other three conjuncts: the phase ladder consults the
+    // bound row first, and `no-commits` — a positive claim that this branch has
+    // nothing past base — is the one thing an unresolvable ref may never
+    // manufacture. Shipped behaviour was {phase:"no-commits", tip:""} with
+    // prnumber REMOVED, which makes Task 14's auto-archive (prPhase==='merged')
+    // unable to ever fire for this workspace and leaves `cmd_ws_archive` with no
+    // number to file as `archivedreason merged:#42`.
+    const { tip } = renameAway();
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('merged');
+    expect(o.number).toBe(42);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+  });
+
+  it('says tip null and ahead null rather than "" and 0', () => {
+    // Deviation 7's precedent, verbatim: `tip` is JSON null when the ref does
+    // not resolve, never "" and never a substitute oid. `""` and `0` are
+    // MEASUREMENTS — "this ref is empty", "this branch is level with base" — and
+    // neither was measured here.
+    const { tip } = renameAway();
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.tip).toBeNull();
+    expect(o.ahead).toBeNull();
+  });
+
+  it('is none, never no-commits, when nothing binds either', () => {
+    renameAway();
+    h.ghRows([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('none');
+    expect(o.ahead).toBeNull();
+  });
+
+  it('keeps rc 1 and rc 128 apart — an unreadable repo is not an absent ref', () => {
+    // `--quiet` is what makes the distinction exist at all: without it git
+    // answers 128 for BOTH, so "that ref does not exist" and "I cannot read that
+    // repository" collapse into one empty string. Measured on git 2.43, and it
+    // is the same distinction `_ws_archive_manifest` was written to preserve one
+    // task earlier in this file. An unreadable $main is not a fact about a PR:
+    // it is a per-session failure that persists nothing.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    const out = h.sh(`${GH_STUB} _pr_state_one demo-quiet-basin /no/such/main o/r '[]'`);
+    expect(JSON.parse(out)).toEqual({ id: 'demo-quiet-basin', phase: 'unknown', reason: 'error' });
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+  });
+});
+
 describe('the object the server reads', () => {
   it('carries exactly the documented keys, and the local facts in them', () => {
     // Every consumer downstream (prstate.ts, the composer, ws-audit) reads
