@@ -33,6 +33,18 @@ const workspace = (project: string, slug: string): string => {
 const open = (extra = '', id = 'demo-quiet-basin', title = 'the work', body = 'because', draft = 'false') =>
   h.run(`${GH_STUB} ${extra} cmd_pr_open --session '${id}' --title '${title}' --body-b64 '${b64(body)}' --draft '${draft}'`);
 
+/** A `gh` that behaves the way the real one does ACROSS a create: no PR before
+ *  `pr create`, the fixture's rows after. `ghRows` is one file read by every
+ *  call, so it cannot express "the probe and the read-back answer differently
+ *  in one run" — which is the only run in which the create path has an answer
+ *  at all. Layered after `GH_STUB` so it wins, and it logs the same argv. */
+const GH_CREATES = `
+gh() {
+  printf '%s\\n' "$*" >> "$HOME/gh-calls"
+  case "$1 $2" in "pr create") touch "$HOME/gh-created"; return 0 ;; esac
+  if [[ -f "$HOME/gh-created" ]]; then cat "$HOME/gh-rows.json"; else echo '[]'; fi
+};`;
+
 describe('argv discipline', () => {
   it('takes exactly four flag/value pairs, in exactly that order', () => {
     workspace('demo', 'quiet-basin');
@@ -190,6 +202,64 @@ describe('the happy path', () => {
     const r = open();
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/push failed/);
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+  });
+
+  it('answers with the PR rows and nothing else, in ONE shape on both paths', () => {
+    // The create path's stdout had never been asserted, and it was not JSON:
+    // `git push --set-upstream` writes "branch 'x' set up to track 'origin/x'."
+    // to STDOUT, so the verb's answer was that sentence followed by the rows.
+    // Dropping the read-back entirely, or its `isDraft`, both left the suite
+    // green. The Interfaces block promises "the PR as JSON on stdout".
+    workspace('demo', 'quiet-basin');
+    const row = { number: 9, url: 'https://github.com/o/r/pull/9', state: 'OPEN', isDraft: false };
+    h.ghRows([row]);
+    const created = h.run(`${GH_STUB} ${GH_CREATES} cmd_pr_open --session demo-quiet-basin --title t --body-b64 ${b64('b')} --draft false`);
+    expect(created.code).toBe(0);
+    expect(JSON.parse(created.stdout)).toEqual([row]);
+
+    // ...and the idempotent path answers the same shape from the same reader,
+    // where the two calls used to ask for `number,url,state` and
+    // `number,url,state,isDraft` — a caller could tell the paths apart by
+    // whether `isDraft` was there at all. Run second, against the PR the first
+    // one opened, which is exactly the case idempotence is for.
+    const existing = open();
+    expect(existing.code).toBe(0);
+    expect(JSON.parse(existing.stdout)).toEqual([row]);
+  });
+
+  it('asks gh ONE bounded question, the same one on both calls, always under timeout', () => {
+    // The stub logs the argv it was handed and `timeout` logs its own, which is
+    // the only way any of this is assertable: the stub answers whatever it is
+    // asked, so `--state all` -> `--state open` and a dropped `timeout` are
+    // both invisible behaviourally. `PR_GH_TIMEOUT` is the only bound there is
+    // on a 30 s blocking DNS hang.
+    workspace('demo', 'quiet-basin');
+    h.ghRows([{ number: 9, url: 'u', state: 'OPEN', isDraft: false }]);
+    expect(h.run(`${GH_STUB} ${GH_CREATES} cmd_pr_open --session demo-quiet-basin --title t --body-b64 ${b64('b')} --draft false`).code).toBe(0);
+    const asked = 'pr list --repo o/r --head ws/quiet-basin --state all --limit 100 '
+      + '--json number,state,headRefName,headRefOid,baseRefName,isCrossRepository,'
+      + 'mergedAt,mergeCommit,url,title,isDraft,statusCheckRollup';
+    // Exactly twice, byte for byte, and never a third time: --state all (a
+    // CLOSED PR on this branch must read as "exists"), the 100-PR window, the
+    // head filter that scopes it to this branch, and every field the answer is
+    // supposed to carry.
+    expect(h.ghCalls().filter((c) => c.startsWith('pr list'))).toEqual([asked, asked]);
+    expect(h.ghCalls().filter((c) => c.startsWith('timeout '))).toEqual([
+      `timeout 12 gh ${asked}`,
+      'timeout 12 gh pr create --repo o/r --head ws/quiet-basin --base main --title t --body b',
+      `timeout 12 gh ${asked}`,
+    ]);
+  });
+
+  it('returns a CLOSED PR on the branch rather than opening a second one', () => {
+    // --state all, said behaviourally: `--state open` would answer [] here and
+    // open a duplicate over an abandoned PR's branch.
+    workspace('demo', 'quiet-basin');
+    h.ghRows([{ number: 3, url: 'https://github.com/o/r/pull/3', state: 'CLOSED', isDraft: false }]);
+    const r = open();
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)[0].state).toBe('CLOSED');
     expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
   });
 });

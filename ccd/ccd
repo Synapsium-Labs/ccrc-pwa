@@ -1437,7 +1437,12 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   # call. --set-upstream writes branch.<b>.remote/merge into the COMMON config,
   # so the workspace sees the upstream ws-reap later requires (verified: byte-
   # identical keys and values to the same push run inside the worktree).
-  git -C "$main" push --set-upstream origin "refs/heads/$branch:refs/heads/$branch" \
+  # STDOUT is dropped because this verb's stdout is its ANSWER: `--set-upstream`
+  # prints "branch 'x' set up to track 'origin/x'." there, so the create path
+  # used to answer that sentence followed by the rows, which is not JSON. The
+  # ref update summary and every failure go to stderr, where the route wants
+  # them.
+  git -C "$main" push --set-upstream origin "refs/heads/$branch:refs/heads/$branch" >/dev/null \
     || die "push failed for $branch — nothing was opened"
 
   local -a args=(pr create --repo "$repo" --head "$branch" --base "$baseShort"
@@ -1445,8 +1450,21 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   [[ "$draft" == true ]] && args+=(--draft)
   timeout "$PR_GH_TIMEOUT" gh "${args[@]}" >/dev/null || die "gh pr create failed"
 
-  timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --head "$branch" --state all \
-    --json number,url,state,isDraft
+  # The answer, read back through the SAME reader as the probe: same fields,
+  # same 100-PR window, same classification. Two hand-written `--json` lists
+  # made two success shapes out of one contract — `isDraft` was present on the
+  # created answer and absent on the idempotent one — and a caller could tell
+  # which path it had taken from a field that is supposed to describe the PR.
+  # A failure here is NOT a failed open: the PR exists, and saying so is the
+  # difference between "retry" and "look before you retry".
+  opened=$(_gh_pr_list "$repo" "$branch"); rc=$?
+  if (( rc != 0 )); then
+    reason="${opened##*\"reason\":\"}"; reason="${reason%%\"*}"
+    die "the PR was opened, but reading it back failed ($reason)"
+  fi
+  _gh_rows_ok "$opened" \
+    || die "the PR was opened, but gh answered something that is not a list of PRs"
+  printf '%s\n' "$opened"
 }
 
 # ── reclamation ────────────────────────────────────────────────────
