@@ -55,6 +55,37 @@ describe('argv discipline', () => {
     expect(h.run(`${GH_STUB} cmd_pr_open --session demo-quiet-basin --title t --body-b64 ${b64('b')} --draft false --repo evil/repo`).code).toBe(1);
   });
 
+  it('checks each of the four flag names in its OWN position', () => {
+    // Four assertions, four fixtures. One wrong-order fixture trips whichever
+    // assertion still stands, so three of the four were untested at any moment
+    // — each of these is eight tokens, so arity passes and only the position it
+    // names can refuse it.
+    workspace('demo', 'quiet-basin');
+    const b = b64('b');
+    for (const argv of [
+      `--sess demo-quiet-basin --title t --body-b64 ${b} --draft false`,
+      `--session demo-quiet-basin --titel t --body-b64 ${b} --draft false`,
+      `--session demo-quiet-basin --title t --body64 ${b} --draft false`,
+      `--session demo-quiet-basin --title t --body-b64 ${b} --draf false`,
+    ]) {
+      const r = h.run(`${GH_STUB} cmd_pr_open ${argv}`);
+      expect(r.code, argv).toBe(1);
+      expect(r.stderr, argv).toMatch(/usage: ccd pr-open/);
+    }
+    expect(h.ghCalls()).toEqual([]);
+  });
+
+  it('refuses a session id that is not one, before any path is built from it', () => {
+    // Global Constraints name this guard explicitly. Removing it degrades to
+    // `no such session`, which is a refusal too — so only a fixture that says
+    // WHICH refusal it wants keeps the guard alive.
+    workspace('demo', 'quiet-basin');
+    const r = h.run(`${GH_STUB} cmd_pr_open --session '../../etc/passwd' --title t --body-b64 ${b64('b')} --draft false`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/bad session id/);
+    expect(h.ghCalls()).toEqual([]);
+  });
+
   it('has no path-taking flag, no argv passthrough, and no git command in $workdir', () => {
     // gh pr create -F <file> reads any file the uid can, including
     // ~/.config/gh/hosts.yml (0600, two live gho_ tokens). The only correct
@@ -113,11 +144,33 @@ describe('argv discipline', () => {
     // a non-empty one. This is that guarantee, asserted.
     expect(open('', 'demo-quiet-basin', 't', '').stderr).toMatch(/empty body/);
     expect(open('', 'demo-quiet-basin', 't', 'x'.repeat(65537)).stderr).toMatch(/body too large/);
+    // The bound is measured on the BODY, not on its encoding: base64 of 60000
+    // bytes is 80000, so a `wc -c` on `$b64` would refuse a body comfortably
+    // under the limit. The existing PR fixture keeps this to the size guard —
+    // nothing is pushed, so what is asserted is that the body got through it.
+    h.ghRows([{ number: 1, url: 'u', state: 'OPEN', isDraft: false }]);
+    expect(open('', 'demo-quiet-basin', 't', 'x'.repeat(60000)).code).toBe(0);
+  });
+
+  it('refuses a body that is not valid UTF-8', () => {
+    // gh sends the body as JSON, and an invalid sequence is refused by the API
+    // — but only after the branch has been pushed. This check is before it, and
+    // it had no fixture at all.
+    workspace('demo', 'quiet-basin');
+    const bad = Buffer.from([0xff, 0xfe, 0x41]).toString('base64');
+    const r = h.run(`${GH_STUB} cmd_pr_open --session demo-quiet-basin --title t --body-b64 '${bad}' --draft false`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/body is not valid UTF-8/);
+    expect(h.ghCalls()).toEqual([]);
   });
 
   it('rejects a --draft value that is not true or false', () => {
     workspace('demo', 'quiet-basin');
     expect(open('', 'demo-quiet-basin', 't', 'b', 'maybe').stderr).toMatch(/bad --draft/);
+    // The EMPTY value is the one that matters: `${8:-false}` reads a --draft
+    // nobody set as `false` and opens a REAL PR for a request that never said
+    // so. `$8` is set-and-empty here, so it fails the check instead.
+    expect(open('', 'demo-quiet-basin', 't', 'b', '').stderr).toMatch(/bad --draft/);
   });
 });
 
