@@ -1433,8 +1433,16 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   # over a stranger's work. Nothing above reads $workdir either — it is a KEY
   # into git's records here, not a repository this verb talks to.
   # Fully qualified both sides, NEVER --force, branch from the registry and
-  # corroborated by git, never from the request. Failure aborts before any gh
-  # call. --set-upstream writes branch.<b>.remote/merge into the COMMON config,
+  # corroborated by git, never from the request. The SOURCE half is what a test
+  # can tell apart: with a same-named tag in $main — release tooling makes them
+  # from branch names — a bare `ws/x` is "src refspec matches more than one" and
+  # the one bounded write fails outright. The destination half is EQUIVALENT and
+  # stays anyway: measured with `refs/tags/ws/x` present on both sides, a
+  # qualified src alone lands on `refs/heads/ws/x` exactly as the pair does, so
+  # no fixture can distinguish them — it is written out because the ref this
+  # sends to is the one thing a reader of this line most needs stated.
+  # Failure aborts before any gh call.
+  # --set-upstream writes branch.<b>.remote/merge into the COMMON config,
   # so the workspace sees the upstream ws-reap later requires (verified: byte-
   # identical keys and values to the same push run inside the worktree).
   # STDOUT is dropped because this verb's stdout is its ANSWER: `--set-upstream`

@@ -48,6 +48,11 @@ gh() {
 describe('argv discipline', () => {
   it('takes exactly four flag/value pairs, in exactly that order', () => {
     workspace('demo', 'quiet-basin');
+    // An existing PR, so the extra-token call below would SUCCEED on arity
+    // `-ge 8` instead of failing for the harness's own reasons: without a rows
+    // fixture the fail-closed probe refuses it whatever the arity says, and the
+    // assertion would pass while proving nothing.
+    h.ghRows([{ number: 7, url: 'u', state: 'OPEN', isDraft: false }]);
     expect(h.run(`${GH_STUB} cmd_pr_open --session demo-quiet-basin`).code).toBe(1);
     expect(h.run(`${GH_STUB} cmd_pr_open --title t --session demo-quiet-basin --body-b64 ${b64('b')} --draft false`).code).toBe(1);
     // Extra tokens after the pinned prefix are what a prefix whitelist CANNOT
@@ -330,6 +335,26 @@ describe('the happy path', () => {
     ]);
   });
 
+  it('pushes a refspec that is fully qualified on BOTH sides', () => {
+    // A bare `ws/quiet-basin` still pushes correctly in an ordinary fixture, so
+    // the qualified form Global Constraints require was unpinned. A tag of the
+    // same name is what tells them apart: measured, `git push origin
+    // ws/quiet-basin` with both refs/heads/ws/quiet-basin and
+    // refs/tags/ws/quiet-basin present is "src refspec … matches more than
+    // one", while refs/heads/…:refs/heads/… names exactly one ref on each side.
+    // A same-named tag is ordinary — release tooling makes them from branch
+    // names — and here it would turn the one bounded write into a hard failure,
+    // or, on the remote side, into a push at a tag.
+    const main = path.join(h.home, 'projects', 'demo');
+    workspace('demo', 'quiet-basin');
+    h.git(main, 'tag', 'ws/quiet-basin');
+    h.ghRows([]);
+    const r = open();
+    expect(r.code).toBe(0);
+    expect(h.git(path.join(h.home, 'origins', 'demo.git'), 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin'))
+      .toBe(h.git(main, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin'));
+  });
+
   it('names the state a failed create leaves behind — the branch IS on origin', () => {
     // The push is kept: rolling it back would be a destructive rollback of a
     // lossless state (the ref is the workspace's own work, and a later retry
@@ -408,6 +433,47 @@ describe('the existence probe fails closed', () => {
     expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
     expect(() => h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin')).toThrow();
   });
+
+  it('refuses an rc-0 body that PARSES but is not a list', () => {
+    // `{"message":"Not Found"}` is what the API says about a repo the token
+    // cannot see, and it is perfectly good JSON: a check that only asked
+    // "does it parse" would take it for an answer and push underneath it.
+    workspace('demo', 'quiet-basin');
+    h.ghRaw('{"message":"Not Found"}\n');
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/not a list of PRs — nothing was pushed/);
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+  });
+
+  it('says the PR WAS opened when the read-back fails, and answers nothing', () => {
+    // The read-back is the same read, so it fails the same way — but the truth
+    // it reports is different, and it is the difference between "retry" and
+    // "look before you retry".
+    workspace('demo', 'quiet-basin');
+    const r = h.run(`${GH_STUB}
+      gh() { printf '%s\\n' "$*" >> "$HOME/gh-calls"
+             case "$1 $2" in "pr create") touch "$HOME/gh-created"; return 0 ;; esac
+             [[ -f "$HOME/gh-created" ]] && return 124
+             echo '[]'; }
+      cmd_pr_open --session demo-quiet-basin --title t --body-b64 ${b64('b')} --draft false`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the PR was opened, but reading it back failed \(timeout\)/);
+    expect(r.stdout).toBe('');
+  });
+
+  it('never answers with a read-back body that is not a list either', () => {
+    workspace('demo', 'quiet-basin');
+    const r = h.run(`${GH_STUB}
+      gh() { printf '%s\\n' "$*" >> "$HOME/gh-calls"
+             case "$1 $2" in "pr create") touch "$HOME/gh-created"; return 0 ;; esac
+             if [[ -f "$HOME/gh-created" ]]; then echo 'gh: could not determine base repository'
+             else echo '[]'; fi; }
+      cmd_pr_open --session demo-quiet-basin --title t --body-b64 ${b64('b')} --draft false`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the PR was opened, but gh answered something that is not a list of PRs/);
+    expect(r.stdout).not.toContain('could not determine base repository');
+  });
 });
 
 /** The push is the one place this design reaches the network, so the two facts
@@ -451,6 +517,35 @@ describe('the ref is $main’s, and the directory only ever corroborates it', ()
     expect(h.ghCalls()).toEqual([]);
     expect(() => h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/other')).toThrow();
     expect(() => h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin')).toThrow();
+  });
+
+  it('reads the record from $main, so a stranger at $workdir cannot veto the push', () => {
+    // Deviation 4's core claim, on the write path. Corroborating from the
+    // DIRECTORY (`_ws_wt_branch "$workdir" "$workdir"`) survives all three
+    // rungs above, because a stranger repo that happens to be on the same
+    // branch NAME answers the same string. A stranger on a DIFFERENT branch is
+    // what tells them apart: $main's record still says ws/quiet-basin and the
+    // write proceeds with $main's ref, while the directory says attacker/main —
+    // which refuses a write this verb is entitled to make, and prints a
+    // stranger's branch name inside our own refusal while doing it.
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    const ours = h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin');
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.mkdirSync(wt, { recursive: true });
+    h.git(wt, 'init', '-q', '-b', 'attacker/main');
+    fs.writeFileSync(path.join(wt, 'evil.txt'), 'evil\n');
+    h.git(wt, 'add', 'evil.txt');
+    h.git(wt, 'commit', '-m', 'stranger work');
+    // The record in $main is untouched by any of that, which is the premise.
+    expect(h.sh(`_ws_wt_branch "${main}" "${wt}"`)).toBe('ws/quiet-basin');
+
+    h.ghRows([]);
+    const r = open();
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toMatch(/attacker\/main/);
+    expect(h.git(path.join(h.home, 'origins', 'demo.git'), 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin'))
+      .toBe(ours);
   });
 
   it('pushes $main’s ref, never the ref of a stranger repository at $workdir', () => {
