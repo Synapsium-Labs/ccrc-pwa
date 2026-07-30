@@ -24,8 +24,8 @@ const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
   _alive() { return 1; };`;
 
-const shFail = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  try { return { code: 0, stdout: h.sh(snippet), stderr: '' }; }
+const shFail = (snippet: string, env?: NodeJS.ProcessEnv): { code: number; stdout: string; stderr: string } => {
+  try { return { code: 0, stdout: h.sh(snippet, env), stderr: '' }; }
   catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string };
     return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
@@ -229,6 +229,84 @@ describe('ws-archive', () => {
     // The manifest describes the thing that may later be deleted, so it cannot
     // live inside it.
     expect(fs.existsSync(path.join(wt, '.archivemanifest'))).toBe(false);
+  });
+});
+
+/** The manifest is the record Task 5's audit ladder and ws-reap compare against,
+ *  so a manifest that cannot be told truthfully has to be a refusal. Every one of
+ *  these archived at exit 0 before the fix, with the `archived` marker set. */
+describe('ws-archive refuses rather than record a manifest that lies', () => {
+  it('refuses when the worktree directory is gone', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    fs.renameSync(wt, `${wt}-moved`);
+    // Every safety-relevant field would read PRISTINE: dirty 0 because
+    // `status --porcelain` failed, worktreeBytes 0 because _ws_gc_bytes returned
+    // '-' and the fallback zeroed it, ignoredDigest = sha256(''). Measured before
+    // the fix: "archived demo-quiet-basin — worktree kept at …, nothing deleted",
+    // exit 0, marker set. ws-restore already refuses this shape (ccd:613).
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/worktree is gone/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+    expect(h.calls()).toEqual([]);              // and nothing was torn down
+  });
+
+  it('refuses when a stranger repository sits at $workdir', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    // The registry's word alone is not identity. git's RECORD outlives the
+    // directory, so after a hand-deletion and a stray `git init` at the same path
+    // with the same branch NAME the record still reads healthy and still says
+    // ws/quiet-basin — `_ws_wt_branch` cannot catch this on its own, which is why
+    // the directory has to be asked too. Without both, every tree field in the
+    // manifest describes a stranger's tree and files it under this workspace.
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.mkdirSync(wt, { recursive: true });
+    h.git(wt, 'init', '-q', '-b', 'ws/quiet-basin');
+    fs.writeFileSync(path.join(wt, 'evil.txt'), 'evil\n');
+    h.git(wt, 'add', 'evil.txt');
+    h.git(wt, 'commit', '-m', 'stranger work');
+    expect(h.git(main, 'worktree', 'list', '--porcelain')).toContain('branch refs/heads/ws/quiet-basin');
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/is not a worktree of/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses when the registry names a branch git’s record does not', () => {
+    workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    // $main really has both branches, so nothing else would stop it: the manifest
+    // would record ws/other's tip as this workspace's, and ws-reap would compare
+    // the wrong branch's state against the wrong tree.
+    h.git(main, 'branch', 'ws/other', 'main');
+    h.sh('_reg_set demo-quiet-basin branch ws/other');
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/registry says ws\/other/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses when python3 cannot quote the JSON, instead of persisting garbage', () => {
+    workspace('demo', 'quiet-basin');
+    const stub = path.join(h.home, 'nopython');
+    fs.mkdirSync(stub, { recursive: true });
+    fs.writeFileSync(path.join(stub, 'python3'), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
+    // _json_str has no fallback, and every field went through it. Measured before
+    // the fix: the archived marker was set, exit 0, and the persisted record was
+    //   {"id":,"branch":,"base":,"tip":,"dirty":0,…}
+    // — not JSON at all, as the archive record. ccd's other python3 call site
+    // (ccd:1287) warns and continues; that is right for a best-effort transcript
+    // sanitize and wrong for a record deletions are authorised from.
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`,
+                     { PATH: `${stub}:${process.env.PATH ?? ''}` });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/python3/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
   });
 });
 
