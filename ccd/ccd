@@ -132,7 +132,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # `npm test`. A status we do not recognise is far likelier to be new work than
   # new rest, and an allowlist is the only polarity that survives the wrapper
   # growing a fourth word. Same polarity as _auto_swap_check's gate
-  # (ccd:1101), which is likewise `[[ "$st" == "idle" ]]` and stops on anything
+  # (ccd:1261), which is likewise `[[ "$st" == "idle" ]]` and stops on anything
   # else.
   local id="$1" wrapper cfg pid sf st
   wrapper=$(_reg_get "$id" wrapper); [[ -n "$wrapper" ]] || return 1
@@ -688,7 +688,7 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
 
   # Every string field is quoted by python3, so without it NONE of them are and
   # the record is not JSON. Probed once, up front, rather than six times inside
-  # the printf. ccd's other python3 call site (ccd:1287) warns and continues,
+  # the printf. ccd's other python3 call site (ccd:1447) warns and continues,
   # which is right for a best-effort transcript sanitize and wrong for a record
   # that authorises deletions.
   _json_str probe >/dev/null 2>&1 \
@@ -698,7 +698,7 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # reads below are the one class that must be `-C "$workdir"` — they are
   # questions about that directory's contents — so they run only after git's own
   # record AND the directory itself have both said $main, which is the pair
-  # cmd_ws_rm requires before it touches anything (ccd:396-400). `registered` is
+  # cmd_ws_rm requires before it touches anything (ccd:432-435). `registered` is
   # read from $? on its own line: `local x=$(...)` returns local's status.
   local wthead registered wd_common main_common rc
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
@@ -763,7 +763,7 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
   # No confirmation: it only creates. The one thing it must not do is leave the
-  # session unsupervised — `ccd ensure` does NOT re-supervise (ccd:1267-1274), so
+  # session unsupervised — `ccd ensure` does NOT re-supervise (ccd:1427-1434), so
   # boot persistence would be silently lost.
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-restore --session <id>"
   local id=$2
