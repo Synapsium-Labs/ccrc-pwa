@@ -355,7 +355,7 @@ if mode == 'state':
     # `tip: null` rule for the archive manifest, applied to the same fact.
     tip = tip or None
     ahead = int(ahead) if ahead != '' else None
-    dirty = int(dirty)
+    dirty = int(dirty) if dirty != '' else None
     raw_rows = rows_in()
     if raw_rows is None:
         # THE ID-LESS SHAPE, on purpose: the body is one gh call's answer for the
@@ -1171,7 +1171,40 @@ _pr_state_one() {   # id main repo rows -> one JSON line
     # session's whole line disappears from the sweep's output.
     [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=""
   fi
-  dirty=$(git -C "$workdir" status --porcelain 2>/dev/null | grep -c . || true)
+  # THE ONE READ IN THIS VERB THAT IS ABOUT A DIRECTORY. ccrc asks $main;
+  # $workdir is otherwise only ever a path git is asked ABOUT — but "what is
+  # uncommitted here" is a question about that directory's contents, so it is
+  # `-C "$workdir"` and therefore has to be ENTITLED first: git's own record AND
+  # the directory itself must both say $main, the pair `cmd_ws_rm` requires
+  # before it touches anything and `_ws_archive_manifest` walks for the identical
+  # read. Neither rung alone is enough — the record outlives the directory, so a
+  # hand-deletion plus a stray `git init` still answers $branch while its tree
+  # belongs to a stranger. Measured: without the common-dir rung the squatter's
+  # two untracked files were counted and reported as this workspace's.
+  #
+  # UNENTITLED OR UNREADABLE IS `null`, NOT A REFUSAL AND NEVER 0. `dirty` is an
+  # advisory — the PR state is entirely knowable when gh answered and the
+  # worktree did not — and this verb answers for every workspace of a project
+  # from one gh call, so refusing here would cost the siblings their state too.
+  # `ws-archive` refuses on these same facts because it writes a record that
+  # authorises deletions; this one only reports. What is NOT allowed is `0`: the
+  # shipped one-liner piped into `grep -c` and threw git's status away, so a
+  # deleted worktree answered `"dirty": 0` — an affirmative "nothing is
+  # uncommitted here" about a directory that is not there. That is deviation 6's
+  # silent-empty-stream defect, one task later in the same file. `registered` and
+  # the status are read from `$?` on their own lines: `local x=$(cmd)` returns
+  # local's status, not the command's.
+  local wthead registered wd_common main_common porcelain prc
+  dirty=""
+  wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
+  wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
+  if (( registered != 0 )) || [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
+    echo "pr-state: $workdir is not a corroborated worktree of $main — dirty unknown for $id" >&2
+  else
+    porcelain=$(git -C "$workdir" status --porcelain 2>/dev/null); prc=$?
+    if (( prc == 0 )); then dirty=$(printf '%s' "$porcelain" | grep -c . || true)
+    else echo "pr-state: could not read the tree at $workdir — dirty unknown for $id" >&2; fi
+  fi
   tmpl=""
   [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \

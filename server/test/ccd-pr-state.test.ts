@@ -390,6 +390,68 @@ describe('the object the server reads', () => {
   });
 });
 
+describe('dirty is a measurement of OUR tree, or it is null', () => {
+  // The one class of read in this verb that must be `-C "$workdir"` — it is a
+  // question about that directory's CONTENTS — so it runs only after
+  // `_ws_wt_branch` and `_ws_common_dir` have both said `$main`, which is the
+  // pair Global Constraints prescribe and `cmd_ws_rm` requires before it touches
+  // anything. And it never counts a failure as zero: `0` is the positive claim
+  // "nothing here is uncommitted".
+  it('is null, not 0, when the worktree directory is gone', () => {
+    const { wt } = workspaceWithCommit('demo', 'quiet-basin');
+    fs.rmSync(wt, { recursive: true, force: true });
+    h.ghRows([]);
+    const out = h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin 2>"$HOME/pr-err"`);
+    expect(line(out).dirty).toBeNull();
+    // A NOTE, not a refusal: pr-state is read-only and answers for every
+    // workspace of the project from one gh call, so one unreadable worktree must
+    // not cost the rest of them their PR state. Everything else is still here.
+    expect(fs.readFileSync(path.join(h.home, 'pr-err'), 'utf8')).toContain('demo-quiet-basin');
+    expect(line(out).phase).toBe('none');
+    expect(line(out).repo).toBe('o/r');
+  });
+
+  it('never counts a STRANGER repository squatting the workdir as our dirt', () => {
+    // The record outlives the directory, so a hand-deletion plus a `git init` at
+    // the same path still answers `$branch` from `$main`'s worktree list — which
+    // is why the branch rung alone cannot decide the DIRECTORY. Without the
+    // common-dir rung this counts the stranger's untracked files and files them
+    // under this workspace.
+    const { wt } = workspaceWithCommit('demo', 'quiet-basin');
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.mkdirSync(wt, { recursive: true });
+    h.sh(`cd "${wt}" && git init -q -b ws/quiet-basin .`);
+    fs.writeFileSync(path.join(wt, 'theirs1.txt'), 'x\n');
+    fs.writeFileSync(path.join(wt, 'theirs2.txt'), 'x\n');
+    h.ghRows([]);
+    const r = h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    expect(line(r.stdout).dirty).toBeNull();
+    expect(line(r.stdout).dirty).not.toBe(2);
+  });
+
+  it('is null when the tree is entitled but cannot be READ', () => {
+    // The rung the shipped one-liner had no way to reach: the pipe threw git's
+    // status away, so `status --porcelain` failing read as an empty, clean tree.
+    // An unreadable index is a genuine instance — `--git-common-dir` still
+    // answers, so the corroboration passes and only the tree read fails.
+    const { wt } = workspaceWithCommit('demo', 'quiet-basin');
+    const idx = path.join(h.home, 'projects', 'demo', '.git', 'worktrees', 'quiet-basin', 'index');
+    expect(fs.existsSync(idx)).toBe(true);
+    fs.chmodSync(idx, 0o000);
+    try {
+      expect(() => h.git(wt, 'status', '--porcelain')).toThrow();      // git really cannot read it
+      expect(h.sh(`_ws_common_dir "${wt}"`)).toBe(h.sh(`_ws_common_dir "${path.join(h.home, 'projects', 'demo')}"`));
+      h.ghRows([]);
+      const r = h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+      expect(r.code).toBe(0);
+      expect(line(r.stdout).dirty).toBeNull();
+    } finally {
+      fs.chmodSync(idx, 0o644);
+    }
+  });
+});
+
 describe('failure is an ANSWER, not an error', () => {
   it.each([
     [124, '', 'timeout'],
