@@ -5,7 +5,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+
+/** sha256 of the empty string — what a failed read used to be indistinguishable
+ *  from, and what a genuinely empty ignored set still legitimately hashes to. */
+const SHA256_EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-arch-'); });
@@ -60,6 +65,36 @@ const withStatus = (status: string): void => {
   fs.mkdirSync(cfg, { recursive: true });
   fs.writeFileSync(path.join(cfg, '4242.json'), JSON.stringify({ status, statusUpdatedAt: 1 }));
 };
+
+describe('_ws_ignored_digest', () => {
+  it('is the sha256 of the ignored-entry SET, with directories collapsed', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'secrets/\n*.log\n');
+    fs.mkdirSync(path.join(wt, 'secrets'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'secrets', 'creds.env'), 'k\n');
+    fs.writeFileSync(path.join(wt, 'debug.log'), 'l\n');
+    // `--ignored=matching` collapses `secrets/` to ONE entry — the whole reason
+    // this is not `ls-files --others --ignored`, which enumerates per file
+    // (measured 210,070 entries / 24.6 MB in custom-tools against an 8 MB agent
+    // buffer). Pinning the exact preimage pins the collapse, the `!! ` filter and
+    // the sort at once; asserting only "64 hex chars" would not.
+    expect(h.sh(`_ws_ignored_digest "${wt}"`))
+      .toBe(createHash('sha256').update('!! debug.log\n!! secrets/\n').digest('hex'));
+  });
+
+  it('separates a FAILED read from an empty one — both hash to sha256("")', () => {
+    // Harmless while the digest is only recorded. A forgery the moment ws-reap
+    // compares a stored digest against a live one to prove gitignored content is
+    // unchanged: a failure on either side manufactures the match that authorises
+    // the delete. The exit code is the only thing that can carry the difference,
+    // because the two digests are equal by construction.
+    const wt = workspace('demo', 'quiet-basin');
+    const clean = shFail(`_ws_ignored_digest "${wt}"`);
+    expect(clean.stdout.trim()).toBe(SHA256_EMPTY);
+    expect(clean.code).toBe(0);                     // nothing ignored: a SUCCESS
+    expect(shFail('_ws_ignored_digest /no/such/directory').code).not.toBe(0);
+  });
+});
 
 describe('_ws_status', () => {
   it('reads ONLY "idle" as idle — shell, compacting and anything new are busy', () => {
@@ -188,6 +223,7 @@ describe('ws-archive', () => {
     expect(m.tip).toMatch(/^[0-9a-f]{40}$/);
     expect(m.dirty).toBe(0);
     expect(m.stashes).toBe(0);
+    expect(m.ignoredDigest).toBe(SHA256_EMPTY);     // nothing ignored, read OK
     expect(typeof m.worktreeBytes).toBe('number');
     expect(String(m.transcript)).toContain('.claude/projects/');
     // The manifest describes the thing that may later be deleted, so it cannot

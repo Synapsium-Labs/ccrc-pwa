@@ -166,12 +166,32 @@ _ws_stash_count() {   # main branch -> stash entries belonging to that branch
 }
 
 _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
+  # NON-ZERO when the set could not be read at all.
+  #
   # --ignored=matching, NEVER `ls-files --others --ignored`: the latter
   # enumerates per file (measured 210,070 entries / 24.6 MB in custom-tools,
   # against an 8 MB agent EXEC_MAX_BUFFER), while this collapses each ignored
   # directory to one entry.
-  git -C "$1" status --porcelain --ignored=matching 2>/dev/null \
-    | grep '^!! ' | sort | sha256sum | cut -d' ' -f1
+  #
+  # A failed read must not be indistinguishable from an empty one, and by
+  # construction the digests are: a nonexistent directory, a corrupt repo and an
+  # index.lock contention all hash sha256("") = e3b0c442…b855, exactly like a
+  # workspace with nothing ignored. Harmless while the digest is only recorded;
+  # a forgery the moment ws-reap compares a stored digest against a live one to
+  # prove gitignored content is unchanged, because a failure on EITHER side then
+  # manufactures the match that authorises the delete. So the difference is
+  # carried by the exit code.
+  #
+  # It has to come from PIPESTATUS[0] — git's own status — and not from the
+  # pipeline: `grep '^!! '` exits 1 on a legitimately empty ignored set, so the
+  # pipeline already returned non-zero for the HEALTHY case (measured: rc=1 for a
+  # clean workspace, rc=1 for /no/such/dir). Two statements, because
+  # `local d=$(...)` would return local's status.
+  local d
+  d=$(git -C "$1" status --porcelain --ignored=matching 2>/dev/null \
+        | grep '^!! ' | sort | sha256sum | cut -d' ' -f1; exit "${PIPESTATUS[0]}") || return 1
+  [[ "$d" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$d"
 }
 
 # ── workspace slugs ────────────────────────────────────────────────
