@@ -38,11 +38,19 @@ const open = (extra = '', id = 'demo-quiet-basin', title = 'the work', body = 'b
  *  `pr create`, the fixture's rows after. `ghRows` is one file read by every
  *  call, so it cannot express "the probe and the read-back answer differently
  *  in one run" — which is the only run in which the create path has an answer
- *  at all. Layered after `GH_STUB` so it wins, and it logs the same argv. */
+ *  at all. Layered after `GH_STUB` so it wins, and it logs the same argv.
+ *
+ *  `pr create` PRINTS THE PR URL, because the real one does. A silent create
+ *  made `>/dev/null` on that call unfalsifiable: dropping it left the suite
+ *  green while, against a real gh, the URL would land in front of the JSON this
+ *  verb answers with. */
 const GH_CREATES = `
 gh() {
   printf '%s\\n' "$*" >> "$HOME/gh-calls"
-  case "$1 $2" in "pr create") touch "$HOME/gh-created"; return 0 ;; esac
+  case "$1 $2" in
+    "pr create") touch "$HOME/gh-created"
+                 echo 'https://github.com/o/r/pull/9'; return 0 ;;
+  esac
   if [[ -f "$HOME/gh-created" ]]; then cat "$HOME/gh-rows.json"; else echo '[]'; fi
 };`;
 

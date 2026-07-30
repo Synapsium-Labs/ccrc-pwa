@@ -2,11 +2,12 @@
 // finishes.
 //
 // `mkdtempSync(path.join(tmpdir(), 'ccrc-'))` with no matching `rmSync` was the
-// shape in 17 of these files: one full run leaked hundreds of directories, a
-// mutation sweep runs the suite 50-120 times, and /tmp reached 47k directories
-// and 1.4 GiB once and 25k again five weeks later — on the box whose OOM/disk
-// incident history is the reason this project exists. `trap 'rm -rf "$TMPHOME"'
-// EXIT` is the same rule on the ccd side of the harness.
+// shape in 17 of the 23 files this replaces the call in: one full run leaked
+// 140 directories, measured, and a mutation sweep runs the suite 50-120 times.
+// /tmp held 7,830 of them when this landed, five weeks after the 47k/1.4 GiB
+// failure CONSTRAINTS already paid for, on the box whose OOM/disk incident
+// history is the reason this project exists. `trap 'rm -rf "$TMPHOME"' EXIT` is
+// the same rule on the ccd side of the harness.
 //
 // A file-scoped `afterAll` rather than a global sweep of `/tmp/ccrc-*`: test
 // FILES run in parallel processes, so removing everything that matches the

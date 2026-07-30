@@ -1453,6 +1453,13 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   git -C "$main" push --set-upstream origin "refs/heads/$branch:refs/heads/$branch" >/dev/null \
     || die "push failed for $branch — nothing was opened"
 
+  # `--head "$branch"` and `--head "$wthead"` are EQUIVALENT here and no fixture
+  # can tell them apart: the drift rung above dies unless the two strings are
+  # equal, so by this line they are the same string. `$branch` is written
+  # because the registry's name is what this verb is FOR — `$wthead` would read
+  # as "whatever git last saw", which is the reading the corroboration exists to
+  # rule out. `>/dev/null` on the call is not equivalent: real `gh pr create`
+  # prints the new PR's URL on stdout, and this verb's stdout is its answer.
   local -a args=(pr create --repo "$repo" --head "$branch" --base "$baseShort"
                  --title "$title" --body "$body")
   [[ "$draft" == true ]] && args+=(--draft)

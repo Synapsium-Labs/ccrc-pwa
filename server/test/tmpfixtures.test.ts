@@ -3,7 +3,7 @@
 // mutation sweep runs the suite 50-120 times, which is how /tmp reached 47k
 // directories and 1.4 GiB once and 7,830 again five weeks later.
 import { describe, it, expect } from 'vitest';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -22,10 +22,26 @@ describe('mkTmp', () => {
     expect(existsSync(a)).toBe(false);
     expect(existsSync(b)).toBe(false);
 
-    // ...and it forgets them, so the file-scoped hook cannot re-remove a path
-    // that a later mkdtemp could by then have handed to someone else.
-    const c = mkTmp('ccrc-tmpfix-');
+    // ...and it FORGETS them. `mkdtemp` hands out a name the kernel is free to
+    // hand out again once it is gone, so a cleaner that kept its list would
+    // delete, at the end of the file, a directory that by then belongs to
+    // someone else. Said as behaviour: put a directory back at that exact path
+    // and it must survive the next sweep.
+    mkdirSync(a);
     removeTmpFixtures();
-    expect(existsSync(c)).toBe(false);
+    expect(existsSync(a), 'the cleaner re-removed a path it had already cleaned').toBe(true);
+  });
+
+  it('is registered as an afterAll, which is the half no test in this file can run', () => {
+    // An `afterAll` runs after every test in the file that registers it, so
+    // nothing inside that file can observe whether it was registered at all —
+    // and with the hook dropped the suite is green while every fixture leaks.
+    // The empirical check is the one in the commit message (`/tmp/ccrc-*` = 0
+    // before, 0 after two full runs); this is the line that would have to be
+    // deleted for that to stop being true, so it is asserted where a deletion
+    // is visible: in the source.
+    const src = readFileSync(path.join(__dirname, 'tmpHelpers.ts'), 'utf8');
+    expect(src.split('afterAll(removeTmpFixtures);').length - 1,
+      'exactly one afterAll registration in tmpHelpers.ts').toBe(1);
   });
 });
