@@ -362,6 +362,26 @@ describe('the object the server reads', () => {
     expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).dirty).toBe(2);
   });
 
+  it('carries each commit\'s sha, subject AND body — all three are read downstream', () => {
+    // `body` was the one wire key nothing could fail: with `'body': ''`
+    // hardcoded the whole suite stayed green at 561. Task 12's `draftPr` reads
+    // `real[0].body.trim().split('\n\n')[0]` for the PR body whenever the repo
+    // has no template, so every PR ccrc opens could have shipped with an empty
+    // one and no test would have said so. Two paragraphs, because the split is
+    // on the blank line and a one-paragraph fixture cannot see it.
+    const { wt } = workspaceWithCommit('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'g.txt'), 'more\n');
+    h.git(wt, 'add', 'g.txt');
+    h.git(wt, 'commit', '-m', 'the second\n\nwhy it was done\n\nand a second paragraph');
+    h.ghRows([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    // Newest first — `git log base..branch` — which is why draftPr reverses.
+    expect(o.commits.map((c: { subject: string }) => c.subject)).toEqual(['the second', 'the work']);
+    expect(o.commits[0].body).toBe('why it was done\n\nand a second paragraph');
+    expect(o.commits[1].body).toBe('');
+    expect(o.commits[0].sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
   it('carries the repo\'s PR template when it has one', () => {
     // Task 4's composer prefills from this; read from $main, not the worktree,
     // so a workspace that has not merged the template still gets it.

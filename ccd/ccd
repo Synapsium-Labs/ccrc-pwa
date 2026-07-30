@@ -254,6 +254,12 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper
 import json, os, re, subprocess, sys, time
 
 mode = sys.argv[1]
+# `{7,40}` survives mutation and is an EQUIVALENT mutant, disclosed rather than
+# pinned: `{1,40}` accepts every string a real `headRefOid` or `mergeCommit.oid`
+# can be, so no fixture can distinguish them. It bounds a GitHub-sourced string
+# rather than deciding anything — what actually rejects a value is `cat-file -e`
+# in `is_ours`, and `is_merged` reading `mergeCommit.oid` as an oid-SHAPED
+# string is a shape check, never an identity (two PRs can share a merge commit).
 OID = re.compile(r'^[0-9a-f]{7,40}$')
 
 def rows_in():
@@ -1152,6 +1158,12 @@ _pr_state_one() {   # id main repo rows -> one JSON line
   # cannot see this repository". `tip=""` here means the FIRST of those and is
   # emitted as JSON null; the second is not a fact about a PR at all, so it is
   # this session's failure object and persists nothing.
+  #
+  # The `tip=""` arm is an EQUIVALENT mutant, disclosed rather than pinned: the
+  # command substitution already assigned "" when rev-parse printed nothing, so
+  # deleting the assignment changes no value. It is written out because the arm
+  # is where a reader learns that rc 1 is a FIELD and not a failure, and an empty
+  # arm is indistinguishable from an unhandled one.
   local rc
   tip=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null); rc=$?
   case "$rc" in
