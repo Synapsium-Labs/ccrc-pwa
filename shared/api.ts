@@ -19,6 +19,14 @@ export interface FleetSession {
   ultracode: boolean;                        // ultracode super-mode active
   branch: string | null;                     // current git branch
   tasks: TaskProgress | null;                // plan progress; null = this session has no task list
+  /** This workspace's pull request, or null for a main checkout — which is the
+   *  ONLY thing that suppresses the header control. */
+  pr: PrState | null;
+  /** Epoch SECONDS this workspace was archived (ccd writes `$REG/<id>.archived`
+   *  as an epoch), or null. Every piece of archive copy in the UI derives from
+   *  THIS, never from `pr.phase`: a merged PR whose archive was deferred
+   *  because the session was busy must not claim it was archived. */
+  archivedAt: number | null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -41,6 +49,56 @@ export interface TaskProgress {
   running: number;
   active: string | null; // activeForm of the first in-progress task, else null
 }
+
+/** Where a workspace's pull request is, as ccrc last managed to find out.
+ *
+ *  `unchecked` is a FIRST-CLASS state, not a synonym for "no PR": keying the
+ *  header control's visibility on `pr !== null` would make its absence an
+ *  affirmative claim ("this session cannot have a PR") rendered identically to
+ *  "we have not looked", and would put the retry affordance behind a control
+ *  that is not on screen. */
+export type PrPhase =
+  | 'unchecked' | 'none' | 'no-commits' | 'open' | 'draft' | 'merged' | 'closed' | 'unknown';
+
+/** CI rollup. `null` means NO CHECKS ARE CONFIGURED — distinct from 'pending',
+ *  and rendered with different words. */
+export type PrChecks = 'pass' | 'fail' | 'pending' | null;
+
+export interface PrState {
+  phase: PrPhase;
+  number: number | null;
+  url: string | null;
+  title: string | null;
+  checks: PrChecks;
+  /** Names of the FAILING checks. GitHub-sourced and attacker-controllable on
+   *  any repo that accepts fork PRs, so this is inert text everywhere it is
+   *  rendered: never a prompt, never an argv, never a shell word. */
+  checkNames: string[] | null;
+  ahead: number;                 // commits past base
+  /** Why `phase` is `unknown`. Every member but `merge-unproven` is a FAILED
+   *  READ; `merge-unproven` is the opposite — GitHub answered fine and said
+   *  MERGED, and a conjunct of the merge predicate did not hold, so ccrc
+   *  declines to call it merged. It exists because `error` renders as "GitHub
+   *  could not be read", which in that case is simply untrue. */
+  reason:
+    | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
+    | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
+    | 'merge-unproven' | null;
+  checkedAt: number | null;      // epoch ms of the gh read that produced this
+  mergedAt: number | null;
+  /** Epoch ms the sweep will next try this project, or null when nothing is
+   *  scheduled. §6's rate-limit row promises the UI shows the reason AND the
+   *  retry time, and `prBackoff` is the only thing that knows it — 15 minutes
+   *  of a greyed cap with no explanation reads as broken rather than as
+   *  waiting. Null on a ROUTE read failure, which backs nothing off and must
+   *  not borrow the lane's clock. */
+  retryAt: number | null;
+}
+
+/** The eight phases as a runtime value, so a string read off disk (written by
+ *  ccd, possibly a version behind) can be validated rather than trusted. */
+export const PR_PHASES: readonly PrPhase[] =
+  ['unchecked', 'none', 'no-commits', 'open', 'draft', 'merged', 'closed', 'unknown'];
 
 /** `/api/fleet/health` — degraded-mode signal for the remote fleet host.
  *  `mode: 'local'` is always `{connected: true, downSince: null}` — there is

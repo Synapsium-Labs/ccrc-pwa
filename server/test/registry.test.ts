@@ -93,3 +93,48 @@ describe('workspace on the wire', () => {
     expect(rec.workspace).toBeNull();
   });
 });
+
+describe('PR and archive fields', () => {
+  it('reads base, prphase, prnumber, prcheckedat and archived off disk', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const put = (f: string, v: string): void => writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v);
+    put('uuid', 'u'); put('wrapper', 'claude'); put('workdir', '/w'); put('project', 'demo');
+    put('workspace', 'quiet-basin'); put('branch', 'ws/quiet-basin');
+    put('base', 'origin/main'); put('prphase', 'merged'); put('prnumber', '42');
+    put('prcheckedat', '1785300000000'); put('archived', '1785300123');
+    const [r] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(r!.base).toBe('origin/main');
+    expect(r!.prPhase).toBe('merged');
+    expect(r!.prNumber).toBe(42);
+    expect(r!.prCheckedAt).toBe(1785300000000);
+    expect(r!.archivedAt).toBe(1785300123);
+  });
+
+  it('nulls a prphase that is not one of the eight known phases', async () => {
+    // The file is written by ccd on another box. A version skew that writes a
+    // phase this build does not know must degrade to "unchecked", never leak a
+    // string the PWA will switch on and render as nothing.
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', '/w'], ['prphase', 'exploded']]) {
+      writeFileSync(path.join(reg, `demo-x.${f}`), v!);
+    }
+    const [r] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(r!.prPhase).toBeNull();
+  });
+
+  it('leaves every new field null on a session that has none of them', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', '/w']]) {
+      writeFileSync(path.join(reg, `claude-demo.${f}`), v!);
+    }
+    const [r] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect([r!.base, r!.prPhase, r!.prNumber, r!.prCheckedAt, r!.archivedAt])
+      .toEqual([null, null, null, null, null]);
+  });
+});

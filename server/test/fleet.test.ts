@@ -7,6 +7,7 @@ import { assembleFleet, idHomeWrapper } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
+import type { PrState } from '../../shared/api.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -128,5 +129,67 @@ describe('derived session handles', () => {
 
   it('keeps a name whose nameSource is anything but derived', async () => {
     expect((await build({ name: 'refactor-auth', nameSource: 'user' })).name).toBe('refactor-auth');
+  });
+});
+
+describe('PR state on the wire', () => {
+  const seedPr = (home: string, id: string, fields: Record<string, string>): void => {
+    for (const [f, v] of Object.entries(fields)) {
+      writeFileSync(path.join(home, '.cc-sessions', `${id}.${f}`), v);
+    }
+  };
+
+  it('falls back to the persisted registry values when no sweep has run', async () => {
+    // The whole reason the fields are on disk: a server restart must degrade
+    // to "merged, last checked 40 minutes ago", never to "no PR".
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'demo-quiet-basin', 'claude');
+    seedPr(home, 'demo-quiet-basin', {
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin',
+      prphase: 'merged', prnumber: '42', prcheckedat: '1785300000000',
+    });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const s = fleet.find((x) => x.id === 'demo-quiet-basin')!;
+    expect(s.pr).toEqual({
+      phase: 'merged', number: 42, url: null, title: null, checks: null, checkNames: null,
+      ahead: 0, reason: null, checkedAt: 1785300000000, mergedAt: null, retryAt: null,
+    });
+  });
+
+  it('gives a workspace that was never checked an unchecked phase, not null', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'demo-still-cove', 'claude');
+    seedPr(home, 'demo-still-cove', { workspace: 'still-cove' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((x) => x.id === 'demo-still-cove')!.pr!.phase).toBe('unchecked');
+  });
+
+  it('gives a MAIN CHECKOUT no pr object at all — no workspace, no cap', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'claude-demo', 'claude');
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((x) => x.id === 'claude-demo')!.pr).toBeNull();
+  });
+
+  it('prefers a live swept state over the persisted one', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'demo-quiet-basin', 'claude');
+    seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', prphase: 'open', prnumber: '7' });
+    const live = new Map<string, PrState>([['demo-quiet-basin', {
+      phase: 'merged', number: 7, url: 'u', title: 't', checks: 'pass', checkNames: null,
+      ahead: 3, reason: null, checkedAt: 5, mergedAt: 4,
+    }]]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })),
+      undefined, undefined, undefined, undefined, live);
+    expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.pr!.phase).toBe('merged');
+  });
+
+  it('carries archivedAt straight through', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    seedSession(home, 'demo-quiet-basin', 'claude');
+    seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', archived: '1785300123' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.archivedAt).toBe(1785300123);
   });
 });

@@ -2,10 +2,11 @@ import type { CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistry } from './registry.js';
+import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
-import type { FleetSession, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 
 export function idHomeWrapper(id: string): string {
   for (const w of ['claude-corp', 'claude2', 'claude', 'gpt']) if (id.startsWith(`${w}-`)) return w;
@@ -27,6 +28,24 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   return live ? liveSessionStatus(live.status) : 'idle';
 }
 
+/** The PR state a session has WITHOUT a live sweep: whatever `ccd pr-state`
+ *  last wrote into the registry. `unchecked` when it has never run. Null for a
+ *  main checkout, which is the only session that gets no PR control at all.
+ *  Deliberately NOT enriched — url/title/checks are not persisted, and
+ *  inventing them here would put stale CI colour on screen with a fresh
+ *  `checkedAt` beside it. */
+function persistedPr(r: SessionRecord): PrState | null {
+  if (r.workspace === null) return null;
+  return {
+    phase: r.prPhase ?? 'unchecked',
+    number: r.prNumber, url: null, title: null,
+    checks: null, checkNames: null, ahead: 0, reason: null,
+    checkedAt: r.prCheckedAt, mergedAt: null,
+    // The registry stores no backoff: it is per-process, per-project, in-memory.
+    retryAt: null,
+  };
+}
+
 export async function assembleFleet(
   io: FleetIO,
   cfg: CcrcConfig,
@@ -35,6 +54,10 @@ export async function assembleFleet(
   pendingDialogs?: Set<string>,
   statuslines?: Map<string, Statusline>,
   taskProgress?: Map<string, TaskProgress>,
+  /** Last-swept PR state per session id (FleetWatcher's third lane). Absent on
+   *  a cold start and in every existing test — which is exactly why the
+   *  registry fallback below exists. */
+  prStates?: Map<string, PrState>,
 ): Promise<FleetSession[]> {
   const [records, limits] = await Promise.all([readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(records.map(async (r): Promise<FleetSession> => {
@@ -76,6 +99,8 @@ export async function assembleFleet(
       // checkout. The registry fills the gap before the first capture lands.
       ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? r.branch ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
+      pr: prStates?.get(r.id) ?? persistedPr(r),
+      archivedAt: r.archivedAt,
     };
   }));
 }
