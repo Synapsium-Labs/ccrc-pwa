@@ -30,9 +30,14 @@ export function mkTmp(prefix: string): string {
   return dir;
 }
 
-afterAll(() => {
+/** Remove every directory `mkTmp` made in this file, and forget them. Exported
+ *  so the hook below has something a test can call: an `afterAll` cannot be
+ *  observed from inside the file it runs for. */
+export function removeTmpFixtures(): void {
   // `force` because a fixture the test already removed itself is the normal
   // case, not an error — several files own their own cleanup and this is the
   // net underneath them.
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+}
+
+afterAll(removeTmpFixtures);
