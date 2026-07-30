@@ -126,6 +126,26 @@ describe('PR and archive fields', () => {
     expect(r!.prPhase).toBeNull();
   });
 
+  it('nulls a zero-byte or non-numeric field instead of 0 / NaN', async () => {
+    // Both of numOrNull's guards, which nothing else pins. An interrupted
+    // `_reg_set` leaves a zero-byte field, and `Number('')` is 0 — `archivedAt: 0`
+    // reads as archived-in-1970, so the UI would offer "clean up workspace" on a
+    // workspace whose archive never finished. A non-numeric field is NaN, which
+    // JSON.stringify puts on the wire as `null` while the type still says
+    // `number` — the silent lie the comment on numOrNull claims to prevent.
+    const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const put = (f: string, v: string): void => writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v);
+    put('uuid', 'u'); put('wrapper', 'claude'); put('workdir', '/w'); put('project', 'demo');
+    put('archived', ''); put('prcheckedat', 'oops'); put('prnumber', '  ');
+
+    const [r] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(r!.archivedAt).toBeNull();
+    expect(r!.prCheckedAt).toBeNull();
+    expect(r!.prNumber).toBeNull();
+  });
+
   it('leaves every new field null on a session that has none of them', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
     const reg = path.join(home, '.cc-sessions');
