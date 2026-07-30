@@ -1,9 +1,10 @@
-// The fixture cleaner itself. 23 files made `mkdtempSync(tmpdir(), 'ccrc-')`
-// fixtures and removed none of them: one full run leaked 140 directories and a
-// mutation sweep runs the suite 50-120 times, which is how /tmp reached 47k
-// directories and 1.4 GiB once and 7,830 again five weeks later.
+// The fixture cleaner itself. 17 of the 23 files that make
+// `mkdtempSync(tmpdir(), 'ccrc-')` fixtures removed none of them: one full run
+// leaked 140 directories and a mutation sweep runs the suite 50-120 times,
+// which is how /tmp reached 47k directories and 1.4 GiB once, and 7,830 again
+// five weeks later.
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -30,6 +31,11 @@ describe('mkTmp', () => {
     mkdirSync(a);
     removeTmpFixtures();
     expect(existsSync(a), 'the cleaner re-removed a path it had already cleaned').toBe(true);
+    // ...and this one is the test's own to remove, precisely because the
+    // cleaner has (correctly) forgotten it. Measured: without this line the
+    // suite leaked exactly one directory per run — the file that exists to stop
+    // the leak, leaking.
+    rmSync(a, { recursive: true, force: true });
   });
 
   it('is registered as an afterAll, which is the half no test in this file can run', () => {
