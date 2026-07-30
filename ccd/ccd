@@ -897,6 +897,7 @@ ensure
 list
 menu
 pick
+pr-open
 pr-state
 prefer
 start
@@ -1309,6 +1310,98 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 
   local id
   for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows"; done
+}
+
+cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>
+  # The ONE additive write in this whole design. Fixed arity, no getopt loop,
+  # no "$@" passthrough (pflag is last-wins, so a passthrough would let a
+  # caller override -R/--head/--base), and no flag anywhere takes a path.
+  [[ $# -eq 8 && $1 == --session && $3 == --title && $5 == --body-b64 && $7 == --draft ]] \
+    || die "usage: ccd pr-open --session <id> --title <title> --body-b64 <base64> --draft <true|false>"
+  local id=$2 title=$4 b64=$6 draft=$8
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]]     || die "bad session id"
+  [[ -n $title ]]                    || die "empty title"
+  (( ${#title} <= 256 ))             || die "title too long"
+  [[ $title != *[[:cntrl:]]* ]]      || die "title has control characters"
+  [[ $draft == true || $draft == false ]] || die "bad --draft"
+
+  local body bytes
+  body=$(printf '%s' "$b64" | base64 -d 2>/dev/null) || die "bad --body-b64"
+  [[ -n $body ]] || die "empty body"   # an empty --body SUPPRESSES the repo template
+  bytes=$(printf '%s' "$body" | wc -c)
+  (( bytes <= 65536 )) || die "body too large"
+  printf '%s' "$body" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || die "body is not valid UTF-8"
+
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  # Workspace-only, ALWAYS. Without this the verb would push --set-upstream
+  # origin main on its first step for nine of nine live sessions.
+  [[ -n "$(_reg_get "$id" workspace)" ]] \
+    || die "not a workspace — refusing to open a PR from a main checkout"
+
+  local project workdir branch base baseShort main repo
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  branch=$(_reg_get "$id" branch);   base=$(_reg_get "$id" base)
+  [[ -n "$project" && -n "$workdir" && -n "$branch" && -n "$base" ]] \
+    || die "incomplete registry for '$id'"
+  baseShort="${base#origin/}"
+  [[ "$branch" != "$baseShort" ]] || die "head equals base"
+  main="$PROJECTS_ROOT/$project"
+
+  # The registry NAMES the branch; git's own worktree record is what entitles us
+  # to push it. Read from $main and nowhere else (`_ws_wt_branch`, ccd:303-314),
+  # the same three rungs cmd_ws_rm walks (ccd:380, :390, :402) and
+  # _ws_reap_eval re-proves, in refusal form. TWO statements, deliberately:
+  # `local wthead=$(...)` returns LOCAL's status, so `registered` would be 0 for
+  # every path and rung 3 would be dead code.
+  local wthead registered
+  wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
+  (( registered == 0 )) \
+    || die "$main has no worktree record for $workdir — refusing to push a branch nothing corroborates"
+  [[ -n "$wthead" ]] \
+    || die "$main records $workdir on a detached HEAD — there is no branch to open a PR from"
+  [[ "$wthead" == "$branch" ]] \
+    || die "the registry says $branch, git's worktree record for $workdir says $wthead — refusing to push either"
+
+  # This is why the verb lives in ccd at all: the agent's exec op passes no
+  # cwd, its cwd is $HOME which is not a repo, and the server cannot read
+  # ~/worktrees/* (checkPath, whitelist.ts:83-90).
+  repo=$(_gh_repo_slug "$main") || die "no origin remote for $project"
+
+  # Idempotence, before anything is pushed or created. `--head` matches across
+  # fork owners, so a stranger's PR on the same branch name reads as "exists"
+  # and we decline to create — the fail-SAFE direction. What the UI believes is
+  # decided by pr-state's binding, not by this line.
+  local existing
+  existing=$(timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --head "$branch" --state all \
+               --json number,url,state 2>/dev/null)
+  if [[ -n "$existing" && "$existing" != "[]" ]]; then printf '%s\n' "$existing"; return 0; fi
+
+  # Run in $main, NEVER in $workdir — the one network write in this design, so
+  # the repository it is asked of matters more here than anywhere else. $main
+  # owns refs/heads/$branch (a linked worktree's commits are in the shared object
+  # store, so this sends exactly the workspace's work — verified) and $main is
+  # the repository whose remote.origin.url produced $repo above, so the slug in
+  # `gh pr create` and the ref on the wire name ONE repository. Resolved in
+  # $workdir they name two: a stranger repo at that path answers
+  # refs/heads/$branch with ITS commit, and measured on git 2.43 with an `origin`
+  # pointing at ours it lands on OUR ref, after which the create call opens a PR
+  # over a stranger's work. Nothing above reads $workdir either — it is a KEY
+  # into git's records here, not a repository this verb talks to.
+  # Fully qualified both sides, NEVER --force, branch from the registry and
+  # corroborated by git, never from the request. Failure aborts before any gh
+  # call. --set-upstream writes branch.<b>.remote/merge into the COMMON config,
+  # so the workspace sees the upstream ws-reap later requires (verified: byte-
+  # identical keys and values to the same push run inside the worktree).
+  git -C "$main" push --set-upstream origin "refs/heads/$branch:refs/heads/$branch" \
+    || die "push failed for $branch — nothing was opened"
+
+  local -a args=(pr create --repo "$repo" --head "$branch" --base "$baseShort"
+                 --title "$title" --body "$body")
+  [[ "$draft" == true ]] && args+=(--draft)
+  timeout "$PR_GH_TIMEOUT" gh "${args[@]}" >/dev/null || die "gh pr create failed"
+
+  timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --head "$branch" --state all \
+    --json number,url,state,isDraft
 }
 
 # ── reclamation ────────────────────────────────────────────────────
@@ -2168,7 +2261,8 @@ case "${1:-}" in
   ws-archive) shift; cmd_ws_archive "$@" ;;
   ws-restore) shift; cmd_ws_restore "$@" ;;
   ws-attic)   shift; cmd_ws_attic "$@" ;;
+  pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|pr-state} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|pr-open|pr-state} <args>" >&2; exit 1 ;;
 esac
 fi
