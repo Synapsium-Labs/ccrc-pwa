@@ -1552,9 +1552,25 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED / REAP_SENSITIVE / RE
   # `_ws_ignored_digest` is still the only implementation of the digest (it is
   # what the archive manifest records too), so it is called rather than inlined,
   # and its failure is propagated the same way.
-  local wd="$1" line p b out
+  #
+  # AND THE EXIT CODE IS NOT THE WHOLE ANSWER. A PARTIALLY unreadable tree makes
+  # git warn and exit 0: measured on git 2.43, `chmod 000` on a subdirectory
+  # gives rc 0, no line for anything inside it, and `warning: could not open
+  # directory 'sub/'` on stderr — which `2>/dev/null` throws away. The entries
+  # git could not reach are then simply absent, so a gitignored `secrets/` under
+  # that directory leaves REAP_SENSITIVE empty and `sensitive-ignored`, a guard
+  # §7 forbids overriding, cannot fire over files nobody ever enumerated. So
+  # stderr is captured and ANY diagnostic is a read that did not complete.
+  # Deliberately not a match on git's wording: git translates its warnings and
+  # ccd pins no locale, so a text test would pass silently on a box with LANG
+  # set — the failure mode this exists to remove.
+  local wd="$1" line p b out errf err rc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""
-  out=$(git -C "$wd" status --porcelain --ignored=matching 2>/dev/null) || return 1
+  errf=$(mktemp) || return 1
+  out=$(git -C "$wd" status --porcelain --ignored=matching 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  (( rc == 0 )) || return 1
+  [[ -z "$err" ]] || return 1
   while IFS= read -r line; do
     case "$line" in '!! '*) ;; *) continue ;; esac
     p="${line#!! }"
@@ -1614,7 +1630,7 @@ _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
-  local st up ahead repo rows row registered
+  local st up ahead repo rows row registered errf err rc
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -1757,7 +1773,22 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # (`_ws_gc_dirty` states the rule for the file: a status we could not read is
     # not a clean one). An index.lock contention or a permission change mid-flight
     # is enough, and this guard is one §5.3 forbids overriding.
-    REAP_DIRTY=$(git -C "$workdir" status --porcelain 2>/dev/null) \
+    #
+    # And the exit code is only HALF of "could not read", which is why stderr is
+    # captured rather than discarded. A PARTIALLY unreadable tree exits 0:
+    # measured on git 2.43, `chmod 000` on an untracked subdirectory holding
+    # uncommitted work gives rc 0, EMPTY stdout, and `warning: could not open
+    # directory 'sub/'` on stderr. The count is then 0, `dirty-tree` passes, and
+    # the audit hands out a token certifying a clean tree over work it never
+    # saw. Same rule as the ignored set in `_ws_collect_ignored`, and for the
+    # same reason: these two are the guards §5.3/§7 allow no override for, so
+    # "some of the tree" is not an answer either of them may act on. The test is
+    # for the DIAGNOSTIC and not its wording — git translates warnings and ccd
+    # pins no locale.
+    errf=$(mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
+    REAP_DIRTY=$(git -C "$workdir" status --porcelain 2>"$errf"); rc=$?
+    err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+    (( rc == 0 )) && [[ -z "$err" ]] \
       || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
     REAP_DIRTY=$(printf '%s' "$REAP_DIRTY" | grep -c . || true)
     (( REAP_DIRTY == 0 )) \

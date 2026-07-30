@@ -269,6 +269,43 @@ describe('local-loss refusals', () => {
     expect(refusal(wt, NOSTAT).verdict).toBe('tree-unreadable');
   });
 
+  it('refuses a tree it could only PARTLY read — git warns and still exits 0', () => {
+    // The exit code is not the whole answer. Measured on git 2.43 with `chmod
+    // 000` on an untracked subdirectory holding uncommitted work: `git status
+    // --porcelain` exits **0**, prints NOTHING about it, and puts `warning:
+    // could not open directory 'sub/'` on stderr — which `2>/dev/null` throws
+    // away. So the tree reads pristine, `dirty-tree` passes, and
+    // `sensitive-ignored` cannot fire over files it never saw. Both are guards
+    // §7 forbids overriding, and a guard that cannot see a directory must
+    // refuse rather than report the part it could see.
+    //
+    // The test is for the DIAGNOSTIC, not for the wording: git translates its
+    // warnings and ccd pins no locale, so "the read printed something" is the
+    // only form of this check that survives a box with LANG set.
+    const { wt } = squashMovedBase();
+    const sub = path.join(wt, 'sub');
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, 'work.txt'), 'uncommitted\n');
+    fs.chmodSync(sub, 0o000);
+    try {
+      // The blindness itself, measured here rather than asserted from memory:
+      // this is exactly what the pre-hardening guard saw.
+      expect(h.sh(`git -C "${wt}" status --porcelain 2>/dev/null; echo "rc=$?"`),
+        'if this stops being rc=0-with-empty-stdout the whole test is moot',
+      ).toBe('rc=0');
+      expect(refusal(wt).verdict).toBe('tree-unreadable');
+      // Phase B's own `status --porcelain` refuses first, so the SAME failure
+      // inside `_ws_collect_ignored` is unreachable from the verb — and would
+      // survive its hardening being deleted. Pinned at the helper instead.
+      expect(h.sh(`${ARCH} _ws_reap_reset; _ws_collect_ignored "${wt}"; echo "rc=$?"`))
+        .toBe('rc=1');
+    } finally {
+      // `rmSync` cannot recurse into a 0o000 directory, so without this the
+      // harness's own cleanup throws and leaks the entire fixture HOME.
+      fs.chmodSync(sub, 0o755);
+    }
+  });
+
   it('names the sensitive paths so they can be moved, and offers no override', () => {
     const { wt } = squashMovedBase(['.env', 'id_rsa']);
     fs.writeFileSync(path.join(wt, '.env'), 'SECRET=1\n');
