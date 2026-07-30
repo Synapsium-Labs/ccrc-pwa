@@ -117,9 +117,23 @@ _json_str() {   # value -> a JSON string literal (quote/backslash/control safe)
 }
 
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
-  # Fails closed on purpose: a socket hiccup or an unreadable status file must
-  # not read as "not working" and let an archive kill a live turn. Same
-  # discipline as _auto_swap_check's idle gate (ccd:1097-1101).
+  # Fails closed twice over, and both halves are load-bearing.
+  #
+  # UNREADABLE -> non-zero. A socket hiccup or an unreadable status file must
+  # not read as "not working" and let an archive kill a live turn.
+  #
+  # UNRECOGNISED -> busy. `idle` is an ALLOWLIST; every other value is busy.
+  # Claude Code writes at least `idle`, `busy` (a model turn is in flight) and
+  # `shell` (a Bash tool command is running) — server/src/livestate.ts:14-30 is
+  # this repo's own record of that vocabulary, and of what matching `busy` and
+  # calling the rest idle cost when the server side did it. Here the price is
+  # steeper than a wrong badge: `ws-reap` gates `git worktree remove` on this
+  # answer, so `shell` reading idle deletes the tree out from under a running
+  # `npm test`. A status we do not recognise is far likelier to be new work than
+  # new rest, and an allowlist is the only polarity that survives the wrapper
+  # growing a fourth word. Same polarity as _auto_swap_check's gate
+  # (ccd:1101), which is likewise `[[ "$st" == "idle" ]]` and stops on anything
+  # else.
   local id="$1" wrapper cfg pid sf st
   wrapper=$(_reg_get "$id" wrapper); [[ -n "$wrapper" ]] || return 1
   cfg=$(_cfg_dir "$wrapper");        [[ -n "$cfg" ]]     || return 1
@@ -129,7 +143,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   sf="$cfg/sessions/$pid.json"
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
   [[ -n "$st" ]] || return 1
-  [[ "$st" == busy ]] && { echo busy; return 0; }
+  [[ "$st" == idle ]] || { echo busy; return 0; }
   echo idle
 }
 

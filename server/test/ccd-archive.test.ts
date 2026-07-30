@@ -48,6 +48,51 @@ describe('ccd caps', () => {
   });
 });
 
+/** `_alive` true plus a pane pid, so `_ws_status` reads a real status file
+ *  instead of short-circuiting on "no pane at all". */
+const LIVE = ARCH
+  .replace('_alive() { return 1; };', '_alive() { return 0; };')
+  .replace('tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };',
+           'tmux() { case "$1" in list-panes) echo 4242 ;; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; };');
+
+const withStatus = (status: string): void => {
+  const cfg = path.join(h.home, '.claude', 'sessions');
+  fs.mkdirSync(cfg, { recursive: true });
+  fs.writeFileSync(path.join(cfg, '4242.json'), JSON.stringify({ status, statusUpdatedAt: 1 }));
+};
+
+describe('_ws_status', () => {
+  it('reads ONLY "idle" as idle — shell, compacting and anything new are busy', () => {
+    // server/src/livestate.ts:14-30 is this repo's own record of the wrapper's
+    // vocabulary (`idle`, `busy`, and `shell` = a Bash tool command is running)
+    // and of what matching `busy` and calling the rest idle cost when the
+    // server side did it. An allowlist is the only polarity that survives a
+    // vocabulary that grows.
+    workspace('demo', 'quiet-basin');
+    const seen = ['idle', 'busy', 'shell', 'compacting', 'somethingnew'].map((st) => {
+      withStatus(st);
+      return `${st}=${h.sh(`${LIVE} _ws_status demo-quiet-basin`)}`;
+    });
+    expect(seen).toEqual([
+      'idle=idle', 'busy=busy', 'shell=busy', 'compacting=busy', 'somethingnew=busy',
+    ]);
+  });
+
+  it('refuses to archive a session that is running a Bash tool command', () => {
+    // The pane is the one thing archive costs, and `shell` means a command is
+    // running in it — `tmux kill-session` would take the shell out from under a
+    // `npm test`. The same answer gates Task 6's `git worktree remove`, where
+    // the cost is the tree itself.
+    workspace('demo', 'quiet-basin');
+    withStatus('shell');
+    const r = shFail(`${LIVE} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/session-busy/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.calls()).not.toContain('unsupervise demo-quiet-basin');
+  });
+});
+
 describe('ws-archive', () => {
   it('refuses anything but the exact --session <id> shape', () => {
     expect(shFail('cmd_ws_archive').code).toBe(1);
