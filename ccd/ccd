@@ -652,6 +652,25 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # NON-ZERO, with the reason on stderr, when the workspace cannot be described
   # truthfully. Every field used to be swallowed individually, which made the
   # unreadable cases indistinguishable from a clean, empty, unstashed tree.
+  #
+  # The line between the two halves of that sentence is the whole design, and it
+  # is NOT "anything unexpected refuses":
+  #   REFUSED — a question git cannot answer at all: no worktree record for this
+  #     path, a directory belonging to another repository, an unreadable tree or
+  #     ignored set, no python3 to quote with. There is nothing truthful to write.
+  #   RECORDED — a fact about the world that happens not to be the expected one:
+  #     the worktree is on another branch, or on a detached HEAD, or the branch
+  #     the registry names no longer resolves. Those are describable, so they are
+  #     described, and the DESTRUCTIVE verb refuses on them at the instant of
+  #     deletion (Task 5/6: `registry-branch-drift`, `detached-head`,
+  #     `branch-missing`) where a refusal costs nothing but a deferred cleanup.
+  # Archive is lossless and runs unattended — Task 14 fires it every 120 s and
+  # discards the exit code — so a refusal it cannot converge out of strands the
+  # workspace in the live fleet forever with nothing on screen to say why. Same
+  # argument Task 2's Context already makes for a dirty tree ("refusing would
+  # strand merged-but-dirty workspaces in the live fleet permanently"), and the
+  # same division `cmd_ws_rm` draws for this very divergence: the registry is a
+  # witness, never the decider (ccd:465-471).
   local id="$1" project workdir branch base main tip dirty ignored stashes bytes pr transcript
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   branch=$(_reg_get "$id" branch);   base=$(_reg_get "$id" base)
@@ -673,34 +692,64 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # record AND the directory itself have both said $main, which is the pair
   # cmd_ws_rm requires before it touches anything (ccd:396-400). `registered` is
   # read from $? on its own line: `local x=$(...)` returns local's status.
-  local wthead registered wd_common main_common
+  local wthead registered wd_common main_common rc
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
   (( registered == 0 )) \
     || { echo "manifest: $main has no worktree record for $workdir" >&2; return 1; }
-  [[ "$wthead" == "$branch" ]] \
-    || { echo "manifest: registry says $branch, $main's worktree record for $workdir says ${wthead:-a detached HEAD}" >&2; return 1; }
-  # The record alone cannot decide it: the record outlives the directory, so a
+  # DRIFT IS A FIELD, NOT A REFUSAL. `_ws_wt_branch` follows a rename whether ccd
+  # or the user did it (ccd:377-383), so `$wthead` is git's own answer for this
+  # path and `$branch` is the registry's claim: recorded side by side as `branch`
+  # and `worktreeHead`, which is the pair Task 5 fingerprints (`worktreeHead=`)
+  # and puts on the wire as `headMatchesRegistry`. "" is git's answer for a
+  # recorded detached HEAD, and the same "" Task 5 compares against `$branch`.
+  # Three ordinary states used to refuse here, permanently and identically on
+  # retry: a `git branch -m` inside the worktree, a `git checkout other-branch`
+  # to compare something, a `git bisect`. None of them makes the workspace
+  # undescribable, and refusing left the sweep logging the same line every two
+  # minutes forever.
+  #
+  # The record alone cannot decide the DIRECTORY: it outlives the directory, so a
   # hand-deletion plus a stray `git init` at the same path with the same branch
   # name still reads healthy and still answers $branch (measured on git 2.43).
+  # That one stays a refusal — every tree field below would describe a stranger's
+  # tree and file it under this workspace.
   wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
   [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
     || { echo "manifest: $workdir is not a worktree of $main" >&2; return 1; }
 
-  tip=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
-    || { echo "manifest: $main has no refs/heads/$branch" >&2; return 1; }
+  # `--quiet` turns git's own two answers into two exit codes, which is what lets
+  # "that ref does not exist" be a field and "I cannot read that repository" stay
+  # a refusal. Measured on git 2.43: rc 1 for an absent ref in a readable repo,
+  # rc 128 for a repo git cannot read at all (and without --quiet, 128 for both).
+  # `tip` is recorded as JSON null when absent, never as "" or a substitute oid: a
+  # renamed branch leaves the registry's name resolving to nothing, and ws-reap
+  # refuses that as `branch-missing`. The tip stays the tip of the branch this
+  # record NAMES — filing the renamed branch's tip under `branch` would be the
+  # forgery this rung exists to prevent.
+  tip=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null); rc=$?
+  case "$rc" in
+    0) : ;;
+    1) tip="" ;;
+    *) echo "manifest: could not ask $main for refs/heads/$branch" >&2; return 1 ;;
+  esac
+  # Measured against whatever is checked out, which is what `worktreeHead` above
+  # makes legible: on a drifted worktree this counts that branch's uncommitted
+  # work, and it is still the honest answer to "what is uncommitted here".
   dirty=$(git -C "$workdir" status --porcelain 2>/dev/null) \
     || { echo "manifest: could not read the tree at $workdir" >&2; return 1; }
   dirty=$(printf '%s' "$dirty" | grep -c . || true)
   ignored=$(_ws_ignored_digest "$workdir") \
     || { echo "manifest: could not read the ignored set at $workdir" >&2; return 1; }
-  # $main answered rev-parse a moment ago, so its stash list is readable; the
-  # count is the only field whose repository has already been proven healthy.
+  # $main answered rev-parse a moment ago — rc 0 or a clean "no such ref", both
+  # of which are answers — so its stash list is readable; the count is the only
+  # field whose repository has already been proven healthy.
   stashes=$(_ws_stash_count "$main" "$branch")
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
   pr=$(_reg_get "$id" prnumber); [[ "$pr" =~ ^[0-9]+$ ]] || pr=null
   transcript=$(_transcript_path "$id") || transcript=""
-  printf '{"id":%s,"branch":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"transcript":%s}\n' \
-    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$base")" "$(_json_str "$tip")" \
+  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"transcript":%s}\n' \
+    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
+    "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
     "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$(_json_str "$transcript")"
 }
 

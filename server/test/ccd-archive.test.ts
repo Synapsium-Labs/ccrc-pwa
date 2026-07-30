@@ -200,6 +200,18 @@ describe('_ws_ignored_digest', () => {
     expect(clean.code).toBe(0);                     // nothing ignored: a SUCCESS
     expect(shFail('_ws_ignored_digest /no/such/directory').code).not.toBe(0);
   });
+
+  it('refuses an answer that is not a digest, however git exited', () => {
+    // The exit code alone is not enough. git can succeed while the hashing half
+    // of the pipeline does not — a sha256sum that is missing, or killed under
+    // memory pressure — and the function would then print whatever landed on
+    // stdout as though it were a measurement. The shape check is what makes the
+    // manifest's `ignoredDigest` a digest or nothing.
+    const wt = workspace('demo', 'quiet-basin');
+    const r = shFail(`sha256sum() { echo "not-a-digest"; }; _ws_ignored_digest "${wt}"`);
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).toBe('');
+  });
 });
 
 describe('_ws_status', () => {
@@ -352,6 +364,10 @@ describe('ws-archive', () => {
     expect(m.branch).toBe('ws/quiet-basin');
     expect(m.base).toBe('origin/main');
     expect(m.tip).toMatch(/^[0-9a-f]{40}$/);
+    // git's own record for this path, beside the registry's claim. Equal here;
+    // the pair is what makes the drifted cases below describable rather than
+    // refusable, and it is the same fact Task 5 fingerprints as `worktreeHead=`.
+    expect(m.worktreeHead).toBe('ws/quiet-basin');
     expect(m.dirty).toBe(0);
     expect(m.stashes).toBe(0);
     expect(m.ignoredDigest).toBe(SHA256_EMPTY);     // nothing ignored, read OK
@@ -453,17 +469,76 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
   });
 
-  it('refuses when the registry names a branch git’s record does not', () => {
-    workspace('demo', 'quiet-basin');
+  it('refuses when git has no worktree record for the directory at all', () => {
+    const wt = workspace('demo', 'quiet-basin');
     const main = path.join(h.home, 'projects', 'demo');
-    // $main really has both branches, so nothing else would stop it: the manifest
-    // would record ws/other's tip as this workspace's, and ws-reap would compare
-    // the wrong branch's state against the wrong tree.
-    h.git(main, 'branch', 'ws/other', 'main');
-    h.sh('_reg_set demo-quiet-basin branch ws/other');
+    // Hand-pruned metadata: the directory and the branch both survive, and every
+    // read of the directory fails `not a git repository`. Its own rung, ahead of
+    // the common-dir one, because "$main holds no registration for this path" and
+    // "this path belongs to another repository" are different facts and the more
+    // specific one is the one worth printing. Without the rung the common-dir
+    // comparison catches the same state and says the vaguer thing.
+    fs.rmSync(path.join(main, '.git', 'worktrees', 'quiet-basin'), { recursive: true, force: true });
+    expect(fs.existsSync(wt)).toBe(true);
     const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/registry says ws\/other/);
+    expect(r.stderr).toMatch(/has no worktree record for/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses when the registry entry itself names no branch', () => {
+    workspace('demo', 'quiet-basin');
+    // With drift RECORDED rather than refused (below), this rung is the only
+    // thing left between an incomplete registry entry and an archive record whose
+    // `branch` is the empty string — a record naming no branch, filed as the
+    // description of a workspace, with `refs/heads/` for a tip lookup.
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.branch'));
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/incomplete registry/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses an empty manifest the helper reported success for', () => {
+    workspace('demo', 'quiet-basin');
+    // Distinct from the parse rung below, and worth its own diagnosis: a helper
+    // that exits 0 having printed nothing is a different failure from one that
+    // printed something unparseable, and only this rung can say so.
+    const r = shFail(`${ARCH} _ws_archive_manifest() { return 0; }; cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/empty archive manifest/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses when the ignored set cannot be read, and says which read failed', () => {
+    workspace('demo', 'quiet-basin');
+    // Only `--ignored=matching` is failed: `worktree list`, the common-dir reads
+    // and `status --porcelain` all go through to real git, so every rung before
+    // this one passes and this is the one under test. `_ws_ignored_digest` carries
+    // the failure out on its exit code — the digests cannot, because a failed read
+    // and an empty set hash identically.
+    const NOIGN = `${ARCH} git() { [[ "$*" == *"--ignored=matching"* ]] && return 128; command git "$@"; };`;
+    const r = shFail(`${NOIGN} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not read the ignored set/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses when $main cannot be ASKED for a tip — unlike a tip that is absent', () => {
+    workspace('demo', 'quiet-basin');
+    // The two are different answers and only one of them is describable. git
+    // itself distinguishes them: `rev-parse --verify --quiet` exits 1 for a ref
+    // that does not resolve in a repository it CAN read, and 128 when it cannot
+    // read the repository at all (measured, git 2.43). 1 is a fact about the
+    // world and becomes `"tip":null`; 128 is no answer and refuses.
+    const NOASK = `${ARCH} git() { [[ "$*" == *"rev-parse --verify --quiet refs/heads/"* ]] && return 128; command git "$@"; };`;
+    const r = shFail(`${NOASK} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not ask .* for refs\/heads\/ws\/quiet-basin/);
     expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
   });
@@ -485,6 +560,85 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     expect(r.stderr).toMatch(/python3/);
     expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+});
+
+/** Drift between the registry's branch name and git's worktree record is a
+ *  DESCRIBABLE fact about a healthy directory, not an unreadable one — so archive
+ *  records it and folds the workspace out of the live fleet. Refusing was
+ *  non-convergent: Task 14's sweep fires `ccd ws-archive` every 120 s with no
+ *  human in the loop and swallows the exit code, so a permanent refusal keeps the
+ *  workspace in the live fleet forever with nothing on screen to explain it. The
+ *  destructive verb still refuses — `_ws_reap_eval` has `registry-branch-drift`,
+ *  `detached-head` and `branch-missing` for exactly these three states — which is
+ *  the same division of labour Task 2's Context already draws for a dirty tree,
+ *  and `cmd_ws_rm` (ccd:465-471) draws for this very divergence. */
+describe('ws-archive records branch drift instead of refusing forever', () => {
+  const manifestOf = (): Record<string, unknown> =>
+    JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+
+  it('archives a branch renamed by hand, naming both records and no tip', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    // `_ws_wt_branch`'s contract is that it FOLLOWS a rename, ccd's or the
+    // user's (ccd:377-383). The registry's name is now the one that resolves to
+    // nothing, which is a fact about the world: `"tip":null`, and ws-reap refuses
+    // it as `branch-missing` at the instant of deletion.
+    h.git(wt, 'branch', '-m', 'feature/renamed-by-hand');
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^archived demo-quiet-basin/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toMatch(/^\d+$/);
+    const m = manifestOf();
+    expect(m.branch).toBe('ws/quiet-basin');            // the registry's claim
+    expect(m.worktreeHead).toBe('feature/renamed-by-hand');   // git's record
+    expect(m.tip).toBeNull();                            // absent, not sha256('')
+    // Convergence, which is the whole point: the next sweep is answered, not
+    // refused again, so the workspace really does leave the live fleet.
+    const again = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(again.code).toBe(0);
+    expect(again.stdout).toBe('already archived demo-quiet-basin');
+  });
+
+  it('archives a worktree parked on another branch, and says which', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    // The ordinary shape of this: a PR merges while the developer has another
+    // branch checked out in that worktree to compare something. Both branches
+    // exist, so the registry's tip still resolves — and `dirty` is measured
+    // against whatever is checked out, which `worktreeHead` is what makes legible.
+    h.git(wt, 'checkout', '-q', '-b', 'compare-thing');
+    fs.writeFileSync(path.join(wt, 'scratch.txt'), 'comparing\n');
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    const m = manifestOf();
+    expect(m.branch).toBe('ws/quiet-basin');
+    expect(m.worktreeHead).toBe('compare-thing');
+    expect(m.tip).toMatch(/^[0-9a-f]{40}$/);
+    expect(m.dirty).toBe(1);
+  });
+
+  it('archives a detached HEAD, recording the empty branch git records', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    // `git bisect` leaves exactly this. Empty is `_ws_wt_branch`'s own answer for
+    // a recorded detached HEAD, and the same "" Task 5 compares against `$branch`
+    // and refuses as `detached-head`.
+    h.git(wt, 'checkout', '-q', '--detach');
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    const m = manifestOf();
+    expect(m.worktreeHead).toBe('');
+    expect(m.tip).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('still refuses the state where git records no branch AND no directory', () => {
+    // The one shape that stays a refusal, stated here so the boundary is a test
+    // and not a comment: with the directory gone, `dirty`, `ignoredDigest` and
+    // `worktreeBytes` are all unmeasurable at once, so the record would describe
+    // nothing at all — that is the pristine-lying manifest, not drift.
+    const wt = workspace('demo', 'quiet-basin');
+    fs.renameSync(wt, `${wt}-moved`);
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/worktree is gone/);
   });
 });
 
