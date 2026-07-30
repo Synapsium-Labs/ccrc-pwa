@@ -194,6 +194,52 @@ describe('the happy path', () => {
   });
 });
 
+/** A bounded write may not proceed on an UNPROVEN "no PR exists". Every one of
+ *  these used to read as "no PR": rc 124, rc 1 with an expired token, and an
+ *  rc-0 body that is not a list at all — the probe captured stdout alone, so
+ *  all three arrived as the empty string, and the verb pushed and created
+ *  anyway. The loss is a duplicate PR whenever the existing one is
+ *  cross-repository, because our own create then succeeds. */
+describe('the existence probe fails closed', () => {
+  it('refuses when the probe times out — nothing pushed, nothing created', () => {
+    workspace('demo', 'quiet-basin');
+    const origin = path.join(h.home, 'origins', 'demo.git');
+    h.ghFail(124, '');
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not check for an existing PR on ws\/quiet-basin \(timeout\) — nothing was pushed/);
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+    expect(() => h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin')).toThrow();
+  });
+
+  it('says WHICH failure it was — an expired token is not a timeout', () => {
+    // The classification is `_gh_pr_list`'s, and it is the whole reason this
+    // verb reuses that read instead of open-coding `gh pr list` a third time.
+    workspace('demo', 'quiet-basin');
+    h.ghFail(1, 'gh: HTTP 401: Bad credentials\n');
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not check for an existing PR on ws\/quiet-basin \(unauthenticated\)/);
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+  });
+
+  it('refuses an rc-0 body that is not a list of PRs, instead of answering with it', () => {
+    // `gh` writes its own diagnostics to STDOUT at rc 0. The route (Task 13)
+    // answers {ok:true} on rc 0 without parsing stdout, so this exact string
+    // used to reach the phone as "the PR opened", having pushed nothing and
+    // created nothing.
+    workspace('demo', 'quiet-basin');
+    const origin = path.join(h.home, 'origins', 'demo.git');
+    h.ghRaw('gh: could not determine base repository\n');
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/not a list of PRs — nothing was pushed/);
+    expect(r.stdout).not.toContain('could not determine base repository');
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+    expect(() => h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin')).toThrow();
+  });
+});
+
 /** The push is the one place this design reaches the network, so the two facts
  *  it rests on are tested on their own: that git's record for $workdir names the
  *  registry's branch, and that the ref on the wire comes from $main. */

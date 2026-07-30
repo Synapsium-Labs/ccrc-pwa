@@ -215,11 +215,20 @@ _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
   printf '%s\n' "$url"
 }
 
-_gh_pr_list() {   # repo -> rows JSON on stdout; on failure prints the answer
-                  # object instead and returns non-zero. NEVER partially prints.
-  local repo="$1" errf out rc err
+_gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
+                  # the answer object instead and returns non-zero. NEVER
+                  # partially prints.
+  # The head filter is a NAMED second parameter and the flag is built here — it
+  # is never a forwarded "$@". pflag is last-wins, so a passthrough on the one
+  # gh call two verbs share would let a caller override --repo or --state.
+  # pr-open needs the filter because it asks a question about ONE branch; both
+  # readers get the same fields, the same 100-PR window and the same failure
+  # classification, which is the point of there being one reader.
+  local repo="$1" head="${2:-}" errf out rc err
+  local -a filter=()
+  [[ -n "$head" ]] && filter=(--head "$head")
   errf=$(mktemp)
-  out=$(timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --state all --limit 100 \
+  out=$(timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" "${filter[@]}" --state all --limit 100 \
           --json "$PR_JSON_FIELDS" 2>"$errf"); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc == 124 )); then printf '{"phase":"unknown","reason":"timeout"}\n'; return 1; fi
@@ -235,6 +244,24 @@ _gh_pr_list() {   # repo -> rows JSON on stdout; on failure prints the answer
     return 1
   fi
   printf '%s\n' "$out"
+}
+
+_gh_rows_ok() {   # answer -> 0 if it is a JSON list, non-zero for anything else
+  # rc 0 is not the same as an answer. `gh` writes its own diagnostics to
+  # STDOUT and still exits 0 ("gh: could not determine base repository"), so a
+  # caller that only asks `-n` prints that sentence as its own result: measured,
+  # `cmd_pr_open` returned it at exit 0, and the route (Task 13) answers
+  # {ok:true} on rc 0 without parsing stdout — the phone is told a PR opened.
+  # `_pr_py`'s `rows_in` already refuses the same body on the pr-state side
+  # (an rc-0 unparseable read once cleared a persisted `merged:#42`); this is
+  # that check for the caller that never reaches python.
+  # The answer arrives on STDIN, never in an argv — spec §7, it is
+  # GitHub-sourced. The program is argv, which is the safe half.
+  printf '%s' "$1" | python3 -c 'import json, sys
+try:
+    sys.exit(0 if isinstance(json.load(sys.stdin), list) else 1)
+except Exception:
+    sys.exit(1)'
 }
 
 _pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper.
@@ -1367,14 +1394,32 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   # ~/worktrees/* (checkPath, whitelist.ts:83-90).
   repo=$(_gh_repo_slug "$main") || die "no origin remote for $project"
 
-  # Idempotence, before anything is pushed or created. `--head` matches across
-  # fork owners, so a stranger's PR on the same branch name reads as "exists"
-  # and we decline to create — the fail-SAFE direction. What the UI believes is
-  # decided by pr-state's binding, not by this line.
-  local existing
-  existing=$(timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --head "$branch" --state all \
-               --json number,url,state 2>/dev/null)
-  if [[ -n "$existing" && "$existing" != "[]" ]]; then printf '%s\n' "$existing"; return 0; fi
+  # Idempotence, before anything is pushed or created, and it FAILS CLOSED.
+  # `_gh_pr_list` (ccd:218) is the read Task 3 already hardened: it captures
+  # gh's exit status and classifies its stderr. What stood here open-coded the
+  # same call with `2>/dev/null` and captured STDOUT ALONE — and rc 124, an
+  # expired token, a rate limit and an offline box all produce empty stdout,
+  # which is indistinguishable from "no PR". Measured, with gh exiting 124 on
+  # the probe: rc 0, the branch on the origin, one `pr create` issued. A bounded
+  # write may not proceed on an unproven "no PR exists"; the concrete loss is a
+  # DUPLICATE PR whenever the existing one is cross-repository, because our own
+  # create then succeeds.
+  #
+  # `--head` matches across fork owners, so a stranger's PR on the same branch
+  # name reads as "exists" and we decline to create — the fail-SAFE direction.
+  # What the UI believes is decided by pr-state's binding, not by this line.
+  local existing opened rc reason
+  existing=$(_gh_pr_list "$repo" "$branch"); rc=$?
+  if (( rc != 0 )); then
+    # `_gh_pr_list` prints its answer OBJECT on failure; the classified reason
+    # is the part of it this verb has to say out loud. "gh failed" would send
+    # the reader to check `gh auth` for a box that is merely offline.
+    reason="${existing##*\"reason\":\"}"; reason="${reason%%\"*}"
+    die "could not check for an existing PR on $branch ($reason) — nothing was pushed"
+  fi
+  _gh_rows_ok "$existing" \
+    || die "gh answered something that is not a list of PRs — nothing was pushed"
+  if [[ "$existing" != "[]" ]]; then printf '%s\n' "$existing"; return 0; fi
 
   # Run in $main, NEVER in $workdir — the one network write in this design, so
   # the repository it is asked of matters more here than anywhere else. $main
