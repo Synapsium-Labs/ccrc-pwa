@@ -524,6 +524,23 @@ describe('ws-rm', () => {
     expect(calls()).toEqual([]);
   });
 
+  // The `|| die` on the dirty read is load-bearing and nothing was failing when
+  // it was removed. It is reachable: truncate the workspace's PRIVATE index —
+  // what a crash or a full disk leaves behind — and `git status --porcelain`
+  // exits 128 while `rev-parse --git-common-dir` still answers, so the identity
+  // guard above passes and this line is the only thing between a session that is
+  // still running and the kill-then-die. "A status we could not read is not a
+  // clean one", same rule as `_ws_gc_dirty`.
+  it('refuses a worktree whose status cannot be read, before any teardown', () => {
+    const wt = addOne();
+    fs.writeFileSync(path.join(main(), '.git', 'worktrees', 'quiet-mesa', 'index'), 'GARBAGE');
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
   // The test above hand-picks the one variant of "not our worktree" that the
   // record cannot lie about: it prunes first, so `registered` is 1. Without the
   // prune the record is STALE — git still claims this path, so `registered` is
