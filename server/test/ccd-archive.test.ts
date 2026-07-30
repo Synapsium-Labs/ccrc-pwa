@@ -141,6 +141,18 @@ describe('ws-archive', () => {
     expect(r.stdout).toBe('already archived demo-quiet-basin');
   });
 
+  it('RETURNS from the idempotent path — it does not exit the caller', () => {
+    // ccd is explicitly sourceable; the BASH_SOURCE guard at the dispatcher
+    // exists for exactly that, and every sibling command uses `return`. `exit 0`
+    // here terminated the whole shell, so a batch sweep — `for id in …; do
+    // cmd_ws_archive --session "$id"; done` — stopped dead at the first
+    // already-archived workspace and skipped every one after it, exit 0.
+    workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin; echo REACHED-THE-NEXT-ONE`);
+    expect(out).toContain('REACHED-THE-NEXT-ONE');
+  });
+
   it('refuses when the wrapper status cannot be read while the pane IS alive', () => {
     workspace('demo', 'quiet-basin');
     const BUSY = ARCH.replace('_alive() { return 1; };', '_alive() { return 0; };');

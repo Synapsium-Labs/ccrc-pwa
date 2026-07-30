@@ -575,7 +575,10 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   [[ -n "$(_reg_get "$id" workspace)" ]] \
     || die "not a workspace — refusing to archive a main checkout"
-  [[ -f "$REG/$id.archived" ]] && { echo "already archived $id"; exit 0; }
+  # `return`, not `exit`: ccd is sourceable (the BASH_SOURCE guard below), so an
+  # `exit` here would terminate an in-process batch caller at its first
+  # already-archived workspace and skip the rest with a success code.
+  [[ -f "$REG/$id.archived" ]] && { echo "already archived $id"; return 0; }
 
   local st
   st=$(_ws_status "$id") || die "status-unknown"
