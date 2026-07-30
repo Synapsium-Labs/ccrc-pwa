@@ -201,11 +201,15 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     || die "git worktree add failed for $wt"
 
   # Shared across every worktree of this repo, local only, never committed.
-  # `CDPATH=` for the same reason as in _ws_common_dir below: --git-common-dir
-  # answers with a bare `.git` here (this IS the repo's own checkout), bash would
-  # search CDPATH for it, and the write two lines down would then land in a
-  # THIRD repository's info/exclude.
-  local common; common=$(cd "$main" && CDPATH= cd -- "$(git rev-parse --git-common-dir)" && pwd -P)
+  # Asked of git rather than resolved with `cd`, for the reason spelled out at
+  # _ws_common_dir below: --git-common-dir answers with a bare `.git` here (this
+  # IS the repo's own checkout), and a captured `cd` can prepend its own print to
+  # the answer. Measured what that costs, since $common is a path this WRITES
+  # through: the answer arrives two lines long, so `mkdir -p "$common/info"`
+  # creates a junk directory whose name ends in a newline, the `.ccrc/` line is
+  # appended inside that, and $main's real info/exclude never gets it — leaving
+  # .ccrc/ un-ignored in every worktree of the repo.
+  local common; common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)
   mkdir -p "$common/info"
   grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
 
@@ -243,41 +247,45 @@ _ws_realpath() {   # path -> same path, existing prefix resolved
   while [[ ! -d "$head" && "$head" != / && "$head" != . && -n "$head" ]]; do
     tail="/$(basename -- "$head")$tail"; head=$(dirname -- "$head")   # -- : a path may start with -
   done
-  real=$(cd -- "$head" 2>/dev/null && pwd -P) || { echo "$p"; return 0; }
+  # `>/dev/null` on the cd, not merely `2>`: `pwd -P` is the answer, so anything
+  # cd itself prints would be captured as part of it. bash's own cd prints on a
+  # CDPATH hit (not reachable here — $head is only ever an absolute path walked
+  # upwards), but a `cd` exported as a shell function prints whatever it likes,
+  # and that is reachable: bash imports it into this script through the
+  # environment. Redirecting cd alone leaves `pwd -P` free to answer.
+  real=$(cd -- "$head" >/dev/null 2>&1 && pwd -P) || { echo "$p"; return 0; }
   # `pwd -P` prints "/" for the root and never a trailing slash anywhere else,
   # so stripping is only ever right when there is a tail to re-attach: for the
   # root with no tail, "${real%/}" strips the only character there is.
   if [[ -n "$tail" ]]; then echo "${real%/}$tail"; else echo "$real"; fi
 }
 
-# Which repository a directory belongs to, as one absolute, symlink-resolved
+# Which repository a directory belongs to, as one absolute, symlink-collapsed
 # path — the only question that distinguishes "$main's worktree" from "some
-# other repo that was put at that path". `rev-parse --git-common-dir` answers
-# with an absolute path from a linked worktree but a bare `.git` (or `../.git`)
-# from a repo's own checkout, so it is resolved against the directory it was
-# read from rather than compared as printed. Verified on git 2.43.0 for all
-# four states: main checkout, its linked worktree, a standalone `git init`, and
-# another repository's worktree.
+# other repo that was put at that path".
 #   exit: non-zero and NO output when the path is in no repository at all —
 #         callers must treat the empty string as "no answer", never as a match.
-# `CDPATH=` on the inner cd is load-bearing, not defensive. bash searches CDPATH
-# for any operand that is neither absolute nor ./ nor ../-prefixed — which is
-# exactly the bare `.git` a repo's own checkout answers with, i.e. always for
-# $main — and on a hit `cd` PRINTS the directory it landed on. That print goes to
-# THIS function's stdout, so `2>/dev/null` catches none of it. Measured: an
-# exported `CDPATH=.` (an ordinary .bashrc line) returned the right path TWICE
-# for $main and once for the worktree, so the caller's comparison failed and
-# ws-rm refused every healthy workspace; an exported CDPATH containing its own
-# `.git` sent BOTH resolutions to that third repository, so two wrong answers
-# compared EQUAL and the caller waved a squatter through. An empty assignment as
-# a command prefix is unconditional, which is what this needs: `$gcd` is absolute
-# from a linked worktree, and prefixing `./` — the other way to escape CDPATH —
-# would corrupt exactly that case.
+# `--path-format=absolute` (git >= 2.31; this fleet is on 2.43) is doing the work.
+# Plain `--git-common-dir` is not comparable as printed — a bare `.git` from a
+# repo's own checkout, `../.git` from a subdirectory of one, absolute only from a
+# linked worktree — and resolving it here meant a `cd` inside a command
+# substitution, whose stdout ccd does not get to control: bash's own cd prints the
+# directory it landed on when a relative operand hits CDPATH, and a `cd` exported
+# as a shell function prints whatever it likes. Either print is captured as part
+# of the answer (`2>/dev/null` catches neither), and the caller then compares
+# multi-line garbage — two wrong answers that happen to match wave a squatter
+# through, two that do not refuse a healthy workspace. Asking git leaves no `cd`
+# to shadow. Measured on git 2.43.0 against the cd-based resolution it replaces:
+# byte-identical for a repo's own checkout, a subdirectory of one, a linked
+# worktree, a worktree of a worktree, --separate-git-dir, a `.git` that is itself
+# a symlink, a bare repo, and a main and its worktree reached through two
+# different symlinks (both sides still compare equal); and failing with no output
+# for a directory in no repository at all.
 _ws_common_dir() {   # dir -> /abs/.../.git
   local dir="$1" gcd
-  gcd=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null) || return 1
+  gcd=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   [[ -n "$gcd" ]] || return 1
-  (cd -- "$dir" && CDPATH= cd -- "$gcd" && pwd -P) 2>/dev/null
+  printf '%s\n' "$gcd"
 }
 
 # THE branch source of truth: git's own record of which branch the worktree at
@@ -539,13 +547,16 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
 _ws_gc_scan() {
   local main mainreal project wsroot wt prunable line f id wd p s
   # git records fully resolved paths (~/projects -> /data/projects -> /mnt/...),
-  # so both roots have to be resolved before any path comparison.
-  wsroot=$(cd "$WORKTREES_ROOT" 2>/dev/null && pwd -P) || wsroot="$WORKTREES_ROOT"
+  # so both roots have to be resolved before any path comparison. `>/dev/null` on
+  # both cds for the reason at _ws_realpath: only `pwd -P` may answer, and a `cd`
+  # exported as a shell function would otherwise prepend its own print to a path
+  # every classification below then compares.
+  wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
 
   for main in "$PROJECTS_ROOT"/*; do
     [[ -e "$main/.git" ]] || continue
     project=$(basename "$main")
-    mainreal=$(cd "$main" 2>/dev/null && pwd -P) || continue
+    mainreal=$(cd "$main" >/dev/null 2>&1 && pwd -P) || continue
     wt=""; prunable=0
     # Records are blank-line separated; the trailing `echo` flushes the last one
     # whether or not git emitted a final blank line.

@@ -130,11 +130,15 @@ describe('ws-add', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
+  const excludeOf = (repo: string): string => {
+    const p = path.join(repo, '.git', 'info', 'exclude');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  };
+
   it('excludes .ccrc/ so a draft file can never be committed', () => {
     const main = makeRepo('demo');
     sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
-    const exclude = fs.readFileSync(path.join(main, '.git', 'info', 'exclude'), 'utf8');
-    expect(exclude).toContain('.ccrc/');
+    expect(excludeOf(main)).toContain('.ccrc/');
   });
 
   it('runs .ccrc/workspace.sh with MAIN and WT set', () => {
@@ -585,6 +589,67 @@ describe('ws-rm', () => {
     fs.mkdirSync(path.join(decoy, '.git'), { recursive: true });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, { CDPATH: decoy })).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
+  // The OTHER stdout channel into the same guard, and the reason the fix is a
+  // replacement rather than another prefix: a `CDPATH=` assignment stops bash's
+  // OWN cd from printing, and stops nothing else. A `cd` defined as a shell
+  // function and exported with `export -f` is imported by every bash child
+  // through the environment (as BASH_FUNC_cd%%), so it reaches `bash ccd` no
+  // matter what the script puts on the `cd` line; the classic wrapper — the
+  // shape zoxide, direnv and a hundred .bashrc snippets have — echoes on every
+  // call, straight onto the captured stdout. There is nothing ccd can add to a
+  // `cd` it captures that makes that safe. Not capturing a `cd` at all is what
+  // is safe, so both resolutions now ask git and `_ws_realpath` discards cd's
+  // stdout instead of merely its stderr.
+  const CHATTY_CD = { 'BASH_FUNC_cd%%': '() { builtin cd "$@" && echo "[cd hook] now in $PWD"; }' };
+
+  it('removes a healthy workspace when cd itself is shadowed and chatty', () => {
+    const wt = addOne();
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(calls()).toEqual([
+      'unsupervise demo-quiet-mesa',
+      'tmux kill-session -t cc-demo-quiet-mesa',
+    ]);
+  });
+
+  // Same shadow, on the layout the fleet actually runs: $HOME/worktrees is a
+  // symlink (-> /data/worktrees -> /mnt/...). That is what makes _ws_realpath
+  // load-bearing — git records the resolved path while the registry holds the
+  // one ccd wrote, so `$cur == $path` cannot match and only the resolved `$real`
+  // can. Fixing just the two --git-common-dir call sites leaves THIS red:
+  // measured, a chatty cd still refused a healthy workspace here (rc=1,
+  // directory and registry intact) until _ws_realpath stopped capturing cd too.
+  it('removes a healthy workspace under a symlinked worktree root with cd chatty', () => {
+    fs.mkdirSync(path.join(home, 'real-worktrees'));
+    fs.symlinkSync(path.join(home, 'real-worktrees'), path.join(home, 'worktrees'));
+    const wt = addOne();
+    expect(fs.existsSync(path.join(home, 'real-worktrees', 'demo', 'quiet-mesa'))).toBe(true);
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(calls()).toEqual([
+      'unsupervise demo-quiet-mesa',
+      'tmux kill-session -t cc-demo-quiet-mesa',
+    ]);
+  });
+
+  it('refuses the squatter when cd itself is shadowed and chatty', () => {
+    const wt = recreateWithStaleRecord();
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    fs.writeFileSync(path.join(wt, 'PRECIOUS'), 'not ccd’s to remove\n');
+    execFileSync('git', ['-C', wt, 'add', 'PRECIOUS'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD)).toThrow();
     expect(calls()).toEqual([]);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
