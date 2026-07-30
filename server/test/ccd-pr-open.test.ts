@@ -252,6 +252,28 @@ describe('the happy path', () => {
     ]);
   });
 
+  it('names the state a failed create leaves behind — the branch IS on origin', () => {
+    // The push is kept: rolling it back would be a destructive rollback of a
+    // lossless state (the ref is the workspace's own work, and a later retry
+    // needs it there). So the message has to name what it left, the way the
+    // push's own refusal says "nothing was opened" about a state where truly
+    // nothing was. The route (Task 13) surfaces exactly this stderr in its 502.
+    const wt = workspace('demo', 'quiet-basin');
+    const origin = path.join(h.home, 'origins', 'demo.git');
+    const r = h.run(`${GH_STUB}
+      gh() { printf '%s\\n' "$*" >> "$HOME/gh-calls"
+             case "$1 $2" in "pr create") return 1 ;; esac
+             echo '[]'; }
+      cmd_pr_open --session demo-quiet-basin --title t --body-b64 ${b64('b')} --draft false`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /gh pr create failed — ws\/quiet-basin is on origin with its upstream set, but no PR was opened/);
+    // ...and the state the message names is the state that is really there.
+    expect(h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin'))
+      .toBe(h.git(wt, 'rev-parse', 'HEAD'));
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', '@{upstream}')).toBe('origin/ws/quiet-basin');
+  });
+
   it('returns a CLOSED PR on the branch rather than opening a second one', () => {
     // --state all, said behaviourally: `--state open` would answer [] here and
     // open a duplicate over an abandoned PR's branch.

@@ -1448,7 +1448,14 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   local -a args=(pr create --repo "$repo" --head "$branch" --base "$baseShort"
                  --title "$title" --body "$body")
   [[ "$draft" == true ]] && args+=(--draft)
-  timeout "$PR_GH_TIMEOUT" gh "${args[@]}" >/dev/null || die "gh pr create failed"
+  # The push is NOT rolled back if this fails: the ref on the origin is the
+  # workspace's own work, lossless and what a retry needs to find there, and an
+  # automatic `push --delete` would be a destructive rollback of a state nobody
+  # lost anything to. So the refusal NAMES what it left behind, the way the
+  # push's own refusal says "nothing was opened" about a state where truly
+  # nothing was — the route surfaces exactly this stderr in its 502.
+  timeout "$PR_GH_TIMEOUT" gh "${args[@]}" >/dev/null \
+    || die "gh pr create failed — $branch is on origin with its upstream set, but no PR was opened"
 
   # The answer, read back through the SAME reader as the probe: same fields,
   # same 100-PR window, same classification. Two hand-written `--json` lists
