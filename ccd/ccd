@@ -401,7 +401,13 @@ if mode == 'state':
 
     commits = []
     if tip and base:
-        r = git(main, 'log', '--format=%H%x1f%s%x1f%b%x1e', base + '..refs/heads/' + branch)
+        # `--` AFTER the revisions, per Global Constraints. Not exploitable
+        # today — `$base` comes from the registry and always yields a
+        # `..`-bearing operand, so git can only read it as a range — but the
+        # rule exists because git's own disambiguation is positional, and
+        # `git diff --quiet -- A B` silently treats both shas as PATHSPECS
+        # (verified: exit 0, where the same call with `--` last exits 1).
+        r = git(main, 'log', '--format=%H%x1f%s%x1f%b%x1e', base + '..refs/heads/' + branch, '--')
         if r.returncode == 0:
             for rec in r.stdout.split('\x1e'):
                 rec = rec.strip('\n')
