@@ -108,6 +108,58 @@ _ws_supervise()   { systemctl --user enable  --now "claude-session@$1" 2>/dev/nu
                       || echo "warn: could not enable unit claude-session@$1" >&2; }
 _ws_unsupervise() { systemctl --user disable --now "claude-session@$1" 2>/dev/null || true; }
 
+# ── PR / archive lifecycle helpers ─────────────────────────────────
+# `local x=$(cmd)` returns local's status, never cmd's — so anything whose exit
+# code is read below declares first and assigns second, deliberately.
+
+_json_str() {   # value -> a JSON string literal (quote/backslash/control safe)
+  printf '%s' "${1-}" | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read()))'
+}
+
+_ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
+  # Fails closed on purpose: a socket hiccup or an unreadable status file must
+  # not read as "not working" and let an archive kill a live turn. Same
+  # discipline as _auto_swap_check's idle gate (ccd:1097-1101).
+  local id="$1" wrapper cfg pid sf st
+  wrapper=$(_reg_get "$id" wrapper); [[ -n "$wrapper" ]] || return 1
+  cfg=$(_cfg_dir "$wrapper");        [[ -n "$cfg" ]]     || return 1
+  _alive "$id" || { echo idle; return 0; }      # no pane at all: nothing is running
+  pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  sf="$cfg/sessions/$pid.json"
+  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
+  [[ -n "$st" ]] || return 1
+  [[ "$st" == busy ]] && { echo busy; return 0; }
+  echo idle
+}
+
+_transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
+  # <cfg>/projects/<workdir with / . _ all mapped to ->/<uuid>.jsonl — the same
+  # munge server/src/munge.ts applies. Recorded so a reap never has to be
+  # reconstructed from an escaped path after the registry is gone.
+  local id="$1" wrapper cfg workdir uuid munged
+  wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
+  cfg=$(_cfg_dir "$wrapper")
+  [[ -n "$cfg" && -n "$workdir" && -n "$uuid" ]] || return 1
+  munged=$(printf '%s' "$workdir" | tr './_' '---')
+  printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"
+}
+
+_ws_stash_count() {   # main branch -> stash entries belonging to that branch
+  # -F on both patterns: a branch name carrying a '.' would otherwise be a
+  # wildcard and over-count, which here means refusing a legitimate reap.
+  git -C "$1" stash list 2>/dev/null | grep -cF -e "On $2:" -e "WIP on $2:" || true
+}
+
+_ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
+  # --ignored=matching, NEVER `ls-files --others --ignored`: the latter
+  # enumerates per file (measured 210,070 entries / 24.6 MB in custom-tools,
+  # against an 8 MB agent EXEC_MAX_BUFFER), while this collapses each ignored
+  # directory to one entry.
+  git -C "$1" status --porcelain --ignored=matching 2>/dev/null \
+    | grep '^!! ' | sort | sha256sum | cut -d' ' -f1
+}
+
 # ── workspace slugs ────────────────────────────────────────────────
 # No dots: tmux -t parses `session:window.pane`. No slashes: systemd
 # instance names escape them. Lowercase only, so a slug is never ambiguous
@@ -465,6 +517,140 @@ cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is p
   git -C "$workdir" branch -m "$new" || die "rename failed: $old -> $new"
   _reg_set "$id" branch "$new"
   echo "renamed $id: $old -> $new"
+}
+
+cmd_caps() {   # one verb name per line — what THIS copy of ccd implements.
+  # ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a verb can pass
+  # the agent's whitelist and still not exist on the box. The agent reads this
+  # at start and reports it in its ready frame; the server refuses to emit a
+  # verb the agent did not advertise. NOT whitelisted — the agent runs it
+  # directly, and it is a pure read.
+  cat <<'EOF'
+attach
+caps
+clip
+enable
+ensure
+list
+menu
+pick
+prefer
+start
+stop
+supervise
+swap
+swap-self
+ws-add
+ws-archive
+ws-attic
+ws-gc
+ws-rename
+ws-restore
+ws-rm
+ls
+EOF
+}
+
+cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
+  # out of the live fleet. DESTROYS NOTHING: no worktree remove, no branch -d,
+  # no rm of the registry. Its one cost is the tmux pane (scrollback and any
+  # in-flight turn), which is why it demands an affirmative idle.
+  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-archive --session <id>"
+  local id=$2
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  [[ -n "$(_reg_get "$id" workspace)" ]] \
+    || die "not a workspace — refusing to archive a main checkout"
+  [[ -f "$REG/$id.archived" ]] && { echo "already archived $id"; exit 0; }
+
+  local st
+  st=$(_ws_status "$id") || die "status-unknown"
+  [[ "$st" != busy ]] || die "session-busy"
+
+  # Into the REGISTRY, never into the worktree — the worktree is the thing that
+  # may later be deleted, and a manifest inside it would die with it.
+  _ws_archive_manifest "$id" > "$REG/$id.archivemanifest"
+
+  _ws_unsupervise "$id"                                   # clears Restart=always
+  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+
+  local pr; pr=$(_reg_get "$id" prnumber)
+  _reg_set "$id" archived "$(date +%s)"
+  if [[ "$pr" =~ ^[0-9]+$ ]]; then _reg_set "$id" archivedreason "merged:#$pr"
+  else                             _reg_set "$id" archivedreason "merged"; fi
+
+  local workdir; workdir=$(_reg_get "$id" workdir)
+  local note=""; [[ "$pr" =~ ^[0-9]+$ ]] && note=" (merged in #$pr)"
+  echo "archived $id$note — worktree kept at $workdir, nothing deleted"
+}
+
+_ws_archive_manifest() {   # id -> one JSON object on stdout
+  local id="$1" project workdir branch base main tip dirty ignored stashes bytes pr transcript
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  branch=$(_reg_get "$id" branch);   base=$(_reg_get "$id" base)
+  main="$PROJECTS_ROOT/$project"
+  tip=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null)
+  dirty=$(git -C "$workdir" status --porcelain 2>/dev/null | grep -c . || true)
+  ignored=$(_ws_ignored_digest "$workdir")
+  stashes=$(_ws_stash_count "$main" "$branch")
+  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+  pr=$(_reg_get "$id" prnumber); [[ "$pr" =~ ^[0-9]+$ ]] || pr=null
+  transcript=$(_transcript_path "$id") || transcript=""
+  printf '{"id":%s,"branch":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"transcript":%s}\n' \
+    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$base")" "$(_json_str "$tip")" \
+    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$(_json_str "$transcript")"
+}
+
+cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
+  # No confirmation: it only creates. The one thing it must not do is leave the
+  # session unsupervised — `ccd ensure` does NOT re-supervise (ccd:1267-1274), so
+  # boot persistence would be silently lost.
+  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-restore --session <id>"
+  local id=$2
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  [[ -f "$REG/$id.archived" ]]   || die "not archived: $id"
+  local workdir; workdir=$(_reg_get "$id" workdir)
+  [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
+  rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
+  _spawn "$id" resume
+  _reg_set "$id" started 1
+  _ws_supervise "$id"
+  echo "restored $id — $workdir"
+}
+
+_attic_project() {   # id -> the project owning its attic refs
+  # Registry first, tombstone second: after a reap the registry is gone, and
+  # the attic is exactly what the user still needs to reach.
+  local id="$1" p
+  p=$(_reg_get "$id" project); [[ -n "$p" ]] && { printf '%s\n' "$p"; return 0; }
+  p=$(sed -n 's/.*"project"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REG/.reaped/$id.json" 2>/dev/null | head -1)
+  [[ -n "$p" ]] && { printf '%s\n' "$p"; return 0; }
+  return 1
+}
+
+cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
+  # --drop is terminal-only: only ['ws-attic','--session'] is whitelisted, so
+  # the PWA cannot reach it. Attic refs are never garbage-collected on a timer.
+  [[ $# -eq 2 ]] || die "usage: ccd ws-attic --session <id> | ccd ws-attic --drop <id>"
+  local mode=$1 id=$2
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  local project; project=$(_attic_project "$id") || die "no such session: $id"
+  local main="$PROJECTS_ROOT/$project"
+  case "$mode" in
+    --session)
+      git -C "$main" for-each-ref --format='%(refname) %(objectname)' "refs/ccrc/attic/$id/" 2>/dev/null
+      ;;
+    --drop)
+      local n=0 ref
+      while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        git -C "$main" update-ref -d "$ref" && n=$(( n + 1 ))
+      done < <(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null)
+      echo "dropped $n attic ref$( (( n == 1 )) || echo s ) for $id"
+      ;;
+    *) die "usage: ccd ws-attic --session <id> | ccd ws-attic --drop <id>" ;;
+  esac
 }
 
 # ── reclamation ────────────────────────────────────────────────────
@@ -1320,6 +1506,10 @@ case "${1:-}" in
   ws-rm)     shift; cmd_ws_rm "$@" ;;
   ws-rename) shift; cmd_ws_rename "$@" ;;
   ws-gc)     shift; cmd_ws_gc "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|ws-add|ws-rm|ws-rename|ws-gc} <args>" >&2; exit 1 ;;
+  caps)       cmd_caps ;;
+  ws-archive) shift; cmd_ws_archive "$@" ;;
+  ws-restore) shift; cmd_ws_restore "$@" ;;
+  ws-attic)   shift; cmd_ws_attic "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic} <args>" >&2; exit 1 ;;
 esac
 fi
