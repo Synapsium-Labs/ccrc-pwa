@@ -6,7 +6,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { mungePath } from '../src/munge.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -38,6 +40,71 @@ const workspace = (project: string, slug: string): string => {
   return path.join(h.home, 'worktrees', project, slug);
 };
 
+/** The dispatcher, run the way the box runs it: the real file as a PROGRAM, not a
+ *  sourced copy. Nothing in the suite proved an arm calls the function it names —
+ *  the caps parity test only checks that the arm exists — so `ws-archive` could
+ *  have invoked cmd_ws_restore, or dropped its `shift`, and shipped green.
+ *  tmux and systemctl are shadowed on PATH, which is the only way to stub a
+ *  subprocess: `_alive`'s `tmux has-session` then fails, so _ws_status answers
+ *  idle with no status file to write. */
+const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+  const stub = path.join(h.home, 'stubbin');
+  fs.mkdirSync(stub, { recursive: true });
+  fs.writeFileSync(path.join(stub, 'tmux'),
+    '#!/bin/sh\necho "tmux $*" >> "$HOME/ccd-calls"\nexit 1\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(stub, 'systemctl'),
+    '#!/bin/sh\necho "systemctl $*" >> "$HOME/ccd-calls"\nexit 0\n', { mode: 0o755 });
+  const opts = {
+    encoding: 'utf8' as const, cwd: h.home,
+    env: { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` },
+  };
+  try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
+  catch (e) {
+    const err = e as { status?: number; stdout?: string; stderr?: string };
+    return { code: err.status ?? 1, stdout: String(err.stdout ?? '').trim(), stderr: String(err.stderr ?? '') };
+  }
+};
+
+describe('the dispatcher', () => {
+  it('routes each new verb to its OWN command, with argv shifted', () => {
+    workspace('demo', 'quiet-basin');
+
+    // ws-restore first, while the workspace is NOT archived: its own refusal
+    // proves the arm reached cmd_ws_restore, and it stops before _spawn.
+    const notArchived = runCcd('ws-restore', '--session', 'demo-quiet-basin');
+    expect(notArchived.code).toBe(1);
+    expect(notArchived.stderr).toMatch(/not archived: demo-quiet-basin/);
+
+    // ws-attic: a rejected mode word can only come from cmd_ws_attic's case, and
+    // only if `--frobnicate` arrived as $1 — i.e. the verb was shifted off.
+    const badMode = runCcd('ws-attic', '--frobnicate', 'demo-quiet-basin');
+    expect(badMode.code).toBe(1);
+    expect(badMode.stderr).toMatch(/usage: ccd ws-attic/);
+
+    // caps takes NO shift, deliberately — it accepts no argv.
+    expect(runCcd('caps').stdout.split('\n')).toContain('ws-archive');
+
+    // ws-archive last, because it is the one that changes state. Without the
+    // shift cmd_ws_archive sees three arguments and dies on its arity guard;
+    // pointed at cmd_ws_restore it dies with "not archived".
+    const arch = runCcd('ws-archive', '--session', 'demo-quiet-basin');
+    expect(arch.stderr).toBe('');
+    expect(arch.code).toBe(0);
+    expect(arch.stdout).toMatch(/^archived demo-quiet-basin/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toMatch(/^\d+$/);
+  });
+
+  it('names every verb it dispatches in the usage line', () => {
+    // The usage line is the only thing a mistyped verb prints, and reverting it
+    // to its pre-Task-2 text was invisible to the whole suite.
+    const r = runCcd();
+    expect(r.code).toBe(1);
+    for (const verb of ['caps', 'ws-archive', 'ws-restore', 'ws-attic']) {
+      expect(r.stderr, verb).toContain(verb);
+    }
+  });
+});
+
 describe('ccd caps', () => {
   it('advertises exactly the verbs the dispatcher implements', () => {
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
@@ -65,6 +132,45 @@ const withStatus = (status: string): void => {
   fs.mkdirSync(cfg, { recursive: true });
   fs.writeFileSync(path.join(cfg, '4242.json'), JSON.stringify({ status, statusUpdatedAt: 1 }));
 };
+
+describe('_ws_stash_count', () => {
+  it('counts the stashes belonging to that branch, read from $main', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    fs.writeFileSync(path.join(wt, 'README.md'), 'edited\n');
+    h.git(wt, 'stash', 'push', '-m', 'work in progress');
+    // A stash made in a LINKED worktree lives in the common ref store, which is
+    // why the count is read from $main and still sees it — and why a stash is
+    // work the reap must not delete.
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`)).toBe('1');
+    expect(h.sh(`_ws_stash_count "${main}" ws/other`)).toBe('0');
+  });
+
+  it('matches the branch name FIXED — a dot is not a wildcard', () => {
+    // -F on both patterns, which is what the comment above them justifies.
+    // Without it `On ws.quiet-basin:` is a regex matching the real
+    // `On ws/quiet-basin:`, and an over-count here means refusing a legitimate
+    // reap. Measured without -F: 1.
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    fs.writeFileSync(path.join(wt, 'README.md'), 'edited\n');
+    h.git(wt, 'stash', 'push', '-m', 'work in progress');
+    expect(h.sh(`_ws_stash_count "${main}" 'ws.quiet-basin'`)).toBe('0');
+  });
+});
+
+describe('_transcript_path', () => {
+  it('munges the workdir exactly as server/src/munge.ts does', () => {
+    // The munge is the whole reason the helper exists, and the plan's stated
+    // guarantee is that it matches mungePath. `tr './_' '---'` has to agree on
+    // all three characters, so the fixture path carries all three — a real
+    // workspace path has only slashes, and would let `tr '/' '-'` pass.
+    const odd = '/tmp/proj.dir/some_thing/v1.2';
+    h.sh(`_reg_set fake wrapper claude; _reg_set fake workdir '${odd}'; _reg_set fake uuid u-1`);
+    expect(h.sh('_transcript_path fake'))
+      .toBe(path.join(h.home, '.claude', 'projects', mungePath(odd), 'u-1.jsonl'));
+  });
+});
 
 describe('_ws_ignored_digest', () => {
   it('is the sha256 of the ignored-entry SET, with directories collapsed', () => {
@@ -113,6 +219,20 @@ describe('_ws_status', () => {
     ]);
   });
 
+  it('refuses when the registry names no wrapper at all', () => {
+    // Observable only in isolation, and that is worth saying: `_cfg_dir` answers
+    // EMPTY for every wrapper this guard would reject, so with the real _cfg_dir
+    // the very next line refuses for exactly the same inputs and the guard looks
+    // like dead weight. Stubbing _cfg_dir to answer a path is what makes the
+    // registry precondition its own rung — the helper must not go hunting for a
+    // pane on behalf of a session it cannot identify.
+    workspace('demo', 'quiet-basin');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.wrapper'));
+    withStatus('idle');
+    expect(shFail(`${LIVE} _cfg_dir() { echo "$HOME/.claude"; }; _ws_status demo-quiet-basin`).code)
+      .not.toBe(0);
+  });
+
   it('refuses to archive a session that is running a Bash tool command', () => {
     // The pane is the one thing archive costs, and `shell` means a command is
     // running in it — `tmux kill-session` would take the shell out from under a
@@ -135,6 +255,17 @@ describe('ws-archive', () => {
     expect(shFail('cmd_ws_archive --session').code).toBe(1);
     expect(shFail('cmd_ws_archive --session a --session b').code).toBe(1);
     expect(shFail('cmd_ws_archive --session "../../etc"').stderr).toMatch(/bad session id/);
+  });
+
+  it('says "no such session" for an id the registry has never heard of', () => {
+    // The uuid file is the existence check and it is the FIRST thing either verb
+    // asks. Drop it from archive and the refusal becomes "not a workspace"; drop
+    // it from restore and it becomes "not archived" — both of which describe a
+    // session that exists.
+    expect(shFail(`${ARCH} cmd_ws_archive --session ghost-session`).stderr)
+      .toMatch(/no such session: ghost-session/);
+    expect(shFail(`${ARCH} cmd_ws_restore --session ghost-session`).stderr)
+      .toMatch(/no such session: ghost-session/);
   });
 
   it('refuses a main checkout — it has no worktree to archive', () => {
@@ -225,10 +356,23 @@ describe('ws-archive', () => {
     expect(m.stashes).toBe(0);
     expect(m.ignoredDigest).toBe(SHA256_EMPTY);     // nothing ignored, read OK
     expect(typeof m.worktreeBytes).toBe('number');
-    expect(String(m.transcript)).toContain('.claude/projects/');
+    // Not just "contains .claude/projects/" — the exact path munge.ts computes,
+    // so the reap can find the transcript after the registry is gone.
+    expect(m.transcript).toBe(path.join(
+      h.home, '.claude', 'projects', mungePath(wt), `${h.reg('demo-quiet-basin', 'uuid')}.jsonl`));
     // The manifest describes the thing that may later be deleted, so it cannot
     // live inside it.
     expect(fs.existsSync(path.join(wt, '.archivemanifest'))).toBe(false);
+  });
+
+  it('substitutes 0 when the size cannot be measured, keeping the record JSON', () => {
+    workspace('demo', 'quiet-basin');
+    // _ws_gc_bytes answers '-' when du fails. Unsubstituted that is
+    // "worktreeBytes":- — not JSON — and since the record is now parsed before it
+    // is persisted, dropping the fallback turns a measurable tree into a refusal.
+    h.sh(`${ARCH} _ws_gc_bytes() { echo -; }; cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.worktreeBytes).toBe(0);
   });
 });
 
@@ -271,6 +415,40 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/is not a worktree of/);
+    // The verb's own refusal, not just the helper's: discarding the helper's exit
+    // status leaves the empty-manifest rung to catch it, which refuses for a
+    // reason that does not name what actually disagreed.
+    expect(r.stderr).toMatch(/cannot describe demo-quiet-basin truthfully/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses when the tree itself cannot be read', () => {
+    workspace('demo', 'quiet-basin');
+    // A directory can be a genuine worktree of $main and still not answer: an
+    // index.lock contention, a permission change mid-flight. The read was
+    // 2>/dev/null-swallowed and `grep -c` then counted zero lines, so a tree
+    // nobody could read was recorded as a clean one. Only `status --porcelain` is
+    // failed here — the ignored-set read and `worktree list --porcelain` go
+    // through to the real git, so the rungs before this one still pass.
+    const NOSTATUS = `${ARCH} git() { [[ "$*" == *"status --porcelain" ]] && return 128; command git "$@"; };`;
+    const r = shFail(`${NOSTATUS} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not read the tree/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses a record that is not parseable JSON, whatever produced it', () => {
+    workspace('demo', 'quiet-basin');
+    // Every field is individually guarded, so nothing in ccd can produce this
+    // today; the parse is what stops a FUTURE unquoted or non-numeric field from
+    // becoming a record that only looks like JSON. Dropping _json_str's quoting
+    // is exactly what a missing python3 used to do to all ten fields at once.
+    const r = shFail(
+      `${ARCH} _json_str() { printf '%s' "\${1-}"; }; cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/not valid JSON/);
     expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
   });

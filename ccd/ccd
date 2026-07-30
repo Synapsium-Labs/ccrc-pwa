@@ -606,7 +606,8 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # gone every tree field in the manifest reads PRISTINE — dirty 0 because the
   # status read failed, worktreeBytes 0 from _ws_gc_bytes's '-' fallback,
   # ignoredDigest = sha256("") — and the output still said "nothing deleted".
-  [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
+  [[ -d "$workdir" ]] \
+    || die "worktree is gone: $workdir — cannot describe it for the archive record; see: ccd ws-attic --session $id"
 
   local st
   st=$(_ws_status "$id") || die "status-unknown"
