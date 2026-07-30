@@ -46,9 +46,19 @@ export function makeCcdHarness(prefix: string): CcdHarness {
 
   return {
     home,
+    // `cwd: home` is part of the isolation, not a convenience. Without it the
+    // snippet inherits vitest's cwd — `infra/ccrc/server` — so any ccd path that
+    // resolves a RELATIVE path writes into the repository. Measured: the hostile
+    // -CDPATH ws-add case makes `$common` two lines long, and `mkdir -p
+    // "$common/info"` then created 74 directories under `server/`, two of them
+    // holding a real `.git/info/exclude`. `git status` cannot see them (the tree
+    // walk skips a component named `.git`, and empty dirs are unreported), so
+    // the suite littered the checkout invisibly and `git add -A` would have
+    // committed newline-bearing paths. HOME is only the ONLY boundary this file
+    // claims if the process starts inside it.
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-        { encoding: 'utf8', env: { ...process.env, HOME: home, ...env } }).trim(),
+        { encoding: 'utf8', cwd: home, env: { ...process.env, HOME: home, ...env } }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;

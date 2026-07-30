@@ -130,11 +130,48 @@ describe('ws-add', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
+  const excludeOf = (repo: string): string => {
+    const p = path.join(repo, '.git', 'info', 'exclude');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  };
+
   it('excludes .ccrc/ so a draft file can never be committed', () => {
     const main = makeRepo('demo');
     sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
-    const exclude = fs.readFileSync(path.join(main, '.git', 'info', 'exclude'), 'utf8');
-    expect(exclude).toContain('.ccrc/');
+    expect(excludeOf(main)).toContain('.ccrc/');
+  });
+
+  // ...and the environment does not get to redirect that write. The test above
+  // pins the normal path and can only ever pass, because it never runs under a
+  // hostile environment: the line it is the control for could be reverted and it
+  // would stay green. `$common` is resolved from `--git-common-dir`, which
+  // answers with a bare `.git` here (this IS the repo's own checkout), and ccd
+  // then WRITES through it — so the two ways a captured `cd` can prepend its own
+  // print to that path are the two ways this line silently stops ignoring
+  // `.ccrc/` in every worktree of the repo. Both shapes below are red if the
+  // resolution goes back to `$(cd "$main" && cd -- "$(git rev-parse
+  // --git-common-dir)" && pwd -P)`; the second is red for the `CDPATH=`-prefixed
+  // version too, which is why the line asks git instead.
+  it('writes the exclude to the project itself when the environment shadows cd', () => {
+    // Shape 1: a real repository on CDPATH, so bash's own `cd .git` lands there
+    // and prints it. Measured on the unhardened line: `$common` comes back TWO
+    // lines, so `mkdir -p` creates a junk directory whose name ends in a newline
+    // and `.ccrc/` is written inside that — neither repo's exclude gets the line.
+    const decoy = path.join(home, 'cdp');
+    execFileSync('git', ['init', '-b', 'main', decoy]);
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`, { CDPATH: decoy });
+    expect(excludeOf(main)).toContain('.ccrc/');
+    expect(excludeOf(decoy)).not.toContain('.ccrc/');
+
+    // Shape 2: `cd` itself replaced by an exported shell function that echoes.
+    // No assignment on the `cd` line can stop this one — the function is not
+    // bash's cd. Second project so the `grep -qxF` short-circuit above cannot
+    // make this half pass for free.
+    const two = makeRepo('two');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add two`,
+      { 'BASH_FUNC_cd%%': '() { builtin cd "$@" && echo "[cd hook] now in $PWD"; }' });
+    expect(excludeOf(two)).toContain('.ccrc/');
   });
 
   it('runs .ccrc/workspace.sh with MAIN and WT set', () => {
@@ -307,6 +344,12 @@ describe('ws-rm', () => {
   const RM = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; `
     + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
 
+  const main = (): string => path.join(home, 'projects', 'demo');
+  const branches = (glob: string): string =>
+    execFileSync('git', ['-C', main(), 'branch', '--list', glob], { encoding: 'utf8' }).trim();
+  const gitEnv = (): NodeJS.ProcessEnv => ({ ...process.env, HOME: home,
+    GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' });
+
   it('removes the worktree, the branch and the registry entry', () => {
     const wt = addOne();
     sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
@@ -404,5 +447,289 @@ describe('ws-rm', () => {
     expect(branches.trim()).not.toBe('');
     const containing = execFileSync('git', ['-C', main, 'branch', '--contains', sha], { encoding: 'utf8' });
     expect(containing).toContain('quiet-mesa');
+  });
+
+  // THE BUG. A hand-deleted directory left the branch with no worktree, no
+  // registry entry and no ws-gc row — invisible forever. git still holds the
+  // record (marked `prunable`), which is both where the name comes from and
+  // what blocks `branch -d` until `worktree remove` clears it.
+  it('deletes the branch when the worktree directory was removed by hand', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(execFileSync('git', ['-C', main(), 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8' })).not.toContain('quiet-mesa');
+  });
+
+  // Not "delete more": an unmerged branch still survives on that path — and now
+  // says so, instead of being kept in silence by `2>/dev/null || true`.
+  it('keeps an unmerged branch when the directory is gone, and says it kept it', () => {
+    const wt = addOne();
+    fs.writeFileSync(path.join(wt, 'x.txt'), 'ahead\n');
+    execFileSync('git', ['-C', wt, 'add', 'x.txt'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'ahead of base'], { env: gitEnv() });
+    const sha = execFileSync('git', ['-C', wt, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    fs.rmSync(wt, { recursive: true, force: true });
+
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(out).toContain('kept branch ws/quiet-mesa');
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(execFileSync('git', ['-C', main(), 'branch', '--contains', sha],
+      { encoding: 'utf8' })).toContain('quiet-mesa');
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+  });
+
+  // The wrong-branch test. A hand `git branch -m` bypasses ws-rename, so the
+  // registry keeps the OLD name — and a decoy under that old name is merged,
+  // i.e. `branch -d` would happily take it. Git's record wins; the decoy lives.
+  // This is what fails loudly if anyone "simplifies" the fix to "use the
+  // registry field".
+  it('trusts git over the registry when they disagree, and touches nothing else', () => {
+    const wt = addOne();
+    execFileSync('git', ['-C', wt, 'branch', '-m', 'feat/handmade'], { env: gitEnv() });
+    execFileSync('git', ['-C', main(), 'branch', 'ws/quiet-mesa', 'main'], { env: gitEnv() });
+    fs.rmSync(wt, { recursive: true, force: true });
+
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(branches('feat/handmade')).toBe('');
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(out).toContain("registry recorded 'ws/quiet-mesa'");
+  });
+
+  // Rung 3: no worktree record at all. Deleting the wrong branch costs more
+  // than leaving the right one, so ws-rm finishes the teardown and hands over
+  // the command instead of guessing from an uncorroborated registry field.
+  it('will not delete an uncorroborated branch, and names the command instead', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });
+    execFileSync('git', ['-C', main(), 'worktree', 'prune']);
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(out).toContain('branch -d ws/quiet-mesa');
+  });
+
+  // REFUSE FIRST. Previously this killed the session and the unit, then died on
+  // `worktree remove` — the worst of both.
+  it('refuses a directory that is not a worktree of the project, before any teardown', () => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });
+    execFileSync('git', ['-C', main(), 'worktree', 'prune']);
+    fs.mkdirSync(wt, { recursive: true });
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(calls()).toEqual([]);
+  });
+
+  // The `|| die` on the dirty read is load-bearing and nothing was failing when
+  // it was removed. It is reachable: truncate the workspace's PRIVATE index —
+  // what a crash or a full disk leaves behind — and `git status --porcelain`
+  // exits 128 while `rev-parse --git-common-dir` still answers, so the identity
+  // guard above passes and this line is the only thing between a session that is
+  // still running and the kill-then-die. "A status we could not read is not a
+  // clean one", same rule as `_ws_gc_dirty`.
+  it('refuses a worktree whose status cannot be read, before any teardown', () => {
+    const wt = addOne();
+    fs.writeFileSync(path.join(main(), '.git', 'worktrees', 'quiet-mesa', 'index'), 'GARBAGE');
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
+  // The test above hand-picks the one variant of "not our worktree" that the
+  // record cannot lie about: it prunes first, so `registered` is 1. Without the
+  // prune the record is STALE — git still claims this path, so `registered` is
+  // 0 and a guard that only reads the record waves the teardown through and
+  // dies on `worktree remove` afterwards. The directory has to be asked which
+  // repository it belongs to.
+  const recreateWithStaleRecord = (): string => {
+    const wt = addOne();
+    fs.rmSync(wt, { recursive: true, force: true });   // NO `worktree prune`
+    return wt;
+  };
+  const staleRecordStands = (wt: string): void => {
+    expect(execFileSync('git', ['-C', main(), 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8' })).toContain(wt);
+  };
+
+  it('refuses a stale record whose directory came back as its own repository', () => {
+    const wt = recreateWithStaleRecord();
+    staleRecordStands(wt);
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    // COMMITTED, so `git status --porcelain` in there is clean: the dirty guard
+    // must not be what saves this: it is not the reason ccd should refuse, and
+    // it does not fire for the empty repo two tests below.
+    fs.writeFileSync(path.join(wt, 'PRECIOUS'), 'not ccd’s to remove\n');
+    execFileSync('git', ['-C', wt, 'add', 'PRECIOUS'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
+  it('refuses a stale record whose directory came back as ANOTHER repo’s worktree', () => {
+    const wt = recreateWithStaleRecord();
+    makeRepo('other');
+    execFileSync('git', ['-C', path.join(home, 'projects', 'other'),
+      'worktree', 'add', '-b', 'ws/borrowed', wt], { env: gitEnv() });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(execFileSync('git', ['-C', path.join(home, 'projects', 'other'),
+      'branch', '--list', 'ws/borrowed'], { encoding: 'utf8' }).trim()).not.toBe('');
+  });
+
+  // A refusal that kills first is not merely wrong once: every re-run kills
+  // again. This is what "nothing was touched" has to mean on attempt two.
+  it('kills nothing on a re-run of a refused removal', () => {
+    const wt = recreateWithStaleRecord();
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
+  // CDPATH — `export CDPATH=.` is an ordinary .bashrc line, and the guard above
+  // is resolved with `cd`. `rev-parse --git-common-dir` prints a RELATIVE `.git`
+  // from a repo's own checkout — i.e. always for $main — and bash's `cd` searches
+  // a relative operand through CDPATH and PRINTS the directory it landed on. So
+  // the resolution has to opt out of CDPATH, not merely redirect stderr.
+  // Both tests are ONE fixture each away from the two already above; what is new
+  // is only the environment ccd is run in.
+  it('removes a healthy workspace with CDPATH exported', () => {
+    const wt = addOne();
+    // `CDPATH=.` finds `./.git` and echoes it, so $main's side comes back as the
+    // right path TWICE while the worktree's (absolute `--git-common-dir`) side
+    // comes back once: the guard's own comparison fails and ws-rm refuses a
+    // perfectly healthy workspace, offering only "delete the directory by hand".
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`, { CDPATH: '.' });
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(calls()).toEqual([
+      'unsupervise demo-quiet-mesa',
+      'tmux kill-session -t cc-demo-quiet-mesa',
+    ]);
+  });
+
+  it('refuses the squatter even when CDPATH holds a decoy .git', () => {
+    const wt = recreateWithStaleRecord();
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    fs.writeFileSync(path.join(wt, 'PRECIOUS'), 'not ccd’s to remove\n');
+    execFileSync('git', ['-C', wt, 'add', 'PRECIOUS'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
+    // The dangerous direction. Both the squatter and $main answer with a relative
+    // `.git`, so under this CDPATH BOTH resolutions land on the decoy: two wrong
+    // answers that compare EQUAL, the guard passes, and the session is killed and
+    // the unit disabled before `worktree remove` dies — verbatim the kill-then-die
+    // the guard exists to close. Requiring a non-empty $main side does not help;
+    // only never consulting CDPATH does.
+    const decoy = path.join(home, 'cdp');
+    fs.mkdirSync(path.join(decoy, '.git'), { recursive: true });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, { CDPATH: decoy })).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
+  // The OTHER stdout channel into the same guard, and the reason the fix is a
+  // replacement rather than another prefix: a `CDPATH=` assignment stops bash's
+  // OWN cd from printing, and stops nothing else. A `cd` defined as a shell
+  // function and exported with `export -f` is imported by every bash child
+  // through the environment (as BASH_FUNC_cd%%), so it reaches `bash ccd` no
+  // matter what the script puts on the `cd` line; the classic wrapper — the
+  // shape zoxide, direnv and a hundred .bashrc snippets have — echoes on every
+  // call, straight onto the captured stdout. There is nothing ccd can add to a
+  // `cd` it captures that makes that safe. Not capturing a `cd` at all is what
+  // is safe, so both resolutions now ask git and `_ws_realpath` discards cd's
+  // stdout instead of merely its stderr.
+  const CHATTY_CD = { 'BASH_FUNC_cd%%': '() { builtin cd "$@" && echo "[cd hook] now in $PWD"; }' };
+
+  it('removes a healthy workspace when cd itself is shadowed and chatty', () => {
+    const wt = addOne();
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(calls()).toEqual([
+      'unsupervise demo-quiet-mesa',
+      'tmux kill-session -t cc-demo-quiet-mesa',
+    ]);
+  });
+
+  // Same shadow, on the layout the fleet actually runs: $HOME/worktrees is a
+  // symlink (-> /data/worktrees -> /mnt/...). That is what makes _ws_realpath
+  // load-bearing — git records the resolved path while the registry holds the
+  // one ccd wrote, so `$cur == $path` cannot match and only the resolved `$real`
+  // can. Fixing just the two --git-common-dir call sites leaves THIS red:
+  // measured, a chatty cd still refused a healthy workspace here (rc=1,
+  // directory and registry intact) until _ws_realpath stopped capturing cd too.
+  it('removes a healthy workspace under a symlinked worktree root with cd chatty', () => {
+    fs.mkdirSync(path.join(home, 'real-worktrees'));
+    fs.symlinkSync(path.join(home, 'real-worktrees'), path.join(home, 'worktrees'));
+    const wt = addOne();
+    expect(fs.existsSync(path.join(home, 'real-worktrees', 'demo', 'quiet-mesa'))).toBe(true);
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).toBe('');
+    expect(calls()).toEqual([
+      'unsupervise demo-quiet-mesa',
+      'tmux kill-session -t cc-demo-quiet-mesa',
+    ]);
+  });
+
+  it('refuses the squatter when cd itself is shadowed and chatty', () => {
+    const wt = recreateWithStaleRecord();
+    execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
+    fs.writeFileSync(path.join(wt, 'PRECIOUS'), 'not ccd’s to remove\n');
+    execFileSync('git', ['-C', wt, 'add', 'PRECIOUS'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
+
+    expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD)).toThrow();
+    expect(calls()).toEqual([]);
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+    expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
+  it('deletes no branch for a detached HEAD, and still clears the record', () => {
+    const wt = addOne();
+    execFileSync('git', ['-C', wt, 'checkout', '--detach'], { env: gitEnv() });
+    fs.rmSync(wt, { recursive: true, force: true });
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(execFileSync('git', ['-C', main(), 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8' })).not.toContain('quiet-mesa');
+  });
+
+  // ...and saying "no branch to delete" is not the whole truth: the registry
+  // named one, it still exists, and after this teardown it has no worktree, no
+  // registration and no registry entry — invisible, which is the state this
+  // whole change exists to prevent. Same rung-3 rule as the uncorroborated
+  // case: name it, hand over the command, delete nothing.
+  it('names the registry branch a detached HEAD would otherwise orphan', () => {
+    const wt = addOne();
+    execFileSync('git', ['-C', wt, 'checkout', '--detach'], { env: gitEnv() });
+    fs.rmSync(wt, { recursive: true, force: true });
+    const out = sh(`${RM} cmd_ws_rm demo-quiet-mesa 2>&1`);
+    expect(out).toContain('detached HEAD');
+    expect(out).toContain('ws/quiet-mesa');
+    expect(out).toContain(`branch -d ws/quiet-mesa`);
+    expect(branches('ws/quiet-mesa')).not.toBe('');
   });
 });

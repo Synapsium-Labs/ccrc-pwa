@@ -201,7 +201,15 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     || die "git worktree add failed for $wt"
 
   # Shared across every worktree of this repo, local only, never committed.
-  local common; common=$(cd "$main" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  # Asked of git rather than resolved with `cd`, for the reason spelled out at
+  # _ws_common_dir below: --git-common-dir answers with a bare `.git` here (this
+  # IS the repo's own checkout), and a captured `cd` can prepend its own print to
+  # the answer. Measured what that costs, since $common is a path this WRITES
+  # through: the answer arrives two lines long, so `mkdir -p "$common/info"`
+  # creates a junk directory whose name ends in a newline, the `.ccrc/` line is
+  # appended inside that, and $main's real info/exclude never gets it — leaving
+  # .ccrc/ un-ignored in every worktree of the repo.
+  local common; common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)
   mkdir -p "$common/info"
   grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
 
@@ -230,6 +238,81 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   echo "workspace $id on $hw — $wt (branch $branch, from $base)"
 }
 
+# Every path git prints is fully resolved ($HOME/worktrees -> /data/worktrees ->
+# /mnt/...), while the registry keeps the path ccd wrote. Resolving needs the
+# path to EXIST, and the whole point of the caller below is the case where it
+# does not — so resolve the longest existing prefix and re-attach the rest.
+_ws_realpath() {   # path -> same path, existing prefix resolved
+  local p="$1" head="$1" tail="" real
+  while [[ ! -d "$head" && "$head" != / && "$head" != . && -n "$head" ]]; do
+    tail="/$(basename -- "$head")$tail"; head=$(dirname -- "$head")   # -- : a path may start with -
+  done
+  # `>/dev/null` on the cd, not merely `2>`: `pwd -P` is the answer, so anything
+  # cd itself prints would be captured as part of it. bash's own cd prints on a
+  # CDPATH hit (not reachable here — $head is only ever an absolute path walked
+  # upwards), but a `cd` exported as a shell function prints whatever it likes,
+  # and that is reachable: bash imports it into this script through the
+  # environment. Redirecting cd alone leaves `pwd -P` free to answer.
+  real=$(cd -- "$head" >/dev/null 2>&1 && pwd -P) || { echo "$p"; return 0; }
+  # `pwd -P` prints "/" for the root and never a trailing slash anywhere else,
+  # so stripping is only ever right when there is a tail to re-attach: for the
+  # root with no tail, "${real%/}" strips the only character there is.
+  if [[ -n "$tail" ]]; then echo "${real%/}$tail"; else echo "$real"; fi
+}
+
+# Which repository a directory belongs to, as one absolute, symlink-collapsed
+# path — the only question that distinguishes "$main's worktree" from "some
+# other repo that was put at that path".
+#   exit: non-zero and NO output when the path is in no repository at all —
+#         callers must treat the empty string as "no answer", never as a match.
+# `--path-format=absolute` (git >= 2.31; this fleet is on 2.43) is doing the work.
+# Plain `--git-common-dir` is not comparable as printed — a bare `.git` from a
+# repo's own checkout, `../.git` from a subdirectory of one, absolute only from a
+# linked worktree — and resolving it here meant a `cd` inside a command
+# substitution, whose stdout ccd does not get to control: bash's own cd prints the
+# directory it landed on when a relative operand hits CDPATH, and a `cd` exported
+# as a shell function prints whatever it likes. Either print is captured as part
+# of the answer (`2>/dev/null` catches neither), and the caller then compares
+# multi-line garbage — two wrong answers that happen to match wave a squatter
+# through, two that do not refuse a healthy workspace. Asking git leaves no `cd`
+# to shadow. Measured on git 2.43.0 against the cd-based resolution it replaces:
+# byte-identical for a repo's own checkout, a subdirectory of one, a linked
+# worktree, a worktree of a worktree, --separate-git-dir, a `.git` that is itself
+# a symlink, a bare repo, and a main and its worktree reached through two
+# different symlinks (both sides still compare equal); and failing with no output
+# for a directory in no repository at all.
+_ws_common_dir() {   # dir -> /abs/.../.git
+  local dir="$1" gcd
+  gcd=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [[ -n "$gcd" ]] || return 1
+  printf '%s\n' "$gcd"
+}
+
+# THE branch source of truth: git's own record of which branch the worktree at
+# $2 has checked out, read from the repo at $1. Not `rev-parse HEAD` inside the
+# worktree — that answers from whatever repository owns that directory, which
+# after a hand-deletion and a stray `git init` need not be $1 at all, and the
+# name it returns is then deleted in $1. This lookup cannot leave $1, survives
+# the directory being gone (the record stays, marked `prunable`), and follows a
+# branch rename whether ccd or the user did it.
+#   stdout: branch name, empty for a detached HEAD
+#   exit:   0 = git has a registration for that path, 1 = it has none
+# `git worktree list` failing (repo gone, corrupt, not a repo) yields no records
+# and therefore exit 1 — "no evidence", which is the reading that deletes
+# nothing.
+_ws_wt_branch() {   # main path
+  local main="$1" path="$2" real cur="" line
+  real=$(_ws_realpath "$path")
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) cur="${line#worktree }" ;;
+      "branch "*)   [[ "$cur" == "$real" || "$cur" == "$path" ]] && { echo "${line#branch refs/heads/}"; return 0; } ;;
+      detached)     [[ "$cur" == "$real" || "$cur" == "$path" ]] && { echo ""; return 0; } ;;
+    esac
+  done < <(git -C "$main" worktree list --porcelain 2>/dev/null)
+  return 1
+}
+
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
   local id="${1:?usage: ccd ws-rm <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
@@ -240,32 +323,90 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
   local main="$PROJECTS_ROOT/$project"
 
-  # Read the branch while the worktree still exists; it may have been renamed
-  # since creation, so the slug is not a safe substitute.
-  local branch=""
+  # Gather the evidence BEFORE anything is torn down, and gather it from git.
+  # `registered` is what decides whether there is anything for `worktree remove`
+  # to clear, so it is read from $? on its own line: with no `set -e`, a
+  # `local branch=$(...)` would return local's status, not the function's.
+  local branch registered
+  branch=$(_ws_wt_branch "$main" "$workdir"); registered=$?
+
   if [[ -d "$workdir" ]]; then
-    branch=$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null)
-    # REFUSE FIRST, tear down second. --porcelain counts untracked files, which
-    # is what `git worktree remove` itself objects to. Doing this after the
-    # kill would leave the uncommitted work intact but the session dead and out
-    # of supervision — and the refusal below would be lying about it.
-    local dirty; dirty=$(git -C "$workdir" status --porcelain 2>/dev/null)
+    # REFUSE FIRST, tear down second. A directory that exists but is not a
+    # worktree of $main is not ours to remove and its HEAD is not ours to
+    # delete: move or delete it by hand and re-run, and the missing-directory
+    # path below will finish the job.
+    #
+    # `registered` cannot decide this on its own: it comes from git's RECORD,
+    # and the record outlives the directory. Delete the directory by hand and
+    # put anything else back at that path — a `git init`, another repo's
+    # worktree — and the record still names it, so `registered` is 0 while the
+    # directory belongs to someone else. Trusting it alone killed the session
+    # and disabled the unit, and only THEN did `worktree remove` refuse. So ask
+    # the directory too, and require both to say $main.
+    local wd_common main_common
+    wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
+    (( registered == 0 )) && [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
+      || die "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)"
+    # --porcelain counts untracked files, which is what `git worktree remove`
+    # itself objects to. Doing this after the kill would leave the uncommitted
+    # work intact but the session dead and out of supervision — and the refusal
+    # would be lying about it. A status we could not read is not a clean one
+    # (same rule as _ws_gc_dirty).
+    local dirty
+    dirty=$(git -C "$workdir" status --porcelain 2>/dev/null) \
+      || die "could not read $workdir — nothing was touched"
     [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
   fi
 
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
 
-  if [[ -d "$workdir" ]]; then
-    # Second line of defence, still without --force: the tree can have changed
-    # since the check above, and a locked worktree refuses either way. By here
-    # the session IS stopped, so say that rather than repeat "nothing touched".
+  if (( registered == 0 )); then
+    # Not gated on the directory existing: `git worktree remove` clears the
+    # registration either way, and while that registration stands git refuses to
+    # delete the branch it names ("cannot delete branch used by worktree at").
+    # Still no --force: the tree can have changed since the check above, and a
+    # locked worktree refuses either way. By here the session IS stopped, so say
+    # that rather than repeat "nothing touched".
+    # The recovery has to work in the state it is printed in. `worktree prune`
+    # only drops records whose directory is MISSING, so it is named for exactly
+    # that case and not offered as a general remedy — the "directory is there
+    # but is not ours" case refuses above, before anything is torn down.
     git -C "$main" worktree remove "$workdir" \
-      || die "worktree not removed: $workdir — the session was stopped; clean the tree and re-run"
+      || die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"
   fi
-  # No -D: an unmerged branch must survive.
-  [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null \
-    || true
+
+  local reg_branch; reg_branch=$(_reg_get "$id" branch)
+  if [[ -n "$branch" ]]; then
+    # git had a record, so the registry is a witness, never the decider: a
+    # divergence means the branch was renamed outside ccd, and the name to
+    # delete is the one git actually had checked out there.
+    [[ -n "$reg_branch" && "$reg_branch" != "$branch" ]] \
+      && echo "note: registry recorded '$reg_branch', git's worktree record says '$branch' — deleting '$branch'; '$reg_branch' left alone" >&2
+    # No -D: an unmerged branch must survive — and must SAY so, or it is
+    # orphaned in silence.
+    git -C "$main" branch -d "$branch" 2>/dev/null \
+      || echo "kept branch $branch (unmerged, or still in use) — delete it with: git -C $main branch -D $branch" >&2
+  elif (( registered == 0 )); then
+    echo "note: $workdir was on a detached HEAD — no branch to delete" >&2
+    # "No branch to delete" is only half the truth when the registry named one:
+    # the teardown above just took away its worktree and its registration, and
+    # the line below takes away its registry entry, leaving it with no ws-gc row
+    # either — invisible, which is the state this whole path exists to prevent.
+    # Same rung-3 rule as the no-record case: git never corroborated that name
+    # for this path (the record it did hold was detached), so name it and hand
+    # over the command rather than delete it unverified.
+    if [[ -n "$reg_branch" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$reg_branch" 2>/dev/null; then
+      echo "warn: registry says branch '$reg_branch', which still exists and now has no worktree — not deleting it unverified. If it is finished: git -C $main branch -d $reg_branch" >&2
+    fi
+  elif [[ -n "$reg_branch" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$reg_branch" 2>/dev/null; then
+    # No git record at all (someone pruned it by hand). The registry name is
+    # uncorroborated — the only thing that ever tied it to this path is now
+    # gone — and deleting the wrong branch costs incomparably more than leaving
+    # the right one behind. Name it and hand over the command.
+    echo "warn: no worktree record for $workdir; registry says branch '$reg_branch', which still exists — not deleting it unverified. If it is finished: git -C $main branch -d $reg_branch" >&2
+  fi
+
   rm -f "$REG/$id".*
   echo "removed workspace $id"
 }
@@ -406,13 +547,16 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
 _ws_gc_scan() {
   local main mainreal project wsroot wt prunable line f id wd p s
   # git records fully resolved paths (~/projects -> /data/projects -> /mnt/...),
-  # so both roots have to be resolved before any path comparison.
-  wsroot=$(cd "$WORKTREES_ROOT" 2>/dev/null && pwd -P) || wsroot="$WORKTREES_ROOT"
+  # so both roots have to be resolved before any path comparison. `>/dev/null` on
+  # both cds for the reason at _ws_realpath: only `pwd -P` may answer, and a `cd`
+  # exported as a shell function would otherwise prepend its own print to a path
+  # every classification below then compares.
+  wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
 
   for main in "$PROJECTS_ROOT"/*; do
     [[ -e "$main/.git" ]] || continue
     project=$(basename "$main")
-    mainreal=$(cd "$main" 2>/dev/null && pwd -P) || continue
+    mainreal=$(cd "$main" >/dev/null 2>&1 && pwd -P) || continue
     wt=""; prunable=0
     # Records are blank-line separated; the trailing `echo` flushes the last one
     # whether or not git emitted a final blank line.

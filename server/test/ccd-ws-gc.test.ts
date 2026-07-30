@@ -35,6 +35,24 @@ const addOrphan = (project: string, slug: string): string => {
 };
 
 describe('_ws_gc_scan', () => {
+  // Every state below is decided by comparing git's paths against $wsroot and
+  // $mainreal, and both used to be resolved by CAPTURING a `cd`. A `cd` defined
+  // as a shell function and exported with `export -f` reaches this script through
+  // the environment and echoes into that capture: both roots come back with an
+  // embedded newline, every prefix test fails, and every workspace ccd owns is
+  // reported `foreign` instead of `tracked`. `ws-gc --prune` declines foreign
+  // rows, so nothing is destroyed — but the fleet silently stops seeing its own
+  // reclaimable space. The scan must not depend on the caller's shell at all.
+  it('classifies identically when cd has been shadowed and made chatty', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const plain = h.sh('_ws_gc_scan');
+    expect(plain).toContain('tracked');
+    expect(h.sh('_ws_gc_scan',
+      { 'BASH_FUNC_cd%%': '() { builtin cd "$@" && echo "[cd hook] now in $PWD"; }' }))
+      .toBe(plain);
+  });
+
   it('reports nothing for a project with only its main checkout', () => {
     h.makeRepo('demo');
     expect(scan()).toEqual([]);
