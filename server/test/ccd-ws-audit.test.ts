@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { WS_ADD } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -102,8 +103,8 @@ function rebaseMerged(): Built {
 /** `pre` is sourced BEFORE the verb, which is the only way to fail one specific
  *  git read: every stub in this file shadows a function or a command rather than
  *  patching ccd. */
-const audit = (pre = ''): Record<string, any> =>
-  JSON.parse(h.sh(`${GH_STUB} ${ARCH} ${pre} cmd_ws_audit --session demo-quiet-basin`));
+const audit = (pre = '', id = 'demo-quiet-basin'): Record<string, any> =>
+  JSON.parse(h.sh(`${GH_STUB} ${ARCH} ${pre} cmd_ws_audit --session ${id}`));
 
 /**
  * Read EVERY refusal through this. `ws-audit` is read-only, so a verdict that
@@ -457,7 +458,160 @@ describe('identity refusals', () => {
   });
 });
 
+/**
+ * The plan's own cases leave eleven refusals and the whole fingerprint
+ * unpinned: their lines can be deleted with the suite still green, and two of
+ * them (`session-busy`, `status-unknown`) are the §5.3 idle gate, evaluated on
+ * the box at the instant of deletion. Whole-diff mutation sweeping is what
+ * found them; this block is the answer.
+ */
+describe('the refusals the ladder reaches last', () => {
+  it('refuses a session the wrapper says is BUSY, and one it cannot read', () => {
+    // `_ws_status` is an ALLOWLIST — `idle` is the only idle (deviation 6) —
+    // and both of its answers gate `git worktree remove`. Shadowed as a
+    // function, so the polarity of the gate is what is under test, not the
+    // status file's format.
+    const { wt } = squashMovedBase();
+    expect(refusal(wt, '_ws_status() { echo busy; };').verdict).toBe('session-busy');
+    expect(refusal(wt, '_ws_status() { return 1; };').verdict).toBe('status-unknown');
+  });
+
+  it('refuses a branch with no upstream — never pushed is never proven', () => {
+    const { wt, main } = squashMovedBase();
+    h.git(main, 'branch', '--unset-upstream', 'ws/quiet-basin');
+    expect(refusal(wt).verdict).toBe('no-upstream');
+  });
+
+  it('refuses a bound PR that is not merged', () => {
+    const { wt, tip } = squashMovedBase();
+    h.ghRows([mergedRow({ headRefOid: tip, state: 'OPEN', mergedAt: null, mergeCommit: null })]);
+    expect(refusal(wt).verdict).toBe('not-merged');
+  });
+
+  it('refuses when the merge commit gh named is not in the object store', () => {
+    // The row binds and its shape is a merge, so `pick` hands it over; the
+    // commit simply is not here after a fetch. Distinct from `fetch-failed`:
+    // the fetch worked and GitHub's answer is still unverifiable.
+    const { wt, tip } = squashMovedBase();
+    h.ghRows([mergedRow({ headRefOid: tip, mergeCommit: { oid: 'a'.repeat(40) } })]);
+    expect(refusal(wt).verdict).toBe('merge-commit-missing');
+  });
+
+  it('refuses when gh itself could not be read, naming the classified reason', () => {
+    const { wt } = squashMovedBase();
+    h.ghFail(124, 'timed out');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('gh-unreadable');
+    expect(a.detail).toContain('timeout');
+  });
+
+  it('refuses a project with no origin remote', () => {
+    const { wt, main } = squashMovedBase();
+    h.git(main, 'config', '--unset', 'remote.origin.url');
+    expect(refusal(wt).verdict).toBe('no-remote');
+  });
+
+  it('refuses a session it has never heard of, and a main checkout', () => {
+    squashMovedBase();
+    expect(audit('', 'no-such-thing').verdict).toBe('no-such-session');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.workspace'));
+    expect(audit().verdict).toBe('not-a-workspace');
+  });
+
+  it('refuses a half-written registry rather than proceeding on part of it', () => {
+    const { wt } = squashMovedBase();
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.branch'));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('incomplete-registry');
+    expect(a.detail).toContain("branch=''");
+  });
+
+  it('propagates a digest that could not be computed, not an empty one', () => {
+    // `_ws_collect_ignored` checks its enumeration AND its digest, and the two
+    // are separately load-bearing — but the enumeration's own guard catches
+    // every fixture that fails the shared `git status`, so the digest's
+    // `|| return 1` survives being deleted. `sha256sum` is what fails ONLY the
+    // digest: `_ws_ignored_digest` reads git's status through PIPESTATUS[0],
+    // which is still 0, and refuses on its own `^[0-9a-f]{64}$` rung instead.
+    // An empty digest here is the exact forgery deviation 6 closed — it hashes
+    // identically on the reap side, so the consent check matches.
+    const { wt } = squashMovedBase();
+    expect(refusal(wt, 'sha256sum() { return 1; };').verdict).toBe('tree-unreadable');
+  });
+
+  it('judges sensitivity on the BASENAME, not on the whole ignored path', () => {
+    // `--ignored=matching` collapses a wholly-ignored directory to one entry,
+    // but names the FILE when its directory also holds tracked content — so
+    // `sub/.env` is a real entry shape, and `${b##*/}` is what makes it match
+    // `.env*`. Without the strip it matches nothing and a secret is listed as
+    // ordinary rubbish for deletion.
+    const { wt } = squashMovedBase(['sub/.env']);
+    fs.mkdirSync(path.join(wt, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'sub', '.env'), 'SECRET=1\n');
+    fs.writeFileSync(path.join(wt, 'sub', 'kept.txt'), 'tracked\n');
+    h.git(wt, 'add', 'sub/kept.txt'); h.git(wt, 'commit', '-m', 'tracked neighbour');
+    h.git(wt, 'push', 'origin', 'ws/quiet-basin');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.sensitive).toContain('sub/.env');
+  });
+});
+
+describe('the dispatcher', () => {
+  const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home,
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }),
+    };
+    try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? '').trim(), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  it('routes ws-audit to cmd_ws_audit, with argv shifted', () => {
+    // Every other test in this file sources ccd and calls the function, so the
+    // arm and the `shift` are invisible to all of them. A session id the regex
+    // refuses answers before any registry, git or gh call: a missing arm prints
+    // the `*)` usage line instead, and an arm without its `shift` hands
+    // cmd_ws_audit three tokens and prints ITS usage line.
+    const r = runCcd('ws-audit', '--session', '../../etc/passwd');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('bad session id');
+  });
+
+  it('advertises ws-audit in caps — the agent refuses what caps omits', () => {
+    // ~/.local/bin/ccd is a COPY, so the server asks the agent what this box
+    // implements and never emits a verb caps did not name.
+    expect(runCcd('caps').stdout.split('\n')).toContain('ws-audit');
+  });
+});
+
 describe('the manifest', () => {
+  it('fingerprints twelve DISTINCT facts, and nothing else', () => {
+    // The token is what `ws-reap --expect` re-proves against at the instant of
+    // deletion, so every field has to be in it and no two fields may be
+    // interchangeable. Moving one fact at a time through the helper is the only
+    // way to say that: the behavioural token test can only move the one fact a
+    // fixture can move without changing the verdict.
+    const facts = ['id', 'branch', 'tip', 'head', 'merge', 'proof',
+      '0', 'igndigest', 'sensdigest', '0', 'wthead', 'baseoid'];
+    const call = (a: string[]): string => h.sh(`_ws_fingerprint ${a.map((x) => `'${x}'`).join(' ')}`);
+    const first = call(facts);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(call(facts), 'same twelve facts, same token').toBe(first);
+    const seen = new Map<string, number>([[first, -1]]);
+    facts.forEach((_v, i) => {
+      const moved = [...facts];
+      moved[i] = `${moved[i]}-moved`;
+      const t = call(moved);
+      expect(t, `argument ${i + 1} is not fingerprinted at all`).not.toBe(first);
+      expect(seen.has(t), `argument ${i + 1} collides with argument ${(seen.get(t) ?? 0) + 1}`).toBe(false);
+      seen.set(t, i);
+    });
+  });
+
   it('carries the transcript path, the stash count and the worktree size', () => {
     squashMovedBase();
     const a = audit();
