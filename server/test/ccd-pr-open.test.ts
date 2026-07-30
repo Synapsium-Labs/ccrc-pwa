@@ -60,9 +60,24 @@ describe('argv discipline', () => {
     // Comment lines are stripped first: the assertion is about executable
     // text, and the comments in there deliberately SAY "never --force" and name
     // $workdir.
+    //
+    // BOTH anchors are asserted, and the slice ends at cmd_pr_open's own
+    // closing brace. `indexOf` answers -1 for a miss, `slice(-1, …)` is the
+    // EMPTY STRING, and a scan of the empty string passes every literal: a
+    // behaviour-preserving `cmd_pr_open () {` alone turned this whole ban off,
+    // and measured that way `--body-file -F --template --fill --force "$@"`
+    // plus a live `git -C "$workdir"` inside the function left all 14 tests
+    // green. It is also why the red run printed "1 passed". Ending at the next
+    // `\ncmd_` was the second half of the same problem: that is `cmd_ws_gc` 277
+    // lines further down, so the ban silently covered every `_ws_gc_*` helper —
+    // dilutable, and a false positive waiting for an unrelated task.
     const src = fs.readFileSync(CCD, 'utf8');
-    const start = src.indexOf('cmd_pr_open()');
-    const fn = src.slice(start, src.indexOf('\ncmd_', start + 10))
+    const head = 'cmd_pr_open() {';
+    expect(src.split(head).length - 1, 'exactly one cmd_pr_open definition').toBe(1);
+    const start = src.indexOf(head);
+    const end = src.indexOf('\n}\n', start);
+    expect(end, 'cmd_pr_open must close on a column-0 brace').toBeGreaterThan(start);
+    const fn = src.slice(start, end)
       .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
     for (const banned of ['--body-file', '-F ', '--template', '--fill', '--force', '"$@"',
                           '-C "$workdir"']) {
