@@ -100,6 +100,207 @@ export interface PrState {
 export const PR_PHASES: readonly PrPhase[] =
   ['unchecked', 'none', 'no-commits', 'open', 'draft', 'merged', 'closed', 'unknown'];
 
+/* ---------------------------------------------------------------------------
+ * Snapshot revival — reading a FleetSession[] that an OLDER BUILD persisted.
+ *
+ * The skew is across TIME, not across the wire: the server serves the PWA it
+ * was built with, so a `/ws/fleet` frame always comes from this build. Two
+ * snapshots do not — `ccrc.fleet-snapshot.v1` in localStorage
+ * (pwa/src/lib/offline.ts) and `~/.ccrc/state-cache.json`
+ * (server/src/fleetstate.ts) are read back by whatever build starts next.
+ *
+ * Reading them with a blind `as FleetSession[]` is not a cosmetic sin. Every
+ * consumer tests `archivedAt !== null`, and `undefined !== null` is TRUE, so a
+ * snapshot written before `archivedAt` existed reads as an ENTIRELY ARCHIVED
+ * FLEET, offering "clean up workspace" on live ones; an absent `pr` gets
+ * dereferenced for `.title`. Offline, that state never self-heals — the frame
+ * that would overwrite the snapshot never arrives. `tasks` has had the same
+ * hole since it was added (SessionLine renders `undefined/undefined`).
+ *
+ * The rule is uniform and deliberately incapable of inventing anything:
+ *   - a NULLABLE field, absent            → null  (an older build lacked it)
+ *   - a token from a newer build, where the type has a designated "we do not
+ *     know" member                        → that member ('unchecked', null)
+ *   - a NON-NULLABLE field absent, or ANY field of the wrong type
+ *                                         → the whole snapshot is rejected
+ *
+ * Rejection collapses to `null`, which both readers already treat as "no
+ * snapshot" — precisely the empty cold start that bumping the storage key would
+ * have forced. So the worst a future required field can do is fall back to the
+ * cheap fix; it can never fabricate state. One bad session rejects the whole
+ * FILE rather than being dropped from it: a fleet quietly missing a session
+ * looks exactly like a fleet, while an empty one looks empty.
+ *
+ * `reviveFleetSession` returns a FleetSession LITERAL, so a field added to the
+ * interface and forgotten here is a compile error rather than a fourth outage.
+ * ------------------------------------------------------------------------- */
+
+type RawObj = Record<string, unknown>;
+
+/** Thrown internally, caught at the boundary of `reviveFleetSession`, where it
+ *  becomes a null return. Carries the field name for the debugger's benefit. */
+class MalformedSnapshot extends Error {}
+
+const asObj = (v: unknown, at: string): RawObj => {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new MalformedSnapshot(at);
+  return v as RawObj;
+};
+
+/** Absent or explicitly null → null. Present → must be the declared type. */
+const optStr = (o: RawObj, k: string): string | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string') throw new MalformedSnapshot(k);
+  return v;
+};
+const optNum = (o: RawObj, k: string): number | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  // NaN/Infinity cannot survive JSON.stringify, but a hand-edited cache can
+  // carry anything, and `NaN` typed as `number` is registry.ts's silent lie.
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new MalformedSnapshot(k);
+  return v;
+};
+const reqStr = (o: RawObj, k: string): string => {
+  const v = o[k];
+  if (typeof v !== 'string') throw new MalformedSnapshot(k);
+  return v;
+};
+const reqNum = (o: RawObj, k: string): number => {
+  const v = o[k];
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new MalformedSnapshot(k);
+  return v;
+};
+const reqBool = (o: RawObj, k: string): boolean => {
+  const v = o[k];
+  if (typeof v !== 'boolean') throw new MalformedSnapshot(k);
+  return v;
+};
+
+// Typed `readonly string[]` on purpose: validating an untrusted string against a
+// `readonly PrPhase[]` needs `raw as PrPhase` on the value being checked, which
+// asserts the very thing the check is asking. Cast the CONSTANT, never the input.
+const STATUSES: readonly string[] = ['busy', 'idle', 'dead'];
+const CHECKS: readonly string[] = ['pass', 'fail', 'pending'];
+const REASONS: readonly string[] = [
+  'timeout', 'offline', 'unauthenticated', 'rate-limit',
+  'no-remote', 'unsupported', 'agent-down', 'error', 'merge-unproven',
+];
+
+function revivePr(raw: unknown): PrState {
+  const o = asObj(raw, 'pr');
+
+  // A phase (or reason) this build does not know is exactly what version skew
+  // looks like, and both types carry a designated "we have not looked": degrade,
+  // do not reject. Same stance as registry.ts reading `prphase` off disk.
+  const phaseRaw = optStr(o, 'phase');
+  const phase: PrPhase =
+    phaseRaw !== null && (PR_PHASES as readonly string[]).includes(phaseRaw)
+      ? (phaseRaw as PrPhase) : 'unchecked';
+  const reasonRaw = optStr(o, 'reason');
+  const reason = reasonRaw !== null && REASONS.includes(reasonRaw)
+    ? (reasonRaw as PrState['reason']) : null;
+
+  // `checks` is the opposite case: null means NO CHECKS ARE CONFIGURED, an
+  // affirmative claim, so an unrecognised token has nothing safe to land on —
+  // flattening it into null would print "no checks" over a failing build.
+  const checksRaw = optStr(o, 'checks');
+  if (checksRaw !== null && !CHECKS.includes(checksRaw)) throw new MalformedSnapshot('pr.checks');
+
+  const namesRaw = o['checkNames'];
+  let checkNames: string[] | null = null;
+  if (namesRaw !== undefined && namesRaw !== null) {
+    if (!Array.isArray(namesRaw) || (namesRaw as unknown[]).some((n) => typeof n !== 'string')) {
+      throw new MalformedSnapshot('pr.checkNames');
+    }
+    checkNames = namesRaw as string[];
+  }
+
+  return {
+    phase,
+    number: optNum(o, 'number'),
+    url: optStr(o, 'url'),
+    title: optStr(o, 'title'),
+    checks: checksRaw as PrChecks,
+    checkNames,
+    // No honest stand-in for "how many commits past base": 0 is a claim.
+    ahead: reqNum(o, 'ahead'),
+    reason,
+    checkedAt: optNum(o, 'checkedAt'),
+    mergedAt: optNum(o, 'mergedAt'),
+    retryAt: optNum(o, 'retryAt'),
+  };
+}
+
+/** One persisted session in today's shape, or null if it cannot be one. */
+export function reviveFleetSession(raw: unknown): FleetSession | null {
+  try {
+    const o = asObj(raw, 'session');
+
+    const status = reqStr(o, 'status');
+    // SessionStatus has no "unknown" member, and it drives a CSS class name.
+    if (!STATUSES.includes(status)) throw new MalformedSnapshot('status');
+
+    const limitsRaw = o['limits'];
+    let limits: FleetSession['limits'] = null;
+    if (limitsRaw !== undefined && limitsRaw !== null) {
+      const l = asObj(limitsRaw, 'limits');
+      limits = { five: optNum(l, 'five'), seven: optNum(l, 'seven') };
+    }
+
+    const tasksRaw = o['tasks'];
+    let tasks: TaskProgress | null = null;
+    if (tasksRaw !== undefined && tasksRaw !== null) {
+      const t = asObj(tasksRaw, 'tasks');
+      tasks = {
+        total: reqNum(t, 'total'), done: reqNum(t, 'done'), running: reqNum(t, 'running'),
+        active: optStr(t, 'active'),
+      };
+    }
+
+    const prRaw = o['pr'];
+    const pr = prRaw === undefined || prRaw === null ? null : revivePr(prRaw);
+
+    return {
+      id: reqStr(o, 'id'),
+      wrapper: reqStr(o, 'wrapper'),
+      home: reqStr(o, 'home'),
+      project: reqStr(o, 'project'),
+      workdir: reqStr(o, 'workdir'),
+      workspace: optStr(o, 'workspace'),
+      name: optStr(o, 'name'),
+      status: status as SessionStatus,
+      statusUpdatedAt: optNum(o, 'statusUpdatedAt'),
+      limits,
+      dialogPending: reqBool(o, 'dialogPending'),
+      version: optStr(o, 'version'),
+      model: optStr(o, 'model'),
+      effort: optStr(o, 'effort'),
+      ultracode: reqBool(o, 'ultracode'),
+      branch: optStr(o, 'branch'),
+      tasks,
+      pr,
+      archivedAt: optNum(o, 'archivedAt'),
+    };
+  } catch (err) {
+    if (err instanceof MalformedSnapshot) return null;
+    throw err;   // a real bug in here must not read as a corrupt snapshot
+  }
+}
+
+/** A persisted `sessions` array in today's shape, or null — one unrevivable
+ *  session rejects the file, which both readers already handle as "no data". */
+export function reviveFleetSessions(raw: unknown): FleetSession[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: FleetSession[] = [];
+  for (const item of raw as unknown[]) {
+    const session = reviveFleetSession(item);
+    if (session === null) return null;
+    out.push(session);
+  }
+  return out;
+}
+
 /** `/api/fleet/health` — degraded-mode signal for the remote fleet host.
  *  `mode: 'local'` is always `{connected: true, downSince: null}` — there is
  *  no separate fleet host to lose. */

@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import type { FleetSession } from '../../shared/api.js';
+import { reviveFleetSessions, type FleetSession } from '../../shared/api.js';
 
 /**
  * Degraded-mode snapshot cache. Structurally mirrors `remote/client.ts`'s
@@ -33,7 +33,14 @@ export async function saveSnapshot(sessions: FleetSession[], cachePath: string):
 }
 
 /** Never throws — missing file, unreadable file, or corrupt JSON all
- *  collapse to null (same "no data" stance as `localIO`'s read ops). */
+ *  collapse to null (same "no data" stance as `localIO`'s read ops).
+ *
+ *  There is no version key to bump here and nowhere to put one: the path is
+ *  fixed, and renaming the file would discard the degraded-mode snapshot at the
+ *  exact moment it is needed — the fleet host being down. So the READ is the
+ *  version negotiation: sessions are revived into today's shape (shared/api.ts),
+ *  and a cache that cannot be revived is treated as absent, which the route
+ *  already handles by assembling live. */
 export async function loadSnapshot(cachePath: string): Promise<FleetSnapshot | null> {
   let raw: string;
   try {
@@ -42,9 +49,13 @@ export async function loadSnapshot(cachePath: string): Promise<FleetSnapshot | n
     return null;
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<FleetSnapshot>;
-    if (!Array.isArray(parsed.sessions) || typeof parsed.savedAt !== 'number') return null;
-    return { sessions: parsed.sessions, savedAt: parsed.savedAt };
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { sessions, savedAt } = parsed as { sessions?: unknown; savedAt?: unknown };
+    if (typeof savedAt !== 'number') return null;
+    const revived = reviveFleetSessions(sessions);
+    if (revived === null) return null;
+    return { sessions: revived, savedAt };
   } catch {
     return null;
   }

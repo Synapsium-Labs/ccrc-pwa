@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildServer, type Deps } from '../src/server.js';
@@ -27,9 +27,13 @@ function remoteDeps(
   return { cfg, run: deadRunner, tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath };
 }
 
+// A COMPLETE FleetSession — the fixture was eight fields short of the type it
+// claims (server/tsconfig.json does not include test/, so nothing said so).
 const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
-  name: null, status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
+  workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
+  dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+  branch: null, tasks: null, pr: null, archivedAt: null,
 });
 
 describe('GET /api/fleet/health', () => {
@@ -78,6 +82,33 @@ describe('GET /api/fleet — degraded mode', () => {
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.json()).toEqual({ sessions: [] });
+    await app.close();
+  });
+
+  it('serves a cache written by an OLDER build with pr/archivedAt/tasks as null', async () => {
+    // The whole point of the degraded route is that this file survives a server
+    // upgrade. What it serves is what the PWA renders, and `archivedAt: undefined`
+    // on the wire is `archivedAt !== null` — every workspace reads as archived.
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-cache-'));
+    const cachePath = path.join(dir, 'state-cache.json');
+    writeFileSync(cachePath, JSON.stringify({
+      savedAt: 1785300000001,
+      sessions: [{
+        id: 'claude-Cached', wrapper: 'claude', home: '/home/rc', project: 'claude-Cached',
+        workdir: '/data/projects/claude-Cached', workspace: null, name: null, status: 'idle',
+        statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
+        model: null, effort: null, ultracode: false, branch: null,
+      }],
+    }));
+
+    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000 }, cachePath);
+    const app = await buildServer(deps);
+    const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+    expect(res.json()).toEqual({
+      sessions: [session('claude-Cached')],
+      stale: true,
+      downSince: 1700000000000,
+    });
     await app.close();
   });
 
