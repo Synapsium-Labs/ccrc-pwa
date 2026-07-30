@@ -81,6 +81,17 @@ describe('the dispatcher', () => {
     expect(badMode.code).toBe(1);
     expect(badMode.stderr).toMatch(/usage: ccd ws-attic/);
 
+    // ...and the same arm on its SUCCESS path, because the refusal above is not
+    // enough: an arm that forgets its `shift` passes three arguments, fails the
+    // arity rung, and prints that same usage line. Only a listing proves the verb
+    // arrived with the argv it was meant to have.
+    const main = path.join(h.home, 'projects', 'demo');
+    const atticTip = h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin');
+    h.git(main, 'update-ref', `refs/ccrc/attic/demo-quiet-basin/${atticTip}`, atticTip);
+    const listed = runCcd('ws-attic', '--session', 'demo-quiet-basin');
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain(atticTip);
+
     // caps accepts no argv — and now SAYS so instead of printing the list
     // anyway. The arm shifts and forwards, so the guard can see what it was
     // given: `ccd caps --json` used to answer with the plain list at exit 0,
@@ -336,10 +347,16 @@ describe('_ws_status', () => {
 
 describe('ws-archive', () => {
   it('refuses anything but the exact --session <id> shape', () => {
-    expect(shFail('cmd_ws_archive').code).toBe(1);
-    expect(shFail('cmd_ws_archive demo-quiet-basin').code).toBe(1);
-    expect(shFail('cmd_ws_archive --session').code).toBe(1);
-    expect(shFail('cmd_ws_archive --session a --session b').code).toBe(1);
+    // The MESSAGE, not just the code: `-ge 2` in place of `-eq 2` refuses the
+    // two-pair form too, but as `no such session: a` — an arity error reported as
+    // a lookup, which passes an exit-code-only assertion while the verb quietly
+    // accepts trailing argv it was never given a meaning for.
+    for (const argv of ['cmd_ws_archive', 'cmd_ws_archive demo-quiet-basin',
+                        'cmd_ws_archive --session', 'cmd_ws_archive --session a --session b']) {
+      const r = shFail(argv);
+      expect(r.code, argv).toBe(1);
+      expect(r.stderr, argv).toMatch(/usage: ccd ws-archive --session <id>/);
+    }
     expect(shFail('cmd_ws_archive --session "../../etc"').stderr).toMatch(/bad session id/);
   });
 
@@ -772,6 +789,22 @@ describe('ws-restore', () => {
     expect(h.calls()).toContain('supervise demo-quiet-basin');
   });
 
+  it('leaves the started flag set even when the entry never had one', () => {
+    // Nothing in ccd ever clears `started`, so in the ordinary fixture this
+    // assignment is a no-op and its deletion is invisible. The state it exists for
+    // is an entry that never got one — ws-add is interrupted between `_spawn` and
+    // `_reg_set started 1` — and the cost is not cosmetic: `cmd_ensure` and
+    // `cmd_start` read this flag to choose `new` over `resume` (ccd:1431,
+    // ccd:1440), so a restored session missing it gets re-spawned as a FRESH
+    // session by the next supervise tick, discarding the transcript ws-restore
+    // just resumed from.
+    workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.started'));
+    h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'started')).toBe('1');
+  });
+
   it('refuses a session that is not archived', () => {
     workspace('demo', 'quiet-basin');
     expect(shFail(`${ARCH} cmd_ws_restore --session demo-quiet-basin`).stderr).toMatch(/not archived/);
@@ -781,10 +814,12 @@ describe('ws-restore', () => {
     // The same argv contract archive has, asserted for the verb that SPAWNS: an
     // id that is not an id reaches `$REG/$id.*` and `_spawn`, so the shape check
     // is the boundary, not a formality.
-    expect(shFail('cmd_ws_restore').code).toBe(1);
-    expect(shFail('cmd_ws_restore demo-quiet-basin').code).toBe(1);
-    expect(shFail('cmd_ws_restore --session').code).toBe(1);
-    expect(shFail('cmd_ws_restore --session a --session b').code).toBe(1);
+    for (const argv of ['cmd_ws_restore', 'cmd_ws_restore demo-quiet-basin',
+                        'cmd_ws_restore --session', 'cmd_ws_restore --session a --session b']) {
+      const r = shFail(argv);
+      expect(r.code, argv).toBe(1);
+      expect(r.stderr, argv).toMatch(/usage: ccd ws-restore --session <id>/);
+    }
     expect(shFail('cmd_ws_restore --session "../../etc"').stderr).toMatch(/bad session id/);
   });
 
@@ -863,8 +898,12 @@ describe('ws-attic', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/usage: ccd ws-attic/);
     expect(r.stderr).not.toMatch(/no such session/);
-    // ...and the arity rung is not what caught it.
-    expect(shFail('cmd_ws_attic --session').code).toBe(1);
-    expect(shFail('cmd_ws_attic --session a b').code).toBe(1);
+    // ...and the arity rung is not what caught it — asserted by its own message,
+    // since `-ge 2` would refuse the three-argument form as a missing session.
+    for (const argv of ['cmd_ws_attic --session', 'cmd_ws_attic --session a b']) {
+      const a = shFail(argv);
+      expect(a.code, argv).toBe(1);
+      expect(a.stderr, argv).toMatch(/usage: ccd ws-attic --session <id> \| ccd ws-attic --drop <id>/);
+    }
   });
 });
