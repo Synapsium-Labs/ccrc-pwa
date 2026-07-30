@@ -485,9 +485,18 @@ describe('dirty is a measurement of OUR tree, or it is null', () => {
       expect(() => h.git(wt, 'status', '--porcelain')).toThrow();      // git really cannot read it
       expect(h.sh(`_ws_common_dir "${wt}"`)).toBe(h.sh(`_ws_common_dir "${path.join(h.home, 'projects', 'demo')}"`));
       h.ghRows([]);
-      const r = h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
-      expect(r.code).toBe(0);
-      expect(line(r.stdout).dirty).toBeNull();
+      // Redirected to a file, not read from run().stderr: the harness's run()
+      // returns stderr '' for any rc-0 command (execFileSync only surfaces
+      // stderr on a throw) — same convention as the unentitled test above.
+      const out = h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin 2>"$HOME/pr-err"`);
+      expect(line(out).dirty).toBeNull();
+      // Deviation 11's contract is "null PLUS one line on stderr" — without this
+      // assertion the else-arm is deletable with the suite green, and an
+      // operator's unreadable index reports dirty:null with nothing naming
+      // which workspace or why (re-review N1).
+      const err = fs.readFileSync(path.join(h.home, 'pr-err'), 'utf8');
+      expect(err).toContain('could not read the tree');
+      expect(err).toContain('demo-quiet-basin');
     } finally {
       fs.chmodSync(idx, 0o644);
     }

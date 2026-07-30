@@ -1150,10 +1150,12 @@ _pr_state_one() {   # id main repo rows -> one JSON line
   project=$(_reg_get "$id" project); branch=$(_reg_get "$id" branch)
   base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
   # CARRIES THE ID. A per-session failure and a whole-repo failure are
-  # different events: the server backs a PROJECT off on the id-less shape
-  # (which only `_gh_repo_slug`/`_gh_pr_list` emit, and which really does mean
-  # every session of that repo is unreadable), so an id-less object here would
-  # let one registry-incomplete workspace mark its seven siblings `unknown` and
+  # different events: the server backs a PROJECT off on the id-less shape,
+  # which three sites emit — `_gh_repo_slug`, `_gh_pr_list`, and `_pr_py`
+  # mode `state` for an unparseable rc-0 body — and each of those really is
+  # one gh answer for the whole repo, so every session of it is equally
+  # unreadable. An id-less object HERE, by contrast, would let one
+  # registry-incomplete workspace mark its seven siblings `unknown` and
   # silence the whole project's lane. §6's "Partial sweep" row promises
   # per-session honesty; this is where that is kept.
   [[ -n "$branch" ]] || { printf '{"id":%s,"phase":"unknown","reason":"error"}\n' "$(_json_str "$id")"; return 0; }
