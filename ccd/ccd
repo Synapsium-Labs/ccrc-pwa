@@ -257,14 +257,26 @@ mode = sys.argv[1]
 OID = re.compile(r'^[0-9a-f]{7,40}$')
 
 def rows_in():
+    """The rows, or None for A BODY WE COULD NOT READ — which is NOT `[]`.
+
+    `[]` is an affirmative answer: this repository has no pull request for you,
+    which is `phase:"none"`, which is the one answer meaning "ready to open a
+    PR" — and which CLEARS the persisted number. Collapsing an unintelligible
+    body into it therefore turns "I could not understand GitHub" into "GitHub
+    says the merge you had is gone". `gh` exiting 0 is not the same as `gh`
+    having answered: an empty stdout, a JSON object, a proxy's HTML error page
+    and a truncated array all arrive here at rc 0. Empty counts as unreadable
+    too — `gh pr list --json` prints `[]` for a repo with no PRs, never
+    nothing, and an empty stdin is exactly what deviation 8's program-on-stdin
+    defect produced."""
     raw = sys.stdin.read().strip()
     if not raw:
-        return []
+        return None
     try:
         v = json.loads(raw)
     except Exception:
-        return []
-    return v if isinstance(v, list) else []
+        return None
+    return v if isinstance(v, list) else None
 
 def git(main, *args):
     return subprocess.run(['git', '-C', main, *args], capture_output=True, text=True)
@@ -321,7 +333,17 @@ def pick(rows, branch, base_short):
 if mode == 'state':
     (id_, project, main, repo, branch, base, base_short, tip, ahead, dirty, template, reg) = sys.argv[2:14]
     ahead, dirty = int(ahead), int(dirty)
-    rows = annotate(rows_in(), main, tip, branch, base_short)
+    raw_rows = rows_in()
+    if raw_rows is None:
+        # THE ID-LESS SHAPE, on purpose: the body is one gh call's answer for the
+        # whole repository, so it is unreadable for every session of it at once —
+        # which is what the id-less object means and what the sweep's per-project
+        # backoff keys off. Nothing is persisted: the last good phase, number and
+        # checkedAt all stay, which is what makes "last checked 6m ago" the honest
+        # reading rather than a fresh-looking lie.
+        sys.stdout.write(json.dumps({'phase': 'unknown', 'reason': 'error'}) + '\n')
+        sys.exit(0)
+    rows = annotate(raw_rows, main, tip, branch, base_short)
     chosen = pick(rows, branch, base_short)
     # `reason` accompanies `phase` and stays None for every phase but one, so
     # that prstate.ts's phaseFor can be pinned equal to this on BOTH fields.
@@ -375,9 +397,15 @@ if mode == 'state':
     # request yet", and ws-archive reads the same field and files
     # `archivedreason merged:#42` for a PR that no longer binds to this
     # workspace. REMOVED rather than blanked, so the field is absent exactly as
-    # it is for a workspace that never had a PR. A read that FAILED never
-    # reaches here at all — _gh_pr_list returns before _pr_py is called — so
-    # this cannot turn an unreadable GitHub into a cleared number.
+    # it is for a workspace that never had a PR.
+    #
+    # NO FAILED READ REACHES THIS LINE, and it takes two guards to say that, not
+    # one. `_gh_pr_list` returns before `_pr_py` is called for every read that
+    # failed by EXIT CODE. An rc-0 read whose body is not a list of rows does
+    # reach `_pr_py` — and `rows_in` answering None returns above, before any
+    # `put`/`clear` runs. The comment here used to claim the first guard alone
+    # made this unreachable; it did not, and a `gh` that exited 0 with an empty
+    # or unparseable stdout cleared a persisted `merged:#42`.
     if number is None:
         clear('prnumber')
     else:

@@ -353,6 +353,33 @@ describe('failure is an ANSWER, not an error', () => {
     expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
   });
 
+  it.each([
+    ['a body that is not JSON at all', 'MALFORMED-AFTER-GOOD'],
+    ['a JSON object where a list was promised', '{"pr":"list"}'],
+    ['nothing at all on stdout', ''],
+  ])('an rc-0 gh answer with %s is unknown/error and writes NOTHING', (_what, body) => {
+    // `gh` exiting 0 is not the same as `gh` having ANSWERED. A body that does
+    // not parse as a list of rows is a read we could not understand, and the
+    // one thing it must never become is `[]` — the empty list is the affirmative
+    // answer "this repo has no PR for you", which clears the persisted merge and
+    // then reads on the phone as "ready to open a pull request".
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    const before = h.reg('demo-quiet-basin', 'prcheckedat');
+
+    h.ghRaw(body as string);
+    const r = h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ phase: 'unknown', reason: 'error' });
+    // Every one of the three persisted fields is untouched — including
+    // `prcheckedat`, because a reading nobody could parse is not a reading.
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+    expect(h.reg('demo-quiet-basin', 'prcheckedat')).toBe(before);
+  });
+
   it('answers no-remote when the project has no origin', () => {
     const main = path.join(h.home, 'projects', 'bare');
     fs.mkdirSync(main, { recursive: true });

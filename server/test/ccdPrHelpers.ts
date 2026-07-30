@@ -27,6 +27,10 @@ timeout() { printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
 export interface PrHarness extends CcdHarness {
   /** What the stubbed `gh pr list` returns. */
   ghRows(rows: unknown[]): void;
+  /** The stubbed `gh pr list`'s stdout, BYTE FOR BYTE — for the bodies that are
+   *  not a JSON array at all. `ghRows` can only express well-formed answers, so
+   *  without this the rc-0-with-an-unintelligible-body path has no fixture. */
+  ghRaw(body: string): void;
   /** Make the stubbed gh fail: rc plus the stderr it prints. 124 = timeout. */
   ghFail(rc: number, stderr: string): void;
   ghCalls(): string[];
@@ -65,6 +69,7 @@ export function makePrHarness(prefix: string): PrHarness {
     ...h,
     sh,
     ghRows: (rows) => { fs.writeFileSync(at('gh-rows.json'), JSON.stringify(rows)); },
+    ghRaw: (body) => { fs.writeFileSync(at('gh-rows.json'), body); },
     ghFail: (rc, stderr) => {
       fs.writeFileSync(at('gh-rc'), String(rc));
       fs.writeFileSync(at('gh-err'), stderr);
