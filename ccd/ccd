@@ -559,6 +559,14 @@ cmd_caps() {   # one verb name per line — what THIS copy of ccd implements.
   # at start and reports it in its ready frame; the server refuses to emit a
   # verb the agent did not advertise. NOT whitelisted — the agent runs it
   # directly, and it is a pure read.
+  #
+  # It takes no argv, and says so rather than ignoring it. This whole verb exists
+  # so a caller can find out what this copy of ccd supports; answering `ccd caps
+  # --json` with the plain list — which is what silently discarding argv did —
+  # hands that caller a shape it did not ask for and no way to tell. Every other
+  # verb here asserts its argv exactly; this one is the one whose whole job is
+  # honesty about capability.
+  [[ $# -eq 0 ]] || die "usage: ccd caps"
   cat <<'EOF'
 attach
 caps
@@ -1658,7 +1666,7 @@ case "${1:-}" in
   ws-rm)     shift; cmd_ws_rm "$@" ;;
   ws-rename) shift; cmd_ws_rename "$@" ;;
   ws-gc)     shift; cmd_ws_gc "$@" ;;
-  caps)       cmd_caps ;;
+  caps)       shift; cmd_caps "$@" ;;
   ws-archive) shift; cmd_ws_archive "$@" ;;
   ws-restore) shift; cmd_ws_restore "$@" ;;
   ws-attic)   shift; cmd_ws_attic "$@" ;;

@@ -81,8 +81,15 @@ describe('the dispatcher', () => {
     expect(badMode.code).toBe(1);
     expect(badMode.stderr).toMatch(/usage: ccd ws-attic/);
 
-    // caps takes NO shift, deliberately — it accepts no argv.
+    // caps accepts no argv — and now SAYS so instead of printing the list
+    // anyway. The arm shifts and forwards, so the guard can see what it was
+    // given: `ccd caps --json` used to answer with the plain list at exit 0,
+    // which is the one lie a capability probe must not tell.
     expect(runCcd('caps').stdout.split('\n')).toContain('ws-archive');
+    const capsArgv = runCcd('caps', '--json');
+    expect(capsArgv.code).toBe(1);
+    expect(capsArgv.stderr).toMatch(/usage: ccd caps/);
+    expect(capsArgv.stdout).toBe('');
 
     // ws-archive last, because it is the one that changes state. Without the
     // shift cmd_ws_archive sees three arguments and dies on its arity guard;
@@ -112,7 +119,16 @@ describe('ccd caps', () => {
     // list is what the agent reports; a list that drifts from the dispatcher
     // is worse than none, because the server would trust it.
     const src = fs.readFileSync(CCD, 'utf8');
-    const block = src.slice(src.indexOf('case "${1:-}" in'));
+    // Anchored on the dispatcher's own preamble, and the anchor's uniqueness is
+    // asserted. `case "${1:-}" in` occurs TWICE — cmd_ws_gc's option parser
+    // (ccd:995) comes first — so slicing from indexOf landed inside ws-gc, and
+    // the arm regex missed ws-gc's arms only because they are indented four
+    // spaces instead of two. That coincidence held the whole parity check up: one
+    // re-indentation and this test would have compared the caps list against
+    // ws-gc's flags.
+    const guard = 'if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then';
+    expect(src.split(guard).length - 1, 'exactly one dispatcher preamble').toBe(1);
+    const block = src.slice(src.indexOf(guard));
     const dispatched = [...block.matchAll(/^ {2}([a-z][a-z|-]*)\)/gm)]
       .flatMap((m) => m[1]!.split('|'));
     const advertised = h.sh('cmd_caps').split('\n').filter(Boolean);
@@ -146,6 +162,21 @@ describe('_ws_stash_count', () => {
     expect(h.sh(`_ws_stash_count "${main}" ws/other`)).toBe('0');
   });
 
+  it('does not count a sibling branch whose name starts the same', () => {
+    // The colon is part of the pattern, not punctuation: `On ws/quiet-basin`
+    // without it is a prefix match, so a stash on `ws/quiet-basin-2` is counted
+    // as this workspace's. Over-counting here refuses a legitimate reap, and the
+    // refusal names stashes the user cannot find on this branch.
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    h.git(main, 'branch', 'ws/quiet-basin-2', 'main');
+    h.git(wt, 'checkout', '-q', 'ws/quiet-basin-2');
+    fs.writeFileSync(path.join(wt, 'README.md'), 'sibling work\n');
+    h.git(wt, 'stash', 'push', '-m', 'sibling wip');
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin-2`)).toBe('1');
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`)).toBe('0');
+  });
+
   it('matches the branch name FIXED — a dot is not a wildcard', () => {
     // -F on both patterns, which is what the comment above them justifies.
     // Without it `On ws.quiet-basin:` is a regex matching the real
@@ -169,6 +200,18 @@ describe('_transcript_path', () => {
     h.sh(`_reg_set fake wrapper claude; _reg_set fake workdir '${odd}'; _reg_set fake uuid u-1`);
     expect(h.sh('_transcript_path fake'))
       .toBe(path.join(h.home, '.claude', 'projects', mungePath(odd), 'u-1.jsonl'));
+  });
+
+  it('refuses rather than assemble a path out of a missing field', () => {
+    // The manifest records `transcript:""` when this fails, and that fallback is
+    // only honest if a failure is what happens. Without the guard a missing uuid
+    // yields `<cfg>/projects/<munged>/.jsonl` — a path that looks like a
+    // measurement, points at nothing, and is what a reap would go looking for
+    // after the registry is gone.
+    h.sh(`_reg_set half wrapper claude; _reg_set half workdir /tmp/x`);
+    const r = shFail('_transcript_path half');
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).toBe('');
   });
 });
 
@@ -243,6 +286,37 @@ describe('_ws_status', () => {
     withStatus('idle');
     expect(shFail(`${LIVE} _cfg_dir() { echo "$HOME/.claude"; }; _ws_status demo-quiet-basin`).code)
       .not.toBe(0);
+  });
+
+  it('refuses when the pane is alive and the status file is not there', () => {
+    // The fail-closed half, which nothing exercised: with a live pane and a
+    // NUMERIC pane pid, the only thing left between "no status file" and an
+    // archive is this rung. Dropping it makes an unreadable status answer `busy`
+    // at exit 0 — which happens to refuse the archive, for the wrong reason and
+    // with the wrong word — and at Task 6 the same answer is what the resume path
+    // reports as `session-busy` about a session it never managed to read.
+    workspace('demo', 'quiet-basin');
+    fs.mkdirSync(path.join(h.home, '.claude', 'sessions'), { recursive: true });
+    expect(shFail(`${LIVE} _ws_status demo-quiet-basin`).code).not.toBe(0);
+    const r = shFail(`${LIVE} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/status-unknown/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+  });
+
+  it('will not read a status file named after something that is not a pid', () => {
+    // tmux should never answer a non-numeric pane_pid, and ccd does not take its
+    // word for it: the shape check is what stops `$cfg/sessions/<whatever tmux
+    // said>.json` being read as this session's status. Without it the file below
+    // is picked up and answers `idle` — a live session archived on the strength
+    // of a path ccd assembled from an answer it could not vouch for.
+    workspace('demo', 'quiet-basin');
+    const cfg = path.join(h.home, '.claude', 'sessions');
+    fs.mkdirSync(cfg, { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'not-a-pid.json'), '{"status":"idle","statusUpdatedAt":1}');
+    const ODD = LIVE.replace('list-panes) echo 4242 ;;', 'list-panes) echo not-a-pid ;;');
+    expect(shFail(`${ODD} _ws_status demo-quiet-basin`).code).not.toBe(0);
+    expect(shFail(`${ODD} cmd_ws_archive --session demo-quiet-basin`).stderr).toMatch(/status-unknown/);
   });
 
   it('refuses to archive a session that is running a Bash tool command', () => {
@@ -350,11 +424,36 @@ describe('ws-archive', () => {
     expect(shFail(`${BUSY} cmd_ws_archive --session demo-quiet-basin`).stderr).toMatch(/session-busy/);
   });
 
-  it('names the PR in archivedreason when the registry knows one', () => {
+  it('names the PR in archivedreason AND in what it prints', () => {
     workspace('demo', 'quiet-basin');
     h.sh('_reg_set demo-quiet-basin prnumber 42');
-    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('merged:#42');
+    // The line a person reads, not only the field: the sweep's push notification
+    // says "PR #n merged", and this is the box's own account of the same fact.
+    expect(out).toContain('(merged in #42)');
+  });
+
+  it('records a reason even with no PR number, and no note in the line', () => {
+    // `merged` with nothing after it is the honest reason for a workspace
+    // archived without a bound PR — an ABSENT archivedreason would leave the
+    // archive screen with a row it cannot explain.
+    workspace('demo', 'quiet-basin');
+    const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('merged');
+    expect(out).not.toContain('merged in #');
+  });
+
+  it('refuses when the registry has no workdir to describe', () => {
+    // Distinct diagnosis, and the only rung that can give it: with the field
+    // gone `[[ -d "" ]]` fails too, so dropping this guard still refuses — as
+    // "worktree is gone: ", about a path the registry never held.
+    workspace('demo', 'quiet-basin');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.workdir'));
+    const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/incomplete registry/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
   });
 
   it('writes the manifest into the REGISTRY, never into the worktree', () => {
@@ -370,6 +469,7 @@ describe('ws-archive', () => {
     expect(m.worktreeHead).toBe('ws/quiet-basin');
     expect(m.dirty).toBe(0);
     expect(m.stashes).toBe(0);
+    expect(m.pr).toBeNull();
     expect(m.ignoredDigest).toBe(SHA256_EMPTY);     // nothing ignored, read OK
     expect(typeof m.worktreeBytes).toBe('number');
     // Not just "contains .claude/projects/" — the exact path munge.ts computes,
@@ -379,6 +479,20 @@ describe('ws-archive', () => {
     // The manifest describes the thing that may later be deleted, so it cannot
     // live inside it.
     expect(fs.existsSync(path.join(wt, '.archivemanifest'))).toBe(false);
+  });
+
+  it('carries the stash count a reap would refuse on', () => {
+    // `stashes` is one of the fields Task 6 refuses on (`stashes-present`), and
+    // the manifest is what the archive screen shows for a workspace nobody has
+    // audited yet. A stash pushed in a LINKED worktree lives in the common ref
+    // store, which is why the count is read from $main at all.
+    const wt = workspace('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'README.md'), 'edited\n');
+    h.git(wt, 'stash', 'push', '-m', 'work in progress');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.stashes).toBe(1);
+    expect(m.dirty).toBe(0);        // the stash took the edit with it
   });
 
   it('substitutes 0 when the size cannot be measured, keeping the record JSON', () => {
@@ -663,6 +777,17 @@ describe('ws-restore', () => {
     expect(shFail(`${ARCH} cmd_ws_restore --session demo-quiet-basin`).stderr).toMatch(/not archived/);
   });
 
+  it('refuses anything but the exact --session <id> shape', () => {
+    // The same argv contract archive has, asserted for the verb that SPAWNS: an
+    // id that is not an id reaches `$REG/$id.*` and `_spawn`, so the shape check
+    // is the boundary, not a formality.
+    expect(shFail('cmd_ws_restore').code).toBe(1);
+    expect(shFail('cmd_ws_restore demo-quiet-basin').code).toBe(1);
+    expect(shFail('cmd_ws_restore --session').code).toBe(1);
+    expect(shFail('cmd_ws_restore --session a --session b').code).toBe(1);
+    expect(shFail('cmd_ws_restore --session "../../etc"').stderr).toMatch(/bad session id/);
+  });
+
   it('points at the attic when the worktree is gone', () => {
     const wt = workspace('demo', 'quiet-basin');
     h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
@@ -679,8 +804,50 @@ describe('ws-attic', () => {
     const tip = h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin');
     h.git(main, 'update-ref', `refs/ccrc/attic/demo-quiet-basin/${tip}`, tip);
     expect(h.sh('cmd_ws_attic --session demo-quiet-basin')).toContain(tip);
-    expect(h.sh('cmd_ws_attic --drop demo-quiet-basin')).toMatch(/dropped 1 attic ref/);
+    // Exact, including the singular: `dropped 1 attic refs` is what the plural
+    // logic exists to avoid, and /dropped 1 attic ref/ matches it happily.
+    expect(h.sh('cmd_ws_attic --drop demo-quiet-basin')).toBe('dropped 1 attic ref for demo-quiet-basin');
     expect(h.sh('cmd_ws_attic --session demo-quiet-basin')).toBe('');
+  });
+
+  it('pluralises only when there is more than one ref', () => {
+    workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    const tip = h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin');
+    h.git(main, 'update-ref', `refs/ccrc/attic/demo-quiet-basin/${tip}`, tip);
+    h.git(main, 'update-ref', 'refs/ccrc/attic/demo-quiet-basin/head', tip);
+    expect(h.sh('cmd_ws_attic --drop demo-quiet-basin')).toBe('dropped 2 attic refs for demo-quiet-basin');
+    expect(h.sh('cmd_ws_attic --session demo-quiet-basin')).toBe('');
+  });
+
+  it('reaches the attic from the TOMBSTONE once the registry is gone', () => {
+    // The whole point of the second rung: after a reap there is no registry
+    // entry, and the attic is exactly what the user still needs to reach. Without
+    // it `ccd ws-attic --session <id>` answers `no such session` for every
+    // workspace ccrc has ever cleaned up — the refs are pinned and unreachable.
+    workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    const tip = h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin');
+    h.git(main, 'update-ref', `refs/ccrc/attic/demo-quiet-basin/${tip}`, tip);
+    const reaped = path.join(h.home, '.cc-sessions', '.reaped');
+    fs.mkdirSync(reaped, { recursive: true });
+    fs.writeFileSync(path.join(reaped, 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', tip }));
+    for (const f of fs.readdirSync(path.join(h.home, '.cc-sessions'))) {
+      if (f.startsWith('demo-quiet-basin.')) fs.rmSync(path.join(h.home, '.cc-sessions', f));
+    }
+    expect(h.sh('cmd_ws_attic --session demo-quiet-basin')).toContain(tip);
+  });
+
+  it('refuses an id it can place in neither the registry nor a tombstone', () => {
+    // Without the refusal `$project` is empty, `$main` becomes PROJECTS_ROOT
+    // itself, and `for-each-ref` there fails quietly: exit 0, no output — a
+    // mistyped id reading as "this workspace has nothing pinned".
+    workspace('demo', 'quiet-basin');
+    const r = shFail('cmd_ws_attic --session ghost-session');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/no such session: ghost-session/);
+    expect(shFail('cmd_ws_attic --session "../../etc"').stderr).toMatch(/bad session id/);
   });
 
   it('rejects any mode word other than --session or --drop', () => {
