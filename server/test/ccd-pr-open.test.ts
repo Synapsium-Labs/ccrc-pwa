@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { execFileSync } from 'node:child_process';
+import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -587,5 +588,48 @@ describe('the ref is $main’s, and the directory only ever corroborates it', ()
     // $main's remote.origin.url, the ref from $main's ref store.
     expect(h.ghCalls().find((c) => c.startsWith('pr create'))!).toBe(
       'pr create --repo o/r --head ws/quiet-basin --base main --title the work --body because');
+  });
+});
+
+/** The verb reached through the DISPATCHER, the way the box reaches it: the real
+ *  file as a program, not a sourced copy. The caps-parity test only proves the
+ *  arm's LABEL exists, and every test above calls `cmd_pr_open` directly after
+ *  `source`, so `pr-open)` could have invoked cmd_pr_state — or dropped its
+ *  `shift` — and shipped green. */
+describe('the dispatcher', () => {
+  const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home,
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }),
+    };
+    try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? '').trim(), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  it('routes pr-open to cmd_pr_open, with argv shifted', () => {
+    // Eight tokens after the verb, and a session id the regex refuses. Only
+    // cmd_pr_open answers that with `bad session id`: cmd_pr_state's own arity
+    // rung fires first on eight arguments and prints ITS usage line, and an arm
+    // that forgot its `shift` hands over nine and prints pr-open's usage line.
+    // The refusal is before any path, any gh call and any git call, so this
+    // costs the fixture nothing.
+    const r = runCcd('pr-open', '--session', '../../etc/passwd', '--title', 't',
+      '--body-b64', b64('b'), '--draft', 'false');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/bad session id/);
+    expect(r.stderr).not.toMatch(/usage:/);
+    expect(h.ghPoison()).toEqual([]);
+  });
+
+  it('names pr-open in the usage line a mistyped verb prints', () => {
+    // Not covered by the caps parity test, which compares the caps list with
+    // the dispatcher's arms and never reads this string.
+    const r = runCcd('no-such-verb');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('usage: ccd {');
+    expect(r.stderr).toContain('pr-open');
   });
 });
