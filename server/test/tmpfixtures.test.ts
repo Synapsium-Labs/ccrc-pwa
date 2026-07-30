@@ -46,7 +46,11 @@ describe('mkTmp', () => {
     // before, 0 after two full runs); this is the line that would have to be
     // deleted for that to stop being true, so it is asserted where a deletion
     // is visible: in the source.
-    const src = readFileSync(path.join(__dirname, 'tmpHelpers.ts'), 'utf8');
+    // Comment lines are stripped BEFORE counting: a substring count alone is
+    // satisfied by `// afterAll(removeTmpFixtures);`, which is a green suite
+    // plus 140 leaked dirs per run — measured, on a disk at 92% (re-review N1).
+    const src = readFileSync(path.join(__dirname, 'tmpHelpers.ts'), 'utf8')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
     expect(src.split('afterAll(removeTmpFixtures);').length - 1,
       'exactly one afterAll registration in tmpHelpers.ts').toBe(1);
   });

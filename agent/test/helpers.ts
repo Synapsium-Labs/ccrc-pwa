@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { afterAll } from 'vitest';
 import WebSocket from 'ws';
 import { startAgent, type AgentOpts, type RunningAgent } from '../src/server.js';
 
@@ -10,13 +11,27 @@ export const TOKEN = 'test-token-abc123';
  *  projects root and an "elsewhere" dir outside every whitelist prefix. */
 export interface Fixture { home: string; projectsRoot: string; outside: string }
 
+// Every fixture dir this module hands out, removed once per importing file.
+// Same discipline as the server suite's tmpHelpers: mkdtemp with no cleanup
+// leaked 2 dirs per run here, ×50-120 per mutation sweep, on a disk that has
+// twice filled with test fixtures. Never a global /tmp sweep — files run in
+// parallel processes and must only remove what they created.
+const made: string[] = [];
+afterAll(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+function tmp(prefix: string): string {
+  const d = mkdtempSync(path.join(tmpdir(), prefix));
+  made.push(d);
+  return d;
+}
+
 export function makeFixture(): Fixture {
-  const home = mkdtempSync(path.join(tmpdir(), 'ccrc-agent-home-'));
+  const home = tmp('ccrc-agent-home-');
   for (const dir of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-personal']) {
     mkdirSync(path.join(home, dir), { recursive: true });
   }
-  const projectsRoot = mkdtempSync(path.join(tmpdir(), 'ccrc-agent-projects-'));
-  const outside = mkdtempSync(path.join(tmpdir(), 'ccrc-agent-outside-'));
+  const projectsRoot = tmp('ccrc-agent-projects-');
+  const outside = tmp('ccrc-agent-outside-');
   return { home, projectsRoot, outside };
 }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -8,8 +8,12 @@ import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
 /** A fake `tmux` binary that echoes its args, so exec tests can assert real
  *  stdout/stderr/code flow through the agent without depending on a real
  *  tmux install or an actual session existing in this sandbox. */
+const stubDirs: string[] = [];
+afterAll(() => { for (const d of stubDirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
 function makeStubBinary(name: string, body: string): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-agent-bin-'));
+  stubDirs.push(dir);
   const file = path.join(dir, name);
   writeFileSync(file, `#!/bin/sh\n${body}\n`);
   chmodSync(file, 0o755);

@@ -136,10 +136,20 @@ describe('argv discipline', () => {
     expect(end, 'cmd_pr_open must close on a column-0 brace').toBeGreaterThan(start);
     const fn = src.slice(start, end)
       .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
-    for (const banned of ['--body-file', '-F ', '--template', '--fill', '--force', '"$@"',
+    // The window must really reach the function's end: a `}` at column 0 inside
+    // a quoted string would truncate the slice and everything below it would
+    // escape the ban unscanned (re-review N2). The final statement is the pin.
+    expect(fn, 'the scan window must reach cmd_pr_open\'s last statement')
+      .toContain(`printf '%s\\n' "$opened"`);
+    for (const banned of ['--body-file', '--template', '--fill', '--force', '"$@"',
                           '-C "$workdir"']) {
       expect(fn, `cmd_pr_open must not contain ${banned}`).not.toContain(banned);
     }
+    // -F separately, as a boundary regex: the literal '-F ' misses pflag's
+    // attached shorthand -F<path> — `-F"$HOME/.config/gh/hosts.yml"` is the
+    // token file as the PR body (re-review N3). (^|\s)-F catches both forms
+    // without matching --fill or --force, which the loop above bans anyway.
+    expect(fn, 'cmd_pr_open must not contain -F in any form').not.toMatch(/(^|\s)-F/m);
   });
 
   it('rejects a title over 256 chars, an empty title and control characters', () => {
