@@ -211,7 +211,23 @@ describe('binding refusals', () => {
   it('refuses when the PR head is not reachable from our tip', () => {
     const { wt } = squashMovedBase();
     h.ghRows([mergedRow({ headRefOid: '0'.repeat(40), mergeCommit: { oid: 'aaaaaaa' } })]);
-    expect(refusal(wt).verdict).toBe('pr-head-not-ours');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('pr-head-not-ours');
+    // The DETAIL is what distinguishes this arm from the generic `'!'*` one:
+    // both produce the same verdict token, so without this the dedicated arm
+    // could be deleted with every assertion above still green.
+    expect(a.detail).toContain('not reachable from');
+  });
+
+  it('refuses no-bound-pr when the only PR is on ANOTHER branch', () => {
+    // "There is no PR for this workspace" and "there is one and it is not
+    // ours" are different sentences, and only the second is about a stranger.
+    // The `near` filter's head-name conjunct is the only thing keeping them
+    // apart: relax it and a merged PR for a different branch of the same repo
+    // reports `pr-head-not-ours` about a PR that was never this workspace's.
+    const { wt } = squashMovedBase();
+    h.ghRows([mergedRow({ headRefName: 'ws/someone-else', headRefOid: '0'.repeat(40) })]);
+    expect(refusal(wt).verdict).toBe('no-bound-pr');
   });
 
   it('refuses a fork PR outright', () => {
@@ -300,6 +316,13 @@ describe('local-loss refusals', () => {
       // survive its hardening being deleted. Pinned at the helper instead.
       expect(h.sh(`${ARCH} _ws_reap_reset; _ws_collect_ignored "${wt}"; echo "rc=$?"`))
         .toBe('rc=1');
+      // And the reverse masking, which a mutation sweep caught: the ignored
+      // read sees the SAME warning and refuses with the SAME token, so Phase
+      // B's own stderr check could be deleted with every case above still
+      // green. With the collector stubbed healthy, only that check can answer.
+      const OKIGN = '_ws_collect_ignored() { REAP_IGNORED=(); REAP_SENSITIVE=();'
+        + ' REAP_IGNDIGEST=stub; return 0; };';
+      expect(refusal(wt, OKIGN).verdict).toBe('tree-unreadable');
     } finally {
       // `rmSync` cannot recurse into a 0o000 directory, so without this the
       // harness's own cleanup throws and leaks the entire fixture HOME.
@@ -317,17 +340,40 @@ describe('local-loss refusals', () => {
     expect(a.detail).toContain('.env');
   });
 
+  it('flags a secret-shaped DIRECTORY, which is the entry shape git actually emits', () => {
+    // `--ignored=matching` collapses a wholly-ignored directory to ONE entry
+    // with a trailing slash — `!! secrets/`, never the files inside it — so
+    // the trailing-slash strip is what decides whether a gitignored
+    // `secrets/` is a secret or ordinary rubbish queued for deletion. Without
+    // `${1%/}` the basename of `secrets/` is the EMPTY STRING and matches
+    // nothing. Measured as a mutation survivor, which is how it was found.
+    const { wt } = squashMovedBase(['secrets/', 'deploy.pem']);
+    fs.mkdirSync(path.join(wt, 'secrets'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'secrets', 'creds'), 'token\n');
+    fs.writeFileSync(path.join(wt, 'deploy.pem'), 'KEY\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.sensitive).toEqual(expect.arrayContaining(['secrets/', 'deploy.pem']));
+  });
+
   it('LISTS non-sensitive ignored content with sizes instead of refusing on it', () => {
     // node_modules/, dist/ and .ccrc/ are named, sized and destroyed on
     // confirm. Refusing on all ignored content would make the gate unpassable
     // within minutes of ws-add and push the escape hatch into a config file.
-    const { wt } = squashMovedBase(['node_modules/']);
+    const { wt } = squashMovedBase(['node_modules/', 'dist/']);
     fs.mkdirSync(path.join(wt, 'node_modules', 'x'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'node_modules', 'x', 'big'), 'x'.repeat(4096));
+    fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'dist', 'small'), 'x');
     const a = audit();
     expect(a.verdict).toBe('reapable');
-    expect(a.ignored.map((e: { path: string }) => e.path)).toContain('node_modules/');
-    expect(a.ignoredCount).toBeGreaterThan(0);
+    // Bytes DESCENDING, and two entries is the smallest fixture that can tell
+    // a sort from a coincidence: with one entry the ordering is unobservable.
+    expect(a.ignored.map((e: { path: string }) => e.path)).toEqual(['node_modules/', 'dist/']);
+    // The per-entry size, not just the total — they are two different lines.
+    expect(a.ignored[0].bytes).toBeGreaterThan(4000);
+    expect(a.ignored[0].sensitive).toBe(false);
+    expect(a.ignoredCount).toBe(2);
     expect(a.ignoredBytes).toBeGreaterThan(4000);
   });
 
@@ -335,7 +381,12 @@ describe('local-loss refusals', () => {
     const { wt } = squashMovedBase();
     fs.writeFileSync(path.join(wt, 'f1.txt'), 'wip\n');
     h.sh(`cd "${wt}" && git stash push -q -m wip`);
-    expect(refusal(wt).verdict).toBe('stashes-present');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('stashes-present');
+    // The count is on the wire as well as in the refusal: a manifest that said
+    // `stashes: 0` beside `verdict: stashes-present` would be two answers.
+    expect(a.stashes).toBe(1);
+    expect(a.detail).toContain('1 stash entry');
     h.sh(`cd "${wt}" && git stash drop -q`);
     fs.writeFileSync(path.join(wt, 'z.txt'), 'unpushed\n');
     h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'unpushed');
@@ -377,6 +428,9 @@ describe('identity refusals', () => {
     expect(a.verdict).toBe('registry-branch-drift');
     expect(a.detail).toContain('ws/quiet-basin');
     expect(a.detail).toContain('feat/x');
+    // The corroboration is on the wire too, and it is FALSE here — the field
+    // exists so a reader can see the disagreement without parsing a sentence.
+    expect(a.headMatchesRegistry).toBe(false);
     expect(tip).toMatch(/^[0-9a-f]{40}$/);
   });
 
@@ -581,6 +635,21 @@ describe('the dispatcher', () => {
     expect(r.stderr).toContain('bad session id');
   });
 
+  it('asserts its argv exactly — fixed arity, no getopt loop', () => {
+    // A ninth verb that silently ignored a trailing token would answer a
+    // question the caller did not ask. Both directions, because `-eq 2` is one
+    // mutation away from `-ge 1`.
+    expect(runCcd('ws-audit').stderr).toContain('usage: ccd ws-audit --session <id>');
+    expect(runCcd('ws-audit', '--session', 'a', 'extra').stderr)
+      .toContain('usage: ccd ws-audit --session <id>');
+    expect(runCcd('ws-audit', '--sess', 'a').stderr)
+      .toContain('usage: ccd ws-audit --session <id>');
+  });
+
+  it('names ws-audit in the usage line an unknown verb prints', () => {
+    expect(runCcd('no-such-verb').stderr).toContain('ws-audit');
+  });
+
   it('advertises ws-audit in caps — the agent refuses what caps omits', () => {
     // ~/.local/bin/ccd is a COPY, so the server asks the agent what this box
     // implements and never emits a verb caps did not name.
@@ -612,9 +681,48 @@ describe('the manifest', () => {
     });
   });
 
+  it('the token IS the fingerprint of the facts it reports', () => {
+    // `changes the token when ANY fingerprinted fact moves` can only move the
+    // ONE fact a fixture can move without changing the verdict, and
+    // `fingerprints twelve DISTINCT facts` exercises the helper in isolation.
+    // Neither says the verb feeds it the right twelve. Measured as five
+    // mutation survivors: the proof argument, `baseOid`, the sensitive digest
+    // and its `sort`, and `headRefOid` — every one of them could be replaced
+    // by a constant with the whole file still green, because nothing ever
+    // asserted what the token IS.
+    const { main, wt, tip, merge } = squashMovedBase(['node_modules/']);
+    fs.mkdirSync(path.join(wt, 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'node_modules', 'big'), 'x'.repeat(2048));
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    // Every fact read independently of the verb: from git, from the helper
+    // Task 2 owns, and from the wire the verb itself published.
+    const igndigest = h.sh(`_ws_ignored_digest "${wt}"`);
+    const baseOid = h.git(main, 'rev-parse', '--verify', 'origin/main');
+    // The empty-set sensitive digest. It is a CONSTANT in every state that
+    // reaches a token, because a non-empty set is `sensitive-ignored` and
+    // refuses — which is why its `sort` cannot be pinned behaviourally.
+    const sensdigest = h.sh(`printf '%s\\n' "" | sort | sha256sum | cut -d' ' -f1`);
+    const args = ['demo-quiet-basin', 'ws/quiet-basin', tip, tip, merge, 'patch-id',
+      '0', igndigest, sensdigest, '0', 'ws/quiet-basin', baseOid];
+    expect(a.token).toBe(h.sh(`_ws_fingerprint ${args.map((x) => `'${x}'`).join(' ')}`));
+    // and the wire says the same things the token was built from.
+    expect(a.pr.headRefOid).toBe(tip);
+    expect(a.pr.mergeCommit).toBe(merge);
+    expect(a.merge.proof).toBe('patch-id');
+  });
+
   it('carries the transcript path, the stash count and the worktree size', () => {
     squashMovedBase();
     const a = audit();
+    expect(a.headMatchesRegistry).toBe(true);
+    expect(a.exists).toBe(true);
+    expect(a.reaping).toBeNull();
+    // `timeout` is shadowed by GH_STUB and logs its own argv, because the
+    // wrapper is the only bound on a blocking fetch and a stub that swallowed
+    // it would let ccd drop `timeout` with the suite still green.
+    expect(h.ghCalls().some((c) => /^timeout 60 git .* fetch --quiet origin$/.test(c)),
+      `no bounded fetch in ${JSON.stringify(h.ghCalls())}`).toBe(true);
     // `_cfg_dir` maps the wrapper `_ws_least_loaded` picked to its config dir
     // (claude -> ~/.claude, claude2 -> ~/.claude-personal, …), so the assertion
     // is derived, never hardcoded to `.claude`.
