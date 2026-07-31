@@ -337,6 +337,32 @@ describe('refusals are answers', () => {
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
   }, 30000);
 
+  it('refuses to run the destructive verb unserialised when flock is missing', () => {
+    // The lock is the ONLY thing standing between two concurrent reaps, and it
+    // is now `flock(2)` rather than a directory ccd could always create. On a
+    // box without util-linux that is not a degraded mode to fall back into: it
+    // is the guard being absent, so the verb refuses to run at all. `command`
+    // is shimmed rather than PATH being emptied, because ccd asks the question
+    // with `command -v` and every other stub in this file spells its passthrough
+    // `command git`/`command find` — the shim has to leave those alone.
+    //
+    // In a SUBSHELL: refusing is `die`, i.e. `exit 1`, which in the sourcing
+    // shell would end the snippet before its own `echo` could report.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const NOFLOCK = 'command() { [[ "${1-}" == -v && "${2-}" == flock ]] && return 1;'
+      + ' builtin command "$@"; };';
+    expect(h.sh(`${GH_STUB} ${ARCH} ${NOFLOCK} `
+      + `( cmd_ws_reap --expect ${tok} --session demo-quiet-basin ) >out2.json 2>err2.txt; echo "exit=$?"`))
+      .toBe('exit=1');
+    expect(fs.readFileSync(path.join(h.home, 'out2.json'), 'utf8'),
+      'a refusal to run prints no document at all').toBe('');
+    expect(fs.readFileSync(path.join(h.home, 'err2.txt'), 'utf8')).toContain('flock');
+    expect(fs.existsSync(wt), 'and nothing is destroyed').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
+  }, 30000);
+
   it('refuses rather than writing a tombstone it cannot quote', () => {
     // `_json_str`'s one remaining failure is python3 not being RUNNABLE, and it
     // reports that on its exit status — which every one of the ~20
@@ -448,6 +474,30 @@ describe('refusals are answers', () => {
     } finally {
       fs.chmodSync(path.join(wt, 'build', 'locked'), 0o755);
     }
+  }, 30000);
+
+  it('separates the scan\'s two failure rungs — a bad status, and a diagnostic', () => {
+    // ONE FIXTURE PINS NEITHER. The `chmod 000` case above fails BOTH rungs at
+    // once (find exits non-zero AND prints), so with either guard deleted the
+    // other still refuses and each survives a sweep individually — the exact
+    // shape `removes its scratch file on EVERY path that refuses` exists for in
+    // `_ws_collect_ignored`. So: one fixture where find FAILS silently, and one
+    // where it SUCCEEDS and complains. `find` appears once in ccd, at this
+    // scan, so shadowing it reaches nothing else.
+    const { wt, main } = ready(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
+    const QUIETFAIL = `find() { command find "$@" 2>/dev/null; return 1; };`;
+    const NOISYOK = `find() { command find "$@"; echo "find: something happened" >&2; return 0; };`;
+    for (const [name, stub] of [['rc', QUIETFAIL], ['stderr', NOISYOK]] as const) {
+      const r = h.run(`${GH_STUB} ${ARCH} ${stub} `
+        + `cmd_ws_reap --expect ${'0'.repeat(64)} --session demo-quiet-basin`);
+      expect(r.code, `${name}: stderr ${r.stderr}`).toBe(0);
+      expect(JSON.parse(r.stdout).refused, `the ${name} rung must refuse on its own`)
+        .toBe('tree-unreadable');
+      expect(fs.existsSync(wt)).toBe(true);
+    }
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
   }, 30000);
 
   it('refuses, with the remedy, when the scan runs out of its budget', () => {

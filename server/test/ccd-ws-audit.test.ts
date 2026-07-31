@@ -462,10 +462,12 @@ describe('local-loss refusals', () => {
   });
 
   it('removes its scratch file on EVERY path that refuses, and on the one that does not', () => {
-    // Four exits, three `rm -f "$outf"`, and each one is only reachable through
+    // Five exits, four `rm -f "$outf"`, and each one is only reachable through
     // its own failure — measured by mutation: with any single `rm` deleted, the
     // fixture for a different failure still cleans up, so one case pins nothing
-    // and all four have to be walked. The verdicts are identical with and
+    // and all of them have to be walked. The fifth, added with the scan inside
+    // a collapsed ignored directory, needs an ignored directory to exist at all
+    // and so lives in `removes the inside-scan's scratch files too`. The verdicts are identical with and
     // without them (an empty temp-file name is itself a failing redirect, so the
     // next guard refuses anyway); the FILE is the whole difference, and TMPDIR
     // is what makes it observable. A verb that runs on every sheet open and
@@ -1318,8 +1320,65 @@ describe('the refusals the ladder reaches last', () => {
     // so what refuses is the collector's own `^[0-9a-f]{64}$` rung over an
     // empty hash. An empty digest here is the exact forgery deviation 6 closed
     // — it hashes identically on the reap side, so the consent check matches.
+    //
+    // TWO stubs, because under `set -o pipefail` the first one does not reach
+    // the rung it looks like it tests: a `sha256sum` that EXITS non-zero makes
+    // the pipeline's status the assignment's, and the assignment is the
+    // collector's last statement, so it returns 1 with the shape check deleted.
+    // Measured as a mutation survivor for exactly that reason. The rung is for
+    // a `sha256sum` that SUCCEEDS and answers something that is not a digest —
+    // the case `_ws_ignored_digest` keeps its own `^[0-9a-f]{64}$` for, and the
+    // one that matters, because a STABLE non-digest is computed identically on
+    // the reap side and the consent check then matches.
     const { wt } = squashMovedBase();
     expect(refusal(wt, 'sha256sum() { return 1; };').verdict).toBe('tree-unreadable');
+    expect(refusal(wt, 'sha256sum() { echo "not-a-digest"; };').verdict).toBe('tree-unreadable');
+  });
+
+  it('removes the inside-scan\'s scratch files too, on every path that refuses', () => {
+    // The scan inside a collapsed ignored directory allocates its own two temp
+    // files and has four exits of its own, and the collector gained a FIFTH
+    // exit for it. Same rule as the sibling test above: one fixture pins
+    // nothing, because with any single `rm` deleted a fixture for a different
+    // failure still cleans up. `find` appears once in ccd, at this scan.
+    const { wt } = squashMovedBase(['dist/']);
+    fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
+    const tmp = path.join(h.home, 'tmpdir2');
+    fs.mkdirSync(tmp);
+    // `GH_STUB` for its `timeout`, and that is not incidental: ccd bounds the
+    // scan with `timeout "$left" find …`, and the REAL `timeout` execs the
+    // `find` BINARY — a shell function named `find` is invisible to it, so
+    // without the stub these two cases silently run the genuine walk and the
+    // collector answers rc=0. Measured, and it is the same reason `timeout` is
+    // shadowed for gh: a wrapper the stub cannot see is a wrapper the test is
+    // not exercising.
+    const run = (pre: string): string => h.sh(
+      `${GH_STUB} ${ARCH} ${pre} _ws_reap_reset; _ws_collect_ignored "${wt}"; echo "rc=$?"`,
+      { TMPDIR: tmp });
+
+    // (a) the scan fails by EXIT CODE, silently.
+    expect(run('find() { command find "$@" 2>/dev/null; return 1; };')).toBe('rc=1');
+    expect(fs.readdirSync(tmp), 'the scan exit-code refusal leaked a scratch file').toEqual([]);
+
+    // (b) the scan exits 0 and WARNS.
+    expect(run('find() { command find "$@"; echo "find: nope" >&2; };')).toBe('rc=1');
+    expect(fs.readdirSync(tmp), 'the scan diagnostic refusal leaked a scratch file').toEqual([]);
+
+    // (c) and (d) the scan's OWN allocations fail. The collector takes the
+    // first two, so the third and fourth are the scan's; the counter is a file
+    // for the reason the sibling gives (a variable dies with the subshell).
+    const nth = (k: number): string => `mktemp() { local c="$HOME/mkcount${k}" n;`
+      + ` n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$c";`
+      + ` (( n >= ${k} )) && return 1; command mktemp; };`;
+    expect(run(nth(3))).toBe('rc=1');
+    expect(fs.readdirSync(tmp), 'the scan outf-allocation refusal leaked a scratch file').toEqual([]);
+    expect(run(nth(4))).toBe('rc=1');
+    expect(fs.readdirSync(tmp), 'the scan errf-allocation refusal leaked a scratch file').toEqual([]);
+
+    // (e) and the path that succeeds, which allocates all four.
+    expect(run('')).toBe('rc=0');
+    expect(fs.readdirSync(tmp), 'a successful scan leaked a scratch file').toEqual([]);
   });
 
   it('judges sensitivity on the BASENAME, not on the whole ignored path', () => {

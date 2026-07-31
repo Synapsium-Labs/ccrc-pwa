@@ -1645,6 +1645,17 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   # `${1%/}` — git names a collapsed directory `build/`, with the trailing
   # slash, and a doubled separator makes `${f#"$abs"/}` match nothing, so every
   # hit came back as `build/` + the ABSOLUTE path. Measured.
+  # TWO MUTATION SURVIVORS, disclosed and measured, and they are the same
+  # reason: nothing can spend the budget in a fixture. `left=$(( deadline -
+  # SECONDS ))` can be replaced by a constant, and `(( left > 0 ))` by `(( 1 ))`,
+  # with the whole suite green (44 files / 709 tests, exit 0, each measured on
+  # its own) — because reaching either needs a scan that really takes 30 s, and
+  # the largest ignored tree on this box takes 3.4 s. What IS pinned is the
+  # `rc == 124` arm (`refuses, with the remedy, when the scan runs out of its
+  # budget`, which fails `timeout` for `find` alone), so the EXPIRY behaviour
+  # has a fixture and only the clock that produces it does not. They stay
+  # because a per-entry timeout is the thing they exist to prevent: without the
+  # subtraction each entry gets a fresh 30 s and 226 entries cost 226 of them.
   local abs="${1%/}" rel="${2%/}" ent="$2" deadline="$3" outf errf err rc left f
   _WS_INSIDE_HITS=()
   left=$(( deadline - SECONDS ))
@@ -1652,6 +1663,14 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
     REAP_IGNREASON="the scan of the ignored directories did not finish within ${REAP_SCAN_SECONDS}s (stopped at $ent): remove or move the largest ignored directory and reap again"
     return 1
   }
+  # TWO MORE MUTATION SURVIVORS, disclosed and measured, and they are the same
+  # pair `_ws_collect_ignored` discloses for the same reason: an empty temp-file
+  # name is itself a failing redirect, so `>""` never runs the scan and the
+  # `(( rc == 0 ))` rung below refuses anyway. Both stay because each states the
+  # case it is about, and because the fall-through only holds while that later
+  # line keeps its `rm`. The four `rm -f "$outf"` here ARE pinned individually,
+  # by `removes the inside-scan's scratch files too`, which walks all four exits
+  # — with any one deleted a fixture for a DIFFERENT failure still cleans up.
   outf=$(mktemp) || return 1
   errf=$(mktemp) || { rm -f "$outf"; return 1; }
   timeout "$left" find "$abs" -mindepth 1 \( "${_WS_SENSITIVE_FIND[@]}" \) -print0 \
@@ -1836,6 +1855,14 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # measurement nobody made. `_ws_ignored_digest` keeps its own copy of that
   # rung because the ARCHIVE manifest still calls it, and archive records what
   # reap refuses over.
+  # MUTATION SURVIVOR, disclosed: the `sort -z` can be deleted with the whole
+  # suite green, because git enumerates the ignored set in a stable order for a
+  # given tree and both sides of the consent check call this same function, so
+  # no fixture can make the two orders differ. It stays because a digest is over
+  # a SET, and git's order is not promised — the day it changes for a reason
+  # (a config, a version, a filesystem readdir order) the token would move under
+  # a workspace nobody touched, which is `state-changed` for no reason at all.
+  # The same argument the sensitive digest's `sort` carries at ccd's Phase D1.
   if (( ${#REAP_IGNORED[@]} )); then
     REAP_IGNDIGEST=$(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z | sha256sum | cut -d' ' -f1)
   else
@@ -2584,7 +2611,10 @@ _ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
   #   - `[[ -d "$(_reg_get "$id" workdir)" ]] &&` on the reflog — the workdir
   #     exists whenever (b) runs; it stays so an empty `reflog` is a decision.
   #   - `| head -200` on the reflog — a cap, unpinnable for the reason
-  #     `_ws_attic_pin`'s is.
+  #     `_ws_attic_pin`'s MAGNITUDE is (where the cap is APPLIED is pinned there
+  #     now, by `pins the tip even past the 200-ref cap`; how big it is still
+  #     costs a fixture with 200 resolvable commits in it, and this dump is not
+  #     read by any guard at all).
   #   - the `REAP_PRNUM` numeric test — Phase C proved a bound merged PR before
   #     this line can run, so it is always numeric HERE. The sibling in
   #     `_ws_reap_tail`'s printf is genuinely reachable (the resume path prints
@@ -2714,6 +2744,12 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # and the price of a lock whose identity is an inode rather than a promise.
   # The BREADCRUMB remains the recovery record; this only serialises runs.
   local lock="$REG/.reap-$id.lock" lfd rc=0
+  # NOT a degraded mode. Without `flock` the serialisation is absent, not
+  # weaker, so the destructive verb does not run — the same shape as the
+  # `_json_str` probe above, and the same `die`. Pinned by `refuses to run the
+  # destructive verb unserialised when flock is missing`, which shims `command`
+  # rather than emptying PATH, because every stub in that file spells its own
+  # passthrough `command git`.
   command -v flock >/dev/null 2>&1 \
     || die "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
   exec {lfd}>>"$lock" \
@@ -2723,6 +2759,14 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
     # its own description and no path operation here can reach it. (Under the
     # mkdir form the loser's own trap could `rmdir` the winner's lock, which is
     # why that trap had to be armed after the mkdir rather than before it.)
+    #
+    # MUTATION SURVIVOR, disclosed and measured: this close is removable with
+    # the whole suite green, because a refused caller is a caller that is about
+    # to exit and the kernel closes it then. It is not the same line as the one
+    # after `_ws_reap_locked`, which IS pinned (`gives the lock back when the
+    # FUNCTION returns`): that one is on the path where the shell goes on to do
+    # other things. This one stays so that "every path gives the descriptor
+    # back" is a property of the function rather than of its callers.
     exec {lfd}>&-
     printf '{"refused":"in-progress","detail":%s,"paths":[]}\n' \
       "$(_json_str "another ccd process is already reaping $id and still holds the lock")"
@@ -2837,8 +2881,10 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
       # directory 'sub/'` on stderr, so the count is 0, `dirty-tree` passes, and
       # the cleanup finishes over work it never saw. Two reads, one rule.
       #
-      # MUTATION SURVIVOR, disclosed and measured: restoring `2>/dev/null` here
-      # leaves the suite green, because `_ws_collect_ignored` two statements
+      # TWO MUTATION SURVIVORS, disclosed and each measured whole-suite (44
+      # files / 709 tests, exit 0): dropping the `&& [[ -z "$rerr" ]]` conjunct,
+      # and restoring `2>/dev/null` so there is no `$rerr` to test. Both leave
+      # the suite green, because `_ws_collect_ignored` two statements
       # below reads the same tree under the same rule and refuses
       # `tree-unreadable` first — measured with `chmod 000` on an untracked
       # directory holding uncommitted work: the resume DOES refuse and the work
@@ -2866,6 +2912,14 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
           "$(_json_str "$rdirty uncommitted or untracked file(s) appeared while the cleanup was interrupted")"
         return 0
       fi
+      # MUTATION SURVIVOR, disclosed: the `${REAP_IGNREASON:+ …}` here is
+      # removable with the whole suite green — the EVALUATED site's identical
+      # interpolation is pinned (by the scan-budget and unreadable-directory
+      # fixtures, which both refuse before any breadcrumb exists), and no
+      # fixture reaches a failing scan on the RESUME path, which needs a
+      # breadcrumb AND a surviving worktree AND an unreadable ignored directory
+      # at once. It stays because the two sites describe the same failure and
+      # the remedy is the whole reason the reason exists.
       _ws_collect_ignored "$workdir" || {
         printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
           "$(_json_str "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to finish the cleanup on a guess")"
