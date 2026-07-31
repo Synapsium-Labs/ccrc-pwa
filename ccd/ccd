@@ -2143,7 +2143,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `_ws_manifest` (ccd:1098). Nineteen `_json_str` substitutions
+  # same reason, as `_ws_manifest` (ccd:1109). Nineteen `_json_str` substitutions
   # below sit inside printf ARGUMENT LISTS, where a failure is a swallowed status
   # and an empty argument, i.e. `"path":,` — a document that authorises deletions
   # and does not parse, at exit 0. Bytes can no longer fail the encode (see

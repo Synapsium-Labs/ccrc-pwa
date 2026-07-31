@@ -895,7 +895,13 @@ describe('local-loss refusals', () => {
     expect(refusal(wt).verdict).toBe('stash-unreadable');
     h.sh(`git -C "${main}" stash clear`);
     expect(audit().verdict).toBe('reapable');
-  });
+    // Four `cmd_ws_audit` runs on one fixture, which lands ON vitest's 5 s
+    // default rather than under it. Measured the expensive way: with no timeout
+    // this `it` failed once in six whole-suite runs at 5062 ms, and that flake
+    // landed inside a mutation sweep and reported a mutant KILLED that survives
+    // three re-runs. A test that fails on load does not pin anything — it
+    // fabricates evidence for whatever ran while it was flapping.
+  }, 30000);
 
   it('refuses when `git stash list` fails outright — it reports that as 0 too', () => {
     const { wt } = squashMovedBase();
@@ -1206,9 +1212,10 @@ describe('the refusals the ladder reaches last', () => {
     // shadow that refused everything would look identical.
     expect(refusal(wt, pickRow(OK, OK)).verdict).toBe('merge-commit-missing');
     // Seven `cmd_ws_audit` runs against one fixture, which is over vitest's 5 s
-    // default — the only explicit timeout in this file. The six cases are ONE
-    // claim (every piece of that regex is load-bearing) and splitting them into
-    // three `it`s to fit a default would pay three fixture builds to say it.
+    // default. The six cases are ONE claim (every piece of that regex is
+    // load-bearing) and splitting them into three `it`s to fit a default would
+    // pay three fixture builds to say it. One of two explicit timeouts here;
+    // the other names what an unbudgeted one cost.
   }, 30000);
 
   it('refuses branch-missing when refs/heads/<branch> does not resolve', () => {
