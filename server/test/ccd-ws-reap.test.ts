@@ -1202,4 +1202,66 @@ describe('partial failure and resume', () => {
     expect(h.reg('demo-quiet-basin', 'uuid'), 'and the row clears itself').toBeNull();
     expect(h.reg('demo-quiet-basin', 'reaping')).toBeNull();
   }, 30000);
+
+  it('resumes from a branch breadcrumb — worktree already gone, branch still there', () => {
+    // The third known phase, exercised the same way `clips` is above: a crash
+    // between (f) (worktree removed, breadcrumb set to `branch`) and (g) (the
+    // branch CAS-deleted). Nothing in this file resumed from `branch` before —
+    // every other fixture either resumes from `worktree` or leaves the
+    // breadcrumb AT `branch` without ever calling reap a second time — so nothing
+    // pinned that `_ws_reap_tail`'s dispatch treats `branch` as "skip the
+    // worktree-removal step, the rest already ran" rather than as unrecognised.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    h.sh('_reg_set demo-quiet-basin reaping branch');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
+    h.git(main, 'worktree', 'remove', wt);
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped, 'a branch resume must finish').toBe('demo-quiet-basin');
+    expect(out.resumed).toBe('branch');
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+    expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
+  }, 30000);
+
+  it('refuses a resume whose breadcrumb phase ccd never wrote, and destroys nothing', () => {
+    // THE hazard this guard exists to close. `_ws_reap_tail`'s worktree-removal
+    // step used to be gated by the LOOSE test `resumed == "" || resumed ==
+    // worktree`: a breadcrumb holding ANY other value — including one ccd never
+    // writes — falls to the else of that test exactly the way a legitimate
+    // `branch` or `clips` resume does, so `git worktree remove` is silently
+    // skipped... and the run then falls straight through to (g) branch delete,
+    // (h) clips delete and (i) registry delete, and reports `{"reaped":...}`.
+    // The result: an orphaned worktree — still registered with git — standing
+    // next to a deleted branch and a deleted registry, on a run that claimed
+    // success. `_ws_reap_locked`'s tip re-validation already treats an
+    // unrecognised phase the STRICT way for the same reason (see its comment);
+    // this is the same rule applied to the tail's own dispatch.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    h.sh('_reg_set demo-quiet-basin reaping sometime-else');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
+    // The worktree is deliberately left ON DISK: an unrecognised phase must
+    // refuse before ANY destructive step, not merely before the one step the
+    // loose test happened to skip.
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.refused).toBe('reaping-phase-unknown');
+    expect(out.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(fs.existsSync(wt), 'the worktree must survive an unrecognised breadcrumb').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch must survive too')
+      .toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry must survive too').not.toBeNull();
+    // The breadcrumb is LEFT exactly as found — nothing about it is resolved by
+    // refusing to act on it.
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('sometime-else');
+  }, 30000);
 });

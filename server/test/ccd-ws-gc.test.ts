@@ -401,3 +401,102 @@ describe('ws-gc --prune', () => {
     expect(fs.existsSync(elsewhere)).toBe(true);
   });
 });
+
+describe('archived and reaping workspaces', () => {
+  const ARCH = `_ws_unsupervise() { :; }; _spawn() { :; }; tmux() { return 1; }; _alive() { return 1; };`;
+
+  it('classifies an archived workspace as archived, not tracked', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-mesa`);
+    expect(find(scan(), 'quiet-mesa')!.state).toBe('archived');
+  });
+
+  it('--prune DECLINES an archived workspace — deletion is never automatic', () => {
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-mesa`);
+    const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
+    expect(out).toMatch(/declined .*quiet-mesa is archived/);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('never reclaims the registry of an archived session whose worktree is gone', () => {
+    // dead-reg's `rm -f $REG/<id>.*` would delete the ONLY record of where the
+    // branch and worktree were — exactly the ws/swift-harbor orphan.
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-mesa`);
+    fs.rmSync(wt, { recursive: true, force: true });
+    h.sh(`${ARCH} cmd_ws_gc --prune`);
+    expect(h.reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
+  it('never reclaims the registry of a session mid-reap', () => {
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    h.sh('_reg_set demo-quiet-mesa reaping branch');
+    fs.rmSync(wt, { recursive: true, force: true });
+    h.sh(`${ARCH} cmd_ws_gc --prune`);
+    expect(h.reg('demo-quiet-mesa', 'reaping')).toBe('branch');
+  });
+
+  it('never removes the .reaped tombstone directory', () => {
+    h.makeRepo('demo');
+    const tomb = path.join(h.home, '.cc-sessions', '.reaped');
+    fs.mkdirSync(tomb, { recursive: true });
+    fs.writeFileSync(path.join(tomb, 'demo-gone.json'), '{}');
+    h.sh(`${ARCH} cmd_ws_gc --prune`);
+    expect(fs.existsSync(path.join(tomb, 'demo-gone.json'))).toBe(true);
+  });
+
+  it('names the archived set and the attic in the ws-add disk-floor refusal', () => {
+    // The spec writes this pointer as `ccd ws-attic --list`; no such form
+    // exists — the verb takes `--session <id>` or `--drop <id>` (Task 2), and
+    // a refusal that names a command which does not run is worse than one
+    // that names none. The message points at the real form.
+    h.makeRepo('demo');
+    const r = (() => { try { return h.sh(`${WS_ADD} CCD_DISK_FLOOR_GB=999999 cmd_ws_add demo`); }
+      catch (e) { return String((e as { stderr?: string }).stderr ?? ''); } })();
+    expect(r).toContain('ccd ws-gc');
+    expect(r).toContain('ccd ws-attic --session');
+  });
+
+  // The six tests above (verbatim from the plan) never exercise `_ws_gc_row`'s
+  // `reaping` ladder rung or `_ws_gc_prune_row`'s `reaping)` arm through a LIVE
+  // worktree: both "mid-reap" tests above remove the worktree directory first,
+  // which routes the row through the dead-reg/stale-meta paths instead. A
+  // workspace can be mid-reap with its worktree still fully present — that is
+  // exactly the window between (c) and (f) in `_ws_reap_tail` — so the ladder
+  // rung and the prune arm need their own coverage, added here to close a
+  // mutation-sweep gap the brief's tests leave open.
+  it('classifies a mid-reap workspace (worktree still present) as reaping, not tracked', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    h.sh('_reg_set demo-quiet-mesa reaping worktree');
+    expect(find(scan(), 'quiet-mesa')!.state).toBe('reaping');
+  });
+
+  // A workspace reaches `_ws_reap_tail` only once `cmd_ws_archive` has already
+  // set `.archived` (ws-reap refuses `not-archived` otherwise), so a REAL
+  // mid-reap workspace has both markers set at once. This pins that `reaping`
+  // is checked before `archived` in the ladder — the more actionable state
+  // ("re-run ccd ws-reap") wins over the less actionable one ("remove it with
+  // the workspace sheet").
+  it('classifies a mid-reap AND archived workspace as reaping, not archived', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-mesa`);
+    h.sh('_reg_set demo-quiet-mesa reaping worktree');
+    expect(find(scan(), 'quiet-mesa')!.state).toBe('reaping');
+  });
+
+  it('--prune declines a mid-reap workspace whose worktree is still present, and says why', () => {
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    h.sh('_reg_set demo-quiet-mesa reaping worktree');
+    const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
+    expect(out).toMatch(/declined .*quiet-mesa is mid-cleanup/);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+});

@@ -619,7 +619,7 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   free=$(_ws_disk_free_gb "$WORKTREES_ROOT") \
     || die "could not read free space for $WORKTREES_ROOT"
   (( free >= CCD_DISK_FLOOR_GB )) \
-    || die "only ${free}G free on $WORKTREES_ROOT, floor is ${CCD_DISK_FLOOR_GB}G — reclaim space first: ccd ws-gc"
+    || die "only ${free}G free on $WORKTREES_ROOT, floor is ${CCD_DISK_FLOOR_GB}G — reclaim space first: ccd ws-gc (archived workspaces are listed there and removed only on confirmation; pinned commits: ccd ws-attic --session <id>)"
 
   [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
                         _ws_slug_free "$project" "$slug" || die "slug in use: $slug"; }
@@ -2987,6 +2987,27 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   main="$PROJECTS_ROOT/$project"
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
 
+  # A breadcrumb holding anything ccd did not write is not a phase this can
+  # reason about, so it gets the stricter reading, not the looser one — the
+  # same rule `_ws_reap_locked`'s tip re-validation already states for the same
+  # uncertainty. The LOOSE reading used to live below, as
+  # `[[ "$resumed" == "" || "$resumed" == worktree ]]`: an unrecognised value is
+  # neither `""` nor `worktree`, so it fell to the ELSE of that single test —
+  # `git worktree remove` silently skipped — and the run then fell straight
+  # through to (g)'s branch delete, (h)'s clips delete and (i)'s registry
+  # delete, and reported `{"reaped":...}`. Measured: a breadcrumb of
+  # `reaping=sometime-else` with the worktree still on disk finished with
+  # `wt-exists true`, the branch gone, and the registry gone — an orphaned
+  # worktree, still registered with git, standing next to a deleted branch,
+  # on a run that claimed success. Checked BEFORE any of (f)/(g)/(h)/(i).
+  case "$resumed" in
+    ""|worktree|branch|clips) : ;;
+    *)
+      printf '{"refused":"reaping-phase-unknown","detail":%s,"paths":[]}\n' \
+        "$(_json_str "breadcrumb phase '$resumed' for $id is not one ccd ever writes — refusing to guess which steps already ran")"
+      return 0 ;;
+  esac
+
   if [[ -z "$resumed" ]]; then
     attic=$(_ws_attic_pin "$main" "$id" "$workdir" "$REAP_TIP")            # (a)
     clips=$(_ws_clip_manifest "$id")
@@ -3181,9 +3202,11 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   fi
 
   local state
-  if   [[ ! -f "$REG/$project-$slug.uuid" ]]; then state=orphan
-  elif _ws_gc_dirty "$wt";                    then state=dirty
-  else                                             state=tracked
+  if   [[ ! -f "$REG/$project-$slug.uuid" ]];    then state=orphan
+  elif [[ -f "$REG/$project-$slug.reaping" ]];   then state=reaping
+  elif [[ -f "$REG/$project-$slug.archived" ]];  then state=archived
+  elif _ws_gc_dirty "$wt";                       then state=dirty
+  else                                                state=tracked
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$project" "$slug" "$bytes" "$age" "$wt"
 }
@@ -3220,6 +3243,10 @@ _ws_gc_scan() {
     [[ -e "$f" ]] || continue
     id=$(basename "$f" .workspace)
     [[ -f "$REG/$id.uuid" ]] || continue
+    # An archived workspace's registry is the ONLY record of where its branch
+    # and worktree were, and a reaping breadcrumb is what makes the tail
+    # resumable. dead-reg's `rm -f $REG/<id>.*` would destroy either.
+    [[ -f "$REG/$id.archived" || -f "$REG/$id.reaping" ]] && continue
     wd=$(_reg_get "$id" workdir)
     [[ -n "$wd" && ! -d "$wd" ]] || continue
     p=$(_reg_get "$id" project); s=$(_reg_get "$id" workspace)
@@ -3287,6 +3314,12 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       else
         echo "  declined   git refused to remove $p"
       fi ;;
+    archived)
+      # Archived is the STAGING for a confirmed deletion, not a queue a sweep
+      # drains. No timer, no grace window, no "reclaim opens in 11 days".
+      echo "  declined   $p is archived — remove it with the workspace sheet, never on a timer" ;;
+    reaping)
+      echo "  declined   $p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
     dirty)
       echo "  declined   $p is dirty — never removed, at any flag" ;;
     foreign)
