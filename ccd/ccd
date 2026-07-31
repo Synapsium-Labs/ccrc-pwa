@@ -1564,9 +1564,18 @@ _ws_sensitive_match() {   # path -> 0 when it is secret-shaped
   # is listed and destroyed like any other ignored directory, because ccd
   # itself put it in info/exclude and exempting it would be a blind spot ccd
   # manufactured.
+  #
+  # `.env*` AND `*.env`, because dotenv has two spellings and only the first was
+  # here for a round: `production.env`, `prod.env` and `My Project.env` all read
+  # as ordinary rubbish queued for deletion in the one guard §7 forbids
+  # overriding, while four places — this comment among them — claimed the case
+  # was closed by the `-z` read. It was not; `-z` fixed the QUOTING of
+  # `deploy key.pem` and `prod db.sqlite`, whose suffixes were already listed,
+  # and `My Project.env` had no arm to match quoted or unquoted. `env.sample` and
+  # `environment` are the negatives that keep this a suffix and not a substring.
   local b="${1%/}"; b="${b##*/}"
   case "$b" in
-    .env*|*.pem|*.key|*.p12|id_[dre]*|*.kdbx|credentials*|*.sqlite*|*.db|*.dump|*.sql|secrets*) return 0 ;;
+    .env*|*.env|*.pem|*.key|*.p12|id_[dre]*|*.kdbx|credentials*|*.sqlite*|*.db|*.dump|*.sql|secrets*) return 0 ;;
   esac
   return 1
 }
@@ -1616,8 +1625,12 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # SUFFIX pattern dies on the trailing quote and every PREFIX pattern on the
   # leading one — measured end to end, a gitignored private key named
   # `deploy key.pem` produced verdict=reapable, sensitive:false and a TOKEN,
-  # against the one guard §7 says has no override (`My Project.env`,
-  # `prod db.sqlite`, `ssh key.pem`). The quoted string is also what the size
+  # against the one guard §7 says has no override (`prod db.sqlite`,
+  # `ssh key.pem`, same shape). This comment used to name `My Project.env` in
+  # that list and was WRONG to: its suffix had no arm in `_ws_sensitive_match`
+  # at all, so it was un-matched quoted and un-matched unquoted, and no amount of
+  # `-z` was going to close it. That one is closed where it lives, by the `*.env`
+  # arm. The quoted string is also what the size
   # read was given, and it names nothing on disk, so `ignoredBytes`
   # under-reported precisely the entries that matter — and the human, whose
   # reading of a filename this whole design rests on, was shown

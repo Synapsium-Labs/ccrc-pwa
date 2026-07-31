@@ -523,8 +523,11 @@ describe('local-loss refusals', () => {
     // one, so a gitignored private key called `deploy key.pem` came back
     // `verdict=reapable` with a token, `sensitive:false` and `bytes:0` — the
     // quoted string is also what was handed to the size read, and it names
-    // nothing on disk. `My Project.env`, `prod db.sqlite` and `ssh key.pem` are
-    // the same hole in the one guard §7 says has no override.
+    // nothing on disk. `prod db.sqlite` and `ssh key.pem` are the same hole in
+    // the one guard §7 says has no override. `My Project.env` was named here
+    // too and did NOT belong: its suffix had no arm in `_ws_sensitive_match`,
+    // so quoting was never what was wrong with it — see the `*.env` case in
+    // `matches EVERY pattern`, which is where it is actually closed.
     //
     // `-z` is what closes it, and `core.quotePath=false` is NOT: measured, that
     // config unquotes the non-ASCII directory and STILL quotes the space.
@@ -676,10 +679,20 @@ describe('local-loss refusals', () => {
     // none of it may rot silently. The NEGATIVES are half the test — a list
     // that matched everything would refuse every workspace and the pressure
     // would land on a repo-wide opt-out.
-    const secret = ['.env.local', 'deploy.pem', 'api.key', 'cert.p12', 'id_ed25519',
+    //
+    // `.env*` is a PREFIX arm and `*.env` a SUFFIX one, and BOTH spellings are
+    // here because for one round only the prefix existed: `production.env`,
+    // `prod.env` and `My Project.env` all read as ordinary rubbish queued for
+    // deletion while four places claimed the case was closed. The one with a
+    // space in it is deliberate — that is the name the C-quoting round used as
+    // its example, and quoting was never what was wrong with it.
+    const secret = ['.env.local', 'production.env', 'My Project.env', 'deploy.pem',
+      'api.key', 'cert.p12', 'id_ed25519',
       'vault.kdbx', 'credentials.json', 'app.sqlite3', 'cache.db', 'pg.dump',
       'schema.sql', 'secrets.tar'];
-    const ordinary = ['notes.md', 'env.sample', 'myid_rsa', 'database.dbx'];
+    // `env.sample` and `environment` are the negatives that keep `*.env` from
+    // being written as a substring match.
+    const ordinary = ['notes.md', 'env.sample', 'environment', 'myid_rsa', 'database.dbx'];
     const { wt } = squashMovedBase([...secret, ...ordinary]);
     for (const n of [...secret, ...ordinary]) fs.writeFileSync(path.join(wt, n), 'x\n');
     const a = refusal(wt);
