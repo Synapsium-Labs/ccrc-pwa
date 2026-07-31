@@ -1560,25 +1560,117 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
 # it at the instant of deletion. One implementation, two evaluations at two
 # times: the audit's verdict is never trusted, it is recomputed.
 
+# THE secret-shaped name list, and now it has TWO consumers, so it is a list
+# rather than a `case` — `_ws_sensitive_match` walks it for one name, and
+# `_WS_SENSITIVE_FIND` is the same list as a `find` predicate for the scan
+# INSIDE a collapsed ignored directory. Two hand-maintained copies of a §7
+# guard's definition is exactly the drift this design cannot afford, so the
+# predicate is DERIVED here, once, at source time.
+#
+# Small, non-rotting and permanent. `.ccrc/` deliberately does NOT match: it is
+# listed and destroyed like any other ignored directory, because ccd itself put
+# it in info/exclude and exempting it would be a blind spot ccd manufactured.
+#
+# `.env*` AND `*.env`, because dotenv has two spellings and only the first was
+# here for a round: `production.env`, `prod.env` and `My Project.env` all read
+# as ordinary rubbish queued for deletion in the one guard §7 forbids
+# overriding, while four places claimed the case was closed by the `-z` read. It
+# was not; `-z` fixed the QUOTING of `deploy key.pem` and `prod db.sqlite`,
+# whose suffixes were already listed, and `My Project.env` had no arm to match
+# quoted or unquoted. `env.sample` and `environment` are the negatives that keep
+# this a suffix and not a substring.
+_WS_SENSITIVE_GLOBS=( '.env*' '*.env' '*.pem' '*.key' '*.p12' 'id_[dre]*' '*.kdbx'
+                      'credentials*' '*.sqlite*' '*.db' '*.dump' '*.sql' 'secrets*' )
+_WS_SENSITIVE_FIND=()
+for _wsg in "${_WS_SENSITIVE_GLOBS[@]}"; do
+  (( ${#_WS_SENSITIVE_FIND[@]} )) && _WS_SENSITIVE_FIND+=( -o )
+  _WS_SENSITIVE_FIND+=( -name "$_wsg" )
+done
+unset _wsg
+
 _ws_sensitive_match() {   # path -> 0 when it is secret-shaped
-  # Small, non-rotting and permanent. `.ccrc/` deliberately does NOT match: it
-  # is listed and destroyed like any other ignored directory, because ccd
-  # itself put it in info/exclude and exempting it would be a blind spot ccd
-  # manufactured.
-  #
-  # `.env*` AND `*.env`, because dotenv has two spellings and only the first was
-  # here for a round: `production.env`, `prod.env` and `My Project.env` all read
-  # as ordinary rubbish queued for deletion in the one guard §7 forbids
-  # overriding, while four places — this comment among them — claimed the case
-  # was closed by the `-z` read. It was not; `-z` fixed the QUOTING of
-  # `deploy key.pem` and `prod db.sqlite`, whose suffixes were already listed,
-  # and `My Project.env` had no arm to match quoted or unquoted. `env.sample` and
-  # `environment` are the negatives that keep this a suffix and not a substring.
-  local b="${1%/}"; b="${b##*/}"
-  case "$b" in
-    .env*|*.env|*.pem|*.key|*.p12|id_[dre]*|*.kdbx|credentials*|*.sqlite*|*.db|*.dump|*.sql|secrets*) return 0 ;;
-  esac
+  # `[[ $b == $g ]]` with the pattern UNQUOTED is glob matching, i.e. the same
+  # operation each `case` arm used to be — including `id_[dre]*`'s bracket
+  # expression. `pins the two matchers to one list` walks a table of positives
+  # and negatives through this function AND through the find predicate and
+  # requires the same answer from both.
+  local b="${1%/}" g; b="${b##*/}"
+  for g in "${_WS_SENSITIVE_GLOBS[@]}"; do
+    [[ "$b" == $g ]] && return 0
+  done
   return 1
+}
+
+REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
+
+_ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
+  # THE §0 GUARD, ONE DIRECTORY DOWN. `--ignored=matching` collapses a wholly
+  # ignored directory to a SINGLE entry, so `build/.env` holding a live key was
+  # handed to `_ws_sensitive_match` as `build/`, matched nothing, and was
+  # deleted under a sheet reading "not in git · 1 entry, 39 B — build/".
+  # Measured end to end before this existed: verdict `reapable`, a token issued,
+  # `sensitive: []`, and `build/.env` gone afterwards. Moving one secret one
+  # directory deeper defeated the only guard §7 refuses to give an override.
+  #
+  # `find`, NOT `git ls-files --others --ignored --exclude-standard`, and the
+  # difference is not a preference — measured on git 2.43 with a nested
+  # repository inside an ignored `build/`:
+  #     git ls-files …  ->  build/nested/          (one entry, and that is all)
+  #     find …          ->  build/nested/.env      (the file)
+  # git collapses a nested repository exactly the way `--ignored=matching`
+  # collapses an ignored directory, so it reproduces this very blindness one
+  # level deeper — over content `rm -rf` destroys all the same. The question
+  # here is "what will be deleted", which is a filesystem question.
+  #
+  # ALL TYPES, not `-type f`: `_ws_sensitive_match` matches DIRECTORY names too
+  # (git hands it `secrets/` as a top-level entry and the `%/` strip is there
+  # for exactly that), so restricting the scan to regular files would answer a
+  # different question inside than outside.
+  #
+  # BOUNDED, and the bound is a DEADLINE for the whole workspace rather than a
+  # per-entry timeout, so a workspace with 226 ignored entries cannot cost 226
+  # timeouts. Measured on this box against the tree `--ignored=matching` was
+  # chosen for (custom-tools: 226 collapsed entries, 355,392 entries beneath
+  # them): 3.4 s with one `find` per entry, 1.2 s as a single walk. The
+  # performance reason for `--ignored=matching` still holds for the DISPLAY —
+  # nothing here is printed, counted or sized, only matched — and sensitivity
+  # cannot be sampled. Expiry is a read that did not complete, which is a
+  # refusal, and the remedy travels in the message.
+  #
+  # ANY DIAGNOSTIC IS ALSO A READ THAT DID NOT COMPLETE, the same rule and the
+  # same polarity as the `git status` beside it: a `chmod 000` subdirectory
+  # makes find print `Permission denied` and carry on, and the entries it could
+  # not reach are then simply absent — which is the state that says "no secrets
+  # here" about files nobody enumerated.
+  # `${1%/}` — git names a collapsed directory `build/`, with the trailing
+  # slash, and a doubled separator makes `${f#"$abs"/}` match nothing, so every
+  # hit came back as `build/` + the ABSOLUTE path. Measured.
+  local abs="${1%/}" rel="${2%/}" ent="$2" deadline="$3" outf errf err rc left f
+  _WS_INSIDE_HITS=()
+  left=$(( deadline - SECONDS ))
+  (( left > 0 )) || {
+    REAP_IGNREASON="the scan of the ignored directories did not finish within ${REAP_SCAN_SECONDS}s (stopped at $ent): remove or move the largest ignored directory and reap again"
+    return 1
+  }
+  outf=$(mktemp) || return 1
+  errf=$(mktemp) || { rm -f "$outf"; return 1; }
+  timeout "$left" find "$abs" -mindepth 1 \( "${_WS_SENSITIVE_FIND[@]}" \) -print0 \
+    >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 124 )); then
+    rm -f "$outf"
+    REAP_IGNREASON="the scan of the ignored directories did not finish within ${REAP_SCAN_SECONDS}s (stopped at $ent): remove or move the largest ignored directory and reap again"
+    return 1
+  fi
+  (( rc == 0 )) || { rm -f "$outf"; REAP_IGNREASON="could not walk the ignored directory $ent"; return 1; }
+  [[ -z "$err" ]] || { rm -f "$outf"; REAP_IGNREASON="could not read all of the ignored directory $ent ($err)"; return 1; }
+  # `${f#"$abs"/}` with the prefix QUOTED: an unquoted one is a GLOB, and an
+  # ignored directory is free to be called `build[1]`.
+  while IFS= read -r -d '' f; do
+    [[ -n "$f" ]] || continue
+    _WS_INSIDE_HITS+=( "$rel/${f#"$abs"/}" )
+  done <"$outf"
+  rm -f "$outf"
 }
 
 _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tpath`) / REAP_SENSITIVE / REAP_IGNDIGEST
@@ -1586,14 +1678,15 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # checked. Neither failure can be allowed to look like "there is nothing
   # ignored here", because that is the answer that authorises the delete:
   #
-  #   - The DIGEST half forges the token. `_ws_ignored_digest` signals a failed
-  #     read on its exit code (Task 2, deviation 6) precisely because a failure
-  #     and an empty set hash identically; discarding that status here puts ""
-  #     into REAP_IGNDIGEST on the audit side AND on the reap side, so the
-  #     fingerprints match and D2's consent check passes. Measured with only
+  #   - The DIGEST half forges the token. A failure and an empty set hash
+  #     identically (Task 2, deviation 6), so a discarded status puts "" into
+  #     REAP_IGNDIGEST on the audit side AND on the reap side, the fingerprints
+  #     match, and D2's consent check passes. Measured with only
   #     `status --ignored=matching` failing: both sides produce
   #     `igndigest='' … token=17af9144…`, an exact match, from a read that never
-  #     happened.
+  #     happened. The digest is now built from the RECORDS this function
+  #     produces rather than from a second `git status` (see the tail), so this
+  #     read is the only one that can fail and its status is checked here.
   #   - The ENUMERATION half is worse, because it needs no token at all: an empty
   #     REAP_SENSITIVE means `sensitive-ignored` cannot fire, and the resume path
   #     (Task 6 Step 4) reads that array directly. Same measurement:
@@ -1601,10 +1694,9 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   #
   # The read is therefore ONE `git status` whose status is checked, and the loop
   # filters `!! ` itself rather than piping through grep — a pipeline's exit code
-  # would be grep's, and grep exits 1 on a legitimately empty ignored set.
-  # `_ws_ignored_digest` is still the only implementation of the digest (it is
-  # what the archive manifest records too), so it is called rather than inlined,
-  # and its failure is propagated the same way.
+  # would be grep's, and grep exits 1 on a legitimately empty ignored set. It is
+  # also the ONLY `git status` here now: `_ws_ignored_digest` survives for the
+  # ARCHIVE manifest, which records what it cannot describe rather than refusing.
   #
   # AND THE EXIT CODE IS NOT THE WHOLE ANSWER. A PARTIALLY unreadable tree makes
   # git warn and exit 0: measured on git 2.43, `chmod 000` on a subdirectory
@@ -1688,8 +1780,9 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   #     because the loop's other two lines both dereference `$p` into a
   #     filesystem path, and an empty one would size `$wd/` — the whole
   #     workspace — as an "ignored entry".
-  local wd="$1" entry p b outf errf err rc
-  REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""
+  local wd="$1" entry p b sens deadline outf errf err rc
+  REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""; REAP_IGNREASON=""
+  deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
   outf=$(mktemp) || return 1
   errf=$(mktemp) || { rm -f "$outf"; return 1; }
   git -C "$wd" -c core.quotePath=false status --porcelain --ignored=matching -z \
@@ -1702,18 +1795,53 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     p="${entry#!! }"
     [[ -n "$p" ]] || continue
     b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0
-    if _ws_sensitive_match "$p"; then REAP_SENSITIVE+=("$p"); REAP_IGNORED+=(1$'\t'"$b"$'\t'"$p")
-    else                              REAP_IGNORED+=(0$'\t'"$b"$'\t'"$p"); fi
+    sens=0
+    _ws_sensitive_match "$p" && { sens=1; REAP_SENSITIVE+=("$p"); }
+    # AND THE ENTRY IS OPENED WHEN IT IS A DIRECTORY. A hit anywhere inside
+    # makes the ENTRY sensitive — the entry is what the sheet lists and what
+    # `rm -rf` destroys — while REAP_SENSITIVE records the PATH THAT WAS FOUND,
+    # because "move `build/.env` somewhere else" is a remedy and "build/ is
+    # sensitive" is not. The sensitivity of the entry and the paths reported are
+    # therefore two different facts and both are kept.
+    if [[ -d "$wd/$p" ]]; then
+      _ws_sensitive_inside "$wd/$p" "$p" "$deadline" || { rm -f "$outf"; return 1; }
+      if (( ${#_WS_INSIDE_HITS[@]} )); then
+        sens=1; REAP_SENSITIVE+=( "${_WS_INSIDE_HITS[@]}" )
+      fi
+    fi
+    REAP_IGNORED+=("$sens"$'\t'"$b"$'\t'"$p")
   done <"$outf"
   rm -f "$outf"
-  # MUTATION SURVIVOR, disclosed: the `|| return 1` is removable with the suite
-  # green because this is the LAST statement, and a bare `VAR=$(cmd)` already
-  # returns cmd's status as the function's own. It is written out because that
-  # is true only while nothing follows it — the next line anyone appends here
-  # silently turns a failed digest into a successful collect, which is deviation
-  # 6's forgery. `propagates a digest that could not be computed` covers the
-  # behaviour; this comment covers the line.
-  REAP_IGNDIGEST=$(_ws_ignored_digest "$wd") || return 1
+  # THE DIGEST IS OVER THE RECORDS, not over the paths — which is a change of
+  # WHAT the token promises, and it was made because the old promise was empty.
+  # `_ws_ignored_digest` hashes `status --ignored=matching`'s lines, i.e. the
+  # SET OF PATHS, so measured: growing an ignored `build/out.o` from 9 bytes to
+  # 400,000 left the token IDENTICAL and the reap deleted 400,215 bytes where
+  # the sheet said 9; adding a whole file inside an already-listed ignored
+  # directory did the same; so did dropping a nested git repository with its own
+  # commits into one (27,141 bytes, reaped silently). The records already carry
+  # `sensitive\tbytes\tpath`, so hashing THEM makes the size and the
+  # inside-the-directory sensitivity above both move the token, and the consent
+  # check refuses `state-changed` for each.
+  #
+  # `sort -z`, because a digest is over a SET and git's enumeration order is not
+  # promised; NUL-separated, because a path may hold a TAB or a NEWLINE and the
+  # records are built to survive that. The empty case hashes the empty input
+  # rather than one blank line, so "nothing ignored" and "one entry called
+  # nothing" cannot collide.
+  #
+  # A FAILED HASH IS STILL NOT AN EMPTY ONE (deviation 6): the shape check is
+  # what keeps `sha256sum` failing from putting "" into the field on BOTH sides,
+  # where the fingerprints then match and D2's consent check passes over a
+  # measurement nobody made. `_ws_ignored_digest` keeps its own copy of that
+  # rung because the ARCHIVE manifest still calls it, and archive records what
+  # reap refuses over.
+  if (( ${#REAP_IGNORED[@]} )); then
+    REAP_IGNDIGEST=$(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z | sha256sum | cut -d' ' -f1)
+  else
+    REAP_IGNDIGEST=$(printf '' | sha256sum | cut -d' ' -f1)
+  fi
+  [[ "$REAP_IGNDIGEST" =~ ^[0-9a-f]{64}$ ]] || { REAP_IGNDIGEST=""; return 1; }
 }
 
 _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
@@ -1755,18 +1883,27 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
-_ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid
+_ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest
+  # THIRTEEN facts, and the thirteenth is the clips. `~/.cc-clips/<id>` is
+  # `rm -rf`'d at (h) — 3.8 MB full-resolution screenshots per the spec — and
+  # until this argument existed the fingerprint could not see it at all:
+  # measured, pasting two clips between the sheet rendering and the tap left the
+  # token IDENTICAL (`0e38d4d1…7ccd` before and after) and the reap deleted
+  # them. A change to WHAT GETS DELETED that no human consented to in any form
+  # is the one thing D2 exists to refuse, so the manifest is now both on the
+  # wire (`cmd_ws_audit`'s `clips`) and in the token.
   printf '%s\n' "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
     "dirtyCount=$7" "ignoredDigest=$8" "sensitiveDigest=$9" "stashCount=${10}" \
-    "worktreeHead=${11}" "baseOid=${12}" | sha256sum | cut -d' ' -f1
+    "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" | sha256sum | cut -d' ' -f1
 }
 
 _ws_reap_reset() {
   REAP_VERDICT=""; REAP_DETAIL=""; REAP_PROOF=""; REAP_TOKEN=""
   REAP_TIP=""; REAP_HEADOID=""; REAP_MERGE=""; REAP_BASEOID=""; REAP_WTHEAD=""
-  REAP_DIRTY=0; REAP_STASHES=0; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""
+  REAP_DIRTY=0; REAP_STASHES=0; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""; REAP_IGNREASON=""
+  REAP_CLIPDIGEST=""
   REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=0
-  REAP_IGNORED=(); REAP_SENSITIVE=()
+  REAP_IGNORED=(); REAP_SENSITIVE=(); _WS_INSIDE_HITS=()
 }
 
 # MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
@@ -1983,7 +2120,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     (( REAP_DIRTY == 0 )) \
       || { _reap_refuse dirty-tree "$REAP_DIRTY uncommitted or untracked file(s)"; return 1; }
     _ws_collect_ignored "$workdir" \
-      || { _reap_refuse tree-unreadable "could not read the ignored set at $workdir"; return 1; }
+      || { _reap_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"; return 1; }
     (( ${#REAP_SENSITIVE[@]} == 0 )) \
       || { _reap_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
   fi
@@ -2132,8 +2269,14 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # and because the ordering `_ws_collect_ignored` produces is git's, which is
   # not promised. The only way to pin it would be a state this design forbids.
   REAP_SENSDIGEST=$(printf '%s\n' "${REAP_SENSITIVE[@]-}" | sort | sha256sum | cut -d' ' -f1)
+  # The clips manifest is `_ws_clip_manifest`'s, the same producer the TOMBSTONE
+  # records at (a), so the record of what was deleted and the consent to delete
+  # it cannot describe different files. Hashed rather than carried, because the
+  # fingerprint is a line-per-fact document and a manifest holds newlines.
+  REAP_CLIPDIGEST=$(_ws_clip_manifest "$id" | sha256sum | cut -d' ' -f1)
   REAP_TOKEN=$(_ws_fingerprint "$id" "$branch" "$REAP_TIP" "$REAP_HEADOID" "$REAP_MERGE" "$REAP_PROOF" \
-                 "$REAP_DIRTY" "$REAP_IGNDIGEST" "$REAP_SENSDIGEST" "$REAP_STASHES" "$REAP_WTHEAD" "$REAP_BASEOID")
+                 "$REAP_DIRTY" "$REAP_IGNDIGEST" "$REAP_SENSDIGEST" "$REAP_STASHES" "$REAP_WTHEAD" \
+                 "$REAP_BASEOID" "$REAP_CLIPDIGEST")
   REAP_VERDICT=reapable
   return 0
 }
@@ -2264,8 +2407,13 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
   printf '"dirty":%s,"ignored":%s,"ignoredCount":%s,"ignoredBytes":%s,"sensitive":%s,' \
     "$dirty_json" "$ign_json" "$count" "$total" "$sens_json"
-  printf '"stashes":%s,"worktreeBytes":%s,"commitsAheadOfBase":%s,' \
-    "$REAP_STASHES" "$bytes" "$ahead"
+  # `clips` on the wire, because the sheet cannot ask a human to consent to a
+  # deletion it does not list. `_ws_clip_manifest` is the same producer the
+  # tombstone and the fingerprint use, and it is called HERE rather than read
+  # from a variable so the field is present on every verdict — a refusal is the
+  # answer a human reads too.
+  printf '"clips":%s,"stashes":%s,"worktreeBytes":%s,"commitsAheadOfBase":%s,' \
+    "$(_ws_clip_manifest "$id")" "$REAP_STASHES" "$bytes" "$ahead"
   printf '"pr":{"number":%s,"url":%s,"mergeCommit":%s,"headRefOid":%s},' \
     "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" \
     "$(_json_str "$REAP_PRURL")" "$(_json_str "$REAP_MERGE")" "$(_json_str "$REAP_HEADOID")"
@@ -2350,7 +2498,7 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
   echo "$n"
 }
 
-_ws_clip_manifest() {   # id -> JSON array of {name,bytes}; also echoes the dir
+_ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
   # TWO MUTATION SURVIVORS, disclosed. `[[ -d "$dir" ]] || { echo "[]"; … }` is
   # removable with the suite green because an unmatched glob stays literal, the
   # `-f` test rejects it, and the loop falls through to the same `[]` — it stays
@@ -2658,7 +2806,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
       fi
       _ws_collect_ignored "$workdir" || {
         printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
-          "$(_json_str "could not read the ignored set at $workdir — refusing to finish the cleanup on a guess")"
+          "$(_json_str "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to finish the cleanup on a guess")"
         return 0
       }
       if (( ${#REAP_SENSITIVE[@]} != 0 )); then

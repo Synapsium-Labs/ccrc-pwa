@@ -413,13 +413,18 @@ describe('local-loss refusals', () => {
     // Task 2 test uses).
     const NOSTAT = `git() { [[ "$*" == *"status --porcelain" ]] && return 128; command git "$@"; };`;
     expect(refusal(wt, NOSTAT).verdict).toBe('tree-unreadable');
-    // And the collector's own EXIT-CODE check, which the two patterns above
-    // cannot reach: they fail `_ws_ignored_digest` too, and its `|| return 1`
-    // then answers for both, so `(( rc == 0 ))` survived a whole-diff mutation
-    // sweep. `-z` is what separates them — the digest reads the same status
-    // WITHOUT it — so this fails the enumeration alone, and the enumeration is
-    // the half that needs no token to do harm: an empty `REAP_SENSITIVE` means
-    // `sensitive-ignored` cannot fire over files nobody listed.
+    // And the collector's own EXIT-CODE check. This USED to be unreachable —
+    // the two patterns above failed `_ws_ignored_digest` as well, its
+    // `|| return 1` answered for both, and `(( rc == 0 ))` survived a
+    // whole-diff mutation sweep. The digest is now built from the collector's
+    // own records rather than from a second `git status`, so there is no second
+    // read left to answer for it: re-measured, deleting `(( rc == 0 )) || …`
+    // fails THIS test and `removes its scratch file on EVERY path that refuses`
+    // (2 failed / 66 passed), where before it failed nothing. `-z` is still what
+    // separates the two reads, so this case fails the enumeration alone — and
+    // the enumeration is the half that needs no token to do harm: an empty
+    // `REAP_SENSITIVE` means `sensitive-ignored` cannot fire over files nobody
+    // listed.
     const NOZ = `git() { [[ "$*" == *"--ignored=matching -z"* ]] && return 128; command git "$@"; };`;
     expect(refusal(wt, NOZ).verdict).toBe('tree-unreadable');
   });
@@ -1308,13 +1313,11 @@ describe('the refusals the ladder reaches last', () => {
 
   it('propagates a digest that could not be computed, not an empty one', () => {
     // `_ws_collect_ignored` checks its enumeration AND its digest, and the two
-    // are separately load-bearing — but the enumeration's own guard catches
-    // every fixture that fails the shared `git status`, so the digest's
-    // `|| return 1` survives being deleted. `sha256sum` is what fails ONLY the
-    // digest: `_ws_ignored_digest` reads git's status through PIPESTATUS[0],
-    // which is still 0, and refuses on its own `^[0-9a-f]{64}$` rung instead.
-    // An empty digest here is the exact forgery deviation 6 closed — it hashes
-    // identically on the reap side, so the consent check matches.
+    // are separately load-bearing. `sha256sum` is what fails ONLY the digest:
+    // the enumeration has already succeeded by the time the records are hashed,
+    // so what refuses is the collector's own `^[0-9a-f]{64}$` rung over an
+    // empty hash. An empty digest here is the exact forgery deviation 6 closed
+    // — it hashes identically on the reap side, so the consent check matches.
     const { wt } = squashMovedBase();
     expect(refusal(wt, 'sha256sum() { return 1; };').verdict).toBe('tree-unreadable');
   });
@@ -1384,18 +1387,22 @@ describe('the dispatcher', () => {
 });
 
 describe('the manifest', () => {
-  it('fingerprints twelve DISTINCT facts, and nothing else', () => {
+  it('fingerprints thirteen DISTINCT facts, and nothing else', () => {
     // The token is what `ws-reap --expect` re-proves against at the instant of
     // deletion, so every field has to be in it and no two fields may be
     // interchangeable. Moving one fact at a time through the helper is the only
     // way to say that: the behavioural token test can only move the one fact a
     // fixture can move without changing the verdict.
+    //
+    // The thirteenth is `clipsDigest`: `~/.cc-clips/<id>` is `rm -rf`'d by the
+    // reap, so a clip pasted between the sheet and the tap is deleted — and
+    // until it was fingerprinted the token did not move when one was.
     const facts = ['id', 'branch', 'tip', 'head', 'merge', 'proof',
-      '0', 'igndigest', 'sensdigest', '0', 'wthead', 'baseoid'];
+      '0', 'igndigest', 'sensdigest', '0', 'wthead', 'baseoid', 'clipsdigest'];
     const call = (a: string[]): string => h.sh(`_ws_fingerprint ${a.map((x) => `'${x}'`).join(' ')}`);
     const first = call(facts);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
-    expect(call(facts), 'same twelve facts, same token').toBe(first);
+    expect(call(facts), 'same thirteen facts, same token').toBe(first);
     const seen = new Map<string, number>([[first, -1]]);
     facts.forEach((_v, i) => {
       const moved = [...facts];
@@ -1423,14 +1430,22 @@ describe('the manifest', () => {
     expect(a.verdict).toBe('reapable');
     // Every fact read independently of the verb: from git, from the helper
     // Task 2 owns, and from the wire the verb itself published.
-    const igndigest = h.sh(`_ws_ignored_digest "${wt}"`);
+    // The ignored digest is over the RECORDS the collector builds
+    // (`sensitive\tbytes\tpath`), not over the paths `_ws_ignored_digest`
+    // hashes — that is what makes a grown ignored file move the token — so it is
+    // rebuilt here BY HAND rather than read back from the producer under test.
+    const ignBytes = h.sh(`du -sb "${wt}/node_modules" | head -n1 | cut -f1`);
+    const igndigest = h.sh(
+      `printf '%s\\0' "0"$'\\t'"${ignBytes}"$'\\t'"node_modules/" | sort -z | sha256sum | cut -d' ' -f1`);
+    // No clips directory for this session, so the manifest is the empty array.
+    const clipsdigest = h.sh(`printf '[]\\n' | sha256sum | cut -d' ' -f1`);
     const baseOid = h.git(main, 'rev-parse', '--verify', 'origin/main');
     // The empty-set sensitive digest. It is a CONSTANT in every state that
     // reaches a token, because a non-empty set is `sensitive-ignored` and
     // refuses — which is why its `sort` cannot be pinned behaviourally.
     const sensdigest = h.sh(`printf '%s\\n' "" | sort | sha256sum | cut -d' ' -f1`);
     const args = ['demo-quiet-basin', 'ws/quiet-basin', tip, tip, merge, 'patch-id',
-      '0', igndigest, sensdigest, '0', 'ws/quiet-basin', baseOid];
+      '0', igndigest, sensdigest, '0', 'ws/quiet-basin', baseOid, clipsdigest];
     expect(a.token).toBe(h.sh(`_ws_fingerprint ${args.map((x) => `'${x}'`).join(' ')}`));
     // and the wire says the same things the token was built from.
     expect(a.pr.headRefOid).toBe(tip);

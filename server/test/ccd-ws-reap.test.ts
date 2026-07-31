@@ -176,6 +176,54 @@ describe('refusals are answers', () => {
     expect(refused(tok, wt, main).refused).toBe('dirty-tree');
   }, 30000);
 
+  it('names state-changed when an ignored file GREW between audit and tap', () => {
+    // The fingerprint used to hash the ignored PATHS, so the set was the only
+    // thing it could see. Measured: growing `build/out.o` from 9 bytes to
+    // 400,000 left the token IDENTICAL and the reap deleted 400,215 bytes under
+    // a sheet that said 9 — the size arrived in the reap's own output, after the
+    // fact. The records carry `sensitive\tbytes\tpath`, so hashing THEM is what
+    // makes the bytes a fingerprinted fact.
+    const { wt, main } = ready(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'x'.repeat(9));
+    const tok = tokenOf();
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'x'.repeat(400000));
+    expect(refused(tok, wt, main).refused).toBe('state-changed');
+  }, 30000);
+
+  it('names state-changed when a file appears INSIDE an already-ignored directory', () => {
+    // The other half of the same blindness, and the one that composes with the
+    // inside-the-directory scan: a whole nested git repository dropped into an
+    // ignored directory (measured at 27,141 bytes) changed neither the entry
+    // set nor the entry's own byte count in the old digest.
+    const { wt, main } = ready(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'x'.repeat(9));
+    const tok = tokenOf();
+    fs.writeFileSync(path.join(wt, 'build', 'second.o'), 'x'.repeat(9));
+    expect(refused(tok, wt, main).refused).toBe('state-changed');
+  }, 30000);
+
+  it('names state-changed when a CLIP is pasted between the sheet and the tap', () => {
+    // `~/.cc-clips/<id>` is `rm -rf`'d at (h) — full-resolution screenshots —
+    // and the fingerprint could not see it at all: measured, pasting two clips
+    // after the audit left the token IDENTICAL and the reap deleted them. A
+    // change to WHAT GETS DELETED that no human consented to in any form is the
+    // one thing D2 exists to refuse.
+    const { wt, main } = ready();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'a.png'), 'x');
+    const tok = tokenOf();
+    // And the sheet could not have LISTED it either, which is the other half:
+    // consent to a deletion the document never names is not consent.
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.clips).toEqual([{ name: 'a.png', bytes: 1 }]);
+    fs.writeFileSync(path.join(clips, 'b.png'), 'pasted after the sheet rendered');
+    expect(refused(tok, wt, main).refused).toBe('state-changed');
+    expect(fs.existsSync(path.join(clips, 'b.png')), 'and it is still there').toBe(true);
+  }, 30000);
+
   it('leaves the worktree, the branch and the registry intact on EVERY refusal', () => {
     const { wt, main } = ready();
     const tok = tokenOf();
@@ -347,6 +395,112 @@ describe('refusals are answers', () => {
     expect(fs.readFileSync(path.join(wt, '.env'), 'utf8')).toBe('SECRET_API_KEY=1\n');
     expect(fs.readFileSync(path.join(wt, 'id_rsa'), 'utf8')).toBe('PRIVATE KEY\n');
   }, 30000);
+
+  it('sees a secret one directory BELOW a collapsed ignored directory', () => {
+    // THE HOLE UNDER THE ONE GUARD §7 GIVES NO OVERRIDE. `--ignored=matching`
+    // collapses a wholly ignored directory to a SINGLE entry, so
+    // `_ws_sensitive_match` was handed `build/` and nothing ever looked inside.
+    // Measured before the scan existed: verdict `reapable`, a token issued,
+    // `sensitive: []`, a sheet reading "not in git · 1 entry, 39 B — build/",
+    // and `build/.env` — holding a live key — gone afterwards. Moving one secret
+    // one directory deeper defeated the whole §0 promise.
+    //
+    // Three shapes in one fixture: the flat case, a second name so the list is
+    // a list, and `deep/a/b/c/credentials.json`, because a depth-1 peek would
+    // pass the first two and still lose the third.
+    const { wt, main } = ready(['build/']);
+    fs.mkdirSync(path.join(wt, 'build', 'deep', 'a', 'b', 'c'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', '.env'), 'SECRET_API_KEY=live_sk_xxx\n');
+    fs.writeFileSync(path.join(wt, 'build', 'id_rsa'), 'PRIVATE KEY\n');
+    fs.writeFileSync(path.join(wt, 'build', 'deep', 'a', 'b', 'c', 'credentials.json'), '{"aws":1}\n');
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
+
+    // git really does collapse it — the fixture is about the collapse, so the
+    // collapse is asserted rather than assumed.
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.ignored.map((e: { path: string }) => e.path)).toEqual(['build/']);
+    expect(a.ignored[0].sensitive, 'the ENTRY is what the sheet lists and what rm -rf destroys').toBe(true);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.token, 'a state that refuses is never issued a token').toBeUndefined();
+
+    const o = refused('0'.repeat(64), wt, main);
+    expect(o.refused).toBe('sensitive-ignored');
+    // The paths NAMED are the files found, not the entry: "move build/.env
+    // somewhere else" is a remedy, "build/ is sensitive" is not.
+    expect([...o.paths].sort())
+      .toEqual(['build/.env', 'build/deep/a/b/c/credentials.json', 'build/id_rsa']);
+    expect(fs.readFileSync(path.join(wt, 'build', '.env'), 'utf8')).toBe('SECRET_API_KEY=live_sk_xxx\n');
+  }, 30000);
+
+  it('refuses when it could not walk all of an ignored directory', () => {
+    // Same polarity as the two `git status` reads beside it: find prints
+    // `Permission denied` and carries on, so the entries it could not reach are
+    // simply ABSENT — which is the answer that says "no secrets here" about
+    // files nobody enumerated. Any diagnostic is a read that did not complete.
+    const { wt, main } = ready(['build/']);
+    fs.mkdirSync(path.join(wt, 'build', 'locked'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'locked', '.env'), 'SECRET=1\n');
+    fs.chmodSync(path.join(wt, 'build', 'locked'), 0o000);
+    try {
+      const o = refused('0'.repeat(64), wt, main);
+      expect(o.refused).toBe('tree-unreadable');
+      expect(o.detail, 'the operator is told WHICH directory').toContain('build/');
+    } finally {
+      fs.chmodSync(path.join(wt, 'build', 'locked'), 0o755);
+    }
+  }, 30000);
+
+  it('refuses, with the remedy, when the scan runs out of its budget', () => {
+    // The bound is a DEADLINE for the whole workspace rather than a per-entry
+    // timeout, so 226 ignored entries cannot cost 226 timeouts. Measured on
+    // this box against the tree `--ignored=matching` was chosen for
+    // (custom-tools: 226 collapsed entries, 355,392 entries beneath them) the
+    // whole scan costs 3.4 s, so the 30 s budget is ~9x the largest real tree
+    // here and does not fire in practice — which is exactly why the expiry path
+    // needs a fixture rather than a real tree. `timeout` is a shell function in
+    // this harness (it is shadowed so the gh wrapper cannot be bypassed), so
+    // failing it for `find` alone is the faithful stand-in for the real 124.
+    const { wt, main } = ready(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
+    const SLOW = `timeout() { [[ "$*" == *" find "* ]] && return 124; `
+      + `printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };`;
+    const r = h.run(`${GH_STUB} ${SLOW} ${ARCH} cmd_ws_reap --expect ${'0'.repeat(64)} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('tree-unreadable');
+    expect(o.detail, 'a permanent refusal with no override must carry its remedy')
+      .toContain('remove or move the largest ignored directory');
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+  }, 30000);
+
+  it('pins the two matchers to ONE list', () => {
+    // `_ws_sensitive_match` and the `find` predicate are the same §7 guard asked
+    // in two places, and two hand-maintained copies of it is the drift this
+    // design cannot afford. Both are derived from `_WS_SENSITIVE_GLOBS`; this is
+    // what says they still agree, name by name, including the negatives the list
+    // exists to keep out.
+    const yes = ['.env', '.env.local', 'production.env', 'My Project.env', 'deploy key.pem',
+      'id_rsa', 'id_ed25519', 'id_dsa', 'x.p12', 'v.kdbx', 'credentials.json',
+      'prod db.sqlite', 'x.sqlite3', 'x.db', 'x.dump', 'x.sql', 'secrets', 'secrets.yml'];
+    const no = ['env.sample', 'environment', 'README.md', 'out.o', 'id_helper.ts',
+      'index.js', 'package-lock.json', 'notes.txt'];
+    const ask = (names: string[]): string[] => h.sh(
+      `for n in ${names.map((n) => `'${n}'`).join(' ')}; do `
+      + `m=no; _ws_sensitive_match "$n" && m=yes; `
+      + `f=no; [[ -n "$(find "$HOME/matchdir" -mindepth 1 -name "$n" \\( "\${_WS_SENSITIVE_FIND[@]}" \\) -print -quit)" ]] && f=yes; `
+      + `echo "$n $m $f"; done`,
+    ).split('\n');
+    fs.mkdirSync(path.join(h.home, 'matchdir'), { recursive: true });
+    for (const n of [...yes, ...no]) fs.writeFileSync(path.join(h.home, 'matchdir', n), 'x');
+    for (const line of ask([...yes, ...no])) {
+      const [name, byCase, byFind] = line.split(' ').slice(-3);
+      expect(byFind, `find and _ws_sensitive_match disagree about ${name}`).toBe(byCase);
+    }
+    for (const line of ask(yes)) expect(line, `${line} must be secret-shaped`).toMatch(/ yes yes$/);
+    for (const line of ask(no)) expect(line, `${line} must NOT be secret-shaped`).toMatch(/ no no$/);
+  });
 });
 
 describe('destruction order', () => {
