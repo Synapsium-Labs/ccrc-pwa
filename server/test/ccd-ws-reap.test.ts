@@ -570,6 +570,46 @@ describe('destruction order', () => {
     expect(h.git(main, 'cat-file', '-t', tip)).toBe('commit');
   }, 30000);
 
+  it('pins the tip even past the 200-ref cap, because the CAP is on the reflog', () => {
+    // `{ reflog; printf tip; } | sort -u | head -200` applies the cap to the
+    // UNION, so the tip is just another line in hex-sort order and drops out
+    // whenever 200 distinct shas sort before it. Measured end to end on a
+    // workspace with 231 commits: 237 distinct reflog shas, the tip at rank 201,
+    // `tip pinned in attic? 0`. That is the one commit a squash merge leaves
+    // outside main — the whole reason the attic exists — and once
+    // `origin/<branch>` is auto-deleted on merge and the next `fetch --prune`
+    // runs it is dangling, with the two-week fuse §5.5(a) exists to remove. The
+    // cap belongs to the reflog; the tip is appended after it.
+    //
+    // The reflog is STUBBED rather than grown to 300 real commits, because the
+    // fixture has to be deterministic: whether a real tip sorts inside the first
+    // 200 of 205 is a ~2% coin toss, and a test that pins a cap only sometimes
+    // pins nothing. Every fake sorts strictly before the tip by construction
+    // (same prefix, one hex digit lower at the first non-zero position), and
+    // none of them resolves, so `cat-file -e` drops all 300 and what is left in
+    // the attic is exactly the fact under test.
+    const { main, tip } = ready();
+    const tok = tokenOf();
+    const HEX = '0123456789abcdef';
+    const i = [...tip].findIndex((c) => c !== '0');
+    const lower = tip.slice(0, i) + HEX[HEX.indexOf(tip[i]!) - 1];
+    const fakes = Array.from({ length: 300 },
+      (_v, n) => (lower + n.toString(16).padStart(40 - lower.length, '0')));
+    expect(new Set(fakes).size, 'the fakes must be distinct').toBe(300);
+    for (const f of fakes) expect(f < tip, `${f} must sort before the tip`).toBe(true);
+    fs.writeFileSync(path.join(h.home, 'fakereflog'), `${fakes.join('\n')}\n`);
+    const BIGLOG = `git() { [[ "$*" == *"--format=%H" ]] && { cat "$HOME/fakereflog"; return 0; }; command git "$@"; };`;
+    const r = h.run(`${GH_STUB} ${ARCH} ${BIGLOG} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
+    expect(t.attic, 'the tip is pinned however many refs sorted in front of it')
+      .toEqual([`refs/ccrc/attic/demo-quiet-basin/${tip}`]);
+    expect(out.attic).toBe(1);
+    expect(h.git(main, 'cat-file', '-t', tip)).toBe('commit');
+  }, 30000);
+
   it('records in the tombstone the ignored manifest it destroyed, field for field', () => {
     // `git worktree remove` deletes the gitignored content too, so this array is
     // the ONLY record of what went with it — and until this fixture existed the

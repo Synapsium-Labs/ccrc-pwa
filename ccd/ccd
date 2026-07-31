@@ -2465,7 +2465,8 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
   # the tip. ~50 bytes each, no new objects, and the commits become REFERENCED
   # rather than dangling — so gc.pruneExpire can never reach them.
   #
-  # THREE MUTATION SURVIVORS, disclosed and each measured:
+  # TWO MUTATION SURVIVORS, disclosed and each measured (the `head -200` that
+  # used to be a third is now half of the pinned ORDER below):
   #   - `git cat-file -e "${sha}^{commit}" || continue` is removable with the
   #     suite green: `update-ref` refuses a value it cannot resolve, so a
   #     nonexistent object creates no ref and increments nothing either way.
@@ -2479,22 +2480,38 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
   #     read errors into /dev/null and the tip still comes through. It stays so
   #     the helper is safe to call from anywhere, which is how the resume path
   #     would want to call it if it ever did.
-  #   - `| head -200` is a CAP, and pinning a cap costs a fixture with 200
-  #     distinct reflog shas in it. Its only job is to bound how many refs one
-  #     reap can write; it is disclosed rather than paid for.
+  #
+  # THE CAP IS ON THE REFLOG, AND THE TIP IS APPENDED AFTER IT. It used to be
+  # applied to `{ reflog; tip } | sort -u`, i.e. to the UNION, which made the tip
+  # just another line in hex-sort order — measured end to end on a workspace
+  # with 231 commits: 237 distinct reflog shas, the tip at rank 201 of them,
+  # `tip pinned in attic? 0`, 200 refs written and not one of them the branch's
+  # own commit. That commit is the ONE a squash merge leaves outside main, so it
+  # is precisely the commit the attic exists for; after `origin/<branch>` is
+  # auto-deleted on merge and the next `fetch --prune` runs, it is dangling with
+  # the two-week fuse §5.5(a) exists to remove. Spec §5.5(a) reads "deduped,
+  # capped at 200, PLUS `tip`", and now so does this: `sort -u | head -200` over
+  # the reflog, then the tip, then a second `sort -u` — which dedupes rather
+  # than caps, so a tip already among the 200 is not pinned twice and does not
+  # inflate the count the sheet prints. At most 201 refs.
+  #
   # What IS pinned, by `pins the tip when the reflog cannot be read, and makes
   # no ref from a non-sha`: the shape check (without it `refs/heads/main` is a
-  # string `update-ref` resolves, and the attic grows a ref made out of a NAME),
-  # the unconditional tip append, and — by `pins the amended-away commit` —
-  # `sort -u`, because `%H` prints one line per reflog ENTRY and the count that
-  # reaches the sheet has to be the number of refs that exist.
+  # string `update-ref` resolves, and the attic grows a ref made out of a NAME)
+  # and the unconditional tip append; by `pins the tip even past the 200-ref
+  # cap`: the ORDER of the cap and the append; and by `pins the amended-away
+  # commit` the first `sort -u`, because `%H` prints one line per reflog ENTRY
+  # and the count that reaches the sheet has to be the number of refs that
+  # exist. The cap's own MAGNITUDE — 200 rather than 20 — remains unpinned:
+  # bounding it costs a fixture with 200 resolvable commits in it, and the
+  # fixture above pins where the cap is applied without paying for how big it is.
   local main="$1" id="$2" workdir="$3" tip="$4" sha n=0
   while read -r sha; do
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
     git -C "$main" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
     git -C "$main" update-ref "refs/ccrc/attic/$id/$sha" "$sha" 2>/dev/null && n=$(( n + 1 ))
-  done < <( { [[ -d "$workdir" ]] && git -C "$workdir" reflog show --all --format=%H 2>/dev/null; \
-              printf '%s\n' "$tip"; } | sort -u | head -200 )
+  done < <( { [[ -d "$workdir" ]] && git -C "$workdir" reflog show --all --format=%H 2>/dev/null | sort -u | head -200; \
+              printf '%s\n' "$tip"; } | sort -u )
   echo "$n"
 }
 
