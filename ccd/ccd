@@ -1988,11 +1988,30 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # digest forgery in the `stashCount` field: a deletion authorised over stashes
   # nobody counted.
   #
-  # What CAN see it is the ref. Measured across push/pop/drop/clear on git 2.43:
-  # `refs/stash` exists if and only if at least one entry exists — git creates
-  # it on the first push and deletes it when the last entry goes. So if the ref
-  # resolves and `git stash list` still prints NOTHING, the reflog was not read,
-  # whatever the command returned.
+  # What CAN see it is the ref, and the invariant is ONE-WAY — not the
+  # biconditional this comment used to claim. Measured across push/pop/drop/clear
+  # on git 2.43, one half IS a law git keeps: at least one entry ⇒ `refs/stash`
+  # resolves, because git creates the ref on the first push and deletes it when
+  # the last entry goes. The CONVERSE is not, and the converse is what this guard
+  # rests on: `git reflog expire --all --expire=now --expire-unreachable=now` — a
+  # documented maintenance command that does not mention refs/stash — empties the
+  # stash reflog and LEAVES THE REF, so it resolves (rc 0) beside a `git stash
+  # list` that returns rc 0 and zero entries. Measured on git 2.43.
+  # (`git gc --prune=now` does not reach it, nor does gc with
+  # `gc.reflogExpire=now` — git protects refs/stash from gc by default, measured
+  # too. The trigger is narrow. It is not impossible.)
+  #
+  # So the guard has a FALSE-POSITIVE STATE and it is DISCLOSED rather than
+  # engineered away: from here the two are indistinguishable, and the only safe
+  # reading of "I cannot tell" is to refuse. What that costs is said out loud —
+  # a repository in that state answers `stash-unreadable` PERMANENTLY, for every
+  # workspace in it, with no override, and since this runs before the `exists`
+  # branch it blocks the `reap-interrupted` resume path too. Which is why the
+  # REMEDY travels in the refusal detail rather than in this comment: the
+  # operator the message reaches is the only one who can act, and neither
+  # 'git stash clear' nor 'git update-ref -d refs/stash' is something they will
+  # guess. Both measured against the reflog-expire fixture, in the test that
+  # names it.
   #
   # What the guard must NOT do is read "refs/stash exists" as "this branch has
   # stashes". A stash on another branch is a legitimate, reapable state (also
@@ -2004,7 +2023,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   if git -C "$main" rev-parse --verify --quiet refs/stash >/dev/null 2>&1; then
     stashall=$(git -C "$main" stash list 2>/dev/null | grep -c .)
     (( stashall > 0 )) \
-      || { _reap_refuse stash-unreadable "refs/stash resolves in $main but the stash list read back empty"; return 1; }
+      || { _reap_refuse stash-unreadable "refs/stash resolves in $main but the stash list read back empty — either its reflog cannot be read, or maintenance ('git reflog expire --all') emptied it and left the ref: if this repository truly holds no stashes, 'git stash clear' (or 'git update-ref -d refs/stash') clears the stale ref"; return 1; }
   fi
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \

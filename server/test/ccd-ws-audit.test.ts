@@ -760,15 +760,67 @@ describe('local-loss refusals', () => {
     expect(h.sh(`git -C "${main}" stash list 2>&1; echo "rc=$?"`)).toBe('rc=0');
     expect(refusal(wt).verdict).toBe('stash-unreadable');
 
-    // THE INVARIANT the guard turns on, measured rather than assumed:
-    // `refs/stash` exists if and only if at least one entry does — git creates
-    // the ref on the first push and deletes it when the last entry goes,
-    // whether by pop, drop or clear.
+    // THE HALF OF THE INVARIANT THAT IS A LAW, measured rather than assumed:
+    // at least one entry ⇒ `refs/stash` resolves — git creates the ref on the
+    // first push and deletes it when the last entry goes, whether by pop, drop
+    // or clear. The CONVERSE is what this guard actually rests on and it is NOT
+    // a law git keeps; the next `it` names the state that breaks it.
     expect(h.sh(`git -C "${main}" rev-parse --verify --quiet refs/stash >/dev/null; echo "rc=$?"`))
       .toBe('rc=0');
     h.sh(`git -C "${main}" stash clear`);
     expect(h.sh(`git -C "${main}" rev-parse --verify --quiet refs/stash >/dev/null; echo "rc=$?"`))
       .toBe('rc=1');
+    expect(audit().verdict).toBe('reapable');
+  });
+
+  it('carries its own remedy when maintenance leaves refs/stash behind', () => {
+    // The guard's false-positive state, named rather than hidden.
+    // `git reflog expire --all --expire=now --expire-unreachable=now` is a
+    // DOCUMENTED maintenance command that does not mention refs/stash, and
+    // measured on git 2.43 it empties the stash reflog and LEAVES THE REF: the
+    // ref resolves (rc 0) beside a `git stash list` that returns rc 0 with zero
+    // entries — bit for bit the shape the guard reads as "the reflog was not
+    // read". So `stash-unreadable` fires for a repository that honestly has no
+    // stashes, and it fires PERMANENTLY, for every workspace in that repository,
+    // with no override, and — running before the `exists` branch — it blocks the
+    // `reap-interrupted` resume path too. (`git gc --prune=now` does NOT reach
+    // it, nor does gc with `gc.reflogExpire=now`: git protects refs/stash from
+    // gc by default. Measured. The trigger is narrow, but it is real.)
+    //
+    // It fails SAFE — a refusal, never a token — so the guard stays and the
+    // false positive is disclosed instead of engineered away, because from
+    // here the two states are indistinguishable and "I cannot tell" may only
+    // refuse. What that makes load-bearing is the REMEDY: the operator this
+    // message reaches is the only one who can act on it, so it travels in the
+    // refusal rather than in a comment nobody in that position will read.
+    const { wt, main } = squashMovedBase();
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'wip\n');
+    h.sh(`cd "${wt}" && git stash push -q -m wip`);
+    h.sh(`git -C "${main}" reflog expire --all --expire=now --expire-unreachable=now`);
+    // The state itself, measured here rather than asserted from memory: if a
+    // future git stops leaving the ref, this whole `it` is moot.
+    expect(h.sh(`git -C "${main}" rev-parse --verify --quiet refs/stash >/dev/null; echo "rc=$?"`),
+      'the ref must OUTLIVE the reflog for this to be the state under test').toBe('rc=0');
+    expect(h.sh(`git -C "${main}" stash list | grep -c . || true`),
+      'and the list must read back empty').toBe('0');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('stash-unreadable');
+    expect(a.detail, 'a permanent refusal with no override must name its way out')
+      .toContain('git stash clear');
+    expect(a.detail).toContain('git update-ref -d refs/stash');
+    // And the named remedy WORKS on the state it is named for — otherwise the
+    // detail is advice nobody measured. Both are asserted; `stash clear` runs
+    // last so the workspace is left reapable.
+    h.sh(`git -C "${main}" update-ref -d refs/stash`);
+    expect(audit().verdict).toBe('reapable');
+    // The tree is clean again after that first stash, so it has to be dirtied
+    // before it can hold a second one — `git stash push` on a clean tree makes
+    // no entry and no ref, and the fixture would rebuild nothing.
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'wip again\n');
+    h.sh(`cd "${wt}" && git stash push -q -m wip2`);
+    h.sh(`git -C "${main}" reflog expire --all --expire=now --expire-unreachable=now`);
+    expect(refusal(wt).verdict).toBe('stash-unreadable');
+    h.sh(`git -C "${main}" stash clear`);
     expect(audit().verdict).toBe('reapable');
   });
 
