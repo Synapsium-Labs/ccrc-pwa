@@ -13,8 +13,15 @@ const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _alive() { return 1; };`;
 
 /** The same genuine squash-with-a-moved-base fixture the audit tests use, so
- *  the reap path is exercised against the case it exists for. */
-function ready(): { main: string; wt: string; tip: string } {
+ *  the reap path is exercised against the case it exists for.
+ *
+ *  `ignore` writes a `.gitignore` INTO THE MERGED WORK — into the branch's
+ *  commits AND into main's squash of them, exactly as `squashMovedBase` does in
+ *  `ccd-ws-audit.test.ts`, and for the reason recorded there: committing it to
+ *  the branch AFTER the squash landed adds a commit that is genuinely not in
+ *  the merge, so the ladder refuses `tree-differs` and the test becomes about a
+ *  refusal instead of about what it says it is about. */
+function ready(ignore: string[] = []): { main: string; wt: string; tip: string } {
   const main = h.makeGhRepo('demo');
   h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
   const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
@@ -22,10 +29,15 @@ function ready(): { main: string; wt: string; tip: string } {
     fs.writeFileSync(path.join(wt, `f${n}.txt`), `work ${n}\n`);
     h.git(wt, 'add', `f${n}.txt`); h.git(wt, 'commit', '-m', `work ${n}`);
   }
+  if (ignore.length) {
+    fs.writeFileSync(path.join(wt, '.gitignore'), `${ignore.join('\n')}\n`);
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore');
+  }
   const tip = h.git(wt, 'rev-parse', 'HEAD');
   fs.writeFileSync(path.join(main, 'other.txt'), 'someone else\n');
   h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'unrelated');
   for (const n of ['1', '2', '3']) fs.writeFileSync(path.join(main, `f${n}.txt`), `work ${n}\n`);
+  if (ignore.length) fs.writeFileSync(path.join(main, '.gitignore'), `${ignore.join('\n')}\n`);
   h.git(main, 'add', '-A'); h.git(main, 'commit', '-m', 'squash (#42)');
   const merge = h.git(main, 'rev-parse', 'HEAD');
   h.git(main, 'push', 'origin', 'main');
@@ -153,13 +165,25 @@ describe('refusals are answers', () => {
     // All three assertions live in `refused`; this test is what pins them to a
     // refusal whose verdict is deliberately not named — any refusal will do.
     expect(refused(tok, wt, main).refused).toBeTruthy();
+    // And the lock goes back. A refusal keeps the workspace, so a lock left
+    // behind here is not litter — it is `in-progress`, for ever, to every later
+    // attempt, with no reap running and nothing to kill. The EXIT trap is what
+    // returns it, and this is the only path on which anyone is left to care.
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock')),
+      'the EXIT trap must release the lock a refusal took').toBe(false);
   }, 30000);
 
   it('declines a concurrent invocation with in-progress', () => {
     const { wt, main } = ready();
     const tok = tokenOf();
-    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock'));
+    const lock = path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock');
+    fs.mkdirSync(lock);
     expect(refused(tok, wt, main).refused).toBe('in-progress');
+    // AND IT DOES NOT TAKE THE LOCK WITH IT. The trap is armed only after the
+    // mkdir succeeds, deliberately: arm it first and the loser of the race
+    // rmdir's the WINNER's lock on its way out, and the next tap walks in
+    // beside a reap that is mid-`git worktree remove`.
+    expect(fs.existsSync(lock), 'a declined reap must not release the lock it never took').toBe(true);
   }, 30000);
 
   it('refuses rather than writing a tombstone it cannot quote', () => {
@@ -193,6 +217,32 @@ describe('refusals are answers', () => {
     // Before the lock, too — a die that left the lock behind would answer
     // `in-progress` to every later attempt, with no reap running.
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock'))).toBe(false);
+  }, 30000);
+
+  it('names the sensitive paths on the EVALUATED path too, not only on resume', () => {
+    // `_reap_paths_json` says it is "shared by BOTH refusal sites … so the two
+    // cannot describe the same finding differently", and until this fixture
+    // existed only the resume site had one. Delete the `paths=` line on this
+    // side and every other test stays green while the sheet loses the one thing
+    // that makes `sensitive-ignored` actionable: the name of the file to move.
+    //
+    // No `tokenOf()`: `sensitive-ignored` is Phase B, which runs before Phase C
+    // and long before the token is compared, so any 64-hex string reaches it —
+    // and an audit would refuse to issue one for this state anyway.
+    // TWO of them, because one pins no separator: `[".env"]` is what a missing
+    // comma still produces, and `[".env""id_rsa"]` — the shape a human's list of
+    // files to rescue takes without it — is not JSON at all.
+    const { wt, main } = ready();
+    fs.appendFileSync(path.join(wt, '.gitignore'), '.env\nid_rsa\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore env');
+    fs.writeFileSync(path.join(wt, '.env'), 'SECRET_API_KEY=1\n');
+    fs.writeFileSync(path.join(wt, 'id_rsa'), 'PRIVATE KEY\n');
+    const o = refused('0'.repeat(64), wt, main);
+    expect(o.refused).toBe('sensitive-ignored');
+    expect([...o.paths].sort()).toEqual(['.env', 'id_rsa']);
+    expect(o.detail).toContain('.env');
+    expect(fs.readFileSync(path.join(wt, '.env'), 'utf8')).toBe('SECRET_API_KEY=1\n');
+    expect(fs.readFileSync(path.join(wt, 'id_rsa'), 'utf8')).toBe('PRIVATE KEY\n');
   }, 30000);
 });
 
@@ -229,6 +279,56 @@ describe('destruction order', () => {
     // that has forgotten the thing it exists to remember.
     const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
     expect(t.attic).toContain(`refs/ccrc/attic/demo-quiet-basin/${orphan}`);
+    // The number it REPORTS is the number it PINNED. `%H` prints one line per
+    // reflog ENTRY, not per commit — this fixture's own reflog repeats five
+    // shas thirteen times — so without the `sort -u` the count is entry-shaped
+    // while the refs are commit-shaped, and the sheet says "17 commits kept"
+    // over eight.
+    expect(out.attic).toBe(t.attic.length);
+  }, 30000);
+
+  it('pins the tip when the reflog cannot be read, and makes no ref from a non-sha', () => {
+    // Two lines of `_ws_attic_pin` in one fixture, both of them about what
+    // happens when the reflog is not the well-behaved list of shas it normally
+    // is. The tip is appended UNCONDITIONALLY, so a reflog that answers nothing
+    // usable still leaves the branch's own commit pinned before the ref is
+    // deleted — that commit is the only one deletion can strand. And every
+    // candidate is shape-checked first, because the next two statements put it
+    // into a git argv and then into a REF NAME: `refs/heads/main` is a string
+    // `update-ref` resolves quite happily, so without the check the attic grows
+    // `refs/ccrc/attic/<id>/refs/heads/main` — a ref made out of a name.
+    //
+    // The suffix match is exact: `$*` ends with `--format=%H` for the attic's
+    // read and with `%gs` for the tombstone's, so only one of the two is failed.
+    const { main, tip } = ready();
+    const tok = tokenOf();
+    const BADLOG = `git() { [[ "$*" == *"--format=%H" ]] && { printf '%s\\n' refs/heads/main not-a-sha; return 0; }; command git "$@"; };`;
+    const r = h.run(`${GH_STUB} ${ARCH} ${BADLOG} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.attic).toBe(1);
+    const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
+    expect(t.attic).toEqual([`refs/ccrc/attic/demo-quiet-basin/${tip}`]);
+    expect(h.git(main, 'cat-file', '-t', tip)).toBe('commit');
+  }, 30000);
+
+  it('records in the tombstone the ignored manifest it destroyed, field for field', () => {
+    // `git worktree remove` deletes the gitignored content too, so this array is
+    // the ONLY record of what went with it — and until this fixture existed the
+    // whole loop that builds it was unreached, because every other fixture here
+    // has an empty ignored set. The record is `sensitive\tbytes\tpath` and the
+    // path goes LAST precisely because `-z` leaves a TAB in a filename intact:
+    // read the other way round this entry becomes `"path":"0"` with the
+    // filename in the `sensitive` field, which is the deviation-18 defect
+    // wearing the tombstone's clothes rather than the audit's.
+    const { wt } = ready(['*.log']);
+    fs.writeFileSync(path.join(wt, 'a\tb.log'), 'x'.repeat(64));
+    const tok = tokenOf();
+    const out = JSON.parse(reap(tok).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
+    expect(t.ignored).toEqual([{ path: 'a\tb.log', bytes: 64, sensitive: false }]);
   }, 30000);
 
   it('writes the tombstone outside the registry glob it later removes', () => {
@@ -258,6 +358,13 @@ describe('destruction order', () => {
   it('removes the worktree, CAS-deletes the branch, and clears the registry LAST', () => {
     const { wt, main } = ready();
     const tok = tokenOf();
+    // COUNTED, not `toContain`. `cmd_ws_archive` (ccd:1064) kills the same pane
+    // with the same argv, and `ready()` runs it — so the line is already in the
+    // log before the reap starts and a `toContain` passes with (e) deleted.
+    // Measured: the mutation sweep reported that assertion's mutant SURVIVED,
+    // which is what an assertion that cannot fail looks like from outside.
+    const KILL = 'tmux kill-session -t cc-demo-quiet-basin';
+    const killsBefore = h.calls().filter((l) => l === KILL).length;
     const out = JSON.parse(reap(tok).stdout);
     expect(out.reaped).toBe('demo-quiet-basin');
     expect(out.proof).toBe('patch-id');
@@ -266,6 +373,103 @@ describe('destruction order', () => {
     expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'reaping')).toBeNull();
     expect(h.calls()).toContain('unsupervise demo-quiet-basin');
+    // (e), which is not (d): the unit and the pane are two different things to
+    // stop, and leaving the pane alive holds the deleted directory open as some
+    // shell's cwd.
+    expect(h.calls().filter((l) => l === KILL).length,
+      'the reap kills the pane itself — the archive having killed one earlier proves nothing')
+      .toBe(killsBefore + 1);
+    // `null`, never `""`: this is the field Task 17's sheet branches on to tell
+    // "we finished the job" from "we finished a job someone else started", and
+    // an empty string is truthy nowhere and present everywhere.
+    expect(out.resumed).toBeNull();
+  }, 30000);
+
+  it('journals before it destroys — a kill at (d) leaves a resumable workspace', () => {
+    // THE ORDERING, executable. The attic (a) and the tombstone (b) are written
+    // BEFORE the breadcrumb (c), and the breadcrumb before `_ws_unsupervise`
+    // (d) — so the process is killed here, inside the (c)–(d) window, and every
+    // artifact the recovery needs must already be on disk while nothing has yet
+    // been destroyed. Reverse (b) and (c) and this is the state where the
+    // workspace is marked half-reaped with no tombstone to resume from: the
+    // `branch-moved` refusal for ever, which is the wedge §5.6 exists to end.
+    //
+    // `exit 9` from a stubbed ccd function is the only faithful stand-in for the
+    // SIGTERM the outer timeout sends — and it exercises the EXIT trap on the
+    // way out, which is what lets the second run take the lock at all.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const KILL = ARCH.replace('_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };',
+      '_ws_unsupervise() { exit 9; };');
+    expect(KILL).not.toBe(ARCH);   // a .replace() that matched nothing is a silent no-op
+    const r = h.run(`${GH_STUB} ${KILL} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, 'the fixture must really have died mid-tail').toBe(9);
+    expect(fs.existsSync(wt), 'nothing is destroyed before (d)').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    const tomb = path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json');
+    expect(fs.existsSync(tomb), '(b) is on disk before (c)').toBe(true);
+    expect(JSON.parse(fs.readFileSync(tomb, 'utf8')).tip)
+      .toBe(h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'));
+    expect(h.reg('demo-quiet-basin', 'reaping'), '(c) is on disk before (d)').toBe('worktree');
+    expect(h.sh('cmd_ws_attic --session demo-quiet-basin'), '(a) is on disk before both').not.toBe('');
+    // And the journal is what makes it finishable: the very next invocation
+    // resumes rather than refusing, with the lock free because the trap ran.
+    const out = JSON.parse(reap(tok).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.resumed).toBe('worktree');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+    // The resumed run counts the attic it INHERITED rather than reporting zero:
+    // the refs the killed run pinned are what the sheet has to name, and the
+    // resume is the run the human is looking at.
+    expect(out.attic).toBeGreaterThan(0);
+  }, 30000);
+
+  it('advances the journal to clips BEFORE it removes them', () => {
+    // The last breadcrumb, and the only window with no function boundary to
+    // interrupt at — so `rm` itself is the clock. `-rf` is the discriminator
+    // and it is the whole reason this stub works: the reap runs `rm -f` several
+    // times before it gets here (`_ws_collect_ignored`'s two scratch files,
+    // Phase B's stderr capture), and a blanket `rm() { exit 7; }` dies inside
+    // the AUDIT half with nothing journalled at all — measured, `reaping` read
+    // null and the test failed for a reason that had nothing to do with clips.
+    // `rm -rf` appears exactly once in the file, at (h).
+    //
+    // A resume reading `clips` and one reading `branch` take the same path
+    // through the tail, so this value is diagnostic rather than a branch
+    // condition — which is precisely why nothing else can see it, and why it
+    // would otherwise be a line that could be deleted with the suite green.
+    const { main } = ready();
+    fs.mkdirSync(path.join(h.home, '.cc-clips', 'demo-quiet-basin'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-clips', 'demo-quiet-basin', 'a.png'), 'x');
+    const tok = tokenOf();
+    const r = h.run(`${GH_STUB} ${ARCH} rm() { [[ "$1" == -rf ]] && exit 7; command rm "$@"; }; `
+      + `cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, 'the fixture must really have died at the rm').toBe(7);
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('clips');
+    // (g) is already done by then — the journal never runs ahead of the work.
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+  }, 30000);
+
+  it('stops on a worktree removal it could not do, and keeps the registry', () => {
+    // The one failure in the destructive sequence that is not a race: git
+    // refuses, or the directory is held open. Losing the registry here would
+    // leave a live worktree nothing in ccrc can name — so the rule is STOP, and
+    // the session is already stopped, so `ws-restore` is the way back. The
+    // breadcrumb stays at `worktree` because that is exactly where it stopped.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const NOWT = `git() { [[ "$*" == *"worktree remove"* ]] && { echo "fatal: nope" >&2; return 1; }; command git "$@"; };`;
+    const r = h.run(`${GH_STUB} ${ARCH} ${NOWT} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('worktree-remove-failed');
+    expect(o.detail).toContain('nope');       // git's own words, not ccd's guess
+    expect(o.reaped).toBeUndefined();
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
   }, 30000);
 
   it('refuses when the branch moved under the CAS, and never orphans it', () => {
@@ -316,6 +520,11 @@ describe('destruction order', () => {
     ready();
     fs.mkdirSync(clips, { recursive: true });
     fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(2048));
+    // A directory beside the file, so `[[ -f "$f" ]]` has something to reject:
+    // without it a subdirectory joins the manifest as a clip whose "size" is
+    // the inode's, and `toEqual` is what makes that a failure rather than an
+    // extra entry nobody looks at.
+    fs.mkdirSync(path.join(clips, 'thumbs'));
     const tok = tokenOf();
     const out = JSON.parse(reap(tok).stdout);
     const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
@@ -369,6 +578,8 @@ describe('partial failure and resume', () => {
       JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
         tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
     h.git(main, 'worktree', 'remove', wt);
+    const tomb = path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json');
+    const journal = fs.readFileSync(tomb, 'utf8');
     const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
     expect(r.code).toBe(0);
     const out = JSON.parse(r.stdout);
@@ -376,6 +587,12 @@ describe('partial failure and resume', () => {
     expect(out.resumed).toBe('worktree');
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
     expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
+    // AND THE JOURNAL IS NOT REWRITTEN. A resume that re-ran (a) and (b) would
+    // overwrite the tombstone from a world where the worktree is already gone:
+    // the ignored manifest of what was destroyed, the proof rung, the PR — all
+    // replaced by the empty values readable now. That document is the only
+    // thing left that describes the deletion, so it is written once.
+    expect(fs.readFileSync(tomb, 'utf8')).toBe(journal);
   }, 30000);
 
   it('re-proves Phase B on resume when the worktree is STILL THERE — dirty', () => {
@@ -447,6 +664,57 @@ describe('partial failure and resume', () => {
     expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
   }, 30000);
 
+  it('re-proves Phase B on resume — the DIRTY read is checked too, not just the ignored one', () => {
+    // The block's comment claims "both reads checked"; the fixture above fails
+    // only the ignored one, so this is the other half. An unreadable
+    // `status --porcelain` counts zero lines, and zero lines is exactly what a
+    // clean tree looks like — the same shape as the archive manifest's
+    // deviation-6 defect, on the path that has no token to fall back on.
+    // `--ignored` is excluded from the stub so the failure is unambiguous.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
+    const NOSTATUS = `git() { [[ "$*" == *"status --porcelain"* && "$*" != *"--ignored"* ]] && return 128; command git "$@"; };`;
+    const r = h.run(`${GH_STUB} ${ARCH} ${NOSTATUS} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('tree-unreadable');
+    expect(o.detail).toContain('the tree at');   // not the ignored-set sentence
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+  }, 30000);
+
+  it('re-proves Phase D1 on resume — a status it cannot read is not reaped either', () => {
+    // `_ws_status` fails closed on a NON-ZERO exit as well as on an
+    // unrecognised word, and the resume path has to honour both: a pane whose
+    // pid cannot be read is a session that may well be mid-turn. Without the
+    // `|| { status-unknown … }` arm the failure falls through as an empty
+    // string, which is not `busy`, and the worktree goes.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
+    // Alive, with a pane, whose pid does not read back — `_ws_status` returns 1.
+    const NOPID = ARCH
+      .replace('_alive() { return 1; };', '_alive() { return 0; };')
+      .replace('tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };',
+               'tmux() { case "$1" in list-panes) : ;; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; };');
+    expect(NOPID.includes('list-panes')).toBe(true);   // both replaces really matched
+    expect(NOPID.includes('_alive() { return 0; };')).toBe(true);
+    const r = h.run(`${GH_STUB} ${NOPID} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).refused).toBe('status-unknown');
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+  }, 30000);
+
   it('re-proves Phase D1 on resume — a session still running is not reaped', () => {
     // The crash window between (c) and (d): the breadcrumb exists, the session
     // was never stopped. Phase B passes (clean, pushed) and would let it through.
@@ -469,6 +737,63 @@ describe('partial failure and resume', () => {
     expect(JSON.parse(r.stdout).refused).toBe('session-busy');
     expect(fs.existsSync(wt)).toBe(true);
     expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+  }, 30000);
+
+  it('refuses a breadcrumb with no tombstone behind it', () => {
+    // The half-state a hand-edited registry or a lost filesystem write leaves:
+    // `reaping` says a removal started, and the document that says WHAT it was
+    // removing is not there. `tombtip` reads empty, and empty is not a tip — it
+    // is the absence of the only proof this path has, since Phase C is
+    // deliberately not re-run here. With the branch also gone the two empties
+    // COMPARE EQUAL, so without the `-z` conjunct the run walks past its own
+    // proof and reports a reap for a workspace it never established anything
+    // about, clearing the registry on the way.
+    const { wt, main, tip } = ready();
+    const tok = tokenOf();
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    h.git(main, 'worktree', 'remove', wt);
+    h.git(main, 'update-ref', '-d', 'refs/heads/ws/quiet-basin', tip);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json')))
+      .toBe(false);
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('branch-moved');
+    expect(o.reaped).toBeUndefined();
+    expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+  }, 30000);
+
+  it('resumes against the tombstone tip, so the CAS is still a CAS', () => {
+    // `REAP_TIP="$tombtip"` is the line that makes the resume's delete a
+    // compare-and-swap at all, and it is invisible until the branch moves
+    // between the tombstone check and the delete. Measured on git 2.43:
+    // `update-ref -d <ref> ""` deletes UNCONDITIONALLY at exit 0 — an empty
+    // old-value reads as "no old value given", exactly like the all-zeros name
+    // — so with that assignment gone the resume stops proving anything and
+    // removes whatever the ref points at now.
+    //
+    // The branch is moved from a stub of `_ws_gc_bytes`, which `_ws_reap_tail`
+    // calls first: the stub is a CLOCK, standing in for another box pushing in
+    // the window, and nothing here is a claim about that function. The
+    // replacement commit carries the same tree for the reason the evaluated-path
+    // CAS test gives.
+    const { wt, main, tip } = ready();
+    const tok = tokenOf();
+    const moved = h.git(main, 'commit-tree', `${tip}^{tree}`, '-p', tip, '-m', 'someone else pushed');
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin', tip }));
+    h.git(main, 'worktree', 'remove', wt);
+    const MOVE = `_ws_gc_bytes() { git -C "${main}" update-ref refs/heads/ws/quiet-basin ${moved} ${tip}; echo 0; };`;
+    const r = h.run(`${GH_STUB} ${ARCH} ${MOVE} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('branch-moved');
+    expect(o.reaped).toBeUndefined();
+    expect(h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin')).toBe(moved);
+    expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
   }, 30000);
 
   it('stops and keeps the registry when the branch moved under the CAS', () => {

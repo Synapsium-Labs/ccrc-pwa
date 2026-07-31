@@ -2316,6 +2316,30 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
   # Every distinct sha in the worktree's HEAD reflog, deduped and capped, plus
   # the tip. ~50 bytes each, no new objects, and the commits become REFERENCED
   # rather than dangling — so gc.pruneExpire can never reach them.
+  #
+  # THREE MUTATION SURVIVORS, disclosed and each measured:
+  #   - `git cat-file -e "${sha}^{commit}" || continue` is removable with the
+  #     suite green: `update-ref` refuses a value it cannot resolve, so a
+  #     nonexistent object creates no ref and increments nothing either way.
+  #     It stays for the `^{commit}` PEEL rather than for the existence test —
+  #     `update-ref` will happily point a ref outside refs/heads at a blob or a
+  #     tree, and the attic is a record of COMMITS. No reflog can produce one,
+  #     which is why no fixture can pin it.
+  #   - `[[ -d "$workdir" ]] &&` is removable for the same reason: this helper
+  #     is called only from the tail's `[[ -z "$resumed" ]]` arm, where Phase A
+  #     has already proved the directory is $main's worktree. With it gone the
+  #     read errors into /dev/null and the tip still comes through. It stays so
+  #     the helper is safe to call from anywhere, which is how the resume path
+  #     would want to call it if it ever did.
+  #   - `| head -200` is a CAP, and pinning a cap costs a fixture with 200
+  #     distinct reflog shas in it. Its only job is to bound how many refs one
+  #     reap can write; it is disclosed rather than paid for.
+  # What IS pinned, by `pins the tip when the reflog cannot be read, and makes
+  # no ref from a non-sha`: the shape check (without it `refs/heads/main` is a
+  # string `update-ref` resolves, and the attic grows a ref made out of a NAME),
+  # the unconditional tip append, and — by `pins the amended-away commit` —
+  # `sort -u`, because `%H` prints one line per reflog ENTRY and the count that
+  # reaches the sheet has to be the number of refs that exist.
   local main="$1" id="$2" workdir="$3" tip="$4" sha n=0
   while read -r sha; do
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
@@ -2327,6 +2351,15 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
 }
 
 _ws_clip_manifest() {   # id -> JSON array of {name,bytes}; also echoes the dir
+  # TWO MUTATION SURVIVORS, disclosed. `[[ -d "$dir" ]] || { echo "[]"; … }` is
+  # removable with the suite green because an unmatched glob stays literal, the
+  # `-f` test rejects it, and the loop falls through to the same `[]` — it stays
+  # as the early return that makes the empty answer a DECISION rather than an
+  # accident of globbing. `|| echo 0` on the size fires only if the file
+  # disappears between the glob and the stat, which no fixture can arrange; it
+  # stays because the alternative is `"bytes":`, a document that does not parse,
+  # in the record that outlives the workspace. The `-f` test itself IS pinned
+  # (`records clip FILENAMES and sizes` puts a directory beside the file).
   local id="$1" dir="$HOME/.cc-clips/$id" f out="[" first=1
   [[ -d "$dir" ]] || { echo "[]"; return 0; }
   for f in "$dir"/*; do
@@ -2339,7 +2372,15 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}; also echoes the dir
 
 _reap_paths_json() {   # -> REAP_SENSITIVE as a JSON array of strings
   # Shared by BOTH refusal sites in cmd_ws_reap (the evaluated one and the
-  # resume one), so the two cannot describe the same finding differently.
+  # resume one), so the two cannot describe the same finding differently — and
+  # both sites are now pinned, one per fixture, because a shared helper with one
+  # caller under test is a shared helper by intention only.
+  #
+  # MUTATION SURVIVOR, disclosed: `[[ -n "$p" ]] || continue` is removable with
+  # the suite green, exactly as its two siblings in `_ws_collect_ignored` and
+  # `cmd_ws_audit` are. REAP_SENSITIVE is filled by the collector, which already
+  # refuses an empty path, so no fixture can put one here. Kept as defence in
+  # depth against a future producer, which is the same reason given there.
   local out="[" first=1 p
   for p in "${REAP_SENSITIVE[@]-}"; do
     [[ -n "$p" ]] || continue
@@ -2357,7 +2398,37 @@ _ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
   # a NEWLINE in a path intact, so the two fixed-shape fields come off the FRONT
   # and the path is everything after the second tab. A `read -r p b s` on a
   # path-first record shifts every field, and this record is what the TOMBSTONE
-  # says was destroyed — the one document that outlives the workspace.
+  # says was destroyed — the one document that outlives the workspace. The field
+  # ORDER is pinned by `records in the tombstone the ignored manifest it
+  # destroyed, field for field`, whose ignored entry is named `a<TAB>b.log`;
+  # before that fixture existed every other one here had an EMPTY ignored set,
+  # so this whole loop was unreached and the order was an argument rather than a
+  # measurement.
+  #
+  # SEVEN MUTATION SURVIVORS in this function, disclosed together because six of
+  # them are one reason — the tombstone is written on the EVALUATED path only,
+  # after Phase A proved the registry complete and Phase C proved the PR, so the
+  # states these lines are about cannot occur where they run:
+  #   - `if (( ${#REAP_IGNORED[@]} ))` — on bash 4.4+ an empty array under
+  #     `set -u` expands to nothing and the loop reads one empty record and
+  #     skips it. The guard is what stops the empty case depending on that.
+  #   - `[[ -n "$p" ]] || continue` and `[[ -n "$aref" ]] || continue` — neither
+  #     producer can emit an empty record (gate finding N8's class, and the same
+  #     answer: the next statement dereferences the value into a document a
+  #     human reads filenames out of).
+  #   - `[[ -d "$(_reg_get "$id" workdir)" ]] &&` on the reflog — the workdir
+  #     exists whenever (b) runs; it stays so an empty `reflog` is a decision.
+  #   - `| head -200` on the reflog — a cap, unpinnable for the reason
+  #     `_ws_attic_pin`'s is.
+  #   - the `REAP_PRNUM` numeric test — Phase C proved a bound merged PR before
+  #     this line can run, so it is always numeric HERE. The sibling in
+  #     `_ws_reap_tail`'s printf is genuinely reachable (the resume path prints
+  #     an empty one) and is pinned there; this one is the same shape kept for
+  #     the same reason, `"pr":` being invalid JSON.
+  # The seventh is `|| transcript=""`, which cannot change anything at all: a
+  # bare `VAR=$(cmd)` already assigns "" when cmd fails. It is written because
+  # `cmd_ws_audit` (ccd:2161) writes it, and these two records name the same
+  # transcript — they are kept identical so they cannot drift.
   local ign_json="[" first=1 rec rest p b s
   if (( ${#REAP_IGNORED[@]} )); then
     while IFS= read -r -d '' rec; do
@@ -2593,19 +2664,23 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # (g) Compare-and-swap, never `branch -d` (it refuses a squash merge and
   # succeeds when the branch merely equals its upstream) and never `-D`.
   #
-  # The old-value operand is the whole mechanism, and it has ONE hole worth
-  # knowing about even though nothing here can reach it: measured on git 2.43,
-  # `update-ref -d <ref> 000…0` (40 zeros) DELETES unconditionally and exits 0,
-  # because git reads the all-zeros name as "no old value given" rather than as
-  # a value to match — while any other wrong sha exits 1 with `is at X but
-  # expected Y` and leaves the ref alone. `$REAP_TIP` cannot be all-zeros on
-  # either path: the evaluated one reads it from `rev-parse --verify`, and the
-  # resume one takes it from the tombstone only after it equalled a `rev-parse
+  # The old-value operand is the whole mechanism, and it has TWO degenerate
+  # values worth knowing about even though nothing here can reach either.
+  # Measured on git 2.43: `update-ref -d <ref> 000…0` (40 zeros) and
+  # `update-ref -d <ref> ""` BOTH delete unconditionally and exit 0, because git
+  # reads each as "no old value given" rather than as a value to match — while
+  # any other wrong sha exits 1 with `is at X but expected Y` and leaves the ref
+  # alone. `$REAP_TIP` can be neither on either path: the evaluated one reads it
+  # from `rev-parse --verify`, and the resume one takes it from the tombstone
+  # only after `[[ -z "$tombtip" ]]` and an equality against a `rev-parse
   # --verify` of the live ref, which never answers zeros (an unresolvable ref
   # answers EMPTY, and empty != 000…0 refuses `branch-moved` above). Written
   # down because that is an argument about two other call sites, not about this
   # line, and the day either of them stops resolving the tip this degrades from
   # a compare-and-swap into an unconditional delete without failing anything.
+  # The empty case is not hypothetical: deleting `REAP_TIP="$tombtip"` on the
+  # resume path produced exactly it, and the suite stayed green until
+  # `resumes against the tombstone tip, so the CAS is still a CAS` existed.
   if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$main" update-ref -d "refs/heads/$branch" "$REAP_TIP" 2>/dev/null || {
       printf '{"refused":"branch-moved","detail":%s,"paths":[]}\n' \
@@ -2626,12 +2701,30 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # survives every reap. Without `--`, the regex above admits a leading hyphen,
     # so an id like `-P` would be read as cd's own option. Both failures are
     # fail-CLOSED — no rm runs — which is the right direction and still wrong.
+    #
+    # TWO MUTATION SURVIVORS, disclosed, and they are the two guards standing in
+    # front of the only `rm -rf` in this file — so it is worth saying exactly why
+    # neither can be reached rather than leaving that to be assumed. `cmd_ws_reap`
+    # validated `$id` against this same regex at entry, so re-testing it here can
+    # never change the answer; and for any id that PASSES the regex the child
+    # assertion holds by arithmetic. The interesting case is `..`, which the
+    # regex admits (`.` and `-` are both in the class) and which resolves to
+    # $HOME, one level ABOVE the root — and the equality is what refuses it. It
+    # is unreachable only because `_ws_reap_eval` refuses `..` far earlier, for
+    # want of a `$REG/...uuid`. Both stay: a re-validation immediately before an
+    # `rm -rf` is not redundancy, it is the last thing that runs before it.
     local cdir; cdir=$(cd -- "$HOME/.cc-clips" >/dev/null 2>&1 && cd -- "./$id" >/dev/null 2>&1 && pwd -P) || cdir=""
     local croot; croot=$(cd -- "$HOME/.cc-clips" >/dev/null 2>&1 && pwd -P) || croot=""
     [[ -n "$cdir" && -n "$croot" && "$cdir" == "$croot/$id" ]] && rm -rf "$cdir"
   fi
 
   rm -f "$REG/$id".*                                                       # (i) LAST
+  # MUTATION SURVIVOR, disclosed: `${attic:-0}` is removable with the suite
+  # green, because both arms above assign `attic` and neither can leave it
+  # unset. It is `set -u` insurance on the ONE printf that reports a completed
+  # deletion — an unbound variable here kills the process after the work is
+  # done and before anything says so, which is the failure mode this whole
+  # function is arranged to avoid.
   printf '{"reaped":%s,"branch":%s,"pr":%s,"proof":%s,"tombstone":%s,"attic":%s,"bytes":%s,"resumed":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" \
     "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" \
