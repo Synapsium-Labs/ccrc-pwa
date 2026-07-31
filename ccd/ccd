@@ -1902,7 +1902,16 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   REAP_FETCHED=$(date +%s)
   git -C "$main" cat-file -e "${REAP_MERGE}^{commit}" 2>/dev/null \
     || { _reap_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
-  REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) || REAP_BASEOID=""
+  # A REFUSAL, not a default. This was the last fingerprint input that answered
+  # a failed read with `""`: measured, with only this read failing the verdict
+  # stayed `reapable` and a token was issued over a field nobody measured — and
+  # because the failure is deterministic, ws-reap recomputes the same `""` and
+  # the `--expect` consent check matches. Same class as the ignored digest
+  # (deviation 6) and the stash count above. `$base` is the registry's, so this
+  # fires for a workspace whose base ref was deleted or renamed under it, which
+  # is a state to reconcile rather than one to delete over.
+  REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) \
+    || { _reap_refuse base-missing "$base does not resolve in $main"; return 1; }
   if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
     REAP_PROOF="$_WS_PROOF"
   else

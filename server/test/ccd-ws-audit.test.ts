@@ -717,6 +717,24 @@ describe('the refusals the ladder reaches last', () => {
     expect(a.detail).toContain("branch=''");
   });
 
+  it('refuses a base that did not resolve, rather than fingerprinting ""', () => {
+    // The last fingerprint input that answered a failed read with a DEFAULT.
+    // `REAP_BASEOID=$(… rev-parse --verify "$base") || REAP_BASEOID=""` was
+    // plan-verbatim, and measured: with that one read failing the verdict
+    // stayed `reapable` and a token was issued over a field nobody measured.
+    // ws-reap then recomputes the same "" and `--expect` matches — the same
+    // forgery as the ignored digest and the stash count, in `baseOid`.
+    const { wt } = squashMovedBase();
+    expect(h.reg('demo-quiet-basin', 'base'),
+      'the stub below is keyed on the recorded base').toBe('origin/main');
+    // ONLY this read. `_ws_reap_eval`'s other two rev-parses carry `--quiet`
+    // (`@{upstream}`) or a `refs/heads/` operand, and `cmd_ws_audit`'s own
+    // `commitsAheadOfBase` read of the same ref carries `--quiet` as well, so
+    // the manifest around the refusal is still built from live reads.
+    const NOBASE = `git() { [[ "$*" == *"rev-parse --verify origin/main" ]] && return 128; command git "$@"; };`;
+    expect(refusal(wt, NOBASE).verdict).toBe('base-missing');
+  });
+
   it('propagates a digest that could not be computed, not an empty one', () => {
     // `_ws_collect_ignored` checks its enumeration AND its digest, and the two
     // are separately load-bearing — but the enumeration's own guard catches
