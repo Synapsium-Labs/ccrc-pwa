@@ -1528,7 +1528,7 @@ _ws_sensitive_match() {   # path -> 0 when it is secret-shaped
   return 1
 }
 
-_ws_collect_ignored() {   # workdir — fills REAP_IGNORED / REAP_SENSITIVE / REAP_IGNDIGEST
+_ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tpath`) / REAP_SENSITIVE / REAP_IGNDIGEST
   # NON-ZERO when the ignored set could not be READ, and both of its reads are
   # checked. Neither failure can be allowed to look like "there is nothing
   # ignored here", because that is the answer that authorises the delete:
@@ -1564,21 +1564,63 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED / REAP_SENSITIVE / RE
   # Deliberately not a match on git's wording: git translates its warnings and
   # ccd pins no locale, so a text test would pass silently on a box with LANG
   # set — the failure mode this exists to remove.
-  local wd="$1" line p b out errf err rc
+  #
+  # AND THE READ IS `-z`, WHICH IS A CORRECTNESS REQUIREMENT, NOT A STYLE.
+  # Without it git C-QUOTES any path holding a space, a non-ASCII byte, a quote,
+  # a backslash or a control character: measured on git 2.43, `!! .env` bare
+  # beside `!! "deploy key.pem"` and `!! "s\303\251crets/"`. `_ws_sensitive_match`
+  # is then handed a string whose first and last characters are `"`, so every
+  # SUFFIX pattern dies on the trailing quote and every PREFIX pattern on the
+  # leading one — measured end to end, a gitignored private key named
+  # `deploy key.pem` produced verdict=reapable, sensitive:false and a TOKEN,
+  # against the one guard §7 says has no override (`My Project.env`,
+  # `prod db.sqlite`, `ssh key.pem`). The quoted string is also what the size
+  # read was given, and it names nothing on disk, so `ignoredBytes`
+  # under-reported precisely the entries that matter — and the human, whose
+  # reading of a filename this whole design rests on, was shown
+  # `"s\303\251crets/"`. `-c core.quotePath=false` does NOT fix it: measured, it
+  # unquotes the non-ASCII byte and STILL quotes the space. It is passed anyway,
+  # as a stated no-op under `-z` on git 2.43, so the intent is on the line that
+  # would otherwise read as an ordinary status call; it cannot be pinned
+  # behaviourally and is disclosed as such.
+  #
+  # `-z` needs a FILE rather than `$(…)`: command substitution drops NUL bytes,
+  # so the separator would vanish and every entry run together.
+  #
+  # What `-z` gives it also takes back, and the record shape is the answer: git
+  # is no longer escaping a TAB or a NEWLINE inside a path either, so
+  # `path\tbytes\tsensitive` read left to right shifts its fields on
+  # `a<TAB>b.log` and `cmd_ws_audit` prints `"bytes":b.log`, which is not JSON.
+  # Hence `sensitive\tbytes\tpath`: the two fixed-shape fields first — one of
+  # `0|1`, one of `[0-9]+`, neither able to contain a tab — and the free-form
+  # one last, so the path keeps whatever bytes it has.
+  #
+  # `du -sb` rather than `_ws_gc_bytes`, which answers `-` for anything that is
+  # not a DIRECTORY (its own contract, and right for the workspace totals it was
+  # written for): every ignored FILE was therefore recorded as 0 bytes, so a
+  # 400 MB `dump.sql` was listed as free. `$wd` is absolute, so no `--` guard is
+  # needed against a leading dash — but `head -n1` IS needed, because du echoes
+  # the path back beside the size and a path with a newline in it makes that two
+  # lines (measured: `cut -f1` alone returned `1\nd.log`, which fails the
+  # numeric test and silently became 0).
+  local wd="$1" entry p b outf errf err rc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""
-  errf=$(mktemp) || return 1
-  out=$(git -C "$wd" status --porcelain --ignored=matching 2>"$errf"); rc=$?
+  outf=$(mktemp) || return 1
+  errf=$(mktemp) || { rm -f "$outf"; return 1; }
+  git -C "$wd" -c core.quotePath=false status --porcelain --ignored=matching -z \
+    >"$outf" 2>"$errf"; rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
-  (( rc == 0 )) || return 1
-  [[ -z "$err" ]] || return 1
-  while IFS= read -r line; do
-    case "$line" in '!! '*) ;; *) continue ;; esac
-    p="${line#!! }"
+  (( rc == 0 )) || { rm -f "$outf"; return 1; }
+  [[ -z "$err" ]] || { rm -f "$outf"; return 1; }
+  while IFS= read -r -d '' entry; do
+    case "$entry" in '!! '*) ;; *) continue ;; esac
+    p="${entry#!! }"
     [[ -n "$p" ]] || continue
-    b=$(_ws_gc_bytes "$wd/$p"); [[ "$b" =~ ^[0-9]+$ ]] || b=0
-    if _ws_sensitive_match "$p"; then REAP_SENSITIVE+=("$p"); REAP_IGNORED+=("$p"$'\t'"$b"$'\t'1)
-    else                              REAP_IGNORED+=("$p"$'\t'"$b"$'\t'0); fi
-  done <<< "$out"
+    b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0
+    if _ws_sensitive_match "$p"; then REAP_SENSITIVE+=("$p"); REAP_IGNORED+=(1$'\t'"$b"$'\t'"$p")
+    else                              REAP_IGNORED+=(0$'\t'"$b"$'\t'"$p"); fi
+  done <"$outf"
+  rm -f "$outf"
   REAP_IGNDIGEST=$(_ws_ignored_digest "$wd") || return 1
 }
 
@@ -1863,14 +1905,25 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # Sensitive-first, then bytes descending. Counts and total bytes are NEVER
   # truncated — the whole judgement this design rests on is the human reading
   # a filename, and a truncated list makes it structurally unavailable.
-  local ign_json="[" first=1 total=0 count=0 line p b s
+  #
+  # NUL-terminated end to end, and the record is `sensitive\tbytes\tpath`
+  # (`_ws_collect_ignored`): the read that fills it is `-z`, so a path may
+  # legitimately contain a TAB or a NEWLINE. `printf '%s\n' | sort` splits such
+  # a path across two records and an `IFS=$'\t' read -r p b s` on a
+  # path-first record shifts every field — measured, `a<TAB>b.log` printed
+  # `"bytes":b.log`, which is not JSON. So: `sort -z`, `read -d ''`, and the
+  # two fixed-shape fields peeled off the FRONT with `${…%%}`/`${…#}` rather
+  # than by word-splitting, which would collapse a run of tabs.
+  local ign_json="[" first=1 total=0 count=0 rec rest p b s
   if (( ${#REAP_IGNORED[@]} )); then
-    while IFS=$'\t' read -r p b s; do
+    while IFS= read -r -d '' rec; do
+      s="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"
+      b="${rest%%$'\t'*}"; p="${rest#*$'\t'}"
       [[ -n "$p" ]] || continue
       (( first )) || ign_json+=","; first=0
       ign_json+="{\"path\":$(_json_str "$p"),\"bytes\":$b,\"sensitive\":$( ((s)) && echo true || echo false)}"
       total=$(( total + b )); count=$(( count + 1 ))
-    done < <(printf '%s\n' "${REAP_IGNORED[@]}" | sort -t$'\t' -k3,3nr -k2,2nr)
+    done < <(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z -t$'\t' -k1,1nr -k2,2nr)
   fi
   ign_json+="]"
 

@@ -356,6 +356,70 @@ describe('local-loss refusals', () => {
     expect(a.sensitive).toEqual(expect.arrayContaining(['secrets/', 'deploy.pem']));
   });
 
+  it('reads the path git C-QUOTES — a space in a secret’s name is not an override', () => {
+    // Measured on git 2.43: `git status --porcelain --ignored=matching` C-quotes
+    // any path holding a space, a non-ASCII byte, a quote, a backslash or a
+    // control character — `!! "deploy key.pem"`, `!! "s\303\251crets/"` — while
+    // leaving `!! .env` alone. Every SUFFIX pattern in `_ws_sensitive_match`
+    // then dies on the trailing `"` and every PREFIX pattern on the leading
+    // one, so a gitignored private key called `deploy key.pem` came back
+    // `verdict=reapable` with a token, `sensitive:false` and `bytes:0` — the
+    // quoted string is also what was handed to the size read, and it names
+    // nothing on disk. `My Project.env`, `prod db.sqlite` and `ssh key.pem` are
+    // the same hole in the one guard §7 says has no override.
+    //
+    // `-z` is what closes it, and `core.quotePath=false` is NOT: measured, that
+    // config unquotes the non-ASCII directory and STILL quotes the space.
+    const { wt } = squashMovedBase(['deploy key.pem', 'sécrets/']);
+    fs.writeFileSync(path.join(wt, 'deploy key.pem'), 'PRIVATE KEY\n'.repeat(64));
+    fs.mkdirSync(path.join(wt, 'sécrets'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'sécrets', 'blob'), 'x'.repeat(4096));
+    // The quoting itself, measured here rather than asserted from memory: if
+    // git ever stops doing this the test below stops meaning anything.
+    expect(h.sh(`git -C "${wt}" status --porcelain --ignored=matching | grep -c '^!! "'`),
+      'if git stops C-quoting these two paths the whole test is moot').toBe('2');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.sensitive).toEqual(['deploy key.pem']);
+    expect(a.detail).toContain('deploy key.pem');
+    const byPath: Record<string, { bytes: number; sensitive: boolean }> =
+      Object.fromEntries(a.ignored.map((e: { path: string }) => [e.path, e]));
+    // The human reads a filename; `"s\303\251crets/"` is not one.
+    expect(Object.keys(byPath).sort()).toEqual(['deploy key.pem', 'sécrets/']);
+    expect(byPath['deploy key.pem']!.sensitive).toBe(true);
+    // And the bytes, for BOTH — the quoted path measured nothing on disk, so
+    // `ignoredBytes` under-reported precisely the entries that matter. A plain
+    // FILE has to size too: `_ws_gc_bytes` answers `-` for anything that is not
+    // a directory, which made every ignored file 0 bytes on its own.
+    expect(byPath['deploy key.pem']!.bytes).toBe(768);
+    expect(byPath['sécrets/']!.sensitive).toBe(false);
+    expect(byPath['sécrets/']!.bytes).toBeGreaterThan(4000);
+    expect(a.ignoredCount).toBe(2);
+    expect(a.ignoredBytes).toBeGreaterThan(4700);
+  });
+
+  it('survives a TAB and a NEWLINE inside an ignored path', () => {
+    // What `-z` gives with one hand it takes with the other: git's C-quoting was
+    // accidentally CONTAINING these two bytes, and unquoted they land in an
+    // array whose records used to be `path\tbytes\tsensitive` read
+    // left-to-right. Measured with the naive record: a file called `a<TAB>b.log`
+    // shifts every field and `cmd_ws_audit` printed `"bytes":b.log` — not JSON
+    // at all, so `JSON.parse` in `audit()` is the assertion. A newline breaks
+    // the line-oriented `printf '%s\n' | sort` the same way. Hence
+    // `sensitive\tbytes\tpath`: the two fixed-shape fields first, the free-form
+    // one last, NUL-terminated through `sort -z`.
+    const { wt } = squashMovedBase(['*.log']);
+    fs.writeFileSync(path.join(wt, 'a\tb.log'), 'x'.repeat(4096));
+    fs.writeFileSync(path.join(wt, 'c\nd.log'), 'x');
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.ignored.map((e: { path: string }) => e.path)).toEqual(['a\tb.log', 'c\nd.log']);
+    expect(a.ignored[0].bytes).toBe(4096);
+    expect(a.ignored[1].bytes).toBe(1);
+    expect(a.ignoredCount).toBe(2);
+    expect(a.ignoredBytes).toBe(4097);
+  });
+
   it('LISTS non-sensitive ignored content with sizes instead of refusing on it', () => {
     // node_modules/, dist/ and .ccrc/ are named, sized and destroyed on
     // confirm. Refusing on all ignored content would make the gate unpassable
