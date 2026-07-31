@@ -629,13 +629,29 @@ describe('identity refusals', () => {
     // Retry after a killed reap used to certify an empty workspace as clean.
     // NOT read through `refusal`: this test removes the worktree ITSELF, so
     // asserting it still exists would assert the opposite of the fixture.
-    const { wt } = squashMovedBase();
+    const { wt, main } = squashMovedBase();
     h.sh('_reg_set demo-quiet-basin reaping worktree');
     fs.rmSync(wt, { recursive: true, force: true });
     const a = audit();
     expect(a.reaping).toBe('worktree');
     expect(a.exists).toBe(false);
     expect(a.token).toBeUndefined();
+    // And NOT `reapable`. A tokenless `reapable` is a wire shape the sheet
+    // mis-renders: `wsaudit.ts` gives `reapable` an EMPTY sentence and
+    // `ReapSheet` renders the primary Remove button on it, whose `confirm()`
+    // early-returns when `token === undefined` — a button that silently does
+    // nothing, under no explanation. It is a different STATE, so it gets a
+    // different verdict: the proof holds, the worktree is already gone, and
+    // ccrc's own breadcrumb says ccrc removed it, so what remains is a resume
+    // and a resume carries no token.
+    expect(a.verdict).toBe('reap-interrupted');
+    expect(a.detail).toContain('worktree');
+    // `refusal`'s worktree assertion cannot be used here — the fixture removed
+    // the worktree itself — so the read-only claim is asserted inline: the
+    // audit neither re-creates it nor takes the branch with it.
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'show-ref', '--verify', 'refs/heads/ws/quiet-basin'))
+      .toContain('ws/quiet-basin');
   });
 
   it('refuses worktree-missing when there is NO breadcrumb to explain it', () => {

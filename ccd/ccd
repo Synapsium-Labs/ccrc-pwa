@@ -2010,6 +2010,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   printf '"merge":{"proof":%s,"fetchedAt":%s},"transcript":%s,' \
     "$( [[ -n "$REAP_PROOF" ]] && _json_str "$REAP_PROOF" || echo null)" \
     "$REAP_FETCHED" "$(_json_str "$transcript")"
+  # Three verdicts, not two, and the third one is why: `reapable` MEANS a token.
+  #
   # `token` is present ONLY when the verdict is reapable AND the tree was
   # actually read. The second half is not a belt-and-braces restatement of the
   # first: with the worktree gone and a `reaping` breadcrumb explaining why,
@@ -2025,8 +2027,24 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # at. The audit therefore reports the state (`exists:false`, `reaping`) and
   # hands out nothing to confirm against; resuming a killed reap is ws-reap's
   # own path, not a token-carrying delete.
+  #
+  # AND IT MUST NOT SAY `reapable` WHILE DOING SO. Withholding the token from a
+  # verdict that still read `reapable` produced a wire shape the sheet
+  # mis-renders: `wsaudit.ts` gives `reapable` an EMPTY sentence, `ReapSheet`
+  # renders the primary Remove button on `verdict === 'reapable'`, and that
+  # button's `confirm()` early-returns when `token === undefined` — a button
+  # that silently does nothing, under no explanation at all. Two different
+  # states must not share a verdict: this one is `reap-interrupted`, the
+  # worktree is already gone, ccrc's own breadcrumb says ccrc removed it, and
+  # what is left is a RESUME (`ws-reap --resume`, Task 6), which is not a
+  # token-carrying delete and never asks for a confirmation the human cannot
+  # give. `_ws_reap_eval` is deliberately untouched: its `reapable` is what the
+  # resume path itself depends on.
   if [[ "$REAP_VERDICT" == reapable && "$exists" == true ]]; then
     printf '"verdict":"reapable","detail":"","token":%s}\n' "$(_json_str "$REAP_TOKEN")"
+  elif [[ "$REAP_VERDICT" == reapable ]]; then
+    printf '"verdict":"reap-interrupted","detail":%s}\n' \
+      "$(_json_str "a previous removal stopped after the ${reaping:-worktree} step and left no worktree to inspect")"
   else
     printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
   fi
