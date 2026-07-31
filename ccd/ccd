@@ -2510,13 +2510,72 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # `_ws_reap_eval` calls this again on the normal path; it is idempotent.
   _ws_reap_reset
 
-  # Atomic. NOTE: bash's EXIT trap releases this on SIGTERM while an orphaned
-  # `git worktree remove` grandchild keeps running — so the BREADCRUMB, not the
-  # lock, is the recovery mechanism.
-  local lock="$REG/.reap-$id.lock"
-  mkdir "$lock" 2>/dev/null || { printf '{"refused":"in-progress","detail":"another reap is running","paths":[]}\n'; return 0; }
-  trap 'rmdir "'"$lock"'" 2>/dev/null' EXIT
+  # THE LOCK IS THE KERNEL'S, NOT A TRAP'S — and on this box that is the whole
+  # argument. `mkdir` plus `trap … EXIT` was the shipped form, and a trap does
+  # not run on SIGKILL: an OOM kill (this project's own speciality), a
+  # `systemctl` hard stop, a power loss or a reboot each leave the directory
+  # behind, every later `ws-reap` for that session answers `in-progress`, and
+  # the RESUME PATH — the entire recovery mechanism — sits one refusal behind
+  # it with no verb in ccd able to clear it. Measured, same fixture, only the
+  # signal changed: SIGTERM left the lock free and the next run resumed;
+  # SIGKILL left it HELD and every later run answered
+  # `{"refused":"in-progress"}`, for ever. Step (i)'s `rm -f "$REG/$id".*` does
+  # not match this name, and nothing else in the file does either.
+  #
+  # `flock` attaches an advisory lock to an OPEN FILE DESCRIPTION, and the
+  # kernel drops it when the last copy of that description closes — which every
+  # form of death does, including the ones no handler can see. Nothing has to
+  # run for the lock to come back. Verified on this box (util-linux 2.39.3,
+  # `flock from util-linux 2.39.3`): a second acquirer is refused while the
+  # holder lives, and a `kill -9` of the holder frees it for the next acquirer.
+  #
+  # THE DESCRIPTION IS INHERITED BY CHILDREN, and that is the RIGHT semantics
+  # here rather than a leak. Measured: a child of the holder keeps the lock
+  # after the holder is SIGKILLed, and it is released when the child exits. The
+  # case the old comment worried about — "an orphaned `git worktree remove`
+  # grandchild keeps running" after the shell died — is exactly the case in
+  # which a second reap must NOT start, and under a trap it was exactly the
+  # case in which one could. Nothing in the destructive sequence daemonises
+  # (`git worktree remove`, `systemctl --user disable --now`,
+  # `tmux kill-session`, `rm -rf` are all short-lived clients), so the interval
+  # is bounded by the work itself.
+  #
+  # THE LOCK FILE IS NEVER UNLINKED. Unlinking it while holding it is how two
+  # processes each end up holding "the lock" on two different inodes: the
+  # second `open()` after the unlink creates a NEW file, whose lock nobody
+  # contends. What is left behind is a 0-byte hidden file per session that has
+  # ever been offered to `ws-reap` — inert (the registry is read through
+  # `$REG/*.workspace` and `$REG/$id.<field>`, and a dotfile matches neither),
+  # and the price of a lock whose identity is an inode rather than a promise.
+  # The BREADCRUMB remains the recovery record; this only serialises runs.
+  local lock="$REG/.reap-$id.lock" lfd rc=0
+  command -v flock >/dev/null 2>&1 \
+    || die "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
+  exec {lfd}>>"$lock" \
+    || die "cannot open the reap lock at $lock"
+  flock -n "$lfd" || {
+    # Close OUR descriptor and touch nothing else: the winner's lock lives on
+    # its own description and no path operation here can reach it. (Under the
+    # mkdir form the loser's own trap could `rmdir` the winner's lock, which is
+    # why that trap had to be armed after the mkdir rather than before it.)
+    exec {lfd}>&-
+    printf '{"refused":"in-progress","detail":%s,"paths":[]}\n' \
+      "$(_json_str "another ccd process is already reaping $id and still holds the lock")"
+    return 0
+  }
+  # EVERY return path gives the descriptor back, which is why the body is its
+  # own function. `flock` treats two `open()`s of one path in one process as
+  # two strangers, so a descriptor left open by one call refuses the NEXT call
+  # in the same shell — and ccd is sourced (by `ccd` itself and by its tests),
+  # so "the process exits eventually" is not the same statement as "the lock
+  # went back".
+  _ws_reap_locked "$token" "$id"; rc=$?
+  exec {lfd}>&-
+  return "$rc"
+}
 
+_ws_reap_locked() {   # token id — everything the reap lock serialises
+  local token="$1" id="$2"
   local resumed; resumed=$(_reg_get "$id" reaping)
   if [[ -n "$resumed" ]]; then
     # Resume: the tombstone written at (b) is what distinguishes "the user

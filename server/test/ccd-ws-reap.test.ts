@@ -82,6 +82,24 @@ const refused = (tok: string, wt: string | null, main: string | null): Record<st
 };
 
 /**
+ * Is the reap lock FREE? — the only question worth asking about it, and not the
+ * same question as "does the lock file exist".
+ *
+ * `flock` is an advisory lock the kernel attaches to an open file description
+ * and releases when the last copy of that description closes — a normal exit, a
+ * `die`, a SIGKILL, an OOM kill, a reboot. The FILE it is attached to is never
+ * unlinked (ccd says why at the lock), so its existence says nothing at all;
+ * what a test has to be able to see is whether anyone still holds it. A
+ * non-blocking acquire from a throwaway descriptor is that question, asked the
+ * same way ccd asks it.
+ */
+const lockFree = (): boolean => {
+  const lock = path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock');
+  if (!fs.existsSync(lock)) return true;
+  return h.sh(`( exec {fd}>>"${lock}" && flock -n "$fd" && echo free ) || echo held`) === 'free';
+};
+
+/**
  * EVERY `it` that builds a fixture carries `}, 30000);`, and that is a measured
  * decision rather than a habit. One `ready()` is a repo, a worktree, six
  * commits and two pushes; every `tokenOf()` and every `reap()` on top of it is
@@ -165,25 +183,110 @@ describe('refusals are answers', () => {
     // All three assertions live in `refused`; this test is what pins them to a
     // refusal whose verdict is deliberately not named — any refusal will do.
     expect(refused(tok, wt, main).refused).toBeTruthy();
-    // And the lock goes back. A refusal keeps the workspace, so a lock left
-    // behind here is not litter — it is `in-progress`, for ever, to every later
-    // attempt, with no reap running and nothing to kill. The EXIT trap is what
-    // returns it, and this is the only path on which anyone is left to care.
-    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock')),
-      'the EXIT trap must release the lock a refusal took').toBe(false);
+    // And the lock goes back. A refusal keeps the workspace, so a lock still
+    // HELD here is not litter — it is `in-progress`, for ever, to every later
+    // attempt, with no reap running and nothing to kill. The lock FILE stays on
+    // disk by design (see `lockFree` and ccd's own comment at the lock): what
+    // has to go back is the kernel's advisory lock on it, and that is what this
+    // asserts.
+    expect(lockFree(), 'a refusal must give the lock back').toBe(true);
   }, 30000);
 
-  it('declines a concurrent invocation with in-progress', () => {
+  it('declines a genuinely concurrent invocation with in-progress', () => {
+    // A REAL second holder, not a hand-made lock file. Under `flock` the lock
+    // is a property of an open file description a live process owns, so the
+    // only way to occupy it is to have a process occupying it — which is also
+    // the only state the refusal is allowed to describe.
     const { wt, main } = ready();
     const tok = tokenOf();
     const lock = path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock');
-    fs.mkdirSync(lock);
-    expect(refused(tok, wt, main).refused).toBe('in-progress');
-    // AND IT DOES NOT TAKE THE LOCK WITH IT. The trap is armed only after the
-    // mkdir succeeds, deliberately: arm it first and the loser of the race
-    // rmdir's the WINNER's lock on its way out, and the next tap walks in
-    // beside a reap that is mid-`git worktree remove`.
-    expect(fs.existsSync(lock), 'a declined reap must not release the lock it never took').toBe(true);
+    const out = h.sh(`${GH_STUB} ${ARCH}
+      : > "${lock}"
+      flock "${lock}" -c 'touch "$HOME/held"; sleep 25' >/dev/null 2>&1 &
+      hp=$!
+      for _ in $(seq 200); do [[ -f "$HOME/held" ]] && break; sleep 0.05; done
+      [[ -f "$HOME/held" ]] || { echo "holder never took the lock"; kill "$hp" 2>/dev/null; exit 1; }
+      cmd_ws_reap --expect ${tok} --session demo-quiet-basin
+      kill -9 "$hp" 2>/dev/null; wait "$hp" 2>/dev/null || true`);
+    const o = JSON.parse(out);
+    expect(o.refused).toBe('in-progress');
+    expect(o.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(fs.existsSync(wt), 'a declined reap destroys nothing').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    // AND IT DOES NOT RELEASE THE LOCK IT NEVER TOOK. The loser closes its own
+    // descriptor and touches nothing else; the winner's lock is the kernel's,
+    // on a different open file description, and no `rm` or `rmdir` on the loser's
+    // path can reach it. (Under the old mkdir lock the loser's own EXIT trap
+    // could — which is why the trap was armed only after the mkdir.)
+    expect(lockFree(), 'the holder still holds it after the loser is refused').toBe(false);
+  }, 30000);
+
+  it('a kill -9 mid-reap leaves nothing to clear — the KERNEL drops the lock', () => {
+    // THE CRASH THIS BOX IS FOR. An EXIT trap does not run on SIGKILL, on an
+    // OOM kill or on a power loss, so a trap-released lock survives its own
+    // process and answers `in-progress` for ever — with the breadcrumb, i.e.
+    // the entire recovery mechanism, sitting one refusal behind it and no ccd
+    // verb able to clear it. `flock` on a descriptor is released by the kernel
+    // when the last descriptor closes, which a SIGKILL does.
+    //
+    // The reap is BLOCKED, not stubbed to exit: `read < fifo` blocks in the
+    // shell itself (open(2) on a fifo with no writer), so the process holding
+    // the lock is the process being killed and no child inherits the
+    // descriptor. `exit 9` from a stub — the technique the other two kill
+    // fixtures use — exercises the orderly path and cannot reach this at all.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const BLOCK = ARCH.replace('_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };',
+      '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; read -r _ < "$HOME/blockfifo"; };');
+    expect(BLOCK).not.toBe(ARCH);   // a .replace() that matched nothing is a silent no-op
+    const probe = h.sh(`${GH_STUB} ${BLOCK}
+      mkfifo "$HOME/blockfifo"
+      # COUNTED, not \`grep -q\`: \`ready()\` archived this workspace, and
+      # \`cmd_ws_archive\` unsupervises too — so the line is already in the log
+      # before the reap starts and a presence test would fall straight through
+      # and kill a process that had not reached (c) yet.
+      n0=$(grep -c unsupervise "$HOME/ccd-calls" 2>/dev/null || true)
+      ( cmd_ws_reap --expect ${tok} --session demo-quiet-basin >"$HOME/reap.out" 2>&1 ) &
+      p=$!
+      for _ in $(seq 400); do
+        n1=$(grep -c unsupervise "$HOME/ccd-calls" 2>/dev/null || true)
+        (( n1 > n0 )) && break; sleep 0.05
+      done
+      (( n1 > n0 )) || { echo "never reached (d)"; kill -9 "$p" 2>/dev/null; exit 1; }
+      echo "breadcrumb=$(cat "$HOME/.cc-sessions/demo-quiet-basin.reaping" 2>/dev/null)"
+      kill -9 "$p"; wait "$p" 2>/dev/null || true
+      echo "killed=yes"`);
+    expect(probe, `the fixture must have died inside the (c)-(d) window: ${probe}`)
+      .toContain('breadcrumb=worktree');
+    expect(probe).toContain('killed=yes');
+    // The kernel gave it back. Nothing ran to make that true.
+    expect(lockFree(), 'a SIGKILLed holder must not leave the lock held').toBe(true);
+    // And the recovery mechanism is reachable again: the very next invocation
+    // resumes from the breadcrumb and finishes.
+    const out = JSON.parse(reap(tok).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.resumed).toBe('worktree');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+  }, 30000);
+
+  it('gives the lock back when the FUNCTION returns, not when the shell exits', () => {
+    // `flock` locks an open file description, and two `open()`s of one path in
+    // one process are two descriptions the kernel treats as strangers — so a
+    // descriptor left open by the first call refuses the second, in the same
+    // shell, with no other process involved. ccd is sourced by its own tests
+    // and by `ccd` itself, so "the shell exits eventually" is not the same
+    // statement as "the lock went back".
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const out = h.sh(`${GH_STUB} ${ARCH}
+      cmd_ws_reap --expect ${'0'.repeat(64)} --session demo-quiet-basin
+      cmd_ws_reap --expect ${tok} --session demo-quiet-basin`).split('\n');
+    expect(JSON.parse(out[0]!).refused, 'the first call refuses and gives the lock back').toBe('state-changed');
+    expect(JSON.parse(out[1]!).reaped, `the second call must not see its own leftover descriptor: ${out[1]}`)
+      .toBe('demo-quiet-basin');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
   }, 30000);
 
   it('refuses rather than writing a tombstone it cannot quote', () => {
