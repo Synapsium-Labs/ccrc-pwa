@@ -584,6 +584,89 @@ describe('local-loss refusals', () => {
     expect(a.ignoredBytes).toBe(4097);
   });
 
+  /** A path holding a byte that is not valid UTF-8 — the case `-z` created by
+   *  handing raw bytes to a serializer git's C-quoting used to keep ASCII.
+   *  `path.join` takes strings, and a JS string cannot hold a lone 0xff, so the
+   *  path is built as a BUFFER and the byte never round-trips through node. */
+  const rawName = (dir: string, prefix: string, suffix: string): Buffer =>
+    Buffer.concat([Buffer.from(`${dir}/${prefix}`, 'utf8'), Buffer.from([0xff]),
+      Buffer.from(suffix, 'utf8')]);
+
+  it('serialises a path byte NO locale can decode — a SENSITIVE name', () => {
+    // The regression `-z` introduced, and the reason the encoding policy is
+    // pinned in `_json_str`. Before this: `_json_str` read stdin through
+    // python's LOCALE codec, which on this box (LANG=en_US.UTF-8) is utf-8
+    // STRICT, so 0xff raised UnicodeDecodeError, stdout was EMPTY, `$(…)`
+    // swallowed the status, and `cmd_ws_audit` printed
+    // `"ignored":[{"path":,"bytes":600,…}]` — a document `JSON.parse` rejects,
+    // at exit 0, for a workspace whose verdict was `sensitive-ignored`. Worse
+    // than the syntax error: the `sensitive` array degraded to `[]` beside a
+    // verdict that named it. It was locale-dependent too (valid under LC_ALL=C,
+    // where python falls back to surrogateescape), and on the same file the
+    // collector's own comment gives "ccd pins no locale" as a reason to
+    // distrust text tests.
+    //
+    // `JSON.parse` inside `refusal()` is therefore half the assertion. The
+    // other half is that the byte is REPLACED (U+FFFD) rather than dropped:
+    // the guard already ran on the raw bytes in bash, so this string is the
+    // human's copy and it has to say "something here is not text".
+    const { wt } = squashMovedBase(['*.pem']);
+    fs.writeFileSync(rawName(wt, 'a', 'b.pem'), 'PRIVATE KEY\n'.repeat(50));
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.sensitive).toEqual(['a�b.pem']);
+    expect(a.ignored).toEqual([{ path: 'a�b.pem', bytes: 600, sensitive: true }]);
+    expect(a.detail).toContain('a�b.pem');
+  });
+
+  it('serialises a path byte NO locale can decode — an ORDINARY name', () => {
+    // The same byte in a name nothing refuses on: the document must still parse
+    // and the token must still be issued. Measured before the fix: verdict
+    // `reapable` with a real 64-hex token inside a document `JSON.parse` threw
+    // on — so `parseAudit` answered null and the sheet rendered "Checking…"
+    // forever, over a workspace ccd had certified as deletable.
+    const { wt } = squashMovedBase(['*.log']);
+    fs.writeFileSync(rawName(wt, 'a', 'b.log'), 'x'.repeat(77));
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.ignored).toEqual([{ path: 'a�b.log', bytes: 77, sensitive: false }]);
+    expect(a.sensitive).toEqual([]);
+  });
+
+  it('REFUSES outright when python3 cannot quote — it never prints a hole', () => {
+    // The one failure `_json_str` has left once bytes cannot fail it, and the
+    // reason its status is checked ONCE, up front, rather than at fifteen
+    // `$(_json_str …)` sites inside printf argument lists where the status is
+    // swallowed by construction. `_ws_manifest` (ccd:1066) already probes for
+    // exactly this and says why: a best-effort transcript sanitize may warn and
+    // continue, a record that authorises deletions may not.
+    //
+    // The assertion is deliberately NOT `expect(() => audit()).toThrow()`: a
+    // document full of holes ALSO makes `JSON.parse` throw, so that shape is
+    // green with and without the fix and pins nothing. What is asserted is the
+    // pair — exit NON-ZERO and stdout EMPTY — which is the difference between
+    // refusing and emitting a hole.
+    //
+    // `-c` is `_json_str`'s invocation form and nothing else's in this file:
+    // `_pr_py` runs `python3 /dev/fd/3`, so the PR read still works for real and
+    // the only broken thing is the quoting. A blanket `python3() { return 127; }`
+    // would break `_pr_py` too and refuse for a different reason entirely.
+    const { wt } = squashMovedBase(['dist/']);
+    fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
+    const NOPY = `python3() { [[ "\${1-}" == -c ]] && return 127; command python3 "$@"; };`;
+    // In a SUBSHELL because refusing here is `die`, which is `exit 1` — in the
+    // sourcing shell that ends the snippet before its own `echo` can report.
+    expect(h.sh(`${GH_STUB} ${ARCH} ${NOPY} `
+      + `( cmd_ws_audit --session demo-quiet-basin ) >out.json 2>err.txt; echo "exit=$?"`))
+      .toBe('exit=1');
+    expect(fs.readFileSync(path.join(h.home, 'out.json'), 'utf8'),
+      'a refusal must print NO document, not a document with holes in it').toBe('');
+    expect(fs.readFileSync(path.join(h.home, 'err.txt'), 'utf8')).toContain('python3');
+    expect(fs.existsSync(wt), 'a read-only audit must never remove the worktree').toBe(true);
+  });
+
   it('matches EVERY pattern in the secret-shaped list, and nothing beside them', () => {
     // One `it` per shape would be twelve fixtures; one fixture with twelve
     // files is the same coverage. Written because a whole-diff mutation sweep

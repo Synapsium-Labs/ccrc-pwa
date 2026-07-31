@@ -113,7 +113,50 @@ _ws_unsupervise() { systemctl --user disable --now "claude-session@$1" 2>/dev/nu
 # code is read below declares first and assigns second, deliberately.
 
 _json_str() {   # value -> a JSON string literal (quote/backslash/control safe)
-  printf '%s' "${1-}" | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read()))'
+  # THE ENCODING POLICY IS PINNED HERE, because the value may be RAW BYTES and a
+  # filename is not text. `_ws_collect_ignored` reads paths with `-z`
+  # (deliberately — see there), so `ignored[].path`, `sensitive[]` and the
+  # `sensitive-ignored` detail carry whatever the filesystem holds, and a Linux
+  # path is any byte string without NUL or `/`.
+  #
+  # The previous form read stdin through python's LOCALE codec. On this box
+  # (`LANG=en_US.UTF-8`) that is utf-8 STRICT, so one 0xff byte raised
+  # UnicodeDecodeError, stdout was EMPTY, `$(…)` swallowed the status and
+  # `cmd_ws_audit` printed `"ignored":[{"path":,"bytes":600,…}]` — a document
+  # JSON.parse rejects, at exit 0, over a workspace whose verdict was
+  # `sensitive-ignored` and whose `sensitive` array had silently degraded to
+  # `[]`. Under `LC_ALL=C` the same input was fine (python falls back to
+  # surrogateescape), so it was locale-dependent as well as wrong.
+  #
+  # So the bytes are read as BYTES — `sys.stdin.buffer`, which no locale can
+  # reach — and decoded utf-8 with errors='replace'. LOSSY, deliberately, and it
+  # cannot weaken a guard: every decision over these bytes has already been taken
+  # in bash on the RAW bytes (`_ws_sensitive_match`'s `case` globs, `du`'s size,
+  # `_ws_ignored_digest`'s hash) before anything is serialised. What is left is
+  # the HUMAN's copy, and U+FFFD renders as a visible "this is not text" where a
+  # `\udcff` surrogate escape — the round-tripping alternative — is valid JSON
+  # that most consumers mangle or refuse to re-encode. `json.dumps` defaults to
+  # ensure_ascii, so stdout is pure ASCII whatever the writer's locale; `LC_ALL`
+  # is pinned anyway rather than inherited, so nothing here depends on the box.
+  #
+  # NON-ZERO now means one thing only: python3 could not be RUN. Callers must
+  # check it — a bare `$(_json_str …)` inside a printf argument list swallows the
+  # status by construction, which is how the hole above got printed — and both
+  # callers that build a whole record (`_ws_manifest`, `cmd_ws_audit`) probe once
+  # up front and refuse rather than checking nineteen substitutions.
+  #
+  # MUTATION SURVIVOR, disclosed and measured: `LC_ALL=C.UTF-8` can be deleted
+  # with the suite green, and always will be on a box whose LANG is already a
+  # UTF-8 one — `sys.stdin.buffer` bypasses the stdin codec and `ensure_ascii`
+  # makes stdout pure ASCII, so between them the call is already locale-proof and
+  # no fixture on THIS box can tell the two apart. It is written because the
+  # defect it guards against is precisely a difference between boxes: the old
+  # form was correct under `LC_ALL=C` and broken under `en_US.UTF-8`, so "it
+  # works here" was exactly the evidence that was worthless. Pinning it means a
+  # future rewrite that goes back to a text-mode read fails on every box rather
+  # than on someone else's.
+  printf '%s' "${1-}" | LC_ALL=C.UTF-8 python3 -c 'import json,sys
+sys.stdout.write(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))'
 }
 
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
@@ -2057,6 +2100,17 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-audit --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+
+  # `_json_str`'s status, checked ONCE and up front — the same probe, for the
+  # same reason, as `_ws_manifest` (ccd:1098). Nineteen `_json_str` substitutions
+  # below sit inside printf ARGUMENT LISTS, where a failure is a swallowed status
+  # and an empty argument, i.e. `"path":,` — a document that authorises deletions
+  # and does not parse, at exit 0. Bytes can no longer fail the encode (see
+  # `_json_str`), so what is left is python3 not being runnable at all, and the
+  # only honest answer to that is to print NOTHING and exit non-zero. Before
+  # `_ws_reap_eval`, so a refusal costs no gh call and no fetch.
+  _json_str probe >/dev/null 2>&1 \
+    || die "python3 unavailable — cannot quote the audit record safely"
 
   _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
   local project workdir branch base repo transcript reaping
