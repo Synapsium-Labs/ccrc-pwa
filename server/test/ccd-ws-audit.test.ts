@@ -844,7 +844,7 @@ describe('local-loss refusals', () => {
     expect(h.sh(`git -C "${main}" rev-parse --verify --quiet refs/stash >/dev/null; echo "rc=$?"`))
       .toBe('rc=1');
     expect(audit().verdict).toBe('reapable');
-  });
+  }, 30000);
 
   it('carries its own remedy when maintenance leaves refs/stash behind', () => {
     // The guard's false-positive state, named rather than hidden.
@@ -1198,6 +1198,12 @@ describe('the refusals the ladder reaches last', () => {
       [OK, 'origin/deadbeef1', 'headRefOid with leading garbage — the `^`'],
       [OK, GARBAGE, 'headRefOid with trailing garbage — the `$`'],
       [OK, 'f'.repeat(41), 'headRefOid over the ceiling of 40'],
+      // The gate measured that floor and ceiling were each pinned on only ONE
+      // of the two fields — `{7,40}`→`{1,40}` on headRefOid alone survived,
+      // and a short headRefOid is exactly the resolves-as-a-REVISION half the
+      // guard exists for. Both bounds, both fields (gate finding N7).
+      [OK, 'abc', 'headRefOid under the floor — `abc` is a resolvable ref'],
+      ['f'.repeat(41), OK, 'mergeCommit over the ceiling of 40'],
     ];
     const { wt } = squashMovedBase();
     for (const [m, hd, why] of cases) {
@@ -1211,11 +1217,11 @@ describe('the refusals the ladder reaches last', () => {
     // guard. Without it every case above would pass for the wrong reason — a
     // shadow that refused everything would look identical.
     expect(refusal(wt, pickRow(OK, OK)).verdict).toBe('merge-commit-missing');
-    // Seven `cmd_ws_audit` runs against one fixture, which is over vitest's 5 s
-    // default. The six cases are ONE claim (every piece of that regex is
-    // load-bearing) and splitting them into three `it`s to fit a default would
-    // pay three fixture builds to say it. One of two explicit timeouts here;
-    // the other names what an unbudgeted one cost.
+    // Nine `cmd_ws_audit` runs against one fixture, which is over vitest's 5 s
+    // default. The eight cases are ONE claim (every piece of that regex is
+    // load-bearing on BOTH fields) and splitting them into `it`s to fit a
+    // default would pay repeated fixture builds to say it. One of the explicit
+    // timeouts here; another names what an unbudgeted one cost.
   }, 30000);
 
   it('refuses branch-missing when refs/heads/<branch> does not resolve', () => {
@@ -1475,5 +1481,5 @@ describe('the manifest', () => {
     expect(second.verdict, 'ignored content is listed, never a refusal').toBe('reapable');
     expect(second.token).toMatch(/^[0-9a-f]{64}$/);
     expect(second.token).not.toBe(first);
-  });
+  }, 30000);
 });

@@ -2178,6 +2178,13 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     while IFS= read -r -d '' rec; do
       s="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"
       b="${rest%%$'\t'*}"; p="${rest#*$'\t'}"
+      # MUTATION SURVIVOR, disclosed: `[[ -n "$p" ]] || continue` is removable
+      # with the suite green, and always will be — REAP_IGNORED's records are
+      # built by _ws_collect_ignored, whose own `[[ -n "$p" ]]` (disclosed
+      # there) already refuses an empty path, and `read -d ''` cannot produce
+      # an empty record from `printf '%s\0'` over a non-empty array. Same
+      # reasoning as the `$dl` sibling below; kept as defence in depth against
+      # a future producer. (Gate finding N8.)
       [[ -n "$p" ]] || continue
       (( first )) || ign_json+=","; first=0
       ign_json+="{\"path\":$(_json_str "$p"),\"bytes\":$b,\"sensitive\":$( ((s)) && echo true || echo false)}"
