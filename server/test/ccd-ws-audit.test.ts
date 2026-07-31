@@ -201,6 +201,40 @@ describe('the proof ladder', () => {
     expect(a.detail).toContain('later.txt');
   });
 
+  it('never proves patch-id from two EMPTY patch-ids', () => {
+    // `[[ -n "$a" && "$a" == "$b" ]]` — the `-n` half, which a whole-diff
+    // mutation sweep found deletable with the suite still green. It is
+    // reachable, not defensive: `a` is empty exactly when the tip's tree equals
+    // its merge base with `M^1`, and `b` is empty exactly when `M` is an empty
+    // commit. Both at once and the mutant `[[ "$a" == "$b" ]]` certifies the
+    // branch merged because git computed NOTHING about either side.
+    //
+    // `_ws_merge_proof` is called directly: this is a shape no `squashMovedBase`
+    // variant produces, and the ladder is a pure function of three revisions.
+    const main = h.makeRepo('demo');
+    h.git(main, 'checkout', '-q', '-b', 'side');
+    h.git(main, 'commit', '-q', '--allow-empty', '-m', 'empty on the side');
+    const tip = h.git(main, 'rev-parse', 'HEAD');
+    h.git(main, 'checkout', '-q', 'main');
+    fs.writeFileSync(path.join(main, 'other.txt'), 'moved\n');
+    h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'unrelated');
+    h.git(main, 'commit', '--allow-empty', '-m', 'empty squash');
+    const merge = h.git(main, 'rev-parse', 'HEAD');
+    // BOTH halves empty — measured here, because if either stops being empty
+    // the fixture stops being about this guard at all.
+    const patchId = (from: string, to: string): string => h.sh(
+      `git -C "${main}" diff --binary "${from}" "${to}" -- | git -C "${main}" patch-id --stable | cut -d' ' -f1`);
+    expect(patchId(h.git(main, 'merge-base', tip, `${merge}^1`), tip)).toBe('');
+    expect(patchId(`${merge}^1`, merge)).toBe('');
+    // The earlier rungs must both say no, or this proves nothing either.
+    expect(h.sh(`git -C "${main}" merge-base --is-ancestor -- "${tip}" "${merge}"; echo "rc=$?"`)).toBe('rc=1');
+    expect(h.sh(`git -C "${main}" diff --quiet "${merge}" "${tip}" --; echo "rc=$?"`)).toBe('rc=1');
+    // `cherry` is what answers instead, and the assertion is on WHICH rung:
+    // with the guard deleted this reports `patch-id`.
+    expect(h.sh(`_ws_merge_proof "${main}" "${merge}" "${tip}"; echo "rc=$? proof=$_WS_PROOF"`))
+      .toBe('rc=0 proof=cherry');
+  });
+
   it('never uses the fail-open `git diff --quiet -- A B` form', () => {
     // Verified in this worktree: `-- A B` exits 0 for ANY two shas (the
     // revisions become pathspecs) while `A B --` exits 1 correctly. A grep is
@@ -388,8 +422,14 @@ describe('local-loss refusals', () => {
     expect(a.detail).toContain('deploy key.pem');
     const byPath: Record<string, { bytes: number; sensitive: boolean }> =
       Object.fromEntries(a.ignored.map((e: { path: string }) => [e.path, e]));
-    // The human reads a filename; `"s\303\251crets/"` is not one.
-    expect(Object.keys(byPath).sort()).toEqual(['deploy key.pem', 'sécrets/']);
+    // The human reads a filename; `"s\303\251crets/"` is not one. And the ORDER
+    // is the sensitive-first half of the sort, which nothing else could pin: it
+    // is only observable when a sensitive entry and a BIGGER ordinary one are
+    // in the same manifest, and that happens exactly here, in the manifest
+    // printed beside a `sensitive-ignored` refusal. On bytes alone `sécrets/`
+    // would come first.
+    expect(a.ignored.map((e: { path: string }) => e.path))
+      .toEqual(['deploy key.pem', 'sécrets/']);
     expect(byPath['deploy key.pem']!.sensitive).toBe(true);
     // And the bytes, for BOTH — the quoted path measured nothing on disk, so
     // `ignoredBytes` under-reported precisely the entries that matter. A plain
@@ -422,6 +462,29 @@ describe('local-loss refusals', () => {
     expect(a.ignored[1].bytes).toBe(1);
     expect(a.ignoredCount).toBe(2);
     expect(a.ignoredBytes).toBe(4097);
+  });
+
+  it('matches EVERY pattern in the secret-shaped list, and nothing beside them', () => {
+    // One `it` per shape would be twelve fixtures; one fixture with twelve
+    // files is the same coverage. Written because a whole-diff mutation sweep
+    // could delete `*.key`, `*.p12`, `*.sqlite*`, `*.db` and `credentials*`
+    // from the case statement with the suite still green: the list is small,
+    // permanent and has no override, so every arm of it is load-bearing and
+    // none of it may rot silently. The NEGATIVES are half the test — a list
+    // that matched everything would refuse every workspace and the pressure
+    // would land on a repo-wide opt-out.
+    const secret = ['.env.local', 'deploy.pem', 'api.key', 'cert.p12', 'id_ed25519',
+      'vault.kdbx', 'credentials.json', 'app.sqlite3', 'cache.db', 'pg.dump',
+      'schema.sql', 'secrets.tar'];
+    const ordinary = ['notes.md', 'env.sample', 'myid_rsa', 'database.dbx'];
+    const { wt } = squashMovedBase([...secret, ...ordinary]);
+    for (const n of [...secret, ...ordinary]) fs.writeFileSync(path.join(wt, n), 'x\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect([...a.sensitive].sort()).toEqual([...secret].sort());
+    // The ordinary four are still LISTED and still destroyed on confirm — they
+    // are simply not what refuses.
+    expect(a.ignoredCount).toBe(secret.length + ordinary.length);
   });
 
   it('LISTS non-sensitive ignored content with sizes instead of refusing on it', () => {
@@ -607,6 +670,23 @@ describe('identity refusals', () => {
     // $main's record still names OUR branch — which is the only reason the
     // drift rung passed, and is the whole claim of the unified read.
     expect(h.git(main, 'worktree', 'list', '--porcelain')).toContain('branch refs/heads/ws/quiet-basin');
+  });
+
+  it('treats an unanswerable common-dir as NO answer, never as a match', () => {
+    // The `-n "$common" && -n "$mainreal"` halves, which a whole-diff mutation
+    // sweep found deletable with the suite still green — and they are the two
+    // that decide an IRREVERSIBLE step: with both lookups failing, the mutant
+    // `[[ "$common" == "$mainreal" ]]` compares "" against "" and waves a
+    // stranger's directory straight into Phase B, which reads it for
+    // `dirty-tree` and `sensitive-ignored`, and at Task 6 into
+    // `git worktree remove`. `_ws_common_dir`'s own contract is that empty is no
+    // answer; this is the call site honouring it.
+    const { wt } = squashMovedBase();
+    const a = refusal(wt, '_ws_common_dir() { return 1; };');
+    expect(a.verdict).toBe('foreign-worktree');
+    // Both sides named, and neither invented: the refusal says what it could
+    // not read rather than printing an empty path.
+    expect(a.detail).toContain('no repository');
   });
 
   it('refuses no-worktree-record when git’s registration was removed by hand', () => {
