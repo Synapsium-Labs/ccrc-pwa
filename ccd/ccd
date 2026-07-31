@@ -1672,7 +1672,7 @@ _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
-  local st up ahead repo rows row registered errf err rc
+  local st up ahead repo rows row registered errf err rc stashall
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -1841,6 +1841,38 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       || { _reap_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
   fi
 
+  # THE STASH READ THAT CANNOT FAIL SILENTLY — corroborated here rather than
+  # widened in `_ws_stash_count`, whose `2>/dev/null … || true` is Task 2's
+  # deliberate contract and which Task 4 consumes.
+  #
+  # Every failure of that helper is a 0, and a 0 is what authorises the delete.
+  # Neither of the two techniques already in this file can see it: measured on
+  # git 2.43, with `.git/logs/refs/stash` unreadable OR deleted while
+  # `refs/stash` still resolves, `git stash list` returns rc 0, EMPTY stdout and
+  # EMPTY stderr — so the exit code says fine and Phase B's stderr rule has
+  # nothing to test. The failure is deterministic, so ws-reap recomputes the
+  # same 0 and the `--expect` consent check matches. That is deviation 6's
+  # digest forgery in the `stashCount` field: a deletion authorised over stashes
+  # nobody counted.
+  #
+  # What CAN see it is the ref. Measured across push/pop/drop/clear on git 2.43:
+  # `refs/stash` exists if and only if at least one entry exists — git creates
+  # it on the first push and deletes it when the last entry goes. So if the ref
+  # resolves and `git stash list` still prints NOTHING, the reflog was not read,
+  # whatever the command returned.
+  #
+  # What the guard must NOT do is read "refs/stash exists" as "this branch has
+  # stashes". A stash on another branch is a legitimate, reapable state (also
+  # measured: a stash pushed from $main's own checkout leaves this branch's
+  # count at an honest 0), and refusing it would make every workspace in a repo
+  # whose main holds one stash permanently un-reapable, with no override. So the
+  # corroboration is on the WHOLE list and the branch-scoped count stays
+  # `_ws_stash_count`'s.
+  if git -C "$main" rev-parse --verify --quiet refs/stash >/dev/null 2>&1; then
+    stashall=$(git -C "$main" stash list 2>/dev/null | grep -c .)
+    (( stashall > 0 )) \
+      || { _reap_refuse stash-unreadable "refs/stash resolves in $main but the stash list read back empty"; return 1; }
+  fi
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \
     || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) on $branch"; return 1; }

@@ -456,6 +456,79 @@ describe('local-loss refusals', () => {
     h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'unpushed');
     expect(refusal(wt).verdict).toBe('unpushed-commits');
   });
+
+  it('refuses a stash read that failed SILENTLY, instead of fingerprinting its 0', () => {
+    // The third instance of the token-forgery class, and the one no status
+    // check and no stderr check can reach. `_ws_stash_count` answers 0 for
+    // every failure BY DESIGN — its `2>/dev/null` and its `|| true` are Task
+    // 2's and Task 4 consumes it — and measured on git 2.43, with
+    // `.git/logs/refs/stash` unreadable OR simply deleted while `refs/stash`
+    // still resolves, `git stash list` returns rc 0, EMPTY stdout and EMPTY
+    // stderr. The failure is deterministic, so ws-reap recomputes the same 0
+    // and the `--expect` consent check matches: a deletion authorised over
+    // stashes nobody counted. Same shape as deviation 6's digest forgery, in
+    // the `stashCount` field.
+    const { wt, main } = squashMovedBase();
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'wip\n');
+    h.sh(`cd "${wt}" && git stash push -q -m wip`);
+    // `refs/stash` is a COMMON ref, so a stash pushed from a linked worktree
+    // has its reflog in $main. If that stops being true, fix the fixture.
+    const reflog = path.join(main, '.git', 'logs', 'refs', 'stash');
+    expect(fs.existsSync(reflog), 'the stash reflog must be $main’s').toBe(true);
+
+    fs.chmodSync(reflog, 0o000);
+    // The blindness itself, measured here rather than asserted from memory.
+    expect(h.sh(`git -C "${main}" stash list 2>&1; echo "rc=$?"`),
+      'if this stops being rc=0-with-empty-output the whole test is moot').toBe('rc=0');
+    expect(refusal(wt).verdict).toBe('stash-unreadable');
+    fs.chmodSync(reflog, 0o644);
+    // The honest baseline the two failures are indistinguishable from without
+    // the guard: the SAME fixture, read successfully.
+    expect(refusal(wt).verdict).toBe('stashes-present');
+
+    fs.rmSync(reflog);
+    expect(h.sh(`git -C "${main}" stash list 2>&1; echo "rc=$?"`)).toBe('rc=0');
+    expect(refusal(wt).verdict).toBe('stash-unreadable');
+
+    // THE INVARIANT the guard turns on, measured rather than assumed:
+    // `refs/stash` exists if and only if at least one entry does — git creates
+    // the ref on the first push and deletes it when the last entry goes,
+    // whether by pop, drop or clear.
+    expect(h.sh(`git -C "${main}" rev-parse --verify --quiet refs/stash >/dev/null; echo "rc=$?"`))
+      .toBe('rc=0');
+    h.sh(`git -C "${main}" stash clear`);
+    expect(h.sh(`git -C "${main}" rev-parse --verify --quiet refs/stash >/dev/null; echo "rc=$?"`))
+      .toBe('rc=1');
+    expect(audit().verdict).toBe('reapable');
+  });
+
+  it('refuses when `git stash list` fails outright — it reports that as 0 too', () => {
+    const { wt } = squashMovedBase();
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'wip\n');
+    h.sh(`cd "${wt}" && git stash push -q -m wip`);
+    const NOSTASH = `git() { [[ "$*" == *"stash list"* ]] && return 128; command git "$@"; };`;
+    expect(refusal(wt, NOSTASH).verdict).toBe('stash-unreadable');
+  });
+
+  it('does NOT read a stash on another branch as an unreadable one', () => {
+    // `refs/stash` resolving means at least one entry exists SOMEWHERE, never
+    // that this branch has one — measured, a stash pushed from $main's own
+    // checkout leaves `_ws_stash_count "$main" ws/quiet-basin` at a legitimate
+    // 0. Reading the ref's mere existence as the refusal would make every
+    // workspace in a repo whose main holds one stash permanently un-reapable,
+    // with no override — which is why the corroboration is on the WHOLE list
+    // and the branch-scoped count stays `_ws_stash_count`'s.
+    const { wt, main } = squashMovedBase();
+    fs.writeFileSync(path.join(main, 'other.txt'), 'wip on main\n');
+    h.sh(`cd "${main}" && git stash push -q -m 'main wip'`);
+    expect(h.sh(`git -C "${main}" rev-parse --verify --quiet refs/stash >/dev/null; echo "rc=$?"`),
+      'the fixture must actually leave refs/stash resolving').toBe('rc=0');
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.stashes).toBe(0);
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
 });
 
 describe('identity refusals', () => {
