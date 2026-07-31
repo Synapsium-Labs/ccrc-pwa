@@ -116,10 +116,14 @@ const audit = (pre = '', id = 'demo-quiet-basin'): Record<string, any> =>
  *
  * The two identity cases that delete the worktree THEMSELVES
  * (`worktree-missing` and the breadcrumb case) call `audit()` directly and say
- * so inline; everything else goes through here.
+ * so inline; every other `it` that expects a REFUSAL goes through here — which
+ * is why the session id is a parameter: `no-such-session` and
+ * `not-a-workspace` are refusals about a DIFFERENT id or a stripped registry,
+ * and reaching for `audit()` to say so is exactly how the two of them lost the
+ * worktree assertion.
  */
-const refusal = (wt: string, pre = ''): Record<string, any> => {
-  const a = audit(pre);
+const refusal = (wt: string, pre = '', id = 'demo-quiet-basin'): Record<string, any> => {
+  const a = audit(pre, id);
   expect(a.verdict, `expected a refusal, got ${a.verdict}`).not.toBe('reapable');
   expect(a.token, 'a refusal must not hand out a reap token').toBeUndefined();
   expect(fs.existsSync(wt), 'a read-only audit must never remove the worktree').toBe(true);
@@ -657,11 +661,16 @@ describe('identity refusals', () => {
   it('refuses worktree-missing when there is NO breadcrumb to explain it', () => {
     // Also not read through `refusal`, and for the same reason: the fixture
     // deleted the worktree on purpose.
-    const { wt } = squashMovedBase();
+    const { wt, main } = squashMovedBase();
     fs.rmSync(wt, { recursive: true, force: true });
     const a = audit();
     expect(a.verdict).toBe('worktree-missing');
     expect(a.token).toBeUndefined();
+    // The half of `refusal` that still applies, inline: the branch and its
+    // commits are what the user has left, and a read-only verb does not touch
+    // them.
+    expect(h.git(main, 'show-ref', '--verify', 'refs/heads/ws/quiet-basin'))
+      .toContain('ws/quiet-basin');
   });
 });
 
@@ -742,10 +751,15 @@ describe('the refusals the ladder reaches last', () => {
   });
 
   it('refuses a session it has never heard of, and a main checkout', () => {
-    squashMovedBase();
-    expect(audit('', 'no-such-thing').verdict).toBe('no-such-session');
+    // Through `refusal` like every other negative case: these two are Phase A's
+    // FIRST two rungs, so they refuse before any git call, and a bare `audit()`
+    // here asserted neither that the worktree survived nor that no token came
+    // back — which is what the definition of done's "a fifth hit is a test that
+    // lost the assertion" is about.
+    const { wt } = squashMovedBase();
+    expect(refusal(wt, '', 'no-such-thing').verdict).toBe('no-such-session');
     fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.workspace'));
-    expect(audit().verdict).toBe('not-a-workspace');
+    expect(refusal(wt).verdict).toBe('not-a-workspace');
   });
 
   it('refuses a half-written registry rather than proceeding on part of it', () => {
