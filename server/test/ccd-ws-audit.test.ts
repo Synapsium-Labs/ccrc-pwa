@@ -704,6 +704,29 @@ describe('the refusals the ladder reaches last', () => {
     expect(refusal(wt).verdict).toBe('merge-commit-missing');
   });
 
+  it('re-anchors the oids AFTER the TSV split, so a tab in a url shifts nothing', () => {
+    // §7: no GitHub-sourced string is ever placed in an argv, and the plan
+    // calls that boundary "not a formality". `_pr_py pick` anchors
+    // `mergeCommit.oid` and `headRefOid` with `OID` (`^[0-9a-f]{7,40}$`,
+    // ccd:292) but NOT `url` or `number`, and hands all four back joined with
+    // tabs — so a `url` holding a TAB shifts the fields and `REAP_MERGE`
+    // becomes whatever followed it. Measured: with `url: 'https://x/\tinjected'`
+    // the string `injected` reached `git cat-file -e "injected^{commit}"`,
+    // `git merge-base --is-ancestor -- "$tip" "injected"` and
+    // `git diff --stat "injected" …`. It failed CLOSED (`merge-commit-missing`,
+    // exit 0, valid JSON), which is luck rather than construction — a floor of
+    // 7 anchored at both ends is what makes it construction. Same regex as
+    // python's, restated on this side of the split because the split is what
+    // can move a value from one field to another.
+    const { wt, tip, merge } = squashMovedBase();
+    h.ghRows([mergedRow({
+      headRefOid: tip, mergeCommit: { oid: merge }, url: 'https://x/\tinjected',
+    })]);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('pr-fields-malformed');
+    expect(a.detail).toContain('injected');
+  });
+
   it('refuses when gh itself could not be read, naming the classified reason', () => {
     const { wt } = squashMovedBase();
     h.ghFail(124, 'timed out');

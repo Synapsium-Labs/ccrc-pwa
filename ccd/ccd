@@ -1894,6 +1894,22 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     '!'*)                 _reap_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
   esac
   IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
+  # §7's argv boundary, restated on THIS side of the split — because the split
+  # is what can move a value out of the field that was anchored and into one
+  # that was not. `_pr_py pick` checks `mergeCommit.oid` and `headRefOid`
+  # against `OID` (ccd:292) inside python, but `url` and `number` are
+  # GitHub-sourced and unanchored, and all four come back joined with tabs. So a
+  # PR whose `url` holds a TAB shifts every later field: measured with
+  # `url: "https://x/\tinjected"`, the string `injected` became REAP_MERGE and
+  # reached `git cat-file -e "injected^{commit}"`, `git merge-base --is-ancestor
+  # -- "$tip" "injected"` and `git diff --stat "injected" …`. It failed closed
+  # there, but by luck rather than by construction, and one anchored test is
+  # what turns the one into the other. Same regex as python's, deliberately:
+  # a floor of 7 because a 3-character hex string like `abc` can be a real ref,
+  # and both ends anchored because `headRefOid: "main"` otherwise resolves as a
+  # REVISION and binds.
+  [[ "$REAP_MERGE" =~ ^[0-9a-f]{7,40}$ && "$REAP_HEADOID" =~ ^[0-9a-f]{7,40}$ ]] \
+    || { _reap_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
 
   # Mergedness is NEVER proven against an unfetched ref. Six repos on this box
   # have never been fetched; one is 24 days stale.
