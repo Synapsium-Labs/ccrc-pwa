@@ -233,6 +233,30 @@ describe('the proof ladder', () => {
     // with the guard deleted this reports `patch-id`.
     expect(h.sh(`_ws_merge_proof "${main}" "${merge}" "${tip}"; echo "rc=$? proof=$_WS_PROOF"`))
       .toBe('rc=0 proof=cherry');
+
+    // And the OTHER end of the helper, which no fixture that reaches a rung can
+    // observe: a call that proves nothing must return 1 with `_WS_PROOF` still
+    // EMPTY. Both the reset at the top and the final `return 1` survived a
+    // whole-diff sweep for want of exactly this — a caller that read a stale
+    // `_WS_PROOF` after a refusal would record the previous workspace's proof.
+    h.git(main, 'checkout', '-q', '-b', 'stray');
+    fs.writeFileSync(path.join(main, 'unmerged.txt'), 'not in the merge\n');
+    h.git(main, 'add', 'unmerged.txt'); h.git(main, 'commit', '-m', 'stray work');
+    const stray = h.git(main, 'rev-parse', 'HEAD');
+    expect(h.sh(`_ws_merge_proof "${main}" "${merge}" "${stray}"; echo "rc=$? proof=$_WS_PROOF"`))
+      .toBe('rc=1 proof=');
+  });
+
+  it('does not read a FAILED `git cherry` as an empty one', () => {
+    // The rung's own comment says it — "swallowing its exit code and testing an
+    // empty string would pass every broken invocation" — and a mutation sweep
+    // found the `if cout=$(…); then` deletable. The rebase fixture is where it
+    // bites: `cherry` is the ONLY rung left there, so with the exit code
+    // swallowed an empty `cout` has no `+` line and the merge is proven from a
+    // command that never ran.
+    const { wt } = rebaseMerged();
+    const NOCHERRY = `git() { [[ "$*" == *" cherry "* ]] && return 128; command git "$@"; };`;
+    expect(refusal(wt, NOCHERRY).verdict).toBe('tree-differs');
   });
 
   it('never uses the fail-open `git diff --quiet -- A B` form', () => {
@@ -265,6 +289,13 @@ describe('binding refusals', () => {
     // reports `pr-head-not-ours` about a PR that was never this workspace's.
     const { wt } = squashMovedBase();
     h.ghRows([mergedRow({ headRefName: 'ws/someone-else', headRefOid: '0'.repeat(40) })]);
+    expect(refusal(wt).verdict).toBe('no-bound-pr');
+    // The other half of the same filter, which a whole-diff sweep found
+    // deletable on its own: a merged PR opened FROM this branch INTO a
+    // different base. `pr-head-not-ours` would be a sentence about a stranger's
+    // commit told about our own branch, and the remedy it implies (look at
+    // whose commit that is) is the wrong one.
+    h.ghRows([mergedRow({ baseRefName: 'develop', headRefOid: '0'.repeat(40) })]);
     expect(refusal(wt).verdict).toBe('no-bound-pr');
   });
 
@@ -322,6 +353,95 @@ describe('local-loss refusals', () => {
     // Task 2 test uses).
     const NOSTAT = `git() { [[ "$*" == *"status --porcelain" ]] && return 128; command git "$@"; };`;
     expect(refusal(wt, NOSTAT).verdict).toBe('tree-unreadable');
+    // And the collector's own EXIT-CODE check, which the two patterns above
+    // cannot reach: they fail `_ws_ignored_digest` too, and its `|| return 1`
+    // then answers for both, so `(( rc == 0 ))` survived a whole-diff mutation
+    // sweep. `-z` is what separates them — the digest reads the same status
+    // WITHOUT it — so this fails the enumeration alone, and the enumeration is
+    // the half that needs no token to do harm: an empty `REAP_SENSITIVE` means
+    // `sensitive-ignored` cannot fire over files nobody listed.
+    const NOZ = `git() { [[ "$*" == *"--ignored=matching -z"* ]] && return 128; command git "$@"; };`;
+    expect(refusal(wt, NOZ).verdict).toBe('tree-unreadable');
+  });
+
+  it('takes only the `!! ` lines from a status that also has dirty ones', () => {
+    // The `!! ` filter, deletable with the suite green because Phase B refuses
+    // `dirty-tree` BEFORE the collector ever sees a mixed status — so the only
+    // caller that can is Task 6's resume path, and the only place to read it is
+    // the helper. Without the filter a ` M f1.txt` line becomes an ignored
+    // ENTRY whose path is ` M f1.txt`, sized 0 and offered for deletion beside
+    // the real ones.
+    const { wt } = squashMovedBase(['dist/']);
+    fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'edited\n');
+    expect(h.sh(`git -C "${wt}" status --porcelain --ignored=matching | wc -l`),
+      'the fixture must present BOTH kinds of line to the collector').toBe('2');
+    const paths = h.sh(`${ARCH} _ws_reap_reset; _ws_collect_ignored "${wt}"`
+      + `; for r in "\${REAP_IGNORED[@]}"; do echo "\${r##*$'\\t'}"; done`);
+    expect(paths).toBe('dist/');
+  });
+
+  it('records 0 bytes rather than an empty field when the size read fails', () => {
+    // `[[ "$b" =~ ^[0-9]+$ ]] || b=0`. Without it a failed `du` puts "" into the
+    // record and `cmd_ws_audit` prints `"bytes":`, which is not JSON at all —
+    // so `JSON.parse` inside `audit()` is the assertion, and what it defends is
+    // the manifest a human reads before authorising a delete.
+    const { wt } = squashMovedBase(['dist/']);
+    fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
+    const a = audit('du() { return 1; };');
+    expect(a.verdict).toBe('reapable');
+    expect(a.ignored).toEqual([{ path: 'dist/', bytes: 0, sensitive: false }]);
+    expect(a.ignoredBytes).toBe(0);
+  });
+
+  it('removes its scratch file on EVERY path that refuses, and on the one that does not', () => {
+    // Four exits, three `rm -f "$outf"`, and each one is only reachable through
+    // its own failure — measured by mutation: with any single `rm` deleted, the
+    // fixture for a different failure still cleans up, so one case pins nothing
+    // and all four have to be walked. The verdicts are identical with and
+    // without them (an empty temp-file name is itself a failing redirect, so the
+    // next guard refuses anyway); the FILE is the whole difference, and TMPDIR
+    // is what makes it observable. A verb that runs on every sheet open and
+    // leaks one temp file per failure is how a box ends up with 47k of them.
+    const { wt } = squashMovedBase();
+    const tmp = path.join(h.home, 'tmpdir');
+    fs.mkdirSync(tmp);
+    const run = (pre: string): string => h.sh(
+      `${ARCH} ${pre} _ws_reap_reset; _ws_collect_ignored "${wt}"; echo "rc=$?"`, { TMPDIR: tmp });
+
+    // (a) the SECOND allocation fails — the leak is the file the first one made.
+    // The counter lives in a FILE, not a variable: `outf=$(mktemp)` runs the
+    // stub inside a command substitution, so a shell variable it incremented
+    // would be discarded with the subshell and the stub would never fail.
+    const ONCE = `mktemp() { local c="$HOME/mkcount" n;`
+      + ` n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$c";`
+      + ` (( n >= 2 )) && return 1; command mktemp; };`;
+    expect(run(ONCE)).toBe('rc=1');
+    expect(fs.readdirSync(tmp), 'the errf-allocation refusal left its scratch file').toEqual([]);
+
+    // (b) the read fails by EXIT CODE.
+    const NOZ = `git() { [[ "$*" == *"--ignored=matching -z"* ]] && return 128; command git "$@"; };`;
+    expect(run(NOZ)).toBe('rc=1');
+    expect(fs.readdirSync(tmp), 'the exit-code refusal left its scratch file').toEqual([]);
+
+    // (c) the read exits 0 and WARNS — the partial-read refusal.
+    const sub = path.join(wt, 'sub');
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, 'work.txt'), 'uncommitted\n');
+    fs.chmodSync(sub, 0o000);
+    try {
+      expect(run('')).toBe('rc=1');
+      expect(fs.readdirSync(tmp), 'the stderr refusal left its scratch file').toEqual([]);
+    } finally {
+      fs.chmodSync(sub, 0o755);
+    }
+
+    // (d) and the path that succeeds.
+    fs.rmSync(sub, { recursive: true, force: true });
+    expect(run('')).toBe('rc=0');
+    expect(fs.readdirSync(tmp), 'a successful read left its scratch file').toEqual([]);
   });
 
   it('refuses a tree it could only PARTLY read — git warns and still exits 0', () => {
@@ -814,6 +934,41 @@ describe('the refusals the ladder reaches last', () => {
     const a = refusal(wt);
     expect(a.verdict).toBe('pr-fields-malformed');
     expect(a.detail).toContain('injected');
+    // A shifted fragment that IS hex refuses as well: `bee` is three hex
+    // characters, so the character class alone would take it. What refuses is
+    // the TAIL field, which still carries the literal tab — and that is also
+    // why the FLOOR of 7 cannot be pinned from here and is disclosed as a
+    // survivor at the ccd site instead. Measured, not assumed: a test written
+    // for the floor was re-swept and `{1,40}` gave this same answer.
+    h.ghRows([mergedRow({
+      headRefOid: tip, mergeCommit: { oid: merge }, url: 'https://x/\tbee',
+    })]);
+    expect(refusal(wt).verdict).toBe('pr-fields-malformed');
+  });
+
+  it('refuses branch-missing when refs/heads/<branch> does not resolve', () => {
+    // Unreachable by DELETING the ref — measured, `<branch>@{upstream}` still
+    // resolves from config afterwards, so `rev-list --count` fails first and
+    // `unpushed-commits` is what answers. The rung is still what stops Phase C
+    // building a proof out of an empty tip (`REAP_TIP` is the fingerprint's
+    // third field and `_ws_merge_proof`'s third argument), so it is failed
+    // directly rather than left unpinned on the strength of being unreachable
+    // through one route.
+    const { wt } = squashMovedBase();
+    const NOTIP = `git() { [[ "$*" == *'rev-parse --verify refs/heads/ws/quiet-basin'* ]] && return 128; command git "$@"; };`;
+    expect(refusal(wt, NOTIP).verdict).toBe('branch-missing');
+  });
+
+  it('publishes a NUMBER for commitsAheadOfBase even when the count fails', () => {
+    // `[[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0` in the VERB, not the evaluator.
+    // Without it a failed `rev-list --count` prints `"commitsAheadOfBase":` and
+    // the whole manifest stops being JSON — including the refusal it was
+    // carrying, so the sheet would show a parse error instead of a sentence.
+    const { wt } = squashMovedBase();
+    const NOCOUNT = `git() { [[ "$*" == *"rev-list --count"* ]] && return 128; command git "$@"; };`;
+    const a = refusal(wt, NOCOUNT);
+    expect(a.verdict).toBe('unpushed-commits');
+    expect(a.commitsAheadOfBase).toBe(0);
   });
 
   it('refuses when gh itself could not be read, naming the classified reason', () => {
@@ -848,6 +1003,11 @@ describe('the refusals the ladder reaches last', () => {
     const a = refusal(wt);
     expect(a.verdict).toBe('incomplete-registry');
     expect(a.detail).toContain("branch=''");
+    // The `-n "$REAP_WTHEAD"` half of `headMatchesRegistry`, which nothing else
+    // can reach: this is the one state where BOTH sides of the comparison are
+    // empty, and a bare equality would publish `true` — "git's record and ccrc's
+    // registry agree" — about a registry that names no branch at all.
+    expect(a.headMatchesRegistry).toBe(false);
   });
 
   it('refuses a base that did not resolve, rather than fingerprinting ""', () => {

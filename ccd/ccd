@@ -1578,11 +1578,15 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # read was given, and it names nothing on disk, so `ignoredBytes`
   # under-reported precisely the entries that matter — and the human, whose
   # reading of a filename this whole design rests on, was shown
-  # `"s\303\251crets/"`. `-c core.quotePath=false` does NOT fix it: measured, it
-  # unquotes the non-ASCII byte and STILL quotes the space. It is passed anyway,
-  # as a stated no-op under `-z` on git 2.43, so the intent is on the line that
-  # would otherwise read as an ordinary status call; it cannot be pinned
-  # behaviourally and is disclosed as such.
+  # `"s\303\251crets/"`.
+  #
+  # MUTATION SURVIVOR, disclosed: `-c core.quotePath=false` is a stated NO-OP
+  # here and cannot be pinned. Measured on git 2.43 in both directions: with
+  # `-z` the output is verbatim whether that config is false, true or unset, and
+  # WITHOUT `-z` the config unquotes the non-ASCII byte and still quotes the
+  # space — so it fixes nothing on its own and changes nothing beside `-z`. It
+  # is passed so the line says what it is for; `-z` is what does the work, and
+  # `reads the path git C-QUOTES` is what kills its removal.
   #
   # `-z` needs a FILE rather than `$(…)`: command substitution drops NUL bytes,
   # so the separator would vanish and every entry run together.
@@ -1603,6 +1607,30 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # the path back beside the size and a path with a newline in it makes that two
   # lines (measured: `cut -f1` alone returned `1\nd.log`, which fails the
   # numeric test and silently became 0).
+  #
+  # THREE MORE MUTATION SURVIVORS, disclosed with the reason each is one, and
+  # two of them are the same reason — an empty temp-file name is itself a
+  # failing redirect, so the read never runs and the NEXT guard refuses:
+  #   - `outf=$(mktemp) || return 1` — removable with the suite green: `>""` is
+  #     an invalid redirect, git never runs, and `(( rc == 0 ))` refuses.
+  #   - the `|| { rm -f "$outf"; return 1; }` on the `errf` line — removable for
+  #     the same reason PLUS one more: `2>""` fails the read, so control reaches
+  #     `(( rc == 0 )) || { rm -f "$outf"; …` one line later, which unlinks the
+  #     same file. Measured, not assumed: a test was written for it and the
+  #     mutant was re-swept and still SURVIVED. The OTHER THREE `rm -f "$outf"`
+  #     — the exit-code one, the stderr one and the one after the loop — are
+  #     each pinned individually by `removes its scratch file on EVERY path that
+  #     refuses`, which walks all four exits, because with any single one
+  #     deleted a fixture for a DIFFERENT failure still cleans up and one case
+  #     pins nothing.
+  #     Both stay for the reason `_gh_repo_slug`'s first two guards stay: each
+  #     states the case it is about rather than relying on a later line, and the
+  #     fall-through only holds while that later line keeps its `rm`.
+  #   - `[[ -n "$p" ]] || continue` — git never emits a bare `!! `, so `p` cannot
+  #     be empty after the prefix strip and no fixture can make it so. Kept
+  #     because the loop's other two lines both dereference `$p` into a
+  #     filesystem path, and an empty one would size `$wd/` — the whole
+  #     workspace — as an "ignored entry".
   local wd="$1" entry p b outf errf err rc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""
   outf=$(mktemp) || return 1
@@ -1621,6 +1649,13 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     else                              REAP_IGNORED+=(0$'\t'"$b"$'\t'"$p"); fi
   done <"$outf"
   rm -f "$outf"
+  # MUTATION SURVIVOR, disclosed: the `|| return 1` is removable with the suite
+  # green because this is the LAST statement, and a bare `VAR=$(cmd)` already
+  # returns cmd's status as the function's own. It is written out because that
+  # is true only while nothing follows it — the next line anyone appends here
+  # silently turns a failed digest into a successful collect, which is deviation
+  # 6's forgery. `propagates a digest that could not be computed` covers the
+  # behaviour; this comment covers the line.
   REAP_IGNDIGEST=$(_ws_ignored_digest "$wd") || return 1
 }
 
@@ -1636,6 +1671,16 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   # patch-id — a squash whose base DID move, i.e. the majority case on a busy
   # repo. Whole-branch diff, NOT git cherry: cherry compares per-commit
   # patch-ids and reports + for every commit of a multi-commit squash.
+  #
+  # TWO MUTATION SURVIVORS, disclosed: `[[ -n "$Pm" ]]` and `[[ -n "$mb" ]]` are
+  # each removable with the suite green, and they are removable because the
+  # `-n "$a"` below is the backstop that IS pinned. `Pm` is empty only for a
+  # merge commit with no parent (a root commit as `M`), and `mb` only for
+  # histories with no common ancestor; in both cases the `git diff` that follows
+  # gets an empty revision operand, fails, and leaves `a` empty — which
+  # `never proves patch-id from two EMPTY patch-ids` refuses. They stay because
+  # each names the case it is about, and because a diff against `""` is a git
+  # invocation nobody should be relying on the shape of.
   Pm=$(git -C "$main" rev-parse --verify "${M}^1" 2>/dev/null) || Pm=""
   if [[ -n "$Pm" ]]; then
     mb=$(git -C "$main" merge-base -- "$tip" "$Pm" 2>/dev/null) || mb=""
@@ -1667,6 +1712,11 @@ _ws_reap_reset() {
   REAP_IGNORED=(); REAP_SENSITIVE=()
 }
 
+# MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
+# green, because every call site in `_ws_reap_eval` is `… ; return 1` and none
+# of them reads this function's status. It stays so that a site CAN be written
+# `_reap_refuse … || return` — and so that the function's contract is "this
+# refuses", not "this assigns two variables".
 _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
@@ -1793,6 +1843,17 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # squatter through, two that differ refuse a healthy workspace.
     # Empty is NO ANSWER, never a match — the helper's own contract — so both
     # sides are required non-empty before the comparison means anything.
+    #
+    # MUTATION SURVIVOR, disclosed: replacing the FIRST call with the banned
+    # `cd "$workdir" && git rev-parse --git-common-dir` form leaves the suite
+    # green, and the reason is worth knowing rather than papering over. `$workdir`
+    # is absolute, so CDPATH cannot fire on it, and from a LINKED worktree
+    # `--git-common-dir` already answers absolutely — so on this side the two
+    # forms agree. The form is banned for the OTHER side: from a repository's own
+    # checkout plain `--git-common-dir` prints a bare `.git`, and `$main` is
+    # exactly that. `_ws_common_dir` (ccd:687-692) is where that is pinned, and
+    # it is called here rather than reimplemented so there is one answer to
+    # break.
     common=$(_ws_common_dir "$workdir") || common=""
     mainreal=$(_ws_common_dir "$main")  || mainreal=""
     [[ -n "$common" && -n "$mainreal" && "$common" == "$mainreal" ]] \
@@ -1805,6 +1866,13 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # the value did change and is worth knowing while reading the fingerprint: a
     # detached worktree now yields "" where `rev-parse` yielded the literal
     # `HEAD` — unobservable, because rung 2 refuses before this line.
+    #
+    # MUTATION SURVIVOR, disclosed: writing `REAP_WTHEAD="$branch"` here leaves
+    # the suite green, and always will — rung 1 above refuses unless
+    # `wthead == branch`, so on this line the two are equal BY CONSTRUCTION. It
+    # is written from `wthead` because the field means "what git's record says",
+    # and the day that rung moves or softens, the fingerprint must follow git
+    # rather than quietly follow the registry.
     REAP_WTHEAD="$wthead"
 
     # ── Phase B: nothing local is lost ─────────────────────────────
@@ -1842,6 +1910,13 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # status text is not the count, and one variable holding both in turn is how
     # a later reader ends up printing porcelain into a sentence that says
     # "file(s)".
+    # MUTATION SURVIVOR, disclosed: this line's `|| { _reap_refuse … }` is
+    # removable with the suite green, for the same reason as the two in
+    # `_ws_collect_ignored` — an empty `errf` makes `2>""` a failing redirect, the
+    # status read never runs, and the `(( rc == 0 ))` two lines down refuses with
+    # the same token. Unlike those two there is no file to leak here, so nothing
+    # observable is left to pin. It states the case rather than relying on a
+    # later line to catch it.
     errf=$(mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
     dirt=$(git -C "$workdir" status --porcelain 2>"$errf"); rc=$?
     err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
@@ -1923,6 +1998,16 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # a floor of 7 because a 3-character hex string like `abc` can be a real ref,
   # and both ends anchored because `headRefOid: "main"` otherwise resolves as a
   # REVISION and binds.
+  #
+  # MUTATION SURVIVOR, disclosed: the FLOOR alone (`{7,40}` -> `{1,40}`) is
+  # removable with the suite green, and measured rather than assumed — a test
+  # written for it was re-swept and the mutant still survived. The reason is
+  # structural: a value can only arrive here two ways, and neither exposes the
+  # floor. Python's `OID` already enforces 7 on both oids, and the field SHIFT
+  # this guard is for always leaves the tail field carrying a literal TAB, which
+  # fails the character class whatever the bounds are. So the floor restates
+  # python's, one process later, for the day these two stop being read from the
+  # same producer. The character class and the anchors are what is pinned.
   [[ "$REAP_MERGE" =~ ^[0-9a-f]{7,40}$ && "$REAP_HEADOID" =~ ^[0-9a-f]{7,40}$ ]] \
     || { _reap_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
 
@@ -1954,6 +2039,13 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   st=$(_ws_status "$id") || { _reap_refuse status-unknown "cannot read the wrapper status file"; return 1; }
   [[ "$st" != busy ]] || { _reap_refuse session-busy "the session is working — a model turn, a Bash tool command, or a status this ccd does not recognise"; return 1; }
 
+  # MUTATION SURVIVOR, disclosed and unpinnable BY CONSTRUCTION: the `sort` can
+  # be deleted with the suite green, because every state that reaches this line
+  # has an EMPTY sensitive set — a non-empty one refuses `sensitive-ignored`
+  # above, with no override — so the digest is the constant sha256 of one blank
+  # line. It stays because the field is a set digest and a set has no order,
+  # and because the ordering `_ws_collect_ignored` produces is git's, which is
+  # not promised. The only way to pin it would be a state this design forbids.
   REAP_SENSDIGEST=$(printf '%s\n' "${REAP_SENSITIVE[@]-}" | sort | sha256sum | cut -d' ' -f1)
   REAP_TOKEN=$(_ws_fingerprint "$id" "$branch" "$REAP_TIP" "$REAP_HEADOID" "$REAP_MERGE" "$REAP_PROOF" \
                  "$REAP_DIRTY" "$REAP_IGNDIGEST" "$REAP_SENSDIGEST" "$REAP_STASHES" "$REAP_WTHEAD" "$REAP_BASEOID")
