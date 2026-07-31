@@ -691,9 +691,14 @@ describe('destruction order', () => {
     // workspace is marked half-reaped with no tombstone to resume from: the
     // `branch-moved` refusal for ever, which is the wedge §5.6 exists to end.
     //
-    // `exit 9` from a stubbed ccd function is the only faithful stand-in for the
-    // SIGTERM the outer timeout sends — and it exercises the EXIT trap on the
-    // way out, which is what lets the second run take the lock at all.
+    // `exit 9` from a stubbed ccd function is the faithful stand-in for the
+    // SIGTERM the outer timeout sends: the process really dies, and the lock
+    // comes back because the process died — the kernel closes its descriptor.
+    // That is now true of every death, which is why `a kill -9 mid-reap leaves
+    // nothing to clear` is a separate fixture rather than a variation on this
+    // one: `exit 9` cannot distinguish a lock an EXIT trap released from one
+    // the kernel did, and under the shipped-and-replaced trap form the two
+    // signals gave opposite answers.
     const { wt, main } = ready();
     const tok = tokenOf();
     const KILL = ARCH.replace('_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };',
