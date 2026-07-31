@@ -632,6 +632,27 @@ describe('local-loss refusals', () => {
     expect(a.ignoredBytes).toBeGreaterThan(4700);
   });
 
+  it('scans ALL TYPES inside a collapsed dir, so a secret-shaped DIRECTORY is seen', () => {
+    // The inside-scan's `find` deliberately carries no `-type f`, because
+    // `_ws_sensitive_match` matches DIRECTORY names too — restricting it would
+    // answer a different question inside a collapsed entry than outside it.
+    // That choice was argued in a comment and pinned by nothing: adding
+    // `-type f` left the whole suite green (gate finding N1). Here the only
+    // matches ARE directories — no file below `build/` matches any glob — so
+    // with `-type f` the scan finds nothing, the entry reads ordinary, and a
+    // tap deletes `build/secrets/` and `build/credentials/` unnamed.
+    const { wt } = squashMovedBase(['build/']);
+    for (const d of ['secrets', 'credentials']) {
+      fs.mkdirSync(path.join(wt, 'build', d), { recursive: true });
+      fs.writeFileSync(path.join(wt, 'build', d, 'data.txt'), 'x'.repeat(128));
+    }
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.sensitive.sort()).toEqual(['build/credentials', 'build/secrets']);
+    expect(a.token).toBeUndefined();
+    expect(fs.existsSync(path.join(wt, 'build', 'secrets', 'data.txt'))).toBe(true);
+  });
+
   it('survives a TAB and a NEWLINE inside an ignored path', () => {
     // What `-z` gives with one hand it takes with the other: git's C-quoting was
     // accidentally CONTAINING these two bytes, and unquoted they land in an

@@ -1648,7 +1648,7 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   # TWO MUTATION SURVIVORS, disclosed and measured, and they are the same
   # reason: nothing can spend the budget in a fixture. `left=$(( deadline -
   # SECONDS ))` can be replaced by a constant, and `(( left > 0 ))` by `(( 1 ))`,
-  # with the whole suite green (44 files / 709 tests, exit 0, each measured on
+  # with the whole suite green (44 files / 712 tests, exit 0, each measured on
   # its own) — because reaching either needs a scan that really takes 30 s, and
   # the largest ignored tree on this box takes 3.4 s. What IS pinned is the
   # `rc == 124` arm (`refuses, with the remedy, when the scan runs out of its
@@ -1852,7 +1852,14 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # A FAILED HASH IS STILL NOT AN EMPTY ONE (deviation 6): the shape check is
   # what keeps `sha256sum` failing from putting "" into the field on BOTH sides,
   # where the fingerprints then match and D2's consent check passes over a
-  # measurement nobody made. `_ws_ignored_digest` keeps its own copy of that
+  # measurement nobody made.
+  #   MUTATION SURVIVOR, disclosed: the `printf ''` that feeds an EMPTY set can
+  #   be written `printf '\n'` with the suite green, and always will be. The
+  #   comment above reasons about "nothing ignored" colliding with "one entry
+  #   called nothing", but that second state is unconstructible — the collector's
+  #   `[[ -n "$p" ]] || continue` refuses an empty path and every record carries
+  #   `sensitive\tbytes\t` before it. Unpinnable by construction, like the
+  #   sensitive-digest `sort` two blocks down. (Gate finding N3.) `_ws_ignored_digest` keeps its own copy of that
   # rung because the ARCHIVE manifest still calls it, and archive records what
   # reap refuses over.
   # MUTATION SURVIVOR, disclosed: the `sort -z` can be deleted with the whole
@@ -2882,7 +2889,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
       # the cleanup finishes over work it never saw. Two reads, one rule.
       #
       # TWO MUTATION SURVIVORS, disclosed and each measured whole-suite (44
-      # files / 709 tests, exit 0): dropping the `&& [[ -z "$rerr" ]]` conjunct,
+      # files / 712 tests, exit 0): dropping the `&& [[ -z "$rerr" ]]` conjunct,
       # and restoring `2>/dev/null` so there is no `$rerr` to test. Both leave
       # the suite green, because `_ws_collect_ignored` two statements
       # below reads the same tree under the same rule and refuses
