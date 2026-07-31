@@ -336,6 +336,66 @@ describe('local-loss refusals', () => {
     expect(refusal(wt).verdict).toBe(verdict);
   });
 
+  it('shows a dirty path as a FILENAME, not as C-quoted octal', () => {
+    // The sibling of the ignored list, in the same document, read by the same
+    // human, and left behind when that one was fixed: `git status --porcelain`
+    // without `-z` C-quotes any path holding a space, a non-ASCII byte, a
+    // quote, a backslash or a control character. Measured, this fixture
+    // rendered `"?? \"d\\303\\251j\\303\\240 vu.txt\""` in the same document as
+    // an `ignored` array carrying raw paths.
+    //
+    // NO GUARD READS THIS ARRAY — `dirty-tree` refuses on `REAP_DIRTY`, a count
+    // from a different read in `_ws_reap_eval` — so this is about the manifest a
+    // human is asked to authorise a deletion from, which is the whole of why
+    // the ignored list was a finding.
+    const { wt } = squashMovedBase();
+    fs.writeFileSync(path.join(wt, 'déjà vu.txt'), 'x\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('dirty-tree');
+    expect(a.dirty).toEqual(['?? déjà vu.txt']);
+  });
+
+  it('reads a staged RENAME as one dirty entry, not as an orphan path', () => {
+    // What `-z` gives it takes back, here as in the ignored list. Porcelain v1
+    // emits a rename or copy as TWO NUL-terminated records — `XY <to>NUL<from>`
+    // — where the non-`-z` form printed a single `R  <from> -> <to>` line.
+    // Unpaired, the second record joins this list as an entry with no status
+    // letters: a bare filename, in the one list this design asks a human to
+    // read before authorising a delete.
+    //
+    // The letter is in the X column: measured on git 2.43, a worktree-only
+    // rename is not detected at all (it reports ` D` plus `??`) and only an
+    // INDEX rename produces the two-path form.
+    const { wt } = squashMovedBase();
+    h.git(wt, 'mv', 'f1.txt', 'renamed.txt');
+    expect(h.sh(`git -C "${wt}" status --porcelain -z | tr '\\0' '|'`),
+      'if git stops emitting the two-record form this test is moot')
+      .toBe('R  renamed.txt|f1.txt|');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('dirty-tree');
+    expect(a.dirty).toEqual(['R  f1.txt -> renamed.txt']);
+  });
+
+  it('reads a staged COPY the same way — `C` is reachable, not dead weight', () => {
+    // The other letter that carries the two-path form, given its own fixture so
+    // that `[RC]*` is not half a pattern nobody can tell from `[R]*`. It takes
+    // BOTH `status.renames=copies` and a MODIFIED source: measured on git 2.43,
+    // an unmodified source beside a fresh copy reports a plain `A  copy.txt`,
+    // because git's copy detection only considers sources that changed in the
+    // same diff and `git status` has no `--find-copies-harder`.
+    const { wt } = squashMovedBase();
+    h.git(wt, 'config', 'status.renames', 'copies');
+    fs.copyFileSync(path.join(wt, 'f1.txt'), path.join(wt, 'f1copy.txt'));
+    fs.appendFileSync(path.join(wt, 'f1.txt'), 'edited\n');
+    h.git(wt, 'add', '-A');
+    expect(h.sh(`git -C "${wt}" status --porcelain -z | tr '\\0' '|'`),
+      'if git stops detecting the copy this test is moot')
+      .toBe('M  f1.txt|C  f1copy.txt|f1.txt|');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('dirty-tree');
+    expect(a.dirty).toEqual(['M  f1.txt', 'C  f1.txt -> f1copy.txt']);
+  });
+
   it('refuses a tree it could not READ, rather than counting it clean', () => {
     // The two Phase B reads carry the same failure and the same forgery. A
     // `status --porcelain | grep -c .` counts ZERO lines for a worktree nobody

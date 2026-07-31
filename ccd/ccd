@@ -2194,13 +2194,49 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   done
   sens_json+="]"
 
-  local dirty_json="[" dfirst=1 dl
+  # `-z` HERE TOO, for the reason the ignored list has it: this array is read by
+  # the same human, in the same document, before the same irreversible action,
+  # and without `-z` git C-QUOTES the same five classes of byte — measured, a
+  # dirty `déjà vu.txt` rendered `"?? \"d\\303\\251j\\303\\240 vu.txt\""` beside
+  # an `ignored` array already carrying raw paths. No guard reads this array
+  # (`dirty-tree` refuses on `REAP_DIRTY`, a count from `_ws_reap_eval`'s own
+  # read), so nothing here decides anything; the whole judgement this design
+  # rests on is a human reading a filename, and `\303\251` is not one.
+  #
+  # A pipe rather than a temp file: process substitution is a PIPE, so the NULs
+  # survive it — it is `$(…)` that drops them, which is why the collector needs
+  # a file and this does not. And `-c core.quotePath=false` is deliberately NOT
+  # repeated here: `_ws_collect_ignored` records it as a measured NO-OP beside
+  # `-z`, and a second copy would be a second line no fixture can pin.
+  #
+  # A RENAME OR COPY IS TWO RECORDS, `XY <to>NUL<from>NUL`, where the non-`-z`
+  # form printed one `R  <from> -> <to>` line — so the second is consumed here
+  # and rejoined into that line. Unpaired it would join the list as an entry
+  # with no status letters: a bare filename, in exactly the list a human is
+  # asked to read. The letter is in the X column: measured on git 2.43, a
+  # worktree-only rename is not detected at all (` D` plus `??`) and only an
+  # INDEX rename produces the two-path form. `C` is not dead weight beside `R`:
+  # it needs `status.renames=copies` AND a modified source (git's copy detection
+  # only looks at sources that changed in the same diff, and status has no
+  # `--find-copies-harder`), and both halves are in a fixture.
+  #
+  # MUTATION SURVIVOR, disclosed and measured: `[[ -n "$dl" ]] || continue` is
+  # removable with the suite green. Under `-z` git's output ends in a NUL and
+  # never contains two in a row, so `read -d ''` cannot produce an empty record
+  # — it hits EOF and ends the loop instead. Kept for the reason the identical
+  # line in `_ws_collect_ignored` is kept: the next statement indexes `$dl`
+  # positionally, and an empty record would put `""` into the one list this
+  # design asks a human to read filenames out of.
+  local dirty_json="[" dfirst=1 dl dsrc
   if [[ -d "$workdir" ]]; then
-    while IFS= read -r dl; do
+    while IFS= read -r -d '' dl; do
       [[ -n "$dl" ]] || continue
+      case "$dl" in
+        [RC]*) IFS= read -r -d '' dsrc && dl="${dl:0:3}$dsrc -> ${dl:3}" ;;
+      esac
       (( dfirst )) || dirty_json+=","; dfirst=0
       dirty_json+="$(_json_str "$dl")"
-    done < <(git -C "$workdir" status --porcelain 2>/dev/null)
+    done < <(git -C "$workdir" status --porcelain -z 2>/dev/null)
   fi
   dirty_json+="]"
 
