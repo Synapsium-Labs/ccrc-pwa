@@ -1672,7 +1672,7 @@ _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
-  local st up ahead repo rows row registered errf err rc stashall
+  local st up ahead repo rows row registered errf err rc stashall dirt
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -1827,12 +1827,27 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # "some of the tree" is not an answer either of them may act on. The test is
     # for the DIAGNOSTIC and not its wording — git translates warnings and ccd
     # pins no locale.
+    #
+    # SAID OUT LOUD, because the polarity is chosen and not free: ANY diagnostic
+    # refuses, so one benign `warning:` — a stale index extension, a
+    # `core.fsmonitor` complaint, an advice line a future git decides to print —
+    # makes this workspace un-reapable, permanently, with no override anywhere.
+    # That is the correct direction (the alternative is a wording allowlist that
+    # a translated warning walks straight through), and the cost is that the
+    # remedy is to fix the warning, not to press through it. `ws-archive`, which
+    # runs unattended, is deliberately NOT built this way — it records what it
+    # cannot describe rather than refusing forever.
+    #
+    # `dirt` and `REAP_DIRTY` are two names because they are two types: the raw
+    # status text is not the count, and one variable holding both in turn is how
+    # a later reader ends up printing porcelain into a sentence that says
+    # "file(s)".
     errf=$(mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
-    REAP_DIRTY=$(git -C "$workdir" status --porcelain 2>"$errf"); rc=$?
+    dirt=$(git -C "$workdir" status --porcelain 2>"$errf"); rc=$?
     err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
     (( rc == 0 )) && [[ -z "$err" ]] \
       || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
-    REAP_DIRTY=$(printf '%s' "$REAP_DIRTY" | grep -c . || true)
+    REAP_DIRTY=$(printf '%s' "$dirt" | grep -c . || true)
     (( REAP_DIRTY == 0 )) \
       || { _reap_refuse dirty-tree "$REAP_DIRTY uncommitted or untracked file(s)"; return 1; }
     _ws_collect_ignored "$workdir" \
@@ -2923,7 +2938,7 @@ case "${1:-}" in
   ws-archive) shift; cmd_ws_archive "$@" ;;
   ws-restore) shift; cmd_ws_restore "$@" ;;
   ws-attic)   shift; cmd_ws_attic "$@" ;;
-  ws-audit)  shift; cmd_ws_audit "$@" ;;
+  ws-audit)   shift; cmd_ws_audit "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|pr-open|pr-state} <args>" >&2; exit 1 ;;
