@@ -915,4 +915,42 @@ describe('partial failure and resume', () => {
     expect(refused(tok, null, main).refused).toBe('branch-moved');
     expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
   }, 30000);
+
+  it('resumes from a clips breadcrumb, where the branch is SUPPOSED to be gone', () => {
+    // THE WEDGE THE PER-PHASE RULE EXISTS TO END. §5.6 says "re-validate
+    // `refs/heads/$branch == $tip` from the tombstone, THEN continue from the
+    // recorded phase" — and applied unconditionally that re-validation is a
+    // contradiction for `reaping=clips`, because (g) has already CAS-deleted
+    // the branch by then. `live` reads empty, `tombtip` is a sha, so the gate
+    // says "moved" for the one phase in which gone is the correct state, and
+    // it says it FOREVER: the clips directory leaks, the registry row survives
+    // with no worktree and no branch, `ccd ls` and the PWA keep showing it, and
+    // the detail claims nothing was deleted after the worktree when in fact
+    // everything up to and including the branch was.
+    //
+    // This is also the fixture that pins (g)'s `show-ref` gate in the SKIP
+    // direction. `if true` there survives every other test in the file: with
+    // the gate gone, this resume runs `update-ref -d` on a ref that is already
+    // deleted, git fails, and the run refuses `branch-moved` without clearing
+    // the registry — i.e. it manufactures this same wedge on the one path that
+    // would otherwise finish.
+    const { main } = ready();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'a.png'), 'full resolution, and unrecoverable');
+    const tok = tokenOf();
+    const r = h.run(`${GH_STUB} ${ARCH} rm() { [[ "$1" == -rf ]] && exit 7; command rm "$@"; }; `
+      + `cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, 'the fixture must really have died at the clips rm').toBe(7);
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('clips');
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), '(g) is done by then').toBe('');
+    expect(fs.existsSync(clips), 'and (h) is not').toBe(true);
+
+    const out = JSON.parse(reap(tok).stdout);
+    expect(out.reaped, 'a clips resume must FINISH, not refuse for ever').toBe('demo-quiet-basin');
+    expect(out.resumed).toBe('clips');
+    expect(fs.existsSync(clips), 'the clips it stopped in front of are gone').toBe(false);
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'and the row clears itself').toBeNull();
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBeNull();
+  }, 30000);
 });

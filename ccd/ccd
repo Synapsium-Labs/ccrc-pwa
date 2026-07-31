@@ -2582,12 +2582,42 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
     # deleted the worktree" from "we did".
     local tombtip; tombtip=$(sed -n 's/.*"tip"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$REG/.reaped/$id.json" 2>/dev/null | head -1)
     local branch; branch=$(_reg_get "$id" branch)
-    local live;   live=$(git -C "$PROJECTS_ROOT/$(_reg_get "$id" project)" rev-parse --verify "refs/heads/$branch" 2>/dev/null)
-    if [[ -z "$tombtip" || "$live" != "$tombtip" ]]; then
+    # THE TIP IS REQUIRED ON EVERY PHASE. It is the CAS old-value at (g) and the
+    # only proof this journal belongs to this branch, since Phase C is
+    # deliberately not re-run here. Empty is the ABSENCE of that proof, never a
+    # value: with the branch also gone the two empties compare equal, so the
+    # emptiness test cannot be folded into the comparison below.
+    if [[ -z "$tombtip" ]]; then
       printf '{"refused":"branch-moved","detail":%s,"paths":[]}\n' \
-        "$(_json_str "the branch moved while cleaning up — nothing was deleted after the worktree")"
+        "$(_json_str "no tombstone tip for $id — refusing to finish a cleanup whose journal cannot be read")"
       return 0
     fi
+    # AND THE COMPARISON IS PER PHASE, because §5.6's "re-validate … THEN
+    # continue from the recorded phase" is a contradiction once the phase is
+    # `clips`: (g) has ALREADY CAS-deleted the branch by then, so `live` is
+    # empty by construction and an unconditional comparison reads "moved" for
+    # the one state in which gone is correct — permanently. Measured before it
+    # was per phase: a kill at (h) answered `branch-moved` on every later
+    # attempt, the clips directory leaked, the registry row survived with no
+    # worktree and no branch, and the detail said "nothing was deleted after
+    # the worktree" while everything up to and including the branch had been.
+    #
+    # `clips` is the ONLY phase that skips it, and the default arm re-validates:
+    # a breadcrumb holding anything ccd did not write is not a phase this can
+    # reason about, so it gets the stricter reading, not the looser one. What
+    # protects (g) in the skipped case is (g)'s own compare-and-swap — a branch
+    # recreated at another sha after the delete fails that CAS and refuses
+    # there.
+    case "$resumed" in
+      clips) : ;;
+      *)
+        local live; live=$(git -C "$PROJECTS_ROOT/$(_reg_get "$id" project)" rev-parse --verify "refs/heads/$branch" 2>/dev/null)
+        if [[ "$live" != "$tombtip" ]]; then
+          printf '{"refused":"branch-moved","detail":%s,"paths":[]}\n' \
+            "$(_json_str "the branch moved while cleaning up — nothing was deleted after the worktree")"
+          return 0
+        fi ;;
+    esac
 
     # ── Phase B, AGAIN, on the resume path ────────────────────────────
     # §5.3 is unconditional: "every guard below is evaluated inside ws-reap, on
@@ -2740,6 +2770,15 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # The empty case is not hypothetical: deleting `REAP_TIP="$tombtip"` on the
   # resume path produced exactly it, and the suite stayed green until
   # `resumes against the tombstone tip, so the CAS is still a CAS` existed.
+  #
+  # THE `show-ref` GATE IS PINNED IN BOTH DIRECTIONS, which took two fixtures
+  # and is worth saying because one of them nearly was not written. `if false`
+  # is killed by every test that reaps a live branch. `if true` — the SKIP
+  # direction — survived the whole suite until `resumes from a clips
+  # breadcrumb`: on that path the branch is already gone, so without the gate
+  # `update-ref -d` runs against a ref that does not resolve, git exits 1, and
+  # the run refuses `branch-moved` and leaves the registry row behind, which is
+  # the F2 wedge manufactured on a path that would otherwise finish.
   if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$main" update-ref -d "refs/heads/$branch" "$REAP_TIP" 2>/dev/null || {
       printf '{"refused":"branch-moved","detail":%s,"paths":[]}\n' \
