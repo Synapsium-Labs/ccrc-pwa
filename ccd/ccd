@@ -2745,6 +2745,28 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
   if [[ -n "$resumed" ]]; then
     # Resume: the tombstone written at (b) is what distinguishes "the user
     # deleted the worktree" from "we did".
+    #
+    # `--expect` IS NOT CHECKED ON THIS PATH, and that is a decision rather than
+    # an oversight, so it is written down here where the path forks. Everywhere
+    # else the plan and the spec call the token THE consent boundary — "any
+    # drift refuses `state-changed`" — and the argv still requires a shape-valid
+    # 64-hex string, so `ws-reap` cannot be spelled without one. What it is not
+    # is compared: there is nothing to compare it to. The token is
+    # `_ws_reap_eval`'s, built from twelve facts Phase B and Phase C measured,
+    # and on a resume the worktree is usually already gone — Phase B has no tree
+    # to read and Phase C would need a gh call an outage could withhold for
+    # ever, which is the wedge §5.6 exists to end. `cmd_ws_audit` says the same
+    # thing from the other side by refusing to ISSUE a token for
+    # `reap-interrupted`: a token nobody can obtain cannot be the boundary.
+    #
+    # What stands in its place is stricter in the ways that still have facts
+    # behind them: the TOMBSTONE is the consent record — it exists only because
+    # a token-carrying reap was authorised, and its `tip` is re-validated
+    # against the live ref per phase below — and Phase B and Phase D1, the two
+    # whose facts can still change in the gap, are re-proven in full. What is
+    # accepted is that a SECOND human, holding any 64-hex string, can finish a
+    # cleanup a first human authorised. Measured: after a kill at (c),
+    # `ws-reap --expect ffff…ff` completed the reap.
     local tombtip; tombtip=$(sed -n 's/.*"tip"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$REG/.reaped/$id.json" 2>/dev/null | head -1)
     local branch; branch=$(_reg_get "$id" branch)
     # THE TIP IS REQUIRED ON EVERY PHASE. It is the CAS old-value at (g) and the
@@ -2809,8 +2831,31 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
       # REAP_SENSITIVE would take `git worktree remove` straight through both
       # guards. `local x=$(cmd)` returns local's status, so the read is its own
       # statement.
-      local rdirty
-      rdirty=$(git -C "$workdir" status --porcelain 2>/dev/null) || {
+      # AND STDERR IS CAPTURED, exactly as `_ws_reap_eval`'s Phase B captures
+      # it (ccd:2109-2116) and for the same measured reason: a PARTIALLY
+      # unreadable tree exits 0 with EMPTY stdout and `warning: could not open
+      # directory 'sub/'` on stderr, so the count is 0, `dirty-tree` passes, and
+      # the cleanup finishes over work it never saw. Two reads, one rule.
+      #
+      # MUTATION SURVIVOR, disclosed and measured: restoring `2>/dev/null` here
+      # leaves the suite green, because `_ws_collect_ignored` two statements
+      # below reads the same tree under the same rule and refuses
+      # `tree-unreadable` first — measured with `chmod 000` on an untracked
+      # directory holding uncommitted work: the resume DOES refuse and the work
+      # DOES survive, but the refusal comes from the ignored read. This is
+      # defence in depth, and it is written out because the ordering it relies
+      # on is not a property anyone would preserve on purpose: reorder those two
+      # statements, or relax the ignored read, and a partially unreadable tree
+      # walks into `git worktree remove`.
+      local rdirty rerrf rerr rrc
+      rerrf=$(mktemp) || {
+        printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+          "$(_json_str "could not read the tree at $workdir — refusing to finish the cleanup on a guess")"
+        return 0
+      }
+      rdirty=$(git -C "$workdir" status --porcelain 2>"$rerrf"); rrc=$?
+      rerr=$(cat "$rerrf" 2>/dev/null); rm -f "$rerrf"
+      { (( rrc == 0 )) && [[ -z "$rerr" ]]; } || {
         printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
           "$(_json_str "could not read the tree at $workdir — refusing to finish the cleanup on a guess")"
         return 0
@@ -2889,6 +2934,16 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     _ws_unsupervise "$id"                                                  # (d)
     tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true              # (e)
   else
+    # AND (d) AND (e) ARE NOT RE-RUN, which is safe only because of what stands
+    # in front of this path: `_ws_reap_eval` refuses `not-archived` unless
+    # `$REG/$id.archived` exists, and `cmd_ws_archive` (ccd:1063-1064) is what
+    # writes it — after `_ws_unsupervise` and after `tmux kill-session`. So by
+    # the time any breadcrumb can exist the unit is disabled and the pane is
+    # gone, and re-running either would be a second call to an idempotent
+    # no-op. Measured: a resumed reap completes with `unsup=0`. What it does NOT
+    # cover is something re-supervising the session between the archive and the
+    # reap; the resume's own Phase D1 re-proof refuses `session-busy` if that
+    # something is actually working, which is the part that could cost bytes.
     tomb="$REG/.reaped/$id.json"
     attic=$(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null | grep -c . || true)
   fi
