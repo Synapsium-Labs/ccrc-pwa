@@ -2061,15 +2061,24 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # and both ends anchored because `headRefOid: "main"` otherwise resolves as a
   # REVISION and binds.
   #
-  # MUTATION SURVIVOR, disclosed: the FLOOR alone (`{7,40}` -> `{1,40}`) is
-  # removable with the suite green, and measured rather than assumed — a test
-  # written for it was re-swept and the mutant still survived. The reason is
-  # structural: a value can only arrive here two ways, and neither exposes the
-  # floor. Python's `OID` already enforces 7 on both oids, and the field SHIFT
-  # this guard is for always leaves the tail field carrying a literal TAB, which
-  # fails the character class whatever the bounds are. So the floor restates
-  # python's, one process later, for the day these two stop being read from the
-  # same producer. The character class and the anchors are what is pinned.
+  # ALL SIX PIECES ARE PINNED — the two anchors on each oid, the floor and the
+  # ceiling — and the route that reaches them is a fixture that shadows
+  # `_pr_py pick` and hands this line one crafted row at a time. That is not a
+  # contrivance; it is the case the line is FOR. While the two ends are one
+  # producer, python's `OID` screens both oids before they are joined and the
+  # tab-shift above always leaves a literal TAB in the tail field, so the
+  # character class alone answers everything and NOTHING beneath it is
+  # observable. Measured, and the reason this comment is a correction: the
+  # previous one claimed "the character class and the anchors are what is
+  # pinned" and disclosed the floor as the sole survivor. Re-swept, EIGHT
+  # mutants of this one line survived — dropping either conjunct, dropping
+  # either `^`, dropping either `$`, `{1,40}`, and `{7,}`. With `^` gone,
+  # `origin/deadbeef1` matches on its nine-hex tail and reaches
+  # `git cat-file -e "origin/deadbeef1^{commit}"`, `merge-base --is-ancestor`
+  # and `diff --stat`: the exact "resolves as a REVISION and binds" case the
+  # two lines above say the anchors exist to stop. bash's `=~` searches unless
+  # anchored, which is why each anchor needs its own fixture rather than
+  # inheriting one from its neighbour.
   [[ "$REAP_MERGE" =~ ^[0-9a-f]{7,40}$ && "$REAP_HEADOID" =~ ^[0-9a-f]{7,40}$ ]] \
     || { _reap_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
 

@@ -1070,16 +1070,73 @@ describe('the refusals the ladder reaches last', () => {
     expect(a.verdict).toBe('pr-fields-malformed');
     expect(a.detail).toContain('injected');
     // A shifted fragment that IS hex refuses as well: `bee` is three hex
-    // characters, so the character class alone would take it. What refuses is
-    // the TAIL field, which still carries the literal tab — and that is also
-    // why the FLOOR of 7 cannot be pinned from here and is disclosed as a
-    // survivor at the ccd site instead. Measured, not assumed: a test written
-    // for the floor was re-swept and `{1,40}` gave this same answer.
+    // characters, so the character class alone would take it. What refuses it
+    // here is the TAIL field, which still carries the literal tab — which is
+    // also why THIS route can only ever pin the character class. The floor, the
+    // ceiling and all four anchors are pinned by the next `it`, through the one
+    // route that can reach them.
     h.ghRows([mergedRow({
       headRefOid: tip, mergeCommit: { oid: merge }, url: 'https://x/\tbee',
     })]);
     expect(refusal(wt).verdict).toBe('pr-fields-malformed');
   });
+
+  /** A `_pr_py pick` that answers a row of OUR choosing.
+   *
+   *  Shadowing a shell function is what every other stub in this file does, and
+   *  it is the only route to this guard's interior: the guard's own reason for
+   *  existing is "the day these two stop being read from the same producer", and
+   *  while there IS one producer, python's `OID` screens both oids before they
+   *  are joined and the tab-shift always leaves a literal tab in the tail field.
+   *  So with the real `pick` nothing below the character class is reachable —
+   *  measured, as eight surviving mutants. `pick` is the only mode `ws-audit`
+   *  calls, so shadowing the function shadows exactly this one answer.
+   *
+   *  `number` and `url` are kept well-formed: the point is the two oid fields. */
+  const pickRow = (merge: string, head: string): string =>
+    `_pr_py() { cat >/dev/null; printf '42\\thttps://x/1\\t%s\\t%s\\n' '${merge}' '${head}'; };`;
+
+  it('re-anchors BOTH oids at BOTH ends, and bounds them at 7 and 40', () => {
+    // Every piece of `^[0-9a-f]{7,40}$ && ^[0-9a-f]{7,40}$`, one crafted row at
+    // a time. bash's `=~` SEARCHES unless anchored, so each anchor has its own
+    // survivor: with `^` gone `origin/deadbeef1` matches on its 9-hex tail and
+    // reaches `git cat-file -e "origin/deadbeef1^{commit}"`, `merge-base
+    // --is-ancestor` and `diff --stat` — precisely the "resolves as a REVISION
+    // and binds" case the guard is written to stop. With `$` gone a trailing
+    // `^{commit}` rides in on the head of the string. The floor of 7 and the
+    // ceiling of 40 each have one too.
+    //
+    // The verdict, not merely "a refusal", is the assertion: with any of these
+    // six pieces removed the row passes the guard and the audit refuses
+    // `merge-commit-missing` one fetch later — a refusal either way, so
+    // `refusal()` alone would pin nothing.
+    const OK = 'a'.repeat(40);
+    const GARBAGE = `${'b'.repeat(24)}^{commit}`;
+    const cases: [string, string, string][] = [
+      ['origin/deadbeef1', OK, 'mergeCommit with leading garbage — the `^`'],
+      [GARBAGE, OK, 'mergeCommit with trailing garbage — the `$`'],
+      ['abc', OK, 'mergeCommit under the floor — `abc` is a resolvable ref'],
+      [OK, 'origin/deadbeef1', 'headRefOid with leading garbage — the `^`'],
+      [OK, GARBAGE, 'headRefOid with trailing garbage — the `$`'],
+      [OK, 'f'.repeat(41), 'headRefOid over the ceiling of 40'],
+    ];
+    const { wt } = squashMovedBase();
+    for (const [m, hd, why] of cases) {
+      const a = refusal(wt, pickRow(m, hd));
+      expect(a.verdict, why).toBe('pr-fields-malformed');
+      // Both names in the refusal, so the reader can see WHICH field was bad.
+      expect(a.detail).toContain(m);
+      expect(a.detail).toContain(hd);
+    }
+    // And the control: the same route with two well-formed oids gets PAST this
+    // guard. Without it every case above would pass for the wrong reason — a
+    // shadow that refused everything would look identical.
+    expect(refusal(wt, pickRow(OK, OK)).verdict).toBe('merge-commit-missing');
+    // Seven `cmd_ws_audit` runs against one fixture, which is over vitest's 5 s
+    // default — the only explicit timeout in this file. The six cases are ONE
+    // claim (every piece of that regex is load-bearing) and splitting them into
+    // three `it`s to fit a default would pay three fixture builds to say it.
+  }, 30000);
 
   it('refuses branch-missing when refs/heads/<branch> does not resolve', () => {
     // Unreachable by DELETING the ref — measured, `<branch>@{upstream}` still
