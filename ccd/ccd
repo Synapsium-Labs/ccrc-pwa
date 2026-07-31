@@ -1001,6 +1001,7 @@ ws-archive
 ws-attic
 ws-audit
 ws-gc
+ws-reap
 ws-rename
 ws-restore
 ws-rm
@@ -2311,6 +2312,333 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   fi
 }
 
+_ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
+  # Every distinct sha in the worktree's HEAD reflog, deduped and capped, plus
+  # the tip. ~50 bytes each, no new objects, and the commits become REFERENCED
+  # rather than dangling — so gc.pruneExpire can never reach them.
+  local main="$1" id="$2" workdir="$3" tip="$4" sha n=0
+  while read -r sha; do
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
+    git -C "$main" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
+    git -C "$main" update-ref "refs/ccrc/attic/$id/$sha" "$sha" 2>/dev/null && n=$(( n + 1 ))
+  done < <( { [[ -d "$workdir" ]] && git -C "$workdir" reflog show --all --format=%H 2>/dev/null; \
+              printf '%s\n' "$tip"; } | sort -u | head -200 )
+  echo "$n"
+}
+
+_ws_clip_manifest() {   # id -> JSON array of {name,bytes}; also echoes the dir
+  local id="$1" dir="$HOME/.cc-clips/$id" f out="[" first=1
+  [[ -d "$dir" ]] || { echo "[]"; return 0; }
+  for f in "$dir"/*; do
+    [[ -f "$f" ]] || continue
+    (( first )) || out+=","; first=0
+    out+="{\"name\":$(_json_str "$(basename "$f")"),\"bytes\":$(stat -c %s "$f" 2>/dev/null || echo 0)}"
+  done
+  echo "$out]"
+}
+
+_reap_paths_json() {   # -> REAP_SENSITIVE as a JSON array of strings
+  # Shared by BOTH refusal sites in cmd_ws_reap (the evaluated one and the
+  # resume one), so the two cannot describe the same finding differently.
+  local out="[" first=1 p
+  for p in "${REAP_SENSITIVE[@]-}"; do
+    [[ -n "$p" ]] || continue
+    (( first )) || out+=","; first=0
+    out+="$(_json_str "$p")"
+  done
+  printf '%s]\n' "$out"
+}
+
+_ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
+  local id="$1" clips="$2" dir="$REG/.reaped" f="$REG/.reaped/$1.json"
+  mkdir -p "$dir"
+  # `sensitive\tbytes\tpath`, NUL-terminated, read exactly as cmd_ws_audit reads
+  # it (Task 5, deviation 18): the collector's `git status … -z` leaves a TAB or
+  # a NEWLINE in a path intact, so the two fixed-shape fields come off the FRONT
+  # and the path is everything after the second tab. A `read -r p b s` on a
+  # path-first record shifts every field, and this record is what the TOMBSTONE
+  # says was destroyed — the one document that outlives the workspace.
+  local ign_json="[" first=1 rec rest p b s
+  if (( ${#REAP_IGNORED[@]} )); then
+    while IFS= read -r -d '' rec; do
+      s="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"
+      b="${rest%%$'\t'*}"; p="${rest#*$'\t'}"
+      [[ -n "$p" ]] || continue
+      (( first )) || ign_json+=","; first=0
+      ign_json+="{\"path\":$(_json_str "$p"),\"bytes\":$b,\"sensitive\":$( ((s)) && echo true || echo false)}"
+    done < <(printf '%s\0' "${REAP_IGNORED[@]}")
+  fi
+  ign_json+="]"
+  # THE ATTIC REF NAMES, not the count of them — spec §5.5(b) lists "the attic
+  # ref names" among what this document contains, and (j) is where the count
+  # goes, on the verb's stdout. They are different facts and both are needed:
+  # `ccd ws-attic --drop <id>` releases the refs, and after that this document
+  # is the only record of which commits were pinned — which is the whole point
+  # of a tombstone, since by then the branch, the reflog and the registry are
+  # all gone. Read back from git rather than passed in, so the list has ONE
+  # producer and cannot disagree with itself; `_ws_attic_pin` has already
+  # created them by the time (b) runs, and its own answer is "how many I
+  # created", which is not the same question.
+  local main="$PROJECTS_ROOT/$(_reg_get "$id" project)" attic_json="[" afirst=1 aref
+  while IFS= read -r aref; do
+    [[ -n "$aref" ]] || continue
+    (( afirst )) || attic_json+=","; afirst=0
+    attic_json+="$(_json_str "$aref")"
+  done < <(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null)
+  attic_json+="]"
+  local reflog="" transcript
+  [[ -d "$(_reg_get "$id" workdir)" ]] && reflog=$(git -C "$(_reg_get "$id" workdir)" reflog show --all --format='%H %gs' 2>/dev/null | head -200)
+  transcript=$(_transcript_path "$id") || transcript=""
+  {
+    printf '{"id":%s,"project":%s,"workdir":%s,"branch":%s,"base":%s,"tip":%s,' \
+      "$(_json_str "$id")" "$(_json_str "$(_reg_get "$id" project)")" \
+      "$(_json_str "$(_reg_get "$id" workdir)")" "$(_json_str "$(_reg_get "$id" branch)")" \
+      "$(_json_str "$(_reg_get "$id" base)")" "$(_json_str "$REAP_TIP")"
+    printf '"uuid":%s,"wrapper":%s,"mergeCommit":%s,"proof":%s,"pr":%s,"prUrl":%s,' \
+      "$(_json_str "$(_reg_get "$id" uuid)")" "$(_json_str "$(_reg_get "$id" wrapper)")" \
+      "$(_json_str "$REAP_MERGE")" "$(_json_str "$REAP_PROOF")" \
+      "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" "$(_json_str "$REAP_PRURL")"
+    printf '"ignored":%s,"clips":%s,"transcript":%s,"attic":%s,"reflog":%s,"reapedAt":%s}\n' \
+      "$ign_json" "$clips" "$(_json_str "$transcript")" "$attic_json" "$(_json_str "$reflog")" "$(date +%s)"
+  } > "$f"
+  echo "$f"
+}
+
+cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
+  # The ONLY destructive verb. Every guard is re-evaluated HERE, on the box, at
+  # the instant of deletion — the audit's verdict is not trusted, it is
+  # recomputed. A refusal prints on stdout and exits 0: it is an answer.
+  [[ $# -eq 4 && $1 == --expect && $3 == --session ]] \
+    || die "usage: ccd ws-reap --expect <token> --session <id>"
+  local token=$2 id=$4
+  [[ $token =~ ^[0-9a-f]{64}$ ]]    || die "bad token"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]]    || die "bad session id"
+
+  # `_json_str`'s status, checked ONCE and up front — the same probe, for the
+  # same reason, as `cmd_ws_audit` (ccd:2153) and `_ws_manifest` (ccd:1109).
+  # This is the THIRD caller that builds a whole record, and the record it
+  # builds is the TOMBSTONE: the one document that outlives the workspace, and
+  # the only thing left naming the transcript once step (i) has removed the
+  # registry. Every `_json_str` here sits inside a printf ARGUMENT LIST, where a
+  # failure is a swallowed status and an empty argument — `"path":,` — so
+  # without this the resume path, which is the one route to the destructive tail
+  # that never calls `_pr_py` and so is not already refused by python3 being
+  # missing, would delete and then report it in a document that does not parse.
+  # Before the lock, so a refusal leaves no lock behind for the next attempt to
+  # trip over, and before `_ws_reap_eval`, so it costs no gh call and no fetch.
+  _json_str probe >/dev/null 2>&1 \
+    || die "python3 unavailable — cannot quote the reap record safely"
+
+  # BEFORE either path, because ccd runs under `set -u` and `_ws_reap_tail`
+  # reads REAP_PRNUM and REAP_PROOF unconditionally. On the resume path
+  # `_ws_reap_eval` is never called, so without this they are UNBOUND, and the
+  # final printf loses those two arguments: it emits {"pr":,"proof":} —
+  # syntactically invalid JSON, which the caller reports as a parse error rather
+  # than as the successful resume it actually was. (Reproduced in bash: two
+  # `unbound variable` lines on stderr and a truncated object on stdout, exit 0.)
+  # `_ws_reap_eval` calls this again on the normal path; it is idempotent.
+  _ws_reap_reset
+
+  # Atomic. NOTE: bash's EXIT trap releases this on SIGTERM while an orphaned
+  # `git worktree remove` grandchild keeps running — so the BREADCRUMB, not the
+  # lock, is the recovery mechanism.
+  local lock="$REG/.reap-$id.lock"
+  mkdir "$lock" 2>/dev/null || { printf '{"refused":"in-progress","detail":"another reap is running","paths":[]}\n'; return 0; }
+  trap 'rmdir "'"$lock"'" 2>/dev/null' EXIT
+
+  local resumed; resumed=$(_reg_get "$id" reaping)
+  if [[ -n "$resumed" ]]; then
+    # Resume: the tombstone written at (b) is what distinguishes "the user
+    # deleted the worktree" from "we did".
+    local tombtip; tombtip=$(sed -n 's/.*"tip"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$REG/.reaped/$id.json" 2>/dev/null | head -1)
+    local branch; branch=$(_reg_get "$id" branch)
+    local live;   live=$(git -C "$PROJECTS_ROOT/$(_reg_get "$id" project)" rev-parse --verify "refs/heads/$branch" 2>/dev/null)
+    if [[ -z "$tombtip" || "$live" != "$tombtip" ]]; then
+      printf '{"refused":"branch-moved","detail":%s,"paths":[]}\n' \
+        "$(_json_str "the branch moved while cleaning up — nothing was deleted after the worktree")"
+      return 0
+    fi
+
+    # ── Phase B, AGAIN, on the resume path ────────────────────────────
+    # §5.3 is unconditional: "every guard below is evaluated inside ws-reap, on
+    # the box, at the instant of deletion". §5.6 authorises resuming a tail; it
+    # does not authorise skipping the guards on the way through it. And the
+    # breadcrumb is written at (c), BEFORE `git worktree remove` at (f), so
+    # `reaping=worktree` WITH the worktree still on disk is the routine outcome
+    # of one SIGTERM inside that window — not an exotic case. Without this
+    # block the next reap deletes that worktree unaudited, and a .env written
+    # between the two runs is gone with it.
+    #
+    # Phase C is deliberately NOT re-run: mergedness was proven before the
+    # breadcrumb existed and the tombstone records the proof, and re-requiring
+    # a gh read would let an outage strand a half-reaped workspace forever.
+    # What is re-proven here is Phase B and Phase D1 — the guards whose facts
+    # can still have changed in the gap, and the only two the resume can cost
+    # anything by skipping.
+    local workdir; workdir=$(_reg_get "$id" workdir)
+    if [[ -d "$workdir" ]]; then
+      # Both reads checked, for the reason spelled out at `_ws_reap_eval`'s Phase
+      # B — and here it matters more, because this path has no token to fall back
+      # on: nothing downstream compares a fingerprint, so an unreadable tree that
+      # counted 0 dirty files and an unreadable ignored set that produced an empty
+      # REAP_SENSITIVE would take `git worktree remove` straight through both
+      # guards. `local x=$(cmd)` returns local's status, so the read is its own
+      # statement.
+      local rdirty
+      rdirty=$(git -C "$workdir" status --porcelain 2>/dev/null) || {
+        printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+          "$(_json_str "could not read the tree at $workdir — refusing to finish the cleanup on a guess")"
+        return 0
+      }
+      rdirty=$(printf '%s' "$rdirty" | grep -c . || true)
+      if (( rdirty != 0 )); then
+        printf '{"refused":"dirty-tree","detail":%s,"paths":[]}\n' \
+          "$(_json_str "$rdirty uncommitted or untracked file(s) appeared while the cleanup was interrupted")"
+        return 0
+      fi
+      _ws_collect_ignored "$workdir" || {
+        printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+          "$(_json_str "could not read the ignored set at $workdir — refusing to finish the cleanup on a guess")"
+        return 0
+      }
+      if (( ${#REAP_SENSITIVE[@]} != 0 )); then
+        printf '{"refused":"sensitive-ignored","detail":%s,"paths":%s}\n' \
+          "$(_json_str "${REAP_SENSITIVE[*]}")" "$(_reap_paths_json)"
+        return 0
+      fi
+
+      # Phase D1 too, and for the same reason: the breadcrumb is written at (c),
+      # BEFORE _ws_unsupervise at (d), so a SIGTERM in that window leaves
+      # `reaping=worktree` with the session STILL RUNNING. Without this the
+      # resume yanks the worktree out from under a live turn OR a running Bash
+      # tool command — `idle` is an allowlist in _ws_status, so `shell` refuses
+      # here (deviation 6). The tree is clean and pushed, so no bytes are lost,
+      # but §5.3 is unconditional and session-busy is one of its guards.
+      local rst; rst=$(_ws_status "$id") || {
+        printf '{"refused":"status-unknown","detail":%s,"paths":[]}\n' \
+          "$(_json_str "cannot read the wrapper status file — refusing to finish the cleanup on a guess")"
+        return 0
+      }
+      if [[ "$rst" == busy ]]; then
+        printf '{"refused":"session-busy","detail":%s,"paths":[]}\n' \
+          "$(_json_str "the session is working — a model turn or a Bash tool command — and the cleanup was interrupted before it was stopped")"
+        return 0
+      fi
+    fi
+
+    REAP_TIP="$tombtip"
+    _ws_reap_tail "$id" "$resumed"
+    return 0
+  fi
+
+  if ! _ws_reap_eval "$id"; then
+    local paths="[]"
+    [[ "$REAP_VERDICT" == sensitive-ignored ]] && paths=$(_reap_paths_json)
+    printf '{"refused":%s,"detail":%s,"paths":%s}\n' \
+      "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")" "$paths"
+    return 0
+  fi
+
+  # D2 — the consent IS the fingerprint, and it is checked HERE, in ccd. A
+  # server-side check fails open into deletion; this one cannot.
+  if [[ "$token" != "$REAP_TOKEN" ]]; then
+    printf '{"refused":"state-changed","detail":%s,"paths":[]}\n' \
+      "$(_json_str "expected $REAP_TOKEN, was given $token — this workspace changed since the list you were shown")"
+    return 0
+  fi
+
+  _ws_reap_tail "$id" ""
+}
+
+_ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
+  local id="$1" resumed="$2" project workdir branch main attic clips tomb bytes
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); branch=$(_reg_get "$id" branch)
+  main="$PROJECTS_ROOT/$project"
+  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+
+  if [[ -z "$resumed" ]]; then
+    attic=$(_ws_attic_pin "$main" "$id" "$workdir" "$REAP_TIP")            # (a)
+    clips=$(_ws_clip_manifest "$id")
+    tomb=$(_ws_tombstone "$id" "$clips")                                   # (b)
+    _reg_set "$id" reaping worktree                                        # (c)
+    _ws_unsupervise "$id"                                                  # (d)
+    tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true              # (e)
+  else
+    tomb="$REG/.reaped/$id.json"
+    attic=$(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null | grep -c . || true)
+  fi
+
+  if [[ "$resumed" == "" || "$resumed" == worktree ]]; then
+    if [[ -d "$workdir" ]]; then
+      # No --force. On failure STOP: the session is already stopped and
+      # ws-restore recovers it, whereas losing the registry would not be
+      # recoverable.
+      #
+      # ONE invocation, with its stderr captured. Re-running the command just
+      # to read its message can SUCCEED the second time — a lock released, a
+      # file closed — and then this prints a refusal while the worktree is
+      # actually gone and the breadcrumb still says `worktree`, which is a lie
+      # in the one direction that matters.
+      local wtout wtrc
+      wtout=$(git -C "$main" worktree remove "$workdir" 2>&1); wtrc=$?
+      if (( wtrc != 0 )); then
+        printf '{"refused":"worktree-remove-failed","detail":%s,"paths":[]}\n' \
+          "$(_json_str "$(printf '%s' "$wtout" | head -3)")"
+        return 0
+      fi
+    fi
+    _reg_set "$id" reaping branch
+  fi
+
+  # (g) Compare-and-swap, never `branch -d` (it refuses a squash merge and
+  # succeeds when the branch merely equals its upstream) and never `-D`.
+  #
+  # The old-value operand is the whole mechanism, and it has ONE hole worth
+  # knowing about even though nothing here can reach it: measured on git 2.43,
+  # `update-ref -d <ref> 000…0` (40 zeros) DELETES unconditionally and exits 0,
+  # because git reads the all-zeros name as "no old value given" rather than as
+  # a value to match — while any other wrong sha exits 1 with `is at X but
+  # expected Y` and leaves the ref alone. `$REAP_TIP` cannot be all-zeros on
+  # either path: the evaluated one reads it from `rev-parse --verify`, and the
+  # resume one takes it from the tombstone only after it equalled a `rev-parse
+  # --verify` of the live ref, which never answers zeros (an unresolvable ref
+  # answers EMPTY, and empty != 000…0 refuses `branch-moved` above). Written
+  # down because that is an argument about two other call sites, not about this
+  # line, and the day either of them stops resolving the tip this degrades from
+  # a compare-and-swap into an unconditional delete without failing anything.
+  if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$main" update-ref -d "refs/heads/$branch" "$REAP_TIP" 2>/dev/null || {
+      printf '{"refused":"branch-moved","detail":%s,"paths":[]}\n' \
+        "$(_json_str "the branch moved while cleaning up — nothing was deleted after the worktree")"
+      return 0
+    }
+  fi
+  _reg_set "$id" reaping clips
+
+  # (h) Re-validate the id and assert the resolved path is a DIRECT CHILD of
+  # ~/.cc-clips before any rm -rf.
+  if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    # `>/dev/null` on every cd, and `--` before every operand: the house rule
+    # ccrc/ws-rm-fix established at _ws_realpath and _ws_common_dir. Only `pwd -P`
+    # may answer. Without the redirect a `cd` exported as a shell function
+    # prepends its own print to $cdir (two cds, two lines) and to $croot (one cd,
+    # one line), so the equality below fails and the clips directory silently
+    # survives every reap. Without `--`, the regex above admits a leading hyphen,
+    # so an id like `-P` would be read as cd's own option. Both failures are
+    # fail-CLOSED — no rm runs — which is the right direction and still wrong.
+    local cdir; cdir=$(cd -- "$HOME/.cc-clips" >/dev/null 2>&1 && cd -- "./$id" >/dev/null 2>&1 && pwd -P) || cdir=""
+    local croot; croot=$(cd -- "$HOME/.cc-clips" >/dev/null 2>&1 && pwd -P) || croot=""
+    [[ -n "$cdir" && -n "$croot" && "$cdir" == "$croot/$id" ]] && rm -rf "$cdir"
+  fi
+
+  rm -f "$REG/$id".*                                                       # (i) LAST
+  printf '{"reaped":%s,"branch":%s,"pr":%s,"proof":%s,"tombstone":%s,"attic":%s,"bytes":%s,"resumed":%s}\n' \
+    "$(_json_str "$id")" "$(_json_str "$branch")" \
+    "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" \
+    "$(_json_str "$REAP_PROOF")" "$(_json_str "$tomb")" "${attic:-0}" "$bytes" \
+    "$( [[ -n "$resumed" ]] && _json_str "$resumed" || echo null)"
+}
+
 # ── reclamation ────────────────────────────────────────────────────
 # ws-gc REPORTS by default and acts only under --prune. 29G of abandoned agent
 # worktrees accumulated on this box over six weeks because no command existed
@@ -3169,8 +3497,9 @@ case "${1:-}" in
   ws-restore) shift; cmd_ws_restore "$@" ;;
   ws-attic)   shift; cmd_ws_attic "$@" ;;
   ws-audit)   shift; cmd_ws_audit "$@" ;;
+  ws-reap)   shift; cmd_ws_reap "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|pr-open|pr-state} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|pr-open|pr-state} <args>" >&2; exit 1 ;;
 esac
 fi
