@@ -8,6 +8,17 @@ const jsonResponse = (status: number, body: unknown): Response =>
   });
 
 describe('api client', () => {
+  // Task 8: DELETE /api/sessions/:id/workspace is gone, and so is this method.
+  // A mutation sweep found that restoring workspaceRemove (and the `del`
+  // helper it needs) in isolation — without touching SessionActionsSheet's
+  // button — compiles clean and leaves every other test green, because
+  // nothing else in the client ever called it. This pins the client shape
+  // directly so that gap can't reopen unnoticed.
+  it('has no workspaceRemove — the route it called no longer exists', () => {
+    const api = createApi();
+    expect('workspaceRemove' in api).toBe(false);
+  });
+
   it('prompt posts a JSON body to /api/sessions/:id/prompt', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);

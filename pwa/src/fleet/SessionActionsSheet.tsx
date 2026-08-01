@@ -1,6 +1,14 @@
 // Per-session actions, behind the line's `···`. A sheet rather than a
-// long-press: discoverability beats density here, and a hidden gesture on a
-// destructive action ("Remove workspace") is the wrong trade on a phone.
+// long-press: discoverability beats density here.
+//
+// There is deliberately NO workspace delete here. `ccd ws-rm` used to sit on
+// this sheet as an unconfirmed one-tap button under a comment claiming it
+// "refuses an unmerged branch" — it does not; it keeps the branch and warns on
+// stderr, which a tap has nowhere to show. Its only data guard is
+// `git status --porcelain`, blind to a gitignored `.env`; it asks the remote
+// nothing, so it cannot know the work is in main; and it carries no
+// confirmation, so nothing re-proves the tree at the instant of deletion.
+// Cleanup now goes archive -> audit -> confirmed reap.
 //
 // Swap hands off to the existing SwapSheet rather than reimplementing the
 // account picker, its limit gauges and its consequence confirm.
@@ -32,7 +40,6 @@ export function SessionActionsSheet({
   // the sheet closes, and a conditional hook would throw on that render.
   const [swapOpen, setSwapOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const [removing, setRemoving] = useState(false);
 
   // A closed sheet forgets Swap (mirrors NewSessionSheet's own reset-on-close
   // effect). FleetScreen now keeps this component mounted across a close
@@ -62,22 +69,6 @@ export function SessionActionsSheet({
     }
   };
 
-  // No confirm dialog: ccd ws-rm refuses a dirty tree, an unmerged branch and a
-  // main checkout, and says why. The guard lives where the facts are, which is
-  // what makes surfacing its text load-bearing rather than cosmetic.
-  const removeWorkspace = async (): Promise<void> => {
-    if (removing) return;
-    setRemoving(true);
-    try {
-      await api.workspaceRemove(session.id);
-      onClose();
-    } catch (err) {
-      toast(`Couldn't remove — ${apiErrorText(err)}`, 'error');
-    } finally {
-      setRemoving(false);
-    }
-  };
-
   const five = session.limits?.five ?? null;
   const seven = session.limits?.seven ?? null;
   const critical =
@@ -99,17 +90,6 @@ export function SessionActionsSheet({
           <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}>
             Swap account
           </button>
-
-          {session.workspace !== null && (
-            <button
-              type="button"
-              className="btn-ghost sess-sheet-remove"
-              onClick={() => void removeWorkspace()}
-              disabled={removing}
-            >
-              {removing ? 'Removing…' : 'Remove workspace'}
-            </button>
-          )}
 
           {session.status !== 'dead' && session.wrapper !== session.home && (
             <p className="sess-sheet-note">

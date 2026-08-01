@@ -804,11 +804,6 @@
   min-height: 44px;
 }
 
-/* --danger has no counterpart in this file's tokens; the retired SessionCard's
-   identical "Remove workspace" button was --ink-secondary too, not a red —
-   ws-rm's own refusal already carries the warning, so the button stays calm. */
-.sess-sheet-remove { color: var(--ink-secondary); }
-
 .sess-sheet-note {
   margin: 0;
   font-size: var(--text-xs);

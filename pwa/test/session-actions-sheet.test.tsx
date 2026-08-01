@@ -36,16 +36,6 @@ describe('composition', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('offers Remove workspace for a workspace session', () => {
-    render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
-    expect(screen.getByRole('button', { name: /remove workspace/i })).toBeInTheDocument();
-  });
-
-  it('hides Remove workspace for a main checkout — ws-rm would refuse it anyway', () => {
-    render(<SessionActionsSheet session={s({ workspace: null })} open onClose={() => {}} />);
-    expect(screen.queryByRole('button', { name: /remove workspace/i })).not.toBeInTheDocument();
-  });
-
   it('explains the limit consequence that the line only had room to flag', () => {
     render(<SessionActionsSheet session={s({ limits: { five: 82, seven: 10 } })}
                                 open onClose={() => {}} />);
@@ -89,34 +79,6 @@ describe('actions', () => {
     );
   });
 
-  // api.ensure kept its id assertion when SessionCard's tests were dropped;
-  // api.workspaceRemove did not — a hardcoded id in the request would have
-  // shipped unnoticed.
-  it('sends the session id to api.workspaceRemove', async () => {
-    render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /remove workspace/i }));
-    // Same reason as the restart test above: the hidden SwapSheet's own
-    // /api/accounts poll can land first.
-    await waitFor(() =>
-      expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('demo-quiet-mesa'))).toBe(true),
-    );
-  });
-
-  // THE regression this project has shipped twice. The server answers
-  // 502 { ok, stderr } with no `error` key, so err.message yields the generic
-  // "request failed (502)" and ccd's actual refusal never reaches the reader.
-  it("surfaces ccd's own refusal text when a remove fails", async () => {
-    stubFetch({ ok: false, stderr: 'ccd: worktree not removed (uncommitted changes?)' });
-    render(
-      <>
-        <SessionActionsSheet session={s()} open onClose={() => {}} />
-        <ToastHost />
-      </>,
-    );
-    fireEvent.click(screen.getByRole('button', { name: /remove workspace/i }));
-    expect(await screen.findByText(/uncommitted changes/i)).toBeInTheDocument();
-  });
-
   it("surfaces ccd's own refusal text when a restart fails", async () => {
     stubFetch({ ok: false, stderr: 'ccd: no such session: demo-quiet-mesa' });
     render(
@@ -127,6 +89,21 @@ describe('actions', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /restart/i }));
     expect(await screen.findByText(/no such session/i)).toBeInTheDocument();
+  });
+});
+
+describe('the unguarded delete is gone', () => {
+  it('offers no Remove workspace button for a workspace session', () => {
+    // A shallower unguarded door beside a careful one guarantees the
+    // unguarded one gets used.
+    render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
+    expect(screen.queryByText(/Remove workspace/)).not.toBeInTheDocument();
+  });
+
+  it('still offers restart and swap', () => {
+    render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
+    expect(screen.getByText('Restart session')).toBeInTheDocument();
+    expect(screen.getByText('Swap account')).toBeInTheDocument();
   });
 });
 

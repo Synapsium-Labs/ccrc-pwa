@@ -310,11 +310,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcd(reply, ['ws-add', project]);
   });
 
-  app.delete('/api/sessions/:id/workspace', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    return runCcd(reply, ['ws-rm', id]);
-  });
-
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
