@@ -159,6 +159,32 @@ describe('checks', () => {
       { name: 'build', conclusion: 'SUCCESS' }, { name: 'e2e', conclusion: 'FAILURE' },
     ] })).checks).toBe('fail');
   });
+
+  it('reads a CLASSIC commit status ({state, context}), not only the Checks API shape', () => {
+    // Real repos migrate CI incrementally, and the classic Status API
+    // (`state`/`context`) predates and still coexists with the Checks API
+    // (`conclusion`/`status`/`name`) this file's other fixtures all use.
+    // `stateOf`'s `?? c.state` and `nameOf`'s `?? c.context` exist for this
+    // shape specifically — without a fixture in it, a failing or pending
+    // classic status silently reads as `pass`, a lie about merge-readiness.
+    const failing = checksFor(row({ statusCheckRollup: [{ state: 'failure', context: 'ci/travis' }] }));
+    expect(failing.checks).toBe('fail');
+    expect(failing.checkNames).toEqual(['ci/travis']);
+
+    const pending = checksFor(row({ statusCheckRollup: [{ state: 'pending', context: 'ci/jenkins' }] }));
+    expect(pending.checks).toBe('pending');
+  });
+
+  it('mixes Checks API items and classic status items in one rollup — incremental migration', () => {
+    // A repo mid-migration reports some checks through the Checks API and
+    // others still through classic statuses, in the SAME rollup.
+    const c = checksFor(row({ statusCheckRollup: [
+      { name: 'build', conclusion: 'SUCCESS' },      // Checks API, passing
+      { state: 'failure', context: 'ci/legacy' },    // classic, failing
+    ] }));
+    expect(c.checks).toBe('fail');
+    expect(c.checkNames).toEqual(['ci/legacy']);
+  });
 });
 
 describe('phaseFor', () => {
