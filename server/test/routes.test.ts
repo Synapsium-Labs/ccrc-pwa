@@ -10,6 +10,7 @@ import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { guardRunner, testDeps } from './helpers.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -369,5 +370,59 @@ describe('notify ingestion', () => {
     expect(notices).toEqual([message]);
     expect(sessionMsgs).toEqual([]);
     await app.close();
+  });
+});
+
+describe('layer 1 — the guard runner', () => {
+  // `async` + `await`, and both are load-bearing: `expect(promise).rejects`
+  // returns a promise, so a synchronous callback that neither awaits nor
+  // returns it passes no matter what `guardRunner` does — and this is the ONLY
+  // behavioural test of layer 1. Prove it can fail before moving on: make
+  // `guardRunner` return `inner(cmd, args)` unconditionally and watch this go
+  // red.
+  it('rejects an argv the agent whitelist would refuse, from any route', async () => {
+    // Free on every existing route test: testDeps wraps its runner, so a route
+    // that starts emitting a non-whitelisted argv fails HERE rather than on
+    // the fleet.
+    const inner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ws-rm', 'x']))
+      .rejects.toThrow(/argv not in the agent EXEC_WHITELIST: ccd ws-rm x/);
+  });
+
+  it('lets a whitelisted argv through untouched — the guard is not a blanket refusal', async () => {
+    // Without this, "rejects everything" would satisfy the test above.
+    const inner: Runner = async () => ({ code: 0, stdout: 'ok', stderr: '' });
+    await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ensure', 'demo-quiet-basin']))
+      .resolves.toEqual({ code: 0, stdout: 'ok', stderr: '' });
+  });
+
+  // MUTATION-SWEEP FINDING (Task 11): replacing `run: guarded` with the bare
+  // `run` in `testDeps` left the whole suite green — no EXISTING route happens
+  // to emit a non-whitelisted argv today, so the two tests above (which call
+  // `guardRunner` directly) never exercise `testDeps`'s own wiring, only the
+  // function in isolation. This pins the wiring itself, independent of whether
+  // any current route misbehaves — the claim in the comment above testDeps
+  // ("free on every existing route test") is only true if this holds.
+  it('testDeps wires the guard onto deps.run, not just reachable via a direct guardRunner call', async () => {
+    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    await expect(deps.run(deps.cfg.ccdBin, ['ws-rm', 'x']))
+      .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
+  });
+
+  // MUTATION-SWEEP FINDING (Task 11): replacing `new Tmux(guarded)` with
+  // `new Tmux(run)` in testDeps ALSO left the whole suite green — Tmux's own
+  // public methods only ever build already-whitelisted tmux verbs
+  // (has-session, list-panes, capture-pane, send-keys, resize-window), so no
+  // call through Tmux's public API can ever observe whether its runner is
+  // guarded. Reach the constructor-injected runner directly — a real instance
+  // property at runtime, since TypeScript `private` is compile-time-only —
+  // and drive it with a verb none of Tmux's own methods build, to prove the
+  // guard is actually load-bearing on this path rather than one refactor away
+  // from being deleted as dead code.
+  it('testDeps wires the guard onto deps.tmux as well, not just onto deps.run', async () => {
+    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
+    await expect(tmuxRunner('tmux', ['kill-session', '-t', 'cc-x']))
+      .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
   });
 });

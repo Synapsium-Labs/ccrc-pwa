@@ -11,6 +11,7 @@ import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome } from './limits.js';
 import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
+import { CCD_ARGV } from './ccdargv.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
@@ -215,7 +216,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
       // not leave the session shrunken (wrapped panes break capture parsing).
-      void deps.run('tmux', ['resize-window', '-t', `cc-${id}`, '-x', '220', '-y', '50']);
+      void deps.tmux.resizeWindow(id, 220, 50);
     });
   });
 
@@ -295,19 +296,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       || typeof body.project !== 'string' || body.project.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const sub = body.enable === false ? 'start' : 'enable';   // enable = start + systemd enable
-    const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? [body.workdir] : [];
-    return runCcd(reply, [sub, body.wrapper, body.project, ...workdir]);
+    // enable = start + systemd enable. The ternary picks the ENTRY rather than
+    // interpolating a verb into an array, so both spellings are enumerated by
+    // whitelist-subset.test.ts and neither can drift out of the agent's list.
+    const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
+    return runCcd(reply, body.enable === false
+      ? CCD_ARGV.start(body.wrapper, body.project, workdir)
+      : CCD_ARGV.enable(body.wrapper, body.project, workdir));
   });
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
     const { id } = req.params as { id: string };
-    return runCcd(reply, ['ensure', id]);
+    return runCcd(reply, CCD_ARGV.ensure(id));
   });
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    return runCcd(reply, ['ws-add', project]);
+    return runCcd(reply, CCD_ARGV.wsAdd(project));
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
@@ -319,7 +324,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // rec.wrapper and ccd would recompute `<wrapper>-<project>` — a DIFFERENT,
     // live session, killed while the workspace kept running and the PWA
     // reported success. ccd stop's one-argument form takes the id whole.
-    if (rec.workspace !== null) return runCcd(reply, ['stop', id]);
+    if (rec.workspace !== null) return runCcd(reply, CCD_ARGV.stopId(id));
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
     // rec.wrapper, which a prior swap flips to the new account while the
@@ -327,7 +332,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
       : rec.wrapper;
-    return runCcd(reply, ['stop', originalWrapper, rec.project]);
+    return runCcd(reply, CCD_ARGV.stopPair(originalWrapper, rec.project));
   });
 
   // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.
@@ -391,7 +396,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    return runCcd(reply, ['swap', id, body.wrapper]);
+    return runCcd(reply, CCD_ARGV.swap(id, body.wrapper));
   });
 
   // Static PWA (populated by Plan 2's build): serve dist-pwa/ at / with SPA

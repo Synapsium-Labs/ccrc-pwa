@@ -1,13 +1,30 @@
+import { isExecAllowed } from '../../agent/src/whitelist.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
+import { wireCmd } from '../src/remote/runner.js';
 import type { Deps } from '../src/server.js';
 import { mkTmp } from './tmpHelpers.js';
+
+/**
+ * Layer 1: every runner used in a server test crosses the agent's real
+ * whitelist first. Applying `wireCmd` is load-bearing — call sites pass
+ * `cfg.ccdBin`, an absolute path, and `isExecAllowed` rejects any cmd
+ * containing '/'. Free coverage on every existing route test.
+ */
+export const guardRunner = (inner: Runner): Runner => async (cmd, args) => {
+  const wire = wireCmd(cmd);
+  if (!isExecAllowed(wire, args)) {
+    throw new Error(`argv not in the agent EXEC_WHITELIST: ${wire} ${args.join(' ')}`);
+  }
+  return inner(cmd, args);
+};
 
 /** Deps against a throwaway fixture home; default runner fails every exec (all sessions dead). */
 export function testDeps(
   home: string = mkTmp('ccrc-'),
   run: Runner = async () => ({ code: 1, stdout: '', stderr: '' }),
 ): Deps {
-  return { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO };
+  const guarded = guardRunner(run);
+  return { cfg: loadConfig({ CCRC_HOME: home }), run: guarded, tmux: new Tmux(guarded), io: localIO };
 }
