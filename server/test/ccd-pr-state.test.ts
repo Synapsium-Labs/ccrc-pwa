@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
+import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-prstate-'); });
@@ -732,5 +733,96 @@ describe('gh isolation', () => {
     expect(h.ghPoison()).toHaveLength(1);
     expect(h.ghPoison()[0]).toContain('pr list');
     expect(h.ghCalls()).toEqual([]);
+  });
+});
+
+describe('ccd and prstate.ts agree about phase, always', () => {
+  // The predicate exists twice by necessity: ccd persists it (the server
+  // cannot write the registry) and prstate.ts puts it on the wire. Drift means
+  // the fleet card and the registry disagree about the same PR, silently.
+  // This is the device that stops it, and it is the same precedent as
+  // _ws_least_loaded vs limits.ts projectHome.
+  //
+  // EVERY ROW CARRIES ITS EXPECTED PHASE **AND REASON**, and both
+  // implementations are asserted against THAT, not against each other.
+  // `expect(phaseFor(l).phase).toBe(l.phase)` alone is satisfied by any SHARED
+  // misreading — including both sides answering `unknown` because the fixture's
+  // origin was unresolvable, which is exactly how this test would have passed
+  // while proving nothing. The third and fourth elements are the anchor; if a
+  // row's expectation is wrong, one of the four assertions fails and says which
+  // side.
+  //
+  // `reason` is pinned because phase agreement alone let the two drift on it:
+  // ccd wrote no reason for the merged-but-unproven row while phaseFor answered
+  // `error`, i.e. "GitHub could not be read" about a read that worked.
+  type Reason = string | null;
+  const matrix: [string, Record<string, unknown>, string, Reason][] = [
+    ['merged',          {}, 'merged', null],
+    // A fork PR does not bind, and with commits past base an unbound workspace
+    // is `none` — ready to compose — never `no-commits`.
+    ['fork',            { isCrossRepository: true }, 'none', null],
+    ['other base',      { baseRefName: 'release/9' }, 'none', null],
+    // Binds, but the merge predicate fails a conjunct while gh still says
+    // MERGED: `unknown`, never `merged`. The archive trigger hangs off this.
+    // The reason is `merge-unproven` and NOT any read-failure token — the gh
+    // call succeeded, and this row is the only one in the matrix with a reason.
+    ['no merge commit', { mergeCommit: null }, 'unknown', 'merge-unproven'],
+    ['open',            { state: 'OPEN', mergedAt: null, mergeCommit: null }, 'open', null],
+    ['draft',           { state: 'OPEN', mergedAt: null, mergeCommit: null, isDraft: true }, 'draft', null],
+    ['closed',          { state: 'CLOSED', mergedAt: null, mergeCommit: null }, 'closed', null],
+  ];
+
+  it.each(matrix)('%s', async (_name, over, expected, expectedReason) => {
+    const { phaseFor } = await import('../src/prstate.js');
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...over })]);
+    const l = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    // A read-failure reason here — `no-remote` is the classic — means the read
+    // never got as far as the predicate, and both sides would then agree on
+    // `unknown` for a reason that has nothing to do with agreement. Pinning the
+    // expected reason per row catches that too: `no-remote` matches no row.
+    expect(l.reason, 'ccd disagrees with the matrix about reason').toBe(expectedReason);
+    expect(l.phase, 'ccd disagrees with the matrix').toBe(expected);
+    const s = phaseFor(l as never);
+    expect(s.phase, 'prstate.ts disagrees with the matrix').toBe(expected);
+    expect(s.reason, 'prstate.ts disagrees with the matrix about reason').toBe(expectedReason);
+  });
+
+  // TWO MORE ROWS THE MATRIX ABOVE CANNOT EXPRESS, because what varies is not a
+  // field of the gh row. Task 3's fix round (findings 1 and 2) created both
+  // states, and neither had anything for `phaseFor` to agree about before it.
+  it('agrees when the registry\'s branch no longer resolves — a bound merge still wins', () => {
+    // `git branch -m` inside the worktree. ccd sends `tip: null` and
+    // `ahead: null`, the ancestry rung of proof 0 is skipped (there is no tip to
+    // reach from) and the row still binds on its other three conjuncts, so BOTH
+    // sides must answer `merged`. The trap this pins is `no-commits`: ccd used
+    // to compute it from a fabricated `ahead: 0`, and a `phaseFor` written
+    // against `(line.ahead ?? 0) === 0` would reproduce the same lie on the wire.
+    const { wt, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.git(wt, 'branch', '-m', 'ws/renamed');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    const l = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(l.tip).toBeNull();
+    expect(l.ahead).toBeNull();
+    expect(l.phase).toBe('merged');
+    expect(phaseFor(l as never).phase).toBe('merged');
+    // …and with no PR at all in the same state, `none`, never `no-commits`.
+    h.ghRows([]);
+    const l2 = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(l2.phase).toBe('none');
+    expect(phaseFor(l2 as never).phase).toBe('none');
+  });
+
+  it('agrees that an unreadable gh body is a WHOLE-REPO failure, not a line', () => {
+    // rc 0 with a body that is not a list of rows. ccd emits the id-less failure
+    // object and persists nothing; `parsePrLines` must classify it as
+    // `CcdPrFailure` so the sweep backs the project off — reading it as a full
+    // line would send it to `phaseFor` with no `rows` and throw inside a
+    // void-dispatched sweep.
+    workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRaw('MALFORMED');
+    const out = h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(parsePrLines(out)).toEqual([{ phase: 'unknown', reason: 'error' }]);
+    expect(isFullLine(parsePrLines(out)[0]!)).toBe(false);
   });
 });

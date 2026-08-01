@@ -100,6 +100,21 @@ export interface PrState {
 export const PR_PHASES: readonly PrPhase[] =
   ['unchecked', 'none', 'no-commits', 'open', 'draft', 'merged', 'closed', 'unknown'];
 
+/** What `GET /api/sessions/:id/pr` answers. `draft` is present ONLY in phase
+ *  `none` — the one phase whose sheet is a composer — and `facts` is the line
+ *  the composer always shows above the confirm. */
+export interface PrView {
+  pr: PrState;
+  draft: { title: string; body: string } | null;
+  /** `commits` and `dirty` are null for UNMEASURED — the branch did not resolve,
+   *  or the worktree could not be corroborated and its tree read (deviation 10).
+   *  Null is not 0: 0 is the claim "nothing past base" / "nothing uncommitted". */
+  facts: {
+    branch: string; baseShort: string; repo: string;
+    commits: number | null; dirty: number | null;
+  } | null;
+}
+
 /* ---------------------------------------------------------------------------
  * Snapshot revival — reading a FleetSession[] that an OLDER BUILD persisted.
  *
