@@ -46,4 +46,25 @@ describe('PATH containment', () => {
     expect(r.stderr).toContain('contained-tmux refuses');
     expect(r.stderr).toContain('kill-server');
   });
+
+  it('contains `gh` too — the credentialed one', () => {
+    // Same gate, same reason, higher stakes. `gh` on this box holds a token with
+    // `repo` WRITE scope and no second credential behind it. Under the sweep's
+    // `M01_ADD_GH` mutant the whitelist grew a `gh: [['pr']]` entry, exec.test's
+    // `gh pr create --repo o/r …` matched it, and the agent ran the real binary
+    // against GitHub — the mutant died for the right reason by the wrong
+    // mechanism. Nothing in this suite may reach that binary again.
+    const dir = process.env.CCRC_TEST_CONTAINED_PATH_DIR;
+    expect(dir, 'containment must be wired before this test may execute anything').toBeTruthy();
+    const resolved = spawnSync('sh', ['-c', 'command -v gh'], { encoding: 'utf8' }).stdout.trim();
+    expect(
+      resolved.startsWith(`${dir}${path.sep}`),
+      `gh must resolve inside the contained dir; got "${resolved}" — REFUSING to run pr create`,
+    ).toBe(true);
+
+    const r = spawnSync(resolved, ['pr', 'create', '--repo', 'o/r'], { encoding: 'utf8' });
+    expect(r.status, 'the contained gh refuses everything').toBe(1);
+    expect(r.stderr).toContain('contained-gh refuses');
+    expect(r.stderr).toContain('pr create');
+  });
 });

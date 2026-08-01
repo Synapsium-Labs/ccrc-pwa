@@ -26,10 +26,28 @@ import path from 'node:path';
 import { afterAll } from 'vitest';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-agent-containpath-'));
-const bin = path.join(dir, 'tmux');
-// Refuses everything, says so on stderr, and touches nothing.
-writeFileSync(bin, '#!/bin/sh\necho "contained-tmux refuses: $*" 1>&2\nexit 1\n');
-chmodSync(bin, 0o755);
+
+/** Every real binary the whitelist is able to NAME gets a refusing stub here.
+ *  The test for whether one belongs is not "does a test call it today" — it is
+ *  "could a wrong whitelist make a test call it tomorrow", because that is the
+ *  only case in which the containment matters at all.
+ *
+ *  `tmux` earned its place by killing the fleet four times. `gh` is here for the
+ *  same reason found one review later, and it is the worse of the two: the
+ *  mutant `M01_ADD_GH` adds a `gh: [['pr']]` grant, `exec.test.ts` sends
+ *  `gh pr create --repo o/r …` expecting `forbidden`, and under that mutant the
+ *  prefix matches — so the agent executed the REAL `gh`, holding the host's
+ *  `repo`-WRITE-scoped token, against GitHub. It failed only because `o/r` does
+ *  not exist. The mutant was killed for the right reason and by the wrong
+ *  mechanism: a live authenticated write attempt. `ccd` needs no entry — it
+ *  resolves to `$HOME/.local/bin/ccd` inside the fixture home, which is already
+ *  isolated. */
+for (const name of ['tmux', 'gh'] as const) {
+  const bin = path.join(dir, name);
+  // Refuses everything, says so on stderr, and touches nothing.
+  writeFileSync(bin, `#!/bin/sh\necho "contained-${name} refuses: $*" 1>&2\nexit 1\n`);
+  chmodSync(bin, 0o755);
+}
 
 process.env.PATH = `${dir}${path.delimiter}${process.env.PATH ?? ''}`;
 // Read by the pin. Its presence is the only proof this setup file ran.
