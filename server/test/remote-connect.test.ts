@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { WebSocketServer } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
-import type { ConnectedFleet } from '../src/remote/client.js';
-import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+import { connectFleet, FleetClient, type ConnectedFleet } from '../src/remote/client.js';
+import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 describe('connectFleet — connection lifecycle', () => {
   let agent: RunningAgent | undefined;
@@ -26,7 +28,7 @@ describe('connectFleet — connection lifecycle', () => {
     agent = await bootAgent(fixture);
     fleet = connectToAgent(agent.port);
 
-    await vi.waitFor(() => expect(fleet!.state).toEqual({ connected: true, downSince: null }), { timeout: 3000 });
+    await vi.waitFor(() => expect(fleet!.state).toEqual({ connected: true, downSince: null, ccdVerbs: [] }), { timeout: 3000 });
   });
 
   it('notifies onStateChange listeners as connectivity flips', async () => {
@@ -67,5 +69,91 @@ describe('connectFleet — connection lifecycle', () => {
     // A request issued after close() must reject rather than hang or resurrect the socket.
     await expect(fleet.runner('tmux', ['has-session', '-t', 'cc-nope'])).resolves.toMatchObject({ code: 1 });
     fleet = undefined; // already closed — afterEach shouldn't double-close
+  });
+
+  it('records the agent-advertised ccd verbs on the fleet state', async () => {
+    fixture = makeFixture();
+    const bin = path.join(fixture.home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'ccd'), '#!/bin/sh\n[ "$1" = caps ] && printf "start\\nws-audit\\n"\n');
+    chmodSync(path.join(bin, 'ccd'), 0o755);
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port);
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.ccdVerbs).toEqual(['start', 'ws-audit']);
+  });
+
+  // `ccdVerbs` is `string[] | null`, and null means "we have no evidence" —
+  // NEVER "the agent said there are no verbs". A real ccrc-agent always sends
+  // a (possibly empty) array, so the "no evidence" branch only fires before
+  // the first handshake, or against an agent old/broken enough to send
+  // something else. Both are exercised below without a real agent.
+  it('starts with ccdVerbs:null before any handshake — the class default, never []', () => {
+    // Constructed but never `.start()`-ed: no socket, no network activity,
+    // nothing to close. Isolates the initializer from connection lifecycle.
+    const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
+    expect(client.state.ccdVerbs).toBeNull();
+  });
+});
+
+/** A hand-rolled minimal agent that only speaks the hello/ready handshake, so
+ *  a `ready` frame with a missing or malformed `ccdVerbs` — something the
+ *  real ccrc-agent, which always sends a validated `string[]`, can never
+ *  produce — can still be driven through `FleetClient.onReady`. */
+function fakeReadyAgent(readyExtra: Record<string, unknown>): Promise<{ port: number; close(): Promise<void> }> {
+  return new Promise((resolve) => {
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => {
+      const address = wss.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      resolve({
+        port,
+        close: () =>
+          new Promise<void>((res) => {
+            for (const client of wss.clients) client.terminate();
+            wss.close(() => res());
+          }),
+      });
+    });
+    wss.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg: unknown = JSON.parse(raw.toString());
+        if (typeof msg === 'object' && msg !== null && (msg as { t?: unknown }).t === 'hello') {
+          ws.send(JSON.stringify({ t: 'ready', v: 1, ...readyExtra }));
+        }
+      });
+    });
+  });
+}
+
+describe('FleetClient.onReady — ccdVerbs validation distinguishes null from empty/malformed', () => {
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  it('an absent ccdVerbs field (older agent) is recorded as null, never []', async () => {
+    server = await fakeReadyAgent({});
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.ccdVerbs).toBeNull();
+  });
+
+  it('a malformed ccdVerbs (non-string elements) is discarded as null, never trusted partially', async () => {
+    server = await fakeReadyAgent({ ccdVerbs: [1, 2, 3] });
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.ccdVerbs).toBeNull();
+  });
+
+  it('a real empty array is recorded as [], distinct from the null "no evidence" case', async () => {
+    server = await fakeReadyAgent({ ccdVerbs: [] });
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.ccdVerbs).toEqual([]);
   });
 });

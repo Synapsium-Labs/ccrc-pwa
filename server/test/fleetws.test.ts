@@ -139,7 +139,7 @@ describe('fleet REST + WS', () => {
     const cacheDir = mkTmp('ccrc-cache-');
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null }, stateCachePath: cachePath };
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
     const watcher = new FleetWatcher(deps, new Bus());
 
     await watcher.tick();
@@ -154,7 +154,7 @@ describe('fleet REST + WS', () => {
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = {
-      ...testDeps(home), cfg, fleetState: { connected: false, downSince: Date.now() }, stateCachePath: cachePath,
+      ...testDeps(home), cfg, fleetState: { connected: false, downSince: Date.now(), ccdVerbs: null }, stateCachePath: cachePath,
     };
     const watcher = new FleetWatcher(deps, new Bus());
 

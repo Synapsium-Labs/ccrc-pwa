@@ -4,7 +4,11 @@
 // both sides; copied verbatim per the plan's pinned interfaces.
 
 export interface AgentHello { t: 'hello'; token: string }
-export interface AgentReady { t: 'ready'; v: 1 }
+/** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
+ *  ~/.local/bin/ccd is a copy, not a symlink to the repo, so passing the
+ *  whitelist is not evidence a verb exists there. Optional: an older agent
+ *  omits it, and the server treats absent as "no evidence either way". */
+export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[] }
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
 export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number }

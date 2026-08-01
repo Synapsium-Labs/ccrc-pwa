@@ -46,14 +46,14 @@ describe('GET /api/fleet/health', () => {
   });
 
   it('remote mode + connected fleetState reports connected', async () => {
-    const app = await buildServer(remoteDeps({}, { connected: true, downSince: null }));
+    const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
     expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
-    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000 }));
+    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
     expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000 });
     await app.close();
@@ -67,7 +67,7 @@ describe('GET /api/fleet — degraded mode', () => {
     const cachedSessions = [session('claude-Cached')];
     await saveSnapshot(cachedSessions, cachePath);
 
-    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000 }, cachePath);
+    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.statusCode).toBe(200);
@@ -78,7 +78,7 @@ describe('GET /api/fleet — degraded mode', () => {
   it('falls back to a live assemble (no stale flag) when disconnected but no cache exists yet', async () => {
     const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'never-written.json');
-    const deps = remoteDeps({}, { connected: false, downSince: Date.now() }, cachePath);
+    const deps = remoteDeps({}, { connected: false, downSince: Date.now(), ccdVerbs: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.json()).toEqual({ sessions: [] });
@@ -101,7 +101,7 @@ describe('GET /api/fleet — degraded mode', () => {
       }],
     }));
 
-    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000 }, cachePath);
+    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.json()).toEqual({
@@ -117,7 +117,7 @@ describe('GET /api/fleet — degraded mode', () => {
     const cachePath = path.join(dir, 'state-cache.json');
     await saveSnapshot([session('claude-Stale')], cachePath);
 
-    const deps = remoteDeps({}, { connected: true, downSince: null }, cachePath);
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.json()).toEqual({ sessions: [] });
@@ -135,7 +135,7 @@ describe('POST /api/fleet/reboot', () => {
   });
 
   it('501s in remote mode with no Hetzner token/server id configured', async () => {
-    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1 }));
+    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1, ccdVerbs: null }));
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ ok: false, error: 'not-configured' });
@@ -148,7 +148,7 @@ describe('POST /api/fleet/reboot', () => {
     const app = await buildServer(
       remoteDeps(
         { CCRC_HETZNER_TOKEN: 'hetzner-secret', CCRC_FLEET_SERVER_ID: '12345' },
-        { connected: false, downSince: 1 },
+        { connected: false, downSince: 1, ccdVerbs: null },
       ),
     );
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });
@@ -168,7 +168,7 @@ describe('POST /api/fleet/reboot', () => {
     const app = await buildServer(
       remoteDeps(
         { CCRC_HETZNER_TOKEN: 'bad-token', CCRC_FLEET_SERVER_ID: '12345' },
-        { connected: false, downSince: 1 },
+        { connected: false, downSince: 1, ccdVerbs: null },
       ),
     );
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });
@@ -183,7 +183,7 @@ describe('POST /api/fleet/reboot', () => {
     const app = await buildServer(
       remoteDeps(
         { CCRC_HETZNER_TOKEN: 'token', CCRC_FLEET_SERVER_ID: '12345' },
-        { connected: false, downSince: 1 },
+        { connected: false, downSince: 1, ccdVerbs: null },
       ),
     );
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });

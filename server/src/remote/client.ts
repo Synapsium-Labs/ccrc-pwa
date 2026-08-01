@@ -11,6 +11,7 @@ import type {
   TailReset,
 } from '../../../shared/agent-protocol.js';
 import type { Runner } from '../exec.js';
+import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { SpawnPty } from '../pty.js';
 import { createRunner } from './runner.js';
@@ -44,7 +45,16 @@ export interface RemoteFleetConfig {
 
 type ResolvedConfig = Required<RemoteFleetConfig>;
 
-export interface FleetState { connected: boolean; downSince: number | null }
+// Re-exported so every importer of `FleetState` from `remote/client.js` keeps
+// working unchanged now that this module no longer declares its own copy.
+// Disclosed rather than pinned: as of this change nothing in this tree
+// imports `FleetState` from here yet (every current call site — server.ts,
+// fleet-health.test.ts — reaches it via `fleetstate.js` directly), so no test
+// or tsc error currently distinguishes this line from its own deletion. It
+// exists for the callers this split was done for: `ccdargv.ts`'s
+// `Pick<FleetState, 'ccdVerbs'>` and the `verbSupported(deps.fleetState, …)`
+// call sites landing in later tasks.
+export type { FleetState };
 
 interface Pending { resolve: (v: ResOk) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
 
@@ -72,7 +82,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * `remote/io.ts` (and, from T4, `remote/pty.ts`) build on.
  */
 export class FleetClient {
-  readonly state: FleetState = { connected: false, downSince: null };
+  readonly state: FleetState = { connected: false, downSince: null, ccdVerbs: null };
 
   private readonly cfg: ResolvedConfig;
   private ws: WebSocket | null = null;
@@ -223,7 +233,7 @@ export class FleetClient {
     if (!isRecord(msg)) return;
 
     if (msg.t === 'ready') {
-      this.onReady();
+      this.onReady(msg);
       return;
     }
     if (msg.t === 'pong') {
@@ -258,8 +268,14 @@ export class FleetClient {
     }
   }
 
-  private onReady(): void {
+  private onReady(frame: Record<string, unknown>): void {
     this.ready = true;
+    // Mutated directly rather than pushed through setState, whose change
+    // detection compares only connected/downSince — a reconnect to an upgraded
+    // agent must still refresh this.
+    this.state.ccdVerbs = Array.isArray(frame.ccdVerbs)
+      && frame.ccdVerbs.every((v) => typeof v === 'string')
+      ? (frame.ccdVerbs as string[]) : null;
     // Only the SECOND+ successful handshake is a "reconnect" — `everConnected`
     // (unlike `state.connected`, which starts false) distinguishes "first
     // connect ever" from "came back after a drop".
@@ -297,7 +313,11 @@ export class FleetClient {
     }
   }
 
-  private setState(patch: FleetState): void {
+  /** Connectivity only, by design: `ccdVerbs` arrives on the ready frame and is
+   *  assigned in `onReady`, not patched through here — this function's change
+   *  detection compares connected/downSince and would suppress a verb-only
+   *  update. */
+  private setState(patch: Pick<FleetState, 'connected' | 'downSince'>): void {
     if (patch.connected === this.state.connected && patch.downSince === this.state.downSince) return;
     this.state.connected = patch.connected;
     this.state.downSince = patch.downSince;

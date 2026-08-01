@@ -4,11 +4,23 @@ import path from 'node:path';
 import { reviveFleetSessions, type FleetSession } from '../../shared/api.js';
 
 /**
- * Degraded-mode snapshot cache. Structurally mirrors `remote/client.ts`'s
- * `FleetState` (connected + downSince) WITHOUT importing it, so local-mode
- * code (and this module) never needs to know the remote client exists.
+ * Degraded-mode snapshot cache, and the ONE declaration of fleet reachability.
+ *
+ * `remote/client.ts` used to declare its own structurally identical
+ * `FleetState`; it now imports this one. The rule that mattered is unchanged —
+ * this module must never import from `remote/`, so local-mode code still needs
+ * no knowledge that the remote client exists — but two copies of a type that
+ * must stay in lockstep is how `ccdVerbs` would have been added to one of them
+ * and read off the other.
  */
-export interface FleetState { connected: boolean; downSince: number | null }
+export interface FleetState {
+  connected: boolean;
+  downSince: number | null;
+  /** What `ccd caps` printed on the fleet host, or null when we have no
+   *  evidence (local mode, or an agent old enough not to send it). Null is
+   *  NOT "no verbs" — the server treats it as "do not block". */
+  ccdVerbs: string[] | null;
+}
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
 

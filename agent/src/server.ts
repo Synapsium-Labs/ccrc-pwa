@@ -52,12 +52,12 @@ export interface RunningAgent {
 
 const DEFAULT_HELLO_TIMEOUT_MS = 3000;
 const DEFAULT_EXEC_TIMEOUT_MS = 10_000;
-const MAX_EXEC_TIMEOUT_MS = 120_000;
+const MAX_EXEC_TIMEOUT_MS = 300_000;
 const EXEC_MAX_BUFFER = 8 * 1024 * 1024;
 const AUTH_CLOSE_CODE = 4401;
 export const DEFAULT_PROJECTS_ROOT = '/srv/projects';
 
-type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | { t: 'ready'; v: 1 };
+type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | { t: 'ready'; v: 1; ccdVerbs: string[] };
 
 function send(ws: WebSocket, msg: OutMsg): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -290,7 +290,22 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
   }
 }
 
-function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number): void {
+/** One `ccd caps` read per agent process, at start. Not whitelisted and never
+ *  reachable from a connection: it is the agent's own account of what the
+ *  DEPLOYED script implements, and the server uses it to render `unsupported`
+ *  instead of a control that silently answers `forbidden` on the fleet. */
+async function readCcdVerbs(home: string): Promise<string[]> {
+  // 10s, same ceiling as every other pre-connection exec on this box. Not
+  // independently provable by a fast stub-script test — any value big enough
+  // to let a trivial `sh` process finish behaves identically here — so this
+  // bound is disclosed rather than pinned: `caps` just lists whitelist keys,
+  // it does no I/O, and 10s already matches the rest of the file's defaults.
+  const res = await runExec(resolveSpawnCmd('ccd', home), ['caps'], 10_000);
+  if (res.code !== 0) return [];
+  return res.stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
+}
+
+function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, ccdVerbs: string[]): void {
   let authed = false;
   const ctx: ConnCtx = {
     cfg: { home: opts.home, projectsRoot: opts.projectsRoot },
@@ -322,7 +337,7 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       }
       authed = true;
       clearTimeout(helloTimer);
-      send(ws, { t: 'ready', v: 1 });
+      send(ws, { t: 'ready', v: 1, ccdVerbs });
       return;
     }
 
@@ -399,10 +414,11 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
+  const ccdVerbs = await readCcdVerbs(opts.home);
 
   const httpServer: Server = createServer();
   const wss = new WebSocketServer({ server: httpServer });
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs));
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, ccdVerbs));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);

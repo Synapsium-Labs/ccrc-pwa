@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { rmSync } from 'node:fs';
 import type { RunningAgent } from '../../agent/src/server.js';
-import type { ConnectedFleet } from '../src/remote/client.js';
+import type { ConnectedFleet, FleetClient } from '../src/remote/client.js';
+import { createRunner } from '../src/remote/runner.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 describe('remote Runner — exec over the agent WS', () => {
@@ -65,5 +66,37 @@ describe('wireCmd — absolute ccdBin normalization (agent whitelist takes bare 
     expect(wireCmd('ccd')).toBe('ccd');
     expect(wireCmd('tmux')).toBe('tmux');
     expect(wireCmd('/usr/bin/tmux')).toBe('/usr/bin/tmux'); // only ccd is re-homed
+  });
+});
+
+describe('per-verb timeouts', () => {
+  const seen: number[] = [];
+  const client = {
+    request: async (req: { timeoutMs?: number }) => { seen.push(req.timeoutMs ?? -1); return { code: 0, stdout: '', stderr: '' }; },
+  } as unknown as FleetClient;
+
+  it.each([
+    [['pr-state', '--session', 'x'], 20_000],
+    [['ws-archive', '--session', 'x'], 60_000],
+    [['ws-restore', '--session', 'x'], 60_000],
+    [['ws-audit', '--session', 'x'], 90_000],
+    [['ws-reap', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
+    [['ensure', 'x'], 90_000],                  // the unchanged ccd default
+  ])('sends %j with a %i ms budget', async (args, ms) => {
+    seen.length = 0;
+    await createRunner(client)('/home/u/.local/bin/ccd', args as string[]);
+    expect(seen[0]).toBe(ms);
+  });
+
+  it('still gives tmux its own short budget', async () => {
+    seen.length = 0;
+    await createRunner(client)('tmux', ['has-session', '-t', 'x']);
+    expect(seen[0]).toBe(10_000);
+  });
+
+  it('falls back to the flat ccd default rather than throwing when args is empty', async () => {
+    seen.length = 0;
+    await createRunner(client)('/home/u/.local/bin/ccd', []);
+    expect(seen[0]).toBe(90_000);
   });
 });

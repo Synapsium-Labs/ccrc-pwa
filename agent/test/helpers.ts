@@ -96,10 +96,10 @@ export class TestClient {
     });
   }
 
-  async hello(token = TOKEN): Promise<void> {
+  async hello(token = TOKEN): Promise<unknown> {
     await this.opened();
     this.send({ t: 'hello', token });
-    await this.waitFor((m) => (m as { t?: unknown }).t === 'ready');
+    return this.waitFor((m) => (m as { t?: unknown }).t === 'ready');
   }
 
   async req<T = unknown>(id: number, req: Record<string, unknown>): Promise<T> {

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, afterAll } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
@@ -153,6 +153,61 @@ describe('ccrc-agent exec whitelist', () => {
     const res = await client.req<ExecRes>(1, { op: 'exec', cmd: 'ccd', args: ['ws-reap', 'demo-quiet-basin'] });
     expect(res.ok).toBe(false);
     expect(res.err).toBe('forbidden');
+  });
+
+  it('advertises the deployed ccd verbs in its ready frame', async () => {
+    // A verb can pass the whitelist and not exist on the box, because
+    // ~/.local/bin/ccd is a COPY. Without this the UI shows a merged-purple
+    // dot that never resolves.
+    fixture = makeFixture();
+    const bin = path.join(fixture.home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'ccd'), '#!/bin/sh\n[ "$1" = caps ] && printf "start\\nws-reap\\n"\n');
+    chmodSync(path.join(bin, 'ccd'), 0o755);
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    const ready = await client.hello();
+    expect((ready as { ccdVerbs?: string[] }).ccdVerbs).toEqual(['start', 'ws-reap']);
+  });
+
+  it('reports no verbs rather than crashing when ccd is missing entirely', async () => {
+    fixture = makeFixture();
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    const ready = await client.hello();
+    expect((ready as { ccdVerbs?: string[] }).ccdVerbs).toEqual([]);
+  });
+
+  it('ignores stdout from a failing ccd caps call — only a clean exit is evidence', async () => {
+    // A nonzero exit with something ON stdout (a usage banner, a partial
+    // dump before a crash) must not leak through as advertised verbs.
+    fixture = makeFixture();
+    const bin = path.join(fixture.home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'ccd'), '#!/bin/sh\n[ "$1" = caps ] && printf "start\\n"\nexit 1\n');
+    chmodSync(path.join(bin, 'ccd'), 0o755);
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    const ready = await client.hello();
+    expect((ready as { ccdVerbs?: string[] }).ccdVerbs).toEqual([]);
+  });
+
+  it('trims incidental whitespace from each ccd caps line before matching', async () => {
+    fixture = makeFixture();
+    const bin = path.join(fixture.home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'ccd'), '#!/bin/sh\n[ "$1" = caps ] && printf "  start \\nws-reap\\n"\n');
+    chmodSync(path.join(bin, 'ccd'), 0o755);
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    const ready = await client.hello();
+    expect((ready as { ccdVerbs?: string[] }).ccdVerbs).toEqual(['start', 'ws-reap']);
+  });
+
+  it('accepts a 300 s exec timeout — ws-reap on a multi-GB worktree needs it', () => {
+    // Asserted on the constant rather than by sleeping 300 s.
+    const src = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const MAX_EXEC_TIMEOUT_MS = 300_000;');
   });
 });
 
