@@ -2,6 +2,7 @@ import { isExecAllowed } from '../../agent/src/whitelist.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
+import { ccdRunner } from '../src/lifecycle.js';
 import { wireCmd } from '../src/remote/runner.js';
 import type { Deps } from '../src/server.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -20,11 +21,18 @@ export const guardRunner = (inner: Runner): Runner => async (cmd, args) => {
   return inner(cmd, args);
 };
 
-/** Deps against a throwaway fixture home; default runner fails every exec (all sessions dead). */
+/** Deps against a throwaway fixture home; default runner fails every exec (all sessions dead).
+ *
+ *  Both capabilities `Deps` carries are built from the SAME guarded runner:
+ *  `runCcd` composes it through `ccdRunner`, `Tmux` gets it by constructor
+ *  injection. Guarding at the `Runner` level rather than at `CcdRunner`'s is
+ *  what lets one guard cover both paths — `routes.test.ts`'s two wiring tests
+ *  pin each use site independently. */
 export function testDeps(
   home: string = mkTmp('ccrc-'),
   run: Runner = async () => ({ code: 1, stdout: '', stderr: '' }),
 ): Deps {
   const guarded = guardRunner(run);
-  return { cfg: loadConfig({ CCRC_HOME: home }), run: guarded, tmux: new Tmux(guarded), io: localIO };
+  const cfg = loadConfig({ CCRC_HOME: home });
+  return { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO };
 }

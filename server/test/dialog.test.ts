@@ -8,6 +8,7 @@ import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
+import { ccdRunner } from '../src/lifecycle.js';
 import type { Dialog, FleetSession, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -196,7 +197,8 @@ describe('FleetWatcher dialog detection', () => {
       if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO };
     const bus = new Bus();
     const msgs: SessionStreamMsg[] = [];
     const fleets: FleetSession[][] = [];

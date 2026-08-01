@@ -6,7 +6,8 @@ import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { listProjects } from '../src/lifecycle.js';
+import { ccdRunner, listProjects } from '../src/lifecycle.js';
+import { CCD_ARGV } from '../src/ccdargv.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ID = 'claude2-MekWarLive';
@@ -43,7 +44,7 @@ async function makeApp(opts: { fail?: boolean; projectsRoot?: string } = {}): Pr
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
   const cfg = loadConfig(env);
-  const app = await buildServer({ cfg, run, tmux: new Tmux(run), io: localIO });
+  const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO });
   return { app, calls, cfg, home };
 }
 
@@ -108,7 +109,7 @@ describe('lifecycle routes', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, run, tmux: new Tmux(run), io: localIO });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
     // …but stop must still target claude2-cctest, not claude-cctest.
@@ -135,7 +136,7 @@ describe('lifecycle routes', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, run, tmux: new Tmux(run), io: localIO });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa']]);
@@ -215,5 +216,46 @@ describe('listProjects', () => {
     expect(out.roots).toEqual(['/nope/does-not-exist']);
     expect(out.projects).toEqual([{ name: 'MekWarLive', workdir: '/data/projects/MekWarLive' }]);
     await app.close();
+  });
+});
+
+// The composition-root factory task 13S introduced: it is the ONLY thing that
+// turns a raw `Runner` into the single `Deps.runCcd` capability, so every route
+// above reaches ccd through it. Covered directly because nothing else can see
+// its three decisions apart — which binary it names, how it maps an exit code,
+// and whether a failure still carries the output the 502 body quotes.
+describe('ccdRunner — the one ccd capability Deps carries', () => {
+  const spy = (result: { code: number; stdout: string; stderr: string }) => {
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return result; };
+    return { run, calls };
+  };
+  const cfg = loadConfig({ CCRC_HOME: mkTmp('ccrc-') });
+
+  it('names cfg.ccdBin and passes the argv tokens through verbatim', async () => {
+    const { run, calls } = spy({ code: 0, stdout: '', stderr: '' });
+    await ccdRunner(run, cfg)(CCD_ARGV.wsReap('a'.repeat(64), ID));
+    expect(calls).toEqual([[cfg.ccdBin, 'ws-reap', '--expect', 'a'.repeat(64), '--session', ID]]);
+  });
+
+  it('ok is exit code 0 and nothing else', async () => {
+    const zero = spy({ code: 0, stdout: '', stderr: '' });
+    const one = spy({ code: 1, stdout: '', stderr: '' });
+    const other = spy({ code: 127, stdout: '', stderr: '' });
+    expect((await ccdRunner(zero.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(true);
+    expect((await ccdRunner(one.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(false);
+    expect((await ccdRunner(other.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(false);
+  });
+
+  it('passes stdout and stderr through untouched on success', async () => {
+    const { run } = spy({ code: 0, stdout: 'out\n', stderr: 'warn\n' });
+    expect(await ccdRunner(run, cfg)(CCD_ARGV.wsAudit(ID)))
+      .toEqual({ ok: true, stdout: 'out\n', stderr: 'warn\n' });
+  });
+
+  it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
+    const { run } = spy({ code: 1, stdout: 'partial\n', stderr: 'boom\n' });
+    expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID)))
+      .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n' });
   });
 });

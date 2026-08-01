@@ -5,6 +5,7 @@ import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
+import { ccdRunner } from '../src/lifecycle.js';
 import { parseSkillListing, BUILTINS } from '../src/commands.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -43,7 +44,8 @@ describe('GET /api/sessions/:id/commands', () => {
       if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: '' }; // dead → uses registry workdir
       return { code: 0, stdout: '', stderr: '' };
     };
-    const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO });
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${id}/commands` });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { builtins: { name: string }[]; skills: { name: string }[] };
@@ -57,7 +59,8 @@ describe('GET /api/sessions/:id/commands', () => {
     const home = mkTmp('ccrc-cmd-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
-    const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO });
     const res = await app.inject({ method: 'GET', url: '/api/sessions/nope/commands' });
     expect(res.statusCode).toBe(404);
     await app.close();

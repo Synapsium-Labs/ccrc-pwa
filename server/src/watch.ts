@@ -6,7 +6,6 @@ import { paneState, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { ccd } from './lifecycle.js';
 import { CCD_ARGV, verbSupported } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
@@ -217,7 +216,7 @@ export class FleetWatcher {
           }
           continue;
         }
-        const res = await ccd(this.deps.run, this.deps.cfg, argv);
+        const res = await this.deps.runCcd(argv);
         if (!res.ok) { this.backoffPr(project, now, 'agent-down', records); continue; }
         const lines = parsePrLines(res.stdout);
         // A WHOLE-REPO failure — the id-less shape, emitted by `_gh_repo_slug`,
@@ -305,7 +304,7 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       if (pr?.phase !== 'merged') continue;                 // unknown NEVER archives
       if ((await this.archiveSafety(r.id)) !== 'ok') continue;   // defers; the next sweep retries
-      const res = await ccd(this.deps.run, this.deps.cfg, CCD_ARGV.wsArchive(r.id));
+      const res = await this.deps.runCcd(CCD_ARGV.wsArchive(r.id));
       if (!res.ok) continue;
       if (res.stdout.startsWith('already archived')) continue;   // idempotent re-fire: no second push
       // AFTER the fact, and it promises only navigation: PushPayload is

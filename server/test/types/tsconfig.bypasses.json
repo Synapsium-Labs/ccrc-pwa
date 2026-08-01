@@ -1,0 +1,6 @@
+{
+  "_comment": "task 13S: the four historical layer-2b bypasses plus two extra pins. This project MUST FAIL to compile, and ccdargv-brand.test.ts asserts the exact error per file. Kept out of the server's real tsconfig deliberately — these files are supposed to be broken.",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["bypasses/**/*.ts"]
+}

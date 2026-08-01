@@ -6,12 +6,12 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import type { CcrcConfig } from './config.js';
-import type { Runner, Tmux } from './exec.js';
+import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome } from './limits.js';
 import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
-import { CCD_ARGV, verbSupported } from './ccdargv.js';
+import { CCD_ARGV, verbSupported, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -21,7 +21,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
 import { readRegistry } from './registry.js';
-import { ccd, listProjects } from './lifecycle.js';
+import { listProjects, type CcdResult } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
@@ -41,7 +41,13 @@ const CLIP_MIME: Record<string, string> = {
 };
 
 export interface Deps {
-  cfg: CcrcConfig; run: Runner; tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
+  cfg: CcrcConfig;
+  /** The ONLY path to `ccd`. There is deliberately no raw `run` here: with one,
+   *  "every ccd argv is built in ccdargv.ts" is enforceable only by scanning
+   *  source text, which was defeated four times in four rounds. The parameter
+   *  type is the enforcement now — see task 13S and `CcdArgv`. */
+  runCcd: (argv: CcdArgv) => Promise<CcdResult>;
+  tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
   /** Remote-mode reachability, straight from `connectFleet().state` — absent
    *  (or ignored) in local mode, where the fleet is always "connected". */
   fleetState?: FleetState;
@@ -285,9 +291,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? res : reply.code(409).send(res);
   });
 
-  // Lifecycle + projects routes: shell out to ccd; failures map to 502 with stderr.
-  const runCcd = async (reply: FastifyReply, args: string[]) => {
-    const res = await ccd(deps.run, deps.cfg, args);
+  // Lifecycle + projects routes: shell out to ccd; failures map to 502 with
+  // stderr. Named for the response shape it adds, not for the call it makes —
+  // `deps.runCcd` is the call, and routes needing another shape (a 200 carrying
+  // `phase:unknown`, a parsed WsAudit/ReapResult, a 501 hoisted out of a queued
+  // fn) compose from `deps.runCcd` directly rather than reaching for a runner.
+  const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
+    const res = await deps.runCcd(argv);
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   };
 
@@ -303,19 +313,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // interpolating a verb into an array, so both spellings are enumerated by
     // whitelist-subset.test.ts and neither can drift out of the agent's list.
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
-    return runCcd(reply, body.enable === false
+    return runCcdOr502(reply, body.enable === false
       ? CCD_ARGV.start(body.wrapper, body.project, workdir)
       : CCD_ARGV.enable(body.wrapper, body.project, workdir));
   });
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
     const { id } = req.params as { id: string };
-    return runCcd(reply, CCD_ARGV.ensure(id));
+    return runCcdOr502(reply, CCD_ARGV.ensure(id));
   });
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    return runCcd(reply, CCD_ARGV.wsAdd(project));
+    return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
@@ -327,7 +337,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // rec.wrapper and ccd would recompute `<wrapper>-<project>` — a DIFFERENT,
     // live session, killed while the workspace kept running and the PWA
     // reported success. ccd stop's one-argument form takes the id whole.
-    if (rec.workspace !== null) return runCcd(reply, CCD_ARGV.stopId(id));
+    if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id));
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
     // rec.wrapper, which a prior swap flips to the new account while the
@@ -335,7 +345,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
       : rec.wrapper;
-    return runCcd(reply, CCD_ARGV.stopPair(originalWrapper, rec.project));
+    return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project));
   });
 
   // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.
@@ -399,7 +409,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    return runCcd(reply, CCD_ARGV.swap(id, body.wrapper));
+    return runCcdOr502(reply, CCD_ARGV.swap(id, body.wrapper));
   });
 
   // ── PR lifecycle ────────────────────────────────────────────────
@@ -422,7 +432,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silence §2 forbids, and the client would render it as "no control" rather
     // than "we could not look".
     if (!verbSupported(deps.fleetState, argv)) return unknownView('unsupported');
-    const res = await ccd(deps.run, deps.cfg, argv);
+    const res = await deps.runCcd(argv);
     if (!res.ok) return unknownView('agent-down');
     const [first] = parsePrLines(res.stdout);
     return prView(first ?? null, await prTasks(id), null);
@@ -447,7 +457,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     // Through the per-session queue, so it serialises with every other write.
-    const r = await sendDeps.queue.run(id, () => ccd(deps.run, deps.cfg, argv));
+    const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
     return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
   });
 
@@ -455,21 +465,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return runCcd(reply, CCD_ARGV.wsArchive(id));
+    return runCcdOr502(reply, CCD_ARGV.wsArchive(id));
   });
 
   app.post('/api/sessions/:id/restore', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return runCcd(reply, CCD_ARGV.wsRestore(id));
+    return runCcdOr502(reply, CCD_ARGV.wsRestore(id));
   });
 
   app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const res = await ccd(deps.run, deps.cfg, CCD_ARGV.wsAudit(id));
+    const res = await deps.runCcd(CCD_ARGV.wsAudit(id));
     const audit = parseAudit(res.stdout);
     if (audit === null) return reply.code(502).send({ ok: false, stderr: res.stderr });
     return audit;
@@ -489,7 +499,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!verbSupported(deps.fleetState, argv)) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
-    const res = await sendDeps.queue.run(id, () => ccd(deps.run, deps.cfg, argv));
+    const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
     return parseReap(res.stdout, res.ok ? 0 : 1, res.stderr);
   });
 

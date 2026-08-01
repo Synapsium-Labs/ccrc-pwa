@@ -1,6 +1,7 @@
 import { buildServer, type Deps } from './server.js';
 import { loadConfig } from './config.js';
 import { realRunner, Tmux } from './exec.js';
+import { ccdRunner } from './lifecycle.js';
 import { localIO } from './io.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
@@ -26,9 +27,12 @@ if (cfg.fleetMode === 'remote') {
     process.exit(1);
   }
   const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken });
-  deps = { cfg, run: fleet.runner, tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty, fleetState: fleet.state, push };
+  // The composition root is the ONLY place a raw `Runner` is in scope: it binds
+  // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
+  // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
+  deps = { cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty, fleetState: fleet.state, push };
 } else {
-  deps = { cfg, run: realRunner, tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty, push };
+  deps = { cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty, push };
 }
 
 const bus = new Bus();

@@ -5,6 +5,7 @@ import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
+import { ccdRunner } from '../src/lifecycle.js';
 import { saveSnapshot, type FleetState } from '../src/fleetstate.js';
 import { testDeps } from './helpers.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -24,7 +25,7 @@ function remoteDeps(
 ): Deps {
   const home = mkTmp('ccrc-');
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote', ...env });
-  return { cfg, run: deadRunner, tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath };
+  return { cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath };
 }
 
 // A COMPLETE FleetSession — the fixture was eight fields short of the type it

@@ -6,6 +6,8 @@ import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
+import { ccdRunner } from '../src/lifecycle.js';
+import type { CcdArgv } from '../src/ccdargv.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
@@ -54,7 +56,8 @@ async function makeApp(
     return { code: 0, stdout: '', stderr: '' };
   };
   const bus = new Bus();
-  const app = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO }, bus);
+  const cfg = loadConfig({ CCRC_HOME: home });
+  const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO }, bus);
   return { app, calls, bus, home };
 }
 
@@ -396,16 +399,23 @@ describe('layer 1 — the guard runner', () => {
       .resolves.toEqual({ code: 0, stdout: 'ok', stderr: '' });
   });
 
-  // MUTATION-SWEEP FINDING (Task 11): replacing `run: guarded` with the bare
-  // `run` in `testDeps` left the whole suite green — no EXISTING route happens
-  // to emit a non-whitelisted argv today, so the two tests above (which call
-  // `guardRunner` directly) never exercise `testDeps`'s own wiring, only the
-  // function in isolation. This pins the wiring itself, independent of whether
-  // any current route misbehaves — the claim in the comment above testDeps
-  // ("free on every existing route test") is only true if this holds.
-  it('testDeps wires the guard onto deps.run, not just reachable via a direct guardRunner call', async () => {
+  // MUTATION-SWEEP FINDING (Task 11): replacing `ccdRunner(guarded, cfg)` with
+  // `ccdRunner(run, cfg)` in `testDeps` leaves the whole suite green — no
+  // EXISTING route happens to emit a non-whitelisted argv today, so the two
+  // tests above (which call `guardRunner` directly) never exercise `testDeps`'s
+  // own wiring, only the function in isolation. This pins the wiring itself,
+  // independent of whether any current route misbehaves — the claim in the
+  // comment above testDeps ("free on every existing route test") is only true
+  // if this holds. Task 13S moved the observation point from `deps.run` (gone:
+  // there is no raw runner on Deps any more) to `deps.runCcd`; it observes the
+  // same composition, one link further down the same chain.
+  it('testDeps wires the guard onto deps.runCcd, not just reachable via a direct guardRunner call', async () => {
     const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
-    await expect(deps.run(deps.cfg.ccdBin, ['ws-rm', 'x']))
+    // The cast is deliberate and is the point: since task 13S no route CAN
+    // build this argv — that half is the brand, pinned in
+    // ccdargv-brand.test.ts. This half is that a whitelist check still stands
+    // between whatever argv does arrive and the process.
+    await expect(deps.runCcd(['ws-rm', 'x'] as unknown as CcdArgv))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
   });
 
@@ -419,7 +429,7 @@ describe('layer 1 — the guard runner', () => {
   // and drive it with a verb none of Tmux's own methods build, to prove the
   // guard is actually load-bearing on this path rather than one refactor away
   // from being deleted as dead code.
-  it('testDeps wires the guard onto deps.tmux as well, not just onto deps.run', async () => {
+  it('testDeps wires the guard onto deps.tmux as well, not just onto deps.runCcd', async () => {
     const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
     await expect(tmuxRunner('tmux', ['kill-session', '-t', 'cc-x']))

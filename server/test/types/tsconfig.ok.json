@@ -1,0 +1,6 @@
+{
+  "_comment": "task 13S: the positive control for the bypass pins next door. This project MUST compile clean.",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["ok/**/*.ts"]
+}

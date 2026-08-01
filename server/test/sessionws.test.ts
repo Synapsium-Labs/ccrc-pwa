@@ -8,6 +8,7 @@ import { buildServer, type Deps } from '../src/server.js';
 import { nextDialogFrame, SessionStream, type DialogSeen } from '../src/sessionws.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
+import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { AskQuestion, Dialog } from '../../shared/api.js';
@@ -187,7 +188,8 @@ const streamWith = async (opts: {
       return localIO.readFileFrom(p, off);
     },
   };
-  const deps: Deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io };
+  const cfg = loadConfig({ CCRC_HOME: home });
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io };
   const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
   put(at(seq, 0));
   const frames: any[] = [];
@@ -360,7 +362,8 @@ describe('session WS', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const deps: Deps = { cfg: loadConfig({ CCRC_HOME: home }), run, tmux: new Tmux(run), io: localIO };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO };
     app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -438,7 +441,8 @@ describe('session WS', () => {
       if (args[0] === 'capture-pane') return { code: 0, stdout: menuPane, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const menuApp = await buildServer({ cfg: loadConfig({ CCRC_HOME: home }), run: menuRun, tmux: new Tmux(menuRun), io: localIO }, new Bus());
+    const menuCfg = loadConfig({ CCRC_HOME: home });
+    const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO }, new Bus());
     await menuApp.listen({ host: '127.0.0.1', port: 0 });
     const a = menuApp.server.address();
     const p = typeof a === 'object' && a !== null ? a.port : 0;
