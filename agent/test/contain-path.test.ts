@@ -16,11 +16,32 @@ describe('PATH containment', () => {
   });
 
   it('makes `tmux kill-server` harmless from inside this suite', () => {
-    // The proof, stated as the thing we actually care about: run the exact argv
-    // that killed the box, and show it cannot reach a real tmux server. If this
-    // ever passes through to the real binary, it takes every ccrc session with
-    // it — so this test asserts the stub answered, not merely that it exists.
-    const r = spawnSync('tmux', ['kill-server'], { encoding: 'utf8' });
+    // This test runs the exact argv that killed the box four times, so it must
+    // PROVE the binary it is about to invoke is the stub BEFORE invoking it —
+    // and it must never resolve that binary through PATH at call time.
+    //
+    // The first version of this test did exactly what it exists to forbid: it
+    // called `spawnSync('tmux', ['kill-server'])` and relied on the setup file
+    // to have made that safe. Then someone deleted the `setupFiles` line to
+    // watch the pin go red — the obvious way to check a pin — and the pin
+    // resolved the REAL tmux and killed the fleet for the fourth time. A test
+    // whose safety depends on the mechanism it is testing is the same loaded
+    // gun as the one in exec.test.ts, just aimed by a shorter argument.
+    //
+    // So: resolve once, assert the resolution is inside the contained
+    // directory, and only then execute — by absolute path, never by name. When
+    // containment is missing, the assertion throws and nothing is executed at
+    // all, which is the behaviour that makes deleting `setupFiles` a safe way
+    // to check this pin.
+    const dir = process.env.CCRC_TEST_CONTAINED_PATH_DIR;
+    expect(dir, 'containment must be wired before this test may execute anything').toBeTruthy();
+    const resolved = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' }).stdout.trim();
+    expect(
+      resolved.startsWith(`${dir}${path.sep}`),
+      `tmux must resolve inside the contained dir; got "${resolved}" — REFUSING to run kill-server`,
+    ).toBe(true);
+
+    const r = spawnSync(resolved, ['kill-server'], { encoding: 'utf8' });
     expect(r.status, 'the contained tmux refuses everything').toBe(1);
     expect(r.stderr).toContain('contained-tmux refuses');
     expect(r.stderr).toContain('kill-server');
