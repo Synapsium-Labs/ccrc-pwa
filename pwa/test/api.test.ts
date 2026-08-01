@@ -84,3 +84,90 @@ describe('attachments', () => {
       .toBe(`${location.origin}/api/sessions/claude2-Proj/clip/clip-1-a1b2.png`);
   });
 });
+
+describe('PR lifecycle (Task 13)', () => {
+  it('pr GETs /api/sessions/:id/pr and returns the parsed PrView', async () => {
+    const view = { pr: { phase: 'none' }, draft: null, facts: null };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.pr('demo-quiet-basin')).resolves.toEqual(view);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe('/api/sessions/demo-quiet-basin/pr');
+    expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('prOpen POSTs the draft as JSON to /api/sessions/:id/pr', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.prOpen('demo-quiet-basin', { title: 't', body: 'b', draft: true });
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/demo-quiet-basin/pr');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ title: 't', body: 'b', draft: true });
+  });
+
+  it('archive POSTs to /api/sessions/:id/archive with no body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.archive('demo-quiet-basin');
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/demo-quiet-basin/archive');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('restore POSTs to /api/sessions/:id/restore with no body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.restore('demo-quiet-basin');
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/demo-quiet-basin/restore');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('workspaceAudit GETs /api/sessions/:id/workspace/audit and returns the parsed WsAudit', async () => {
+    const audit = { id: 'demo-quiet-basin', verdict: 'reapable', sentence: '', token: 'a'.repeat(64) };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, audit));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.workspaceAudit('demo-quiet-basin')).resolves.toEqual(audit);
+    const [url] = fetchImpl.mock.calls[0] as [string];
+    expect(url).toBe('/api/sessions/demo-quiet-basin/workspace/audit');
+  });
+
+  it('workspaceReap POSTs the expect token to /api/sessions/:id/workspace/reap and returns the parsed ReapResult', async () => {
+    const result = { refused: 'state-changed', sentence: 'This workspace changed since the list you were shown — nothing was removed.' };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, result));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.workspaceReap('demo-quiet-basin', 'a'.repeat(64))).resolves.toEqual(result);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/demo-quiet-basin/workspace/reap');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ expect: 'a'.repeat(64) });
+  });
+
+  it('workspaceReap throws ApiError on a non-2xx response — e.g. the 400 for a malformed expect token', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(400, { ok: false, error: 'bad-request' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.workspaceReap('demo-quiet-basin', 'nope').then(
+      () => { throw new Error('expected workspaceReap to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(400);
+  });
+});

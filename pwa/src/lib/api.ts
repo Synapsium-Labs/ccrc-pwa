@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountUsage, FleetHealth, FleetSession, ProjectedHome, SlashCommand, StagedClip } from '../../../shared/api';
+import type { AccountUsage, FleetHealth, FleetSession, PrView, ProjectedHome, ReapResult, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -116,6 +116,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
     stop: (id: string) => post(`${sid(id)}/stop`),
     swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
+    pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
+    prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
+    archive: (id: string) => post(`${sid(id)}/archive`),
+    restore: (id: string) => post(`${sid(id)}/restore`),
+    workspaceAudit: (id: string) => getJson<WsAudit>(`${sid(id)}/workspace/audit`),
+    workspaceReap: async (id: string, expect: string): Promise<ReapResult> =>
+      (await (await request(`${sid(id)}/workspace/reap`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expect }),
+      })).json()) as ReapResult,
     prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[] } = {}) =>
       post(`${sid(id)}/prompt`, {
         text,

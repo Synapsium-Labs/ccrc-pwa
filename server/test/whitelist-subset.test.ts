@@ -132,6 +132,54 @@ function isAllowedArgvExpr(text: string): boolean {
   return isDirectCcdArgvCall(t.slice(qIdx + 1, cIdx)) && isDirectCcdArgvCall(t.slice(cIdx + 1));
 }
 
+/**
+ * The RHS text of the NEAREST `const <ident> = <expr>;` occurring strictly
+ * before `beforeIndex` in `src`, or null when there is none. "Nearest", not
+ * "first": Task 13 gave several PR-lifecycle route handlers their own local
+ * `const argv = CCD_ARGV.…(...)` — same identifier name, once per handler —
+ * so binding to the CLOSEST preceding declaration is what keeps one
+ * handler's `argv` from vouching for a different handler's call. Route
+ * handlers in this codebase are sequential, non-nested top-level statements,
+ * so for every real call site here "nearest preceding" always resolves to
+ * the enclosing handler's own declaration; a hand-written case that defeats
+ * that shape is out of scope the same way obfuscated member access
+ * (`CCD_ARGV['ensure'](id)`) already is, per the block comment above.
+ */
+function lastConstDeclBefore(src: string, beforeIndex: number, ident: string): string | null {
+  const declRe = new RegExp(`\\bconst\\s+${ident}\\s*=\\s*`, 'g');
+  let rhsStart = -1;
+  let m: RegExpExecArray | null;
+  while ((m = declRe.exec(src))) {
+    if (m.index >= beforeIndex) break;
+    rhsStart = m.index + m[0].length;
+  }
+  if (rhsStart === -1) return null;
+  let depth = 0;
+  for (let i = rhsStart; i < src.length; i++) {
+    const c = src[i];
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (c === ';' && depth === 0) return src.slice(rhsStart, i);
+  }
+  return null;   // no top-level `;` before EOF — not a shape a real file has
+}
+
+/**
+ * True iff `expr` — a `ccd(...)` call's own third-argument text — is
+ * provably a CCD_ARGV construction: directly, via `isAllowedArgvExpr`, or —
+ * new in Task 13, when PR-lifecycle routes stopped funnelling every
+ * non-`runCcd` `ccd()` call through one shared forwarding call — as a bare
+ * local identifier whose nearest preceding declaration is itself such an
+ * expression.
+ */
+function resolvesToAllowedArgv(src: string, callIndex: number, expr: string): boolean {
+  const t = expr.trim();
+  if (isAllowedArgvExpr(t)) return true;
+  if (!/^[A-Za-z_$][\w$]*$/.test(t)) return false;
+  const rhs = lastConstDeclBefore(src, callIndex, t);
+  return rhs !== null && isAllowedArgvExpr(rhs);
+}
+
 describe('layer 2b\'s parsing helpers — direct unit coverage for shapes the codebase doesn\'t contain yet', () => {
   // These pin isDirectCcdArgvCall/isAllowedArgvExpr against adversarial or
   // edge-case input the shipped codebase doesn't currently exercise, so a
@@ -159,6 +207,45 @@ describe('layer 2b\'s parsing helpers — direct unit coverage for shapes the co
   it('requires BOTH ternary branches to be CCD_ARGV calls, not just one', () => {
     expect(isAllowedArgvExpr('a ? notCcdArgv() : CCD_ARGV.ensure(x)')).toBe(false);
   });
+
+  // resolvesToAllowedArgv / lastConstDeclBefore (Task 13): the tracer that
+  // lets a `ccd(...)` call site outside `runCcd` pass a bare local `argv`
+  // identifier rather than the (already covered) direct CCD_ARGV call.
+  it('traces a bare identifier back to its nearest preceding CCD_ARGV declaration', () => {
+    const src = "async () => {\n  const argv = CCD_ARGV.ensure(id);\n  return ccd(a, b, argv);\n}\n";
+    expect(resolvesToAllowedArgv(src, src.indexOf('ccd(a'), 'argv')).toBe(true);
+  });
+
+  it('rejects a bare identifier whose nearest preceding declaration is NOT a CCD_ARGV construction', () => {
+    const src = "async () => {\n  const argv = ['ws-rm', id];\n  return ccd(a, b, argv);\n}\n";
+    expect(resolvesToAllowedArgv(src, src.indexOf('ccd(a'), 'argv')).toBe(false);
+  });
+
+  it('rejects a bare identifier with no preceding declaration in the file at all', () => {
+    const src = 'return ccd(a, b, argv);\n';
+    expect(resolvesToAllowedArgv(src, src.indexOf('ccd(a'), 'argv')).toBe(false);
+  });
+
+  it('binds each call to the NEAREST preceding declaration, not the first, when the name repeats per-handler', () => {
+    // Exactly the shape Task 13 introduced: several handlers each declare
+    // their OWN `const argv = CCD_ARGV....(...)`. The second call must not be
+    // allowed to slide past on the FIRST declaration if that one is later
+    // reassigned to something unsafe — nor should the first call see the
+    // second (later) declaration at all, since `lastConstDeclBefore` only
+    // looks strictly BEFORE its own call's index.
+    const src =
+      "h1: { const argv = CCD_ARGV.ensure(id); ccd(a, b, argv); }\n" +
+      "h2: { const argv = ['ws-rm', id];       ccd(a, b, argv); }\n";
+    const first = src.indexOf('ccd(a, b, argv)');
+    const second = src.indexOf('ccd(a, b, argv)', first + 1);
+    expect(resolvesToAllowedArgv(src, first, 'argv')).toBe(true);
+    expect(resolvesToAllowedArgv(src, second, 'argv')).toBe(false);
+  });
+
+  it('does not fall for a same-shaped declaration under a DIFFERENT identifier name', () => {
+    const src = "const argv2 = CCD_ARGV.ensure(id);\nreturn ccd(a, b, argv);\n";
+    expect(resolvesToAllowedArgv(src, src.indexOf('ccd(a'), 'argv')).toBe(false);
+  });
 });
 
 describe('layer 2b — every runner call site\'s argv is a direct CCD_ARGV call', () => {
@@ -178,13 +265,24 @@ describe('layer 2b — every runner call site\'s argv is a direct CCD_ARGV call'
   //   (B) every `ccd(` call (the `lifecycle.ts` helper `runCcd` wraps,
   //       matched with a word boundary so it does not also match `runCcd(`)
   //       that is a CALL rather than `ccd`'s own `function ccd(...)`
-  //       declaration — there must be at most one such call outside
-  //       `ccdargv.ts`/`exec.ts`, and it must be the known, single, internal
-  //       forwarding call inside `runCcd`'s own body (its argv argument must
-  //       be exactly the bare parameter name `runCcd` itself declares for
-  //       it) — a second such call, or one with any other argument, means
-  //       something is reaching `ccd()` without going through `runCcd`, hence
-  //       without check (A).
+  //       declaration. Shipped originally (Task 11) as "at most one such call
+  //       outside `ccdargv.ts`/`exec.ts`, and it must be `runCcd`'s own
+  //       internal forwarding call" — the simplest statement of the
+  //       invariant while `runCcd`'s fixed `{ok:true}`/502 shape was the only
+  //       response shape anything needed. Task 13's PR-lifecycle routes need
+  //       OTHER shapes `runCcd` cannot express (a 200 carrying
+  //       `phase:unknown`, a parsed `WsAudit`/`ReapResult`, a 501 hoisted out
+  //       of a queued fn) and so call `ccd()` directly, more than once — so
+  //       "at most one" stopped being the property that matters. What still
+  //       matters, unchanged, is that EVERY argv reaching `ccd()` is provably
+  //       a `CCD_ARGV.<name>(...)` construction: each call site is now
+  //       individually held to that proof — `runCcd`'s own forwarding call by
+  //       its declared parameter name exactly as before, every other site by
+  //       `resolvesToAllowedArgv`, which accepts a direct call (or two-way
+  //       ternary of them, reusing `isAllowedArgvExpr`) OR a bare local
+  //       identifier whose NEAREST preceding `const <name> = …` declaration
+  //       is one of those — the shape Task 13's routes use when the same
+  //       argv is read once for `verbSupported` and again for the call.
   //   (C) zero occurrences of `deps.run(`/`this.run(` outside `exec.ts` — a
   //       direct bypass of both `runCcd` and `ccd()`.
   //
@@ -204,7 +302,7 @@ describe('layer 2b — every runner call site\'s argv is a direct CCD_ARGV call'
   // outside `ccdargv.ts`/`exec.ts` until this scan learns to skip comments.
   const offenders: string[] = [];
   const runCcdCallSites: { file: string; argv: string }[] = [];
-  const ccdCallSites: { file: string; args: string[] }[] = [];
+  const ccdCallSites: { file: string; args: string[]; src: string; callIndex: number }[] = [];
   let runCcdArgvParam: string | null = null;
 
   const walk = (dir: string): void => {
@@ -246,7 +344,7 @@ describe('layer 2b — every runner call site\'s argv is a direct CCD_ARGV call'
         const openIdx = m.index + m[0].length - 1;
         const closeIdx = matchParen(src, openIdx);
         const parts = splitTopLevelArgs(src.slice(openIdx + 1, closeIdx)).map((s) => s.trim());
-        ccdCallSites.push({ file: rel, args: parts });
+        ccdCallSites.push({ file: rel, args: parts, src, callIndex: m.index });
       }
 
       // (C) direct runner bypass.
@@ -268,26 +366,19 @@ describe('layer 2b — every runner call site\'s argv is a direct CCD_ARGV call'
     expect(offenders, `build these through CCD_ARGV instead:\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  it('ccd() is called at most once outside ccdargv.ts/exec.ts, and only as runCcd\'s own forwarding call', () => {
+  it('every ccd() call outside ccdargv.ts/exec.ts is runCcd\'s own forwarding call, or has a provably CCD_ARGV-built argv', () => {
     expect(runCcdArgvParam, 'could not find runCcd\'s own definition to learn its argv parameter name').not.toBeNull();
+    // Sanity floor on the scan itself: Task 13 is known to add several direct
+    // ccd() call sites (GET/POST pr, GET workspace/audit, POST
+    // workspace/reap), so a regression that made the `ccdRe` walk above find
+    // NOTHING would make every check below vacuously true.
+    expect(ccdCallSites.length).toBeGreaterThan(1);
     const bad: string[] = [];
-    // MUTATION-SWEEP FINDING, disclosed: on the shipped tree there is exactly
-    // one real ccd() call site, so `> 1` here is indistinguishable from `> 2`
-    // (or any other threshold above 1) — a mutant widening the threshold
-    // survives today. It was verified by hand instead (temporarily adding a
-    // second `ccd(deps.run, deps.cfg, args)` call site to server.ts): the
-    // per-site argument-name check just below this one still fires for BOTH
-    // of the resulting sites' worth of scrutiny once a real second site
-    // exists, and `> 1` (not `> 2`) is what's shipped, so the arithmetic is
-    // correct even though nothing here currently forces it to be. See the
-    // Task 11 fix-round report for the reproduction transcript.
-    if (ccdCallSites.length > 1) {
-      bad.push(`ccd() called ${ccdCallSites.length} times outside ccdargv.ts/exec.ts — expected at most 1 (runCcd's own forwarding call): ${JSON.stringify(ccdCallSites)}`);
-    }
     for (const site of ccdCallSites) {
-      const argv = site.args[2];
-      if (argv !== runCcdArgvParam) {
-        bad.push(`${site.file}: ccd(${site.args.join(', ')}) — third argument must be runCcd's own argv parameter ('${runCcdArgvParam}'), not '${argv}'`);
+      const argv = site.args[2] ?? '';
+      if (argv === runCcdArgvParam) continue;   // runCcd's own forwarding call
+      if (!resolvesToAllowedArgv(site.src, site.callIndex, argv)) {
+        bad.push(`${site.file}: ccd(${site.args.join(', ')}) — third argument must be runCcd's own argv parameter ('${runCcdArgvParam}'), or a CCD_ARGV.<name>(...) construction (direct, a two-way ternary of them, or a local const assigned from one)`);
       }
     }
     expect(bad, bad.join('\n')).toEqual([]);

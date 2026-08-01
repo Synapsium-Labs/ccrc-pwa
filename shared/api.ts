@@ -115,6 +115,37 @@ export interface PrView {
   } | null;
 }
 
+/** `ccd ws-audit --session <id>`, with a server-added `sentence`. `token` is
+ *  present ONLY when `verdict === 'reapable'`; the client sends it back as
+ *  `expect`, and ccd re-proves the world state matches it. */
+export interface WsAudit {
+  id: string; branch: string; base: string; workdir: string; project: string; repo: string;
+  exists: boolean; headMatchesRegistry: boolean; reaping: string | null;
+  dirty: string[];
+  ignored: { path: string; bytes: number; sensitive: boolean }[];
+  ignoredCount: number; ignoredBytes: number;
+  sensitive: string[];
+  /** `~/.cc-clips/<id>` — the reap `rm -rf`s it, so the sheet has to list it.
+   *  It is fingerprinted too (`clipsDigest`), so a clip pasted between the
+   *  sheet and the tap refuses `state-changed` rather than being deleted. */
+  clips: { name: string; bytes: number }[];
+  stashes: number; worktreeBytes: number; commitsAheadOfBase: number;
+  pr: { number: number | null; url: string; mergeCommit: string; headRefOid: string };
+  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number };
+  transcript: string;
+  verdict: string; detail: string; token?: string;
+  sentence: string;
+}
+
+/** `ccd ws-reap`. Exactly one of `reaped`, `refused` or `indeterminate` is set. */
+export interface ReapResult {
+  reaped?: string; branch?: string; pr?: number | null; proof?: string;
+  tombstone?: string; attic?: number; bytes?: number; resumed?: string | null;
+  refused?: string; detail?: string; paths?: string[];
+  indeterminate?: boolean;
+  sentence: string;
+}
+
 /* ---------------------------------------------------------------------------
  * Snapshot revival — reading a FleetSession[] that an OLDER BUILD persisted.
  *

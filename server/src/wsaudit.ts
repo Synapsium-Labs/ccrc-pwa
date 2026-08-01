@@ -1,0 +1,128 @@
+import type { ReapResult, WsAudit } from '../../shared/api.js';
+
+/**
+ * Refusal token → the sentence a person reads. ccd's tokens are stable
+ * identifiers, not copy; rendering the raw shell string would put a bash
+ * variable name on a phone screen. Anything unmapped falls back to the token
+ * itself with a neutral frame, so a NEW ccd refusal degrades to something
+ * readable rather than to blank.
+ *
+ * Exported (Task 13, beyond the plan's own interface list) so
+ * `wsaudit.test.ts`'s refusal-token linkage test can enumerate this SAME map
+ * against every token `ccd`'s own source can emit, in both directions —
+ * rather than maintaining a second, hand-copied token list that could itself
+ * drift from either side the way `branch-drift` -> `registry-branch-drift`
+ * once did with nothing noticing.
+ */
+export const SENTENCES: Record<string, string> = {
+  'no-such-session': 'ccrc has no record of this session.',
+  'not-a-workspace': 'This is a project’s main checkout, not a workspace — there is nothing to remove.',
+  'not-archived': 'This workspace has not been archived yet. Archiving is the staging step; it stops the session and destroys nothing.',
+  'incomplete-registry': 'This session’s registry entry is missing its branch or workdir, so ccrc cannot tell what removing it would delete.',
+  'worktree-missing': 'The worktree is already gone; the branch and the registry entry are still here. `ccd ws-attic` lists the commits ccrc pinned.',
+  // The three rungs of `_ws_wt_branch` (ccd:303-314), which is where every
+  // branch name in ccd comes from. These three sentences and ccd's three
+  // refusals move together: renaming a token without moving its copy leaves the
+  // fallback below printing a bash identifier on a phone screen, which is the
+  // one failure mode this map exists to prevent.
+  'no-worktree-record': 'git has no record of this directory as a worktree of this project, so nothing here is ccrc’s to remove.',
+  'detached-head': 'git has this worktree on a detached HEAD, so ccrc cannot tell which branch it belongs to.',
+  'registry-branch-drift': 'git has this worktree on a different branch than ccrc recorded. Nothing is removed while the two disagree.',
+  'foreign-worktree': 'This worktree belongs to a different repository than the project it is registered under.',
+  'dirty-tree': 'There are uncommitted or untracked changes here. Commit or move them first.',
+  // A read that FAILED, not a tree that was clean. It gets its own sentence
+  // rather than borrowing dirty-tree's, because "commit or move them first" is
+  // advice about files, and this is a worktree ccrc could not open at all.
+  'tree-unreadable': 'ccrc could not read this worktree, so it cannot prove nothing here would be lost. Nothing was removed.',
+  'sensitive-ignored': 'There are secret-shaped files here that are in no commit and cannot be recovered. Move them out, then try again — there is no override.',
+  'stashes-present': 'This branch has stashed changes, which are in no commit.',
+  // A stash read that FAILED, and it gets its own sentence for the same reason
+  // `tree-unreadable` does: `git stash list` answers rc 0 with empty output for
+  // an unreadable reflog (deviation 17), so "no stashes" and "we could not
+  // count them" were the same answer until ccd started corroborating against
+  // `refs/stash`.
+  // The remedy is IN THE SENTENCE, not only in ccd's `detail`: `ReapSheet`
+  // renders `audit.sentence` for a refusal and never `audit.detail`, and this
+  // refusal is permanent and has no override, so advice that stayed in `detail`
+  // would reach nobody who could act on it. `git reflog expire --all` leaves
+  // `refs/stash` resolving over an empty reflog (deviation 21), which is a
+  // healthy repository ccrc cannot distinguish from a broken one.
+  'stash-unreadable': 'ccrc could not read this repository’s stash list, so it cannot prove nothing is stashed here. Nothing was removed. If this repository has no stashes, `git stash clear` in it clears the stale ref.',
+  'no-upstream': 'This branch was never pushed, so nothing on the remote holds its commits.',
+  'unpushed-commits': 'This branch has commits that are not on the remote.',
+  'branch-missing': 'The branch this workspace names does not resolve.',
+  'no-remote': 'This project has no `origin` remote, so ccrc cannot check its pull requests.',
+  'gh-unreadable': 'ccrc could not reach GitHub, so it cannot prove this work was merged. Nothing was removed.',
+  'no-bound-pr': 'No merged pull request belongs to this branch.',
+  'pr-head-not-ours': 'The pull request that matches this branch name was opened from a different commit — it is not this workspace’s.',
+  'not-merged': 'The pull request for this branch is not merged.',
+  'pr-fields-malformed': 'GitHub’s answer for this pull request did not contain usable commit ids, so ccrc will not put any of it in a git command.',
+  'fetch-failed': 'ccrc could not fetch from origin, so it cannot prove this work was merged. Nothing is claimed about your commits.',
+  'merge-commit-missing': 'GitHub named a merge commit that is not in this repository even after fetching.',
+  'base-missing': 'The base branch this workspace was cut from no longer resolves, so ccrc cannot describe what removing it would leave behind.',
+  'tree-differs': 'GitHub reports this pull request merged, but ccrc cannot prove this branch’s work is in the merge (checked: ancestor, tree, patch-id, cherry). Not removing anything.',
+  'session-busy': 'This session is in the middle of a turn.',
+  'status-unknown': 'ccrc cannot read this session’s status, so it will not act on a guess.',
+  // NOT a refusal — the one verdict that is neither `reapable` nor a refusal
+  // (deviation 19). The proof holds and the worktree is already gone, so there
+  // is nothing to confirm and no token to confirm it with; `parseAudit` gives
+  // every non-`reapable` verdict a sentence, and this is that sentence.
+  'reap-interrupted': 'A previous cleanup of this workspace stopped part-way and its worktree is already gone. Finish it from ccd — there is nothing left here to confirm.',
+  'state-changed': 'This workspace changed since the list you were shown — nothing was removed.',
+  'in-progress': 'Another cleanup of this workspace is already running.',
+  'worktree-remove-failed': 'git refused to remove the worktree. The session is stopped and nothing further was deleted.',
+  'branch-moved': 'The branch moved while cleaning up — nothing was deleted after the worktree.',
+  // Added by Task 7, executing the Task 6 gate's required hardening: a resume
+  // whose `reaping` breadcrumb holds a phase ccd never wrote (not one of
+  // `worktree|branch|clips`) now refuses here rather than silently skipping
+  // the worktree-removal step and deleting the branch, clips and registry
+  // anyway. Deviation 35.
+  'reaping-phase-unknown': 'A previous cleanup left a marker ccrc does not recognise. Nothing was removed — this needs a human to look at it directly.',
+};
+
+export function refusalSentence(token: string): string {
+  return SENTENCES[token] ?? `ccrc declined: ${token}.`;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
+/** `ccd ws-audit` stdout → WsAudit, or null when it was not one object. */
+export function parseAudit(stdout: string): WsAudit | null {
+  try {
+    const v: unknown = JSON.parse(stdout.trim());
+    if (!isRecord(v) || typeof v.verdict !== 'string') return null;
+    return { ...(v as unknown as WsAudit), sentence: v.verdict === 'reapable' ? '' : refusalSentence(v.verdict) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `ccd ws-reap` stdout/code/stderr → ReapResult.
+ *
+ * **Empty stderr plus a non-zero exit is `indeterminate`, never "failed".**
+ * `execFile` yields exactly that when the process was killed at the outer
+ * timeout, when the agent disconnected mid-call, and when the server
+ * restarted — and in all three cases the filesystem may be in any state
+ * between untouched and fully reaped. Saying "failed" would be a claim about
+ * disk that ccrc is not entitled to make; the next `ws-audit` reports the
+ * breadcrumb and the reap resumes from it.
+ */
+export function parseReap(stdout: string, code: number, stderr: string): ReapResult {
+  const text = stdout.trim();
+  if (text !== '') {
+    try {
+      const v: unknown = JSON.parse(text);
+      if (isRecord(v)) {
+        if (typeof v.refused === 'string') {
+          return { ...(v as unknown as ReapResult), sentence: refusalSentence(v.refused) };
+        }
+        if (typeof v.reaped === 'string') return { ...(v as unknown as ReapResult), sentence: '' };
+      }
+    } catch { /* fall through to the indeterminate/failed split below */ }
+  }
+  if (code !== 0 && stderr.trim() === '') {
+    return { indeterminate: true, sentence: 'ccrc lost contact while cleaning up. Re-open the workspace to see its state.' };
+  }
+  return { refused: 'error', detail: stderr.trim(), sentence: stderr.trim() || 'ccrc could not clean up this workspace.' };
+}

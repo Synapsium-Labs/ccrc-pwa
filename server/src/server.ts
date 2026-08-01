@@ -11,7 +11,10 @@ import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome } from './limits.js';
 import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
-import { CCD_ARGV } from './ccdargv.js';
+import { CCD_ARGV, verbSupported } from './ccdargv.js';
+import { parsePrLines, prView, unknownView } from './prstate.js';
+import { parseAudit, parseReap } from './wsaudit.js';
+import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
@@ -23,7 +26,7 @@ import { sessionCommands } from './commands.js';
 import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
-import type { AccountUsage, FleetSession, SessionStreamMsg } from '../../shared/api.js';
+import type { AccountUsage, FleetSession, SessionStreamMsg, TaskItem } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
 
@@ -397,6 +400,97 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     return runCcd(reply, CCD_ARGV.swap(id, body.wrapper));
+  });
+
+  // ── PR lifecycle ────────────────────────────────────────────────
+  // Every one of these calls isSafeSessionId FIRST: the deleted workspace
+  // route did not, and an id is about to become part of an argv.
+  const prTasks = async (id: string): Promise<TaskItem[] | null> => {
+    const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
+    const cfgDir = rec ? deps.cfg.wrappers[rec.wrapper] : undefined;
+    return rec && cfgDir ? readTasks(deps.io, cfgDir, rec.uuid) : null;
+  };
+
+  app.get('/api/sessions/:id/pr', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const argv = CCD_ARGV.prStateSession(id);
+    // Both of these are ANSWERS, not errors and never 502s: the cap must still
+    // render, name the reason and offer Retry. `unknownView` is the only way
+    // either is built — a branch returning a bare `{}` with no `pr` key is the
+    // silence §2 forbids, and the client would render it as "no control" rather
+    // than "we could not look".
+    if (!verbSupported(deps.fleetState, argv)) return unknownView('unsupported');
+    const res = await ccd(deps.run, deps.cfg, argv);
+    if (!res.ok) return unknownView('agent-down');
+    const [first] = parsePrLines(res.stdout);
+    return prView(first ?? null, await prTasks(id), null);
+  });
+
+  app.post('/api/sessions/:id/pr', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { title?: unknown; body?: unknown; draft?: unknown };
+    if (typeof body.title !== 'string' || body.title.trim() === ''
+      || typeof body.body !== 'string' || body.body.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const b64 = Buffer.from(body.body, 'utf8').toString('base64');
+    const argv = CCD_ARGV.prOpen(id, body.title, b64, body.draft === true);
+    // Hoisted OUT of the queued fn, mirroring the reap route below. A 501 sent
+    // from inside the queue callback returns a FastifyReply, which has no `ok`,
+    // so the old `'ok' in res` guard fell through and reply.code(502).send()
+    // ran after send() had already fired — FST_ERR_REP_ALREADY_SENT.
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    // Through the per-session queue, so it serialises with every other write.
+    const r = await sendDeps.queue.run(id, () => ccd(deps.run, deps.cfg, argv));
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+  });
+
+  app.post('/api/sessions/:id/archive', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    return runCcd(reply, CCD_ARGV.wsArchive(id));
+  });
+
+  app.post('/api/sessions/:id/restore', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    return runCcd(reply, CCD_ARGV.wsRestore(id));
+  });
+
+  app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const res = await ccd(deps.run, deps.cfg, CCD_ARGV.wsAudit(id));
+    const audit = parseAudit(res.stdout);
+    if (audit === null) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    return audit;
+  });
+
+  app.post('/api/sessions/:id/workspace/reap', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { expect?: unknown };
+    // The shape check is a courtesy, not the guard: the guard is that ccd
+    // recomputes the fingerprint and compares it there.
+    if (typeof body.expect !== 'string' || !/^[0-9a-f]{64}$/.test(body.expect)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const argv = CCD_ARGV.wsReap(body.expect, id);
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const res = await sendDeps.queue.run(id, () => ccd(deps.run, deps.cfg, argv));
+    return parseReap(res.stdout, res.ok ? 0 : 1, res.stderr);
   });
 
   // Static PWA (populated by Plan 2's build): serve dist-pwa/ at / with SPA
