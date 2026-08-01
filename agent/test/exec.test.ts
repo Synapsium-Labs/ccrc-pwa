@@ -27,6 +27,15 @@ describe('ccrc-agent exec whitelist', () => {
   let fixture: Fixture | undefined;
   let client: TestClient | undefined;
 
+  // `rejects a whitelisted command with a non-whitelisted subcommand` below sends
+  // `tmux kill-server`. Its safety does NOT come from this file: it comes from
+  // test/contain-path.setup.ts, which puts a harmless `tmux` earliest on PATH for
+  // every agent test process. That containment is structural on purpose —
+  // measured three times in one morning, a widening mutation of EXEC_WHITELIST
+  // (`tmux: [[]]`) let that argv through to the real binary and killed the box's
+  // tmux server, all eleven ccrc sessions with it, including the one driving the
+  // sweep. A negative test that stays harmless only while the code under test is
+  // correct is a loaded gun pointed at the fleet.
   afterEach(async () => {
     client?.ws.close();
     client = undefined;
@@ -119,6 +128,31 @@ describe('ccrc-agent exec whitelist', () => {
     const bin = makeStubBinary('ccd', 'exit 0');
     const res = await client.req<ExecRes>(1, { op: 'exec', cmd: bin, args: ['swap', 'x'] });
     expect(res).toEqual({ t: 'res', id: 1, ok: false, err: 'forbidden' });
+  });
+
+  it('answers forbidden for gh pr create over the real WS surface', async () => {
+    // The unit test above proves the predicate; this proves the WIRE. A gh
+    // grant would be invisible to a predicate test that nobody updated.
+    fixture = makeFixture();
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    const res = await client.req<ExecRes>(1, {
+      op: 'exec', cmd: 'gh',
+      args: ['pr', 'create', '--repo', 'o/r', '--head', 'x', '--base', 'main', '--title', 't', '--body', 'b'],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.err).toBe('forbidden');
+  });
+
+  it('answers forbidden for a ws-reap without --expect', async () => {
+    fixture = makeFixture();
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    const res = await client.req<ExecRes>(1, { op: 'exec', cmd: 'ccd', args: ['ws-reap', 'demo-quiet-basin'] });
+    expect(res.ok).toBe(false);
+    expect(res.err).toBe('forbidden');
   });
 });
 

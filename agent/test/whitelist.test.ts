@@ -114,18 +114,25 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', [])).toBe(false);
   });
 
-  // The workspace lifecycle crosses this boundary like everything else. In
-  // remote mode the ccrc server shells out to ccd THROUGH the agent, so a
-  // subcommand missing from the list is not a hardening measure — it is a PWA
-  // button that answers `forbidden` on the live fleet while every suite stays
-  // green. The capability is not new in kind: `start` already creates a
-  // session, a tmux server and a systemd unit, and `stop` tears all three
-  // down. ws-rm adds worktree and branch deletion, which ccd itself guards —
-  // it refuses a dirty tree, an unmerged branch, and any session with no
-  // `workspace` field.
-  it('allows the workspace lifecycle subcommands', () => {
+  // ws-add stays; ws-rm does NOT. The old comment here claimed ccd "refuses an
+  // unmerged branch" — it does not, it keeps the branch and warns on stderr —
+  // and the whole reap design exists because that guard was never real, and
+  // because the guards ws-rm does have cannot see a gitignored .env, ask the
+  // remote nothing, and are never re-proved at the instant of deletion.
+  // See whitelist-noghosts.test.ts for the full statement.
+  it('allows ws-add and refuses ws-rm', () => {
     expect(isExecAllowed('ccd', ['ws-add', 'OpenClawHetzner'])).toBe(true);
-    expect(isExecAllowed('ccd', ['ws-rm', 'OpenClawHetzner-quiet-mesa'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-rm', 'OpenClawHetzner-quiet-mesa'])).toBe(false);
+  });
+
+  it('allows the PR and archive verbs at their pinned prefixes', () => {
+    expect(isExecAllowed('ccd', ['pr-state', '--session', 'demo-quiet-basin'])).toBe(true);
+    expect(isExecAllowed('ccd', ['pr-state', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['pr-open', '--session', 'x', '--title', 't', '--body-b64', 'Yg==', '--draft', 'false'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-archive', '--session', 'x'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-restore', '--session', 'x'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-audit', '--session', 'x'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-attic', '--session', 'x'])).toBe(true);
   });
 
   it('is still a whitelist — plausible adjacent subcommands stay refused', () => {

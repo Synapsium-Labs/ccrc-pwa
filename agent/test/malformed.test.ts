@@ -100,6 +100,16 @@ describe('ccrc-agent malformed requests never crash the process', () => {
     await assertStillAlive();
   });
 
+  it('rejects an exec whose args contain a non-string inside a pinned prefix', async () => {
+    await open();
+    const res = await client!.req<Res>(1, {
+      op: 'exec', cmd: 'ccd', args: ['ws-reap', 42 as unknown as string, '--session', 'x'],
+    });
+    expect(res.ok).toBe(false);
+    const again = await client!.req<Res>(2, { op: 'exec', cmd: 'tmux', args: ['has-session', '-t', 'x'] });
+    expect(again.ok).toBe(true);   // the process survived
+  });
+
   it('surviving one malformed request per op in sequence still leaves a normal request working', async () => {
     await open();
     for (const { frame } of cases) {

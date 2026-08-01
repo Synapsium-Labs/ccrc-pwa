@@ -90,18 +90,36 @@ export async function checkPath(
   return readAllowed ? canonicalTarget : null;
 }
 
-/** cmd -> allowed first-argument subcommands. Anything else is `forbidden`. */
-const EXEC_WHITELIST: Record<string, readonly string[]> = {
-  tmux: ['has-session', 'list-panes', 'capture-pane', 'send-keys', 'resize-window'],
-  // ws-add/ws-rm are the workspace lifecycle (ccd cmd_ws_add / cmd_ws_rm). In
-  // remote mode every `ccd` call the server makes crosses this list, so
-  // omitting them left both of the PWA's workspace controls answering
-  // `forbidden` on the live fleet. Not a widening in kind: `start` already
-  // creates a session, a tmux server and a systemd unit and `stop` tears all
-  // three down; ws-rm's extra reach is worktree and branch deletion, which ccd
-  // itself refuses on a dirty tree, an unmerged branch, or a session carrying
-  // no `workspace` field.
-  ccd: ['start', 'enable', 'ensure', 'stop', 'swap', 'clip', 'ws-add', 'ws-rm'],
+/** cmd -> allowed argv PREFIXES. `args` must begin with one of them; tokens
+ *  after the prefix are unconstrained. One-token prefixes are exactly the old
+ *  behaviour, so every pre-existing entry is bit-identical. */
+const EXEC_WHITELIST: Record<string, readonly (readonly string[])[]> = {
+  tmux: [['has-session'], ['list-panes'], ['capture-pane'], ['send-keys'], ['resize-window']],
+
+  // NO `gh` KEY, DELIBERATELY. The host token carries the `repo` WRITE scope
+  // (gh auth status: gist, read:org, repo, workflow) and there is no second
+  // layer — no read-only credential, no cwd sandbox. Any `gh` entry makes this
+  // list the sole control between the PWA and `gh pr merge`. `gh: [['api']]` is
+  // strictly worse still: -X POST|PATCH|PUT creates, closes and merges PRs.
+  // PR reads and the one PR write go through `ccd` verbs, whose args[0] has no
+  // write sibling reachable by changing args[1]. See whitelist-noghosts.test.ts.
+  //
+  // `ws-rm` is GONE from this list: it is the unguarded legacy verb and the PWA
+  // must not be able to emit it. `ws-reap` replaces it and is pinned to carry
+  // `--expect`, so an UNCONFIRMED reap cannot cross the wire at all.
+  // `clip` is GONE: dead grant, no server call site emits it.
+  // `ws-gc` is absent and must stay absent: ['ws-gc'] would permit `--prune`.
+  ccd: [
+    ['start'], ['enable'], ['ensure'], ['stop'], ['swap'], ['ws-add'],
+    ['pr-state', '--session'],
+    ['pr-state', '--project'],
+    ['pr-open',  '--session'],
+    ['ws-archive', '--session'],
+    ['ws-restore', '--session'],
+    ['ws-audit', '--session'],
+    ['ws-reap',  '--expect'],   // load-bearing: no reap without a confirmation token
+    ['ws-attic', '--session'],
+  ],
 };
 
 /**
@@ -118,9 +136,19 @@ const EXEC_WHITELIST: Record<string, readonly string[]> = {
  */
 export function isExecAllowed(cmd: string, args: string[]): boolean {
   if (typeof cmd !== 'string' || cmd.length === 0 || cmd.includes('/')) return false;
-  const allowedSubs = EXEC_WHITELIST[cmd];
-  if (!allowedSubs) return false;
+  const prefixes = EXEC_WHITELIST[cmd];
+  if (!prefixes) return false;
   if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) return false;
-  const sub = args[0];
-  return typeof sub === 'string' && allowedSubs.includes(sub);
+  // MUTATION SURVIVOR, disclosed: `p.length <= args.length &&` is removable
+  // with the suite green, and provably always will be. It is a fast path, not a
+  // guard — when `args` is shorter than `p`, `args[i]` reads `undefined` for the
+  // overhanging indices, every `tok` is a string literal from EXEC_WHITELIST, and
+  // `undefined === tok` is false, so `every` already answers false. The two
+  // clauses cannot disagree: the line above rejects any `args` element that is
+  // not a string, so no `undefined` can arrive as a VALUE and make the short
+  // read compare equal. Kept because it states the prefix rule in the same
+  // breath as it checks it, and because dropping it would make the widening
+  // mutants (M13/M14, empty prefix) read as ordinary rather than as the
+  // fleet-killing change they are.
+  return prefixes.some((p) => p.length <= args.length && p.every((tok, i) => args[i] === tok));
 }
