@@ -84,6 +84,17 @@ export function ReapSheet({
             <dl className="reap-rows">
               <dt>branch</dt>
               <dd>
+                {/* MUTATION SURVIVOR, disclosed, on `audit.merge.proof ?? 'none'`
+                    only: `??` -> `||` survives because `WsAudit['merge']['proof']`
+                    is `'ancestor' | 'tree' | 'patch-id' | 'cherry' | null` —
+                    four non-empty string literals and `null`, so no value the
+                    type admits is falsy-but-non-null. The two operators act on
+                    exactly the same inputs at every call site; a distinguishing
+                    call would need the union to grow a falsy member. Same shape
+                    as PrKeycap.tsx's and PrSheet.tsx's own disclosed survivors.
+                    `audit.pr.number ?? '?'` on the same line is NOT equivalent —
+                    `number | null` admits `0`, a real (if unusual) PR number —
+                    and is pinned by a dedicated test instead. */}
                 {`${audit.branch} — merged in #${audit.pr.number ?? '?'} (proof: ${audit.merge.proof ?? 'none'}), ${days(audit.merge.fetchedAt)}`}
               </dd>
 

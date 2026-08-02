@@ -385,6 +385,85 @@ describe('FleetScreen', () => {
       },
     );
   });
+
+  describe('the guarded reap flow (Task 17)', () => {
+    const wsAudit = {
+      id: 'a', branch: 'ws/quiet-mesa', base: 'origin/main', workdir: '/w/alpha/quiet-mesa',
+      project: 'alpha', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+      dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [],
+      clips: [], stashes: 0, worktreeBytes: 900_000_000, commitsAheadOfBase: 1,
+      pr: { number: 9, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
+      merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },
+      transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'z'.repeat(64), sentence: '',
+    };
+
+    it("the fleet line's Clean up workspace… opens the REAL ReapSheet for THAT session", async () => {
+      // SessionActionsSheet's own suite (session-actions-sheet.test.tsx) only
+      // proves the button calls `onReap(id)` against a spy — it never mounts
+      // FleetScreen, so `onReap={setReapId}` and the `<ReapSheet .../>` mount
+      // fed by `sessions.find((sn) => sn.id === reapId)` could both be gutted
+      // with that suite staying green. This drives the real tap-through and
+      // checks the real sheet fetched THIS session's audit.
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (String(url).includes('/workspace/audit')) {
+          return new Response(JSON.stringify(wsAudit), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }));
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [session({
+          id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 1785300000,
+        })],
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+      fireEvent.click(screen.getByText(/clean up workspace/i));
+
+      expect(await screen.findByText('/w/alpha/quiet-mesa')).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: /Remove quiet-mesa/ })).toBeInTheDocument();
+    });
+
+    it('completing a reap closes the sheet — `onReaped={() => setReapId(null)}` is not dead wiring', async () => {
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (String(url).includes('/workspace/audit')) {
+          return new Response(JSON.stringify(wsAudit), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (String(url).includes('/workspace/reap')) {
+          return new Response(JSON.stringify({ reaped: 'a', branch: 'ws/quiet-mesa', attic: 1, sentence: '' }),
+            { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }));
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [session({
+          id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 1785300000,
+        })],
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+      fireEvent.click(screen.getByText(/clean up workspace/i));
+      fireEvent.click(await screen.findByRole('button', { name: /Remove quiet-mesa/ }));
+
+      await waitFor(() => expect(screen.queryByText('/w/alpha/quiet-mesa')).not.toBeInTheDocument());
+    });
+
+    it('offers no Clean up workspace… button before the workspace is archived', () => {
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: null })],
+      });
+      fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+      expect(screen.queryByText(/clean up workspace/i)).not.toBeInTheDocument();
+    });
+  });
 });
 
 // — AccountsStrip —

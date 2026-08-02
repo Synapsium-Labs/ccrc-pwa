@@ -220,6 +220,97 @@ describe('SessionScreen interrupt wiring', () => {
   });
 });
 
+describe('SessionScreen reap wiring (Task 17)', () => {
+  it('wires onReapWorkspace to the real ReapSheet, not a no-op', async () => {
+    // The line above this test (Task 16's own "Clean up (Task 16) both
+    // closes the sheet and hands off to onReapWorkspace") only proves the
+    // CALLBACK fires against a mocked onReapWorkspace — it never mounts the
+    // real SessionScreen, so `onReapWorkspace={() => setReapOpen(true)}` and
+    // the `<ReapSheet open={reapOpen} .../>` mount below it could both be
+    // deleted with that suite staying green. This mounts the real screen and
+    // checks the real sheet — this session's audit, fetched and rendered.
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/workspace/audit')) {
+        return new Response(JSON.stringify({
+          id: 'demo', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+          dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [],
+          clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
+          pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
+          merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },
+          transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const mergedPr: FleetSession['pr'] = {
+      phase: 'merged', number: 42, url: 'u', title: null, checks: null, checkNames: null,
+      ahead: 0, reason: null, checkedAt: Date.now(), mergedAt: Date.now(), retryAt: null,
+    };
+    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({
+        sessions: [fleetSession({ workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr })],
+        conn: 'open',
+      });
+    });
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    fireEvent.click(screen.getByLabelText(/pull request/i));
+    fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
+    expect(await screen.findByText('/w/quiet-basin')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Remove quiet-basin/ })).toBeInTheDocument();
+  });
+
+  it('completing a reap from the chat header hands control back to the fleet', async () => {
+    // `onReaped={() => { setReapOpen(false); navigate('/'); }}` — nothing
+    // above exercises the SECOND half of that line. A mutant dropping the
+    // `navigate('/')` call would leave every other test in this file green:
+    // the session that no longer exists would stay on screen.
+    history.pushState(null, '', '/s/claude:OpenClawHetzner');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/workspace/audit')) {
+        return new Response(JSON.stringify({
+          id: 'demo', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+          dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [],
+          clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
+          pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
+          merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },
+          transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (String(url).includes('/workspace/reap')) {
+        return new Response(JSON.stringify({ reaped: 'demo', branch: 'ws/quiet-basin', attic: 2, sentence: '' }),
+          { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const mergedPr: FleetSession['pr'] = {
+      phase: 'merged', number: 42, url: 'u', title: null, checks: null, checkNames: null,
+      ahead: 0, reason: null, checkedAt: Date.now(), mergedAt: Date.now(), retryAt: null,
+    };
+    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({
+        sessions: [fleetSession({ workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr })],
+        conn: 'open',
+      });
+    });
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    fireEvent.click(screen.getByLabelText(/pull request/i));
+    fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Remove quiet-basin/ }));
+    await waitFor(() => expect(location.pathname).toBe('/'));
+    // Both halves of the one-liner, not just navigate('/'): a mutant that
+    // drops `setReapOpen(false)` alone would still pass the path check above
+    // — this render has no router shell to unmount the screen for it, so the
+    // sheet itself has to be the witness that it actually closed.
+    expect(screen.queryByText('/w/quiet-basin')).not.toBeInTheDocument();
+  });
+});
+
 // — keyboard discipline —
 
 describe('breadcrumb', () => {
