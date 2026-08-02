@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { FleetSession, PrState, PrView } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { PrSheet } from '../src/session/PrSheet';
-import { checkPhrase, prSentence } from '../src/session/PrKeycap';
+import { checkPhrase, prSentence, tooltipSentence } from '../src/session/PrKeycap';
 
 const pr = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -471,8 +471,18 @@ describe('one copy of the phase words (final-round integration finding 5)', () =
     // its base." beside a lede that said "Pull request: `<branch>` has no
     // commits past its base." — two sentences, one fact, already diverging in
     // form.
-    expect(btn).toHaveAttribute('title', document.querySelector('.pr-lede')?.textContent ?? '');
-    expect(btn.getAttribute('title')).toBe(prSentence(p, 'ws/quiet-basin'));
+    //
+    // Fix round 3, verifier P6: it is still ONE sentence, derived — but a
+    // `title` is plain text. Reusing the lede byte-for-byte put literal
+    // markdown backticks in the tooltip and repeated an opener the lede
+    // directly above already says. Both assertions below fail if the tooltip
+    // goes back to `title={lede}`, and the third fails if it is hand-written
+    // again instead of derived.
+    expect(btn.getAttribute('title')).toBe('ws/quiet-basin has no commits past its base.');
+    expect(btn.getAttribute('title')).not.toContain('`');
+    expect(btn.getAttribute('title')).toBe(tooltipSentence(prSentence(p, 'ws/quiet-basin')));
+    // The visible lede keeps its own presentation, ticks and all.
+    expect(document.querySelector('.pr-lede')?.textContent).toBe(prSentence(p, 'ws/quiet-basin'));
   });
 
   it('says the closed sentence exactly ONCE on the screen', async () => {
