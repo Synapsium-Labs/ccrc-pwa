@@ -182,7 +182,7 @@ export function blockBody(src, open) {
 // `--foo` are two different properties. This is the one place in the file that
 // must NOT fold case, and the reason declOf takes the distinction as an
 // argument rather than a flag.
-const customProps = (body) =>
+export const customProps = (body) =>
   Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
 
 /** Both theme palettes, parsed. The light theme is an OVERRIDE block, not a

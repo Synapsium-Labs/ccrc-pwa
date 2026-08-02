@@ -99,6 +99,9 @@ export const KEYFRAME_TROUGHS: Record<string, string>;
 export function stylesheets(root?: string): string[];
 export function loadThemes(root?: string): Themes;
 export function blockBody(src: string, open: string): string;
+/** The custom properties a declaration block declares, name -> value. Names are
+ *  case-SENSITIVE, per CSS Variables 1. */
+export function customProps(body: string): Record<string, string>;
 export function resolveColor(expr: string, theme: Theme, depth?: number): RGBA;
 export function over(fg: RGBA, bg: RGBA): RGBA;
 export function contrast(a: RGBA, b: RGBA): number;

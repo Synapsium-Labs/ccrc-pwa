@@ -5,7 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="description" content="Drive your Claude Code fleet from anywhere." />
     <!-- --bg-page (tokens.css) for both themes; lib/theme.ts keeps the plain
-         meta in sync with the applied theme after boot. -->
+         meta in sync with the applied theme after boot.
+
+         THESE FOUR HEXES MUST BE LITERALS and cannot be var(): a <meta> takes
+         no custom property, and the <style> below has to paint before any
+         stylesheet has loaded — that is the whole point of it. So they are
+         BOUND instead of deduplicated: test/contrast.test.ts parses this file
+         and fails if any of them stops equalling --bg-page in tokens.css, in
+         the theme the surrounding markup names. Retune --bg-page and the gate
+         tells you these four (and vite.config.ts's two manifest colours) are
+         now the old colour, instead of leaving the pre-paint flash, the browser
+         chrome and the install splash quietly behind. -->
     <meta name="theme-color" content="#0B0D0C" />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F6F3" />
     <!-- Pre-paint theme + no-white-flash guard: stamp the light theme before

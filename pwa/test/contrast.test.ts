@@ -18,7 +18,7 @@
 //   * MUTATION proofs — a copy of the stylesheets is mutated on disk and the
 //     REAL gate command is run against it, once per escape route that has
 //     actually been used to smuggle a failure past this gate.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -35,6 +35,7 @@ import {
   blockBody,
   compoundChain,
   contrast,
+  customProps,
   paintOf,
   declOf,
   keyframeTroughs,
@@ -923,6 +924,144 @@ describe('every stylesheet under src/ is audited', () => {
       expect(g.why.length, k).toBeGreaterThan(20);
       expect(g.under.length, k).toBeGreaterThan(0);
     }
+  });
+});
+
+// ── nothing outside tokens.css re-types a colour without a bind ─────────────
+// final2-gates F6 / verify3-ui-css P7. index.html hand-types --bg-page four
+// times and vite.config.ts twice, and nothing held any of them to tokens.css:
+// retuning --bg-page left the pre-paint flash, the browser chrome and the
+// install splash on the old colour, silently. None of the six can be a var()
+// (a <meta> takes no custom property; the pre-paint <style> runs before any
+// stylesheet exists; the manifest is JSON), so the answer is a BIND, not a
+// deduplication — the same answer this whole file gives everywhere else.
+//
+// The sweep below is the part that matters: it walks the package and finds
+// EVERY hex that equals a tokens.css colour, so a seventh copy in a seventh
+// file is a failure rather than a discovery three rounds later. That is the
+// same reason design/audit.mjs discovers stylesheets instead of listing them.
+describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
+  const hexes = (s: string): string[] => (s.match(/#[0-9a-fA-F]{6}\b/g) ?? []).map((h) => h.toUpperCase());
+  const tokenHexes = new Set(
+    [...Object.values(DARK), ...Object.values(LIGHT)]
+      .filter((v) => /^#[0-9a-fA-F]{6}$/.test(v))
+      .map((v) => v.toUpperCase()),
+  );
+
+  /** Files allowed to contain a hex that equals a token, each with WHY it is
+   *  allowed and where the bind that holds it lives. A file not named here is
+   *  a failure — that is the point of the sweep. */
+  const BOUND: Record<string, string> = {
+    'index.html': 'the four pre-paint / theme-color literals — bound by the case below',
+    'vite.config.ts': 'the PWA manifest background_color + theme_color — bound by the case below',
+    'design/mockup.html': 'a self-contained static mockup that says it carries a verbatim copy of the token block — bound property-by-property by the case below',
+    'design/DIRECTION.md': 'the palette table the design doc calls "the map" — bound row-by-row by the case below',
+    'design/contrast-check.mjs': 'one hex inside a prose comment explaining why a pair takes attention-TEXT and not the dot hue; no colour is typed into the gate itself (palette() looks every one up by token)',
+    'test/contrast.test.ts': 'the hand-computed arithmetic controls this file exists to carry, each already asserted against resolveColor',
+    'test/fleet-css.test.ts': 'one hex inside a prose comment about --accent and --status-busy sharing a value',
+    'src/session/TerminalDrawer.tsx': 'the xterm 16-colour ANSI palette. The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
+  };
+
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (['node_modules', 'dist', '.git', 'public', 'coverage'].includes(e.name)) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p, out);
+      else if (e.isFile() && /\.(ts|tsx|html|css|mjs|md|json)$/.test(e.name)) out.push(p);
+    }
+    return out;
+  };
+
+  it('finds no copy in a file that is not bound here', () => {
+    const found = new Set<string>();
+    for (const abs of walk(ROOT)) {
+      const rel = path.relative(ROOT, abs).split(path.sep).join('/');
+      if (rel === 'src/styles/tokens.css') continue;
+      // CSS comments cite measured hexes as prose all over this tree; strip
+      // them the way the auditor does, so only DECLARATIONS count.
+      const src = readFileSync(abs, 'utf8');
+      const body = rel.endsWith('.css') ? src.replace(/\/\*[\s\S]*?\*\//g, '') : src;
+      if (hexes(body).some((h) => tokenHexes.has(h))) found.add(rel);
+    }
+    // Vacuity guard: a sweep that matched nothing would pass this trivially.
+    expect(found.size).toBeGreaterThan(4);
+    expect([...found].sort().filter((f) => !(f in BOUND))).toEqual([]);
+    // …and the other direction: a BOUND entry for a file that no longer
+    // re-types anything is a comment pretending to be a gate.
+    expect(Object.keys(BOUND).sort().filter((f) => !found.has(f))).toEqual([]);
+  });
+
+  it('gives a reason for every file it allows', () => {
+    for (const [f, why] of Object.entries(BOUND)) expect(why.length, f).toBeGreaterThan(20);
+  });
+
+  it("index.html's four literals are --bg-page in the theme the markup names", () => {
+    const html = readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const dark = (DARK['--bg-page'] as string).toUpperCase();
+    const light = (LIGHT['--bg-page'] as string).toUpperCase();
+    const meta = [...html.matchAll(/<meta name="theme-color"([^>]*)>/g)].map((m) => m[1]);
+    expect(meta).toHaveLength(2);
+    expect(hexes(meta[0] as string)).toEqual([dark]);
+    expect((meta[1] as string).includes('prefers-color-scheme: light')).toBe(true);
+    expect(hexes(meta[1] as string)).toEqual([light]);
+    const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+    expect(hexes(blockBody(style, 'html {'))).toEqual([dark]);
+    expect(hexes(blockBody(style, "html[data-theme='light']"))).toEqual([light]);
+    // Nothing else in the file may carry a token colour.
+    expect(hexes(html).filter((h) => tokenHexes.has(h))).toEqual([dark, light, dark, light]);
+  });
+
+  it("vite.config.ts's manifest colours are the dark --bg-page", () => {
+    // The manifest is deliberately dark-only (the app is dark-first; light is an
+    // in-app [data-theme] override), so both entries take the DARK value.
+    const cfg = readFileSync(path.join(ROOT, 'vite.config.ts'), 'utf8');
+    const dark = (DARK['--bg-page'] as string).toUpperCase();
+    for (const key of ['background_color', 'theme_color']) {
+      const m = new RegExp(`${key}:\\s*'(#[0-9a-fA-F]{6})'`).exec(cfg);
+      expect(m?.[1], key).toBeDefined();
+      expect((m?.[1] ?? '').toUpperCase(), key).toBe(dark);
+    }
+  });
+
+  it("design/mockup.html's copied token block still equals tokens.css", () => {
+    // The file's own comment says "verbatim copy of src/styles/tokens.css". A
+    // verbatim copy that nothing compares is the drift class audit.mjs was
+    // written to end; this compares it with the auditor's own primitives.
+    const src = readFileSync(path.join(ROOT, 'design/mockup.html'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    let checked = 0;
+    for (const [open, theme] of [[':root', DARK], ["[data-theme='light']", LIGHT]] as const) {
+      for (const [k, v] of Object.entries(customProps(blockBody(src, open)))) {
+        if (theme[k] === undefined) continue;
+        expect(v.replace(/\s+/g, ''), `mockup.html ${open} ${k}`)
+          .toBe((theme[k] ?? '').replace(/\s+/g, ''));
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(50);
+  });
+
+  it("design/DIRECTION.md's palette table still equals tokens.css", () => {
+    const md = readFileSync(path.join(ROOT, 'design/DIRECTION.md'), 'utf8');
+    let checked = 0;
+    for (const line of md.split('\n')) {
+      const cells = line.split('|').map((c) => c.trim());
+      if (cells.length < 6) continue;
+      const names = (cells[2]?.match(/`([^`]+)`/g) ?? []).map((s) => s.slice(1, -1));
+      const head = names[0];
+      if (head === undefined || !head.startsWith('--')) continue;
+      // `--status-busy` / `-text` names --status-busy and --status-busy-text.
+      const full = names.map((n) => (n.startsWith('--') ? n : `${head}${n}`));
+      for (const [cell, theme] of [[cells[3], DARK], [cells[4], LIGHT]] as const) {
+        const vals = ((cell ?? '').match(/`([^`]+)`/g) ?? []).map((s) => s.slice(1, -1));
+        vals.forEach((v, i) => {
+          const name = full[i];
+          if (name === undefined || !/^#[0-9a-fA-F]{6}$/.test(v) || theme[name] === undefined) return;
+          expect(v.toUpperCase(), `DIRECTION.md ${name}`).toBe((theme[name] ?? '').toUpperCase());
+          checked++;
+        });
+      }
+    }
+    expect(checked).toBeGreaterThan(40);
   });
 });
 
