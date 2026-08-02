@@ -32,21 +32,11 @@ export interface MeasuredPair {
   detail: string;
 }
 
-export interface KeyframeTrough {
-  file: string;
-  name: string;
-  /** The lowest opacity any stop sets, or null if a stop is not a literal. */
-  min: number | null;
-  /** "chat.css working-dot 0.25" */
-  key: string;
-}
-
 export interface StaleEntries {
   grounds: string[];
   exempt: string[];
   inherited: string[];
   opacity: string[];
-  keyframes: string[];
 }
 
 export interface AuditCounts {
@@ -56,7 +46,6 @@ export interface AuditCounts {
   pseudo: number;
   inherited: number;
   faded: number;
-  keyframes: number;
 }
 
 export interface AuditReport {
@@ -68,7 +57,6 @@ export interface AuditReport {
   stale: StaleEntries;
   counts: AuditCounts;
   fades: { key: string; value: number }[];
-  troughs: KeyframeTrough[];
 }
 
 export interface Ground {
@@ -86,7 +74,6 @@ export const GROUNDS: Record<string, Ground>;
 export const SELF_GROUNDED_EXEMPT: Record<string, string>;
 export const INHERITED_GROUNDS: Record<string, Ground>;
 export const OPACITY_REGISTRY: Record<string, OpacityEntry>;
-export const KEYFRAME_TROUGHS: Record<string, string>;
 
 export function stylesheets(root?: string): string[];
 export function loadThemes(root?: string): Themes;
@@ -104,5 +91,4 @@ export function rulesOf(root: string, rel: string): Rule[];
 export function ruleKey(r: Rule): string;
 export function declOf(body: string, prop: string): string | null;
 export function opacityNumber(raw: string): number | null;
-export function keyframeTroughs(root?: string): KeyframeTrough[];
 export function audit(root?: string): AuditReport;

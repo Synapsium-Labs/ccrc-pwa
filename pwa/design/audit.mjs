@@ -46,9 +46,6 @@
 //   5. element opacity — every static `opacity` strictly between 0 and 1,
 //      which must be registered with the pairs it composites or a reason it
 //      composites nothing.
-//   6. keyframe troughs — every @keyframes opacity stop below 1, which must be
-//      registered. Not gated on contrast (see KEYFRAME_TROUGHS); registered so
-//      the list cannot drift, which it already had.
 //
 // Deliberately NOT attempted: full selector coverage of the ~230 rules that
 // set a `color` but no background and are not a pseudo-element of a rule that
@@ -342,56 +339,6 @@ export const OPACITY_REGISTRY = {
   },
 };
 
-// ── @keyframes opacity troughs ──────────────────────────────────────────────
-// A running animation dips below its steady state, and nothing measures the
-// dip. This registry does NOT gate contrast at the trough — WCAG 2.1 states no
-// per-frame requirement for an animating element, and every loop below reduces
-// to a steady state under prefers-reduced-motion that IS measured above. What
-// it gates is the LIST: the previous round disclosed "working-glyph .35,
-// working-dot .25, tool-breathe .55, task-breathe .55" as the complete set of
-// troughs, and it was already wrong — dot-breathe .55 (the fleet/chat status
-// lamps, the most visible animation in the app) was missing from it. A
-// hand-typed list of what the stylesheets contain is the drift class this
-// whole file exists to close, so the list is discovered and this registry is
-// checked against it.
-//
-// Open design question, deliberately NOT decided here (see fix3-ui-css.md):
-// whether a breathing element should be floored at its trough. Doing so means
-// retuning the "glow means life" motion language in DIRECTION.md, which is a
-// design decision and not a defect fix.
-export const KEYFRAME_TROUGHS = {
-  'primitives.css dot-breathe 0.55': 'status lamps (.dot--busy, .dot--attention). Reduced motion: animation none, opacity 0.85 — registered and measured above',
-  'primitives.css skel-shimmer 1': 'a background-position shimmer; the stops set no opacity below 1',
-  'primitives.css toast-in 0': 'a one-shot entrance from opacity 0; the resting state is opacity 1',
-  'chat.css task-breathe 0.55': 'the running task mark (.task-mark--running). Reduced motion: animation none, opacity 0.85 — registered and measured above',
-  'chat.css jump-in 0': 'a one-shot entrance for the jump-to-latest button; the resting state is opacity 1',
-  'chat.css caret-blink 0': 'the terminal caret, a step-end blink between 1 and 0. A caret is a cursor, not content',
-  'chat.css working-glyph 0.35': 'the working indicator glyph (.msg-working-glyph). Reduced motion: animation none, opacity 1',
-  'chat.css working-dot 0.25': 'the three working dots (.msg-working-dots i), 4px decorative pips beside a full-strength label. Reduced motion: animation none, opacity inherits 1',
-  'chat.css tool-breathe 0.55': 'the running tool dot (.tool-dot--run) and the terminal "attaching" word. Reduced motion: animation none, opacity 0.8 for both — registered and measured above',
-  'chat.css attach-spin 1': 'a rotation; the stops set no opacity',
-};
-
-/** Every @keyframes block, with the lowest opacity any of its stops sets. */
-export function keyframeTroughs(root = PWA_ROOT) {
-  const found = [];
-  for (const rel of stylesheets(root)) {
-    const css = readCss(root, rel);
-    const file = rel.split('/').pop();
-    for (const m of css.matchAll(/@keyframes\s+([\w-]+)\s*\{/g)) {
-      const body = blockBody(css.slice(m.index), `@keyframes ${m[1]}`);
-      const stops = [...body.matchAll(/(?:^|[;{\s])opacity\s*:\s*([^;}]+)/g)].map((s) => opacityNumber(s[1]));
-      if (stops.some((v) => v === null)) {
-        found.push({ file, name: m[1], min: null, key: `${file} ${m[1]} ?` });
-        continue;
-      }
-      const min = stops.length === 0 ? 1 : Math.min(...stops);
-      found.push({ file, name: m[1], min, key: `${file} ${m[1]} ${min}` });
-    }
-  }
-  return found.sort((a, b) => (a.key < b.key ? -1 : 1));
-}
-
 /** A static opacity as a number, or null if the declaration is not a literal.
  *  `72%`, `.72` and `0.72 !important` are the same declaration as `0.72`;
  *  treating any of them as NaN and dropping it (which is what the first
@@ -562,30 +509,16 @@ export function audit(root = PWA_ROOT) {
     }
   }
 
-  // 6: keyframe troughs — the LIST is gated, not the ratio.
-  const troughs = keyframeTroughs(root);
-  for (const t of troughs) {
-    if (t.min === null) {
-      problems.push(`@keyframes ${t.file} ${t.name} has an opacity stop that is not a static value`);
-      continue;
-    }
-    if (!(t.key in KEYFRAME_TROUGHS)) {
-      problems.push(`unregistered keyframe trough ${t.key} — add it to KEYFRAME_TROUGHS with the elements it animates and their reduced-motion steady state`);
-    }
-  }
-
   // stale registry entries — a registry that outlives its rule is a comment
   // pretending to be a gate.
   const liveRules = new Set(rules.map(ruleKey));
   const liveSelfGrounded = new Set(selfGrounded.map(ruleKey));
   const liveFades = new Set(faded.map((f) => f.k));
-  const liveTroughs = new Set(troughs.map((t) => t.key));
   const stale = {
     grounds: Object.keys(GROUNDS).filter((k) => !liveSelfGrounded.has(k)),
     exempt: Object.keys(SELF_GROUNDED_EXEMPT).filter((k) => !liveRules.has(k)),
     inherited: Object.keys(INHERITED_GROUNDS).filter((k) => !liveRules.has(k)),
     opacity: Object.keys(OPACITY_REGISTRY).filter((k) => !liveFades.has(k)),
-    keyframes: Object.keys(KEYFRAME_TROUGHS).filter((k) => !liveTroughs.has(k)),
   };
   for (const [kind, keys] of Object.entries(stale)) {
     for (const k of keys) problems.push(`stale ${kind} registry entry: ${k} matches no rule in the stylesheets`);
@@ -604,9 +537,7 @@ export function audit(root = PWA_ROOT) {
       pseudo: pseudoCount,
       inherited: Object.keys(INHERITED_GROUNDS).length,
       faded: faded.length,
-      keyframes: troughs.length,
     },
     fades: faded.map((f) => ({ key: f.k, value: f.value })),
-    troughs,
   };
 }

@@ -1,55 +1,62 @@
-// WCAG 2.1 contrast checker for the ccrc "phosphor & ink" token set.
-// Run: node contrast-check.mjs — every ratio quoted in tokens.css comes from here.
-const lin = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-const L = (hex) => {
-  const [r, g, b] = [1, 3, 5].map((i) => lin(parseInt(hex.slice(i, i + 2), 16) / 255));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-};
-const cr = (a, b) => {
-  const [hi, lo] = [L(a), L(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-};
-// alpha-composite fg over bg (for the 12%-alpha EXIT-badge pill)
-const chan = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-const mix = (fg, bg, a) => {
-  const f = chan(fg), b = chan(bg);
-  return "#" + f.map((c, i) => Math.round(a * c + (1 - a) * b[i]).toString(16).padStart(2, "0")).join("");
+// WCAG 2.1 contrast gate for the ccrc "phosphor & ink" design system.
+// Run: node design/contrast-check.mjs — every ratio quoted in tokens.css comes
+// from here, and this is the command the plan, the reviews and the release
+// chain all name.
+//
+// It used to be a hand-typed copy of tokens.css (a `D` and an `Lt` table of
+// hexes) measured against a hand-typed list of token pairs. That shape is
+// exactly why a 2.44:1 blocker and a fifteen-pair opacity failure both shipped
+// with this gate printing ALL 94 PASS: a pair nobody typed is a pair nothing
+// measures, and a table nobody re-typed is a table that drifts (deviations 86
+// and 87 were both "the table and the stylesheet disagree").
+//
+// Now: the palettes are PARSED from src/styles/tokens.css, and the pairs come
+// in two halves.
+//
+//   * TOKEN PAIRS (below) — combinations the design system promises to hold
+//     wherever they are used, including as defensive floors for combinations
+//     with no live use site today. These are a deliberate hand-written
+//     contract, not a copy: only the labels and the pairing are typed here,
+//     never a colour.
+//   * THE STYLESHEETS — design/audit.mjs reads every .css file under src/ and
+//     measures what the rules actually say. Nobody registers anything.
+//
+// A failure in either half is a FAIL row and a non-zero exit.
+import { audit, contrast, resolveColor } from './audit.mjs';
+
+const report = audit();
+const { DARK, LIGHT } = report.themes;
+
+/** A token pair is named by its tokens.css custom property; the hex is looked
+ *  up per theme, so there is no second copy of the palette to keep in sync. */
+const palette = (theme) => {
+  const of = (name) => {
+    const c = resolveColor(`var(${name})`, theme);
+    if (c[3] !== 1) throw new Error(`${name} is translucent; token pairs must be opaque`);
+    return c;
+  };
+  return {
+    page: of('--bg-page'), surface: of('--bg-surface'), raised: of('--bg-raised'),
+    well: of('--bg-well'), sheet: of('--bg-sheet'), edgeStrong: of('--edge-strong'),
+    inkP: of('--ink-primary'), inkS: of('--ink-secondary'), inkT: of('--ink-tertiary'),
+    inkWell: of('--ink-on-well'),
+    accent: of('--accent'), accentInk: of('--ink-on-accent'), accentTint: of('--accent-tint'),
+    busy: of('--status-busy'), busyText: of('--status-busy-text'), idle: of('--status-idle'),
+    att: of('--status-attention'), attText: of('--status-attention-text'), attTint: of('--status-attention-tint'),
+    dead: of('--status-dead'), deadText: of('--status-dead-text'), deadTintSolid: of('--status-dead-tint-solid'),
+    claude: of('--acct-claude'), claudeT: of('--acct-claude-tint'),
+    claude2: of('--acct-claude2'), claude2T: of('--acct-claude2-tint'),
+    corp: of('--acct-corp'), corpT: of('--acct-corp-tint'),
+    gpt: of('--acct-gpt'), gptT: of('--acct-gpt-tint'),
+    track: of('--limit-track'), lOk: of('--limit-ok'), lWarn: of('--limit-warn'), lCrit: of('--limit-critical'),
+    diffAdd: of('--diff-add'), diffDel: of('--diff-del'),
+    // --pr-merged (tokens.css) aliases --acct-claude2, so it resolves to that
+    // same hex per theme rather than being a second colour to keep in sync.
+    prMerged: of('--pr-merged'),
+  };
 };
 
-const D = {
-  page: "#0B0D0C", surface: "#141715", raised: "#1C201D", well: "#070808",
-  sheet: "#181C19", edgeStrong: "#39403A",
-  inkP: "#ECF0EC", inkS: "#ADB6AE", inkT: "#8B948C", inkWell: "#DEE4DE",
-  accent: "#45D67E", accentInk: "#082312", accentTint: "#12291B",
-  busy: "#45D67E", busyText: "#57E08B", idle: "#7C867D",
-  att: "#F2B84B", attText: "#F2B84B", attTint: "#2E2413",
-  dead: "#E06A55", deadText: "#E8836F",
-  claude: "#6FD6EA", claudeT: "#0E2A31",
-  claude2: "#C7A7F4", claude2T: "#241C38",
-  corp: "#96B4F4", corpT: "#16233B",
-  gpt: "#F0A3C8", gptT: "#331B28",
-  track: "#242A25", lOk: "#45D67E", lWarn: "#F2B84B", lCrit: "#E06A55",
-  diffAdd: "#57E08B", diffDel: "#F08A78",
-  // --pr-merged (tokens.css) aliases --acct-claude2, so it is literally this
-  // same hex per theme, not a second colour to keep in sync.
-  prMerged: "#C7A7F4",
-};
-const Lt = {
-  page: "#F4F6F3", surface: "#FFFFFF", raised: "#EAEEEA", well: "#141715",
-  sheet: "#FFFFFF", edgeStrong: "#C3CAC2",
-  inkP: "#1A201B", inkS: "#4E5850", inkT: "#5F6962", inkWell: "#DEE4DE",
-  accent: "#0E7B3F", accentInk: "#FFFFFF", accentTint: "#DFF2E5",
-  busy: "#178A48", busyText: "#106E39", idle: "#6C766E",
-  att: "#B27400", attText: "#8A5A0A", attTint: "#F7E9CF",
-  dead: "#B2402C", deadText: "#B2402C",
-  claude: "#0A6377", claudeT: "#DAF0F6",
-  claude2: "#6D3FB4", claude2T: "#EDE6FA",
-  corp: "#2F55B8", corpT: "#E3EAFA",
-  gpt: "#A62667", gptT: "#FAE3EE",
-  track: "#E3E7E2", lOk: "#178A48", lWarn: "#B27400", lCrit: "#B2402C",
-  diffAdd: "#57E08B", diffDel: "#F08A78",
-  prMerged: "#6D3FB4",
-};
+const hex = (c) => '#' + [0, 1, 2].map((i) => Math.round(c[i]).toString(16).padStart(2, '0')).join('');
 
 const pairs = (T, name) => [
   [`${name} ink-primary / surface`, T.inkP, T.surface, 4.5],
@@ -118,7 +125,10 @@ const pairs = (T, name) => [
   [`${name} dead-text / surface`, T.deadText, T.surface, 4.5],
   [`${name} dead dot / surface (UI 3:1)`, T.dead, T.surface, 3],
   [`${name} dead dot / lamp well (UI 3:1)`, T.dead, T.well, 3],
-  [`${name} dead-text / EXIT-badge pill (12% dead over surface)`, T.deadText, mix(T.dead, T.surface, 0.12), 4.5],
+  // --status-dead-tint-solid IS the 12% wash pre-composited on a card, so this
+  // no longer mixes anything here; tokens.css owns the 12% and audit.mjs pins
+  // the solid token against the translucent one it derives from.
+  [`${name} dead-text / EXIT-badge pill (12% dead over surface)`, T.deadText, T.deadTintSolid, 4.5],
   [`${name} acct claude / tint`, T.claude, T.claudeT, 4.5],
   [`${name} acct claude2 / tint`, T.claude2, T.claude2T, 4.5],
   [`${name} acct corp / tint`, T.corp, T.corpT, 4.5],
@@ -158,13 +168,38 @@ const pairs = (T, name) => [
 ];
 
 let fail = 0, n = 0;
-for (const [label, fg, bg, min] of [...pairs(D, "DARK "), ...pairs(Lt, "LIGHT")]) {
-  const r = cr(fg, bg);
+
+console.log(`# token pairs — the design system's standing contract`);
+for (const [label, fg, bg, min] of [...pairs(palette(DARK), 'DARK '), ...pairs(palette(LIGHT), 'LIGHT')]) {
+  const r = contrast(fg, bg);
   const ok = r >= min;
   if (!ok) fail++;
   n++;
-  console.log(`${ok ? "PASS" : "FAIL"}  ${r.toFixed(2).padStart(6)}  (min ${min})  ${label}  ${fg} on ${bg}`);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${r.toFixed(2).padStart(6)}  (min ${min})  ${label}  ${hex(fg)} on ${hex(bg)}`);
 }
+
+console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);
+console.log(
+  `# ${report.counts.rules} rules, ${report.counts.selfGrounded} self-grounded, `
+  + `${report.counts.pseudo} pseudo-element children, ${report.counts.inherited} inherited-ground, `
+  + `${report.counts.faded} element fades`,
+);
+for (const m of report.measured) {
+  if (!m.ok) fail++;
+  n++;
+  console.log(`${m.ok ? 'PASS' : 'FAIL'}  ${m.ratio.toFixed(2).padStart(6)}  (min ${m.floor})  ${m.label}  ${m.detail}`);
+}
+
+// A structural problem — an unregistered fade, an unparsed colour, a registry
+// entry pointing at a rule that no longer exists — is a gate failure in its
+// own right. It means the audit could not measure something, which is the
+// state every defect this gate has ever missed was in.
+for (const p of report.problems) {
+  fail++;
+  n++;
+  console.log(`FAIL  ------  (audit)  ${p}`);
+}
+
 console.log(fail ? `\n${fail} FAILURES of ${n}` : `\nALL ${n} PASS`);
 // The gate is the last link of `npx vitest run && npm run build && node
 // design/contrast-check.mjs`, so a failing pair has to be a non-zero exit —
