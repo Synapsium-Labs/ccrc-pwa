@@ -447,19 +447,61 @@ describe('local-loss refusals', () => {
     expect(paths).toBe('dist/');
   });
 
-  it('records 0 bytes rather than an empty field when the size read fails', () => {
-    // `[[ "$b" =~ ^[0-9]+$ ]] || b=0`. Without it a failed `du` puts "" into the
-    // record and `cmd_ws_audit` prints `"bytes":`, which is not JSON at all —
-    // so `JSON.parse` inside `audit()` is the assertion, and what it defends is
-    // the manifest a human reads before authorising a delete.
+  // RENAMED, round-3 item 3, routed here by the ui-tsx verifier. This was
+  // `records 0 bytes rather than an empty field when the size read fails`, and
+  // it PINNED A FORGERY: `[[ "$b" =~ ^[0-9]+$ ]] || b=0` turned a `du` that
+  // never ran into the number `0`, the record went into `ignoredBytes`, and
+  // `ReapSheet.tsx:161` prints that as a stated total immediately above the
+  // Remove button. A test asserting the 0 is worse than no test, so the
+  // assertion is inverted rather than deleted — and the half it legitimately
+  // defended (an empty `b` makes `"bytes":`, which is not JSON) is kept: the
+  // `JSON.parse` in `audit()`/`refusal()` still runs on every case below.
+  it('refuses the collection when an entry\'s size read FAILS, and records no 0', () => {
     const { wt } = squashMovedBase(['dist/']);
     fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
-    const a = audit('du() { return 1; };');
-    expect(a.verdict).toBe('reapable');
-    expect(a.ignored).toEqual([{ path: 'dist/', bytes: 0, sensitive: false }]);
-    expect(a.ignoredBytes).toBe(0);
+    const a = refusal(wt, 'du() { return 1; };');
+    expect(a.verdict).toBe('tree-unreadable');
+    expect(a.detail, a.detail).toContain("could not size the ignored entry dist/");
+    // The forged figures are ABSENT, not zero: a refusal document carries no
+    // ignored manifest at all, so there is no total to misread.
+    expect(a.ignored ?? [], 'no entry was recorded on a size nobody took').toEqual([]);
+    expect(a.ignoredBytes ?? 0).toBe(0);
+    expect(a.ignoredCount ?? 0).toBe(0);
   });
+
+  it('refuses a PARTIAL du total — the failure that looks like an answer', () => {
+    // The second and nastier half of the same rung. `du -sb` on a directory it
+    // can only partly read exits 1, writes the diagnostic to stderr, and still
+    // prints a PARTIAL total on stdout — measured below, and on GNU coreutils
+    // 9.4 outside the suite: 5000 for a tree holding 14000. `^[0-9]+$` accepted
+    // that, so the old rung did not merely record 0 on a hard failure, it
+    // recorded a plausible under-count on a soft one. 0 looks like a bug;
+    // an under-count looks like an answer, and it is the answer the Remove
+    // button prints.
+    const { wt } = squashMovedBase(['dist/']);
+    const locked = path.join(wt, 'dist', 'locked');
+    fs.mkdirSync(locked, { recursive: true });
+    fs.writeFileSync(path.join(wt, 'dist', 'visible.bin'), 'v'.repeat(5000));
+    fs.writeFileSync(path.join(locked, 'hidden.bin'), 'h'.repeat(9000));
+    fs.chmodSync(locked, 0o000);
+    try {
+      // The fixture only means anything if du really behaves this way here.
+      const probe = h.sh(`du -sb "${wt}/dist" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
+        + `echo "out=[$(cat "$HOME/du-out")]"; echo "err=[$(cat "$HOME/du-err")]"`);
+      expect(probe, probe).toContain('rc=1');
+      expect(probe, probe).toContain('Permission denied');
+      expect(probe, probe).toMatch(/out=\[5\d{3}\s/);   // partial: 9000 bytes missing
+
+      const a = refusal(wt, '');
+      expect(a.verdict).toBe('tree-unreadable');
+      expect(a.detail, a.detail).toContain("could not size the ignored entry dist/");
+      expect(JSON.stringify(a), 'the partial total never reaches the wire')
+        .not.toMatch(/"bytes":5\d{3}/);
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  }, 30000);
 
   it('removes its scratch file on EVERY path that refuses, and on the one that does not', () => {
     // Five exits, four `rm -f "$outf"`, and each one is only reachable through

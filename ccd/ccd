@@ -2181,6 +2181,33 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # lines (measured: `cut -f1` alone returned `1\nd.log`, which fails the
   # numeric test and silently became 0).
   #
+  # AND A `du` THAT DID NOT FINISH REFUSES THE WHOLE COLLECTION — round-3 item 3,
+  # routed here by the ui-tsx verifier, and the TWELFTH instance of the
+  # measurement-forgery class on this branch (after `_ws_gc_bytes`, c140dbd, and
+  # this round's own `_ws_gc_dirty`). The rung used to be
+  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`, which forged in BOTH of du's failure modes:
+  #   - `du` stubbed to fail / the entry gone: `b` empty, recorded as 0;
+  #   - `du -sb` on a PARTIALLY readable directory: measured, GNU coreutils 9.4,
+  #     `chmod 000` on one subdirectory gives rc=1, stderr
+  #     `du: cannot read directory '…/sub': Permission denied` and stdout
+  #     `5000  top` for a tree that really holds 14000 bytes. The old test was
+  #     `^[0-9]+$`, so the PARTIAL TOTAL passed as a measurement — worse than
+  #     the 0, because 0 looks like a bug and 5000 looks like an answer.
+  # Both land in `ignoredBytes`, which `ReapSheet.tsx` prints as a stated total
+  # immediately above the Remove button.
+  #
+  # The fix is not a `null` in the record: `ignoredBytes` is `number` on the
+  # wire (shared/api.ts:155) and `humanBytes(null)` renders `0 B`, so a null
+  # would relocate the forgery into the PWA rather than close it. It is the
+  # refusal this function already owns — the same `return 1` + `REAP_IGNREASON`
+  # the git-status rungs and the inside-walk rungs use, which every caller
+  # already handles: `_ws_reap_eval` refuses `tree-unreadable` (ccd:2580),
+  # `_ws_reap_tail` refuses rather than finishing "on a guess" (ccd:3487), and
+  # `_ws_gc_reclaimable` declines "refusing to remove a tree it cannot describe"
+  # (ccd:4107). A size ccd could not take is a tree ccd cannot describe, and the
+  # only thing this function's answer is used for is authorising a deletion.
+  # `pipefail` is set at the top of this file, so the pipeline's status IS du's.
+  #
   # THREE MORE MUTATION SURVIVORS, disclosed with the reason each is one, and
   # two of them are the same reason — an empty temp-file name is itself a
   # failing redirect, so the read never runs and the NEXT guard refuses:
@@ -2204,7 +2231,7 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   #     because the loop's other two lines both dereference `$p` into a
   #     filesystem path, and an empty one would size `$wd/` — the whole
   #     workspace — as an "ignored entry".
-  local wd="$1" entry p b sens deadline outf errf err rc ih
+  local wd="$1" entry p b sens deadline outf errf err rc ih drc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""; REAP_IGNREASON=""
   REAP_SENSITIVE_FILTERED=0
   deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
@@ -2219,7 +2246,12 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     case "$entry" in '!! '*) ;; *) continue ;; esac
     p="${entry#!! }"
     [[ -n "$p" ]] || continue
-    b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0
+    b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); drc=$?
+    { (( drc == 0 )) && [[ "$b" =~ ^[0-9]+$ ]]; } || {
+      rm -f "$outf"
+      REAP_IGNREASON="could not size the ignored entry $p"
+      return 1
+    }
     sens=0
     if _ws_sensitive_match "$p"; then
       # NOISE is counted, not silenced: `_ws_sensitive_noise` is the F3
@@ -4261,13 +4293,33 @@ cmd_ws_gc() {   # [--prune]
   # One du across every path at once: it de-dupes inodes shared between
   # worktrees, so this is the exact figure that removing the lot would free.
   # The per-row sizes are independent measurements and can sum to more.
-  local total='-'
+  #
+  # RC AND STDERR, the same three conjuncts as `_ws_gc_bytes` — found by the
+  # round-3 item-3 sweep over every `du` in this file, and the last unguarded
+  # one left in it. `du -scb` over a set containing a partially readable tree
+  # exits 1, writes the diagnostic to stderr and STILL prints a `total` line
+  # holding a partial sum (measured, GNU coreutils 9.4: 5000 for a tree holding
+  # 14000). `_ws_gc_human` only answers `-` for a NON-numeric input, so that
+  # partial sum rendered as a figure under a sentence that says "what removing
+  # all of them would free" — an affirmative total over a read that did not
+  # finish, which is the class this branch has closed eleven times.
+  local total='-' tf terr trc
   if (( ${#paths[@]} > 0 )); then
-    total=$(du -scb "${paths[@]}" 2>/dev/null | awk '$2 == "total" {print $1}')
+    tf=$(mktemp) || tf=''
+    if [[ -n "$tf" ]]; then
+      total=$(du -scb "${paths[@]}" 2>"$tf" | awk '$2 == "total" {print $1}'); trc=$?
+      terr=$(cat "$tf" 2>/dev/null); rm -f "$tf"
+      { (( trc == 0 )) && [[ -z "$terr" ]]; } || total='-'
+    fi
     total=$(_ws_gc_human "$total")
   fi
   echo
-  echo "total $total across $n worktree$( (( n == 1 )) || echo s ) — what removing all of them would free."
+  # A total that was not measured does not get the sentence that claims one.
+  if [[ "$total" == '-' ]]; then
+    echo "total unmeasured across $n worktree$( (( n == 1 )) || echo s ) — du could not read all of them, so there is no figure to give."
+  else
+    echo "total $total across $n worktree$( (( n == 1 )) || echo s ) — what removing all of them would free."
+  fi
   echo "Rows are measured independently, so they can sum to more than the total when workspaces share hardlinks."
 
   (( prune )) || return 0

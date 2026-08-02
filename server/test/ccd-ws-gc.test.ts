@@ -207,6 +207,37 @@ describe('ws-gc report', () => {
     expect(out).toContain('hardlink');
   });
 
+  it('gives no grand total at all when du could not read every worktree', () => {
+    // Round-3 item 3, the `du` sweep. `du -scb` over a set containing a
+    // partially readable tree exits 1, writes to stderr, and STILL prints a
+    // `total` line holding a partial sum — measured below and, outside the
+    // suite, on GNU coreutils 9.4 (5000 for a tree holding 14000).
+    // `_ws_gc_human` only answers `-` for a NON-numeric input, so that partial
+    // sum used to render as a figure under the words "what removing all of
+    // them would free".
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    const locked = path.join(wt, 'locked');
+    fs.mkdirSync(locked, { recursive: true });
+    fs.writeFileSync(path.join(locked, 'big.bin'), 'x'.repeat(9000));
+    fs.writeFileSync(path.join(wt, 'visible.bin'), 'v'.repeat(5000));
+    fs.chmodSync(locked, 0o000);
+    try {
+      const probe = h.sh(`du -scb "${wt}" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
+        + `echo "err=[$(cat "$HOME/du-err")]"; echo "out=[$(cat "$HOME/du-out")]"`);
+      expect(probe, probe).toContain('rc=1');
+      expect(probe, probe).toContain('Permission denied');
+      expect(probe, probe).toContain('total');   // …and it still printed one
+
+      const out = gc();
+      expect(out, out).toContain('total unmeasured across 1 worktree');
+      expect(out, out).toContain('du could not read all of them');
+      expect(out, out).not.toContain('what removing all of them would free');
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  }, 30000);
+
   it('says so plainly when there is nothing to report', () => {
     h.makeRepo('demo');
     expect(gc()).toContain('nothing to report');
