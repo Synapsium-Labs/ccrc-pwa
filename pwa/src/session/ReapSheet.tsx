@@ -107,8 +107,12 @@ export function ReapSheet({
               <dt>worktree</dt>
               <dd>
                 {audit.workdir}
-                {/* Its own node so the figure reads as a figure. */}
-                <span className="reap-size">{humanBytes(audit.worktreeBytes)}</span>
+                {/* Its own node so the figure reads as a figure. Pre-merge fix
+                    round, finding F: `worktreeBytes` is `number | null` —
+                    `du` failing to read even one subdirectory used to hand
+                    this a real, plausible, WRONG number instead of refusing
+                    to answer. `null` says "unknown" rather than guess. */}
+                <span className="reap-size">{audit.worktreeBytes === null ? 'unknown' : humanBytes(audit.worktreeBytes)}</span>
               </dd>
 
               <dt>uncommitted</dt>
@@ -200,7 +204,10 @@ export function ReapSheet({
 
             {audit.verdict === 'reapable' && result === null && (
               <button type="button" className="btn-primary reap-go" disabled={busy} onClick={confirm}>
-                {`Remove ${slug} · ${humanBytes(audit.worktreeBytes)}`}
+                {/* The confirm this whole design exists to protect: it must
+                    say "unknown size", never a number `du` could not stand
+                    behind (finding F). */}
+                {`Remove ${slug} · ${audit.worktreeBytes === null ? 'unknown size' : humanBytes(audit.worktreeBytes)}`}
               </button>
             )}
 

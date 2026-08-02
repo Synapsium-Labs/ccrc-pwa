@@ -138,7 +138,13 @@ export interface WsAudit {
    *  It is fingerprinted too (`clipsDigest`), so a clip pasted between the
    *  sheet and the tap refuses `state-changed` rather than being deleted. */
   clips: { name: string; bytes: number }[];
-  stashes: number; worktreeBytes: number; commitsAheadOfBase: number;
+  /** `null` when `du` could not read the whole worktree — even partially, even
+   *  a subdirectory — never a fabricated (and possibly ten-times-too-small)
+   *  number (pre-merge fix round, finding F; deviation 10's rule). This is the
+   *  figure `ReapSheet.tsx`'s confirm button prints before a destructive
+   *  action, so it must say "unknown" rather than a number it cannot stand
+   *  behind. */
+  stashes: number; worktreeBytes: number | null; commitsAheadOfBase: number;
   pr: { number: number | null; url: string; mergeCommit: string; headRefOid: string };
   merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number };
   transcript: string;

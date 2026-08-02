@@ -2493,7 +2493,15 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     ahead=$(git -C "$PROJECTS_ROOT/$project" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)
     [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0
   fi
-  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+  # Pre-merge fix round, finding F: `null`, never a fabricated `0` — the same
+  # rule `_ws_archive_manifest` (ccd:1190) already carries, applied here where
+  # `_ws_gc_bytes`'s own fix (ccd:3201) actually closes the gap. This is the
+  # figure `ReapSheet.tsx`'s primary Remove button prints beside "Remove
+  # <slug> ·" — the one confirm the whole design exists to protect — so a
+  # `du` that could not fully measure the tree must say so rather than hand
+  # the sheet a plausible-looking lie. `WsAudit.worktreeBytes` is `number |
+  # null` on the wire for exactly this reason (shared/api.ts).
+  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
 
   printf '{"id":%s,"branch":%s,"base":%s,"workdir":%s,"project":%s,"repo":%s,' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$base")" \
@@ -3198,10 +3206,55 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
 # worktrees accumulated on this box over six weeks because no command existed
 # that would have said so; the visibility is the point.
 
-_ws_gc_bytes() {   # path -> size in bytes, or '-'
+_ws_gc_bytes() {   # path -> size in bytes, or '-' when it could not be FULLY measured
+  # Pre-merge fix round, finding F — the NINTH instance of the
+  # measurement-forgery class (deviation 10: "a number is a measurement").
+  # `du` on a tree with an unreadable subdirectory does not fail the way the
+  # old regex-only check assumed: it prints the PARTIAL total it could sum on
+  # stdout, a "cannot read directory" line on stderr, and exits non-zero — so a
+  # 100 kB readable + 900 kB unreadable tree answered "102400", a real number
+  # ten times smaller than the truth, and `[[ "$b" =~ ^[0-9]+$ ]]` passed. A
+  # fully unreadable root is no safer: `du` still prints "0" rather than
+  # nothing. Measured both shapes with a real `chmod 000` subdirectory, no
+  # stub — `du() { return 1; }` (the technique this file used before this fix)
+  # does not resemble either one.
+  #
+  # `b=$(du -sb "$1" 2>"$errf" | cut -f1); rc=$?` is two statements, not
+  # `local b=$(…)`, for the reason CONSTRAINTS.md states file-wide: `local`'s
+  # own status would overwrite the pipeline's. `set -o pipefail` (ccd:4) is
+  # what then makes `rc` mean `du`'s exit code rather than `cut`'s: `cut`
+  # always succeeds on whatever `du` handed it, so without pipefail this read
+  # would need `${PIPESTATUS[0]}`, captured before anything else touches it.
+  #
+  # THREE MUTATION SURVIVORS, disclosed together because they are one
+  # reason: on THIS box, with real GNU `du`, every failure this function can
+  # observe sets a non-zero exit code AND writes to stderr AND leaves `$b`
+  # non-numeric (empty, on the `mktemp`-armoured path) at once, so any ONE of
+  # the three conjuncts already refuses alone and the suite stays green with
+  # either of the other two deleted. Kept as defence in depth, the same
+  # judgement `_ws_reap_locked`'s resume-path tree check makes for the
+  # identical shape (ccd:2964-2976, "Two reads, one rule"): a future
+  # coreutils that keeps `du`'s exit 0 on a partial read, or that starts
+  # emitting a non-numeric total, is exactly the case this line exists for,
+  # and it is untestable without a `du` that does not exist yet.
+  #   - `(( rc == 0 )) &&` — measured: deleting it still refuses on `$err`
+  #     being non-empty for every fixture in this suite.
+  #   - `[[ -z "$err" ]] &&` — measured: deleting it still refuses on `rc`
+  #     being non-zero for every fixture in this suite.
+  #   - `[[ "$b" =~ ^[0-9]+$ ]]` — measured: every real `du` failure this
+  #     function can construct already trips one of the other two first.
+  # A FOURTH, of the same shape as `_ws_collect_ignored`'s `outf=$(mktemp) ||
+  # return 1` (ccd:1825): `mktemp` failing needs a full filesystem or a
+  # missing `/tmp`, neither of which any fixture here can arrange, so
+  # `errf=$(mktemp) || …` is unpinnable for the same reason and stays for the
+  # same one — a value this function cannot get right must refuse rather than
+  # guess, and "cannot even allocate the scratch file" is exactly that case.
   [[ -d "$1" ]] || { echo '-'; return 0; }
-  local b; b=$(du -sb "$1" 2>/dev/null | cut -f1)
-  [[ "$b" =~ ^[0-9]+$ ]] && echo "$b" || echo '-'
+  local errf b rc err
+  errf=$(mktemp) || { echo '-'; return 0; }
+  b=$(du -sb "$1" 2>"$errf" | cut -f1); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 0 )) && [[ -z "$err" ]] && [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo '-'; fi
 }
 
 _ws_gc_age() {     # path -> whole days since its mtime, or '-'

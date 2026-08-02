@@ -548,6 +548,35 @@ describe('ws-archive', () => {
     const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
     expect(m.worktreeBytes).toBe(0);
   });
+
+  // Pre-merge fix round, finding F: the `du() { return 1; }` fixture above
+  // reproduces a TOTAL failure — empty stdout, and `_ws_gc_bytes` (before its
+  // own fix) answered '-' for that shape by accident, because an empty string
+  // fails the numeric regex too. Real GNU `du` on a tree it can only PARTLY
+  // read does not behave like that stub: it prints the partial total it DID
+  // sum — a real, numeric, WRONG answer — and the old `_ws_gc_bytes` passed
+  // that number straight through. This is the gap the stub-only coverage
+  // above could not see: a `chmod 000` on a real subdirectory, not a shell
+  // function shadow.
+  it('records worktreeBytes as null — not the understated number a partially-unreadable subdirectory produces', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    const readable = path.join(wt, 'readable_sub');
+    const blocked = path.join(wt, 'blocked_sub');
+    fs.mkdirSync(readable, { recursive: true });
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.writeFileSync(path.join(readable, 'f'), Buffer.alloc(102_400));   // 100 kB, du CAN see
+    fs.writeFileSync(path.join(blocked, 'f'), Buffer.alloc(921_600));    // 900 kB, du CANNOT
+    fs.chmodSync(blocked, 0o000);
+    try {
+      const m = JSON.parse(h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin >/dev/null; `
+        + `cat "$HOME/.cc-sessions/demo-quiet-basin.archivemanifest"`)) as Record<string, unknown>;
+      expect(m.worktreeBytes).toBeNull();
+    } finally {
+      // rmSync cannot recurse into a 0o000 directory — without this the
+      // harness's own cleanup throws and leaks the fixture HOME.
+      fs.chmodSync(blocked, 0o755);
+    }
+  });
 });
 
 /** The manifest is the record Task 5's audit ladder and ws-reap compare against,

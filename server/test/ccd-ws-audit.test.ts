@@ -1604,6 +1604,28 @@ describe('the manifest', () => {
     expect(a.pr.number).toBe(42);
   });
 
+  // Pre-merge fix round, finding F — the ninth instance of the
+  // measurement-forgery class (deviation 10). This is the figure
+  // `ReapSheet.tsx`'s primary Remove button prints, so a `du` that could only
+  // partly read the worktree must not hand it a real-looking, understated
+  // number. `chmod 000` on a real subdirectory — not a `du() { … }` shell
+  // shadow, which does not reproduce how GNU `du` actually fails.
+  it('worktreeBytes is null, not an understated number, when a subdirectory is unreadable', () => {
+    const { wt } = squashMovedBase();
+    const readable = path.join(wt, 'readable_sub');
+    const blocked = path.join(wt, 'blocked_sub');
+    fs.mkdirSync(readable, { recursive: true });
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.writeFileSync(path.join(readable, 'f'), Buffer.alloc(102_400));
+    fs.writeFileSync(path.join(blocked, 'f'), Buffer.alloc(921_600));
+    fs.chmodSync(blocked, 0o000);
+    try {
+      expect(audit().worktreeBytes).toBeNull();
+    } finally {
+      fs.chmodSync(blocked, 0o755);
+    }
+  });
+
   it('changes the token when ANY fingerprinted fact moves', () => {
     // BOTH halves, and the first one is what makes the second mean anything.
     // `ws-reap --expect <token>` re-proves against this string at the instant

@@ -500,3 +500,125 @@ describe('archived and reaping workspaces', () => {
     expect(fs.existsSync(wt)).toBe(true);
   });
 });
+
+// Pre-merge fix round, finding F — the ninth instance of the
+// measurement-forgery class (deviation 10: "a number is a measurement"). GNU
+// `du` on a tree it can only partly read does not fail the way a regex-only
+// check over its stdout assumes: it prints the PARTIAL total it summed,
+// writes a "cannot read directory" line to stderr, and exits non-zero — a
+// real, plausible-looking, WRONG number, never an empty or non-numeric
+// stdout. `_ws_gc_bytes` is the one function every `worktreeBytes` figure in
+// ccd goes through (`_ws_archive_manifest`, `cmd_ws_audit`,
+// `_ws_reap_tail`), so this is where the fix belongs rather than at each
+// caller. `chmod 000` on a real subdirectory, never a `du() { … }` shell
+// shadow: the earlier fix to `_ws_archive_manifest` (deviation 118) was
+// reproduced with `du() { return 1; }`, and real `du` does not behave like
+// that stub — the whole point of this suite is not repeating that mistake.
+describe('_ws_gc_bytes', () => {
+  it('measures a fully readable directory exactly', () => {
+    const dir = path.join(h.home, 'plain');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'f'), Buffer.alloc(102_400));
+    const b = h.sh(`_ws_gc_bytes "${dir}"`);
+    expect(b).toBe('102400');
+  });
+
+  it('answers "-", never a real-looking understatement, when du can only PARTLY read the tree', () => {
+    const dir = path.join(h.home, 'partial');
+    const readable = path.join(dir, 'readable');
+    const blocked = path.join(dir, 'blocked');
+    fs.mkdirSync(readable, { recursive: true });
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.writeFileSync(path.join(readable, 'f'), Buffer.alloc(102_400));   // 100 kB, du CAN see
+    fs.writeFileSync(path.join(blocked, 'f'), Buffer.alloc(921_600));   // 900 kB, du CANNOT
+    fs.chmodSync(blocked, 0o000);
+    try {
+      // The measurement this fix replaces, shown first so the bug is not
+      // taken on faith: real `du -sb` on this exact fixture.
+      const raw = h.sh(`du -sb "${dir}" 2>/dev/null | cut -f1 || true`);
+      expect(Number(raw), 'du must print a real, wrong, ten-times-too-small number').toBeLessThan(200_000);
+      expect(h.sh(`_ws_gc_bytes "${dir}"`)).toBe('-');
+    } finally {
+      // rmSync cannot recurse into a 0o000 directory — without this the
+      // harness's own cleanup throws and leaks the fixture HOME.
+      fs.chmodSync(blocked, 0o755);
+    }
+  });
+
+  it('answers "-", never the "0" du prints, when the root itself is fully unreadable', () => {
+    const dir = path.join(h.home, 'sealed');
+    fs.mkdirSync(dir);
+    fs.chmodSync(dir, 0o000);
+    try {
+      const raw = h.sh(`du -sb "${dir}" 2>/dev/null | cut -f1 || true`);
+      expect(raw, 'du prints "0" on stdout for a root it cannot enter, not nothing').toBe('0');
+      expect(h.sh(`_ws_gc_bytes "${dir}"`)).toBe('-');
+    } finally {
+      fs.chmodSync(dir, 0o755);
+    }
+  });
+
+  it('still answers "-" for a nonexistent path', () => {
+    expect(h.sh(`_ws_gc_bytes "${path.join(h.home, 'no-such-dir')}"`)).toBe('-');
+  });
+
+  it('leaves no scratch file behind, on the read that fails and the one that succeeds', () => {
+    // `ws-gc` calls this once per worktree in the fleet — a leak here is the
+    // same class of harm CONSTRAINTS.md records for test fixtures (47k stale
+    // dirs), just paid one file per scan instead of one per test run.
+    const tmp = path.join(h.home, 'tmpdir');
+    fs.mkdirSync(tmp);
+    const dir = path.join(h.home, 'clean');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'f'), Buffer.alloc(1024));
+    h.sh(`_ws_gc_bytes "${dir}"`, { TMPDIR: tmp });
+    expect(fs.readdirSync(tmp), 'the successful read left its scratch file').toEqual([]);
+
+    const blocked = path.join(h.home, 'blocked-leak');
+    fs.mkdirSync(blocked);
+    fs.chmodSync(blocked, 0o000);
+    try {
+      h.sh(`_ws_gc_bytes "${blocked}"`, { TMPDIR: tmp });
+      expect(fs.readdirSync(tmp), 'the failed read left its scratch file').toEqual([]);
+    } finally {
+      fs.chmodSync(blocked, 0o755);
+    }
+  });
+});
+
+/** The two named call sites: a manifest and a live audit built over the SAME
+ *  partially-unreadable worktree must both record `null`, never the
+ *  understated number `_ws_gc_bytes` used to hand them. */
+describe('worktreeBytes: null on a partial read, at both call sites (finding F)', () => {
+  const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; }; tmux() { return 1; }; _alive() { return 1; };`;
+  const blockedWorktree = (): { wt: string } => {
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-basin');
+    const readable = path.join(wt, 'readable_sub');
+    const blocked = path.join(wt, 'blocked_sub');
+    fs.mkdirSync(readable, { recursive: true });
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.writeFileSync(path.join(readable, 'f'), Buffer.alloc(102_400));
+    fs.writeFileSync(path.join(blocked, 'f'), Buffer.alloc(921_600));
+    fs.chmodSync(blocked, 0o000);
+    return { wt };
+  };
+  const unblock = (wt: string): void => fs.chmodSync(path.join(wt, 'blocked_sub'), 0o755);
+
+  it('_ws_archive_manifest: worktreeBytes is null, not an understated number', () => {
+    const { wt } = blockedWorktree();
+    try {
+      const m = JSON.parse(h.sh(`${ARCH} _ws_archive_manifest demo-quiet-basin`)) as Record<string, unknown>;
+      expect(m['worktreeBytes']).toBeNull();
+    } finally { unblock(wt); }
+  });
+
+  it('cmd_ws_audit: worktreeBytes is null, not an understated number — the figure the confirm button prints', () => {
+    const { wt } = blockedWorktree();
+    try {
+      const GH = `gh() { echo '[]'; }; timeout() { shift; "$@"; };`;
+      const a = JSON.parse(h.sh(`${GH} ${ARCH} cmd_ws_audit --session demo-quiet-basin`)) as Record<string, unknown>;
+      expect(a['worktreeBytes']).toBeNull();
+    } finally { unblock(wt); }
+  });
+});

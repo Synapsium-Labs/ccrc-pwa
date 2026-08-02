@@ -215,6 +215,17 @@ describe('mutation-sweep closures', () => {
     expect(await screen.findByText('1.0 GB')).toBeInTheDocument();
   });
 
+  // Pre-merge fix round, finding F: `worktreeBytes` is `number | null` on the
+  // wire now — `du` failing to fully read the worktree must not hand this
+  // sheet a number to print, in the row OR on the confirm button, which is
+  // the one figure the whole design exists to protect.
+  it('says "unknown", never a number, when worktreeBytes is null — row and confirm button both', async () => {
+    auditBody = audit({ worktreeBytes: null });
+    open();
+    expect(await screen.findByText('unknown')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Remove quiet-basin · unknown size' })).toBeInTheDocument();
+  });
+
   it('says "today" at the merge-age boundary, not "0 days ago"', async () => {
     auditBody = audit({ merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) } });
     open();
