@@ -822,6 +822,16 @@ describe('every static opacity is registered and composited', () => {
     // { opacity: 0.75 } faded live body text to 3.34 and the lamp dots to 2.67
     // in the light theme. FleetScreen's .offline-banner announces the same
     // state in words, at full strength, in exactly the cases the rule fired.
+    //
+    // verify3-css P5: the round-3 report said of that banner "Nothing tests
+    // it" and routed a render assertion to the ui-tsx lane. The claim was
+    // false and the referral is WITHDRAWN — both states are already pinned by
+    // test/fleet-screen.test.tsx ("shows a persistent offline banner when conn
+    // is 'down'…") and test/offline.test.ts ("shows hydrated cards behind a
+    // last-known banner while connecting"), and each fails if the banner is
+    // removed or re-gated. Measured, not assumed: four mutants on
+    // FleetScreen.tsx (either banner deleted; either banner's condition
+    // narrowed) each failed exactly one of those two tests.
     const faded = rulesOf(ROOT, 'src/fleet/fleet.css')
       .filter((r) => r.selector.includes("data-conn") && declOf(r.body, 'opacity') !== null);
     expect(faded.map(ruleKey)).toEqual([]);
