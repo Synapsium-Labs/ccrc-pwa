@@ -672,7 +672,18 @@ export function audit(root = PWA_ROOT) {
       problems.push(`unregistered fade ${f.k} — add it to OPACITY_REGISTRY with the pairs it composites or a reason it composites no coloured content`);
       continue;
     }
-    if (!('pairs' in entry)) continue;
+    // An entry is EXACTLY one of the two legal shapes: the pairs it composites,
+    // or a reason it composites no coloured content. This used to be
+    // `if (!('pairs' in entry)) continue;`, so an entry carrying neither — a
+    // `knownBelowFloor` again, say, the escape hatch this round deleted — was
+    // silently skipped by the GATE while only the suite objected. Gate and
+    // suite disagreeing about whether the hatch exists is worse than the hatch.
+    const shape = Object.keys(entry).sort().join('+');
+    if (shape !== 'pairs' && shape !== 'noText') {
+      problems.push(`OPACITY_REGISTRY ${f.k} is {${shape}} — an entry must carry EXACTLY one of \`pairs\` (what it composites) or \`noText\` (why it composites no coloured content), and nothing else`);
+      continue;
+    }
+    if (shape === 'noText') continue;
     for (const [label, fg, chain, floor] of entry.pairs) {
       for (const [theme, palette] of THEMES) {
         try {

@@ -779,10 +779,36 @@ describe('every static opacity is registered and composited', () => {
     // every other pair of that fade. The fade is gone (fleet.css), so the
     // escape hatch it needed is gone with it: a fade now either composites no
     // coloured content or clears every floor it touches.
-    for (const [, entry] of Object.entries(OPACITY_REGISTRY)) {
-      expect(Object.keys(entry).sort()).toEqual(expect.arrayContaining([]));
-      expect('knownBelowFloor' in entry).toBe(false);
+    //
+    // verify3-css P4: the assertion that used to sit here read
+    // `expect(Object.keys(entry).sort()).toEqual(expect.arrayContaining([]))`,
+    // which matches literally any key set — including
+    // ['knownBelowFloor','whatever'] — while reading like a second guard over
+    // the real one below it. Replaced with the shape check it was pretending
+    // to be: an entry is EXACTLY one of the two legal shapes, so there is no
+    // third key for a hatch to be reintroduced under.
+    for (const [k, entry] of Object.entries(OPACITY_REGISTRY)) {
+      expect(['pairs', 'noText'], k).toContain(Object.keys(entry).sort().join('+'));
+      expect('knownBelowFloor' in entry, k).toBe(false);
     }
+  });
+
+  it('the GATE, not just this file, rejects an entry with neither pairs nor noText', () => {
+    // The escape hatch survived in the gate binary: `if (!('pairs' in entry))
+    // continue;` meant `node design/contrast-check.mjs` — the single auditor
+    // this round elevated — printed ALL 232 PASS and exited 0 for a
+    // knownBelowFloor entry, and only the suite objected. A gate and a suite
+    // that disagree about whether the hatch exists is the hatch.
+    const dir = gateTree();
+    edit(dir, 'design/audit.mjs', (s) =>
+      s.replace(
+        "    pairs: [['running tool dot on a card', 'var(--status-busy)', ['var(--bg-surface)'], 3]],",
+        "    knownBelowFloor: 'the escape hatch this round claims to have deleted',",
+      ));
+    const r = runGate(dir);
+    expect(r.stdout).toMatch(/OPACITY_REGISTRY chat\.css \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
+    expect(r.stdout).toMatch(/^FAIL/m);
+    expect(r.status).not.toBe(0);
   });
 
   it('archived rows carry no element opacity', () => {
