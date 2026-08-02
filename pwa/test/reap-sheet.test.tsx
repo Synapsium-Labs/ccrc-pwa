@@ -442,23 +442,38 @@ describe('mutation-sweep closures', () => {
   // Same class as the two rows above, and the only figure on this sheet that
   // is a SUM: `clips.reduce((n, c) => n + c.bytes, 0)` under-counts an
   // unmeasured clip silently (`3 + null === 3`) and NaNs a missing one, either
-  // way stating a total the sheet was not given. The producer half
-  // (`_ws_clip_manifest`, ccd:2811) is the ccd lane's; the disclosure is
+  // way stating a total the sheet was not given. The disclosure is
   // ArchiveScreen's existing answer for a partially measured set.
+  //
+  // PRODUCER LANDED (cross-lane seam round). These two were written while
+  // `clips[].bytes` was still `number` on the wire and ccd still fabricated a
+  // `0`, so they had to assign through `auditBody: unknown` to get past the
+  // compile-time type, and were disclosed as such. `_ws_clip_manifest` now
+  // emits `null` (ccd:3162/3171) and `WsAudit` declares `number | null`, so
+  // they go through `audit()` — which is `Partial<WsAudit>` and therefore
+  // TYPE-CHECKED. That conversion is itself the check that the two halves
+  // agree: if the producer had landed as `-1`, or as an omitted field, or if
+  // the wire type had not been widened, this line would not compile, and the
+  // pwa suite runs `--typecheck`.
   it('discloses an unmeasured clip instead of folding it into the total', async () => {
-    // Past the compile-time type on purpose, exactly as the two ignoredBytes
-    // fixtures above are: `clips[].bytes` is still `number` on the wire
-    // (widening it is svc's), and what this asserts is what the RUNTIME does
-    // with the value ccd is being fixed to send.
-    auditBody = { ...audit(), clips: [{ name: 'a.png', bytes: 1_000_000 }, { name: 'b.png', bytes: null }] };
+    auditBody = audit({ clips: [{ name: 'a.png', bytes: 1_000_000 }, { name: 'b.png', bytes: null }] });
     open();
     expect(await screen.findByText('2 pasted images, 1 MB + 1 unmeasured')).toBeInTheDocument();
   });
 
   it('refuses the clips total outright when no clip was measured at all', async () => {
-    auditBody = { ...audit(), clips: [{ name: 'a.png', bytes: null }] };
+    auditBody = audit({ clips: [{ name: 'a.png', bytes: null }] });
     open();
     expect(await screen.findByText('1 pasted image, size unknown')).toBeInTheDocument();
+  });
+
+  it('states the measured total unchanged when every clip WAS measured', async () => {
+    // The other side of the same branch: widening the type must not make the
+    // ordinary sheet start hedging. `clipsSizeText`'s `unmeasured === 0` arm
+    // is the one a reader sees every day.
+    auditBody = audit({ clips: [{ name: 'a.png', bytes: 1_000_000 }, { name: 'b.png', bytes: 2_000_000 }] });
+    open();
+    expect(await screen.findByText('2 pasted images, 3 MB')).toBeInTheDocument();
   });
 
   it('counts stashes instead of collapsing them to "none"', async () => {

@@ -205,8 +205,24 @@ export interface WsAudit {
   sensitiveFiltered: number;
   /** `~/.cc-clips/<id>` — the reap `rm -rf`s it, so the sheet has to list it.
    *  It is fingerprinted too (`clipsDigest`), so a clip pasted between the
-   *  sheet and the tap refuses `state-changed` rather than being deleted. */
-  clips: { name: string; bytes: number }[];
+   *  sheet and the tap refuses `state-changed` rather than being deleted.
+   *
+   *  `bytes` is `number | null` and the `null` is the POINT (cross-lane seam
+   *  round, the thirteenth measurement forgery). `_ws_clip_manifest`
+   *  (ccd:3106/3109) answered a failed `du`/`stat` with `0` for as long as this
+   *  field was typed `number`, and that is not a coincidence: a producer that
+   *  must emit a `number` has exactly two options for an unreadable clip, and
+   *  one of them compiles. Typing the absence is what stops the next person
+   *  reintroducing the fabrication to satisfy the compiler — it is how this
+   *  class survived twelve closures.
+   *
+   *  Null is NOT 0 and it is NOT "empty file": 0 is the claim that `rm -rf`
+   *  will reclaim nothing here. `ReapSheet.tsx`'s `clipsSizeText` is the only
+   *  reader; it never folds a null into the sum, because a partial total is
+   *  banned by name alongside 0 — it states what was measured and discloses
+   *  the rest ("1 MB + 1 unmeasured"). Same rule, same wording, as
+   *  `worktreeBytes` below and `archivedBytes` on the archive sheet. */
+  clips: { name: string; bytes: number | null }[];
   /** `null` when `du` could not read the whole worktree — even partially, even
    *  a subdirectory — never a fabricated (and possibly ten-times-too-small)
    *  number (pre-merge fix round, finding F; deviation 10's rule). This is the

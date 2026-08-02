@@ -52,12 +52,24 @@ const sizeText = (bytes: number | null | undefined, unknown = 'unknown'): string
  *  be wrong without any single input being wrong: `n + c.bytes` silently
  *  under-counts an unmeasured clip (`3 + null === 3`) and produces `NaN` for a
  *  missing one — a partial total, which the house rule bans by name alongside
- *  `0`. Same producer class as the two rows above (`_ws_clip_manifest`'s
- *  per-clip `du -sb`, ccd:2811, still answers a failed read with 0; that half
- *  is the ccd lane's), and the same answer ArchiveScreen already gives for a
- *  partially measured set: state what WAS measured and disclose the rest,
- *  rather than fold the unknown into the number. */
-const clipsSizeText = (clips: { bytes: number }[]): string => {
+ *  `0`. Same producer class as the two rows above, and the same answer
+ *  ArchiveScreen already gives for a partially measured set: state what WAS
+ *  measured and disclose the rest, rather than fold the unknown into the
+ *  number.
+ *
+ *  PRODUCER LANDED (cross-lane seam round). When this was written, the ccd
+ *  half still fabricated `0` and `clips[].bytes` was `number` on the wire, so
+ *  every branch below was reachable only from a fixture that went past the
+ *  compile-time type — disclosed as such at the time. `_ws_clip_manifest`
+ *  (ccd:3106/3109) now emits `null` for a clip it could not size, and
+ *  `WsAudit['clips'][number]['bytes']` is `number | null`, so the unmeasured
+ *  branches are reachable from a real audit and the fixtures no longer have to
+ *  lie to reach them. The earlier disclosure worried the producer might land
+ *  as `-1` or as an omitted field instead; it landed as `null`, and the
+ *  parameter stays deliberately wider than the wire (`undefined` too) so an
+ *  older server or a dropped field degrades to the honest word rather than to
+ *  `NaN B` — the same defence `sizeText` above carries, for the same reason. */
+const clipsSizeText = (clips: { bytes: number | null | undefined }[]): string => {
   const measured = clips.map((c) => c.bytes).filter((b): b is number => typeof b === 'number');
   const unmeasured = clips.length - measured.length;
   if (measured.length === 0) return 'size unknown';

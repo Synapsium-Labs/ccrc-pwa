@@ -3075,38 +3075,100 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
   # depends on must not rest on an implementation detail merely because
   # today's filesystem happens to make it hold.
   #
-  # TWO MORE MUTATION SURVIVORS, disclosed, both pre-existing this fix and
-  # both still true of it. `[[ -d "$dir" ]] || { echo "[]"; … }` is removable with
+  # ONE MUTATION SURVIVOR, disclosed, pre-existing this fix and still true of
+  # it. `[[ -d "$dir" ]] || { echo "[]"; … }` is removable with
   # the suite green because `find` on a nonexistent path prints nothing on
   # stdout and a diagnostic on stderr (discarded below), so the loop reads no
   # records either way — it stays as the early return that makes the empty
   # answer a DECISION rather than an accident of `find`'s own exit code, which
-  # this function does not otherwise check. `|| echo 0` on a file's size fires
-  # only if the entry disappears between the `find` and the `stat`, which no
-  # fixture can arrange; it stays for the reason it always did — the
-  # alternative is `"bytes":`, a document that does not parse, in the record
-  # that outlives the workspace.
-  local id="$1" dir="$HOME/.cc-clips/$id" f name b out="[" first=1
+  # this function does not otherwise check.
+  #
+  # ── THE THIRTEENTH FORGERY (cross-lane seam round) ────────────────────────
+  # Both size rungs below used to answer a FAILED READ with `0`, and the older
+  # comment above defended it: the entry's NAME lands either way, and the name
+  # is what the digest and the token are built from. That argument is sound
+  # about the name and says nothing about the number — and the number is not
+  # private to this function. `cmd_ws_audit` puts this manifest on the wire
+  # (ccd:2944) and `ReapSheet.tsx:303` SUMS `clips[].bytes` into a stated total
+  # printed on the same sheet, above the same Remove button, as the worktree
+  # figure `_ws_gc_bytes` already refuses to fabricate. So the fabricated 0 was
+  # never merely a display understatement; it was a measurement claim made to a
+  # human about to authorise a `rm -rf`.
+  #
+  # Re-measured here, GNU coreutils 9.4, before the fix: `du -sb` over a tree
+  # holding 14000 bytes with one `chmod 000` subdirectory exits **1**, writes
+  # `du: cannot read directory …: Permission denied` to stderr, and STILL
+  # PRINTS `5000`. A numeric-looking answer is therefore not evidence of a
+  # completed measurement, and `[[ "$b" =~ ^[0-9]+$ ]]` on its own accepted it.
+  # Both rungs now check the exit status FIRST (`pipefail` is set file-wide, so
+  # the pipeline's status is du's) and keep the numeric test as the second
+  # conjunct for a `du` that succeeds and prints something else.
+  #
+  # WHY `null` PER ENTRY AND NOT THIS FUNCTION'S OWN REFUSAL, which is what
+  # `_ws_collect_ignored` (ccd:2263) got for the same class one round earlier:
+  #   - This function has no refusal channel to use. Its two other consumers
+  #     are the fingerprint (`clipsDigest`, ccd:2796) and `_ws_tombstone` /
+  #     `_ws_tombstone_reclip` — and the tombstone is the record that OUTLIVES
+  #     the workspace. A refusal there is either ignored or turns one
+  #     unreadable clip into a half-finished reap with the worktree already
+  #     gone. `_ws_collect_ignored` could refuse because every one of ITS
+  #     callers had somewhere to put the refusal before anything was destroyed.
+  #   - A manifest has MANY entries and they are independent. One unreadable
+  #     clip is a reason not to state that clip's size; it is not a reason to
+  #     refuse to describe the other nine, or to withhold the whole sheet.
+  #   - The name still lands, which is the half of the old comment that was
+  #     right: the consent boundary and the digest keep working unchanged.
+  # `null` is a fact ("nobody measured this"), not a value, and it is
+  # deterministic for a given readability state, so `clipsDigest` still
+  # discriminates and still refuses `state-changed` on a real change.
+  # `shared/api.ts:209` types `clips[].bytes` as `number | null` so that a
+  # consumer CANNOT go back to fabricating one to satisfy the compiler, and
+  # `ReapSheet.tsx`'s `clipsSizeText` states what was measured and discloses
+  # the rest ("1 MB + 1 unmeasured") rather than folding null into the sum.
+  #
+  # The `null` is also what keeps the old comment's other worry answered: `b`
+  # is now always either digits or the four characters `null`, so the record is
+  # valid JSON on every path — `"bytes":` with nothing after it, the document
+  # that does not parse, is unreachable from either rung.
+  # TWO `local` STATEMENTS, not one. `local id="$1" dir="$HOME/.cc-clips/$id"`
+  # expands EVERY word before performing ANY assignment, so under `set -u` the
+  # `$id` in the second word is unbound and the function dies
+  # `id: unbound variable` — unless the CALLER happens to have a `local id`,
+  # which by dynamic scoping is exactly what all three call sites have today.
+  # So the bug was invisible and the function was untestable in isolation at
+  # the same time, for the same reason. Disclosed by the ccd lane as residual
+  # #3 and left as latent; closed here because the unmeasured-clip fixtures
+  # below call this function directly, and a producer that can only be
+  # exercised through a 30-second destructive end-to-end reap is a producer
+  # whose failure rungs do not get pinned.
+  local id="$1"
+  local dir="$HOME/.cc-clips/$id" f name b brc out="[" first=1
   [[ -d "$dir" ]] || { echo "[]"; return 0; }
   while IFS= read -r -d '' f; do
     name="$(basename "$f")"
     if [[ -d "$f" ]]; then
       # A directory's own size is the directory ENTRY's — `du -sb`, the same
       # recursive read `_ws_gc_bytes` uses, is what makes this figure the
-      # bytes `rm -rf` actually reaches rather than one inode. Falling back
-      # to `0` when `du` cannot fully read it is the SAME choice this
-      # function's sibling fallback already makes for a file that vanishes
-      # between the `find` and the `stat` (disclosed above): the byte count
-      # in the display total can understate, but the entry's NAME still
-      # lands in the manifest either way, which is what the digest and the
-      # token — the actual consent boundary — are built from. Not the same
-      # question `_ws_gc_bytes`'s own fix (finding F) answers: that fallback
-      # protects a number a human reads on a confirm BUTTON before deciding;
-      # this one protects a name a stale token's digest has to move on.
-      b=$(du -sb "$f" 2>/dev/null | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0
+      # bytes `rm -rf` actually reaches rather than one inode.
+      #
+      # `rc` then numeric, in that order and for that reason: the partial
+      # total measured above is numeric AND wrong, so the numeric test cannot
+      # be the outer guard. No stderr conjunct, unlike `_ws_gc_bytes` — that
+      # needs a scratch file, and this is a LOOP, so it would take a `mktemp`
+      # per clip and add a failure mode (mktemp failing mid-manifest) for a
+      # conjunct `_ws_gc_bytes`'s own disclosure says never fires first. Same
+      # rc+numeric shape `_ws_collect_ignored` took for the same class.
+      b=$(du -sb "$f" 2>/dev/null | cut -f1); brc=$?
+      { (( brc == 0 )) && [[ "$b" =~ ^[0-9]+$ ]]; } || b=null
       name="$name/"
     else
-      b=$(stat -c %s "$f" 2>/dev/null || echo 0)
+      # Reachable only if the entry disappears between the `find` and the
+      # `stat`, or its directory becomes unreadable in the same window — no
+      # fixture can arrange either, which is why this rung was `|| echo 0` for
+      # so long. A race is still a failed read: it answers `null` like its
+      # sibling rather than claiming an empty file was deleted.
+      b=$(stat -c %s "$f" 2>/dev/null); brc=$?
+      { (( brc == 0 )) && [[ "$b" =~ ^[0-9]+$ ]]; } || b=null
     fi
     (( first )) || out+=","; first=0
     out+="{\"name\":$(_json_str "$name"),\"bytes\":$b}"

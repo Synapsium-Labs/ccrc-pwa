@@ -963,6 +963,142 @@ describe('destruction order', () => {
     expect(tokenOf()).toBe(tokenOf());
   }, 30000);
 
+  // ── THE THIRTEENTH MEASUREMENT FORGERY (cross-lane seam round) ───────────
+  //
+  // `_ws_clip_manifest` sized a directory entry with
+  // `b=$(du -sb … | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0` and a file entry
+  // with `stat -c %s … || echo 0`. Both answered a FAILED READ with a number,
+  // and `ReapSheet.tsx` sums `clips[].bytes` into a stated total above the same
+  // Remove button as the worktree figure `_ws_gc_bytes` already refuses to
+  // fabricate. `bytes` is `number | null` on the wire now (shared/api.ts:209),
+  // so the refusal is representable in the type and no consumer can be forced
+  // back into inventing one to compile.
+  //
+  // These call `_ws_clip_manifest` DIRECTLY rather than through a reap. Two
+  // reasons: a `chmod 000` entry is precisely the thing step (h)'s `rm -rf`
+  // cannot remove, so an end-to-end reap over this fixture would be a test
+  // about `rm` and not about the measurement; and the function is the single
+  // producer of all three consumers (wire manifest, `clipsDigest`, tombstone),
+  // so pinning it pins all three. The wire is covered separately below.
+  const manifest = (id = 'demo-quiet-basin'): { name: string; bytes: number | null }[] =>
+    JSON.parse(h.sh(`_ws_clip_manifest ${id}`));
+
+  it('a clip directory du can only PARTIALLY read is null, never its partial total', () => {
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    const sub = path.join(clips, 'sub');
+    fs.mkdirSync(path.join(sub, 'locked'), { recursive: true });
+    // 5000 readable + 9000 unreadable. The numbers matter: `du` prints the
+    // readable part as a plain integer, so the total it hands back is both
+    // numeric and 64% short.
+    fs.writeFileSync(path.join(sub, 'a.bin'), 'x'.repeat(5000));
+    fs.writeFileSync(path.join(sub, 'locked', 'b.bin'), 'y'.repeat(9000));
+    fs.writeFileSync(path.join(clips, 'plain.png'), 'z'.repeat(77));
+    try {
+      fs.chmodSync(path.join(sub, 'locked'), 0o000);
+
+      // IN-FIXTURE PROBE, so the premise is measured on the box running the
+      // test rather than asserted from the report. GNU coreutils 9.4: rc 1,
+      // a diagnostic on stderr, AND a partial total on stdout.
+      const probe = h.run(`du -sb "${sub}" 2>"$HOME/du-err"; echo "rc=$?"`);
+      const partial = probe.stdout.match(/^(\d+)\s/m)?.[1];
+      expect(probe.stdout).toContain('rc=1');
+      expect(fs.readFileSync(path.join(h.home, 'du-err'), 'utf8')).toMatch(/annot read/);
+      expect(partial).toBeDefined();
+      expect(Number(partial)).toBeGreaterThanOrEqual(5000);
+      expect(Number(partial)).toBeLessThan(14000);
+      // THE POINT: the partial total passes `^[0-9]+$`. A numeric-looking
+      // answer is not evidence of a completed measurement, which is why the
+      // exit status has to be the OUTER guard and the regex cannot be.
+      expect(partial).toMatch(/^[0-9]+$/);
+
+      const m = manifest();
+      expect(m).toEqual(expect.arrayContaining([{ name: 'sub/', bytes: null }]));
+      // Not the partial total, and not 0 either — 0 is the claim that `rm -rf`
+      // reclaims nothing here, which is false by 14 kB.
+      expect(JSON.stringify(m)).not.toMatch(/"bytes":\s*5\d{3}/);
+      expect(JSON.stringify(m)).not.toMatch(/"name":"sub\/","bytes":0/);
+      // ONE unreadable clip does not cost the others their measurement, and
+      // does not withhold the sheet: this is why the fix is a per-entry null
+      // and not `_ws_collect_ignored`'s whole-collection refusal.
+      expect(m).toEqual(expect.arrayContaining([{ name: 'plain.png', bytes: 77 }]));
+      expect(m).toHaveLength(2);
+    } finally { fs.chmodSync(path.join(sub, 'locked'), 0o755); }
+  }, 30000);
+
+  it('sizes the same clip directory for real once it is readable — null means unread, not unreadable-forever', () => {
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    const sub = path.join(clips, 'sub');
+    fs.mkdirSync(path.join(sub, 'locked'), { recursive: true });
+    fs.writeFileSync(path.join(sub, 'a.bin'), 'x'.repeat(5000));
+    fs.writeFileSync(path.join(sub, 'locked', 'b.bin'), 'y'.repeat(9000));
+    // The whole 14000, not the 5000 the old rung would have published.
+    expect(manifest()).toEqual([{ name: 'sub/', bytes: 14000 }]);
+  }, 30000);
+
+  it('a clip whose size stat cannot take is null, not 0 bytes', () => {
+    // The file rung. It was `|| echo 0` and was defended as race-only — an
+    // entry vanishing between the `find` and the `stat`, which no fixture can
+    // arrange. This one can: strip the SEARCH bit from the clips directory and
+    // `find` can still list the names (readdir needs `r`) while `stat` cannot
+    // resolve any of them (statat needs `x`). Every entry becomes unmeasured,
+    // and `[[ -d "$f" ]]` cannot answer either — so `sub` correctly loses the
+    // trailing slash the readable case gives it, because ccd no longer knows
+    // it is a directory and must not say so.
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(path.join(clips, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(clips, 'plain.png'), 'z'.repeat(77));
+    try {
+      fs.chmodSync(clips, 0o400);
+      const m = manifest();
+      expect(m).toEqual([{ name: 'plain.png', bytes: null }, { name: 'sub', bytes: null }]);
+      expect(JSON.stringify(m)).not.toContain('"bytes":0');
+    } finally { fs.chmodSync(clips, 0o755); }
+  }, 30000);
+
+  it('is callable from a scope with no `id` of its own — set -u, two `local` statements', () => {
+    // `local id="$1" dir="$HOME/.cc-clips/$id"` expanded every word before
+    // assigning any, so `$id` was unbound under `set -u` and the function died
+    // — except at the three call sites that happen to have their own `local
+    // id`, which dynamic scoping quietly supplied. Disclosed as latent by the
+    // ccd lane. `manifest()` above is itself the fixture that would have
+    // failed; this asserts the diagnostic is gone rather than merely absent
+    // from a passing path.
+    const r = h.run('_ws_clip_manifest demo-quiet-basin');
+    expect(r.stderr).not.toContain('unbound variable');
+    expect(r.stdout.trim()).toBe('[]');
+  }, 30000);
+
+  it('puts the unmeasured clip on the WIRE as null, and the audit still parses and still reaps', () => {
+    // The consumer this whole fix exists for: `cmd_ws_audit`'s `clips` is what
+    // `ReapSheet.tsx` renders above the Remove button. `JSON.parse` succeeding
+    // is half the assertion — the rung's old defence for `|| echo 0` was that
+    // an empty `b` writes `"bytes":`, a document that does not parse. `null` is
+    // four characters of valid JSON, so that defence is satisfied without the
+    // forgery.
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    const sub = path.join(clips, 'sub');
+    ready();
+    fs.mkdirSync(path.join(sub, 'locked'), { recursive: true });
+    fs.writeFileSync(path.join(sub, 'a.bin'), 'x'.repeat(5000));
+    fs.writeFileSync(path.join(sub, 'locked', 'b.bin'), 'y'.repeat(9000));
+    fs.writeFileSync(path.join(clips, 'plain.png'), 'z'.repeat(77));
+    try {
+      fs.chmodSync(path.join(sub, 'locked'), 0o000);
+      const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+      expect(a.clips).toEqual(expect.arrayContaining([
+        { name: 'sub/', bytes: null }, { name: 'plain.png', bytes: 77 },
+      ]));
+      // An unreadable clip is not a reason to withhold the sheet or the token:
+      // the names — the consent boundary — are all present and correct.
+      expect(a.verdict).toBe('reapable');
+      expect(typeof a.token).toBe('string');
+      // And the digest is STABLE over an unchanged unreadable directory, so
+      // this does not turn into a permanent false `state-changed`.
+      const again = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+      expect(again.token).toBe(a.token);
+    } finally { fs.chmodSync(path.join(sub, 'locked'), 0o755); }
+  }, 30000);
+
   it('never touches the transcript or the shared info/exclude', () => {
     const { main, wt } = ready();
     const exclude = path.join(main, '.git', 'info', 'exclude');
