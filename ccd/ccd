@@ -265,9 +265,24 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   # pipeline already returned non-zero for the HEALTHY case (measured: rc=1 for a
   # clean workspace, rc=1 for /no/such/dir). Two statements, because
   # `local d=$(...)` would return local's status.
-  local d
-  d=$(git -C "$1" status --porcelain --ignored=matching 2>/dev/null \
-        | grep '^!! ' | sort | sha256sum | cut -d' ' -f1; exit "${PIPESTATUS[0]}") || return 1
+  #
+  # AND STDERR IS THE SECOND RUNG — final-round integration review, item 5 /
+  # new finding 3. `PIPESTATUS[0]` alone is not enough: `git status` over a
+  # PARTIALLY unreadable tree exits ZERO and writes the diagnostic to stderr
+  # only (measured on git 2.43: rc 0, empty stdout, `warning: could not open
+  # directory 'tracked/'`), so the digest hashed a SHORT set and answered
+  # success. `_ws_collect_ignored` has required an empty stderr since Task 6 for
+  # exactly this reason; this function keeps its own copy of that rung because
+  # the ARCHIVE manifest still calls it, and a manifest that records a complete
+  # digest over an incomplete set is the same forgery one layer down. An
+  # incomplete read is not a smaller answer, it is no answer.
+  local d errf err
+  errf=$(mktemp) || return 1
+  d=$(git -C "$1" status --porcelain --ignored=matching 2>"$errf" \
+        | grep '^!! ' | sort | sha256sum | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
+    || { rm -f "$errf"; return 1; }
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  [[ -z "$err" ]] || return 1
   [[ "$d" =~ ^[0-9a-f]{64}$ ]] || return 1
   printf '%s\n' "$d"
 }
@@ -1193,10 +1208,42 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   esac
   # Measured against whatever is checked out, which is what `worktreeHead` above
   # makes legible: on a drifted worktree this counts that branch's uncommitted
-  # work, and it is still the honest answer to "what is uncommitted here".
-  dirty=$(git -C "$workdir" status --porcelain 2>/dev/null) \
-    || { echo "manifest: could not read the tree at $workdir" >&2; return 1; }
+  # work, and it is still the honest answer to "what is uncommitted here" — but
+  # only once the read below is CHECKED, which is what the next paragraph is
+  # about, and which the previous version of this comment claimed without.
+  #
+  # AND STDERR IS CAPTURED — final-round integration review, item 5 / new
+  # finding 3. `git status --porcelain` over a PARTIALLY unreadable tree exits
+  # ZERO with EMPTY stdout and the diagnostic on stderr alone. Measured on git
+  # 2.43, `chmod 000` on a TRACKED directory holding a modified file:
+  #     rc 0, stdout empty, stderr "tracked/deep/code.txt: Permission denied"
+  #                                "warning: could not open directory 'tracked/'"
+  # so `2>/dev/null` plus an exit-code test recorded `"dirty":0` for a tree with
+  # uncommitted work in it. `_ws_reap_eval` (ccd:2205+) and `_ws_collect_ignored`
+  # were hardened against exactly this and this read was not; two reads, one
+  # rule, and this is the third site.
+  #
+  # THIS IS A REFUSAL, not a recorded field, and that is the ladder this
+  # function's own header draws rather than an exception to it: "a question git
+  # cannot answer at all … an unreadable tree or ignored set" is the REFUSED
+  # arm, and a tree that cannot be walked is exactly that. The RECORDED arm is
+  # for facts that are simply not the expected one — a drifted branch, a
+  # detached HEAD — and a partial read is not a fact about the workspace, it is
+  # the absence of one. The archive path deliberately records rather than
+  # refuses (ccd:1800's comment says so), which is precisely why the honesty of
+  # the numbers it does record is the only protection there is.
+  local derrf derr drc
+  derrf=$(mktemp) \
+    || { echo "manifest: could not make a scratch file to read the tree at $workdir" >&2; return 1; }
+  dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
+  derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
+  { (( drc == 0 )) && [[ -z "$derr" ]]; } \
+    || { echo "manifest: could not read the tree at $workdir${derr:+ ($derr)}" >&2; return 1; }
   dirty=$(printf '%s' "$dirty" | grep -c . || true)
+  # Same rule again, one line down: `_ws_ignored_digest` used to check only
+  # `PIPESTATUS[0]`, which is also 0 in the case above, so the recorded
+  # `ignoredDigest` silently covered an incomplete set. The guard now lives
+  # inside that function, where its own callers inherit it.
   ignored=$(_ws_ignored_digest "$workdir") \
     || { echo "manifest: could not read the ignored set at $workdir" >&2; return 1; }
   # $main answered rev-parse a moment ago — rc 0 or a clean "no such ref", both

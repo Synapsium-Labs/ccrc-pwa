@@ -643,10 +643,26 @@ describe('ws-archive', () => {
   // that number straight through. This is the gap the stub-only coverage
   // above could not see: a `chmod 000` on a real subdirectory, not a shell
   // function shadow.
+  //
+  // FIXTURE NARROWED (final-round integration item 5, in the same round as the
+  // tree-read fix below): `blocked_sub` is now GITIGNORED. It has to be, and
+  // the reason is the finding this test is about. A chmod-000 subdirectory that
+  // git WALKS makes `git status --porcelain` print `warning: could not open
+  // directory 'blocked_sub/'` on stderr, and the manifest's tree read now
+  // refuses on any diagnostic — so the old fixture stopped reaching
+  // `_ws_gc_bytes` at all and asserted the wrong guard's refusal. Measured, and
+  // this is why the narrowing is sound rather than convenient: with the
+  // directory gitignored, `git status --porcelain` answers rc 0 with EMPTY
+  // stderr and `--ignored=matching` collapses it to `!! blocked_sub/` without
+  // descending, while `du -sb` still walks in, still fails, and still prints
+  // the partial total — i.e. the du blind spot is reproduced EXACTLY as before
+  // and nothing else is. One fixture, one finding.
   it('records worktreeBytes as null — not the understated number a partially-unreadable subdirectory produces', () => {
     const wt = workspace('demo', 'quiet-basin');
     const readable = path.join(wt, 'readable_sub');
     const blocked = path.join(wt, 'blocked_sub');
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'blocked_sub/\nreadable_sub/\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore the fixture dirs');
     fs.mkdirSync(readable, { recursive: true });
     fs.mkdirSync(blocked, { recursive: true });
     fs.writeFileSync(path.join(readable, 'f'), Buffer.alloc(102_400));   // 100 kB, du CAN see
@@ -725,6 +741,64 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     expect(r.stderr).toMatch(/could not read the tree/);
     expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+  });
+
+  it('refuses a tree it could only PARTIALLY read, instead of recording it pristine', () => {
+    // Final-round integration review, item 5 / new finding 3 — closed on the
+    // reap path, still open here. `git status --porcelain` over a partially
+    // unreadable tree exits ZERO with EMPTY stdout and the diagnostic on
+    // stderr alone, so `2>/dev/null` plus an exit-code test recorded
+    // `"dirty":0` for a tree with uncommitted work in it. Measured on git 2.43
+    // against this exact fixture — `chmod 000` on a TRACKED directory holding a
+    // modified file:
+    //     rc 0, stdout empty, stderr "tracked/deep/code.txt: Permission denied"
+    //                                "warning: could not open directory 'tracked/'"
+    //
+    // NO STUB. A `git() { return 128; }` shadow — the technique the rung above
+    // uses, and the right one for the exit-code case — cannot reproduce this at
+    // all, because the whole point is that real git SUCCEEDS. This is the
+    // lesson the ninth measurement forgery taught: a stub that does not
+    // resemble the failure proves nothing about it.
+    const wt = workspace('demo', 'quiet-basin');
+    fs.mkdirSync(path.join(wt, 'tracked', 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'tracked', 'deep', 'code.txt'), 'v1\n');
+    h.git(wt, 'add', '-A'); h.git(wt, 'commit', '-m', 'tracked work');
+    fs.writeFileSync(path.join(wt, 'tracked', 'deep', 'code.txt'), 'v2\n');   // uncommitted
+    fs.chmodSync(path.join(wt, 'tracked'), 0o000);
+    try {
+      // The premise, asserted rather than assumed: real git really does answer
+      // rc 0 with an empty porcelain here.
+      expect(h.sh(`git -C "${wt}" status --porcelain 2>/dev/null; echo "rc=$?"`),
+        'the fixture only means anything if git SUCCEEDS with an empty answer').toBe('rc=0');
+
+      // THE DIRTY RUNG, ON ITS OWN. `_ws_ignored_digest` reads the same tree
+      // under the same rule one line later, so without this stub either guard
+      // alone would refuse and neither would be pinned — the same "one fixture
+      // pins neither" shape `_ws_collect_ignored` records for its own two rungs.
+      const OKDIGEST = `_ws_ignored_digest() { echo ${'a'.repeat(64)}; };`;
+      const m = shFail(`${OKDIGEST} _ws_archive_manifest demo-quiet-basin`);
+      expect(m.code, `stdout: ${m.stdout}`).not.toBe(0);
+      expect(m.stdout, 'a refused manifest prints NOTHING — a partial record is the forgery').toBe('');
+      expect(m.stderr).toMatch(/could not read the tree/);
+      expect(m.stderr, 'and it says what git actually said').toMatch(/Permission denied/);
+
+      // THE IGNORED-DIGEST RUNG, ON ITS OWN. `PIPESTATUS[0]` is 0 in this state
+      // too, so before the fix the digest hashed a SHORT set and reported
+      // success — a complete-looking digest over an incomplete set.
+      const d = shFail(`_ws_ignored_digest "${wt}"`);
+      expect(d.code).not.toBe(0);
+      expect(d.stdout).toBe('');
+
+      // AND THE VERB REFUSES, so nothing is staged for deletion off the back of
+      // a record nobody could make.
+      const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/cannot describe demo-quiet-basin truthfully/);
+      expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+      expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+    } finally {
+      fs.chmodSync(path.join(wt, 'tracked'), 0o755);
+    }
   });
 
   it('refuses a record that is not parseable JSON, whatever produced it', () => {

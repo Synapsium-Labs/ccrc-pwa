@@ -766,11 +766,23 @@ describe('_ws_gc_bytes', () => {
  *  understated number `_ws_gc_bytes` used to hand them. */
 describe('worktreeBytes: null on a partial read, at both call sites (finding F)', () => {
   const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; }; tmux() { return 1; }; _alive() { return 1; };`;
+  // FIXTURE NARROWED (final-round integration item 5, same round): the two
+  // subdirectories are GITIGNORED. A chmod-000 directory git WALKS makes
+  // `git status --porcelain` print `warning: could not open directory` on
+  // stderr, and both the archive manifest's tree read and `_ws_ignored_digest`
+  // now refuse on any diagnostic — so the un-narrowed fixture stopped reaching
+  // `_ws_gc_bytes` and asserted a different guard. Measured: gitignored, plain
+  // `status --porcelain` is rc 0 with EMPTY stderr and `--ignored=matching`
+  // collapses `blocked_sub/` without descending, while `du -sb` still walks in,
+  // still fails, and still prints the partial total. The du blind spot is
+  // reproduced exactly and nothing else is.
   const blockedWorktree = (): { wt: string } => {
     h.makeRepo('demo');
     const wt = addWs('demo', 'quiet-basin');
     const readable = path.join(wt, 'readable_sub');
     const blocked = path.join(wt, 'blocked_sub');
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'blocked_sub/\nreadable_sub/\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore the fixture dirs');
     fs.mkdirSync(readable, { recursive: true });
     fs.mkdirSync(blocked, { recursive: true });
     fs.writeFileSync(path.join(readable, 'f'), Buffer.alloc(102_400));
