@@ -77,9 +77,27 @@ The phosphor identity survives daylight inside the glass.
   ring, the `❯` preselect. "Acting" and "working" deliberately share one color
   story: what you press is what makes sessions glow.
 
-All ratios verified programmatically (74 pairs, both themes —
-`contrast-check.mjs` in this directory): text roles ≥ 4.5:1, non-text UI roles
-(dots, bar fills, focus ring) ≥ 3:1. Exact ratios are annotated per-token in `tokens.css`.
+All ratios verified programmatically in both themes by `contrast-check.mjs` in
+this directory: text roles ≥ 4.5:1, non-text UI roles (dots, bar fills, focus
+ring) ≥ 3:1. Exact ratios are annotated per-token in `tokens.css`.
+
+The gate parses `tokens.css` and every stylesheet under `src/` (`audit.mjs`
+beside it does the reading), so a colour is measured because a rule *uses* it,
+not because someone added it to a list. Two things it will refuse: a rule whose
+text and background it cannot resolve, and an `opacity` between 0 and 1 that is
+not registered with the pairs it composites. Element opacity over content is
+effectively banned by that second rule — a fade composites the ground into the
+ink after the token pair was chosen, so if a stale/disabled/quiet treatment is
+wanted, spell it in the chrome (fill, hairline) or step the ink token, never in
+`opacity`.
+
+Animation is the one exception, and it is a deliberate open question: a
+breathing element dips below its steady state mid-loop (`dot-breathe` .55,
+`working-glyph` .35, `working-dot` .25, `tool-breathe` / `task-breathe` .55).
+Every loop reduces to a registered, measured steady state under
+`prefers-reduced-motion`, and WCAG sets no per-frame requirement, so the troughs
+are registered rather than floored — see `KEYFRAME_TROUGHS` in `audit.mjs`.
+Flooring them is a motion-language decision this design owes an answer to.
 
 ## Typography
 

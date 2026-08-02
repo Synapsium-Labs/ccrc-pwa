@@ -10,9 +10,17 @@
    identity can never be misread as session state.
 
    Contrast: every value verified with WCAG 2.1 relative-luminance math
-   (design/contrast-check.mjs — 74 pairs, all pass). Ratios quoted in comments
-   are computed, not estimated. Text roles target AA 4.5:1; non-text UI roles
+   (design/contrast-check.mjs, all pass). Ratios quoted in comments are
+   computed, not estimated. Text roles target AA 4.5:1; non-text UI roles
    (dots, bar fills, focus ring) target 3:1 per WCAG 1.4.11.
+
+   The gate PARSES this file and every stylesheet under src/ — it does not
+   carry a copy of these hexes and it does not work from a list of pairs
+   somebody remembered to write down. Both of those shapes shipped live AA
+   failures under a green gate (a 2.44:1 text pair nobody had listed, and an
+   `opacity` fade the pair list could not see even in principle). A count of
+   pairs is deliberately not quoted here: this comment said "74 pairs" while
+   the gate measured 94, which is the same drift in miniature.
    ========================================================================== */
 
 :root {
