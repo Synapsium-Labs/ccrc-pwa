@@ -295,8 +295,7 @@ const localVars = (body: string): Record<string, string> =>
 // working-glyph .35, working-dot .25, tool-breathe .55, task-breathe .55.
 type OpacityEntry =
   | { noText: string }
-  | { pairs: readonly (readonly [string, string, readonly string[], number])[] }
-  | { knownBelowFloor: string; worst: readonly [string, string, readonly string[], number] };
+  | { pairs: readonly (readonly [string, string, readonly string[], number])[] };
 
 const OPACITY_REGISTRY: Record<string, OpacityEntry> = {
   'fleet.css .bell 0.55': {
@@ -335,17 +334,6 @@ const OPACITY_REGISTRY: Record<string, OpacityEntry> = {
     // (.shell-placeholder-copy, "Select a session") renders beside it at full
     // strength, --ink-secondary on the page.
     noText: 'purely decorative: aria-hidden="true" in app.tsx, and .shell-placeholder-copy carries the message unfaded',
-  },
-  // PRE-EXISTING (2026-07-21, before this branch) and NOT fixed here: it is
-  // outside the findings this round was opened for, and choosing what replaces
-  // a whole-list stale fade is a design decision, not a defect fix. Recorded
-  // rather than exempted so the gate at least PRINTS the number and so the
-  // number cannot move without a test noticing. Raising the fade does not
-  // rescue it either — the middot needs 0.894 before it clears 4.5.
-  'fleet.css .fleet[data-conn=\'down\'] .fleet-list, .fleet[data-conn=\'connecting\'] .fleet-list:not([data-loading=\'true\']) 0.75': {
-    knownBelowFloor:
-      'stale-fleet fade composites the whole card list; the .sess-meta middot is the worst pair at 3.79 dark / 3.34 light against 4.5',
-    worst: ['.sess-meta middot', 'var(--ink-tertiary)', ['var(--bg-page)', 'var(--bg-surface)'], 4.5],
   },
 };
 
@@ -667,17 +655,19 @@ describe('every static opacity is registered and composited', () => {
     expect(failures).toEqual([]);
   });
 
-  it('holds the measured number for the fades recorded as below the floor', () => {
-    // Not an exemption: a characterisation pin. If the fade is fixed OR made
-    // worse, this test reports the new ratio and forces the registry to say so.
-    for (const f of faded) {
-      const entry = OPACITY_REGISTRY[f.k];
-      if (entry === undefined || !('knownBelowFloor' in entry)) continue;
-      const [, fg, chain, floor] = entry.worst;
-      const worst = Math.min(...THEMES.map(([, t]) => ratio(fg, chain, t, Number(f.value))));
-      expect(worst, `${f.k} — ${entry.knownBelowFloor}`).toBeLessThan(floor);
-      expect(worst).toBeCloseTo(3.34, 2);
-    }
+  it('the fleet list carries no element opacity when the socket is down', () => {
+    // This fade used to be here, registered as knownBelowFloor with a
+    // "characterisation pin" — and the pin named the WRONG worst pair (the
+    // .sess-meta middot at 3.34 light, while the attention lamp dot sat at
+    // 2.67 against a 3:1 floor), while the knownBelowFloor form itself made
+    // the floor test SKIP every other pair of that fade, so a regression in
+    // the lamp dots moved silently. Removing the fade removes both the defect
+    // and the escape hatch: every fade must now clear every floor it touches
+    // or composite no coloured content.
+    const dimmed = ALL_RULES.filter(
+      (r) => r.selector.includes('data-conn') && declOf(r.body, 'opacity') !== null,
+    );
+    expect(dimmed.map((r) => r.selector)).toEqual([]);
   });
 });
 
