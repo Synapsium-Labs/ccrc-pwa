@@ -246,7 +246,13 @@ button.metachip:active {
 .pr-body-preview {
   width: 100%; max-height: 40vh; overflow: auto; resize: none;
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
-  color: var(--ink-secondary); background: var(--bg-well);
+  /* --ink-on-well, NOT --ink-secondary. Wells stay dark in the light theme
+     (tokens.css: "deliberately dark in light theme"), so every ink tuned for
+     paper dies on the glass: --ink-secondary is #4E5850 in light and measured
+     2.44:1 on #141715 against a 4.5 floor — worse than the 3.17 case deviation
+     106 caught by hand. --ink-on-well is the one text token declared once for
+     both themes, and it reads 15.52 dark / 13.98 light here. */
+  color: var(--ink-on-well); background: var(--bg-well);
   border: 1px solid var(--edge-subtle); border-radius: var(--r-sm); padding: var(--sp-2);
 }
 .pr-check-names { color: var(--status-dead-text); font-size: var(--text-sm); word-break: break-word; }
@@ -337,7 +343,13 @@ button.metachip:active {
 }
 .chat-banner--dead {
   border-color: color-mix(in srgb, var(--status-dead) 35%, var(--edge-subtle));
-  background: var(--status-dead-tint);
+  /* --status-dead-tint is 12% alpha and tokens.css prices it over a CARD
+     ("dead-text on it 4.81:1 over surface"); this banner floats on the chat
+     screen's --bg-page, where the same tint lets more of a darker ground
+     through and the pair falls to 4.44 in light — under the floor. Mixing over
+     --bg-surface explicitly buys back the ground the token was measured
+     against: 5.88 dark / 4.81 light. */
+  background: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
   color: var(--status-dead-text);
 }
 .chat-banner--dead .banner-copy {
@@ -901,7 +913,11 @@ button.metachip:active {
 .msg-assist .callout[data-callout='tip']       { --callout-hue: var(--status-busy-text);     --callout-tint: var(--accent-tint); }
 .msg-assist .callout[data-callout='important'] { --callout-hue: var(--acct-claude2);          --callout-tint: var(--acct-claude2-tint); }
 .msg-assist .callout[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--status-attention-tint); }
-.msg-assist .callout[data-callout='caution']   { --callout-hue: var(--status-dead-text);      --callout-tint: var(--status-dead-tint); }
+/* caution's tint is the ONE alpha value in the five (--status-dead-tint, 12%),
+   so it alone let the page ground through and its ::before label measured 4.44
+   in light where the other four sit at 4.94-5.73. Mixed over --bg-surface it
+   becomes opaque like its siblings and reads 5.88 / 4.81. */
+.msg-assist .callout[data-callout='caution']   { --callout-hue: var(--status-dead-text);      --callout-tint: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface)); }
 .msg-assist .callout[data-callout='note']::before      { content: '● NOTE'; }
 .msg-assist .callout[data-callout='tip']::before       { content: '★ TIP'; }
 .msg-assist .callout[data-callout='important']::before { content: '◆ IMPORTANT'; }
@@ -1618,10 +1634,18 @@ button.metachip:active {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   background: var(--bg-well);
-  color: var(--ink-primary);
+  /* Same well trap as .pr-body-preview, and the worst instance of it in the
+     file: --ink-primary is #1A201B in the light theme and this input paints it
+     on a #141715 well — 1.09:1, i.e. black on black. What you have typed is
+     invisible. --ink-on-well reads 15.52 / 13.98. */
+  color: var(--ink-on-well);
   font: var(--weight-regular) var(--text-base) / 1.3 var(--font-ui);
 }
-.dlg-reply-input::placeholder { color: var(--ink-tertiary); }
+/* --syn-comment, not --ink-tertiary: the syntax palette is declared once in
+   :root and never re-declared for light precisely because it renders on the
+   (always dark) glass, so it is the only muted ink that survives here —
+   6.41 dark / 5.77 light, against --ink-tertiary's 3.17 in light. */
+.dlg-reply-input::placeholder { color: var(--syn-comment); }
 .dlg-reply-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
 .dlg-reply-send {
   flex: none;
@@ -1954,7 +1978,11 @@ button.metachip:active {
 .msg-attach-gone {
   display: block;
   font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
-  color: var(--ink-tertiary);
+  /* Third instance of the well trap: --ink-tertiary is paper ink and measures
+     3.17:1 on the light-theme well. --syn-comment is the well's own muted ink
+     (6.41 / 5.77) and keeps this quieter than --ink-on-well, which is what the
+     "degraded to its filename" treatment wants. */
+  color: var(--syn-comment);
   background: var(--bg-well);
   border: 1px dashed var(--edge-subtle);
   border-radius: var(--r-md);

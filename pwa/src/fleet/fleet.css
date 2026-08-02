@@ -120,7 +120,11 @@
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  background: var(--status-dead-tint);
+  /* Same correction as .chat-banner--dead (chat.css): the 12%-alpha tint is
+     priced over a card in tokens.css, and this banner floats on the fleet's
+     --bg-page, which drops the text pair to 4.44 in light. Mixed over
+     --bg-surface: 5.88 dark / 4.81 light. */
+  background: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
   border: 1px solid var(--status-dead);
   border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
@@ -969,8 +973,33 @@
   font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary);
 }
 /* Archived rows read as past tense, but never so faint that the branch name
-   stops being legible — this is the only route back to that transcript. */
-.proj-archived-body .sess-line { opacity: 0.72; }
+   stops being legible — this is the only route back to that transcript.
+   NOT element opacity. This rule used to be `opacity: 0.72` on the whole
+   .sess-line, and chat.css's own note ("Never element opacity — that would
+   push ink below AA", .task-row--completed) is exactly why that was wrong:
+   opacity composites over the card AFTER the token pair is chosen, so every
+   already-gated colour in the subtree quietly dropped — 15 pairs, measured:
+   .sess-meta 3.70 light, its middot 3.60 dark / 3.15 light, waiting 3.30,
+   working 3.50, exited 3.70, warn 4.09 / 3.38, acct-away 3.30, the four
+   account hues 3.62-3.89 light, and all four lamp dots 2.18-2.99 light
+   against their 3:1 floor. The contrast gate saw none of it: it measures
+   token pairs and opacity is not a token.
+   Raising the value does not rescue it either — the light-theme dead dot on
+   its lamp well needs 0.962 before it clears 3:1, and at 0.962 nothing looks
+   faded. So past tense is an INK STEP on the row's identity instead: the
+   label drops --ink-primary -> --ink-secondary (15.68 -> 8.67 dark,
+   16.58 -> 7.41 light, both already-gated pairs) and gives up its medium
+   weight. Two channels, no compositing, floor cleared in both themes.
+   :not(.sess-line--active) because the selected row reverses out and fills
+   with --ink-primary as a BACKGROUND — --ink-secondary on that slab is 1.81
+   dark / 2.24 light, and project-card.test.tsx:337 renders precisely an
+   archived selected row. This rule sits after .sess-line--active .sess-label
+   in source order and has equal specificity, so the guard is load-bearing,
+   not decorative. */
+.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {
+  color: var(--ink-secondary);
+  font-weight: var(--weight-regular);
+}
 
 /* — Task 19: the fleet-footer archived total, and ArchiveScreen — */
 .fleet-archived-row {
