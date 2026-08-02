@@ -653,6 +653,56 @@ describe('local-loss refusals', () => {
     expect(fs.existsSync(path.join(wt, 'build', 'secrets', 'data.txt'))).toBe(true);
   });
 
+  // F3 refinement (pre-merge fix round): the human partner ruled directly —
+  // apply it. Measured over 15 real projects, three top-level globs
+  // (`credentials*`, `secrets*`, `*.pem`) reaching one directory into a
+  // dependency or build tree produced 338 inside-hits, 7 of 15 projects
+  // refusing on the first tap, essentially all of it vendored/build noise.
+  // A secret-shaped name that ALSO ends in a source, compiled or template
+  // extension is filtered — but COUNTED, never silently dropped, and a real
+  // secret beside the noise still refuses.
+  it('filters vendored noise inside a collapsed directory, but a real secret beside it still refuses (F3 refinement)', () => {
+    const { wt } = squashMovedBase(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'credentials.d.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(wt, 'build', 'secretsmanager.generated.js'), '// generated\n');
+    fs.writeFileSync(path.join(wt, 'build', '.env'), 'SECRET_API_KEY=1\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    // The noise is not in `sensitive` at all — only the real secret is.
+    expect(a.sensitive).toEqual(['build/.env']);
+    // But it is COUNTED: excluded must never mean invisible.
+    expect(a.sensitiveFiltered).toBe(2);
+  });
+
+  it('reads reapable when every secret-shaped hit inside a collapsed directory is noise — and still reports what it filtered', () => {
+    const { wt } = squashMovedBase(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'credentials.d.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(wt, 'build', 'secretsmanager.generated.js'), '// generated\n');
+    fs.writeFileSync(path.join(wt, 'build', 'secrets-manager.js.map'), '{}\n');
+    fs.writeFileSync(path.join(wt, 'build', '.env.example'), 'KEY=\n');
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.sensitive).toEqual([]);
+    expect(a.sensitiveFiltered).toBe(4);
+  });
+
+  it('filters a top-level .env.example as noise while a real top-level .env still refuses — and both stay LISTED', () => {
+    const { wt } = squashMovedBase(['.env.example', '.env']);
+    fs.writeFileSync(path.join(wt, '.env.example'), 'KEY=\n');
+    fs.writeFileSync(path.join(wt, '.env'), 'SECRET=1\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.sensitive).toEqual(['.env']);
+    expect(a.sensitiveFiltered).toBe(1);
+    // Filtered is not the same as unlisted or undeleted: both entries are
+    // still named and sized in `ignored`, exactly as ordinary rubbish is.
+    expect(a.ignoredCount).toBe(2);
+    expect(a.ignored.map((e: { path: string }) => e.path).sort()).toEqual(['.env', '.env.example']);
+  });
+
   it('survives a TAB and a NEWLINE inside an ignored path', () => {
     // What `-z` gives with one hand it takes with the other: git's C-quoting was
     // accidentally CONTAINING these two bytes, and unquoted they land in an

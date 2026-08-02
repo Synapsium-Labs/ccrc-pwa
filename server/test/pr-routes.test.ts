@@ -259,7 +259,7 @@ describe('audit and reap', () => {
     id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w',
     project: 'demo', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
     dirty: [], ignored: [{ path: 'node_modules/', bytes: 412000000, sensitive: false }],
-    ignoredCount: 1, ignoredBytes: 412000000, sensitive: [], clips: [], stashes: 0,
+    ignoredCount: 1, ignoredBytes: 412000000, sensitive: [], sensitiveFiltered: 0, clips: [], stashes: 0,
     worktreeBytes: 1200000000, commitsAheadOfBase: 3,
     pr: { number: 42, url: 'u', mergeCommit: '7a68ca0', headRefOid: 'deadbee' },
     merge: { proof: 'patch-id', fetchedAt: 1785300000 }, transcript: '/t.jsonl',

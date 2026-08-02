@@ -12,7 +12,7 @@ const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
     { path: 'dist/', bytes: 8_000_000, sensitive: false },
     { path: '.ccrc/', bytes: 2_000, sensitive: false },
   ],
-  ignoredCount: 3, ignoredBytes: 420_002_000, sensitive: [],
+  ignoredCount: 3, ignoredBytes: 420_002_000, sensitive: [], sensitiveFiltered: 0,
   clips: [{ name: 'paste-1.png', bytes: 3_800_000 }],
   stashes: 0,
   worktreeBytes: 1_200_000_000, commitsAheadOfBase: 3,
@@ -72,6 +72,27 @@ describe('the manifest', () => {
   it('says what is KEPT — the transcript and the attic', async () => {
     open();
     expect(await screen.findByText(/transcript, and .* pinned in the attic \(ccd ws-attic\)/)).toBeInTheDocument();
+  });
+
+  // F3 refinement (pre-merge fix round): excluded must never mean invisible.
+  it('names how many secret-shaped matches the F3 refinement filtered as noise, pluralized', async () => {
+    auditBody = audit({ sensitiveFiltered: 1 });
+    open();
+    expect(await screen.findByText('1 secret-shaped match filtered as vendored/template.')).toBeInTheDocument();
+    cleanup();
+
+    auditBody = audit({ sensitiveFiltered: 4 });
+    open();
+    expect(await screen.findByText('4 secret-shaped matches filtered as vendored/template.')).toBeInTheDocument();
+  });
+
+  it('shows no filtered-noise note at all when nothing was filtered', async () => {
+    open();
+    // Wait for the audit to actually land — checking synchronously right
+    // after open() would still be in the "Checking…" state, where the note
+    // is trivially absent regardless of whether the `> 0` guard is real.
+    await screen.findByText(/3 entries, 420 MB/);
+    expect(screen.queryByText(/filtered as vendored\/template/)).not.toBeInTheDocument();
   });
 });
 

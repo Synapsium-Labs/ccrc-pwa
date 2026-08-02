@@ -133,6 +133,17 @@ export function ReapSheet({
                 {/* The count and the total are NEVER truncated: the judgement
                     this whole design rests on is a human reading a filename. */}
                 <span className="reap-note">These are in no commit and cannot be recovered.</span>
+                {/* F3 refinement (pre-merge fix round): a secret-shaped name
+                    ending in a source, compiled or template extension is
+                    filtered as vendored/build noise rather than flagged
+                    sensitive. EXCLUDED must never mean INVISIBLE — this is
+                    the count surfacing where a human can actually see it, so
+                    a wrong filter is something anyone would notice. */}
+                {audit.sensitiveFiltered > 0 && (
+                  <span className="reap-note">
+                    {`${audit.sensitiveFiltered} secret-shaped ${audit.sensitiveFiltered === 1 ? 'match' : 'matches'} filtered as vendored/template.`}
+                  </span>
+                )}
               </dd>
 
               {/* CLIPS ARE DELETED TOO, so they are listed. `~/.cc-clips/<id>`

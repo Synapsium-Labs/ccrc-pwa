@@ -391,7 +391,7 @@ describe('FleetScreen', () => {
     const wsAudit = {
       id: 'a', branch: 'ws/quiet-mesa', base: 'origin/main', workdir: '/w/alpha/quiet-mesa',
       project: 'alpha', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
-      dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [],
+      dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
       clips: [], stashes: 0, worktreeBytes: 900_000_000, commitsAheadOfBase: 1,
       pr: { number: 9, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
       merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },

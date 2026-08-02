@@ -234,7 +234,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
         return new Response(JSON.stringify({
           id: 'demo', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
           project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
-          dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [],
+          dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
           merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },
@@ -273,7 +273,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
         return new Response(JSON.stringify({
           id: 'demo', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
           project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
-          dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [],
+          dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
           merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },

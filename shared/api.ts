@@ -129,6 +129,11 @@ export interface WsAudit {
   ignored: { path: string; bytes: number; sensitive: boolean }[];
   ignoredCount: number; ignoredBytes: number;
   sensitive: string[];
+  /** How many secret-SHAPED names the F3 refinement filtered as vendored or
+   *  template noise (`credentials.d.ts`, `.env.example`, …) rather than
+   *  treating as sensitive — a count, never a silent drop, so a wrong filter
+   *  is something anyone can notice from the audit's own output. */
+  sensitiveFiltered: number;
   /** `~/.cc-clips/<id>` — the reap `rm -rf`s it, so the sheet has to list it.
    *  It is fingerprinted too (`clipsDigest`), so a clip pasted between the
    *  sheet and the tap refuses `state-changed` rather than being deleted. */

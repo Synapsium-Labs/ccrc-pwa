@@ -1601,6 +1601,39 @@ _ws_sensitive_match() {   # path -> 0 when it is secret-shaped
   return 1
 }
 
+# F3 REFINEMENT (pre-merge fix round; the human partner ruled directly:
+# apply it). The inside-of-ignored scan enumerates every entry under a
+# collapsed directory, and three of the globs above — `credentials*`,
+# `secrets*`, `*.pem` — reach one directory into a dependency or build tree
+# and catch its ORDINARY contents there: a TypeScript declaration file, a
+# generated JS bundle and its sourcemap, a template. Measured over 15 real
+# projects: 338 inside-hits, 7 of 15 projects refused on the FIRST tap, and
+# essentially all of it was exactly this shape — `credentials.d.ts`,
+# `cacert.pem`, 33 x `.env.example`, `secretsmanager.generated.js`,
+# `secrets-manager.js.map`. A secret-shaped name that ALSO ends in a source,
+# compiled or template extension is NOISE, not a secret. Measured effect:
+# 32 hits, 4 of 15 projects — and the survivors still include the real
+# `.env`, `.env.local`,
+# `infrastructure/dist/config/{production,staging,dev}.env` and
+# `dev-data/app.db`, exactly the content this guard exists for.
+#
+# EXCLUDED IS NOT INVISIBLE — the other half of the ruling. Every name this
+# drops is still COUNTED (`REAP_SENSITIVE_FILTERED`, `sensitiveFiltered` on
+# the wire), so a wrong filter is something anyone can notice from the
+# audit's own output rather than a silent hole. This is a §7 no-override
+# guard, so the list is narrow and enumerated rather than inferred from a
+# pattern: on any doubt a name stays sensitive.
+_WS_SENSITIVE_NOISE_EXT=( ts tsx js jsx mjs cjs map py pyc pyi go rs java rb php cs c h cpp swift kt
+                          example sample template dist )
+
+_ws_sensitive_noise() {   # path -> 0 when a secret-shaped name is vendored/template NOISE
+  local b="${1%/}" ext; b="${b##*/}"
+  for ext in "${_WS_SENSITIVE_NOISE_EXT[@]}"; do
+    [[ "$b" == *".$ext" ]] && return 0
+  done
+  return 1
+}
+
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
@@ -1799,8 +1832,9 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   #     because the loop's other two lines both dereference `$p` into a
   #     filesystem path, and an empty one would size `$wd/` — the whole
   #     workspace — as an "ignored entry".
-  local wd="$1" entry p b sens deadline outf errf err rc
+  local wd="$1" entry p b sens deadline outf errf err rc ih
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""; REAP_IGNREASON=""
+  REAP_SENSITIVE_FILTERED=0
   deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
   outf=$(mktemp) || return 1
   errf=$(mktemp) || { rm -f "$outf"; return 1; }
@@ -1815,7 +1849,16 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     [[ -n "$p" ]] || continue
     b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0
     sens=0
-    _ws_sensitive_match "$p" && { sens=1; REAP_SENSITIVE+=("$p"); }
+    if _ws_sensitive_match "$p"; then
+      # NOISE is counted, not silenced: `_ws_sensitive_noise` is the F3
+      # refinement (see its own comment) and every name it drops still moves
+      # `REAP_SENSITIVE_FILTERED`, so "excluded" never means "invisible".
+      if _ws_sensitive_noise "$p"; then
+        REAP_SENSITIVE_FILTERED=$(( REAP_SENSITIVE_FILTERED + 1 ))
+      else
+        sens=1; REAP_SENSITIVE+=("$p")
+      fi
+    fi
     # AND THE ENTRY IS OPENED WHEN IT IS A DIRECTORY. A hit anywhere inside
     # makes the ENTRY sensitive — the entry is what the sheet lists and what
     # `rm -rf` destroys — while REAP_SENSITIVE records the PATH THAT WAS FOUND,
@@ -1824,9 +1867,17 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     # therefore two different facts and both are kept.
     if [[ -d "$wd/$p" ]]; then
       _ws_sensitive_inside "$wd/$p" "$p" "$deadline" || { rm -f "$outf"; return 1; }
-      if (( ${#_WS_INSIDE_HITS[@]} )); then
-        sens=1; REAP_SENSITIVE+=( "${_WS_INSIDE_HITS[@]}" )
-      fi
+      # Same per-hit noise filter as the top-level match just above, applied
+      # to each path the inside-scan found individually — one collapsed
+      # directory can hold both a generated `.js.map` (noise) and a real
+      # `.env` (not), and the entry must read sensitive on the second alone.
+      for ih in "${_WS_INSIDE_HITS[@]}"; do
+        if _ws_sensitive_noise "$ih"; then
+          REAP_SENSITIVE_FILTERED=$(( REAP_SENSITIVE_FILTERED + 1 ))
+        else
+          sens=1; REAP_SENSITIVE+=("$ih")
+        fi
+      done
     fi
     REAP_IGNORED+=("$sens"$'\t'"$b"$'\t'"$p")
   done <"$outf"
@@ -1937,7 +1988,7 @@ _ws_reap_reset() {
   REAP_DIRTY=0; REAP_STASHES=0; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""; REAP_IGNREASON=""
   REAP_CLIPDIGEST=""
   REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=0
-  REAP_IGNORED=(); REAP_SENSITIVE=(); _WS_INSIDE_HITS=()
+  REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_SENSITIVE_FILTERED=0; _WS_INSIDE_HITS=()
 }
 
 # MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
@@ -2439,8 +2490,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
   printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
-  printf '"dirty":%s,"ignored":%s,"ignoredCount":%s,"ignoredBytes":%s,"sensitive":%s,' \
-    "$dirty_json" "$ign_json" "$count" "$total" "$sens_json"
+  printf '"dirty":%s,"ignored":%s,"ignoredCount":%s,"ignoredBytes":%s,"sensitive":%s,"sensitiveFiltered":%s,' \
+    "$dirty_json" "$ign_json" "$count" "$total" "$sens_json" "${REAP_SENSITIVE_FILTERED:-0}"
   # `clips` on the wire, because the sheet cannot ask a human to consent to a
   # deletion it does not list. `_ws_clip_manifest` is the same producer the
   # tombstone and the fingerprint use, and it is called HERE rather than read
