@@ -1,7 +1,8 @@
 {
   "_comment": "Final review, integration finding 4: `server/tsconfig.json`'s include is [\"src/**/*.ts\",\"../shared/**/*.ts\"], so this whole directory was OUTSIDE the typechecker — which is how a live TS2769 in fleet.test.ts sat here undetected. This project is the same compilerOptions plus test/, run by typecheck-tests.test.ts so the EXISTING server suite gate covers it; it is deliberately separate from tsconfig.json rather than a widened include, because `npm run build` emits from that config and must not emit tests into dist/. `types/**` is excluded: those are the deliberately non-compiling brand- and whitelist-bypass fixtures, which have their own projects and MUST fail.",
+  "_comment_e2e": "FINAL REVIEW ROUND 2, gates finding 4: the same shape had reopened one directory over. `test-e2e/` (helpers.ts + session.e2e.test.ts, 225 lines) was in NO project — not this one, whose `./**/*.ts` is relative to test/, and not tsconfig.json. It was measured CLEAN before being added, which is the argument for the gate and not against it: a directory that is clean and unchecked becomes a directory that is dirty and unchecked with nothing saying so. `../*.ts` closes the same hole at file level for `vitest.config.ts` and `vitest.e2e.config.ts`, found by the same enumeration and also in no project — pwa's own tsconfig already covers its `vite.config.ts`, so this removes an asymmetry rather than inventing a rule. Neither addition changed a verdict on the day it landed. And the coverage gate in typecheck-tests.test.ts now ENUMERATES this package's directories instead of naming one, so the next sibling directory cannot hide the way this one did.",
   "extends": "../tsconfig.json",
   "compilerOptions": { "noEmit": true },
-  "include": ["../src/**/*.ts", "./**/*.ts", "../../shared/**/*.ts"],
+  "include": ["../src/**/*.ts", "./**/*.ts", "../test-e2e/**/*.ts", "../*.ts", "../../shared/**/*.ts"],
   "exclude": ["types/**"]
 }
