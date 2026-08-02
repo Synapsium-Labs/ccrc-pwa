@@ -1,15 +1,20 @@
-// Router shell. Two path routes: `/` (FleetScreen) and `/s/:id`
-// (SessionScreen). On phones this is a full-screen swap (one pane at a time);
-// on desktop it's a two-pane master–detail — the fleet as a persistent sidebar
-// beside the active session (styles/shell.css does the responsive layout, the
-// same DOM serves both). ToastHost mounts here so stores/screens can fire
-// toasts from anywhere.
+// Router shell. Three path routes: `/` (FleetScreen), `/s/:id`
+// (SessionScreen), `/archive` (ArchiveScreen — Task 19, the fleet-wide list
+// every archived workspace routes to from the footer row). On phones this is
+// a full-screen swap (one pane at a time); on desktop it's a two-pane
+// master–detail — the fleet as a persistent sidebar beside the active detail
+// pane (styles/shell.css does the responsive layout, the same DOM serves
+// both). `/archive` shares the SAME detail slot and the SAME [data-view]
+// swap `/s/:id` already uses — CSS never learned a third state, it only
+// needed to know "fleet" vs "something else is in the detail pane".
+// ToastHost mounts here so stores/screens can fire toasts from anywhere.
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { ToastHost } from './components/Toast';
 import { AccountsStrip } from './fleet/AccountsStrip';
-import { usePath } from './lib/router';
+import { navigate, usePath } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
+import { ArchiveScreen } from './screens/ArchiveScreen';
 import { FleetScreen } from './screens/FleetScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { useFleetStore } from './stores/fleet';
@@ -21,19 +26,21 @@ export function App(): ReactNode {
   const path = usePath();
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect once at the shell so
-    // deep links to /s/:id still get live names, limits and dialog badges.
-    // connect() is idempotent; the socket survives navigation.
+    // deep links to /s/:id (or /archive) still get live names, limits and
+    // dialog badges. connect() is idempotent; the socket survives navigation.
     useFleetStore.getState().connect();
   }, []);
+  const sessions = useFleetStore((s) => s.sessions);
   const m = /^\/s\/([^/]+)\/?$/.exec(path);
   const sessionId = m ? decodeURIComponent(m[1]!) : null;
+  const archive = /^\/archive\/?$/.test(path);
   // On desktop the accounts strip is a full-width top bar (rendered here, once);
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
   const desktop = useMediaQuery('(min-width: 900px)');
   return (
     <>
-      <div className="app-shell" data-view={sessionId ? 'session' : 'fleet'}>
+      <div className="app-shell" data-view={sessionId || archive ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
             <AccountsStrip />
@@ -50,6 +57,8 @@ export function App(): ReactNode {
             // key remounts per session so per-session UI state (terminal drawer,
             // pickers) never leaks across a sidebar switch.
             <SessionScreen key={sessionId} id={sessionId} />
+          ) : archive ? (
+            <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
           ) : (
             <div className="shell-placeholder">
               <p className="shell-placeholder-mark" aria-hidden="true">

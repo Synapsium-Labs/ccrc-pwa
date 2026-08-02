@@ -193,3 +193,81 @@ describe('PR state on the wire', () => {
     expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.archivedAt).toBe(1785300123);
   });
 });
+
+describe('archived size on the wire', () => {
+  it('reads worktreeBytes out of the archive manifest ws-archive wrote', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'demo-quiet-basin', 'claude');
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-quiet-basin.workspace'), 'quiet-basin');
+    writeFileSync(path.join(reg, 'demo-quiet-basin.archived'), '1785300123');
+    writeFileSync(path.join(reg, 'demo-quiet-basin.archivemanifest'),
+      JSON.stringify({ branch: 'ws/quiet-basin', worktreeBytes: 1_200_000_000 }));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((s) => s.id === 'demo-quiet-basin')!.archivedBytes).toBe(1_200_000_000);
+  });
+
+  it('is null when there is no manifest, or it is unparseable', async () => {
+    // A missing figure must read as "unknown", never as 0 — a footer claiming
+    // 0 GB would argue against a cleanup that would actually free gigabytes.
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'demo-still-cove', 'claude');
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-still-cove.workspace'), 'still-cove');
+    writeFileSync(path.join(reg, 'demo-still-cove.archived'), '1785300123');
+    writeFileSync(path.join(reg, 'demo-still-cove.archivemanifest'), 'half-writ');
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((s) => s.id === 'demo-still-cove')!.archivedBytes).toBeNull();
+  });
+
+  it('is null when the manifest file itself was never written at all', async () => {
+    // Distinct from the case above: no `.archivemanifest` file exists (the
+    // `field()` read resolves to null), never that its content failed to
+    // parse. Both must land on null, and this is the ONLY case in this
+    // describe block that exercises manifestBytes's `raw === null` branch —
+    // a mutant turning it into `return 0` survives every other test here,
+    // since seedSession() never writes this file for any other fixture in
+    // this suite either.
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'demo-far-hollow', 'claude');
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-far-hollow.workspace'), 'far-hollow');
+    writeFileSync(path.join(reg, 'demo-far-hollow.archived'), '1785300123');
+    // No .archivemanifest file written at all.
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((s) => s.id === 'demo-far-hollow')!.archivedBytes).toBeNull();
+  });
+
+  it('is null when the manifest is valid JSON but never wrote worktreeBytes', async () => {
+    // The `deviation 10` reconciliation this task ships: a manifest
+    // ws-archive wrote with a partial `du` failure could plausibly omit the
+    // key entirely rather than write malformed JSON — this is the "partial
+    // du fallback" case named in the task brief, and it must land on null,
+    // never silently coerce `undefined` into a number.
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'demo-thin-reach', 'claude');
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-thin-reach.workspace'), 'thin-reach');
+    writeFileSync(path.join(reg, 'demo-thin-reach.archived'), '1785300123');
+    writeFileSync(path.join(reg, 'demo-thin-reach.archivemanifest'),
+      JSON.stringify({ branch: 'ws/thin-reach' }));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((s) => s.id === 'demo-thin-reach')!.archivedBytes).toBeNull();
+  });
+
+  it('treats a non-finite worktreeBytes as unknown, never as Infinity', async () => {
+    // JSON syntax permits a numeral outside double-precision range (1e400);
+    // JSON.parse silently overflows it to Infinity, which `typeof` still
+    // calls 'number' — exactly the shape numOrNull's own doc comment warns
+    // about for NaN. Infinity is not a byte count either.
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'demo-far-shore', 'claude');
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-far-shore.workspace'), 'far-shore');
+    writeFileSync(path.join(reg, 'demo-far-shore.archived'), '1785300123');
+    writeFileSync(path.join(reg, 'demo-far-shore.archivemanifest'),
+      '{"branch":"ws/far-shore","worktreeBytes":1e400}');
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((s) => s.id === 'demo-far-shore')!.archivedBytes).toBeNull();
+  });
+});

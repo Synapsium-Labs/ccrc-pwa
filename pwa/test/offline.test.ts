@@ -20,7 +20,7 @@ const session = (id: string): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0',
 });
 
@@ -164,6 +164,20 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     expect(s?.archivedAt).toBeNull();
     expect(s?.pr).toBeNull();
     expect(s?.tasks).toBeNull();
+  });
+
+  it('revives archivedBytes independently of archivedAt — no key-swap, no shared fallback', () => {
+    // DEVIATION from the brief's given test text — added while closing a
+    // mutation-sweep gap; see task-19-report.md. Both fields are
+    // `number | null` and both revive through the same optNum(o, key)
+    // pattern, which is exactly the risk: a mutant reading 'archivedAt'
+    // for archivedBytes too (or vice versa) would pass every OTHER test in
+    // this file, since they all leave the two fields equal (both absent,
+    // both null). Distinct non-null values is the only way to catch that.
+    putRaw([{ ...v1Session('claude:OpenClawHetzner'), archivedAt: 100, archivedBytes: 5_000_000 }]);
+    const s = loadFleetSnapshot()?.sessions[0];
+    expect(s?.archivedAt).toBe(100);
+    expect(s?.archivedBytes).toBe(5_000_000);
   });
 
   it('revives a pr object whose newer fields the writing build did not have', () => {

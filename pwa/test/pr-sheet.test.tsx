@@ -13,7 +13,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo',
   workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: 'ws/quiet-basin', tasks: null, pr: pr(), archivedAt: null, ...over,
+  ultracode: false, branch: 'ws/quiet-basin', tasks: null, pr: pr(), archivedAt: null, archivedBytes: null, ...over,
 });
 
 const view = (over: Partial<PrView> = {}): PrView => ({

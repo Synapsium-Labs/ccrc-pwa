@@ -27,6 +27,10 @@ export interface FleetSession {
    *  THIS, never from `pr.phase`: a merged PR whose archive was deferred
    *  because the session was busy must not claim it was archived. */
   archivedAt: number | null;
+  /** The worktree size ws-archive measured AT ARCHIVE TIME. Null when the
+   *  manifest is absent or half-written — never 0, which would argue
+   *  against a cleanup that would free gigabytes. */
+  archivedBytes: number | null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -327,6 +331,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       tasks,
       pr,
       archivedAt: optNum(o, 'archivedAt'),
+      archivedBytes: optNum(o, 'archivedBytes'),
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;

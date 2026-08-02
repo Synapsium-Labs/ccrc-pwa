@@ -971,3 +971,21 @@
 /* Archived rows read as past tense, but never so faint that the branch name
    stops being legible — this is the only route back to that transcript. */
 .proj-archived-body .sess-line { opacity: 0.72; }
+
+/* — Task 19: the fleet-footer archived total, and ArchiveScreen — */
+.fleet-archived-row {
+  min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-2);
+  background: none; border: 0; cursor: pointer; text-align: left;
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary);
+}
+.archive-screen { display: grid; gap: var(--sp-1); padding: var(--sp-2); }
+.archive-total { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.archive-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--sp-2); align-items: center; min-height: var(--tap-min);
+  background: none; border: 0; cursor: pointer; text-align: left; color: var(--ink-primary);
+}
+.archive-project { font-size: var(--text-sm); color: var(--ink-secondary); }
+.archive-slug { font-family: var(--font-mono); font-size: var(--text-sm); }
+.archive-size { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary); }
+.archive-empty { padding: var(--sp-4); color: var(--ink-secondary); }

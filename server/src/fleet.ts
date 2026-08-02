@@ -101,6 +101,7 @@ export async function assembleFleet(
       tasks: taskProgress?.get(r.id) ?? null,
       pr: prStates?.get(r.id) ?? persistedPr(r),
       archivedAt: r.archivedAt,
+      archivedBytes: r.archivedBytes,
     };
   }));
 }

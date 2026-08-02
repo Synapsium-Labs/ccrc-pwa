@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
+import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '../src/components/Toast';
@@ -61,7 +62,7 @@ const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: Date.now() - 2 * MIN,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0',
   ...over,
 });
@@ -470,6 +471,72 @@ describe('FleetScreen', () => {
       fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
       expect(screen.queryByText(/clean up workspace/i)).not.toBeInTheDocument();
     });
+  });
+});
+
+// — archived footer row (Task 19) —
+//
+// DEVIATION from the brief's Test: list, which names only
+// server/test/fleet.test.ts and the new pwa/test/archive-screen.test.tsx:
+// the footer row and its /archive wiring live in FleetScreen.tsx (in the
+// brief's own Modify list) and had zero behavioural coverage otherwise — a
+// mutant deleting the `> 0` guard, swapping `navigate('/archive')` for a
+// no-op, or breaking the count/byte interpolation would have shipped green.
+// See task-19-report.md.
+describe('archived footer row', () => {
+  afterEach(() => navigate('/'));
+
+  it('reads Archived · count · total bytes across every project, and routes to /archive on tap', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, archivedBytes: 1_200_000_000 }),
+        session({ id: 'b', project: 'beta', workspace: 'still-cove', archivedAt: 200, archivedBytes: 1_100_000_000 }),
+      ],
+    });
+    const row = screen.getByRole('button', { name: /archived · 2 · 2\.3 gb/i });
+    fireEvent.click(row);
+    expect(location.pathname).toBe('/archive');
+  });
+
+  it('totals only what it actually knows — an unmeasured archive contributes nothing, never a fabricated 0 GB', () => {
+    // The measurement rule (deviation 10, this task's ledger item): a manifest
+    // that never wrote (or half-wrote) worktreeBytes must not silently sink
+    // the fleet total, and the row itself must not claim "0 B" for archived-
+    // but-unmeasured — both would argue against a cleanup that would free
+    // real space.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, archivedBytes: 1_200_000_000 }),
+        session({ id: 'b', project: 'beta', workspace: 'still-cove', archivedAt: 200, archivedBytes: null }),
+      ],
+    });
+    expect(screen.getByRole('button', { name: /archived · 2 · 1\.2 gb/i })).toBeInTheDocument();
+  });
+
+  it('does not render when nothing in the fleet is archived', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: null })],
+    });
+    expect(screen.queryByRole('button', { name: /^archived ·/i })).not.toBeInTheDocument();
+  });
+
+  it('renders for exactly one archived workspace too — the guard is count > 0, not > 1', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, archivedBytes: 1_200_000_000 })],
+    });
+    expect(screen.getByRole('button', { name: /archived · 1 · 1\.2 gb/i })).toBeInTheDocument();
   });
 });
 

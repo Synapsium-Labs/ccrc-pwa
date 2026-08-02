@@ -14,7 +14,7 @@ const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, tasks: null, pr: null, archivedAt: null,
+  branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
 });
 
 describe('fleetstate', () => {
@@ -94,6 +94,20 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.status).toBe('busy');
     expect(s?.branch).toBe('ws/quiet-basin');
     expect(s?.limits).toEqual({ five: 10, seven: 40 });
+  });
+
+  it('revives archivedBytes independently of archivedAt — no key-swap, no shared fallback', async () => {
+    // DEVIATION from the brief's given test text — added while closing a
+    // mutation-sweep gap; see task-19-report.md. Same shape as the pwa-side
+    // proof in offline.test.ts, but through THIS build's own consumer of
+    // shared/api.ts's revival logic (loadSnapshot, the degraded-mode cache
+    // read) — a key-swap in reviveFleetSession would pass every other test
+    // in this file, since they all leave the two fields equal (both absent).
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), archivedAt: 100, archivedBytes: 5_000_000 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.archivedAt).toBe(100);
+    expect(s?.archivedBytes).toBe(5_000_000);
   });
 
   it('degrades a pr phase this build does not know to unchecked', async () => {

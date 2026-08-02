@@ -19,6 +19,10 @@ export interface SessionRecord {
   prNumber: number | null;
   prCheckedAt: number | null;    // epoch ms
   archivedAt: number | null;     // epoch seconds
+  /** The worktree size ws-archive measured AT ARCHIVE TIME. Null when the
+   *  manifest is absent or half-written — never 0, which would argue
+   *  against a cleanup that would free gigabytes. */
+  archivedBytes: number | null;
 }
 
 async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
@@ -35,6 +39,17 @@ function numOrNull(raw: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function manifestBytes(raw: string | null): number | null {
+  if (raw === null) return null;
+  try {
+    const v: unknown = JSON.parse(raw);
+    const n = typeof v === 'object' && v !== null ? (v as { worktreeBytes?: unknown }).worktreeBytes : null;
+    return typeof n === 'number' && Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {
   const names = await io.readdir(cfg.registryDir);
   if (names === null) return [];
@@ -42,7 +57,7 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
   const out: SessionRecord[] = [];
   for (const id of ids) {
     const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
-      base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw] = await Promise.all([
+      base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw] = await Promise.all([
       field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
       field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
       field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -50,7 +65,7 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
       field(io, cfg.registryDir, id, 'workspace'), field(io, cfg.registryDir, id, 'branch'),
       field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
       field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
-      field(io, cfg.registryDir, id, 'archived'),
+      field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
     ]);
     if (!wrapper || !workdir || !uuid) continue;   // incomplete registry entry — skip, don't crash
     out.push({
@@ -66,6 +81,10 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
       prNumber: numOrNull(prNumberRaw),
       prCheckedAt: numOrNull(prCheckedAtRaw),
       archivedAt: numOrNull(archivedRaw),
+      /** The worktree size ws-archive measured AT ARCHIVE TIME. Null when the
+       *  manifest is absent or half-written — never 0, which would argue
+       *  against a cleanup that would free gigabytes. */
+      archivedBytes: manifestBytes(manifestRaw),
     });
   }
   return out;
