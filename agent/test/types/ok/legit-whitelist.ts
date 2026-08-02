@@ -47,10 +47,10 @@ export type CurlIsForbidden = Assert<'curl' extends ForbiddenCommand ? true : fa
 export type ExecCommandIsExactlyTmuxAndCcd = Assert<Equals<ExecCommand, 'tmux' | 'ccd'>>;
 
 /** A legitimate whitelist still builds — the pins are not a blanket refusal. */
-export const good: ExecWhitelist = {
+export const good = {
   tmux: [['has-session'], ['capture-pane']],
   ccd: [['start'], ['ws-reap', '--expect']],
-};
+} as const satisfies ExecWhitelist;
 
 /* VERIFY ROUND 2, P1 — the positive control for the VALUE machinery that
  * `g5..g8` next door pin negatively. Without this, "the whole `LawfulGrants`

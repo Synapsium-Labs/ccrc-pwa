@@ -111,6 +111,35 @@ describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is writt
       .toEqual(exp.codes);
   });
 
+  it('every whitelist literal in the fixtures uses the SHIPPED construct', () => {
+    // ROUND 3, P4. g1/g2/g4 and the positive control's `good` were written
+    // `const x: ExecWhitelist = { … }` while the real site at whitelist.ts:309
+    // had become `} as const satisfies ExecWhitelist;`. The two are not the
+    // same check — excess-property behaviour under `satisfies` has moved across
+    // TS releases before — so a compile-failure pin in the annotation form
+    // proves nothing about the form that ships. Measured after converting:
+    // identical codes, TS2353 / TS2353 / TS2741, and the ok project still 0.
+    //
+    // Scanned, not listed, so a NINTH fixture written in the old form is caught
+    // too. `export const live: ExecWhitelist = EXEC_WHITELIST` is deliberately
+    // not matched: it checks the REAL value against the type, which is a
+    // different and still-wanted question from building a literal.
+    const dirs = [bypassDir, path.join(here, 'types', 'ok')];
+    const offenders: string[] = [];
+    for (const dir of dirs) {
+      for (const f of readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+        const src = readFileSync(path.join(dir, f), 'utf8');
+        if (/:\s*ExecWhitelist\s*=\s*\{/.test(src)) offenders.push(path.join(path.basename(dir), f));
+      }
+    }
+    expect(offenders, 'annotation-form whitelist literals; the real site uses `as const satisfies`').toEqual([]);
+    // Guard the guard: the scan must be looking at files, and at ones that do
+    // mention the type — otherwise "no offenders" is just an empty read.
+    const mentions = dirs.flatMap((d) => readdirSync(d).filter((n) => n.endsWith('.ts'))
+      .filter((n) => readFileSync(path.join(d, n), 'utf8').includes('ExecWhitelist')));
+    expect(mentions.length).toBeGreaterThan(4);
+  });
+
   it('g1 and g2 fail identically — the pin is position-independent', () => {
     // This is the specific improvement over the server's layer-3 source-text
     // slice, which starts at the `ccd` key and therefore could not see a grant
@@ -135,7 +164,7 @@ describe('the pins are not a blanket refusal, and they pin FORBIDDEN_COMMANDS it
     const src = readFileSync(path.join(here, 'types', 'ok', 'legit-whitelist.ts'), 'utf8');
     expect(src).toContain("Assert<'gh' extends ForbiddenCommand ? true : false>");
     expect(src).toContain("Assert<Equals<ExecCommand, 'tmux' | 'ccd'>>");
-    expect(src).toContain('const good: ExecWhitelist');
+    expect(src).toContain('export const good = {');
     // VERIFY ROUND 2, P1: and the value half. Without the positive control, a
     // `LawfulGrants` that collapsed to `never` for EVERY table (say, after a
     // rename left `IllegalGrant` matching nothing) would satisfy g5..g8 while
