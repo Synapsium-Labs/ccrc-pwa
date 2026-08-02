@@ -872,16 +872,95 @@ describe('destruction order', () => {
     ready();
     fs.mkdirSync(clips, { recursive: true });
     fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(2048));
-    // A directory beside the file, so `[[ -f "$f" ]]` has something to reject:
-    // without it a subdirectory joins the manifest as a clip whose "size" is
-    // the inode's, and `toEqual` is what makes that a failure rather than an
-    // extra entry nobody looks at.
+    // Pre-merge fix round, finding A: a subdirectory beside the file used to
+    // be silently DROPPED from the manifest (`[[ -f "$f" ]]` rejected it),
+    // even though step (h)'s `rm -rf` destroys it along with everything
+    // else. It now joins the manifest, sized with `du -sb` (recursive) —
+    // 512 B of real content inside it, not the directory inode's own size —
+    // and named with a trailing `/`, the same convention `ignored[]` uses.
     fs.mkdirSync(path.join(clips, 'thumbs'));
+    fs.writeFileSync(path.join(clips, 'thumbs', 'thumb-1.png'), 'y'.repeat(512));
     const tok = tokenOf();
     const out = JSON.parse(reap(tok).stdout);
     const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
-    expect(t.clips).toEqual([{ name: 'clip-a.png', bytes: 2048 }]);
+    expect(t.clips).toEqual(expect.arrayContaining([
+      { name: 'clip-a.png', bytes: 2048 },
+      { name: 'thumbs/', bytes: 512 },
+    ]));
+    expect(t.clips).toHaveLength(2);
     expect(fs.existsSync(clips)).toBe(false);
+  }, 30000);
+
+  // Pre-merge fix round, finding A — the EIGHTH instance of the
+  // measurement-forgery class (deviation 10), and the one where the two
+  // sides that are supposed to catch each other AGREE on a value neither
+  // measured: the audit's own re-issue and the stale token it is compared
+  // against. Reproduces the review's exact scenario: a token issued over
+  // `clip-a.png` alone, then a dotfile and a nested directory added, then
+  // the audit re-run — before the fix the manifest and the token were
+  // BYTE-IDENTICAL across both reads, so the stale token from the first
+  // read still validated a reap that destroyed content nobody was shown.
+  it('a dotfile pasted after the token was issued changes the digest — the stale token refuses', () => {
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    const { main, wt } = ready();
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    const staleTok = tokenOf();
+    // A dotfile: the OLD glob (`"$dir"/*`, no dotglob) never matched it at
+    // all — not filtered out downstream, never even a candidate.
+    fs.writeFileSync(path.join(clips, '.hidden-secret.png'), 'z'.repeat(4096));
+    const freshTok = tokenOf();
+    expect(freshTok, 'the digest must move when the directory ws-reap will rm -rf changes').not.toBe(staleTok);
+    // The stale token is now a LIE about what it was measured over — ccd
+    // must recompute a different one and refuse the mismatch, not destroy
+    // the dotfile over a consent that never saw it.
+    expect(refused(staleTok, wt, main).refused).toBe('state-changed');
+    expect(fs.existsSync(path.join(clips, '.hidden-secret.png'))).toBe(true);
+    // The fresh token, which DID see the dotfile, both succeeds and records it.
+    const out = JSON.parse(reap(freshTok).stdout);
+    const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
+    expect(t.clips).toEqual(expect.arrayContaining([{ name: '.hidden-secret.png', bytes: 4096 }]));
+    expect(fs.existsSync(clips)).toBe(false);
+  }, 30000);
+
+  it('a nested directory pasted after the token was issued changes the digest too, with its recursive byte total', () => {
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    const { main, wt } = ready();
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    const staleTok = tokenOf();
+    // A nested directory with MORE than one file, so the recursive total is
+    // not confusable with either file's own size in isolation.
+    const nested = path.join(clips, 'archive');
+    fs.mkdirSync(nested);
+    fs.writeFileSync(path.join(nested, 'prod.env'), 'AWS_SECRET=hunter2\n');   // 19 B
+    fs.writeFileSync(path.join(nested, 'big.bin'), Buffer.alloc(1_048_576));   // 1 MB
+    const freshTok = tokenOf();
+    expect(freshTok).not.toBe(staleTok);
+    expect(refused(staleTok, wt, main).refused).toBe('state-changed');
+    const out = JSON.parse(reap(freshTok).stdout);
+    const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
+    // The BYTE TOTAL: du -sb sums real file content, not directory inode
+    // overhead — 19 + 1,048,576, exactly, never the file count and never 0.
+    expect(t.clips).toEqual(expect.arrayContaining([{ name: 'archive/', bytes: 1_048_595 }]));
+    expect(fs.existsSync(nested)).toBe(false);
+  }, 30000);
+
+  it('the token is IDENTICAL across two audits when nothing in the clips directory changed', () => {
+    // The property the digest and the CAS both depend on: `find`'s own
+    // enumeration order is not a promise, so without a deterministic sort
+    // two reads of the SAME unchanged directory could disagree with
+    // themselves — a false `state-changed` refusal at best, and at worst
+    // (if the same instability ever ran the other way) a second forgery of
+    // the class this whole finding closes.
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    ready();
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    fs.writeFileSync(path.join(clips, '.hidden.png'), 'y'.repeat(20));
+    fs.mkdirSync(path.join(clips, 'archive'));
+    fs.writeFileSync(path.join(clips, 'archive', 'f'), 'z'.repeat(30));
+    expect(tokenOf()).toBe(tokenOf());
   }, 30000);
 
   it('never touches the transcript or the shared info/exclude', () => {

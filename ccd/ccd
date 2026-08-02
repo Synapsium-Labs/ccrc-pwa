@@ -2619,22 +2619,73 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
 }
 
 _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
-  # TWO MUTATION SURVIVORS, disclosed. `[[ -d "$dir" ]] || { echo "[]"; … }` is
-  # removable with the suite green because an unmatched glob stays literal, the
-  # `-f` test rejects it, and the loop falls through to the same `[]` — it stays
-  # as the early return that makes the empty answer a DECISION rather than an
-  # accident of globbing. `|| echo 0` on the size fires only if the file
-  # disappears between the glob and the stat, which no fixture can arrange; it
-  # stays because the alternative is `"bytes":`, a document that does not parse,
-  # in the record that outlives the workspace. The `-f` test itself IS pinned
-  # (`records clip FILENAMES and sizes` puts a directory beside the file).
-  local id="$1" dir="$HOME/.cc-clips/$id" f out="[" first=1
+  # Pre-merge fix round, finding A — the EIGHTH instance of the
+  # measurement-forgery class (deviation 10), and the one where two sides
+  # AGREE on a value NEITHER measured: the wire manifest, the fingerprint
+  # (`clipsDigest`, `_ws_reap_eval`) and the tombstone (`_ws_tombstone`) all
+  # come from this ONE producer, so all three inherited its blind spot.
+  #
+  # The old enumeration was `for f in "$dir"/*` filtered by `[[ -f "$f" ]]` —
+  # depth-1, non-dot, REGULAR FILES ONLY. Step (h) (`_ws_reap_tail`, ccd:3203)
+  # is `rm -rf "$cdir"` on the WHOLE DIRECTORY. Measured: with `clip-a.png`
+  # (10 B) present, an audit issued a token; adding `.hidden-secret.png`
+  # (4 KB) and `archive/{prod.env,big.bin}` (1 MB) left the manifest AND the
+  # token byte-identical; the STALE token from before those files existed
+  # still validated a reap; the whole directory — dotfile, subdirectory and
+  # all — was destroyed; the tombstone still names only `clip-a.png`. Fixed
+  # by enumerating with `find -mindepth 1 -maxdepth 1`, which unlike a bare
+  # glob does not skip dotfiles, and by sizing a DIRECTORY entry with `du -sb`
+  # (recursive) rather than `stat`, whose size is the inode's, not its
+  # contents' — so the enumeration now matches exactly what (h) destroys.
+  # `sort -z` keeps the manifest deterministic across two calls over an
+  # unchanged directory, the property the digest and the CAS both depend on
+  # — `find`'s own enumeration order is a filesystem implementation detail,
+  # not a promise, even though it happens to be stable on THIS box for an
+  # unmodified small directory (measured: the token is identical across two
+  # back-to-back audits with or without this line, which is why it is a
+  # disclosed survivor rather than a pinned one — the fixture that would
+  # distinguish them needs a filesystem, or a directory history, this suite
+  # cannot arrange). Kept anyway, the same judgement the attic's 200-ref cap
+  # gets for the identical reason (CONSTRAINTS.md): a property this design
+  # depends on must not rest on an implementation detail merely because
+  # today's filesystem happens to make it hold.
+  #
+  # TWO MORE MUTATION SURVIVORS, disclosed, both pre-existing this fix and
+  # both still true of it. `[[ -d "$dir" ]] || { echo "[]"; … }` is removable with
+  # the suite green because `find` on a nonexistent path prints nothing on
+  # stdout and a diagnostic on stderr (discarded below), so the loop reads no
+  # records either way — it stays as the early return that makes the empty
+  # answer a DECISION rather than an accident of `find`'s own exit code, which
+  # this function does not otherwise check. `|| echo 0` on a file's size fires
+  # only if the entry disappears between the `find` and the `stat`, which no
+  # fixture can arrange; it stays for the reason it always did — the
+  # alternative is `"bytes":`, a document that does not parse, in the record
+  # that outlives the workspace.
+  local id="$1" dir="$HOME/.cc-clips/$id" f name b out="[" first=1
   [[ -d "$dir" ]] || { echo "[]"; return 0; }
-  for f in "$dir"/*; do
-    [[ -f "$f" ]] || continue
+  while IFS= read -r -d '' f; do
+    name="$(basename "$f")"
+    if [[ -d "$f" ]]; then
+      # A directory's own size is the directory ENTRY's — `du -sb`, the same
+      # recursive read `_ws_gc_bytes` uses, is what makes this figure the
+      # bytes `rm -rf` actually reaches rather than one inode. Falling back
+      # to `0` when `du` cannot fully read it is the SAME choice this
+      # function's sibling fallback already makes for a file that vanishes
+      # between the `find` and the `stat` (disclosed above): the byte count
+      # in the display total can understate, but the entry's NAME still
+      # lands in the manifest either way, which is what the digest and the
+      # token — the actual consent boundary — are built from. Not the same
+      # question `_ws_gc_bytes`'s own fix (finding F) answers: that fallback
+      # protects a number a human reads on a confirm BUTTON before deciding;
+      # this one protects a name a stale token's digest has to move on.
+      b=$(du -sb "$f" 2>/dev/null | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0
+      name="$name/"
+    else
+      b=$(stat -c %s "$f" 2>/dev/null || echo 0)
+    fi
     (( first )) || out+=","; first=0
-    out+="{\"name\":$(_json_str "$(basename "$f")"),\"bytes\":$(stat -c %s "$f" 2>/dev/null || echo 0)}"
-  done
+    out+="{\"name\":$(_json_str "$name"),\"bytes\":$b}"
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | sort -z)
   echo "$out]"
 }
 
