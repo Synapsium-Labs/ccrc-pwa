@@ -242,7 +242,18 @@ Object.freeze(EXEC_WHITELIST);
 export function auditExecWhitelist(
   whitelist: Readonly<Record<string, unknown>> = EXEC_WHITELIST,
 ): void {
-  const keys = Object.keys(whitelist);
+  // `Reflect.ownKeys`, NOT `Object.keys` (verify round 2, P2). `Object.keys`
+  // returns own ENUMERABLE keys; `isExecAllowed` looks a command up with
+  // `Object.hasOwn`, which is own ENUMERABLE-OR-NOT. The verifier measured the
+  // gap: one line —
+  //   Object.defineProperty(EXEC_WHITELIST, 'gh', { value: [['pr','merge']], enumerable: false })
+  // — and `isExecAllowed('gh', ['pr','merge','1'])` answered TRUE while this
+  // audit, the server's cross-package `Object.keys` assertion and both type
+  // mechanisms all reported a clean two-key list. An auditor must consult
+  // EXACTLY what the lookup consults. Symbol keys are stringified rather than
+  // dropped, so a symbol-keyed grant lands in the drift branch instead of
+  // vanishing (and `String(sym)` is the one conversion that does not throw).
+  const keys = Reflect.ownKeys(whitelist).map((k) => (typeof k === 'symbol' ? String(k) : k));
 
   const forbidden = keys.filter((k) => (FORBIDDEN_COMMANDS as readonly string[]).includes(k));
   if (forbidden.length > 0) {
@@ -298,6 +309,16 @@ auditExecWhitelist();
  */
 export function isExecAllowed(cmd: string, args: string[]): boolean {
   if (typeof cmd !== 'string' || cmd.length === 0 || cmd.includes('/')) return false;
+  // DECLARED, not merely present (verify round 2, P2). `Object.hasOwn` alone
+  // asks "is there an own property?", which a single
+  // `Object.defineProperty(EXEC_WHITELIST, 'gh', { enumerable: false, … })`
+  // answers yes to while every key-set mechanism in this file reports a clean
+  // two-key list. `GRANTABLE_COMMANDS` is the CLOSED declared set, so this line
+  // asks the question the whole file is about — and it means the lookup and the
+  // audit now consult the same thing, which was the substance of P2. `hasOwn`
+  // stays as the second guard: it is the one that survives GRANTABLE_COMMANDS
+  // being widened, and neither is expensive.
+  if (!(GRANTABLE_COMMANDS as readonly string[]).includes(cmd)) return false;
   if (!Object.hasOwn(EXEC_WHITELIST, cmd)) return false;
   const entry = (EXEC_WHITELIST as Readonly<Record<string, readonly (readonly string[])[] | undefined>>)[cmd];
   if (!Array.isArray(entry)) return false;

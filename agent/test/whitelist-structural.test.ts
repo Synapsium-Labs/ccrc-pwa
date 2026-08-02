@@ -178,6 +178,47 @@ describe('mechanism 3 — the runtime self-audit refuses to boot on a widened li
   });
 });
 
+// VERIFY ROUND 2, P2 — the auditor must consult EXACTLY what the lookup
+// consults. It did not: `Object.keys` is own-ENUMERABLE, `Object.hasOwn` is
+// own-enumerable-OR-NOT, and one `Object.defineProperty(..., { enumerable:
+// false })` granted `gh pr merge` with all three non-test mechanisms silent.
+describe('the audit and the lookup ask the same question', () => {
+  it('a NON-ENUMERABLE own key is a grant, and the audit sees it', () => {
+    const sneaky: Record<string, unknown> = { tmux: [], ccd: [] };
+    Object.defineProperty(sneaky, 'gh', { value: [['pr', 'merge']], enumerable: false });
+    // The exact asymmetry that was exploitable, demonstrated on the fixture:
+    expect(Object.keys(sneaky)).toEqual(['tmux', 'ccd']);
+    expect(Object.hasOwn(sneaky, 'gh')).toBe(true);
+    expect(() => auditExecWhitelist(sneaky)).toThrow(/forbidden command: gh/);
+  });
+
+  it('a non-enumerable UNDECLARED key is caught too, not just a forbidden one', () => {
+    const sneaky: Record<string, unknown> = { tmux: [], ccd: [] };
+    Object.defineProperty(sneaky, 'jq', { value: [['.']], enumerable: false });
+    expect(() => auditExecWhitelist(sneaky)).toThrow(/drifted from EXEC_COMMANDS/);
+  });
+
+  it('a SYMBOL-keyed grant lands in the drift branch instead of vanishing', () => {
+    const sneaky: Record<PropertyKey, unknown> = { tmux: [], ccd: [] };
+    sneaky[Symbol('gh')] = [['pr', 'merge']];
+    expect(() => auditExecWhitelist(sneaky as Record<string, unknown>))
+      .toThrow(/drifted from EXEC_COMMANDS/);
+  });
+
+  it('the lookup gates on the DECLARED set, so a planted own key grants nothing', () => {
+    // The other half of the P2 fix, and the one that matters if the audit is
+    // ever bypassed: `isExecAllowed` now asks `GRANTABLE_COMMANDS.includes`,
+    // not merely "does an own property exist". The real table is frozen, so
+    // this is asserted on the real object — defineProperty on a frozen object
+    // throws, which is itself the first line of defence.
+    expect(() => Object.defineProperty(EXEC_WHITELIST, 'gh', {
+      value: [['pr', 'merge']], enumerable: false,
+    })).toThrow(TypeError);
+    expect(isExecAllowed('gh', ['pr', 'merge', '1'])).toBe(false);
+    expect((GRANTABLE_COMMANDS as readonly string[]).includes('gh')).toBe(false);
+  });
+});
+
 describe('the key set and the forbidden set, asserted as values', () => {
   it('EXEC_WHITELIST has exactly the two declared keys — position-independent', () => {
     expect(Object.keys(EXEC_WHITELIST).sort()).toEqual(['ccd', 'tmux']);
