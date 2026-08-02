@@ -18,10 +18,13 @@ import {
   EXEC_WHITELIST,
   FORBIDDEN_COMMANDS,
   GRANTABLE_COMMANDS,
+  REQUIRED_VERB_FLAG,
+  UNGRANTABLE_VERBS,
   isExecAllowed,
   type ExecCommand,
   type ExecWhitelist,
   type ForbiddenCommand,
+  type LawfulGrants,
 } from '../../../src/whitelist.js';
 
 type Assert<T extends true> = T;
@@ -48,6 +51,25 @@ export const good: ExecWhitelist = {
   tmux: [['has-session'], ['capture-pane']],
   ccd: [['start'], ['ws-reap', '--expect']],
 };
+
+/* VERIFY ROUND 2, P1 — the positive control for the VALUE machinery that
+ * `g5..g8` next door pin negatively. Without this, "the whole `LawfulGrants`
+ * conditional collapsed to `never` for everything" would satisfy all four
+ * bypass fixtures while pinning nothing at all. A lawful table — `ws-reap`
+ * carrying its `--expect`, no ungrantable verb, no empty prefix — must still
+ * be assignable to `LawfulGrants<typeof itself>`. */
+const lawfulTable = {
+  tmux: [['has-session'], ['capture-pane']],
+  ccd: [['start'], ['ws-audit', '--session'], ['ws-reap', '--expect']],
+} as const satisfies ExecWhitelist;
+export const lawful: LawfulGrants<typeof lawfulTable> = lawfulTable;
+
+/** The two rule tables themselves, asserted as types. `ws-reap`'s required
+ *  token is the reap confirmation; deleting the entry is the edit that would
+ *  silently re-permit a token-free reap, and it breaks this build. */
+export type ReapNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reap'], '--expect'>>;
+export type WsRmIsUngrantable = Assert<'ws-rm' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
+export type WsGcIsUngrantable = Assert<'ws-gc' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 
 export const allowed: boolean = isExecAllowed('ccd', ['start', 'claude', 'demo']);
 export const live: ExecWhitelist = EXEC_WHITELIST;

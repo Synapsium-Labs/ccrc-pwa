@@ -1,23 +1,20 @@
 // Every fixture directory this suite makes, removed when the file that made it
-// finishes.
+// finishes. The agent-package twin of `server/test/tmpHelpers.ts`, deliberately
+// identical in shape so there is one discipline in this repo and not two.
 //
-// `mkdtempSync(path.join(tmpdir(), 'ccrc-'))` with no matching `rmSync` was the
-// shape in 17 of the 23 files this replaces the call in: one full run leaked
-// 140 directories, measured, and a mutation sweep runs the suite 50-120 times.
-// /tmp held 7,830 of them when this landed, five weeks after the 47k/1.4 GiB
-// failure CONSTRAINTS already paid for, on the box whose OOM/disk incident
-// history is the reason this project exists.
+// WHY IT EXISTS HERE TOO (critic2, gates 3 related sub-item). The agent package
+// had the registry, but only inside `helpers.ts` — and `whitelist.test.ts`,
+// which imports none of that, cleaned up by calling `rmSync` AFTER its
+// assertions (lines 9/10/19). That works on a PASSING run and leaks on a
+// FAILING one, because a failed `expect` throws and the `rmSync` below it never
+// executes. Failing runs are not the rare case here: this project's whole
+// method is mutation sweeps, which run the suite 50-120 times with assertions
+// deliberately failing, and the previous fix round added three more test files
+// to that same directory without touching it. The host hit 95% disk the day
+// this was written; /tmp has twice been the thing that filled.
 //
-// The sentence that used to end this paragraph — "`trap 'rm -rf "$TMPHOME"'
-// EXIT` is the same rule on the ccd side of the harness" — was FALSE and is
-// removed (critic2, gates Cannot-verify 3; declined twice as out-of-lane, made
-// zero times). `TMPHOME` appears nowhere in this repository except that
-// sentence: `grep -rn TMPHOME infra/` returns exactly one hit, the comment
-// itself, and `ccd` arms no such trap. Whether it was ever true is unknown; it
-// was cited by a review as corroboration for this file's discipline, which is
-// how a false comment does damage. The discipline stands on its own — it is the
-// `afterAll` below, and its ccd-side counterpart is whatever the ccd tests
-// actually do, which is not this.
+// A hook, not a trailing statement, is the entire point: `afterAll`/`afterEach`
+// run whether the test passed, failed or threw.
 //
 // A file-scoped `afterAll` rather than a global sweep of `/tmp/ccrc-*`: test
 // FILES run in parallel processes, so removing everything that matches the
@@ -47,7 +44,9 @@ export function mkTmp(prefix: string): string {
 export function removeTmpFixtures(): void {
   // `force` because a fixture the test already removed itself is the normal
   // case, not an error — several files own their own cleanup and this is the
-  // net underneath them.
+  // net underneath them. `splice(0)` because `mkdtemp` hands out a name the
+  // kernel may reuse: a cleaner that kept its list would, at end of file,
+  // delete a directory that by then belongs to someone else.
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 }
 

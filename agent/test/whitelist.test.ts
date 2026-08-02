@@ -1,26 +1,28 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { canonicalize, checkPath, isExecAllowed } from '../src/whitelist.js';
+// critic2, gates 3 related sub-item: the three `rmSync` calls this replaces sat
+// AFTER their assertions, so a failing assertion threw past them and the
+// directory leaked — on precisely the runs a mutation sweep produces. `mkTmp`
+// registers with a file-scoped `afterAll`, which runs whether the test passed,
+// failed or threw. See tmpHelpers.ts.
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 describe('whitelist.canonicalize', () => {
   it('resolves an existing path to its realpath', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-wl-'));
-    const real = mkdtempSync(path.join(tmpdir(), 'ccrc-wl-real-'));
+    const dir = mkTmp('ccrc-wl-');
+    const real = mkTmp('ccrc-wl-real-');
     const link = path.join(dir, 'link');
     symlinkSync(real, link);
     expect(await canonicalize(link)).toBe(await canonicalize(real));
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(real, { recursive: true, force: true });
   });
 
   it('appends non-existent tail components literally onto the resolved existing prefix', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-wl-'));
+    const dir = mkTmp('ccrc-wl-');
     const target = path.join(dir, 'not', 'yet', 'created.txt');
     const canonical = await canonicalize(target);
     expect(canonical.endsWith(path.join('not', 'yet', 'created.txt'))).toBe(true);
-    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -29,19 +31,19 @@ describe('whitelist.checkPath', () => {
   let projectsRoot: string;
   let outside: string;
 
-  afterEach(() => {
-    rmSync(home, { recursive: true, force: true });
-    rmSync(projectsRoot, { recursive: true, force: true });
-    rmSync(outside, { recursive: true, force: true });
-  });
+  // Kept per-test (this block seeds a fresh $HOME for every case and there are
+  // many of them), but routed through the registry so the end-of-file hook is
+  // the net underneath it: `afterEach` already ran whether a test failed, the
+  // three `rmSync`s above did not.
+  afterEach(removeTmpFixtures);
 
   function seed(): void {
-    home = mkdtempSync(path.join(tmpdir(), 'ccrc-wl-home-'));
+    home = mkTmp('ccrc-wl-home-');
     for (const d of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-corp']) {
       mkdirSync(path.join(home, d), { recursive: true });
     }
-    projectsRoot = mkdtempSync(path.join(tmpdir(), 'ccrc-wl-projects-'));
-    outside = mkdtempSync(path.join(tmpdir(), 'ccrc-wl-outside-'));
+    projectsRoot = mkTmp('ccrc-wl-projects-');
+    outside = mkTmp('ccrc-wl-outside-');
   }
 
   it('allows reads under every read-whitelisted root', async () => {

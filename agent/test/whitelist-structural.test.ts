@@ -31,7 +31,7 @@
 // each of which says in its own name what it is for, plus deletions in two
 // packages. What is closed is the class the old pin lost to: one `rm` of one
 // file, and a diff that reads as ordinary.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -83,6 +83,14 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   'g2-gh-key-below-ccd.ts':   { what: 'the same grant written below it — a type has no notion of position', codes: ['TS2353'] },
   'g3-gh-as-exec-command.ts': { what: "widening the key union instead of the literal", codes: ['TS2322'] },
   'g4-missing-declared-key.ts': { what: 'the reverse drift: declared but not granted', codes: ['TS2741'] },
+  // VERIFY ROUND 2, P1 — the same treatment one level down, on prefix VALUES.
+  // Every g1..g4 mechanism reads the KEY SET; none of them looks inside a
+  // prefix list, which is why the verifier could delete `--expect` with tsc
+  // clean, the module-load audit silent and the server's cross-check at 37/37.
+  'g5-ws-reap-without-expect.ts': { what: "the verifier's own mutation: ws-reap with no confirmation token", codes: ['TS2322'] },
+  'g6-ws-reap-wrong-flag.ts':     { what: "the same grant with a plausible WRONG token (--session)", codes: ['TS2322'] },
+  'g7-ws-rm-readmitted.ts':       { what: 'the unguarded legacy delete, re-admitted', codes: ['TS2322'] },
+  'g8-empty-prefix.ts':           { what: 'an empty prefix — the widest grant expressible, as the smallest diff', codes: ['TS2322'] },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -128,6 +136,13 @@ describe('the pins are not a blanket refusal, and they pin FORBIDDEN_COMMANDS it
     expect(src).toContain("Assert<'gh' extends ForbiddenCommand ? true : false>");
     expect(src).toContain("Assert<Equals<ExecCommand, 'tmux' | 'ccd'>>");
     expect(src).toContain('const good: ExecWhitelist');
+    // VERIFY ROUND 2, P1: and the value half. Without the positive control, a
+    // `LawfulGrants` that collapsed to `never` for EVERY table (say, after a
+    // rename left `IllegalGrant` matching nothing) would satisfy g5..g8 while
+    // pinning nothing — "the bypasses fail" is only evidence when a legitimate
+    // table still builds.
+    expect(src).toContain('export const lawful: LawfulGrants<typeof lawfulTable>');
+    expect(src).toContain("Equals<(typeof REQUIRED_VERB_FLAG)['ws-reap'], '--expect'>");
   });
 });
 
@@ -160,8 +175,54 @@ describe('mechanism 3 — the runtime self-audit refuses to boot on a widened li
       .toThrow(/drifted from EXEC_COMMANDS/);
   });
 
-  it('throws when a declared command has no entry at all', () => {
-    expect(() => auditExecWhitelist({ tmux: [] })).toThrow(/drifted from EXEC_COMMANDS/);
+  // VERIFY ROUND 2, item 3 — the availability objection, answered by drawing a
+  // line rather than by keeping or dropping the throw wholesale. The audit now
+  // refuses to boot ONLY for over-permission. A declared command with NO entry
+  // cannot grant anything (the worst case is one route answering 502), so
+  // killing an agent on a host running 11 live sessions for it was the wrong
+  // trade; it is a loud non-fatal error now. It is still caught before a host
+  // ever sees it by TS2741 (fixture g4), by the assertion above, and by layer 3
+  // of the server's whitelist-subset.test.ts.
+  it('does NOT throw when a declared command is merely MISSING — that grants nothing', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => auditExecWhitelist({ tmux: [] })).not.toThrow();
+      expect(spy).toHaveBeenCalledTimes(1);
+      const msg = String(spy.mock.calls[0]?.[0] ?? '');
+      expect(msg).toMatch(/drifted from EXEC_COMMANDS/);
+      expect(msg).toMatch(/Missing grant\(s\): ccd/);
+      // Diagnosability: the agent's own log prefix, so this line is findable
+      // with the same grep as every other thing the agent ever printed.
+      expect(msg.startsWith('ccrc-agent:')).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('an UNDECLARED key is still fatal — missing is under-permission, extra is not', () => {
+    // The pair that shows the line is drawn where the comment says it is, and
+    // not simply "drift no longer throws".
+    expect(() => auditExecWhitelist({ tmux: [], ccd: [], jq: [] }))
+      .toThrow(/Undeclared grant\(s\): jq/);
+  });
+
+  it('every fatal message carries the agent log prefix and says it is refusing', () => {
+    // The throw happens during ESM evaluation, before index.ts's body runs, so
+    // nothing in the agent gets to format it — node prints it and exits. The
+    // message is therefore the ENTIRE diagnostic, and it has to read like an
+    // agent log line rather than a bare assertion.
+    for (const bad of [
+      { tmux: [], ccd: [], gh: [['pr', 'view']] },
+      { tmux: [], ccd: [], jq: [] },
+      { tmux: [], ccd: [['ws-reap']] },
+      { tmux: [], ccd: [[]] },
+    ]) {
+      let msg = '';
+      try { auditExecWhitelist(bad); } catch (e) { msg = e instanceof Error ? e.message : String(e); }
+      expect(msg, JSON.stringify(bad)).not.toBe('');
+      expect(msg.startsWith('ccrc-agent: '), msg).toBe(true);
+      expect(msg, msg).toMatch(/Refusing to start\.$/);
+    }
   });
 
   it('accepts the real list — the audit is not a blanket refusal', () => {
@@ -175,6 +236,123 @@ describe('mechanism 3 — the runtime self-audit refuses to boot on a widened li
     const src = readFileSync(path.join(agentRoot, 'src', 'whitelist.ts'), 'utf8');
     const topLevelCall = src.split('\n').some((l) => l === 'auditExecWhitelist();');
     expect(topLevelCall, 'whitelist.ts must call auditExecWhitelist() at module scope').toBe(true);
+  });
+});
+
+// VERIFY ROUND 2, P1 — the runtime half of the value pin. The type above is
+// erased at build time and the compiled `dist/whitelist.js` on the fleet host
+// is a plain object literal; this is the mechanism that survives that, a cast,
+// an `any`, and a `JSON.parse`.
+describe('mechanism 3, values — a prefix that grants more than it names is a boot failure', () => {
+  const withCcd = (prefixes: unknown[]): Record<string, unknown> => ({ tmux: [], ccd: prefixes });
+
+  it('throws on a ws-reap with no confirmation token — the reported instance', () => {
+    expect(() => auditExecWhitelist(withCcd([['start'], ['ws-reap']])))
+      .toThrow(/only grantable with '--expect'/);
+  });
+
+  it('throws on a ws-reap with the WRONG token, not merely a missing one', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reap', '--expect']]))).not.toThrow();
+    // Order matters: `--expect` has to be the token IMMEDIATELY after the verb,
+    // because that is the only position `isExecAllowed`'s prefix rule pins. A
+    // grant of `['ws-reap', '--session', '--expect']` would permit
+    // `ccd ws-reap --session <id>` outright, since a prefix constrains only its
+    // own length and nothing past it.
+    expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session', '--expect']])))
+      .toThrow(/only grantable with '--expect'/);
+  });
+
+  it('throws on an ungrantable verb at the head of a prefix', () => {
+    for (const verb of ['ws-rm', 'ws-gc']) {
+      expect(() => auditExecWhitelist(withCcd([[verb]])), verb).toThrow(/ungrantable verb/);
+      expect(() => auditExecWhitelist(withCcd([[verb, '--session']])), verb).toThrow(/ungrantable verb/);
+    }
+  });
+
+  it('throws on an EMPTY prefix — vacuously true, so it grants every subcommand', () => {
+    // `[].every(...)` is true, so `isExecAllowed('ccd', ['ws-rm', 'x'])` would
+    // answer TRUE with one empty prefix present. Demonstrated, not asserted:
+    expect([].every(() => false)).toBe(true);
+    expect(() => auditExecWhitelist(withCcd([['start'], []]))).toThrow(/EMPTY prefix/);
+  });
+
+  it('throws on a prefix that is not a list of string tokens', () => {
+    // A non-array prefix makes `p.every` THROW inside the lookup rather than
+    // answer — the destructive-F7 class, one `try/catch` from being a hole.
+    expect(() => auditExecWhitelist(withCcd(['ws-reap']))).toThrow(/not a list of string tokens/);
+    expect(() => auditExecWhitelist(withCcd([[1, 2]]))).toThrow(/not a list of string tokens/);
+  });
+
+  it('a value that is not a prefix list at all is under-permission — loud, not fatal', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => auditExecWhitelist({ tmux: [], ccd: 'nope' })).not.toThrow();
+      expect(String(spy.mock.calls[0]?.[0] ?? '')).toMatch(/is not a list of argv prefixes/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('the SHIPPED table survives its own audit, and ws-reap really does carry --expect', () => {
+    expect(() => auditExecWhitelist()).not.toThrow();
+    const reap = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-reap');
+    expect(reap.length, 'exactly one ws-reap grant').toBe(1);
+    expect(reap[0]).toEqual(['ws-reap', '--expect']);
+    expect(EXEC_WHITELIST.ccd.map((p) => p[0])).not.toContain('ws-rm');
+    expect(EXEC_WHITELIST.ccd.map((p) => p[0])).not.toContain('ws-gc');
+    expect(EXEC_WHITELIST.ccd.every((p) => p.length > 0)).toBe(true);
+  });
+
+  it('a token-free reap is refused by the lookup, not merely by the audit', () => {
+    // The behavioural end of the same invariant, stated here as well as in
+    // exec.test.ts and whitelist-noghosts.test.ts, because the verifier's
+    // finding was precisely that deleting those two files re-opened it.
+    expect(isExecAllowed('ccd', ['ws-reap', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reap'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'x'])).toBe(true);
+  });
+});
+
+// VERIFY ROUND 2, P2 — the auditor must consult EXACTLY what the lookup
+// consults. It did not: `Object.keys` is own-ENUMERABLE, `Object.hasOwn` is
+// own-enumerable-OR-NOT, and one `Object.defineProperty(..., { enumerable:
+// false })` granted `gh pr merge` with all three non-test mechanisms silent.
+describe('the audit and the lookup ask the same question', () => {
+  it('a NON-ENUMERABLE own key is a grant, and the audit sees it', () => {
+    const sneaky: Record<string, unknown> = { tmux: [], ccd: [] };
+    Object.defineProperty(sneaky, 'gh', { value: [['pr', 'merge']], enumerable: false });
+    // The exact asymmetry that was exploitable, demonstrated on the fixture:
+    expect(Object.keys(sneaky)).toEqual(['tmux', 'ccd']);
+    expect(Object.hasOwn(sneaky, 'gh')).toBe(true);
+    expect(() => auditExecWhitelist(sneaky)).toThrow(/forbidden command: gh/);
+  });
+
+  it('a non-enumerable UNDECLARED key is caught too, not just a forbidden one', () => {
+    const sneaky: Record<string, unknown> = { tmux: [], ccd: [] };
+    Object.defineProperty(sneaky, 'jq', { value: [['.']], enumerable: false });
+    expect(() => auditExecWhitelist(sneaky)).toThrow(/Undeclared grant\(s\): jq/);
+  });
+
+  it('a SYMBOL-keyed grant lands in the drift branch instead of vanishing', () => {
+    const sneaky: Record<PropertyKey, unknown> = { tmux: [], ccd: [] };
+    sneaky[Symbol('gh')] = [['pr', 'merge']];
+    expect(() => auditExecWhitelist(sneaky as Record<string, unknown>))
+      .toThrow(/Undeclared grant\(s\): Symbol\(gh\)/);
+  });
+
+  it('the lookup gates on the DECLARED set, so a planted own key grants nothing', () => {
+    // The other half of the P2 fix, and the one that matters if the audit is
+    // ever bypassed: `isExecAllowed` now asks `GRANTABLE_COMMANDS.includes`,
+    // not merely "does an own property exist". The real table is frozen, so
+    // this is asserted on the real object — defineProperty on a frozen object
+    // throws, which is itself the first line of defence.
+    expect(() => Object.defineProperty(EXEC_WHITELIST, 'gh', {
+      value: [['pr', 'merge']], enumerable: false,
+    })).toThrow(TypeError);
+    expect(isExecAllowed('gh', ['pr', 'merge', '1'])).toBe(false);
+    expect((GRANTABLE_COMMANDS as readonly string[]).includes('gh')).toBe(false);
   });
 });
 

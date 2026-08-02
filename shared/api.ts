@@ -99,9 +99,42 @@ export interface PrState {
   retryAt: number | null;
 }
 
-/** The eight phases as a runtime value, so a string read off disk (written by
- *  ccd, possibly a version behind) can be validated rather than trusted. */
-export const PR_PHASES: readonly PrPhase[] =
+/**
+ * The eight phases as a runtime value, so a string read off disk (written by
+ * ccd, possibly a version behind) can be validated rather than trusted.
+ *
+ * MODULE-PRIVATE (verify round 2, P3), and that is the pin. The fix for
+ * integration finding 3 removed the double cast from `registry.ts` but nothing
+ * stopped it coming back: the verifier reverted that line to the reported
+ * defect verbatim and measured `tsc -p server` clean, the server suite
+ * 1005/1005 and `typecheck-tests` 7/7 — the fix was not pinned against its own
+ * reversal at the very call site the finding named.
+ *
+ * I tried to close that with a type first, and it does not work. MEASURED, not
+ * assumed: branding the registry read (`type UntrustedField = string & {
+ * readonly [B]: true }`) does NOT make `raw as PrPhase` an error, because
+ * TypeScript's COMPARABLE relation permits asserting an intersection to a
+ * subtype of one of its constituents. Both brand shapes I tried, and the whole
+ * reverted expression built on them, compiled clean. A cast is what a cast is
+ * for; no type in this language refuses one.
+ *
+ * What DOES refuse it is not having the constant. With `PR_PHASES` unexported,
+ * `PR_PHASES.includes(prPhaseRaw as PrPhase)` cannot be written in
+ * `registry.ts`, in `watch.ts`, in the PWA or anywhere else — it is TS2459
+ * ("declared locally, but it is not exported") before the casts are even
+ * considered. `isPrPhase` is the only door, which is what the rule three lines
+ * down has been asking for in prose since it was written. Nothing outside this
+ * module used the list (checked across server/src, shared, pwa/src and agent);
+ * the test that needs the eight values derives them from `Record<PrPhase,true>`
+ * instead, which is a stronger statement anyway.
+ *
+ * DISCLOSED RESIDUAL, stated rather than implied: inside THIS module the list
+ * is in scope, so the shape is still writable here — see `isPrPhase`'s own
+ * comment. Re-exporting the constant is also always available. What is closed
+ * is the class the verifier found: a one-line reversal at a call site, in a
+ * different file, that reads as ordinary and leaves every gate green.
+ */
+const PR_PHASES: readonly PrPhase[] =
   ['unchecked', 'none', 'no-commits', 'open', 'draft', 'merged', 'closed', 'unknown'];
 
 /**
@@ -124,6 +157,17 @@ export const PR_PHASES: readonly PrPhase[] =
  * `typeof` guard means a non-string (a `null` off a half-written registry
  * entry, a number from a JSON snapshot) answers `false` rather than reaching
  * `.includes` as a `PrPhase`-shaped lie.
+ *
+ * The `typeof` guard is load-bearing and CANNOT be pinned by a test (verify
+ * round 2, P3): dropping it and writing `.includes(v as string)` returns the
+ * identical answer for every value in the universe, because
+ * `Array.prototype.includes` uses SameValueZero and no non-string is ever
+ * SameValueZero-equal to a string. That is a proof, not a guess — it is why the
+ * seven "rejects a non-string" cases next door discriminate nothing. The guard
+ * stays because the CASTLESS form of the mutation (`.includes(v)` on an
+ * `unknown`) is TS2345, so the only way to remove it is to write an assertion
+ * on the untrusted input, in the one function whose entire job is not doing
+ * that, four lines under a comment saying so.
  */
 export function isPrPhase(v: unknown): v is PrPhase {
   return typeof v === 'string' && (PR_PHASES as readonly string[]).includes(v);

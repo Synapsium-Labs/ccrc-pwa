@@ -1,5 +1,5 @@
 {
-  "_comment": "Final review, integration finding 3. `PR_PHASES` is typed `readonly PrPhase[]` ON PURPOSE, so `.includes(untrustedString)` cannot compile and a caller is pushed to `isPrPhase` instead of casting the input. This project MUST FAIL, and prphase.test.ts asserts the exact code — otherwise a future widening of PR_PHASES to `readonly string[]` would quietly make the double-cast shape legal again.",
+  "_comment": "Final review integration finding 3, re-pinned in verify round 2 (P3). `PR_PHASES` is MODULE-PRIVATE in shared/api.ts on purpose, so neither `.includes(untrustedString)` (p1) nor the double-cast expression the review found in registry.ts (p2) can be written at any call site — both are TS2724 before the casts are even considered. This project MUST FAIL, prphase.test.ts asserts the exact codes per file, and p3 in the same project MUST draw no diagnostic at all, so `nothing compiles` cannot satisfy the pins.",
   "extends": "../../tsconfig.json",
   "compilerOptions": { "noEmit": true },
   "include": ["prphase/**/*.ts"]
