@@ -4230,7 +4230,19 @@ _ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds 
     return 1
   fi
   if (( ${#REAP_IGNORED[@]} == 0 )); then
-    _gc_row contents "$p has nothing ignored — everything in it is in git"
+    # THE SENTENCE MAY ONLY STATE WHAT THIS FUNCTION MEASURED — F1's second
+    # half. It used to read "everything in it is in git", printed on the line
+    # immediately above `reclaimed removed orphan worktree …` and therefore
+    # exactly the reassurance a reader uses to believe the removal was safe.
+    # This function measured ONE thing: the ignored set is empty. It did not
+    # look at the index, at HEAD, or at whether any commit here is reachable
+    # from anything else — and on a detached orphan, whose commit was reachable
+    # only from the worktree HEAD reflog `worktree remove` deletes, the claim
+    # was false at the moment it was printed. The gate above now refuses that
+    # case, and this row no longer stands behind it either way: two independent
+    # fixes, because a guard restored under a sentence that would still lie if
+    # the guard moved is half a fix.
+    _gc_row contents "$p holds no ignored files — nothing gitignored goes with it"
     return 0
   fi
   # NUL-separated on both the sort and the read, and the byte field taken by
@@ -4293,9 +4305,51 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         fi
         return 0
       fi
+      # THE GATE WAS INVERTED — final-round destructive review, F1, and the one
+      # counter-example on this branch to "no sequence of actions destroys a
+      # workspace without a human first seeing an accurate description of what
+      # would be destroyed". This read the branch and then wrote
+      #
+      #     if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged …
+      #
+      # so the mergedness proof ran ONLY when a branch survives the removal —
+      # the case where nothing is lost either way — and was SKIPPED for the
+      # detached HEAD, the case where `worktree remove` deletes
+      # `$main/.git/worktrees/<slug>/` together with its HEAD reflog and leaves
+      # the commit referenced by NOTHING, on gc.pruneExpire's two-week fuse.
+      # Reproduced in the review: two byte-identical orphans, one on a branch
+      # and one detached, each holding one commit; the branched twin was
+      # `declined … is on unmerged branch`, the detached twin was `reclaimed`
+      # and `git fsck` then reported its commit `dangling`.
+      #
+      # Three rungs, in the polarity `_ws_gc_merged`'s own `unprovable` arm
+      # already uses and `_ws_reap_eval`'s Phase-A rungs (ccd:2492-2510) already
+      # spell out: NOTHING READ and NOTHING TO PROVE AGAINST are both refusals,
+      # never a pass. A detached orphan may well hold only commits that are on
+      # origin/HEAD, but this arm cannot tell that from a lost hour's work
+      # without the branch that names it — and "I cannot tell" resolves to doing
+      # nothing everywhere else in this command.
       local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
-      if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged "$main" "$branch"; then
-        # The branch would survive `worktree remove`, so nothing is lost either
+      if [[ -z "$branch" ]]; then
+        # Rung 3 — HEAD did not read at all (unborn, unreadable, not a
+        # worktree). `_ws_gc_dirty` above answers for the FILES; this answers
+        # for the HISTORY, and neither may be inferred from the other.
+        _gc_declined "could not read HEAD in $p — refusing to remove a tree whose history it cannot describe"
+        return 0
+      fi
+      if [[ "$branch" == HEAD ]]; then
+        # Rung 2 — `rev-parse --abbrev-ref` reports a detached HEAD as the
+        # literal string `HEAD`. That is a SENTINEL, not a branch name, and the
+        # old conjunct read it as "no branch, so no mergedness to prove".
+        # ws-reap refuses the same state outright (`detached-head`, ccd:2499)
+        # and cmd_ws_rm notes it (ccd:1115); the unattended sweep refuses and
+        # moves on, which is this command's own polarity for the same fact.
+        _gc_declined "$p is on a detached HEAD ($(git -C "$p" rev-parse --short HEAD 2>/dev/null || echo 'unreadable')) — nothing else references its commits, so removing the worktree removes the last reference to them: check it out on a branch first"
+        return 0
+      fi
+      if ! _ws_gc_merged "$main" "$branch"; then
+        # Rung 1 — on a branch, and the branch is not provably finished. The
+        # branch would survive `worktree remove`, so nothing is lost either
         # way — but a sweep should only reclaim what is provably finished, and
         # someone may be mid-way through this one.
         if [[ "$GC_MERGED_STATE" == unmerged ]]; then
@@ -4319,7 +4373,15 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # counted by the footer, and now sitting between two `reclaimed` rows
         # the listing above added. The row below is ccd's own account of the
         # same fact, in the report's own shape.
-        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
+        #
+        # The `[[ -n "$branch" && "$branch" != HEAD ]]` conjunct that used to
+        # stand here is GONE rather than kept as defence in depth (F1): the
+        # three rungs above now RETURN on both of those states, so leaving the
+        # test in place would read as "the detached case can reach this line",
+        # which is the exact misreading the inverted gate above rested on. If a
+        # future edit lets it reach here, the right repair is a rung, not a
+        # second silent skip.
+        if git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
           _gc_reclaimed "deleted merged branch $branch"
         fi
       else
