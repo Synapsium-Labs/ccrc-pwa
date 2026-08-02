@@ -44,6 +44,15 @@ export function ReapSheet({
   const load = (): void => {
     if (id === null) return;
     setResult(null);
+    // Pre-merge fix round, finding 17-F1: this used to clear only `result`,
+    // so while a fresh audit is in flight the sheet kept rendering the
+    // PREVIOUS audit — and its token. Two demonstrated consequences: a
+    // Re-check re-posting the stale token, and FleetScreen briefly showing
+    // one session's name/size next to another's stale path when the reap
+    // target switches (both pinned in reap-sheet.test.tsx /
+    // fleet-screen.test.tsx). `audit === null` is what renders "Checking…"
+    // instead of a stale confirm button while the fetch below is in flight.
+    setAudit(null);
     void api.workspaceAudit(id).then(setAudit).catch((e) => toast(apiErrorText(e), 'error'));
   };
   useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);

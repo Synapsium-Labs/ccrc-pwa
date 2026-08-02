@@ -471,6 +471,74 @@ describe('FleetScreen', () => {
       fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
       expect(screen.queryByText(/clean up workspace/i)).not.toBeInTheDocument();
     });
+
+    // Pre-merge fix round, finding 17-F1: FleetScreen keeps ONE ReapSheet
+    // mounted and swaps which session it targets (`sessions.find((sn) =>
+    // sn.id === reapId)`) — `load()`'s missing `setAudit(null)` meant that
+    // instant re-render still showed the PREVIOUS target's audit (path,
+    // bytes, token) alongside the NEW target's slug. Demonstrated exactly as
+    // measured: "Remove bravo · 1.2 GB" — bravo's slug, alpha's stale bytes
+    // — rendered together with alpha's still-visible "/w/ALPHA" row. The
+    // real hazard: a tap there would call
+    // `api.workspaceReap('bravo-id', <alpha's token>)` — one session's stale
+    // token posted to another session's endpoint. `_ws_fingerprint` hashes
+    // `id=`, so ccd would refuse `state-changed`, fail-closed — but display
+    // integrity is this sheet's entire job.
+    it('clears the stale audit — and its token — the instant the reap target switches to a different session', async () => {
+      const alphaAudit = { ...wsAudit, id: 'alpha-id', workdir: '/w/ALPHA', worktreeBytes: 1_200_000_000, token: 'a'.repeat(64) };
+      let resolveBravoAudit!: (r: Response) => void;
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (String(url).includes('/sessions/alpha-id/workspace/audit')) {
+          return new Response(JSON.stringify(alphaAudit), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (String(url).includes('/sessions/bravo-id/workspace/audit')) {
+          // Bravo's fresh audit is deliberately held pending — the fix must
+          // clear alpha's stale audit the instant the target changes, not
+          // leave it rendered under bravo's identity until this resolves.
+          return new Promise<Response>((resolve) => { resolveBravoAudit = resolve; });
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }));
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [
+          session({ id: 'alpha-id', project: 'omega', workspace: 'alpha', archivedAt: 1785300000 }),
+          session({ id: 'bravo-id', project: 'omega', workspace: 'bravo', archivedAt: 1785300000 }),
+        ],
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /archived \(2\)/i }));
+      fireEvent.click(screen.getByRole('button', { name: /actions for alpha/i }));
+      fireEvent.click(screen.getByText(/clean up workspace/i));
+      expect(await screen.findByText('/w/ALPHA')).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: 'Remove alpha · 1.2 GB' })).toBeInTheDocument();
+
+      // Back out to the fleet list (both the actions sheet and the reap
+      // sheet are stacked open at this point) and switch to bravo's own
+      // reap flow — the ReapSheet component instance persists underneath,
+      // so its `audit` state carries over unless `load()` clears it.
+      let overlays = screen.queryAllByTestId('sheet-overlay');
+      while (overlays.length > 0) {
+        // `noUncheckedIndexedAccess`: the loop guard already proves an
+        // element exists at this index.
+        fireEvent.click(overlays[overlays.length - 1]!);
+        overlays = screen.queryAllByTestId('sheet-overlay');
+      }
+      fireEvent.click(screen.getByRole('button', { name: /actions for bravo/i }));
+      fireEvent.click(screen.getByText(/clean up workspace/i));
+
+      expect(screen.queryByText('/w/ALPHA')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Remove bravo/ })).not.toBeInTheDocument();
+      expect(screen.getByText('Checking…')).toBeInTheDocument();
+
+      resolveBravoAudit(new Response(JSON.stringify({
+        ...wsAudit, id: 'bravo-id', workdir: '/w/BRAVO', worktreeBytes: 500_000_000, token: 'b'.repeat(64),
+      }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      expect(await screen.findByText('/w/BRAVO')).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: 'Remove bravo · 500 MB' })).toBeInTheDocument();
+    });
   });
 });
 

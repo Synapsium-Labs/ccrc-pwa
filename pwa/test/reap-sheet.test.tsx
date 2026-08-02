@@ -390,3 +390,54 @@ describe('mutation-sweep closures', () => {
     expect(screen.getByText('Checking…')).toBeInTheDocument();
   });
 });
+
+// Pre-merge fix round, finding 17-F1: `load()` cleared `result` but never
+// `audit`, so while a fresh audit is in flight the sheet kept rendering the
+// PREVIOUS audit — and its token. Two demonstrated consequences: Re-check
+// re-posting the stale token (here), and FleetScreen showing one session's
+// name/size next to another's path when the reap target switches
+// (fleet-screen.test.tsx). Fixed by one line: `setAudit(null)` in `load()`.
+describe('stale state (17-F1)', () => {
+  it('does not resurrect the stale token’s Remove button while Re-check’s fresh audit is still in flight', async () => {
+    const auditBody = audit();
+    const freshAudit = audit({ token: 'b'.repeat(64) });
+    let resolveSecondAudit!: (r: Response) => void;
+    let auditCalls = 0;
+    const reapCalls: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/audit')) {
+        auditCalls += 1;
+        if (auditCalls === 1) {
+          return new Response(JSON.stringify(auditBody), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        // The Re-check audit deliberately never resolves during this test —
+        // it is the window in which the stale audit must NOT be rendered.
+        return new Promise<Response>((resolve) => { resolveSecondAudit = resolve; });
+      }
+      reapCalls.push(init?.body);
+      return new Response(JSON.stringify({
+        refused: 'state-changed', detail: 'x', paths: [],
+        sentence: 'This workspace changed since the list you were shown — nothing was removed.',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove quiet-basin · 1.2 GB' }));
+    await screen.findByRole('button', { name: /re-check/i });
+    expect(JSON.parse(String(reapCalls[0]))).toEqual({ expect: 'a'.repeat(64) });
+
+    fireEvent.click(screen.getByRole('button', { name: /re-check/i }));
+    // Before the fix: `load()` cleared only `result`, so
+    // `audit.verdict === 'reapable' && result === null` re-armed the primary
+    // button on THIS render, using the STALE audit — token 'a'.repeat(64) —
+    // before the fresh fetch above ever resolves.
+    expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+
+    resolveSecondAudit(new Response(JSON.stringify(freshAudit), { status: 200, headers: { 'content-type': 'application/json' } }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove quiet-basin · 1.2 GB' }));
+    await waitFor(() => expect(reapCalls).toHaveLength(2));
+    // The second POST carries the FRESH token, never the one Re-check set
+    // out to invalidate.
+    expect(JSON.parse(String(reapCalls[1]))).toEqual({ expect: 'b'.repeat(64) });
+  });
+});
