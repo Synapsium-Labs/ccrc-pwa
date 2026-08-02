@@ -100,9 +100,20 @@ export function ratio(
   theme: Theme,
   opacity?: number,
 ): number;
+export function selectorList(sel: string): string[];
+export function subjectCompound(sel: string): string;
+/** The compound qualifiers `sel` adds to `base`'s subject element, `''` if it
+ *  restates the same subject under a different ancestor chain, or null if it
+ *  is not a variant of `base` at all. */
+export function variantSuffix(sel: string, base: string): string | null;
 export function rulesOf(root: string, rel: string): Rule[];
 export function ruleKey(r: Rule): string;
+/** The value of a rule's LAST declaration of `prop` — the value the browser
+ *  paints — or null if it declares none. */
 export function declOf(body: string, prop: string): string | null;
+/** The last of `background` / `background-color` in source order: the two
+ *  write the same cascaded value, so neither one is a fallback for the other. */
+export function bgOf(body: string): string | null;
 export function opacityNumber(raw: string): number | null;
 export function keyframeTroughs(root?: string): KeyframeTrough[];
 export function audit(root?: string): AuditReport;

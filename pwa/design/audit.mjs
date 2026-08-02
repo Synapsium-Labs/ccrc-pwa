@@ -36,8 +36,25 @@
 //      `background`. The rule IS the pair; no registration needed.
 //   2. variants — a rule that only rebinds the custom properties an ancestor
 //      rule paints with (`.callout[data-callout='warning']` over `.callout`).
-//      The base rule is re-measured once per variant. This is what makes the
-//      callouts unforgeable.
+//      The base rule is re-measured once per variant.
+//
+//      The claim this line used to make was "this is what makes the callouts
+//      unforgeable", and it was false: the check compared whole selector
+//      STRINGS with startsWith, so a grouped selector, an extra ancestor and an
+//      ancestor qualifier each reintroduced the 2.44:1 blocker with the gate
+//      printing ALL PASS. What is true now, and all that is claimed:
+//
+//        A variant is matched on its SUBJECT COMPOUND (`variantSuffix`), across
+//        selector lists, across ancestor chains and across files. Any rule
+//        whose subject is textually the base rule's subject plus compound
+//        qualifiers rebinds the base's paint and is measured.
+//
+//      NOT covered, and this sentence is the disclosure: a rule that restates
+//      the subject in a form that is not textually base-subject-plus-qualifiers
+//      — `:is(.callout)[data-callout='x']`, `[class~='callout'][data-x]`, a
+//      `>`/`+`/`~` chain whose subject is written some other way — is not seen
+//      as a variant. Closing those needs a specificity-aware selector engine,
+//      not a parser. Spell variants as the five in chat.css do.
 //   3. pseudo-element children — `X::before` / `X::placeholder` that set a
 //      colour and no background inherit X's background, including each of X's
 //      variants.
@@ -227,9 +244,29 @@ export function rulesOf(root, rel) {
 
 export const ruleKey = (r) => `${r.file} ${r.selector}`;
 
+/** The value a rule ends up with for `prop`, which is the value of its LAST
+ *  declaration of it — the auditor used to take the FIRST, so any rule with a
+ *  duplicated `color`, `background` or `opacity` was measured against a value
+ *  the browser does not paint. `background: <fallback>; background: var(--x)`
+ *  is the standard progressive-enhancement idiom, and both the reported 2.44:1
+ *  blocker shape and an unregistered fade passed green through it. */
 export const declOf = (body, prop) => {
-  const m = new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+)`).exec(body);
-  return m ? m[1].trim() : null;
+  let last = null;
+  for (const m of body.matchAll(new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+)`, 'g'))) last = m[1].trim();
+  return last;
+};
+
+/** The background PAINT a rule ends up with. `background` and
+ *  `background-color` write the SAME cascaded value, so the answer is whichever
+ *  is written last, not `background ?? background-color`:
+ *  `background: none; background-color: var(--bg-well)` paints the well, and
+ *  the auditor used to say it painted nothing. `background` here is the
+ *  shorthand, so a value with more than a colour in it will not resolve — and
+ *  must not: an unparsed paint is a FAIL, never a skip. */
+export const bgOf = (body) => {
+  let last = null;
+  for (const m of body.matchAll(/(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/g)) last = m[1].trim();
+  return last;
 };
 
 /** Custom properties a rule declares in its OWN body shadow the theme for that
@@ -241,15 +278,87 @@ const localVars = (body) =>
 const KEYFRAME_STOP = /^(from|to|[\d.]+%)$/;
 const isKeyframeStop = (r) => r.selector.split(',').every((s) => KEYFRAME_STOP.test(s.trim()));
 
-/** A selector that is `base` plus a compound qualifier on the SAME element —
- *  `[data-callout='warning']`, `.is-open`, `:not(.x)`. Not a descendant (a
- *  space), not a pseudo-element (`::`). */
+/** Split a selector on separators that are at bracket/paren depth zero, so a
+ *  comma inside `:is(a, b)` or a `~=` inside `[data-x~='y']` is not a split
+ *  point. Empty pieces (`.a > .b` splits on both the space and the `>`) are
+ *  dropped. */
+function topLevel(sel, isSep) {
+  const parts = [];
+  let depth = 0;
+  let cur = '';
+  for (const c of sel) {
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (depth === 0 && isSep(c)) {
+      parts.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts.map((s) => s.trim()).filter((s) => s !== '');
+}
+
+/** The individual selectors of a selector LIST. `rulesOf` stores a grouped
+ *  rule whole (`.dot--busy, .dot--attention`), and a grouped rule is how
+ *  anyone writes two variants that share a tint. */
+export const selectorList = (sel) => topLevel(sel, (c) => c === ',');
+
+/** The SUBJECT of a complex selector — the rightmost compound, i.e. the
+ *  element the rule actually paints. `.msg-assist .md-body .callout[data-x]`
+ *  paints `.callout[data-x]`; the ancestors only say when. */
+export const subjectCompound = (sel) => {
+  const parts = topLevel(sel, (c) => c === ' ' || c === '>' || c === '+' || c === '~');
+  return parts[parts.length - 1] ?? sel;
+};
+
+/** A run of compound qualifiers on one element — `[data-callout='warning']`,
+ *  `.is-open`, `:not(.x)`. */
 const COMPOUND_SUFFIX = /^(?:\[[^\]]*\]|[.:#][A-Za-z][\w-]*(?:\([^)]*\))?)+$/;
-function compoundSuffix(sel, base) {
-  if (!sel.startsWith(base) || sel === base) return null;
-  const rest = sel.slice(base.length);
-  if (rest.includes('::') || rest.includes(' ')) return null;
-  return COMPOUND_SUFFIX.test(rest) ? rest : null;
+
+/**
+ * Is `sel` a rule that can restate `base`'s subject element with at least
+ * base's specificity — i.e. a VARIANT whose custom properties the base rule
+ * would paint with? Returns the qualifier suffix it adds (possibly `''`), or
+ * null.
+ *
+ * This deliberately compares SUBJECTS and ignores the ancestor chains, because
+ * every earlier spelling of this check compared whole selector strings with
+ * `startsWith` and three ordinary spellings walked straight through it — each
+ * reintroducing the reported 2.44:1 blocker with the gate printing ALL PASS:
+ *
+ *   .msg-assist .callout[data-callout='w'], .msg-assist .callout[…='c'] { … }
+ *   .msg-assist .md-body .callout[data-callout='warning']               { … }
+ *   .msg-assist[data-md]  .callout[data-callout='warning']              { … }
+ *
+ * Ignoring ancestors OVER-approximates: a variant that can only match under
+ * some other ancestor is still measured through the base rule. That is the
+ * safe direction for a gate — a context that cannot occur costs a measured row
+ * that passes, while a context that CAN occur and is skipped is the defect
+ * class this whole file exists for. What it does NOT catch is a rule that
+ * restates the subject in a form that is not textually base's subject plus
+ * qualifiers (`:is(.callout)[data-x]`, `[class~='callout'][data-x]`) — see the
+ * disclosure in the file header.
+ */
+export function variantSuffix(sel, base) {
+  const bases = selectorList(base).map(subjectCompound);
+  for (const s of selectorList(sel)) {
+    const ss = subjectCompound(s);
+    if (ss.includes('::')) continue;
+    for (const bs of bases) {
+      if (!ss.startsWith(bs)) continue;
+      const rest = ss.slice(bs.length);
+      // Same subject, different ancestors: still a restatement, and a longer
+      // ancestor chain wins the cascade.
+      if (rest === '') {
+        if (sel !== base) return '';
+        continue;
+      }
+      if (COMPOUND_SUFFIX.test(rest)) return rest;
+    }
+  }
+  return null;
 }
 
 // ── hand-written ground, one entry per rule that cannot name its own ────────
@@ -423,7 +532,6 @@ export function audit(root = PWA_ROOT) {
     measured.push({ label: `${theme} ${label}`, ratio: r, floor, ok: r >= floor, detail });
 
   const isColour = (v) => v !== null && !/^(inherit|currentColor|unset|initial|revert)$/i.test(v);
-  const bgOf = (body) => declOf(body, 'background') ?? declOf(body, 'background-color');
   const isPaint = (v) => v !== null && !/^(none|inherit|unset|initial|revert)$/i.test(v);
 
   const selfGrounded = rules.filter(
@@ -439,11 +547,14 @@ export function audit(root = PWA_ROOT) {
     const out = [{ suffix: '', vars, rule: base }];
     if (Object.keys(vars).length === 0) return out;
     for (const v of rules) {
-      if (v === base || v.file !== base.file) continue;
-      if (compoundSuffix(v.selector, base.selector) === null) continue;
+      if (v === base || isKeyframeStop(v)) continue;
+      if (variantSuffix(v.selector, base.selector) === null) continue;
       const vv = localVars(v.body);
       if (!Object.keys(vv).some((k) => k in vars)) continue;
-      out.push({ suffix: ` [as ${v.selector}]`, vars: { ...vars, ...vv }, rule: v });
+      // Cross-file variants are real (a component sheet retinting a primitive),
+      // so the file is not a filter — but the label has to name it.
+      const as = v.file === base.file ? v.selector : ruleKey(v);
+      out.push({ suffix: ` [as ${as}]`, vars: { ...vars, ...vv }, rule: v });
     }
     return out;
   };
@@ -486,7 +597,18 @@ export function audit(root = PWA_ROOT) {
     if (at <= 0) continue;
     const fg = declOf(rule.body, 'color');
     if (!isColour(fg) || isPaint(bgOf(rule.body))) continue;
-    const host = byKey.get(`${rule.file} ${rule.selector.slice(0, at)}`);
+    // The host is the rule that paints the element this pseudo hangs off. An
+    // exact key match only finds it when the pseudo spells its host EXACTLY as
+    // the self-grounded rule does — the same string comparison that let three
+    // variant spellings through contextsFor, one function up. So fall back to
+    // the subject-compound match: `.msg-assist .md-body .callout::before` and
+    // `.callout[data-callout='x']::before` both hang off `.msg-assist
+    // .callout`, which paints them.
+    const hostSel = rule.selector.slice(0, at);
+    const host =
+      byKey.get(`${rule.file} ${hostSel}`) ??
+      selfGrounded.find((h) => h.selector === hostSel) ??
+      selfGrounded.find((h) => variantSuffix(hostSel, h.selector) !== null);
     if (host === undefined) continue;
     if (`${rule.file} ${rule.selector}` in SELF_GROUNDED_EXEMPT) continue;
     pseudoCount++;
@@ -550,7 +672,18 @@ export function audit(root = PWA_ROOT) {
       problems.push(`unregistered fade ${f.k} — add it to OPACITY_REGISTRY with the pairs it composites or a reason it composites no coloured content`);
       continue;
     }
-    if (!('pairs' in entry)) continue;
+    // An entry is EXACTLY one of the two legal shapes: the pairs it composites,
+    // or a reason it composites no coloured content. This used to be
+    // `if (!('pairs' in entry)) continue;`, so an entry carrying neither — a
+    // `knownBelowFloor` again, say, the escape hatch this round deleted — was
+    // silently skipped by the GATE while only the suite objected. Gate and
+    // suite disagreeing about whether the hatch exists is worse than the hatch.
+    const shape = Object.keys(entry).sort().join('+');
+    if (shape !== 'pairs' && shape !== 'noText') {
+      problems.push(`OPACITY_REGISTRY ${f.k} is {${shape}} — an entry must carry EXACTLY one of \`pairs\` (what it composites) or \`noText\` (why it composites no coloured content), and nothing else`);
+      continue;
+    }
+    if (shape === 'noText') continue;
     for (const [label, fg, chain, floor] of entry.pairs) {
       for (const [theme, palette] of THEMES) {
         try {

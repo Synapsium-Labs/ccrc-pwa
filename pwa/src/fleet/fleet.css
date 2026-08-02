@@ -94,7 +94,12 @@
    full-strength .offline-banner (role="status": "Reconnecting…" for `down`,
    "Last known state — connecting…" for `connecting`) in EXACTLY the states
    this rule fired in — the connecting banner is gated on sessions.length > 0
-   and so was this rule, via :not([data-loading='true']). The staleness is
+   and so was this rule, via :not([data-loading='true']). Both banner states
+   are PINNED, so this justification cannot silently rot: test/
+   fleet-screen.test.tsx "shows a persistent offline banner when conn is
+   'down'…" and test/offline.test.ts "shows hydrated cards behind a last-known
+   banner while connecting" each fail if the banner is removed OR re-gated.
+   The staleness is
    announced in words, to assistive tech as well as to the eye, instead of
    being spelled by pushing live text under AA.
 

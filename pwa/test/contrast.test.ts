@@ -30,6 +30,7 @@ import {
   OPACITY_REGISTRY,
   SELF_GROUNDED_EXEMPT,
   audit,
+  bgOf,
   contrast,
   declOf,
   keyframeTroughs,
@@ -40,7 +41,10 @@ import {
   resolveColor,
   ruleKey,
   rulesOf,
+  selectorList,
   stylesheets,
+  subjectCompound,
+  variantSuffix,
 } from '../design/audit.mjs';
 
 const ROOT = process.cwd();
@@ -208,6 +212,88 @@ describe('the gate fails a mutated tree', () => {
     expect(o).toMatch(/FAIL.*chat\.css \.msg-assist \.callout::before \[as .*warning/);
   });
 
+  // ── the three spellings that forged the "unforgeable" claim ───────────────
+  // verify3-css P1. The variant check used to compare whole selector STRINGS
+  // with startsWith, so each of these reintroduced the reported 2.44:1 blocker
+  // — --ink-secondary body ink on the light-theme well — with the gate printing
+  // ALL 234 PASS and exiting 0. Every one is an ordinary way to write CSS; the
+  // grouped one is how anybody writes two variants that share a tint, and the
+  // tree already groups selectors for exactly that (`.dot--busy, .dot--attention`).
+  const CALLOUT_BEFORE = '.msg-assist .callout::before {';
+  const forge = (rule: string): ((s: string) => string) =>
+    (s) => s.replace(CALLOUT_BEFORE, `${rule}\n${CALLOUT_BEFORE}`);
+
+  it.each([
+    [
+      'GROUPED with a second variant',
+      ".msg-assist .callout[data-callout='warning'], .msg-assist .callout[data-callout='caution'] { --callout-tint: var(--bg-well); }",
+    ],
+    [
+      'given an extra ancestor',
+      ".msg-assist .md-body .callout[data-callout='warning'] { --callout-tint: var(--bg-well); }",
+    ],
+    [
+      "qualified on the variant's ancestor",
+      ".msg-assist[data-md] .callout[data-callout='warning'] { --callout-tint: var(--bg-well); }",
+    ],
+    [
+      'written without the ancestor at all',
+      ".callout[data-callout='rogue'] { --callout-tint: var(--bg-well); }",
+    ],
+  ])('a callout variant %s still cannot hide the well', (_n, rule) => {
+    const o = expectFail('src/session/chat.css', forge(rule));
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout::before \[as /);
+  });
+
+  it('a callout variant hides the well from ANOTHER stylesheet', () => {
+    // The same-file filter was a filter, not a fact: a component sheet
+    // retinting a primitive is ordinary, and the browser does not care which
+    // file a custom property was rebound in.
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      `${s}\n.msg-assist .callout[data-callout='crossfile'] { --callout-tint: var(--bg-well); }\n`);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as fleet\.css /);
+  });
+
+  it("a pseudo-element spells its host differently from the rule that paints it", () => {
+    // The same string comparison, one function down: the ::before host was
+    // looked up by exact `file selector` key, so a pseudo hanging off a
+    // differently-spelled host was silently unmeasured.
+    const o = expectFail('src/session/chat.css', (s) =>
+      `${s}\n.msg-assist .md-body .callout::before { color: var(--callout-tint); }\n`);
+    expect(o).toMatch(/FAIL\s+1\.00 .*chat\.css \.msg-assist \.md-body \.callout::before/);
+  });
+
+  // ── the value the browser paints, not the first one written ───────────────
+  // verify3-css P2. `declOf` took the FIRST matching declaration; CSS applies
+  // the LAST. `background: <fallback>; background: var(--x)` is the standard
+  // progressive-enhancement idiom, so this was one ordinary rule away from
+  // auditing every duplicated property against a value nothing paints.
+  it.each([
+    [
+      'a duplicated `background` — the second one is what paints',
+      '.e7-mutant { color: var(--ink-secondary); background: var(--bg-surface); background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7-mutant/,
+    ],
+    [
+      'a duplicated `color` — the second one is what paints',
+      '.e7b-mutant { background: var(--bg-well); color: var(--ink-on-well); color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7b-mutant/,
+    ],
+    [
+      'a duplicated `opacity` — the second one is what fades',
+      '.e10-mutant { opacity: 1; opacity: 0.72; }',
+      /unregistered fade chat\.css \.e10-mutant 0\.72/,
+    ],
+    [
+      '`background: none` reset, then a `background-color` longhand',
+      '.e1-mutant { color: var(--ink-secondary); background: none; background-color: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.e1-mutant/,
+    ],
+  ])('the gate measures %s', (_n, rule, want) => {
+    expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
   it('a new element fade is added with no contrast decision', () => {
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 0.72; }\n.pr-check-names {'));
@@ -241,6 +327,98 @@ describe('the gate fails a mutated tree', () => {
     const o = expectFail('src/components/primitives.css', (s) =>
       s.replace('@keyframes skel-shimmer {', '@keyframes mutant-fade { from { opacity: 0.2; } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
     expect(o).toMatch(/unregistered keyframe trough primitives\.css mutant-fade 0\.2/);
+  });
+
+  // ── the branches that say "the auditor could not measure this" ────────────
+  // verify3-css P3. Every one of these was correct code with DECORATIVE
+  // coverage: each could be replaced with a bare `continue` and all 145 tests
+  // stayed green, and two of them are exactly the claims the round-3 report
+  // makes in prose ("a gate FAILURE rather than a skip", "unregistered, stale
+  // and non-literal stops are all gate failures"). A gate whose failure
+  // branches are untested is not a gate — an unmeasurable thing must FAIL, and
+  // that is the direction nothing was checking.
+  it('an `opacity` the auditor cannot read as a number is a FAILURE, not a skip', () => {
+    const o = expectFail('src/session/chat.css', (s) => `${s}\n.e11-mutant { opacity: var(--x-fade); }\n`);
+    expect(o).toMatch(/chat\.css \.e11-mutant: opacity "var\(--x-fade\)" is not a static value/);
+  });
+
+  it('a @keyframes stop the auditor cannot read as a number is a FAILURE, not a skip', () => {
+    const o = expectFail('src/components/primitives.css', (s) =>
+      s.replace('@keyframes skel-shimmer {', '@keyframes mutant-var { from { opacity: var(--x); } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
+    expect(o).toMatch(/@keyframes primitives\.css mutant-var has an opacity stop that is not a static value/);
+  });
+
+  it('a translucent background with no GROUNDS entry is a FAILURE, not a skip', () => {
+    // A rule whose fill is a wash cannot be measured without knowing what it
+    // is washed OVER, and that is the one thing this file still hand-writes.
+    // Skipping such a rule is how a translucent tint ships unmeasured.
+    const o = expectFail('src/session/chat.css', (s) =>
+      `${s}\n.e12-mutant { color: var(--ink-primary); background: color-mix(in srgb, var(--bg-well) 50%, transparent); }\n`);
+    expect(o).toMatch(/chat\.css \.e12-mutant: background .* is translucent and has no GROUNDS entry/);
+  });
+
+  it('a KEYFRAME_TROUGHS entry left behind by a renamed animation is a FAILURE', () => {
+    // The stale direction for OPACITY_REGISTRY was pinned; the stale direction
+    // for KEYFRAME_TROUGHS was not, so `keyframes: []` passed the whole suite.
+    const o = expectFail('src/session/chat.css', (s) => s.replace('@keyframes attach-spin {', '@keyframes attach-spin-2 {'));
+    expect(o).toMatch(/stale keyframes registry entry: chat\.css attach-spin 1/);
+  });
+
+  // The same sweep, run over EVERY failure branch in audit.mjs rather than the
+  // four the review named: each `problems.push` was neutered in turn and each
+  // `stale` direction set to []. Five more branches and three more stale
+  // directions were green under that, so they are pinned here too.
+  it('a PSEUDO-ELEMENT painting with a colour the auditor cannot resolve is a FAILURE', () => {
+    // The colour of the ::before label, replaced — not prepended: declOf reads
+    // the LAST declaration now, so a prepended one would be overwritten.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('  color: var(--callout-hue);\n', '  color: var(--no-such-token);\n'));
+    expect(o).toMatch(/chat\.css \.msg-assist \.callout::before.*unknown custom property --no-such-token/);
+  });
+
+  it('an INHERITED_GROUNDS entry whose rule was renamed away is a FAILURE', () => {
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {',
+        '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label-renamed {'));
+    // Two branches, one mutation: the hand-written ground names a rule that is
+    // gone, and the registry key is stale.
+    expect(o).toMatch(/stale INHERITED_GROUNDS entry: no rule fleet\.css \.proj-archived-body/);
+    expect(o).toMatch(/stale inherited registry entry: fleet\.css \.proj-archived-body/);
+  });
+
+  it('an INHERITED_GROUNDS rule that stops setting a colour of its own is a FAILURE', () => {
+    // The whole point of the entry is that the GROUND is hand-written and the
+    // COLOUR is read from the stylesheet. A rule that inherits its colour has
+    // nothing left for the auditor to read, so the entry measures nothing.
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
+        '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: inherit;'));
+    expect(o).toMatch(/INHERITED_GROUNDS fleet\.css \.proj-archived-body.* sets no colour of its own/);
+  });
+
+  it('an INHERITED_GROUNDS rule painting with an unresolvable colour is a FAILURE', () => {
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
+        '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--no-such-token);'));
+    expect(o).toMatch(/fleet\.css \.proj-archived-body.*unknown custom property --no-such-token/);
+  });
+
+  it('an OPACITY_REGISTRY pair the auditor cannot resolve is a FAILURE', () => {
+    // The pairs are hand-written in audit.mjs, so the mutant goes there — the
+    // gate tree carries its own copy of the auditor, which is the point.
+    const o = expectFail('design/audit.mjs', (s) =>
+      s.replace("[['running tool dot on a card', 'var(--status-busy)'", "[['running tool dot on a card', 'var(--no-such-token)'"));
+    expect(o).toMatch(/chat\.css \.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
+  });
+
+  it('a GROUNDS entry whose rule stopped being self-grounded is a FAILURE', () => {
+    const o = expectFail('src/session/chat.css', (s) => s.replace('.code-block-copy {\n', '.code-block-copy-renamed {\n'));
+    expect(o).toMatch(/stale grounds registry entry: chat\.css \.code-block-copy /);
+  });
+
+  it('a SELF_GROUNDED_EXEMPT entry left behind by a renamed rule is a FAILURE', () => {
+    const o = expectFail('src/session/chat.css', (s) => s.replace('.send-btn:disabled {\n', '.send-btn-renamed:disabled {\n'));
+    expect(o).toMatch(/stale exempt registry entry: chat\.css \.send-btn:disabled /);
   });
 
   it('a rule paints with a colour the auditor cannot resolve', () => {
@@ -392,6 +570,33 @@ describe('the auditor itself', () => {
     expect(opacityNumber(raw as string)).toBe(want);
   });
 
+  it.each([
+    // body, prop, the value the BROWSER ends up with
+    ['color: var(--a)', 'color', 'var(--a)'],
+    ['color: var(--a); color: var(--b)', 'color', 'var(--b)'],
+    ['color: var(--a); color: var(--b); color: var(--c)', 'color', 'var(--c)'],
+    ['opacity: 1; opacity: 0.72', 'opacity', '0.72'],
+    // A longer property name is not a declaration of the shorter one.
+    ['background-image: url(x)', 'background', null],
+    ['-webkit-background: red', 'background', null],
+    ['border-color: red', 'color', null],
+  ])('declOf(%s, %s) is the LAST declaration: %s', (body, prop, want) => {
+    expect(declOf(body as string, prop as string)).toBe(want);
+  });
+
+  it.each([
+    // `background` and `background-color` write ONE cascaded value, so the
+    // answer is source order — neither is the other's fallback.
+    ['background: none; background-color: var(--bg-well)', 'var(--bg-well)'],
+    ['background-color: var(--bg-well); background: none', 'none'],
+    ['background: var(--bg-surface); background: var(--bg-well)', 'var(--bg-well)'],
+    ['background-color: var(--a); background-color: var(--b)', 'var(--b)'],
+    ['color: red', null],
+    ['background-image: url(x); background-position: 0 0', null],
+  ])('bgOf(%s) is %s', (body, want) => {
+    expect(bgOf(body as string)).toBe(want);
+  });
+
   it('exposes exactly the report shape the types promise', () => {
     // The .d.mts beside audit.mjs is hand-written, i.e. a drift risk of the
     // same class as everything else here. This is the runtime check on it.
@@ -500,6 +705,53 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
       expect(declOf(r.body, '--callout-hue'), r.selector).not.toBeNull();
     }
   });
+
+  it('measures EVERY rule that rebinds --callout-tint, however it is spelled', () => {
+    // verify3-css P1: the assertion above counts only the five single-compound
+    // spellings, so a sixth variant written as a grouped selector, with an
+    // extra ancestor, or in another stylesheet left it green while walking the
+    // blocker straight past the gate. This is the spelling-agnostic bind —
+    // every rule anywhere under src/ that rebinds the property the callout
+    // paints with must appear as a measured context of the base rule.
+    const rebinders = stylesheets(ROOT)
+      .flatMap((rel) => rulesOf(ROOT, rel))
+      .filter((r) => r.selector !== '.msg-assist .callout' && declOf(r.body, '--callout-tint') !== null);
+    expect(rebinders.map(ruleKey)).toHaveLength(VARIANTS.length);
+    for (const r of rebinders) {
+      const as = r.file === 'chat.css' ? r.selector : ruleKey(r);
+      expect(
+        report.measured.some((m) => m.label.endsWith(`chat.css .msg-assist .callout [as ${as}]`)),
+        `no measured context for ${ruleKey(r)}`,
+      ).toBe(true);
+    }
+  });
+
+  it.each([
+    // sel, base, the qualifier it adds (null = not a variant)
+    [".msg-assist .callout[data-callout='warning']", ".msg-assist .callout", "[data-callout='warning']"],
+    [".msg-assist .callout[data-callout='w'], .msg-assist .callout[data-callout='c']", '.msg-assist .callout', "[data-callout='w']"],
+    [".msg-assist .md-body .callout[data-callout='w']", '.msg-assist .callout', "[data-callout='w']"],
+    [".msg-assist[data-md] .callout[data-callout='w']", '.msg-assist .callout', "[data-callout='w']"],
+    ["main > .callout[data-callout='w']", '.msg-assist .callout', "[data-callout='w']"],
+    ['.msg-assist .md-body .callout', '.msg-assist .callout', ''],
+    // A variant of a GROUPED base — rulesOf stores `.dot--busy, .dot--attention` whole.
+    ['.dot--attention.is-loud', '.dot--busy, .dot--attention', '.is-loud'],
+    // Not variants: a different element, a descendant, a pseudo, a prefix that
+    // is not a compound boundary.
+    ['.msg-assist .callout strong', '.msg-assist .callout', null],
+    [".msg-assist .callout[data-callout='w']::before", '.msg-assist .callout', null],
+    ['.calloutish', '.callout', null],
+    ['.callout-wrap', '.callout', null],
+    ['.msg-assist .callout', '.msg-assist .callout', null],
+  ])('variantSuffix(%s, %s) is %s', (sel, base, want) => {
+    expect(variantSuffix(sel as string, base as string)).toBe(want);
+  });
+
+  it('splits selector lists and finds subjects without tripping over nesting', () => {
+    expect(selectorList(":is(.a, .b) .c, .d[x~='y, z']")).toEqual([':is(.a, .b) .c', ".d[x~='y, z']"]);
+    expect(subjectCompound('.a > .b + .c ~ .d')).toBe('.d');
+    expect(subjectCompound(":not(.a, .b) .c[data-x='p q']")).toBe(".c[data-x='p q']");
+  });
 });
 
 // ── element opacity ─────────────────────────────────────────────────────────
@@ -527,10 +779,36 @@ describe('every static opacity is registered and composited', () => {
     // every other pair of that fade. The fade is gone (fleet.css), so the
     // escape hatch it needed is gone with it: a fade now either composites no
     // coloured content or clears every floor it touches.
-    for (const [, entry] of Object.entries(OPACITY_REGISTRY)) {
-      expect(Object.keys(entry).sort()).toEqual(expect.arrayContaining([]));
-      expect('knownBelowFloor' in entry).toBe(false);
+    //
+    // verify3-css P4: the assertion that used to sit here read
+    // `expect(Object.keys(entry).sort()).toEqual(expect.arrayContaining([]))`,
+    // which matches literally any key set — including
+    // ['knownBelowFloor','whatever'] — while reading like a second guard over
+    // the real one below it. Replaced with the shape check it was pretending
+    // to be: an entry is EXACTLY one of the two legal shapes, so there is no
+    // third key for a hatch to be reintroduced under.
+    for (const [k, entry] of Object.entries(OPACITY_REGISTRY)) {
+      expect(['pairs', 'noText'], k).toContain(Object.keys(entry).sort().join('+'));
+      expect('knownBelowFloor' in entry, k).toBe(false);
     }
+  });
+
+  it('the GATE, not just this file, rejects an entry with neither pairs nor noText', () => {
+    // The escape hatch survived in the gate binary: `if (!('pairs' in entry))
+    // continue;` meant `node design/contrast-check.mjs` — the single auditor
+    // this round elevated — printed ALL 232 PASS and exited 0 for a
+    // knownBelowFloor entry, and only the suite objected. A gate and a suite
+    // that disagree about whether the hatch exists is the hatch.
+    const dir = gateTree();
+    edit(dir, 'design/audit.mjs', (s) =>
+      s.replace(
+        "    pairs: [['running tool dot on a card', 'var(--status-busy)', ['var(--bg-surface)'], 3]],",
+        "    knownBelowFloor: 'the escape hatch this round claims to have deleted',",
+      ));
+    const r = runGate(dir);
+    expect(r.stdout).toMatch(/OPACITY_REGISTRY chat\.css \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
+    expect(r.stdout).toMatch(/^FAIL/m);
+    expect(r.status).not.toBe(0);
   });
 
   it('archived rows carry no element opacity', () => {
@@ -544,6 +822,16 @@ describe('every static opacity is registered and composited', () => {
     // { opacity: 0.75 } faded live body text to 3.34 and the lamp dots to 2.67
     // in the light theme. FleetScreen's .offline-banner announces the same
     // state in words, at full strength, in exactly the cases the rule fired.
+    //
+    // verify3-css P5: the round-3 report said of that banner "Nothing tests
+    // it" and routed a render assertion to the ui-tsx lane. The claim was
+    // false and the referral is WITHDRAWN — both states are already pinned by
+    // test/fleet-screen.test.tsx ("shows a persistent offline banner when conn
+    // is 'down'…") and test/offline.test.ts ("shows hydrated cards behind a
+    // last-known banner while connecting"), and each fails if the banner is
+    // removed or re-gated. Measured, not assumed: four mutants on
+    // FleetScreen.tsx (either banner deleted; either banner's condition
+    // narrowed) each failed exactly one of those two tests.
     const faded = rulesOf(ROOT, 'src/fleet/fleet.css')
       .filter((r) => r.selector.includes("data-conn") && declOf(r.body, 'opacity') !== null);
     expect(faded.map(ruleKey)).toEqual([]);
