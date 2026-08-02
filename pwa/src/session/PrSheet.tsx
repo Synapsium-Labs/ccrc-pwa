@@ -14,7 +14,7 @@ import { Sheet } from '../components/Sheet';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
-import { checkPhrase, prSentence, UNCHECKED_PR } from './PrKeycap';
+import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
 
 export function PrSheet({
@@ -102,8 +102,13 @@ export function PrSheet({
                variable that rendered it — not a second sentence saying the
                same thing in slightly different ones (final-round integration
                finding 5: this said "<branch> has no commits past its base.",
-               a hand copy of prSentence's own no-commits clause). */
-            <button type="button" className="btn-primary" disabled title={lede}>
+               a hand copy of prSentence's own no-commits clause).
+
+               `tooltipSentence` is the plain-text rendering of that same
+               string, not a different sentence (fix round 3, P6): a `title`
+               shows markdown ticks as ticks, and the "Pull request: " opener
+               is already carried by the lede one line above. */
+            <button type="button" className="btn-primary" disabled title={tooltipSentence(lede)}>
               Open pull request
             </button>
           )}

@@ -575,6 +575,12 @@ describe('archived footer row', () => {
     // the fleet total, and the row itself must not claim "0 B" for archived-
     // but-unmeasured — both would argue against a cleanup that would free
     // real space.
+    //
+    // Fix round 3, verifier P3: "1.2 GB" alone was still a forgery — it is
+    // the measured PART presented as the total, and nothing on screen said a
+    // second workspace went uncounted. The name is asserted whole (anchored
+    // both ends) because the old, unqualified text is a prefix of the new one
+    // and a loose regex would match either.
     const store = makeStore();
     render(<FleetScreen store={store} />);
     seed(store, {
@@ -584,7 +590,24 @@ describe('archived footer row', () => {
         session({ id: 'b', project: 'beta', workspace: 'still-cove', archivedAt: 200, archivedBytes: null }),
       ],
     });
-    expect(screen.getByRole('button', { name: /archived · 2 · 1\.2 gb/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^archived · 2 · 1\.2 gb \+ 1 unmeasured$/i })).toBeInTheDocument();
+  });
+
+  it('states no size at all when every archived workspace went unmeasured — never a confident "0 B"', () => {
+    // The pure forgery case: three archives, no manifest read on any of them,
+    // rendered as a stated total of zero for work that may be gigabytes.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, archivedBytes: null }),
+        session({ id: 'b', project: 'beta', workspace: 'still-cove', archivedAt: 200, archivedBytes: null }),
+        session({ id: 'c', project: 'beta', workspace: 'far-shore', archivedAt: 300, archivedBytes: null }),
+      ],
+    });
+    expect(screen.getByRole('button', { name: /^archived · 3 · size unknown$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /0 B/ })).not.toBeInTheDocument();
   });
 
   it('does not render when nothing in the fleet is archived', () => {

@@ -244,6 +244,58 @@ describe('SwapSheet', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  // Fix round 3, verifier P7 — the eleventh instance of the measurement
+  // forgery class, adjudicated REAL and closed here. `AccountLimits.five` /
+  // `.seven` are `number | null`, null meaning THE WINDOW WAS NOT READ, and
+  // the ranking scored them `?? 0`. `{five: null, seven: null}` is producible,
+  // not hypothetical: `readLimits` writes exactly that for an account whose
+  // limits file is missing or unparseable (server/src/limits.ts) and
+  // `server/src/fleet.ts` passes it through as a NON-null `limits` object, so
+  // the unreadable account scored 0% and was recommended as the emptiest pool
+  // — while its own gauges rendered '—'.
+  it('never suggests an account whose limits were not read — an unread window is not 0%', () => {
+    const fleet = storeWith([
+      fleetSession(),  // claude, the current account: excluded as a target
+      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 8, seven: 22 } }),
+      // The whole limits file failed to read: both windows unknown.
+      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: null, seven: null } }),
+    ]);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    expect(screen.getByRole('button', { name: /team·shared/ })).not.toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /alt·max/ })).toHaveTextContent('suggested');
+    // And it still says so where the reader can see it, rather than 0%.
+    expect(screen.getByRole('button', { name: /team·shared/ })).toHaveTextContent('—');
+  });
+
+  it('never suggests on a HALF-read account either — max() of one known window is a lower bound', () => {
+    // `{five: 3, seven: null}` scored 3 under `?? 0` and beat a measured 8,
+    // while its unread 7-day window could have been at 99. The score is a
+    // maximum; one window cannot produce it.
+    const fleet = storeWith([
+      fleetSession(),
+      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 8, seven: 22 } }),
+      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: 3, seven: null } }),
+    ]);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    expect(screen.getByRole('button', { name: /team·shared/ })).not.toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /alt·max/ })).toHaveTextContent('suggested');
+  });
+
+  it('suggests nobody at all when no account has both windows read', () => {
+    const fleet = storeWith([
+      fleetSession(),
+      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: null, seven: null } }),
+      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: null }),
+    ]);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    expect(screen.queryByText('suggested')).not.toBeInTheDocument();
+    // Every target is still offered and still tappable — not scoring is not
+    // hiding.
+    for (const label of ['alt·max', 'team·shared', 'gpt']) {
+      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+  });
+
   it('excludes a disabled account from the swap picker', () => {
     // The bug a display-only fix leaves behind: the strip stops showing gpt
     // while the picker still offers it as a swap target.

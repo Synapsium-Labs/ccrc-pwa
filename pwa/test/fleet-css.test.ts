@@ -4,23 +4,19 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { ruleIn } from './cssRule';
 
 const css = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 const shellCss = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'styles', 'shell.css'), 'utf8');
 
-/** The declarations of the first rule whose selector list starts with `sel`
- *  in `text`, tolerating leading indentation — fleet.css's rules sit at
- *  column 0, but shell.css nests its desktop rules inside `@media`. */
-function ruleIn(text: string, sel: string): string {
-  const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`\\n[ \\t]*${escaped} \\{`);
-  const m = re.exec(text);
-  if (!m) throw new Error(`no rule for ${sel}`);
-  const open = text.indexOf('{', m.index);
-  return text.slice(open + 1, text.indexOf('}', open));
-}
+// The rule reader is shared (test/cssRule.ts) rather than hand-rolled per
+// file: fix round 3, verifier P5. The copy that used to live here demanded
+// exactly ONE space before the brace, so re-indenting fleet.css — a file this
+// lane does not own — turned an assertion into a thrown "no rule for". The
+// shared one tolerates grouping, newlines and comments, and still fails when
+// the declaration itself changes.
 
 /** The declarations of the first rule whose selector list starts with `sel`. */
 function ruleFor(sel: string): string {

@@ -20,6 +20,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FleetSession, PrState, WsAudit } from '../../shared/api';
+import { declValue, norm, ruleIn, stripComments } from './cssRule';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
@@ -33,15 +34,14 @@ const fleetCss = read('fleet', 'fleet.css');
 const chatCss = read('session', 'chat.css');
 const tokensCss = read('styles', 'tokens.css');
 
-/** The declarations of the first rule whose selector list starts with `sel`,
- *  tolerating leading indentation. Same shape as fleet-css.test.ts's. */
-function ruleIn(text: string, sel: string): string {
-  const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = new RegExp(`\\n[ \\t]*${escaped}[ \\t]*\\{`).exec(text);
-  if (m === null) throw new Error(`no rule for ${sel}`);
-  const brace = text.indexOf('{', m.index);
-  return text.slice(brace + 1, text.indexOf('}', brace));
-}
+// Fix round 3, verifier P5. These three stylesheets belong to the ui-css lane
+// and are being edited in parallel with this file, so the scrape must survive
+// any reasonable reformatting of them — grouped selector lists, moved braces,
+// re-indentation, comments — and fail only on the thing it asserts. It reads
+// the rules through the shared, formatting-insensitive helper rather than a
+// fourth hand-rolled regex; `test/cssRule.ts` carries the reasoning, including
+// why a text scrape is the right tool here at all (jsdom evaluates no
+// stylesheet, so no test can assert a computed 44px).
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -79,7 +79,9 @@ const makeStore = (): FleetStore => createFleetStore({
 
 describe('the tap-target token', () => {
   it('is the 44px acceptance criterion, so every rule below inherits it from one place', () => {
-    expect(tokensCss).toContain('--tap-min:   44px;');
+    // The DECLARATION, not the three spaces tokens.css currently aligns it
+    // with: a formatter closing that gap is not a regression in the tap floor.
+    expect(declValue(ruleIn(tokensCss, ':root'), '--tap-min')).toBe('44px');
   });
 });
 
@@ -87,7 +89,7 @@ describe('the tap-target token', () => {
 
 describe('.fleet-archived-row — the fleet footer route into the archive', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(ruleIn(fleetCss, '.fleet-archived-row')).toContain('min-height: var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.fleet-archived-row'), 'min-height')).toBe('var(--tap-min)');
   });
 
   it('is the class the rendered footer row actually carries', () => {
@@ -107,7 +109,7 @@ describe('.fleet-archived-row — the fleet footer route into the archive', () =
 
 describe('.archive-row — every row on the archive screen', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(ruleIn(fleetCss, '.archive-row')).toContain('min-height: var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.archive-row'), 'min-height')).toBe('var(--tap-min)');
   });
 
   it('is the class every rendered archive row actually carries', () => {
@@ -127,7 +129,7 @@ describe('.pr-title-input — the one editable field in the PR composer', () => 
   it('is at least one tap tall, off the shared token', () => {
     // A text input below the floor is worse than a short button: the target
     // has to be hit to place a caret, not merely pressed.
-    expect(ruleIn(chatCss, '.pr-title-input')).toContain('min-height: var(--tap-min)');
+    expect(declValue(ruleIn(chatCss, '.pr-title-input'), 'min-height')).toBe('var(--tap-min)');
   });
 
   it('is the class the rendered title field actually carries', async () => {
@@ -145,7 +147,7 @@ describe('.reap-go — the destructive confirm', () => {
   it('is at least one tap tall, off the shared token', () => {
     // The one button on this branch that deletes a worktree. A mis-tap here
     // is not recoverable by tapping again somewhere else.
-    expect(ruleIn(chatCss, '.reap-go')).toContain('min-height: var(--tap-min)');
+    expect(declValue(ruleIn(chatCss, '.reap-go'), 'min-height')).toBe('var(--tap-min)');
   });
 
   it('is the class the rendered Remove button actually carries', async () => {
@@ -194,8 +196,10 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
     ]) {
-      expect(rule).not.toContain('44px');
-      expect(rule).toContain('var(--tap-min)');
+      // Comments off: a rule may legitimately MENTION 44px in prose
+      // explaining the token, and that is not a hardcoded literal.
+      expect(norm(stripComments(rule))).not.toContain('44px');
+      expect(norm(stripComments(rule))).toContain('var(--tap-min)');
     }
   });
 });

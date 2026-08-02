@@ -99,6 +99,23 @@ export function prSentence(pr: PrState, branch?: string): string {
   }
 }
 
+/** The same sentence, as a native `title` renders it.
+ *
+ *  Fix round 3, verifier P6. Reusing `prSentence`'s output verbatim as a
+ *  tooltip (final-round integration finding 5's de-duplication) regressed the
+ *  copy in two ways a `title` attribute cannot help: it is PLAIN TEXT, so the
+ *  markdown ticks that mark up a branch name for the lede's own presentation
+ *  render as literal backticks; and the bare "Pull request: " opener repeats a
+ *  subject the sheet's eyebrow, heading and visible lede have all established
+ *  already. Both are dropped here — derived from the one sentence, never a
+ *  second hand copy, which is what finding 5 was about.
+ *
+ *  A NUMBERED opener ("Pull request #42: ") is kept: the number is information
+ *  the tooltip's own context does not otherwise carry. */
+export function tooltipSentence(sentence: string): string {
+  return sentence.replace(/^Pull request: /, '').replace(/`/g, '');
+}
+
 /** ' Retrying in 12m.' — §6's rate-limit row promises reason AND retry time,
  *  and a flat 15-minute silence with only a reason reads as broken rather than
  *  as waiting. Empty when nothing is scheduled: a route-level read failure

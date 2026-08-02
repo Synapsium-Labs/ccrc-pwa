@@ -108,12 +108,74 @@ describe('the manifest', () => {
   it('names how many secret-shaped matches the F3 refinement filtered as noise, pluralized', async () => {
     auditBody = audit({ sensitiveFiltered: 1 });
     open();
-    expect(await screen.findByText('1 secret-shaped match filtered as vendored/template.')).toBeInTheDocument();
+    expect(await screen.findByText(/^1 secret-shaped match filtered as vendored\/template\./))
+      .toBeInTheDocument();
     cleanup();
 
     auditBody = audit({ sensitiveFiltered: 4 });
     open();
-    expect(await screen.findByText('4 secret-shaped matches filtered as vendored/template.')).toBeInTheDocument();
+    expect(await screen.findByText(/^4 secret-shaped matches filtered as vendored\/template\./))
+      .toBeInTheDocument();
+  });
+
+  // destructive F8 residual (critic2). The filter POLICY is not under test and
+  // is not changed — the human ruling on it is open. What is fixed is that the
+  // count of filtered matches used to sit next to a list capped at three,
+  // while a filtered entry is exactly the one that sorts last: ccd orders
+  // `ignored` sensitive-first then bytes-descending (ccd:2561) and a
+  // noise-filtered match leaves the entry non-sensitive (ccd:1996-2000). The
+  // number was on screen; the name it counted was not.
+  describe('the filtered count and the names it counts (F8 residual)', () => {
+    const manyIgnored = [
+      { path: 'node_modules/', bytes: 400_000_000, sensitive: false },
+      { path: 'dist/', bytes: 8_000_000, sensitive: false },
+      { path: '.ccrc/', bytes: 2_000, sensitive: false },
+      { path: 'coverage/', bytes: 900, sensitive: false },
+      // Last by ccd's own ordering — non-sensitive and smallest. This is the
+      // shape of a noise-filtered secret, and the entry the cap used to eat.
+      { path: 'config/secrets.template.env', bytes: 120, sensitive: false },
+    ];
+
+    it('shows every ignored entry by default when anything was filtered as noise', async () => {
+      auditBody = audit({ ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020,
+        sensitiveFiltered: 1 });
+      open();
+      expect(await screen.findByText(/config\/secrets\.template\.env/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'show fewer' })).toBeInTheDocument();
+      expect(screen.getByText(/filtered as vendored\/template\./))
+        .toHaveTextContent('Every ignored entry is named above.');
+    });
+
+    it('still caps the list when nothing was filtered — the default is about the count, not the length', async () => {
+      auditBody = audit({ ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020,
+        sensitiveFiltered: 0 });
+      open();
+      await screen.findByText(/5 entries/);
+      expect(screen.queryByText(/config\/secrets\.template\.env/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'show all 5' })).toBeInTheDocument();
+    });
+
+    it('points at the toggle, by its exact label, when the reader has collapsed the list back', async () => {
+      auditBody = audit({ ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020,
+        sensitiveFiltered: 2 });
+      open();
+      fireEvent.click(await screen.findByRole('button', { name: 'show fewer' }));
+      expect(screen.queryByText(/config\/secrets\.template\.env/)).not.toBeInTheDocument();
+      // The sentence follows the list rather than promising what is not there.
+      expect(screen.getByText(/filtered as vendored\/template\./))
+        .toHaveTextContent('Tap "show all 5" to see them.');
+      expect(screen.getByRole('button', { name: 'show all 5' })).toBeInTheDocument();
+    });
+
+    it('claims nothing about a list that is short enough to be whole', async () => {
+      // Three entries are never capped, so the note must not send the reader
+      // looking for a toggle that is not rendered.
+      auditBody = audit({ sensitiveFiltered: 1 });
+      open();
+      expect(await screen.findByText(/filtered as vendored\/template\./))
+        .toHaveTextContent('Every ignored entry is named above.');
+      expect(screen.queryByRole('button', { name: /show all/i })).not.toBeInTheDocument();
+    });
   });
 
   it('shows no filtered-noise note at all when nothing was filtered', async () => {
@@ -284,7 +346,9 @@ describe('mutation-sweep closures', () => {
     open();
     expect(await screen.findByText(/5 entries, 5 B/)).toBeInTheDocument();
     expect(screen.getByText('node_modules/ · dist/ · .ccrc/')).toBeInTheDocument();
-    const toggle = screen.getByRole('button', { name: 'show all' });
+    // The collapsed label states how many entries it is hiding (F8 residual):
+    // the size of what is off-screen is not itself off-screen.
+    const toggle = screen.getByRole('button', { name: 'show all 5' });
     fireEvent.click(toggle);
     expect(screen.getByText('node_modules/ · dist/ · .ccrc/ · coverage/ · tmp/')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'show fewer' })).toBeInTheDocument();
@@ -606,5 +670,62 @@ describe('out-of-order audits (final-round F2)', () => {
     rerender(<><ToastHost /><ReapSheet session={bravoSess} open onClose={() => {}} onReaped={() => {}} /></>);
     expect(await screen.findByText('Checking…')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
+  });
+});
+
+// Fix round 3, verifier P1/P2. F2 shipped the generation bump inside `load()`
+// only, on the reasoning that the effect-cleanup bump would add nothing
+// observable: "the only cases the cleanup would add are unmount and id ->
+// null, neither of which is observable". `toast()` is the counter-example —
+// it is a GLOBAL host that outlives this sheet's own render, so a failure
+// belonging to a sheet the reader has left is still a red banner on their
+// screen, about a workspace check they are no longer looking at. The three
+// cases below are the ones `load()`'s own bump structurally cannot reach:
+// nothing calls `load()` when a sheet is dismissed, when the target leaves
+// the fleet, or when the screen unmounts. Each fails with the cleanup removed
+// from the effect in ReapSheet.tsx.
+describe('audits outliving the sheet that asked for them (fix round 3, P1)', () => {
+  const alphaSess = sess({ id: 'demo-alpha', workspace: 'alpha' });
+  const view = (s: FleetSession | null, isOpen: boolean): ReactElement => (
+    <><ToastHost /><ReapSheet session={s} open={isOpen} onClose={() => {}} onReaped={() => {}} /></>
+  );
+
+  it('does not toast a failure for a sheet the reader has already dismissed', async () => {
+    const net = deferredFetch();
+    const { rerender } = render(view(alphaSess, true));
+    // The reader dismisses the sheet — FleetScreen sets reapOpen=false — while
+    // alpha's audit is still in flight. It then fails.
+    rerender(view(alphaSess, false));
+    await act(async () => { net.reject('demo-alpha', 'alpha audit died'); });
+    expect(document.querySelector('.toast--error')).toBeNull();
+    expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
+  });
+
+  it('does not toast a failure for a session that has left the fleet', async () => {
+    const net = deferredFetch();
+    const { rerender } = render(view(alphaSess, true));
+    // `session` is `sessions.find((s) => s.id === reapId) ?? null` at both
+    // call sites: when the sweep stops listing the workspace it goes null
+    // under an open sheet.
+    rerender(view(null, true));
+    await act(async () => { net.reject('demo-alpha', 'alpha audit died'); });
+    expect(document.querySelector('.toast--error')).toBeNull();
+    expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
+  });
+
+  it('does not toast a failure after the screen holding the sheet has unmounted', async () => {
+    const net = deferredFetch();
+    // The host is mounted SEPARATELY and outlives the sheet — the app shell's
+    // arrangement (main.tsx renders one ToastHost above the router). A toast
+    // fired with no host at all is dropped silently by Toast.tsx, so a test
+    // that unmounted the host along with the sheet would pass with the guard
+    // removed and prove nothing.
+    render(<ToastHost />);
+    const { unmount } = render(
+      <ReapSheet session={alphaSess} open onClose={() => {}} onReaped={() => {}} />);
+    unmount();
+    await act(async () => { net.reject('demo-alpha', 'alpha audit died'); });
+    expect(document.querySelector('.toast--error')).toBeNull();
+    expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
   });
 });

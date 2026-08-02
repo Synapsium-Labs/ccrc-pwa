@@ -35,7 +35,9 @@ export function ReapSheet({
   const [audit, setAudit] = useState<WsAudit | null>(null);
   const [result, setResult] = useState<ReapResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  // `null` = the reader has not chosen; the default depends on the audit (see
+  // `expanded` below). Their choice, once made, wins for this target.
+  const [showAll, setShowAll] = useState<boolean | null>(null);
 
   const id = session?.id ?? null;
   // Final-round finding F2 (destructive review). `setAudit(null)` below fixed
@@ -52,7 +54,22 @@ export function ReapSheet({
   // advances on every change of target and on every close — which means a
   // response is rendered ONLY if no target change and no newer request has
   // happened since it was issued. There is no path by which a superseded
-  // response reaches `setAudit`.
+  // response reaches `setAudit` or `toast`.
+  //
+  // Fix round 3 (verifier P1/P2): the cleanup bump was previously NOT shipped,
+  // on the reasoning that unmount and `id -> null` are unobservable. They are
+  // observable — through `toast()`, which is a GLOBAL surface that outlives
+  // this component's own render. Two inputs, both now pinned below in
+  // reap-sheet.test.tsx: (a) the reader dismisses the sheet (`open -> false`)
+  // while an audit is in flight and it then fails — a red error toast about a
+  // workspace check for a sheet that is no longer on screen; (b) the fleet
+  // sweep stops listing the target, so `sessions.find(...) ?? null` makes
+  // `session` null (this component's `id` goes null and it returns null before
+  // rendering) and the in-flight audit then fails — a toast about a session
+  // that has left the fleet. Both are exactly what the catch guard below
+  // already refuses for the target-switch case; the cleanup is what extends
+  // that same refusal to the close and the drop. The comment above is now a
+  // description of the code rather than of an intention.
   const gen = useRef(0);
   const load = (): void => {
     if (id === null) return;
@@ -67,6 +84,9 @@ export function ReapSheet({
     // fleet-screen.test.tsx). A null `audit` is what renders "Checking…"
     // instead of a stale confirm button while the fetch below is in flight.
     setAudit(null);
+    // The expand/collapse choice belonged to the PREVIOUS audit's list — a new
+    // target (or a Re-check) gets its own default, chosen from its own facts.
+    setShowAll(null);
     void api.workspaceAudit(id)
       .then((a) => { if (gen.current === mine) setAudit(a); })
       // The toast is generation-guarded too: an error belonging to a workspace
@@ -74,7 +94,14 @@ export function ReapSheet({
       // something that is no longer on screen.
       .catch((e) => { if (gen.current === mine) toast(apiErrorText(e), 'error'); });
   };
-  useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
+  useEffect(() => {
+    if (open) load();
+    // Every teardown of this effect — close, target change, target dropped to
+    // null, unmount — retires the generation it set up. Whatever is still in
+    // flight belongs to a sheet state the reader has left.
+    return () => { gen.current += 1; };
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [open, id]);
 
   if (!session) return null;
   const slug = session.workspace ?? session.id;
@@ -94,6 +121,25 @@ export function ReapSheet({
   // Fails safe: a mismatch renders "Checking…" — refusing to describe —
   // rather than describing the wrong workspace.
   const shown = audit !== null && audit.id === session.id ? audit : null;
+
+  // destructive F8 residual (critic2, uncovered). The FILTER POLICY is
+  // deliberately untouched — the human partner's question about it is open,
+  // and this is the display half only.
+  //
+  // The residual: the count of noise-filtered secret-shaped matches was
+  // rendered beside an ignored list capped at three, and a filtered entry is
+  // precisely the one that sorts last. ccd emits `ignored` sorted
+  // sensitive-first then bytes-descending (ccd:2561) and a noise-filtered
+  // match leaves the entry's `sensitive` at 0 (ccd:1996-2000), so its NAME sat
+  // below the cap while the NUMBER claiming it sat above — "excluded must
+  // never mean invisible" held for the count and failed for the name, which is
+  // the only thing a human can actually judge a wrong filter by.
+  //
+  // ccd caps nothing on the wire (the `ignored` array is the whole set), so
+  // showing it is sufficient: when anything was filtered, the entries are
+  // expanded by default. The reader may still collapse them, and the collapsed
+  // toggle always says how many entries it is hiding.
+  const expanded = showAll ?? (shown !== null && shown.sensitiveFiltered > 0);
 
   const confirm = (): void => {
     // The token guard is a TYPE guard now, not a state the UI can reach:
@@ -161,12 +207,14 @@ export function ReapSheet({
                 {`${shown.ignoredCount} entries, ${humanBytes(shown.ignoredBytes)}`}
                 {shown.ignored.length > 0 && (
                   <span className="reap-ignored">
-                    {(showAll ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
+                    {(expanded ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
                   </span>
                 )}
                 {shown.ignored.length > 3 && (
-                  <button type="button" className="btn-ghost" onClick={() => setShowAll((v) => !v)}>
-                    {showAll ? 'show fewer' : 'show all'}
+                  <button type="button" className="btn-ghost" onClick={() => setShowAll(!expanded)}>
+                    {/* The collapsed label carries the total, so the size of
+                        what is hidden is never itself hidden. */}
+                    {expanded ? 'show fewer' : `show all ${shown.ignored.length}`}
                   </button>
                 )}
                 {/* The count and the total are NEVER truncated: the judgement
@@ -181,6 +229,12 @@ export function ReapSheet({
                 {shown.sensitiveFiltered > 0 && (
                   <span className="reap-note">
                     {`${shown.sensitiveFiltered} secret-shaped ${shown.sensitiveFiltered === 1 ? 'match' : 'matches'} filtered as vendored/template.`}
+                    {/* Where to look. The sentence tracks the list's actual
+                        state, so it is never a promise the screen is not
+                        keeping (F8 residual). */}
+                    {expanded || shown.ignored.length <= 3
+                      ? ' Every ignored entry is named above.'
+                      : ` Tap "show all ${shown.ignored.length}" to see them.`}
                   </span>
                 )}
               </dd>

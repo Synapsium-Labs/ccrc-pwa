@@ -42,6 +42,13 @@ const fakeSocket = (): WebSocket =>
     close(): void {},
   }) as unknown as WebSocket;
 
+/** A real workspace session id — ccd builds them as `$project-$slug`
+ *  (ccd:712) and validates them against `^[A-Za-z0-9._-]+$` on every verb
+ *  that takes one. The reap tests below use it for the session, the audit
+ *  fixture and the URL alike, because that is the only combination the
+ *  server can actually serve (fix round 3, verifier P4). */
+const WS_ID = 'OpenClawHetzner-quiet-basin';
+
 const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   id: 'claude:OpenClawHetzner',
   wrapper: 'claude',
@@ -232,12 +239,21 @@ describe('SessionScreen reap wiring (Task 17)', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).includes('/workspace/audit')) {
         return new Response(JSON.stringify({
-          // ccd echoes the REQUESTED session id back as the audit's own first
-          // field (`cmd_ws_audit`'s `local id=$2`, ccd:2416), and the sheet now
-          // refuses to render an audit that does not name the session it is
-          // describing (final-round F2). This fixture said 'demo' against a
-          // 'claude:OpenClawHetzner' session — a response ccd cannot produce.
-          id: 'claude:OpenClawHetzner', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          // ccd echoes the REQUESTED session id back as the audit's own
+          // first field (`cmd_ws_audit`'s `local id=$2`, ccd:2511), and the
+          // sheet refuses to render an audit that does not name the session
+          // it is describing (final-round F2), so the two must agree.
+          //
+          // Fix round 3, verifier P4: the previous note here justified the
+          // change by calling the old `id: 'demo'` "a response ccd cannot
+          // produce" — while substituting 'claude:OpenClawHetzner', which ccd
+          // cannot produce either. `cmd_ws_audit` validates the id BEFORE
+          // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:2512)
+          // and a colon is not in that class, so that request dies and the
+          // route 502s. Both this fixture and the session it describes now use
+          // a real workspace session id: ccd builds them as `$project-$slug`
+          // (ccd:712), and reap only ever applies to a workspace session.
+          id: 'OpenClawHetzner-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
           project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
@@ -252,15 +268,15 @@ describe('SessionScreen reap wiring (Task 17)', () => {
       phase: 'merged', number: 42, url: 'u', title: null, checks: null, checkNames: null,
       ahead: 0, reason: null, checkedAt: Date.now(), mergedAt: Date.now(), retryAt: null,
     };
-    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const store = createSessionStore(WS_ID, { makeSocket: fakeSocket });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
       fleet.setState({
-        sessions: [fleetSession({ workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr })],
+        sessions: [fleetSession({ id: WS_ID, workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr })],
         conn: 'open',
       });
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id={WS_ID} store={store} fleet={fleet} />);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
     expect(await screen.findByText('/w/quiet-basin')).toBeInTheDocument();
@@ -272,16 +288,25 @@ describe('SessionScreen reap wiring (Task 17)', () => {
     // above exercises the SECOND half of that line. A mutant dropping the
     // `navigate('/')` call would leave every other test in this file green:
     // the session that no longer exists would stay on screen.
-    history.pushState(null, '', '/s/claude:OpenClawHetzner');
+    history.pushState(null, '', `/s/${WS_ID}`);
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).includes('/workspace/audit')) {
         return new Response(JSON.stringify({
-          // ccd echoes the REQUESTED session id back as the audit's own first
-          // field (`cmd_ws_audit`'s `local id=$2`, ccd:2416), and the sheet now
-          // refuses to render an audit that does not name the session it is
-          // describing (final-round F2). This fixture said 'demo' against a
-          // 'claude:OpenClawHetzner' session — a response ccd cannot produce.
-          id: 'claude:OpenClawHetzner', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          // ccd echoes the REQUESTED session id back as the audit's own
+          // first field (`cmd_ws_audit`'s `local id=$2`, ccd:2511), and the
+          // sheet refuses to render an audit that does not name the session
+          // it is describing (final-round F2), so the two must agree.
+          //
+          // Fix round 3, verifier P4: the previous note here justified the
+          // change by calling the old `id: 'demo'` "a response ccd cannot
+          // produce" — while substituting 'claude:OpenClawHetzner', which ccd
+          // cannot produce either. `cmd_ws_audit` validates the id BEFORE
+          // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:2512)
+          // and a colon is not in that class, so that request dies and the
+          // route 502s. Both this fixture and the session it describes now use
+          // a real workspace session id: ccd builds them as `$project-$slug`
+          // (ccd:712), and reap only ever applies to a workspace session.
+          id: 'OpenClawHetzner-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
           project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
@@ -300,15 +325,15 @@ describe('SessionScreen reap wiring (Task 17)', () => {
       phase: 'merged', number: 42, url: 'u', title: null, checks: null, checkNames: null,
       ahead: 0, reason: null, checkedAt: Date.now(), mergedAt: Date.now(), retryAt: null,
     };
-    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const store = createSessionStore(WS_ID, { makeSocket: fakeSocket });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
       fleet.setState({
-        sessions: [fleetSession({ workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr })],
+        sessions: [fleetSession({ id: WS_ID, workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr })],
         conn: 'open',
       });
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id={WS_ID} store={store} fleet={fleet} />);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove quiet-basin/ }));
