@@ -50,6 +50,7 @@ const palette = (theme) => {
     gpt: of('--acct-gpt'), gptT: of('--acct-gpt-tint'),
     track: of('--limit-track'), lOk: of('--limit-ok'), lWarn: of('--limit-warn'), lCrit: of('--limit-critical'),
     diffAdd: of('--diff-add'), diffDel: of('--diff-del'),
+    accentOnWell: of('--accent-on-well'),
     // --pr-merged (tokens.css) aliases --acct-claude2, so it resolves to that
     // same hex per theme rather than being a second colour to keep in sync.
     prMerged: of('--pr-merged'),
@@ -152,6 +153,13 @@ const pairs = (T, name) => [
   [`${name} preview toggle / sheet`, T.accent, T.sheet, 4.5],
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
   [`${name} diff-del / well`, T.diffDel, T.well, 4.5],
+  // The code block's COPY / COPIED label. --accent flips with the theme and the
+  // light one is tuned for paper, so on a well — which is dark in BOTH themes —
+  // it read 3.03:1 and shipped that way. --accent-on-well is the well spelling
+  // of the accent; both floors are the 4.5 body floor because the label is 11px
+  // (--text-2xs), not a glyph. Two grounds, because the affordance is on the
+  // BAR and the bar is on the well.
+  [`${name} accent-on-well / well`, T.accentOnWell, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],
   // The selected fleet row inverts (.sess-line--active: background
   // --ink-primary), so its 12px meta line takes --edge-strong ON the slab — a
@@ -181,9 +189,21 @@ for (const [label, fg, bg, min] of [...pairs(palette(DARK), 'DARK '), ...pairs(p
 console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);
 console.log(
   `# ${report.counts.rules} rules, ${report.counts.selfGrounded} self-grounded, `
-  + `${report.counts.pseudo} pseudo-element children, ${report.counts.inherited} inherited-ground, `
+  + `${report.counts.pseudo} pseudo-element children, ${report.counts.descendant} named-ancestor descendants, `
+  + `${report.counts.inherited} inherited-ground, `
   + `${report.counts.faded} element fades, ${report.counts.keyframes} keyframe blocks`,
 );
+// The blind spot, PRINTED rather than described. Every round of this gate has
+// been forged the same way — it measures the shapes someone thought of — so the
+// count of rules it could not ground belongs in the output next to the count of
+// rules it could. These are not failures: they are colour rules whose ground is
+// genuinely inherited from an ancestor the selector does not name, which is DOM
+// knowledge a stylesheet parser cannot recover. `--uncovered` lists them.
+console.log(
+  `# ${report.counts.uncovered} rules set a colour with no ground this auditor can recover`
+  + ' — run with --uncovered to list them',
+);
+if (process.argv.includes('--uncovered')) for (const k of report.uncovered) console.log(`#   ${k}`);
 for (const m of report.measured) {
   if (!m.ok) fail++;
   n++;

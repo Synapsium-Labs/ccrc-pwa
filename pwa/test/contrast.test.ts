@@ -30,9 +30,12 @@ import {
   OPACITY_REGISTRY,
   SELF_GROUNDED_EXEMPT,
   audit,
+  bgImageOf,
   bgOf,
   blockBody,
+  compoundChain,
   contrast,
+  paintOf,
   declOf,
   keyframeTroughs,
   loadThemes,
@@ -293,6 +296,109 @@ describe('the gate fails a mutated tree', () => {
     ],
   ])('the gate measures %s', (_n, rule, want) => {
     expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
+  // ── the VARIANT SHAPE, not the four spellings of it ───────────────────────
+  // final2-gates F1, the MAJOR: `contextsFor` returned only the base unless the
+  // base declared custom properties, and then admitted only variants that
+  // REBOUND one of them. A variant that overrode `color` directly was never
+  // measured — which is how `.code-block-copy:hover,
+  // .code-block-copy[data-copied]` shipped 11px uppercase mono text at 3.03:1
+  // in the light theme with this gate printing ALL 234 PASS.
+  //
+  // Three rounds have each closed one spelling of "variant". These are the
+  // other ways the SHAPE occurs, enumerated with the auditor's own exports
+  // rather than from memory, and each one is a route that was green before this
+  // commit. Every mutant reintroduces the same reported blocker (--ink-secondary
+  // on the light-theme well, 2.44) so nothing here can pass by measuring
+  // something else.
+  it.each([
+    [
+      'overrides `color` on a :hover of a self-grounded rule',
+      'src/session/chat.css',
+      '.pr-body-preview:hover { color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview:hover\]/,
+    ],
+    [
+      'overrides `color` from ANOTHER stylesheet',
+      'src/fleet/fleet.css',
+      ".pr-body-preview[data-x] { color: var(--ink-secondary); }",
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as fleet\.css \.pr-body-preview\[data-x\]\]/,
+    ],
+    [
+      'swaps only the GROUND under an inherited ink',
+      'src/session/chat.css',
+      '.metachip.is-rogue { background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\.is-rogue\]/,
+    ],
+    [
+      'restates the WHOLE selector a second time, colour only',
+      'src/session/chat.css',
+      '.pr-body-preview { color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview\]/,
+    ],
+    [
+      'restates the whole selector a second time, ground only',
+      'src/session/chat.css',
+      '.metachip { background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\]/,
+    ],
+    [
+      'splits the ink and the ground across two rules with the SAME qualifier',
+      'src/session/chat.css',
+      '.metachip:hover { color: var(--ink-secondary); }\n.metachip:hover { background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip:hover \+ \.metachip:hover\]/,
+    ],
+    [
+      'is a DESCENDANT of a self-grounded rule its own selector names',
+      'src/session/chat.css',
+      '.msg-assist pre .rogue { color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist pre \.rogue \[in chat\.css \.msg-assist pre\]/,
+    ],
+  ])('a rule that %s cannot hide the well', (_n, rel, rule, want) => {
+    expect(expectFail(rel as string, (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
+  it('the live rule the MAJOR was found in is measured, in both themes', () => {
+    // Not a mutation — a pin on the live tree, because the defect was that
+    // NOTHING measured this rule. Both rows must exist and both must clear 4.5:
+    // the label is --text-2xs (11px) uppercase mono, so it is body text.
+    const rows = report.measured.filter((m) =>
+      m.label.includes('chat.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r.floor).toBe(4.5);
+      expect(r.detail).toContain('var(--accent-on-well)');
+      expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('retuning --accent-on-well back to the theme accent fails the gate', () => {
+    // The bind between the fix and the gate: --accent flips with the theme and
+    // the light one is tuned for paper, so on the well bar it is 3.03. If
+    // anybody "simplifies" this token away, the gate says so.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('color: var(--accent-on-well);\n  border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);',
+        'color: var(--accent);\n  border-color: color-mix(in srgb, var(--accent) 40%, transparent);'));
+    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT chat\.css \.code-block-copy \[as \.code-block-copy:hover/);
+  });
+
+  // ── background-image: read, or fail loudly. Never skipped ─────────────────
+  // final2-gates F3. `bgOf` matched only `background` / `background-color`, so
+  // a rule that painted its own opaque ground with a gradient and put
+  // unreadable text on it was skipped SILENTLY — contradicting this file's own
+  // claim that an unparsed paint is a FAIL and never a skip. There is no live
+  // instance today; this is the hole the next gradient walks through, and the
+  // design system already uses gradients (.attach-strip, .md-table-wrap,
+  // .skel-line).
+  it.each([
+    ['the `background-image` longhand', '.forge-bgimg { color: var(--ink-secondary); background-image: linear-gradient(var(--bg-well), var(--bg-well)); }'],
+    ['a url() image', '.forge-bgurl { color: var(--ink-secondary); background-image: url(x.png); }'],
+    ['an image inside the `background` shorthand', '.forge-bgshort { color: var(--ink-secondary); background: linear-gradient(#fff, #fff); }'],
+    ['an image ground introduced by a VARIANT', '.metachip.is-grad { background-image: linear-gradient(#fff, #fff); }'],
+  ])('%s is an unmeasurable paint and therefore a FAILURE', (_n, rule) => {
+    const o = expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`);
+    expect(o).toMatch(/background-image .* is a paint that cannot be reduced to a colour/);
   });
 
   // ── CASE. CSS property names are ASCII case-insensitive; this file was not ──
@@ -676,13 +782,14 @@ describe('the auditor itself', () => {
     // The .d.mts beside audit.mjs is hand-written, i.e. a drift risk of the
     // same class as everything else here. This is the runtime check on it.
     expect(Object.keys(report).sort()).toEqual(
-      ['counts', 'fades', 'measured', 'problems', 'sheets', 'stale', 'themes', 'troughs'],
+      ['counts', 'fades', 'measured', 'problems', 'sheets', 'stale', 'themes', 'troughs', 'uncovered'],
     );
     expect(Object.keys(report.stale).sort()).toEqual(
       ['exempt', 'grounds', 'inherited', 'keyframes', 'opacity'],
     );
     expect(Object.keys(report.counts).sort()).toEqual(
-      ['faded', 'inherited', 'keyframes', 'pseudo', 'rules', 'selfGrounded', 'selfGroundedContexts'],
+      ['descendant', 'faded', 'inherited', 'keyframes', 'pseudo', 'rules', 'selfGrounded',
+        'selfGroundedContexts', 'uncovered'],
     );
   });
 });
@@ -718,6 +825,77 @@ describe('every stylesheet under src/ is audited', () => {
 
   it('reports no structural problem', () => {
     expect(report.problems).toEqual([]);
+  });
+
+  // ── the census of what the auditor cannot measure ─────────────────────────
+  // The through-line of every forge this gate has survived is the same: it
+  // measures the shapes someone thought of, and CSS has more shapes than that.
+  // So the audit computes its own blind spot instead of describing it, and this
+  // is the bind on the description: `uncovered` must be EXACTLY the rules whose
+  // ground cannot be recovered from the stylesheets. Re-derived here from the
+  // primitives, independently of how audit() partitions them — if a rule that
+  // names a painter, or restates a painter's subject, ever lands in the census
+  // again (which is what the MAJOR was), this fails.
+  describe('the uncovered census', () => {
+    const rules = stylesheets(ROOT).flatMap((rel) => rulesOf(ROOT, rel));
+    const paints = (r: { body: string }): boolean => paintOf(r.body).paints;
+    const painters = rules.filter((r) => declOf(r.body, 'color') !== null && paints(r));
+
+    it('is non-empty and smaller than the set it is drawn from', () => {
+      // Vacuity guards in both directions: an empty census would make the
+      // assertion below trivially true, and a census equal to every colour rule
+      // would mean nothing is measured at all.
+      const colourRules = rules.filter((r) => declOf(r.body, 'color') !== null);
+      expect(report.uncovered.length).toBeGreaterThan(0);
+      expect(report.uncovered.length).toBeLessThan(colourRules.length - 40);
+      expect(report.counts.uncovered).toBe(report.uncovered.length);
+    });
+
+    it('contains no rule whose ground the selector itself gives away', () => {
+      const recoverable = report.uncovered.filter((k) => {
+        const rule = rules.find((r) => ruleKey(r) === k);
+        if (rule === undefined) return true;
+        return painters.some(
+          (h) =>
+            ruleKey(h) !== k
+            && (variantSuffix(rule.selector, h.selector) !== null
+              || selectorList(rule.selector).some((s) =>
+                compoundChain(s).slice(0, -1).some((anc) =>
+                  selectorList(h.selector).some((hs) => subjectCompound(hs) === anc)))),
+        );
+      });
+      expect(recoverable).toEqual([]);
+    });
+
+    it('every entry really does set a colour and supply no ground', () => {
+      for (const k of report.uncovered) {
+        const rule = rules.find((r) => ruleKey(r) === k);
+        expect(rule, k).toBeDefined();
+        expect(declOf((rule as { body: string }).body, 'color'), k).not.toBeNull();
+        expect(paints(rule as { body: string }), k).toBe(false);
+      }
+    });
+
+    it('the gate prints the count, so the blind spot is in the output', () => {
+      expect(out).toMatch(
+        new RegExp(`# ${report.counts.uncovered} rules set a colour with no ground this auditor can recover`),
+      );
+    });
+  });
+
+  it('grounds the two rules on the code block bar that nothing measured', () => {
+    // The MAJOR's neighbourhood, enumerated rather than fixed one at a time:
+    // .code-block-copy and .code-block-lang are the two texts on
+    // .code-block-bar, and the bar (--well-bar-bg, 5% ink over the well) is what
+    // is behind them — not --bg-well, which the GROUNDS entry used to claim and
+    // which flattered every ratio here.
+    for (const sel of ['.code-block-copy', '.code-block-lang']) {
+      const rows = report.measured.filter((m) => m.label.endsWith(`chat.css ${sel}`));
+      expect(rows.map((m) => m.label), sel).toHaveLength(2);
+      for (const r of rows) expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(GROUNDS['chat.css .code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(INHERITED_GROUNDS['chat.css .code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
   });
 
   it('clears its floor on every pair, in both themes', () => {
@@ -826,6 +1004,35 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     expect(selectorList(":is(.a, .b) .c, .d[x~='y, z']")).toEqual([':is(.a, .b) .c', ".d[x~='y, z']"]);
     expect(subjectCompound('.a > .b + .c ~ .d')).toBe('.d');
     expect(subjectCompound(":not(.a, .b) .c[data-x='p q']")).toBe(".c[data-x='p q']");
+    // The descendant route walks this chain looking for a named painter.
+    expect(compoundChain('.a > .b + .c ~ .d')).toEqual(['.a', '.b', '.c', '.d']);
+    expect(compoundChain(":is(.a, .b) .c[data-x='p q']")).toEqual([':is(.a, .b)', ".c[data-x='p q']"]);
+  });
+
+  it.each([
+    // body, the image paint the auditor must refuse to reduce to a colour
+    ['background-image: linear-gradient(#fff, #000)', 'linear-gradient(#fff, #000)'],
+    ['background-image: url(a.png)', 'url(a.png)'],
+    ['background: repeating-linear-gradient(#fff, #000)', 'repeating-linear-gradient(#fff, #000)'],
+    ['BACKGROUND-IMAGE: URL(a.png)', 'URL(a.png)'],
+    // …and the shapes that are NOT images
+    ['background-image: none', null],
+    ['background: var(--bg-well)', null],
+    ['color: red', null],
+  ])('bgImageOf(%s) is %s', (body, want) => {
+    expect(bgImageOf(body as string)).toBe(want as string | null);
+  });
+
+  it.each([
+    ['background: var(--bg-well)', true],
+    ['background-image: url(a.png)', true],
+    ['background: none', false],
+    ['background-image: none', false],
+    ['color: red', false],
+  ])('paintOf(%s).paints is %s', (body, want) => {
+    // `paints` is the question "does this rule supply a ground of its own".
+    // Answering it with bgOf alone is what made an image ground invisible.
+    expect(paintOf(body as string).paints).toBe(want);
   });
 });
 

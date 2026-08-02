@@ -954,12 +954,17 @@ button.metachip:active {
   cursor: pointer; -webkit-tap-highlight-color: transparent;
   transition: color var(--dur-fast) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
 }
+/* --accent-on-well, not --accent: this label sits on the code well's bar, which
+   is dark in BOTH themes, and the light-theme --accent (#0E7B3F) is tuned for
+   paper — it read 3.03:1 here, under the 4.5 floor this 11px uppercase mono
+   text needs. [data-copied] is not a hover-only state: MessageBubble.tsx holds
+   it for 1600ms after every copy, and it is the state that renders "Copied". */
 .code-block-copy:hover, .code-block-copy[data-copied] {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent-on-well);
+  border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);
 }
 .code-block-copy:active { transform: scale(0.96); }
-.code-block-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.code-block-copy:focus-visible { outline: 2px solid var(--accent-on-well); outline-offset: 2px; }
 .code-block pre { margin: 0; border-radius: 0; }   /* wrapper owns corners + bg */
 
 /* ── Syntax spans — ONE dark palette (wells are dark in both themes).

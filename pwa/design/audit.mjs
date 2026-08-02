@@ -32,47 +32,76 @@
 //
 // WHAT IT MEASURES
 //
-//   1. self-grounded rules — every rule that sets BOTH `color` and
-//      `background`. The rule IS the pair; no registration needed.
-//   2. variants — a rule that only rebinds the custom properties an ancestor
-//      rule paints with (`.callout[data-callout='warning']` over `.callout`).
-//      The base rule is re-measured once per variant.
+// The organising question is ONE question, asked of every rule that sets a
+// `color`: **can the ground be recovered from the stylesheets?** If yes, the
+// pair is measured, whatever the rule looks like. If no, the rule is counted
+// into the `uncovered` census that the gate PRINTS, so the blind spot is a
+// number in the output rather than a paragraph in this comment. And if the
+// ground can be found but not RESOLVED — a translucent tint with no GROUNDS
+// entry, a gradient, an unknown token — that is a `problems` entry, i.e. a
+// FAIL. An unparsed paint is a FAIL, never a skip; there is no fourth outcome.
 //
-//      The claim this line used to make was "this is what makes the callouts
-//      unforgeable", and it was false: the check compared whole selector
-//      STRINGS with startsWith, so a grouped selector, an extra ancestor and an
-//      ancestor qualifier each reintroduced the 2.44:1 blocker with the gate
-//      printing ALL PASS. What is true now, and all that is claimed:
+// The ground is recoverable in four ways:
 //
-//        A variant is matched on its SUBJECT COMPOUND (`variantSuffix`), across
-//        selector lists, across ancestor chains and across files. Any rule
-//        whose subject is textually the base rule's subject plus compound
-//        qualifiers rebinds the base's paint and is measured.
+//   1. self-grounded rules — a rule that sets BOTH `color` and a ground of its
+//      own (`background`, `background-color`, or a `background-image`, which is
+//      recoverable-but-unresolvable and therefore a FAIL). The rule IS the pair.
+//   2. variants — a rule whose SUBJECT restates a self-grounded rule's subject
+//      (`variantSuffix`), across selector lists, ancestor chains and files. The
+//      base rule is re-measured once per variant, with whatever the variant
+//      changes: its `color`, its `background`, or a custom property the base
+//      paints with.
 //
-//      NOT covered, and this sentence is the disclosure: a rule that restates
-//      the subject in a form that is not textually base-subject-plus-qualifiers
-//      — `:is(.callout)[data-callout='x']`, `[class~='callout'][data-x]`, a
-//      `>`/`+`/`~` chain whose subject is written some other way — is not seen
-//      as a variant. Closing those needs a specificity-aware selector engine,
-//      not a parser. Spell variants as the five in chat.css do.
+//      Three rounds have each closed one SPELLING of "variant" here and left
+//      the shape open. The check compared whole selector strings with
+//      startsWith, so a grouped selector / an extra ancestor / an ancestor
+//      qualifier each walked the 2.44:1 blocker past a green gate; then it
+//      admitted only rules that REBOUND A CUSTOM PROPERTY, so a variant that
+//      overrode `color` directly — `.code-block-copy:hover,
+//      .code-block-copy[data-copied]`, shipping at 3.03:1 — was never measured
+//      at all. What is claimed now is the shape: a variant is admitted iff it
+//      changes one of the three inputs to the pair (ink, ground, or a property
+//      the base resolves against), and variants that qualify the subject the
+//      SAME way are merged, so splitting the ink across one rule and the ground
+//      across another is not a hiding place either.
 //   3. pseudo-element children — `X::before` / `X::placeholder` that set a
-//      colour and no background inherit X's background, including each of X's
-//      variants.
-//   4. inherited grounds — rules whose ground genuinely comes from the DOM.
-//      Hand-written ground, but the COLOUR is read from the stylesheet.
-//   5. element opacity — every static `opacity` strictly between 0 and 1,
-//      which must be registered with the pairs it composites or a reason it
+//      colour and no ground inherit X's, including each of X's variants.
+//   4. named-ancestor descendants — a rule that sets a colour, has no ground of
+//      its own, and NAMES a self-grounded ancestor in its own selector
+//      (`.msg-assist .callout strong`). The closest named painter wins; the
+//      pair is measured through every variant context of that painter. No DOM
+//      knowledge is involved — the selector says where the element is.
+//
+// Plus two things a ratio cannot be read off directly:
+//
+//   5. element opacity — every static `opacity` strictly between 0 and 1, which
+//      must be registered with the pairs it composites or a reason it
 //      composites nothing.
 //   6. keyframe troughs — every @keyframes opacity stop below 1, which must be
 //      registered. Not gated on contrast (see KEYFRAME_TROUGHS); registered so
 //      the list cannot drift, which it already had.
 //
-// Deliberately NOT attempted: full selector coverage of the ~230 rules that
-// set a `color` but no background and are not a pseudo-element of a rule that
-// does. Their ground is inherited from an arbitrary ancestor, which is DOM
-// knowledge a stylesheet parser cannot recover. INHERITED_GROUNDS carries the
-// ones whose ground is load-bearing; the rest are uncovered and this sentence
-// is the disclosure.
+// INHERITED_GROUNDS is the escape valve for a load-bearing rule whose ground is
+// genuinely only in the DOM: the ground is hand-written, the COLOUR is still
+// read from the stylesheet.
+//
+// WHAT IT CANNOT MEASURE — enumerated, counted and printed, not described
+//
+//   * ~186 rules set a `color`, supply no ground, and name no painter in their
+//     selector. Their ground comes from an ancestor the stylesheet never names,
+//     which is DOM knowledge a parser cannot recover. `report.uncovered` is the
+//     list, `counts.uncovered` the number, and `node design/contrast-check.mjs
+//     --uncovered` prints it. This paragraph used to make the same claim about
+//     ~230 rules and it was FALSE for 20 of them — the variants and the
+//     named-ancestor descendants above, one of which was shipping below AA.
+//   * a rule that restates a subject in a form that is not textually
+//     base-subject-plus-qualifiers — `:is(.callout)[data-callout='x']`,
+//     `[class~='callout'][data-x]` — is not seen as a variant. Closing that
+//     needs a specificity-aware selector engine, not a parser. Spell variants
+//     as the ones in chat.css do.
+//   * CSS the audit does not model at all: `@media`/`@supports` preludes (the
+//     inner rules ARE read, the condition is ignored), `!important` ordering
+//     across rules, inline `style` attributes, and anything a script sets.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -302,6 +331,52 @@ export const bgOf = (body) => {
   return last;
 };
 
+/** Every CSS value function that paints an IMAGE rather than a colour. */
+const IMAGE_FN =
+  /\b(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(|\b(?:url|src|image|image-set|cross-fade|element|paint)\s*\(/i;
+
+/** The background IMAGE a rule paints, or null.
+ *
+ *  `bgOf` reads only `background` / `background-color`, so a rule that painted
+ *  its own opaque ground with `background-image: linear-gradient(…)` and put
+ *  unreadable text on it was classified as "colour-only, ground unrecoverable"
+ *  and SKIPPED — silently, and by a premise that was false for it. That
+ *  directly contradicted this file's own claim that an unparsed paint is a FAIL
+ *  and never a skip (final2-gates F3), and gradients are an idiom this design
+ *  system already uses (`.attach-strip`'s scrim, `.md-table-wrap`'s fade,
+ *  `.skel-line`'s shimmer).
+ *
+ *  An image cannot be reduced to one colour, so this exists to make the rule
+ *  UNMEASURABLE-and-loud rather than unmeasured-and-quiet: the caller turns a
+ *  non-null answer into a `problems` entry. Both spellings count — the
+ *  `background-image` longhand and an image function inside the `background`
+ *  shorthand — and the answer deliberately over-approximates: a longhand image
+ *  that a later `background` shorthand would reset is still reported, because
+ *  failing a rule that is fine costs a sentence in a registry while skipping a
+ *  rule that is not is the entire defect class this file exists for. */
+export const bgImageOf = (body) => {
+  let longhand = null;
+  for (const m of body.matchAll(/(?:^|[;\s])background-image\s*:\s*([^;]+)/gi)) longhand = m[1].trim();
+  if (longhand !== null && isPaintValue(longhand)) return longhand;
+  const short = bgOf(body);
+  return short !== null && IMAGE_FN.test(short) ? short : null;
+};
+
+/** A `color` value that names an actual colour (rather than deferring to the
+ *  cascade, which the auditor cannot follow). */
+const isColourValue = (v) => v !== null && !/^(inherit|currentColor|unset|initial|revert)$/i.test(v);
+/** A background value that paints something of its own. */
+const isPaintValue = (v) => v !== null && !/^(none|inherit|unset|initial|revert)$/i.test(v);
+
+/** What a rule paints its own element with: a colour, an image, or neither.
+ *  `paints` is the question "does this rule supply a ground of its own" —
+ *  answering it with `bgOf` alone is what made an image ground invisible. */
+export const paintOf = (body) => {
+  const colour = bgOf(body);
+  const image = bgImageOf(body);
+  return { colour, image, paints: isPaintValue(colour) || image !== null };
+};
+
 /** Custom properties a rule declares in its OWN body shadow the theme for that
  *  rule — `.msg-assist .callout` sets `--callout-tint` and then paints with
  *  it, so resolving against the bare theme would throw on an unknown token. */
@@ -342,8 +417,11 @@ export const selectorList = (sel) => topLevel(sel, (c) => c === ',');
 /** The SUBJECT of a complex selector — the rightmost compound, i.e. the
  *  element the rule actually paints. `.msg-assist .md-body .callout[data-x]`
  *  paints `.callout[data-x]`; the ancestors only say when. */
+export const compoundChain = (sel) =>
+  topLevel(sel, (c) => c === ' ' || c === '>' || c === '+' || c === '~');
+
 export const subjectCompound = (sel) => {
-  const parts = topLevel(sel, (c) => c === ' ' || c === '>' || c === '+' || c === '~');
+  const parts = compoundChain(sel);
   return parts[parts.length - 1] ?? sel;
 };
 
@@ -410,18 +488,28 @@ export const GROUNDS = {
   // `background: transparent` rules — the border and the ink are the whole
   // treatment.
   'chat.css .pending-actions button': { under: ['var(--bg-page)'], why: 'ghost button in the message column; chat.css:16 paints the screen --bg-page. Clears on every plausible ground' },
-  'chat.css .code-block-copy': { under: ['var(--bg-well)'], why: 'the copy affordance sits inside the code well it copies (.code-block, background --bg-well). Load-bearing: it clears ONLY on the well (13.98) and reads 1.10-1.29 on page / surface / raised / sheet' },
+  'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
   'chat.css .compaction-head': { under: ['var(--bg-page)'], why: 'a full-width divider in the message column. Clears on every plausible ground' },
   'primitives.css .btn-ghost': { under: ['var(--bg-sheet)'], why: 'the ghost button is a sheet/dialog control. Clears on every plausible ground' },
 };
 
-/** Rules exempt from the self-grounded audit, each with the reason. WCAG
- *  1.4.3 exempts disabled controls; nothing else here is exempt for
- *  convenience. */
+/** Rules exempt from the contrast audit, each with the reason. WCAG 1.4.3
+ *  exempts disabled controls; nothing else here is exempt for convenience.
+ *
+ *  Keyed by rule, and honoured EVERYWHERE that rule is reached — as a
+ *  self-grounded rule in its own right, as a variant context of one, or as the
+ *  host of a descendant. It used to be consulted only on the first of those,
+ *  which was invisible while the other two routes did not exist. */
 export const SELF_GROUNDED_EXEMPT = {
   'chat.css .chat-head .keycap:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   'chat.css .send-btn:disabled': 'WCAG 1.4.3 exempts inactive controls',
   'primitives.css .btn-primary:disabled': 'WCAG 1.4.3 exempts inactive controls',
+  // Measured, not assumed: --ink-disabled on the ghost button's sheet ground is
+  // 2.85 dark / 2.63 light. It is the same --ink-disabled the three entries
+  // above are exempt for; this one only became visible when variants that
+  // override `color` DIRECTLY started being measured (final2-gates F1), and it
+  // is exempt for the same clause, not a new judgement.
+  'primitives.css .btn-ghost:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is 2.85 dark / 2.63 light here and is documented sub-AA in tokens.css',
   'chat.css .attach-strip': "the ground is the user's own image, so no ratio is computable; the rule IS the mitigation (a scrim gradient under --ink-on-well)",
 };
 
@@ -429,6 +517,10 @@ export const SELF_GROUNDED_EXEMPT = {
  *  is hand-written (a parser cannot recover it); the COLOUR is read from the
  *  stylesheet, so retinting the rule re-measures it. */
 export const INHERITED_GROUNDS = {
+  'chat.css .code-block-lang': {
+    under: ['var(--well-bar-bg)'],
+    why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
+  },
   'fleet.css .proj-archived-body .sess-line:not(.sess-line--active) .sess-label': {
     under: ['var(--bg-surface)'],
     why: 'the past-tense signal for an archived row is an ink STEP on the label, not element opacity (see the note above the rule). Its ground is the project card. :not(.sess-line--active) is load-bearing — the selected row inverts to background: var(--ink-primary), where --ink-secondary reads 1.81 dark / 2.24 light',
@@ -569,51 +661,158 @@ export function audit(root = PWA_ROOT) {
   const add = (label, theme, r, floor, detail) =>
     measured.push({ label: `${theme} ${label}`, ratio: r, floor, ok: r >= floor, detail });
 
-  const isColour = (v) => v !== null && !/^(inherit|currentColor|unset|initial|revert)$/i.test(v);
-  const isPaint = (v) => v !== null && !/^(none|inherit|unset|initial|revert)$/i.test(v);
+  const isColour = isColourValue;
+  const isPaint = isPaintValue;
 
+  // A rule is self-grounded when it sets a colour AND supplies a ground of its
+  // own — a background COLOUR or a background IMAGE. The image half is not
+  // measurable, and that is exactly why it belongs in this set: outside it the
+  // rule fell into the "colour-only, ground unrecoverable" bucket and was
+  // skipped in silence.
   const selfGrounded = rules.filter(
-    (r) => !isKeyframeStop(r) && isColour(declOf(r.body, 'color')) && isPaint(bgOf(r.body)),
+    (r) => !isKeyframeStop(r) && isColour(declOf(r.body, 'color')) && paintOf(r.body).paints,
   );
 
-  // Contexts: the rule as written, plus once per variant that rebinds a custom
-  // property the rule paints with. `.callout[data-callout='warning']` sets no
-  // colour of its own, so without this the audit only ever sees the BASE
-  // callout and any variant tint is unmeasured.
+  const selfGroundedKeys = new Set(selfGrounded.map(ruleKey));
+  // By IDENTITY, not by key: two rules can share a `file selector` key (the
+  // stylesheet declares the same selector twice) and only one of them be the
+  // one that paints a ground. Keying this by ruleKey made the OTHER one — a
+  // pure `color` override the browser cascades on top — invisible.
+  const selfGroundedSet = new Set(selfGrounded);
+
+  /** Every way the stylesheets can paint the element a self-grounded rule
+   *  paints: the rule as written, plus once per VARIANT of it.
+   *
+   *  This used to admit exactly one kind of variant — one that rebinds a custom
+   *  property the base paints WITH — and it did not even look for those unless
+   *  the base declared custom properties of its own. A variant that simply
+   *  overrode `color` was never measured, which is how
+   *  `.code-block-copy:hover, .code-block-copy[data-copied]` shipped at 3.03:1
+   *  with this gate printing ALL 234 PASS (final2-gates F1). Three rounds have
+   *  now each closed one SPELLING of "variant"; the shape is what is closed
+   *  here.
+   *
+   *  A variant is admitted when it changes any of the three inputs to the pair
+   *  — the ink (`color`), the ground (`background`/`background-image`), or a
+   *  custom property the base resolves against — and for no other reason, so
+   *  `:active { transform: … }` still costs nothing.
+   *
+   *  Two exclusions, both because the rule is measured better elsewhere:
+   *    * a variant that supplies BOTH ink and ground is itself self-grounded,
+   *      so route 1 measures it with its own GROUNDS entry or exemption;
+   *      re-measuring it through the base's ground is a second, wrong answer
+   *      for the same pixels (`.term-keys .keycap` through `.chat-head
+   *      .keycap`'s ground was exactly that, and threw);
+   *    * a rule with a SELF_GROUNDED_EXEMPT reason is exempt wherever it is
+   *      reached, not only when route 1 reaches it. */
   const contextsFor = (base) => {
     const vars = localVars(base.body);
     const out = [{ suffix: '', vars, rule: base }];
-    if (Object.keys(vars).length === 0) return out;
+    // Each variant gets its own context, AND variants that qualify the base's
+    // subject the same way additionally get a MERGED one. Both, not one or the
+    // other: two rules with the same qualifier paint the same element in the
+    // same state, so splitting the ink across one and the ground across the
+    // other is one more way to have a pair nothing measures — but which of the
+    // two wins a property they both set is decided by specificity, which this
+    // parser does not compute. Measuring every rule alone and then all of them
+    // together covers both outcomes, and over-approximating costs a measured
+    // row that passes where under-approximating costs a shipped defect. (An
+    // earlier draft merged INSTEAD of keeping the singles, and silently
+    // re-opened the three variant spellings round 3 closed: a higher-specificity
+    // forge written EARLIER in the file lost to a lower-specificity real rule
+    // written later.)
+    const groups = new Map();
     for (const v of rules) {
       if (v === base || isKeyframeStop(v)) continue;
-      if (variantSuffix(v.selector, base.selector) === null) continue;
+      // `variantSuffix` answers null for a selector that is textually the base's
+      // — it is written for "is this a NARROWER restatement". A SECOND rule with
+      // the SAME selector is the widest restatement there is, and the browser
+      // simply cascades the two together, so it is a context here.
+      const suffix = v.selector === base.selector ? '' : variantSuffix(v.selector, base.selector);
+      if (suffix === null) continue;
+      if (selfGroundedSet.has(v)) continue;
+      if (ruleKey(v) in SELF_GROUNDED_EXEMPT) continue;
       const vv = localVars(v.body);
-      if (!Object.keys(vv).some((k) => k in vars)) continue;
+      const colour = declOf(v.body, 'color');
+      const paint = paintOf(v.body);
+      const rebinds = Object.keys(vv).some((k) => k in vars);
+      if (!rebinds && !isColour(colour) && !paint.paints) continue;
       // Cross-file variants are real (a component sheet retinting a primitive),
       // so the file is not a filter — but the label has to name it.
       const as = v.file === base.file ? v.selector : ruleKey(v);
-      out.push({ suffix: ` [as ${as}]`, vars: { ...vars, ...vv }, rule: v });
+      const one = {
+        suffix: ` [as ${as}]`,
+        vars: { ...vars, ...vv },
+        colour: isColour(colour) ? colour : undefined,
+        // Both rules match the SAME element, so a variant's background replaces
+        // the base's in the cascade — it does not layer over it.
+        paint: paint.paints ? paint : undefined,
+        rule: v,
+      };
+      out.push(one);
+      const g = groups.get(suffix) ?? { names: [], vars: { ...vars }, colour: undefined, paint: undefined, rule: v };
+      g.names.push(as);
+      Object.assign(g.vars, vv);
+      if (one.colour !== undefined) g.colour = one.colour;
+      if (one.paint !== undefined) g.paint = one.paint;
+      g.rule = v;
+      groups.set(suffix, g);
+    }
+    for (const g of groups.values()) {
+      if (g.names.length > 1) out.push({ ...g, suffix: ` [as ${g.names.join(' + ')}]` });
     }
     return out;
   };
 
-  const measureRule = (base, fgExpr, bgExpr, labelBase, floor, ground) => {
-    for (const ctx of contextsFor(base)) {
-      const label = `${labelBase}${ctx.suffix}`;
-      for (const [theme, palette] of THEMES) {
-        const tokens = { ...palette, ...ctx.vars };
-        try {
-          const bg = resolveColor(bgExpr, tokens);
-          if (bg[3] !== 1 && ground === undefined) {
-            problems.push(`${theme} ${label}: background ${bgExpr} is translucent and has no GROUNDS entry`);
-            continue;
-          }
-          const chain = bg[3] === 1 && ground === undefined ? [bgExpr] : [...(ground?.under ?? []), bgExpr];
-          add(label, theme, ratio(fgExpr, chain, tokens), floor, `${fgExpr} on ${bgExpr}`);
-        } catch (e) {
-          problems.push(`${theme} ${label}: ${e.message} — add a GROUNDS entry or an exemption with a reason`);
+  /** Measure one ink against one ground, in both themes. The single place a
+   *  `measured` row or an unmeasurable-paint problem is produced. */
+  const measureOn = (label, fgExpr, paint, ground, tokenLayers) => {
+    if (paint.image !== null) {
+      // The header's standing claim is that an unparsed paint is a FAIL and
+      // never a skip. `background-image` used not to be read at all, so a rule
+      // that painted its own opaque ground with a gradient and put unreadable
+      // text on it was skipped in silence (final2-gates F3). An image cannot be
+      // reduced to one colour, so the only honest outcomes are a reason or a
+      // different design.
+      problems.push(
+        `${label}: background-image ${paint.image} is a paint that cannot be reduced to a colour`
+        + ' — an unparsed paint is a FAIL, never a skip: give the rule a reason in SELF_GROUNDED_EXEMPT'
+        + ' (as .attach-strip has, for the scrim over a user image) or do not put text on it',
+      );
+      return;
+    }
+    const bgExpr = paint.colour;
+    for (const [theme, palette] of THEMES) {
+      const tokens = Object.assign({}, palette, ...tokenLayers);
+      try {
+        if (!isPaint(bgExpr)) throw new Error(`no ground to measure on (background ${bgExpr})`);
+        const bg = resolveColor(bgExpr, tokens);
+        if (bg[3] !== 1 && ground === undefined) {
+          problems.push(`${theme} ${label}: background ${bgExpr} is translucent and has no GROUNDS entry`);
+          continue;
         }
+        const chain = bg[3] === 1 && ground === undefined ? [bgExpr] : [...(ground?.under ?? []), bgExpr];
+        add(label, theme, ratio(fgExpr, chain, tokens), ground?.floor ?? 4.5, `${fgExpr} on ${bgExpr}`);
+      } catch (e) {
+        problems.push(`${theme} ${label}: ${e.message} — add a GROUNDS entry or an exemption with a reason`);
       }
+    }
+  };
+
+  /** Measure `fg` on `host`'s ground, once per context of the host. `own` are
+   *  custom properties declared by the rule being measured, which win over the
+   *  host's (a pseudo-element or a descendant may retint locally). */
+  const measureThrough = (host, fg, labelBase, own = {}, labelCtx = (s) => s) => {
+    const ground = GROUNDS[ruleKey(host)];
+    const hostPaint = paintOf(host.body);
+    for (const ctx of contextsFor(host)) {
+      measureOn(
+        `${labelBase}${labelCtx(ctx.suffix)}`,
+        fg,
+        ctx.paint ?? hostPaint,
+        ground,
+        [ctx.vars, own],
+      );
     }
   };
 
@@ -622,19 +821,24 @@ export function audit(root = PWA_ROOT) {
     const k = ruleKey(rule);
     if (k in SELF_GROUNDED_EXEMPT) continue;
     const ground = GROUNDS[k];
-    measureRule(rule, declOf(rule.body, 'color'), bgOf(rule.body), k, ground?.floor ?? 4.5, ground);
+    const baseColour = declOf(rule.body, 'color');
+    const basePaint = paintOf(rule.body);
+    for (const ctx of contextsFor(rule)) {
+      measureOn(`${k}${ctx.suffix}`, ctx.colour ?? baseColour, ctx.paint ?? basePaint, ground, [ctx.vars]);
+    }
   }
 
   // 3: pseudo-element children of a self-grounded rule inherit its background,
   // in every one of its variant contexts.
   const byKey = new Map(selfGrounded.map((r) => [ruleKey(r), r]));
   let pseudoCount = 0;
+  const pseudoKeys = new Set();
   for (const rule of rules) {
     if (isKeyframeStop(rule)) continue;
     const at = rule.selector.lastIndexOf('::');
     if (at <= 0) continue;
     const fg = declOf(rule.body, 'color');
-    if (!isColour(fg) || isPaint(bgOf(rule.body))) continue;
+    if (!isColour(fg) || paintOf(rule.body).paints) continue;
     // The host is the rule that paints the element this pseudo hangs off. An
     // exact key match only finds it when the pseudo spells its host EXACTLY as
     // the self-grounded rule does — the same string comparison that let three
@@ -649,23 +853,55 @@ export function audit(root = PWA_ROOT) {
       selfGrounded.find((h) => variantSuffix(hostSel, h.selector) !== null);
     if (host === undefined) continue;
     if (`${rule.file} ${rule.selector}` in SELF_GROUNDED_EXEMPT) continue;
+    if (ruleKey(host) in SELF_GROUNDED_EXEMPT) continue;
     pseudoCount++;
-    const ground = GROUNDS[ruleKey(host)];
-    // The pseudo-element's own local vars win over the host's.
-    const pseudoVars = localVars(rule.body);
-    for (const ctx of contextsFor(host)) {
-      const label = `${ruleKey(rule)}${ctx.suffix}`;
-      for (const [theme, palette] of THEMES) {
-        const tokens = { ...palette, ...ctx.vars, ...pseudoVars };
-        try {
-          const bgExpr = bgOf(host.body);
-          const bg = resolveColor(bgExpr, tokens);
-          const chain = bg[3] === 1 && ground === undefined ? [bgExpr] : [...(ground?.under ?? []), bgExpr];
-          add(label, theme, ratio(fg, chain, tokens), ground?.floor ?? 4.5, `${fg} on ${bgExpr}`);
-        } catch (e) {
-          problems.push(`${theme} ${label}: ${e.message}`);
-        }
+    pseudoKeys.add(ruleKey(rule));
+    measureThrough(host, fg, ruleKey(rule), localVars(rule.body));
+  }
+
+  // 2b: DESCENDANTS. A rule that sets a colour, supplies no ground of its own,
+  // and whose selector NAMES a self-grounded ancestor is painted on that
+  // ancestor's ground — and the selector says so, so this needs no DOM
+  // knowledge and no registration. `.msg-assist .callout strong` is painted on
+  // the callout's tint, in every one of the callout's five variant contexts,
+  // and nothing measured it.
+  //
+  // Only the CLOSEST named ancestor that paints is used per selector in the
+  // list: a nearer ground occludes a farther one, and walking every ancestor
+  // would measure grounds the element cannot see.
+  const paintersBySubject = new Map();
+  for (const h of selfGrounded) {
+    for (const s of selectorList(h.selector)) {
+      const sub = subjectCompound(s);
+      if (!paintersBySubject.has(sub)) paintersBySubject.set(sub, []);
+      paintersBySubject.get(sub).push(h);
+    }
+  }
+  let descendantCount = 0;
+  const descendantKeys = new Set();
+  for (const rule of rules) {
+    if (isKeyframeStop(rule)) continue;
+    const fg = declOf(rule.body, 'color');
+    if (!isColour(fg) || paintOf(rule.body).paints) continue;
+    if (ruleKey(rule) in SELF_GROUNDED_EXEMPT) continue;
+    const hosts = new Map();
+    for (const s of selectorList(rule.selector)) {
+      const chain = compoundChain(s);
+      for (let i = chain.length - 2; i >= 0; i--) {
+        const painters = (paintersBySubject.get(chain[i]) ?? []).filter(
+          (h) => !(ruleKey(h) in SELF_GROUNDED_EXEMPT) && h !== rule,
+        );
+        if (painters.length === 0) continue;
+        for (const h of painters) if (!hosts.has(ruleKey(h))) hosts.set(ruleKey(h), h);
+        break;
       }
+    }
+    if (hosts.size === 0) continue;
+    descendantCount++;
+    descendantKeys.add(ruleKey(rule));
+    const own = localVars(rule.body);
+    for (const host of hosts.values()) {
+      measureThrough(host, fg, `${ruleKey(rule)} [in ${ruleKey(host)}]`, own);
     }
   }
 
@@ -762,20 +998,50 @@ export function audit(root = PWA_ROOT) {
     for (const k of keys) problems.push(`stale ${kind} registry entry: ${k} matches no rule in the stylesheets`);
   }
 
+  // ── the census of what this auditor CANNOT measure ────────────────────────
+  // Every round of this gate has been forged by the same move: it measures the
+  // shapes someone thought of, and CSS has more shapes than that. So the audit
+  // now also computes its own blind spot instead of describing it in prose —
+  // every rule that sets a `color` and that NO route grounded. The gate prints
+  // the count; the suite pins that the list is exactly the rules whose ground
+  // is not recoverable from the selector, which is the only honest claim this
+  // file can make about them.
+  //
+  // The header used to assert of this set that "their ground is inherited from
+  // an arbitrary ancestor, which is DOM knowledge a stylesheet parser cannot
+  // recover". That was false for the slice that named its ancestor in its own
+  // selector, and false for every variant of a rule that DOES name its ground —
+  // 20 rules between them, one of which was shipping at 3.03:1. Both are
+  // measured now, so the sentence is finally true of what is left.
+  const groundedKeys = new Set([
+    ...selfGroundedKeys,
+    ...pseudoKeys,
+    ...descendantKeys,
+    ...Object.keys(INHERITED_GROUNDS),
+    ...Object.keys(SELF_GROUNDED_EXEMPT),
+  ]);
+  for (const base of selfGrounded) for (const ctx of contextsFor(base)) groundedKeys.add(ruleKey(ctx.rule));
+  const uncovered = rules
+    .filter((r) => !isKeyframeStop(r) && isColour(declOf(r.body, 'color')) && !groundedKeys.has(ruleKey(r)))
+    .map(ruleKey);
+
   return {
     sheets,
     themes: { DARK, LIGHT },
     measured,
     problems,
     stale,
+    uncovered,
     counts: {
       rules: rules.length,
       selfGrounded: selfGrounded.length,
       selfGroundedContexts: measured.length,
       pseudo: pseudoCount,
+      descendant: descendantCount,
       inherited: Object.keys(INHERITED_GROUNDS).length,
       faded: faded.length,
       keyframes: troughs.length,
+      uncovered: uncovered.length,
     },
     fades: faded.map((f) => ({ key: f.k, value: f.value })),
     troughs,
