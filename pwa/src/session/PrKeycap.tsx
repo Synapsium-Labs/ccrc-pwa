@@ -10,14 +10,17 @@
 // cap performs an action, so a misread badge can never cost anything.
 import type { ReactNode } from 'react';
 import type { PrChecks, PrState } from '../../../shared/api';
+import { UNCHECKED_PR } from '../../../shared/api';
 import './chat.css';
 
-/** The fallback for "we have not looked yet". Exported because `PrSheet` needs
- *  the identical object and a second copy would drift. */
-export const UNCHECKED_PR: PrState = {
-  phase: 'unchecked', number: null, url: null, title: null, checks: null, checkNames: null,
-  ahead: 0, reason: null, checkedAt: null, mergedAt: null, retryAt: null,
-};
+/** Integration finding 6: "we have not looked yet" is defined ONCE, in
+ *  `shared/api.ts`, and imported here. This file used to own the definition
+ *  under a docstring saying a second copy would drift — and then `watch.ts:38`
+ *  and `prstate.ts:190` grew one each, because they are in a package that
+ *  could not import from a pwa component. Re-exported so `PrSheet`'s existing
+ *  import keeps working and so the cap and the sheet still demonstrably share
+ *  one object; `server/test/single-definition.test.ts` fails on a fourth. */
+export { UNCHECKED_PR };
 
 /** '2m' | '3h' | '5d', or null under a minute. */
 function rel(then: number | null): string | null {

@@ -11,6 +11,7 @@ import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { SessionRecord } from './registry.js';
 import type { PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import { UNCHECKED_PR } from '../../shared/api.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -35,10 +36,9 @@ const PR_BACKOFF_MAX_MS = 900_000;
  *  permanent. */
 const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
 
-const UNCHECKED_PR: PrState = {
-  phase: 'unchecked', number: null, url: null, title: null, checks: null, checkNames: null,
-  ahead: 0, reason: null, checkedAt: null, mergedAt: null, retryAt: null,
-};
+// `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
+// `prstate.ts` each also held — integration finding 6. One definition now, in
+// `shared/api.ts`, which is the only module all three sides can import.
 
 /**
  * Polls the fleet: captures every registered pane to detect menu dialogs

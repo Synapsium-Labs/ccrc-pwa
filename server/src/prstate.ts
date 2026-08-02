@@ -1,4 +1,5 @@
 import type { PrChecks, PrState, PrView, TaskItem } from '../../shared/api.js';
+import { UNCHECKED_PR } from '../../shared/api.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -187,10 +188,10 @@ export function phaseFor(line: CcdPrLine): PrState {
   return { ...common, phase: row.isDraft === true ? 'draft' : 'open' };
 }
 
-const UNCHECKED: PrState = {
-  phase: 'unchecked', number: null, url: null, title: null, checks: null, checkNames: null,
-  ahead: 0, reason: null, checkedAt: null, mergedAt: null, retryAt: null,
-};
+// `UNCHECKED` was the third copy of this literal (integration finding 6),
+// beside `watch.ts`'s and `PrKeycap.tsx`'s. `UNCHECKED_PR` in `shared/api.ts`
+// is the one definition; the local alias is gone rather than renamed, so a
+// reader of this file cannot mistake it for a prstate-specific default.
 
 /**
  * A COMPLETE `PrView` that says "we do not know, and here is why" — the one
@@ -207,7 +208,7 @@ export function unknownView(
   reason: NonNullable<PrState['reason']>,
   prev: PrState | null = null,
 ): PrView {
-  return { pr: { ...(prev ?? UNCHECKED), phase: 'unknown', reason }, draft: null, facts: null };
+  return { pr: { ...(prev ?? UNCHECKED_PR), phase: 'unknown', reason }, draft: null, facts: null };
 }
 
 /**
@@ -221,7 +222,7 @@ export function prView(
   tasks: TaskItem[] | null,
   prev: PrState | null,
 ): PrView {
-  if (line === null) return { pr: prev ?? UNCHECKED, draft: null, facts: null };
+  if (line === null) return { pr: prev ?? UNCHECKED_PR, draft: null, facts: null };
   // Both failure shapes land here and are treated identically — whose fault it
   // was matters to the SWEEP's backoff, not to one session's view.
   if (!isFullLine(line)) return unknownView(line.reason ?? 'error', prev);

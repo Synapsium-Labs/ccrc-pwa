@@ -100,6 +100,40 @@ export interface PrState {
 }
 
 /**
+ * "We have not looked yet", as ONE object.
+ *
+ * Integration finding 6. This literal existed three times — `PrKeycap.tsx:17`,
+ * `watch.ts:38` and `prstate.ts:190` (as `UNCHECKED`) — and the first of them
+ * carried the docstring "Exported because `PrSheet` needs the identical object
+ * and a second copy would drift." Two more copies appeared anyway, which is the
+ * finding: a comment saying "do not copy this" is not a mechanism, and the two
+ * copies were in a package that could not import the first one. `shared/` is
+ * the only module all three sides already depend on, so this is the only place
+ * the definition can live and still be reachable from the pwa, the server and
+ * the agent.
+ *
+ * The drift is not hypothetical bookkeeping. `PrState` has eleven fields;
+ * `watch.ts` spreads this as the base for a state it then marks `unknown`, and
+ * `prstate.ts` spreads it inside `unknownView`. A field added to the interface
+ * and to two of three copies gives the third `undefined` where the type
+ * promises `null`, and `undefined !== null` is TRUE — the exact shape the
+ * snapshot-revival comment below spends thirty lines on.
+ *
+ * FROZEN, because one shared object is exactly the situation where a caller
+ * mutating it in place creates a fourth copy that no grep can find. Every
+ * consumer spreads it; nothing needs to write to it.
+ *
+ * A FOURTH COPY IS CAUGHT, not merely discouraged:
+ * `server/test/single-definition.test.ts` scans `shared/`, `server/src`,
+ * `pwa/src` and `agent/src` for an object literal opening `phase: 'unchecked'`
+ * and fails on any occurrence outside this file.
+ */
+export const UNCHECKED_PR: PrState = Object.freeze({
+  phase: 'unchecked', number: null, url: null, title: null, checks: null, checkNames: null,
+  ahead: 0, reason: null, checkedAt: null, mergedAt: null, retryAt: null,
+});
+
+/**
  * The eight phases as a runtime value, so a string read off disk (written by
  * ccd, possibly a version behind) can be validated rather than trusted.
  *
