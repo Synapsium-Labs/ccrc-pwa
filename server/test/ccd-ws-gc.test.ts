@@ -363,19 +363,42 @@ describe('ws-gc --prune', () => {
     return wt;
   };
 
-  it('leaves a DETACHED orphan alone, and says the commits are referenced by nothing else', () => {
+  it('leaves a DETACHED orphan alone, and says it cannot prove the commits are reachable', () => {
     h.makeRepo('demo');
     const wt = detachedOrphan('demo', 'still-cove');
     const head = h.git(wt, 'rev-parse', 'HEAD');
     const out = prune();
     expect(out, out).toContain('is on a detached HEAD');
-    expect(out, out).toContain('nothing else references its commits');
+    expect(out, out).toContain('cannot prove anything else reaches them');
     expect(out, out).not.toContain('removed orphan worktree');
     expect(fs.existsSync(wt), 'the detached orphan is still on disk').toBe(true);
     // The point of the refusal, stated as the fact it protects: the commit is
     // still reachable, from the one reference `worktree remove` would delete.
     expect(h.git(path.join(h.home, 'projects', 'demo'), 'rev-parse', '--verify', `${head}^{commit}`))
       .toBe(head);
+  });
+
+  it('never claims the commits are unreferenced — it does not look at refs, and says the same thing when they exist', () => {
+    // THE FIFTEENTH FORGERY, found by the final review and made by this rung's
+    // OWN replacement sentence: it used to say "nothing else references its
+    // commits", a reachability claim `_ws_gc_prune_row` never measures, printed
+    // identically for a commit with three refs on it and for one with none.
+    //
+    // The refusal was always right; the justification was invented. This pins
+    // the honest form AND pins that it is the SAME sentence when the commit
+    // demonstrably IS referenced elsewhere — the case the old wording stated
+    // backwards. A tag is used rather than a branch because a branch would
+    // change how the row classifies; the point is a reference this arm cannot
+    // see, not a reference that changes the verdict.
+    h.makeRepo('demo');
+    const wt = detachedOrphan('demo', 'still-cove');
+    const head = h.git(wt, 'rev-parse', 'HEAD');
+    h.git(path.join(h.home, 'projects', 'demo'), 'tag', 'keeps-it', head);
+    const out = prune();
+    expect(out, out).toContain('is on a detached HEAD');
+    expect(out, out).toContain('cannot prove anything else reaches them');
+    expect(out, out).not.toContain('nothing else references');
+    expect(fs.existsSync(wt), 'still declined, and still on disk').toBe(true);
   });
 
   it('does not print the merged-branch diagnosis for a detached orphan — nothing was compared', () => {

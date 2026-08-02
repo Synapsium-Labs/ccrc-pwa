@@ -4497,7 +4497,21 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # ws-reap refuses the same state outright (`detached-head`, ccd:2499)
         # and cmd_ws_rm notes it (ccd:1115); the unattended sweep refuses and
         # moves on, which is this command's own polarity for the same fact.
-        _gc_declined "$p is on a detached HEAD ($(git -C "$p" rev-parse --short HEAD 2>/dev/null || echo 'unreadable')) — nothing else references its commits, so removing the worktree removes the last reference to them: check it out on a branch first"
+        #
+        # THE FIFTEENTH FORGERY, and this arm's own replacement sentence made
+        # it. The message used to say "nothing else references its commits" —
+        # a REACHABILITY claim, and this function never runs a reachability
+        # check. It printed identically for a commit with three refs on it and
+        # for one with none. The comment four lines above already conceded the
+        # point ("this arm cannot tell that from a lost hour's work") while the
+        # sentence below asserted the opposite, which is how it survived
+        # review: the honest statement and the false one shipped together.
+        # Safe-direction — it is a DECLINE either way, nothing is destroyed —
+        # but "a number is a measurement" governs prose too, and a refusal
+        # justified by a fact nobody established teaches the operator to
+        # discount the next one. Now says only what the rung actually knows:
+        # there is no branch, so ccd cannot prove reachability, so it stops.
+        _gc_declined "$p is on a detached HEAD ($(git -C "$p" rev-parse --short HEAD 2>/dev/null || echo 'unreadable')) — with no branch naming its commits, ccd cannot prove anything else reaches them, so it will not remove the one thing that certainly does: check it out on a branch first"
         return 0
       fi
       if ! _ws_gc_merged "$main" "$branch"; then
