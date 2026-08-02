@@ -12,10 +12,32 @@
 // a throw at import time would take the whole file down instead of reporting
 // which pair regressed.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+// ── tmp fixtures ────────────────────────────────────────────────────────────
+// server/test/tmpHelpers.ts is the repo's rule for this and pwa/ had no
+// equivalent, so this file called mkdtempSync bare and never removed the
+// directory: 688 /tmp/contrast-* dirs had accumulated by the time it was
+// found, the oldest dated the day this branch's work started, and a mutation
+// sweep runs the suite 50-120 times. Same shape as the helper: remember what
+// we made, remove it in a file-scoped afterAll. A file-scoped hook rather than
+// a sweep of /tmp/contrast-*, because test FILES run in parallel processes and
+// a prefix sweep would delete a sibling's live fixture.
+const madeTmp: string[] = [];
+function mkTmp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  madeTmp.push(dir);
+  return dir;
+}
+function removeTmpFixtures(): void {
+  // `force`: a fixture its own test already removed is the normal case here,
+  // not an error — this hook is the net underneath that.
+  for (const dir of madeTmp.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+afterAll(removeTmpFixtures);
+
 
 const run = spawnSync(
   process.execPath,
@@ -47,16 +69,38 @@ describe('contrast gate', () => {
     expect(run.status).toBe(0);
   });
 
+  // The injected copy lives in a REGISTERED tmp dir and is removed the moment
+  // the child exits — `leaked` is what the next test reads.
+  let leaked: string | undefined;
+
   it('exits non-zero when a pair fails', () => {
     const gate = path.resolve(process.cwd(), 'design/contrast-check.mjs');
     // Same script, one token swapped for a colour that cannot pass on dark.
     const broken = readFileSync(gate, 'utf8').replace('inkP: "#ECF0EC"', 'inkP: "#151815"');
-    const injected = path.join(mkdtempSync(path.join(tmpdir(), 'contrast-')), 'contrast-check.mjs');
-    writeFileSync(injected, broken);
-    const bad = spawnSync(process.execPath, [injected], { encoding: 'utf8' });
+    const dir = mkTmp('contrast-');
+    leaked = dir;
+    try {
+      const injected = path.join(dir, 'contrast-check.mjs');
+      writeFileSync(injected, broken);
+      const bad = spawnSync(process.execPath, [injected], { encoding: 'utf8' });
 
-    expect(bad.stdout).toMatch(/^FAIL/m);
-    expect(bad.status).not.toBe(0);
+      expect(bad.stdout).toMatch(/^FAIL/m);
+      expect(bad.status).not.toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      madeTmp.splice(madeTmp.indexOf(dir), 1);
+    }
+  });
+
+  // The pin for the /tmp leak: an afterAll cannot be observed from inside the
+  // file it runs for, so the removal has to be observable from the NEXT test.
+  // Before the fix this file made a /tmp/contrast-* directory on every run and
+  // nothing ever removed it — 688 of them, oldest dated the day this branch
+  // started.
+  it('leaves no /tmp fixture behind', () => {
+    expect(leaked).toBeDefined();
+    expect(existsSync(leaked as string)).toBe(false);
+    expect(madeTmp).toEqual([]);
   });
 
   // 11px text (--text-2xs) is body text, not a UI glyph: 4.5, not 3:1.
