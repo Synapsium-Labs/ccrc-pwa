@@ -608,3 +608,60 @@ describe('out-of-order audits (final-round F2)', () => {
     expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
   });
 });
+
+// Fix round 3, verifier P1/P2. F2 shipped the generation bump inside `load()`
+// only, on the reasoning that the effect-cleanup bump would add nothing
+// observable: "the only cases the cleanup would add are unmount and id ->
+// null, neither of which is observable". `toast()` is the counter-example —
+// it is a GLOBAL host that outlives this sheet's own render, so a failure
+// belonging to a sheet the reader has left is still a red banner on their
+// screen, about a workspace check they are no longer looking at. The three
+// cases below are the ones `load()`'s own bump structurally cannot reach:
+// nothing calls `load()` when a sheet is dismissed, when the target leaves
+// the fleet, or when the screen unmounts. Each fails with the cleanup removed
+// from the effect in ReapSheet.tsx.
+describe('audits outliving the sheet that asked for them (fix round 3, P1)', () => {
+  const alphaSess = sess({ id: 'demo-alpha', workspace: 'alpha' });
+  const view = (s: FleetSession | null, isOpen: boolean): ReactElement => (
+    <><ToastHost /><ReapSheet session={s} open={isOpen} onClose={() => {}} onReaped={() => {}} /></>
+  );
+
+  it('does not toast a failure for a sheet the reader has already dismissed', async () => {
+    const net = deferredFetch();
+    const { rerender } = render(view(alphaSess, true));
+    // The reader dismisses the sheet — FleetScreen sets reapOpen=false — while
+    // alpha's audit is still in flight. It then fails.
+    rerender(view(alphaSess, false));
+    await act(async () => { net.reject('demo-alpha', 'alpha audit died'); });
+    expect(document.querySelector('.toast--error')).toBeNull();
+    expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
+  });
+
+  it('does not toast a failure for a session that has left the fleet', async () => {
+    const net = deferredFetch();
+    const { rerender } = render(view(alphaSess, true));
+    // `session` is `sessions.find((s) => s.id === reapId) ?? null` at both
+    // call sites: when the sweep stops listing the workspace it goes null
+    // under an open sheet.
+    rerender(view(null, true));
+    await act(async () => { net.reject('demo-alpha', 'alpha audit died'); });
+    expect(document.querySelector('.toast--error')).toBeNull();
+    expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
+  });
+
+  it('does not toast a failure after the screen holding the sheet has unmounted', async () => {
+    const net = deferredFetch();
+    // The host is mounted SEPARATELY and outlives the sheet — the app shell's
+    // arrangement (main.tsx renders one ToastHost above the router). A toast
+    // fired with no host at all is dropped silently by Toast.tsx, so a test
+    // that unmounted the host along with the sheet would pass with the guard
+    // removed and prove nothing.
+    render(<ToastHost />);
+    const { unmount } = render(
+      <ReapSheet session={alphaSess} open onClose={() => {}} onReaped={() => {}} />);
+    unmount();
+    await act(async () => { net.reject('demo-alpha', 'alpha audit died'); });
+    expect(document.querySelector('.toast--error')).toBeNull();
+    expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
+  });
+});

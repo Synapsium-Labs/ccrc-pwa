@@ -52,7 +52,22 @@ export function ReapSheet({
   // advances on every change of target and on every close — which means a
   // response is rendered ONLY if no target change and no newer request has
   // happened since it was issued. There is no path by which a superseded
-  // response reaches `setAudit`.
+  // response reaches `setAudit` or `toast`.
+  //
+  // Fix round 3 (verifier P1/P2): the cleanup bump was previously NOT shipped,
+  // on the reasoning that unmount and `id -> null` are unobservable. They are
+  // observable — through `toast()`, which is a GLOBAL surface that outlives
+  // this component's own render. Two inputs, both now pinned below in
+  // reap-sheet.test.tsx: (a) the reader dismisses the sheet (`open -> false`)
+  // while an audit is in flight and it then fails — a red error toast about a
+  // workspace check for a sheet that is no longer on screen; (b) the fleet
+  // sweep stops listing the target, so `sessions.find(...) ?? null` makes
+  // `session` null (this component's `id` goes null and it returns null before
+  // rendering) and the in-flight audit then fails — a toast about a session
+  // that has left the fleet. Both are exactly what the catch guard below
+  // already refuses for the target-switch case; the cleanup is what extends
+  // that same refusal to the close and the drop. The comment above is now a
+  // description of the code rather than of an intention.
   const gen = useRef(0);
   const load = (): void => {
     if (id === null) return;
@@ -74,7 +89,14 @@ export function ReapSheet({
       // something that is no longer on screen.
       .catch((e) => { if (gen.current === mine) toast(apiErrorText(e), 'error'); });
   };
-  useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
+  useEffect(() => {
+    if (open) load();
+    // Every teardown of this effect — close, target change, target dropped to
+    // null, unmount — retires the generation it set up. Whatever is still in
+    // flight belongs to a sheet state the reader has left.
+    return () => { gen.current += 1; };
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [open, id]);
 
   if (!session) return null;
   const slug = session.workspace ?? session.id;
