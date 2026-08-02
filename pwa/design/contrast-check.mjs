@@ -182,7 +182,7 @@ console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);
 console.log(
   `# ${report.counts.rules} rules, ${report.counts.selfGrounded} self-grounded, `
   + `${report.counts.pseudo} pseudo-element children, ${report.counts.inherited} inherited-ground, `
-  + `${report.counts.faded} element fades`,
+  + `${report.counts.faded} element fades, ${report.counts.keyframes} keyframe blocks`,
 );
 for (const m of report.measured) {
   if (!m.ok) fail++;

@@ -26,11 +26,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   GROUNDS,
   INHERITED_GROUNDS,
+  KEYFRAME_TROUGHS,
   OPACITY_REGISTRY,
   SELF_GROUNDED_EXEMPT,
   audit,
   contrast,
   declOf,
+  keyframeTroughs,
   loadThemes,
   opacityNumber,
   over,
@@ -233,6 +235,14 @@ describe('the gate fails a mutated tree', () => {
     expect(o).toMatch(/unregistered fade primitives\.css/);
   });
 
+  it('an unregistered @keyframes opacity trough is introduced', () => {
+    // The list of troughs was hand-typed and already wrong (dot-breathe 0.55
+    // was missing from it), so the list is discovered and checked.
+    const o = expectFail('src/components/primitives.css', (s) =>
+      s.replace('@keyframes skel-shimmer {', '@keyframes mutant-fade { from { opacity: 0.2; } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
+    expect(o).toMatch(/unregistered keyframe trough primitives\.css mutant-fade 0\.2/);
+  });
+
   it('a rule paints with a colour the auditor cannot resolve', () => {
     // The failure direction that matters most: an unparsed colour must be a
     // FAIL, never a silent skip.
@@ -386,13 +396,13 @@ describe('the auditor itself', () => {
     // The .d.mts beside audit.mjs is hand-written, i.e. a drift risk of the
     // same class as everything else here. This is the runtime check on it.
     expect(Object.keys(report).sort()).toEqual(
-      ['counts', 'fades', 'measured', 'problems', 'sheets', 'stale', 'themes'],
+      ['counts', 'fades', 'measured', 'problems', 'sheets', 'stale', 'themes', 'troughs'],
     );
     expect(Object.keys(report.stale).sort()).toEqual(
-      ['exempt', 'grounds', 'inherited', 'opacity'],
+      ['exempt', 'grounds', 'inherited', 'keyframes', 'opacity'],
     );
     expect(Object.keys(report.counts).sort()).toEqual(
-      ['faded', 'inherited', 'pseudo', 'rules', 'selfGrounded', 'selfGroundedContexts'],
+      ['faded', 'inherited', 'keyframes', 'pseudo', 'rules', 'selfGrounded', 'selfGroundedContexts'],
     );
   });
 });
@@ -439,6 +449,7 @@ describe('every stylesheet under src/ is audited', () => {
     ['exempt', Object.keys(SELF_GROUNDED_EXEMPT).length],
     ['inherited', Object.keys(INHERITED_GROUNDS).length],
     ['opacity', Object.keys(OPACITY_REGISTRY).length],
+    ['keyframes', Object.keys(KEYFRAME_TROUGHS).length],
   ];
   it.each(REGISTRIES)('has no stale %s registry entry, and it is not empty (%i)', (kind, live) => {
     expect(report.stale[kind]).toEqual([]);
@@ -536,6 +547,25 @@ describe('every static opacity is registered and composited', () => {
     const faded = rulesOf(ROOT, 'src/fleet/fleet.css')
       .filter((r) => r.selector.includes("data-conn") && declOf(r.body, 'opacity') !== null);
     expect(faded.map(ruleKey)).toEqual([]);
+  });
+});
+
+// ── animation troughs ───────────────────────────────────────────────────────
+describe('every @keyframes opacity trough is registered', () => {
+  it.each(keyframeTroughs(ROOT).map((t) => t.key))('%s appears in KEYFRAME_TROUGHS', (k) => {
+    expect(Object.keys(KEYFRAME_TROUGHS)).toContain(k);
+  });
+
+  it('includes dot-breathe, which the previous disclosure of this set omitted', () => {
+    // The previous round listed the troughs by hand as "working-glyph .35,
+    // working-dot .25, tool-breathe .55, task-breathe .55" and shipped that as
+    // the complete set. dot-breathe 0.55 — the status lamps, the most visible
+    // animation in the app — was missing from it. The set is discovered now.
+    expect(report.troughs.map((t) => t.key)).toContain('primitives.css dot-breathe 0.55');
+  });
+
+  it('states the reduced-motion steady state for each looping trough', () => {
+    for (const [k, why] of Object.entries(KEYFRAME_TROUGHS)) expect(why.length, k).toBeGreaterThan(20);
   });
 });
 
