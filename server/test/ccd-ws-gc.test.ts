@@ -256,11 +256,20 @@ describe('ws-gc --prune', () => {
   it('leaves an orphan alone when it cannot resolve origin/HEAD at all', () => {
     // No origin means no base to compare against, so "merged" is unprovable.
     // Unprovable must resolve to declining, not to deleting.
+    //
+    // ROUND 3, P2 class sweep — and it must not resolve to CLAIMING either.
+    // This test used to assert the report said `unmerged`, which is the same
+    // wrong-diagnosis shape as `_ws_gc_dirty`'s: nothing was compared, so
+    // "the branch has unmerged commits" is a sentence about a comparison that
+    // never ran. The test below, where the branch really is ahead, is what pins
+    // the affirmative wording — and the two must not read alike.
     const main = h.makeRepo('demo');
     const wt = addOrphan('demo', 'still-cove');
     h.git(main, 'remote', 'remove', 'origin');
     const out = prune();
-    expect(out).toContain('unmerged');
+    expect(out, out).toContain('could not tell whether branch ws/still-cove is merged');
+    expect(out, out).toContain('refusing to remove');
+    expect(out, out).not.toContain('is on unmerged branch');
     expect(fs.existsSync(wt)).toBe(true);
   });
 
@@ -271,7 +280,10 @@ describe('ws-gc --prune', () => {
     h.git(wt, 'add', 'work.txt');
     h.git(wt, 'commit', '-m', 'ahead of base');
     const out = prune();
-    expect(out).toContain('unmerged');
+    // The affirmative sentence, and it is only ever printed on a comparison
+    // that actually returned "not an ancestor" (round-3 P2 class sweep).
+    expect(out, out).toContain('is on unmerged branch ws/still-cove');
+    expect(out, out).not.toContain('could not tell whether');
     expect(fs.existsSync(wt)).toBe(true);
   });
 
@@ -493,6 +505,17 @@ describe('ws-gc --prune', () => {
     // `_ws_collect_ignored` refuses the same tree a few lines later — which is
     // being right by accident of the next guard, and the decline said the wrong
     // thing about why.
+    //
+    // ROUND 3, P2 — the name is kept deliberately even though it now overstates
+    // what is asserted: round-2 verification confirmed this test by name as the
+    // pin on the stderr rung, and a rename would leave that reference dangling.
+    // What it pins is unchanged in the direction that matters — a partially
+    // unreadable tree is NEVER read as clean, and `--prune` never removes it —
+    // but the verdict is now `tree-unreadable`, not `dirty`, because saying
+    // `dirty` was a claim about files git could not open. `_ws_gc_dirty` still
+    // exits 0 ("do not touch") for both; the distinction rides on
+    // GC_DIRTY_STATE. The zero-uncommitted-changes case — where the old wording
+    // was not merely imprecise but false — is the test immediately below.
     const main = h.makeRepo('demo');
     const wt = addWs('demo', 'still-cove');
     const tracked = path.join(wt, 'tracked');
@@ -509,15 +532,19 @@ describe('ws-gc --prune', () => {
       expect(probe, probe).toContain('out=[]');
       expect(probe, probe).toContain('Permission denied');
 
-      expect(h.sh(`_ws_gc_dirty "${wt}" && echo dirty || echo clean`),
-        'unknown counts as dirty — the function\'s own contract').toBe('dirty');
-      expect(find(scan(), 'still-cove')?.state, 'and the scan says so too').toBe('dirty');
+      expect(h.sh(`_ws_gc_dirty "${wt}" && echo refused || echo clean`),
+        'unknown is never clean — the function\'s own contract').toBe('refused');
+      expect(h.sh(`_ws_gc_dirty "${wt}"; echo "$GC_DIRTY_STATE"`),
+        'and it is refused for the reason that was measured').toBe('tree-unreadable');
+      expect(find(scan(), 'still-cove')?.state, 'and the scan says so too').toBe('tree-unreadable');
 
       // …and as an ORPHAN — the one row `--prune` can delete — it declines for
       // THIS reason, ahead of the ignored-set scan that used to catch it.
       fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-still-cove.uuid'));
       const out = prune();
-      expect(out, out).toContain('has uncommitted changes');
+      expect(out, out).toContain('could not read the status of');
+      expect(out, out).toContain('refusing to remove a tree it cannot describe');
+      expect(out, out).not.toContain('has uncommitted changes');
       expect(out, out).not.toContain('removed orphan worktree');
       expect(fs.existsSync(wt)).toBe(true);
       expect(h.git(main, 'branch', '--list', 'ws/still-cove')).toContain('ws/still-cove');
@@ -526,6 +553,80 @@ describe('ws-gc --prune', () => {
       fs.chmodSync(tracked, 0o755);
     }
   }, 30000);
+
+  it('never says a tree HAS uncommitted changes when it could not read one', () => {
+    // Round-3 verification P2. The fixture above has a real modified file, so
+    // `has uncommitted changes` was merely unproved there. Here the worktree is
+    // COMMITTED CLEAN and one tracked directory is `chmod 000`: `git status
+    // --porcelain` gives rc=0, EMPTY stdout and the diagnostic on stderr
+    // (measured, git 2.43, reproduced by the probe below), so the number of
+    // uncommitted changes is ZERO and the old report printed
+    // `declined  <path> has uncommitted changes` about them — an affirmative
+    // sentence over files nobody looked at, on the destructive path's report.
+    //
+    // The refusal direction is not what changed and is asserted here too: this
+    // tree is still never removed. What changed is that the report now uses the
+    // vocabulary the same file already owns two functions away
+    // (`_ws_gc_reclaimable`: "refusing to remove a tree it cannot describe").
+    const main = h.makeRepo('demo');
+    const wt = addWs('demo', 'still-cove');
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    h.git(wt, 'add', '-A'); h.git(wt, 'commit', '-m', 'the work');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      // The fixture only means anything if the tree really is clean-and-blind.
+      const probe = h.sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+      // Zero uncommitted changes: the same status, read where git CAN read it.
+      expect(h.sh(`git -C "${wt}" status --porcelain --untracked-files=no -- ':!tracked' 2>/dev/null`))
+        .toBe('');
+
+      expect(h.sh(`_ws_gc_dirty "${wt}"; echo "$GC_DIRTY_STATE"`)).toBe('tree-unreadable');
+
+      // As a LIVE workspace first — the row `--prune` reports but never acts
+      // on. It used to be declined as `dirty`; the arm has its own sentence now
+      // and, unlike the orphan arm, no measurement to attach to it.
+      const live = prune();
+      expect(live, live).not.toContain('has uncommitted changes');
+      expect(live, live).toContain('refusing to remove a tree it cannot describe');
+
+      fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-still-cove.uuid'));
+      const out = prune();
+      expect(out, out).not.toContain('has uncommitted changes');
+      expect(out, out).toContain('could not read the status of');
+      expect(out, out).toContain('refusing to remove a tree it cannot describe');
+      // The measurement travels with the refusal: git's own diagnostic, one
+      // line of it, rather than a diagnosis ccd invented.
+      expect(out, out).toContain('Permission denied');
+      // Refusal direction unchanged — this is a wording fix, not a policy one.
+      expect(out, out).not.toContain('removed orphan worktree');
+      expect(fs.existsSync(wt)).toBe(true);
+      expect(h.git(main, 'branch', '--list', 'ws/still-cove')).toContain('ws/still-cove');
+    } finally {
+      fs.chmodSync(tracked, 0o755);
+    }
+  }, 30000);
+
+  it('a mktemp failure refuses as unreadable, never as dirty', () => {
+    // The second rung of the same function, round-3 P2. Without a scratch file
+    // the status is never run at all, so there is even less known about the
+    // tree than in the blind-directory case — and the answer must still be
+    // "do not touch", said in the vocabulary of a read that did not happen.
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    expect(h.sh(`mktemp() { return 1; }; _ws_gc_dirty "${wt}" && echo refused || echo clean`))
+      .toBe('refused');
+    expect(h.sh(`mktemp() { return 1; }; _ws_gc_dirty "${wt}"; echo "$GC_DIRTY_STATE"`))
+      .toBe('tree-unreadable');
+    expect(h.sh(`mktemp() { return 1; }; _ws_gc_dirty "${wt}"; echo "$GC_DIRTY_WHY"`))
+      .toContain('the status was never read');
+  });
 
   // THE load-bearing guard. ws-rm already refuses a dirty workspace; a sweep
   // that overrode that would make the refusal meaningless.

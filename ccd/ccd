@@ -3860,9 +3860,31 @@ _gc_row()       { printf '  %-10s %s\n' "$1" "$(_ws_line_safe "$2")"; }
 _gc_reclaimed() { GC_RECLAIMED=$(( GC_RECLAIMED + 1 )); _gc_row reclaimed "$1"; }
 _gc_declined()  { GC_DECLINED=$((  GC_DECLINED  + 1 )); _gc_row declined  "$1"; }
 
+# WHY the last `_ws_gc_dirty` said "do not touch". Round-3 verification P2: the
+# refusal below is right and stays, but the function is a BOOLEAN and its two
+# callers put a SENTENCE in front of a human. A tree with zero uncommitted
+# changes that git could only partially read was printed
+# `declined  <path> has uncommitted changes` and listed with STATE `dirty` — a
+# claim about files nobody looked at, which is exactly the class this branch
+# spent eleven rounds closing. So the verdict now travels with its reason, and
+# the two callers say which of the two things they measured.
+#
+# Globals rather than a return code, deliberately: a third exit status would
+# make `if _ws_gc_dirty …; then refuse` — the shape both callers use, and the
+# shape whoever adds the third caller will copy — silently stop refusing on the
+# unreadable branch. "Do not touch" stays exit 0 for every reason there is.
+# `$rows` is captured through `$(_ws_gc_scan)`, so these do not survive into
+# `_ws_gc_prune_row`'s `case`; the state token in the row does.
+GC_DIRTY_STATE=''   # dirty | tree-unreadable | clean
+GC_DIRTY_WHY=''     # the measurement behind tree-unreadable, one line, or empty
+
 _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked files,
                    #            OR when we could not find out
+                   #            (GC_DIRTY_STATE says which)
   local out errf err rc
+  # Assume the worst before measuring, so no path out of this function can
+  # forget to set it.
+  GC_DIRTY_STATE=tree-unreadable; GC_DIRTY_WHY=''
   # `git status` failing means unreadable, corrupt, or not a worktree at all —
   # NOT clean. Swallowing the exit code and testing an empty string would report
   # every unreadable tree as safe to delete, which is the one answer that loses
@@ -3879,12 +3901,25 @@ _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked fil
   # because `_ws_collect_ignored` refuses the same tree a few lines later; a
   # guard that is right by accident of the guard after it is not a guard.
   #
-  # A mktemp failure returns 0 = DIRTY: the one direction that cannot lose work.
-  errf=$(mktemp) || return 0
+  # A mktemp failure refuses too — the one direction that cannot lose work —
+  # and it is `tree-unreadable` rather than `dirty` for the same reason as the
+  # rung below: the status was never read, so nothing whatever is known about
+  # this tree's files.
+  errf=$(mktemp) || {
+    GC_DIRTY_WHY='no scratch file to capture git stderr, so the status was never read'
+    return 0
+  }
   out=$(git -C "$1" status --porcelain 2>"$errf"); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
-  { (( rc == 0 )) && [[ -z "$err" ]]; } || return 0
-  [[ -n "$out" ]]
+  { (( rc == 0 )) && [[ -z "$err" ]]; } || {
+    # First line only: git's diagnostic is one line per unreadable directory
+    # (measured, git 2.43) and the report this feeds is line-oriented. It goes
+    # through `_ws_line_safe` at the row, like every other string here.
+    GC_DIRTY_WHY="git status exited $rc${err:+: ${err%%$'\n'*}}"
+    return 0
+  }
+  [[ -n "$out" ]] && { GC_DIRTY_STATE=dirty; return 0; }
+  GC_DIRTY_STATE=clean; return 1
 }
 
 # One TSV row per finding: state project slug bytes agedays path
@@ -3926,7 +3961,7 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   if   [[ ! -f "$REG/$project-$slug.uuid" ]];    then state=orphan
   elif [[ -f "$REG/$project-$slug.reaping" ]];   then state=reaping
   elif [[ -f "$REG/$project-$slug.archived" ]];  then state=archived
-  elif _ws_gc_dirty "$wt";                       then state=dirty
+  elif _ws_gc_dirty "$wt";                       then state=$GC_DIRTY_STATE
   else                                                state=tracked
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$project" "$slug" "$bytes" "$age" "$wt"
@@ -3979,13 +4014,32 @@ _ws_gc_scan() {
   done
 }
 
+# Set by every `_ws_gc_merged`, for the reason `GC_DIRTY_STATE` exists: the
+# refusal is one exit code and the report is a sentence. Found by the round-3 P2
+# class sweep over every `_gc_declined` in this file — this was the second and
+# last producer that named a measured cause on a read that did not happen.
+GC_MERGED_STATE=''   # unmerged | merged | unprovable
+
 _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of origin/HEAD
   local main="$1" branch="$2" base
   # No origin/HEAD means there is no base to compare against, so "merged" is
   # unprovable — and unprovable returns 1, i.e. NOT merged, i.e. do not remove.
   # Every ambiguous case in this command resolves toward doing nothing.
+  #
+  # THE DIRECTION IS UNCHANGED AND THE SENTENCE IS NOT (round-3 P2 class sweep).
+  # `merge-base --is-ancestor` exits 1 for "not an ancestor" and 128 for an
+  # error — an unreadable object, a `refs/heads/$branch` that does not resolve —
+  # and the caller printed `$p is on unmerged branch $branch` for all three
+  # cases, including the two where nothing was compared. Unprovable is reported
+  # as unprovable.
+  GC_MERGED_STATE=unprovable
   base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) || return 1
   git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null
+  case $? in
+    0) GC_MERGED_STATE=merged;   return 0 ;;
+    1) GC_MERGED_STATE=unmerged; return 1 ;;
+    *) return 1 ;;   # 128 and anything else: nothing was compared
+  esac
 }
 
 # Final-round destructive review, finding F4. `ws-gc --prune`'s orphan arm was
@@ -4112,14 +4166,26 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       _gc_reclaimed "dead registry entry $project-$slug" ;;
     orphan)
       if _ws_gc_dirty "$p"; then
-        _gc_declined "$p has uncommitted changes"; return 0
+        # Two refusals, one exit code — round-3 P2. `has uncommitted changes` is
+        # a statement about files; only say it when files were actually seen.
+        if [[ "$GC_DIRTY_STATE" == dirty ]]; then
+          _gc_declined "$p has uncommitted changes"
+        else
+          _gc_declined "could not read the status of $p${GC_DIRTY_WHY:+ — $GC_DIRTY_WHY} — refusing to remove a tree it cannot describe"
+        fi
+        return 0
       fi
       local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
       if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged "$main" "$branch"; then
         # The branch would survive `worktree remove`, so nothing is lost either
         # way — but a sweep should only reclaim what is provably finished, and
         # someone may be mid-way through this one.
-        _gc_declined "$p is on unmerged branch $branch"; return 0
+        if [[ "$GC_MERGED_STATE" == unmerged ]]; then
+          _gc_declined "$p is on unmerged branch $branch"
+        else
+          _gc_declined "could not tell whether branch $branch is merged (no origin/HEAD, or the comparison failed) — refusing to remove $p on an unproved merge"
+        fi
+        return 0
       fi
       # Finding F4 — the §7 scan and the listing, immediately before the only
       # step in this command that deletes a DIRECTORY. See `_ws_gc_reclaimable`.
@@ -4149,6 +4215,13 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       _gc_declined "$p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
     dirty)
       _gc_declined "$p is dirty — never removed, at any flag" ;;
+    tree-unreadable)
+      # Same refusal as `dirty`, different sentence, because a different thing
+      # was measured — round-3 P2. The reason `_ws_gc_dirty` recorded during the
+      # scan does not reach here (`$rows` came back through a command
+      # substitution), and inventing one would be the defect this arm exists to
+      # fix, so the row says only what it knows.
+      _gc_declined "could not read the status of $p — refusing to remove a tree it cannot describe" ;;
     foreign)
       _gc_declined "$p is foreign — ccd removes only what it created" ;;
     tracked)
