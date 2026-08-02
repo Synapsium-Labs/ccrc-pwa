@@ -56,12 +56,53 @@ export const clipUrl = (id: string, name: string): string =>
   new URL(`/api/sessions/${encodeURIComponent(id)}/clip/${encodeURIComponent(name)}`,
     location.origin).href;
 
-/** Human-readable failure text for a caught error: lifecycle routes fail as
- *  502 { stderr } (ccd's own words) — prefer that over the generic message. */
+/**
+ * The one sentence for a fleet host whose `ccd` predates the verb being called.
+ *
+ * `PrKeycap.tsx`'s `REASON_TEXT.unsupported` already owned it — it is what the
+ * cap says when the PR SWEEP hits the same skew. This is the definition and
+ * that map imports it, rather than the two spelling the same fact differently:
+ * the reader who sees the greyed cap and the reader who taps Archive are
+ * looking at one condition on one box.
+ */
+export const UNSUPPORTED_VERB_TEXT =
+  'The fleet host is running a ccd that does not have this verb yet.';
+
+/**
+ * Failures the LIFECYCLE routes name by CODE rather than by ccd's stderr. Same
+ * reason as `SEND_ERROR_TEXT` and `UPLOAD_ERROR_TEXT` above: left raw these
+ * reach a toast as a bare slug.
+ *
+ * svc's round-4 residual. `/archive` and `/restore` grew a `verbSupported` gate
+ * that answers `501 { error: 'unsupported' }` — a 501 has no `stderr`, so
+ * `apiErrorText` fell through to `err.message`, which `ApiError`'s constructor
+ * sets from `body.error`, and `PrSheet`'s toast read "Archiving failed —
+ * unsupported". That is a slug where the reader needs the one thing that tells
+ * them the tap will never work until the box is updated.
+ *
+ * Deliberately keyed on `body.error`, not on the message: the code is what the
+ * server states, and a message that merely happens to equal a code should not
+ * be rewritten into a sentence about the host.
+ */
+const API_ERROR_TEXT: Record<string, string> = {
+  unsupported: UNSUPPORTED_VERB_TEXT,
+};
+
+/** Human-readable failure text for a caught error.
+ *
+ *  Order matters and is unchanged at the top: lifecycle routes fail as
+ *  502 { stderr } (ccd's own words, which are more specific than anything this
+ *  module could say) — prefer that. A coded failure with no stderr is next.
+ *  The bare message stays the floor. */
 export function apiErrorText(err: unknown): string {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
     const stderr = (err.body as { stderr?: unknown }).stderr;
     if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
+    const code = (err.body as { error?: unknown }).error;
+    if (typeof code === 'string') {
+      const text = API_ERROR_TEXT[code];
+      if (text !== undefined) return text;
+    }
   }
   return err instanceof Error ? err.message : String(err);
 }

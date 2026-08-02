@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, clipUrl, createApi } from '../src/lib/api';
+import { ApiError, apiErrorText, clipUrl, createApi, sendErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -169,5 +169,57 @@ describe('PR lifecycle (Task 13)', () => {
     );
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(400);
+  });
+});
+
+// svc's round-4 residual, and the one composition hazard the fix creates.
+//
+// `apiErrorText` now maps a `body.error` CODE to a sentence when there is no
+// `stderr`. One caller composes the two translators —
+// `useAttachImage.ts:145`, `uploadErrorText(apiErrorText(err))` — so a code
+// that BOTH maps know would have its upload-specific sentence shadowed by the
+// generic one, silently, with the suite green. The two vocabularies are
+// disjoint today (`unsupported` vs `unsupported-type`) and this is what keeps
+// it true.
+describe('apiErrorText and the code translators that compose with it', () => {
+  const asError = (status: number, body: unknown): unknown => {
+    try { throw new ApiError(status, body); } catch (e) { return e; }
+  };
+
+  it('routes a 501 unsupported to the sentence, not the slug', () => {
+    expect(apiErrorText(asError(501, { ok: false, error: 'unsupported' })))
+      .toBe(UNSUPPORTED_VERB_TEXT);
+  });
+
+  it('keeps ccd’s stderr ahead of the code map', () => {
+    expect(apiErrorText(asError(502, { ok: false, error: 'unsupported', stderr: '  ccd said no  ' })))
+      .toBe('ccd said no');
+  });
+
+  it('leaves an unmapped code exactly as it was — the floor did not move', () => {
+    expect(apiErrorText(asError(409, { ok: false, error: 'draft-present' }))).toBe('draft-present');
+    expect(apiErrorText(asError(500, 'plain text body'))).toBe('request failed (500)');
+    expect(apiErrorText(new Error('boom'))).toBe('boom');
+    expect(apiErrorText('not an error at all')).toBe('not an error at all');
+  });
+
+  it('does not shadow any code the UPLOAD translator owns', () => {
+    // Every upload code must survive `apiErrorText` UNCHANGED, so that
+    // `uploadErrorText` still gets a key to look up rather than a sentence.
+    for (const code of ['too-large', 'unsupported-type', 'bad-request',
+      'unknown-session', 'bad-session-id']) {
+      expect(apiErrorText(asError(415, { ok: false, error: code })), code).toBe(code);
+      expect(uploadErrorText(apiErrorText(asError(415, { ok: false, error: code }))), code)
+        .not.toBe(code);
+    }
+  });
+
+  it('does not shadow any code the SEND translator owns either', () => {
+    for (const code of ['dialog-open', 'enter-ignored', 'verify-failed',
+      'draft-clear-failed', 'not-alive']) {
+      expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
+      expect(sendErrorText(apiErrorText(asError(409, { ok: false, error: code }))), code)
+        .not.toBe(code);
+    }
   });
 });

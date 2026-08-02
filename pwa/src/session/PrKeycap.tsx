@@ -11,6 +11,7 @@
 import type { ReactNode } from 'react';
 import type { PrChecks, PrReason, PrState } from '../../../shared/api';
 import { UNCHECKED_PR } from '../../../shared/api';
+import { UNSUPPORTED_VERB_TEXT } from '../lib/api';
 import './chat.css';
 
 /** Integration finding 6: "we have not looked yet" is defined ONCE, in
@@ -60,7 +61,13 @@ const REASON_TEXT: Record<PrReason, string> = {
   unauthenticated: "GitHub CLI isn't logged in on the sessions box. Run `gh auth login` there.",
   'rate-limit': 'GitHub is rate-limiting this token.',
   'no-remote': 'This project has no `origin` remote.',
-  unsupported: 'The fleet host is running a ccd that does not have this verb yet.',
+  // Imported, not written here. `PrSheet`'s Archive/Restore toast hits the
+  // SAME condition on the SAME box through a 501 `unsupported` from the
+  // `verbSupported` gate, and used to render the bare slug; routing it to this
+  // sentence and then keeping two copies of the sentence would have closed the
+  // finding and reopened it as a drift. The definition lives in `lib/api.ts`
+  // because that is where the other two server-code -> sentence maps live.
+  unsupported: UNSUPPORTED_VERB_TEXT,
   'agent-down': 'ccrc could not reach the sessions box.',
   error: 'GitHub could not be read.',
   // The one reason that is NOT a failed read: GitHub answered, and said merged.
