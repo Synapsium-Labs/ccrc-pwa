@@ -463,11 +463,32 @@ describe('local-loss refusals', () => {
     const a = refusal(wt, 'du() { return 1; };');
     expect(a.verdict).toBe('tree-unreadable');
     expect(a.detail, a.detail).toContain("could not size the ignored entry dist/");
-    // The forged figures are ABSENT, not zero: a refusal document carries no
-    // ignored manifest at all, so there is no total to misread.
-    expect(a.ignored ?? [], 'no entry was recorded on a size nobody took').toEqual([]);
-    expect(a.ignoredBytes ?? 0).toBe(0);
-    expect(a.ignoredCount ?? 0).toBe(0);
+    // THE COMMENT AND THE ASSERTIONS ARE BOTH REWRITTEN — final-round tests
+    // review F4, and it is worth saying why both had to move rather than one.
+    //
+    // The old comment claimed "the forged figures are ABSENT, not zero: a
+    // refusal document carries no ignored manifest at all". That was FALSE of
+    // the ccd it described: `cmd_ws_audit` emitted `"ignoredCount":0,
+    // "ignoredBytes":0` on every verdict (F3, fixed this round). And the old
+    // assertions were written `x ?? 0` then `.toBe(0)` — the ONE form that
+    // cannot tell absence from a literal 0, which is exactly the
+    // discrimination the test's own title claims to make. So the file asserted
+    // an invariant it did not have, in a form that would have passed either
+    // way; a comment and a test can be wrong together and neither notices.
+    //
+    // Both are now true of what ships: the fields are PRESENT and NULL. Null
+    // rather than absent is deliberate — a dropped field degrades to
+    // `undefined` at every reader and reads as an older server, whereas null
+    // is ccd positively stating "this was not measured".
+    expect(a.ignored, 'no manifest was collected on a scan that refused').toBeNull();
+    expect(a.ignoredBytes, 'null, not 0 — nothing was summed').toBeNull();
+    expect(a.ignoredCount, 'null, not 0 — nothing was counted').toBeNull();
+    for (const k of ['ignored', 'ignoredBytes', 'ignoredCount']) {
+      expect(Object.prototype.hasOwnProperty.call(a, k), `${k} is present and null`).toBe(true);
+    }
+    // The assertion the `?? 0` form structurally could not make.
+    expect(JSON.stringify(a), 'no 0 for a read nobody took')
+      .not.toMatch(/"(ignoredCount|ignoredBytes)":0/);
   });
 
   it('refuses a PARTIAL du total — the failure that looks like an answer', () => {
@@ -1279,6 +1300,157 @@ describe('identity refusals', () => {
 });
 
 /**
+ * A REFUSAL MUST BE DISTINGUISHABLE FROM A CLEAN SCAN — final-round tests
+ * review F3, the fourteenth instance of the measurement-forgery class and the
+ * first one to land on the delete-confirmation surface itself.
+ *
+ * `cmd_ws_audit` printed `"dirty":[],"ignoredCount":0,"ignoredBytes":0,
+ * "sensitive":[],"sensitiveFiltered":0,"stashes":0` on EVERY verdict, straight
+ * out of `_ws_reap_reset`'s defaults, and `ReapSheet.tsx` renders those rows
+ * unconditionally — so the sheet said "uncommitted: none / not in git: 0
+ * entries, 0 B / stashes: none" about a worktree Phase A had refused before
+ * anything was scanned. Every Phase-A refusal reachable from the PWA
+ * (`registry-branch-drift`, `foreign-worktree`, `no-worktree-record`,
+ * `detached-head`, `incomplete-registry`) leaves the worktree ON DISK, and it
+ * may be full of exactly the work those rows say is not there.
+ *
+ * `worktreeBytes` on the same document already answered `null` (deviation
+ * 120). These are its siblings, closed the same way and pinned in the two
+ * directions the earlier fixtures could not tell apart: the refusal says
+ * `null`, and the ordinary reapable sheet is unchanged.
+ */
+describe('the fields a refusal never measured', () => {
+  /** A Phase-A refusal that leaves a POPULATED worktree behind: an ignored
+   *  secret and an ignored bulk directory, neither of which any scan has run
+   *  over, because `detached-head` fires two phases earlier. */
+  const unscanned = (): { wt: string; secret: string } => {
+    const { wt } = squashMovedBase(['secret/', 'bulk/']);
+    const secret = path.join(wt, 'secret', '.env');
+    fs.mkdirSync(path.join(wt, 'secret'), { recursive: true });
+    fs.writeFileSync(secret, 'AWS_SECRET_ACCESS_KEY=live\n');
+    fs.mkdirSync(path.join(wt, 'bulk'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'bulk', 'blob.bin'), 'x'.repeat(4096));
+    h.sh(`cd "${wt}" && git checkout -q --detach`);
+    return { wt, secret };
+  };
+
+  it('answers null — not 0, not [] — for every figure Phase A refused before measuring', () => {
+    const { wt, secret } = unscanned();
+    const a = refusal(wt);
+    expect(a.verdict).toBe('detached-head');
+    // The five outputs of the one scan that never ran.
+    expect(a.ignored, 'no ignored manifest was collected').toBeNull();
+    expect(a.ignoredCount).toBeNull();
+    expect(a.ignoredBytes).toBeNull();
+    expect(a.sensitive).toBeNull();
+    expect(a.sensitiveFiltered).toBeNull();
+    // Two more reads Phase A refused before reaching: the stash list and the
+    // PR fetch. `stashes:0` renders "none" and `fetchedAt:0` renders a date.
+    expect(a.stashes).toBeNull();
+    expect(a.merge.fetchedAt).toBeNull();
+    // ABSENT-vs-ZERO, asserted in the one form that can tell them apart — the
+    // discrimination `x ?? 0` cannot make, which is why the older sibling test
+    // in this file passed against the forgery.
+    expect(Object.prototype.hasOwnProperty.call(a, 'ignoredCount'),
+      'the field is present and null, not dropped').toBe(true);
+    expect(JSON.stringify(a), 'no zero may appear for a read nobody took')
+      .not.toMatch(/"(ignoredCount|ignoredBytes|sensitiveFiltered|stashes)":0/);
+    // And the fact those rows were denying: the secret is on disk, unlisted.
+    expect(fs.existsSync(secret)).toBe(true);
+  });
+
+  it('keeps measuring `dirty` itself — it is this command\'s own read, not the eval\'s', () => {
+    // The other direction, and the reason `dirty` is not simply nulled with
+    // the rest: `cmd_ws_audit` reads the working tree itself, so on a Phase-A
+    // refusal whose worktree is present and readable the list IS a
+    // measurement and must stay one.
+    const { wt } = unscanned();
+    fs.writeFileSync(path.join(wt, 'unsaved.txt'), 'an hour of it\n');
+    const a = refusal(wt);
+    expect(a.dirty).toEqual(['?? unsaved.txt']);
+  });
+
+  it('answers null for `dirty` when there is no worktree to read', () => {
+    // `[]` here is the worst reading of the six, because "uncommitted: none"
+    // is the row a human scans first. Nothing was read at all.
+    const { wt } = squashMovedBase();
+    fs.rmSync(wt, { recursive: true, force: true });
+    const a = audit();
+    expect(a.verdict).toBe('worktree-missing');
+    expect(a.dirty).toBeNull();
+  });
+
+  it('answers null for `dirty` when the status read FAILS, rather than calling it clean', () => {
+    // The exit code AND the stderr, the same two-rung rule `_ws_gc_dirty` and
+    // Phase B both state: a partially unreadable tree exits 0 with the
+    // diagnostic on stderr. Only this command's own `-z` read is shadowed, so
+    // the eval still reaches `reapable` — a reapable document may carry a null
+    // `dirty`, because Phase B's own guard proved the count, not this list.
+    const { wt } = squashMovedBase();
+    const a = audit('git() { [[ "$*" == *"status --porcelain -z"* ]] && return 128; command git "$@"; };');
+    expect(a.verdict).toBe('reapable');
+    expect(a.dirty, 'a status this command could not read is not an empty one').toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('answers null for `dirty` when the status read writes a diagnostic but exits 0', () => {
+    const { wt } = squashMovedBase();
+    const a = audit('git() { [[ "$*" == *"status --porcelain -z"* ]]'
+      + ' && { echo "warning: could not open directory" >&2; return 0; }; command git "$@"; };');
+    expect(a.dirty, 'a PARTIAL read is not a clean one').toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  /* ── the last surviving `|| x=0` ──────────────────────────────────────────
+   *
+   * Final-round destructive review F2. `commitsAheadOfBase` was initialised
+   * `ahead=0` and fell back to `ahead=0`, and BOTH are reachable: the `if`
+   * never runs when `$base` does not resolve or `$branch` is empty, and the
+   * `rev-list` inside it can fail. ccd litigated this exact value 1,340 lines
+   * earlier — `_pr_state_one` writes `ahead=""` under `"" is UNMEASURED, not
+   * zero` — so the file disagreed with itself.
+   */
+  it('answers null for commitsAheadOfBase when the base does not resolve', () => {
+    const { wt } = squashMovedBase();
+    // The INITIALISER's arm: the `if` is skipped entirely, which no fallback
+    // fix would have covered.
+    h.sh('_reg_set demo-quiet-basin base refs/heads/no-such-base');
+    const a = refusal(wt);
+    expect(a.commitsAheadOfBase, 'a base that does not resolve was compared with nothing').toBeNull();
+    expect(JSON.stringify(a)).not.toContain('"commitsAheadOfBase":0');
+  });
+
+  it('answers null for commitsAheadOfBase when the rev-list itself fails', () => {
+    // The FALLBACK's arm. Only the counting read is shadowed, so the base
+    // still resolves and the `if` still runs.
+    const { wt } = squashMovedBase();
+    const a = audit('git() { [[ "$*" == *"rev-list --count"* && "$*" == *"refs/heads/ws/quiet-basin"* ]]'
+      + ' && return 128; command git "$@"; };');
+    expect(a.commitsAheadOfBase).toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('still reports real measurements on the ordinary reapable sheet', () => {
+    // The half a null-everywhere fix would break: widening the wire must not
+    // make the sheet a reader sees every day start hedging.
+    const { wt } = squashMovedBase(['bulk/']);
+    fs.mkdirSync(path.join(wt, 'bulk'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'bulk', 'blob.bin'), 'x'.repeat(4096));
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.dirty).toEqual([]);
+    expect(a.ignoredCount).toBe(1);
+    expect(a.ignoredBytes).toBeGreaterThan(0);
+    expect(a.sensitive).toEqual([]);
+    expect(a.sensitiveFiltered).toBe(0);
+    expect(a.stashes).toBe(0);
+    expect(a.merge.fetchedAt).toBeGreaterThan(0);
+    expect(a.commitsAheadOfBase).toBeGreaterThan(0);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+});
+
+/**
  * The plan's own cases leave eleven refusals and the whole fingerprint
  * unpinned: their lines can be deleted with the suite still green, and two of
  * them (`session-busy`, `status-unknown`) are the §5.3 idle gate, evaluated on
@@ -1427,16 +1599,48 @@ describe('the refusals the ladder reaches last', () => {
     expect(refusal(wt, NOTIP).verdict).toBe('branch-missing');
   });
 
-  it('publishes a NUMBER for commitsAheadOfBase even when the count fails', () => {
-    // `[[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0` in the VERB, not the evaluator.
-    // Without it a failed `rev-list --count` prints `"commitsAheadOfBase":` and
-    // the whole manifest stops being JSON — including the refusal it was
-    // carrying, so the sheet would show a parse error instead of a sentence.
+  // RENAMED AND INVERTED, final-round destructive review F2 — this was
+  // `publishes a NUMBER for commitsAheadOfBase even when the count fails` and
+  // it PINNED THE FORGERY, in the same shape and for the same stated reason as
+  // the round-3 case eighty lines above it: `[[ "$ahead" =~ ^[0-9]+$ ]] ||
+  // ahead=0` turned a `rev-list` that never produced an answer into the number
+  // 0, and this test held it in place by asserting the 0.
+  //
+  // The half it legitimately defended is kept and is the reason the assertion
+  // is inverted rather than deleted: an EMPTY `$ahead` interpolates as
+  // `"commitsAheadOfBase":`, which is not JSON, and a manifest that does not
+  // parse takes the refusal down with it — the sheet shows an error instead of
+  // a sentence. `null` satisfies that requirement and states the truth; 0
+  // satisfies it and states a falsehood. The `JSON.parse` in `audit()` is what
+  // enforces the parse half, on every case in this file.
+  it('answers null — parseable, and not a claim — when the ahead count fails', () => {
     const { wt } = squashMovedBase();
     const NOCOUNT = `git() { [[ "$*" == *"rev-list --count"* ]] && return 128; command git "$@"; };`;
     const a = refusal(wt, NOCOUNT);
     expect(a.verdict).toBe('unpushed-commits');
-    expect(a.commitsAheadOfBase).toBe(0);
+    expect(a.commitsAheadOfBase, '0 is the claim "level with base" — nothing was compared').toBeNull();
+    // The parse requirement, asserted rather than assumed: `refusal()` already
+    // ran `JSON.parse` over this document, and the field is present.
+    expect(Object.prototype.hasOwnProperty.call(a, 'commitsAheadOfBase')).toBe(true);
+    // AND THE SENTENCE (final-round destructive review F5b, round-3 P2's last
+    // instance). `_ws_reap_eval`'s `unpushed-commits` refusal is reached HERE
+    // by the same failed `rev-list`, and it printed " commit(s) are not on the
+    // remote" — a count with the number missing, about a comparison that never
+    // ran. The refusal's direction was always right; only its claim was not.
+    expect(a.detail, a.detail).toContain('could not count the commits between');
+    expect(a.detail, a.detail).toContain('refusing on a comparison that did not run');
+    expect(a.detail, a.detail).not.toMatch(/^ commit\(s\)/);
+  });
+
+  it('still names the real count when the rev-list DID run', () => {
+    // The other direction of the same sentence: an actual number of unpushed
+    // commits must still be reported as one.
+    const { wt } = squashMovedBase();
+    fs.writeFileSync(path.join(wt, 'z.txt'), 'unpushed\n');
+    h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'unpushed');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('unpushed-commits');
+    expect(a.detail, a.detail).toContain('1 commit(s) are not on the remote');
   });
 
   it('refuses when gh itself could not be read, naming the classified reason', () => {

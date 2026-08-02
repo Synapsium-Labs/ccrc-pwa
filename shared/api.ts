@@ -289,15 +289,49 @@ export interface PrView {
 export interface WsAudit {
   id: string; branch: string; base: string; workdir: string; project: string; repo: string;
   exists: boolean; headMatchesRegistry: boolean; reaping: string | null;
-  dirty: string[];
-  ignored: { path: string; bytes: number; sensitive: boolean }[];
-  ignoredCount: number; ignoredBytes: number;
-  sensitive: string[];
+  /* ── `null` MEANS NOBODY LOOKED ────────────────────────────────────────────
+   *
+   * The six fields below, plus `stashes` and `merge.fetchedAt`, are `null`
+   * when the read that would fill them never happened — final-round tests
+   * review F3, the fourteenth instance of the class deviation 10 named ("a
+   * number is a measurement") and the FIRST to reach the delete-confirmation
+   * surface itself.
+   *
+   * They were `string[]` / `number` and ccd emitted `[]` / `0` on every
+   * verdict, straight out of `_ws_reap_reset`. `ReapSheet.tsx` renders these
+   * rows unconditionally and the refusal paragraph comes AFTER them, so a
+   * workspace refused in Phase A — before `_ws_collect_ignored`, before the
+   * stash read, before the PR fetch — was described to the human as
+   * "uncommitted: none / not in git: 0 entries, 0 B / stashes: none". Every
+   * PWA-reachable Phase-A refusal (`registry-branch-drift`,
+   * `foreign-worktree`, `no-worktree-record`, `detached-head`,
+   * `incomplete-registry`) leaves the worktree ON DISK, holding whatever those
+   * rows deny.
+   *
+   * The nullability is the enforcement, not the documentation. `worktreeBytes`
+   * and `clips[].bytes` are `| null` for the same reason and the docstring
+   * below says why in full: a producer that must emit a `number` has exactly
+   * two options for a read that did not happen, and one of them compiles. Any
+   * reader that folds these into a total or a sentence has to say which
+   * branch it is on, and `ReapSheet` says "not scanned".
+   *
+   * `dirty` is `null` on a narrower condition than the rest, deliberately:
+   * `cmd_ws_audit` reads the working tree ITSELF rather than taking the
+   * eval's count, so on a refusal whose worktree is present and readable the
+   * list is a real measurement and stays an array. It is `null` only when
+   * there was no directory to read, or when the read failed or half-finished
+   * (rc plus stderr, the rule `_ws_gc_dirty` states for the file). */
+  dirty: string[] | null;
+  ignored: { path: string; bytes: number; sensitive: boolean }[] | null;
+  ignoredCount: number | null; ignoredBytes: number | null;
+  sensitive: string[] | null;
   /** How many secret-SHAPED names the F3 refinement filtered as vendored or
    *  template noise (`credentials.d.ts`, `.env.example`, …) rather than
    *  treating as sensitive — a count, never a silent drop, so a wrong filter
-   *  is something anyone can notice from the audit's own output. */
-  sensitiveFiltered: number;
+   *  is something anyone can notice from the audit's own output. `null` when
+   *  the scan that would have filtered them never ran: this and `sensitive`
+   *  are two answers from the one scan, so they are unmeasured together. */
+  sensitiveFiltered: number | null;
   /** `~/.cc-clips/<id>` — the reap `rm -rf`s it, so the sheet has to list it.
    *  It is fingerprinted too (`clipsDigest`), so a clip pasted between the
    *  sheet and the tap refuses `state-changed` rather than being deleted.
@@ -324,9 +358,22 @@ export interface WsAudit {
    *  figure `ReapSheet.tsx`'s confirm button prints before a destructive
    *  action, so it must say "unknown" rather than a number it cannot stand
    *  behind. */
-  stashes: number; worktreeBytes: number | null; commitsAheadOfBase: number;
+  /** `stashes` is `null` until `_ws_reap_eval` has read the stash list — 0 is
+   *  the claim "nothing stashed is at stake", and the sheet renders it as the
+   *  word "none". */
+  /** `commitsAheadOfBase` is `null` when `$base` did not resolve, `$branch` was
+   *  empty, or the `rev-list` failed — final-round destructive review F2, the
+   *  last surviving `|| x=0` in ccd. 0 is the claim "this branch is level with
+   *  base", which is what `_pr_state_one` (ccd:1650) already refuses to
+   *  fabricate for the identical figure on the PR sheet. */
+  stashes: number | null; worktreeBytes: number | null; commitsAheadOfBase: number | null;
   pr: { number: number | null; url: string; mergeCommit: string; headRefOid: string };
-  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number };
+  /** `fetchedAt` is `null` until Phase C actually fetched. 0 is a real epoch
+   *  second and the sheet printed it through a relative-date formatter, so a
+   *  refusal that never reached the fetch read "merged … 20669 days ago" —
+   *  beside `pr.number` and `proof`, which have said `null` for that same
+   *  state since deviation 10. */
+  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number | null };
   transcript: string;
   verdict: string; detail: string; token?: string;
   sentence: string;
@@ -334,11 +381,51 @@ export interface WsAudit {
 
 /** `ccd ws-reap`. Exactly one of `reaped`, `refused` or `indeterminate` is set. */
 export interface ReapResult {
+  /** `bytes` is `number | null` — final-round tests review F2, the third and
+   *  last of ccd's `_ws_gc_bytes "$workdir"` sites to stop fabricating a 0
+   *  (`_ws_archive_manifest` and `cmd_ws_audit.worktreeBytes` were closed in
+   *  earlier rounds). This one is the RECEIPT, printed after the irreversible
+   *  delete, so `0` reads as "this deletion reclaimed nothing" — and on the
+   *  resume path, where the worktree was already removed by the interrupted
+   *  run, it was 0 every time. Nothing in the PWA renders it today; the type
+   *  is what stops a future reader folding it into a total. */
   reaped?: string; branch?: string; pr?: number | null; proof?: string;
-  tombstone?: string; attic?: number; bytes?: number; resumed?: string | null;
+  tombstone?: string; attic?: number; bytes?: number | null; resumed?: string | null;
   refused?: string; detail?: string; paths?: string[];
   indeterminate?: boolean;
   sentence: string;
+}
+
+/** `$REG/.reaped/<id>.json` — the record that OUTLIVES the workspace.
+ *
+ *  DECLARED HERE THOUGH NOTHING IMPORTS IT YET, which is the point and is the
+ *  cross-lane seam pass's residual #1 closed: `clips[].bytes: null` reaches
+ *  `_ws_tombstone` (ccd:3199) and is round-tripped by `_ws_tombstone_reclip`
+ *  through `python3 json` on every resume, both JSON-transparent and both
+ *  exercised — but the tombstone had NO declared type at all, so the one
+ *  document that survives the delete was the only place on this branch where
+ *  "bytes may be null" existed purely as ccd's behaviour. `WsAudit.clips` says
+ *  it and is enforced; this said it nowhere. The first consumer written
+ *  against this file (`ccd ws-attic`'s reader, a recovery tool, a support
+ *  script) inherits the null instead of discovering it.
+ *
+ *  Written by ccd only. The field list is `_ws_tombstone`'s printf, in its
+ *  order; `reflog` is a raw text dump and `attic` holds full ref names
+ *  (`refs/ccrc/attic/<id>/…`), read back from git rather than passed in so the
+ *  list has one producer. */
+export interface WsTombstone {
+  id: string; project: string; workdir: string; branch: string; base: string; tip: string;
+  uuid: string; wrapper: string; mergeCommit: string; proof: string;
+  pr: number | null; prUrl: string;
+  /** Same shape and same producer as `WsAudit.ignored` — the manifest of what
+   *  the delete destroyed, which is this document's reason to exist. */
+  ignored: { path: string; bytes: number; sensitive: boolean }[];
+  /** `bytes: number | null`, identical to `WsAudit.clips`, and re-measured on
+   *  every resume by `_ws_tombstone_reclip` because (h) `rm -rf`s whatever is
+   *  on disk at THAT instant. Null is a clip ccd could not size, never an
+   *  empty file and never "nothing was reclaimed here". */
+  clips: { name: string; bytes: number | null }[];
+  transcript: string; attic: string[]; reflog: string; reapedAt: number;
 }
 
 /* ---------------------------------------------------------------------------

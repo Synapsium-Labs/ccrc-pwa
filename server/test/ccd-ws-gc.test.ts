@@ -328,6 +328,101 @@ describe('ws-gc --prune', () => {
     expect(fs.readFileSync(path.join(wt, 'scratch.txt'), 'utf8')).toBe('unsaved\n');
   });
 
+  /* ── F1: the gate was INVERTED for the detached HEAD ──────────────────────
+   *
+   * Final-round destructive review, and the one counter-example on this branch
+   * to "nothing is destroyed without a human first seeing an accurate
+   * description of what would be destroyed". `rev-parse --abbrev-ref HEAD`
+   * answers the literal string `HEAD` for a detached worktree, and
+   * `[[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged …` therefore
+   * ran the mergedness proof ONLY when a branch survives the removal — the
+   * case where nothing is lost either way — and SKIPPED it for the case where
+   * `worktree remove` deletes `$main/.git/worktrees/<slug>/` with its HEAD
+   * reflog and leaves the commit referenced by nothing at all.
+   *
+   * `grep -n detach` over this file returned nothing before these three cases,
+   * across all 96 of its tests: the FALSE arm of that conjunct — the arm that
+   * skipped the only proof standing in front of the delete — had never been
+   * exercised.
+   *
+   * The pair is deliberate. Both fixtures hold ONE commit of the same file and
+   * differ only in whether a ref names it, so the assertions are about the
+   * gate and not about anything else in the row.
+   */
+  const detachedOrphan = (project: string, slug: string): string => {
+    const wt = addOrphan(project, slug);
+    fs.writeFileSync(path.join(wt, 'work.txt'), 'one hour of it\n');
+    h.git(wt, 'add', 'work.txt');
+    h.git(wt, 'commit', '-m', 'committed, and about to be unreferenced');
+    // The branch is what makes the commit survive `worktree remove`. Detaching
+    // and deleting it is the ordinary shape of a throwaway inspection tree —
+    // `git worktree add --detach` makes one directly — and it is the state in
+    // which the worktree's own HEAD reflog is the only reference left.
+    h.git(wt, 'checkout', '--detach');
+    h.git(path.join(h.home, 'projects', project), 'branch', '-D', `ws/${slug}`);
+    return wt;
+  };
+
+  it('leaves a DETACHED orphan alone, and says the commits are referenced by nothing else', () => {
+    h.makeRepo('demo');
+    const wt = detachedOrphan('demo', 'still-cove');
+    const head = h.git(wt, 'rev-parse', 'HEAD');
+    const out = prune();
+    expect(out, out).toContain('is on a detached HEAD');
+    expect(out, out).toContain('nothing else references its commits');
+    expect(out, out).not.toContain('removed orphan worktree');
+    expect(fs.existsSync(wt), 'the detached orphan is still on disk').toBe(true);
+    // The point of the refusal, stated as the fact it protects: the commit is
+    // still reachable, from the one reference `worktree remove` would delete.
+    expect(h.git(path.join(h.home, 'projects', 'demo'), 'rev-parse', '--verify', `${head}^{commit}`))
+      .toBe(head);
+  });
+
+  it('does not print the merged-branch diagnosis for a detached orphan — nothing was compared', () => {
+    // Round-3 P2's rule, applied to the new rung: a sentence about a
+    // comparison is only ever printed on a comparison that ran. `_ws_gc_merged`
+    // is never called for a detached HEAD, so neither of its two sentences may
+    // appear.
+    h.makeRepo('demo');
+    detachedOrphan('demo', 'still-cove');
+    const out = prune();
+    expect(out, out).not.toContain('is on unmerged branch');
+    expect(out, out).not.toContain('could not tell whether');
+    expect(out, out).toContain('declined');
+  });
+
+  it('leaves an orphan whose HEAD could not be read at all, and does not call it detached', () => {
+    // The third rung. `_ws_gc_dirty` above answers for the FILES; an
+    // unreadable HEAD is a fact about the HISTORY and may not be inferred from
+    // a clean status. The stub fails only the one read, so `git status` still
+    // reports the tree clean and the row still reaches this gate.
+    h.makeRepo('demo');
+    const wt = addOrphan('demo', 'still-cove');
+    const out = h.sh('git() { [[ "$*" == *"--abbrev-ref HEAD"* ]] && return 128; command git "$@"; };'
+      + ' cmd_ws_gc --prune 2>&1');
+    expect(out, out).toContain('could not read HEAD in');
+    expect(out, out).toContain('refusing to remove a tree whose history it cannot describe');
+    expect(out, out).not.toContain('detached HEAD');
+    expect(out, out).not.toContain('removed orphan worktree');
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('states only what the ignored scan measured, never that everything is in git', () => {
+    // F1's second half. The `contents` row is printed on the line immediately
+    // above `reclaimed removed orphan worktree …` and is the reassurance a
+    // reader uses to authorise it; `_ws_gc_reclaimable` measures the ignored
+    // set and nothing else, so "everything in it is in git" was a claim about
+    // reachability it had never established. The two halves are pinned apart:
+    // the gate above refuses the detached case, and this row would no longer
+    // lie even if the gate moved.
+    h.makeRepo('demo');
+    const wt = addOrphan('demo', 'still-cove');
+    const out = prune();
+    expect(out, out).toContain('holds no ignored files — nothing gitignored goes with it');
+    expect(out, out).not.toContain('everything in it is in git');
+    expect(fs.existsSync(wt), 'a clean merged orphan is still reclaimed').toBe(false);
+  });
+
   /* ── finding F4: the one directory deletion with no sensitive scan ────────
    *
    * Final-round destructive review. `_ws_gc_dirty` reads
@@ -853,6 +948,57 @@ describe('ws-gc --prune', () => {
     const out = prune();
     expect(out).toContain('STATE');
     expect(out.indexOf('STATE')).toBeLessThan(out.indexOf('removed orphan worktree'));
+  });
+
+  /* ── F4: a `reclaimed` line for work that did not happen ──────────────────
+   *
+   * Final-round destructive review. `_ws_gc_scan` refuses to reconstruct an id
+   * when the registry disagrees with itself — "a prune keyed off a wrong
+   * reconstruction would delete a different session's entry" — and used to
+   * report that as `dead-reg <id> ?`. `_ws_gc_prune_row`'s dead-reg arm then
+   * recomposed `"$project-$slug"`, i.e. the literal `<id>-?`, purged nothing
+   * with it (the `?` arrives from a quoted expansion and cannot glob, so no
+   * stranger's file was ever at risk), and printed an unconditional
+   * `reclaimed dead registry entry <id>-?` plus a footer increment. A
+   * fabricated success line, repeated on every run for ever.
+   */
+  const brokenReg = (id: string): void => {
+    // The registry's own fields disagree with its id: `alpha-quiet-mesa`
+    // filed under project `beta`. `_ws_gc_scan` reads `.workspace` + `.uuid`
+    // and skips archived/reaping, so those three are what the fixture needs;
+    // the workdir must be gone for the row to be emitted at all.
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${id}.uuid`), 'u\n');
+    fs.writeFileSync(path.join(reg, `${id}.workspace`), 'quiet-mesa\n');
+    fs.writeFileSync(path.join(reg, `${id}.project`), 'beta\n');
+    fs.writeFileSync(path.join(reg, `${id}.workdir`), `${path.join(h.home, 'worktrees', 'gone')}\n`);
+  };
+
+  it('classifies a self-inconsistent registry entry as reg-broken, not dead-reg', () => {
+    h.makeRepo('demo');
+    brokenReg('alpha-quiet-mesa');
+    const r = scan().find((x) => x.project === 'alpha-quiet-mesa')!;
+    expect(r, 'the row is emitted at all').toBeDefined();
+    expect(r.state).toBe('reg-broken');
+    // The slug column carries no reconstruction — that is the whole point of
+    // the scan's refusal, and a `?` there was what the prune arm recomposed.
+    expect(r.slug).toBe('-');
+  });
+
+  it('DECLINES a self-inconsistent registry entry instead of reporting a purge it did not do', () => {
+    h.makeRepo('demo');
+    brokenReg('alpha-quiet-mesa');
+    const out = prune();
+    expect(out, out).toContain("alpha-quiet-mesa's registry entry disagrees with itself");
+    expect(out, out).toContain('will not guess which session it belongs to');
+    // The fabricated line and the footer over-count, both named.
+    expect(out, out).not.toContain('dead registry entry');
+    expect(out, out).not.toMatch(/reclaimed .*alpha-quiet-mesa/);
+    expect(out, out).toContain('reclaimed 0');
+    // And nothing was removed, because nothing could be: the entry is still
+    // there for a human to resolve.
+    expect(h.reg('alpha-quiet-mesa', 'uuid')).not.toBeNull();
   });
 
   it('does not let a path containing "reclaimed" inflate the summary counts', () => {

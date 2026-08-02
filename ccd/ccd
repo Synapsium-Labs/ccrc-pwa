@@ -2248,6 +2248,17 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   local wd="$1" entry p b sens deadline outf errf err rc ih drc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""; REAP_IGNREASON=""
   REAP_SENSITIVE_FILTERED=0
+  # `REAP_IGNSCANNED` is the PROOF THIS RAN, cleared here and set on the single
+  # success path at the end — final-round tests review F3. Every other variable
+  # this function fills has a value that is indistinguishable from a real
+  # measurement when the function never ran at all: an empty `REAP_IGNORED`
+  # reads as "nothing ignored", a `REAP_SENSITIVE_FILTERED` of 0 reads as
+  # "nothing filtered", and `cmd_ws_audit` printed both onto the
+  # delete-confirmation sheet for workspaces refused in Phase A, i.e. never
+  # scanned. A flag rather than `[[ -n "$REAP_IGNDIGEST" ]]`, which is true on
+  # exactly the same condition today: the digest's job is the consent
+  # fingerprint, and a second job it happens to satisfy is how these two drift.
+  REAP_IGNSCANNED=0
   deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
   outf=$(mktemp) || return 1
   errf=$(mktemp) || { rm -f "$outf"; return 1; }
@@ -2345,6 +2356,10 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     REAP_IGNDIGEST=$(printf '' | sha256sum | cut -d' ' -f1)
   fi
   [[ "$REAP_IGNDIGEST" =~ ^[0-9a-f]{64}$ ]] || { REAP_IGNDIGEST=""; return 1; }
+  # The ONLY assignment, on the ONLY path that returns 0. Everything above
+  # returns 1 with the flag still 0, which is what makes "these figures are a
+  # measurement" a fact this function states rather than one the caller infers.
+  REAP_IGNSCANNED=1
 }
 
 _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
@@ -2403,10 +2418,21 @@ _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sen
 _ws_reap_reset() {
   REAP_VERDICT=""; REAP_DETAIL=""; REAP_PROOF=""; REAP_TOKEN=""
   REAP_TIP=""; REAP_HEADOID=""; REAP_MERGE=""; REAP_BASEOID=""; REAP_WTHEAD=""
-  REAP_DIRTY=0; REAP_STASHES=0; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""; REAP_IGNREASON=""
+  # `REAP_STASHES` and `REAP_FETCHED` are "" and not 0 — final-round tests
+  # review F3's class, swept over every default in this function that
+  # `cmd_ws_audit` puts on the wire. A reset default that is a VALID-LOOKING
+  # MEASUREMENT is the forgery: `stashes:0` renders "stashes: none" and
+  # `fetchedAt:0` renders "merged … 20669 days ago", both about a workspace
+  # whose stash list and whose PR were never read, because Phase A refused
+  # first. The audit's printf turns a non-numeric value into JSON `null`, the
+  # same shape `REAP_PRNUM` and `REAP_PROOF` have carried since deviation 10.
+  # `REAP_DIRTY` stays 0: it is a guard input (`(( REAP_DIRTY == 0 ))`), never
+  # a wire field — `cmd_ws_audit` builds its `dirty` list from its own read.
+  REAP_DIRTY=0; REAP_STASHES=""; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""; REAP_IGNREASON=""
   REAP_CLIPDIGEST=""
-  REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=0
+  REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=""
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_SENSITIVE_FILTERED=0; _WS_INSIDE_HITS=()
+  REAP_IGNSCANNED=0
 }
 
 # MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
@@ -2701,9 +2727,18 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
   up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null) \
     || { _reap_refuse no-upstream "$branch was never pushed"; return 1; }
+  # The DIRECTION is unchanged and the SENTENCE is not — round-3 P2's class,
+  # last instance, found by the final-round destructive review (F5b). A failed
+  # `rev-list` yields "", which is `!= 0`, so this refuses, which is right; but
+  # it then printed " commit(s) are not on the remote" — a count, with the
+  # number missing, about a comparison that never ran. `_ws_gc_merged` and
+  # `_ws_gc_dirty` both already say the rule for the file: report unprovable as
+  # unprovable.
   ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
   [[ "$ahead" == 0 ]] \
-    || { _reap_refuse unpushed-commits "$ahead commit(s) are not on the remote"; return 1; }
+    || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
+           && echo "$ahead commit(s) are not on the remote" \
+           || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
 
   # ── Phase C: the work is genuinely in main ─────────────────────
   REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
@@ -2837,8 +2872,25 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # `"bytes":b.log`, which is not JSON. So: `sort -z`, `read -d ''`, and the
   # two fixed-shape fields peeled off the FRONT with `${…%%}`/`${…#}` rather
   # than by word-splitting, which would collapse a run of tabs.
-  local ign_json="[" first=1 total=0 count=0 rec rest p b s
-  if (( ${#REAP_IGNORED[@]} )); then
+  #
+  # AND THE WHOLE BLOCK IS SKIPPED WHEN NOTHING WAS SCANNED — final-round tests
+  # review F3, the fourteenth instance of the measurement-forgery class and the
+  # first one to reach the delete-confirmation surface itself. These four
+  # fields used to be initialised to `[`/`0`/`0`/`[` and printed
+  # UNCONDITIONALLY, on every verdict, so a Phase-A refusal
+  # (`registry-branch-drift`, `foreign-worktree`, `no-worktree-record`,
+  # `detached-head`, `incomplete-registry` — every one of which leaves the
+  # worktree ON DISK, possibly full of work) emitted
+  # `"ignored":[],"ignoredCount":0,"ignoredBytes":0,"sensitive":[]` and
+  # `ReapSheet` rendered "not in git: 0 entries, 0 B" about a tree
+  # `_ws_collect_ignored` had never been asked to look at. `worktreeBytes` on
+  # the same document already said `null` (deviation 120); its four siblings
+  # did not. `null` is the answer, for the reason the whole class is closed
+  # that way: 0 is the claim "there is nothing here", and nobody looked.
+  local ign_json=null total=null count=null sens_json=null sfilt=null first=1 rec rest p b s
+  if (( REAP_IGNSCANNED )); then
+   ign_json="["; total=0; count=0; sfilt="${REAP_SENSITIVE_FILTERED:-0}"
+   if (( ${#REAP_IGNORED[@]} )); then
     while IFS= read -r -d '' rec; do
       s="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"
       b="${rest%%$'\t'*}"; p="${rest#*$'\t'}"
@@ -2854,16 +2906,23 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
       ign_json+="{\"path\":$(_json_str "$p"),\"bytes\":$b,\"sensitive\":$( ((s)) && echo true || echo false)}"
       total=$(( total + b )); count=$(( count + 1 ))
     done < <(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z -t$'\t' -k1,1nr -k2,2nr)
-  fi
-  ign_json+="]"
+   fi
+   ign_json+="]"
 
-  local sens_json="[" sfirst=1 sp
-  for sp in "${REAP_SENSITIVE[@]-}"; do
-    [[ -n "$sp" ]] || continue
-    (( sfirst )) || sens_json+=","; sfirst=0
-    sens_json+="$(_json_str "$sp")"
-  done
-  sens_json+="]"
+   # Inside the same `REAP_IGNSCANNED` block, and that is the point rather than
+   # tidiness: `sensitive` and `sensitiveFiltered` are two answers from the one
+   # scan, so a document that reports the scan's ignored set as unmeasured and
+   # its secret-shaped names as "none" would be self-contradictory in the
+   # direction that reassures.
+   local sfirst=1 sp
+   sens_json="["
+   for sp in "${REAP_SENSITIVE[@]-}"; do
+     [[ -n "$sp" ]] || continue
+     (( sfirst )) || sens_json+=","; sfirst=0
+     sens_json+="$(_json_str "$sp")"
+   done
+   sens_json+="]"
+  fi
 
   # `-z` HERE TOO, for the reason the ignored list has it: this array is read by
   # the same human, in the same document, before the same irreversible action,
@@ -2898,25 +2957,63 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # line in `_ws_collect_ignored` is kept: the next statement indexes `$dl`
   # positionally, and an empty record would put `""` into the one list this
   # design asks a human to read filenames out of.
-  local dirty_json="[" dfirst=1 dl dsrc
+  #
+  # AND `null` FOR A READ THAT DID NOT HAPPEN OR DID NOT FINISH — final-round
+  # tests review F3, the same rung as the ignored block above. This was
+  # `dirty_json="["` … `2>/dev/null`, so BOTH "there is no directory to read"
+  # and "git failed, or half-read the tree" produced `[]`, and `ReapSheet`
+  # renders `[]` as **uncommitted: none** — the single most reassuring row on a
+  # delete-confirmation sheet, stated about a tree nobody looked at.
+  #
+  # The rc AND the stderr, for the reason `_ws_gc_dirty` and Phase B both give
+  # in full: a PARTIALLY unreadable tree exits ZERO with empty stdout and the
+  # diagnostic on stderr (measured, git 2.43), so the exit code alone answers
+  # "clean" for a tree holding uncommitted work behind a chmod-000 directory.
+  # A temp file rather than the process substitution this used to have,
+  # because a pipeline's status is not the read's — the same two-statement
+  # shape Phase B states the rule for. The NULs survive a file exactly as they
+  # survive a pipe.
+  local dirty_json=null dfirst=1 dl dsrc dout derrf derr drc
   if [[ -d "$workdir" ]]; then
-    while IFS= read -r -d '' dl; do
-      [[ -n "$dl" ]] || continue
-      case "$dl" in
-        [RC]*) IFS= read -r -d '' dsrc && dl="${dl:0:3}$dsrc -> ${dl:3}" ;;
-      esac
-      (( dfirst )) || dirty_json+=","; dfirst=0
-      dirty_json+="$(_json_str "$dl")"
-    done < <(git -C "$workdir" status --porcelain -z 2>/dev/null)
+    dout=$(mktemp) || dout=""
+    derrf=$(mktemp) || derrf=""
+    if [[ -n "$dout" && -n "$derrf" ]]; then
+      git -C "$workdir" status --porcelain -z >"$dout" 2>"$derrf"; drc=$?
+      derr=$(cat "$derrf" 2>/dev/null)
+      if (( drc == 0 )) && [[ -z "$derr" ]]; then
+        dirty_json="["
+        while IFS= read -r -d '' dl; do
+          [[ -n "$dl" ]] || continue
+          case "$dl" in
+            [RC]*) IFS= read -r -d '' dsrc && dl="${dl:0:3}$dsrc -> ${dl:3}" ;;
+          esac
+          (( dfirst )) || dirty_json+=","; dfirst=0
+          dirty_json+="$(_json_str "$dl")"
+        done < "$dout"
+        dirty_json+="]"
+      fi
+    fi
+    [[ -n "$dout" ]]  && rm -f "$dout"
+    [[ -n "$derrf" ]] && rm -f "$derrf"
   fi
-  dirty_json+="]"
 
-  local exists=false headmatch=false ahead=0 bytes=0
+  # `ahead` starts at `null` and BOTH ways of not measuring it keep it there —
+  # final-round destructive review F2, the last surviving `|| x=0` in this
+  # file. The initialiser and the fallback were each a fabricated 0, and both
+  # are reachable: the `if` does not run at all when `$base` does not resolve
+  # or `$branch` is empty, and `rev-list` can fail inside it.
+  #
+  # ccd already litigated this exact value 1,340 lines earlier. `_pr_state_one`
+  # (ccd:1650) writes `ahead=""` under the comment: `"" is UNMEASURED, not
+  # zero. ahead=0 is the claim "this branch is level with base" … a ref that
+  # does not resolve has not been measured against anything.` The file
+  # disagreed with itself; it no longer does.
+  local exists=false headmatch=false ahead=null bytes=0
   [[ -d "$workdir" ]] && exists=true
   [[ -n "$REAP_WTHEAD" && "$REAP_WTHEAD" == "$branch" ]] && headmatch=true
   if [[ -n "$branch" ]] && git -C "$PROJECTS_ROOT/$project" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
     ahead=$(git -C "$PROJECTS_ROOT/$project" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)
-    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0
+    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=null
   fi
   # Pre-merge fix round, finding F: `null`, never a fabricated `0` — the same
   # rule `_ws_archive_manifest` (ccd:1190) already carries, applied here where
@@ -2933,21 +3030,38 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
   printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
+  # Six fields, one source of truth for whether each is a measurement: `null`
+  # from the builders above whenever the read did not happen. See the two
+  # blocks for the reason; the printf is deliberately dumb so no third rule can
+  # appear here.
   printf '"dirty":%s,"ignored":%s,"ignoredCount":%s,"ignoredBytes":%s,"sensitive":%s,"sensitiveFiltered":%s,' \
-    "$dirty_json" "$ign_json" "$count" "$total" "$sens_json" "${REAP_SENSITIVE_FILTERED:-0}"
+    "$dirty_json" "$ign_json" "$count" "$total" "$sens_json" "$sfilt"
   # `clips` on the wire, because the sheet cannot ask a human to consent to a
   # deletion it does not list. `_ws_clip_manifest` is the same producer the
   # tombstone and the fingerprint use, and it is called HERE rather than read
   # from a variable so the field is present on every verdict — a refusal is the
   # answer a human reads too.
+  # `stashes` is `null` until `_ws_reap_eval` has actually read the stash list
+  # (its reset default is now "" rather than 0, see `_ws_reap_reset`): on a
+  # Phase-A refusal the read never happens, and `ReapSheet` renders a 0 there
+  # as **stashes: none** — a promise that nothing stashed is at stake, made
+  # about a list nobody opened.
   printf '"clips":%s,"stashes":%s,"worktreeBytes":%s,"commitsAheadOfBase":%s,' \
-    "$(_ws_clip_manifest "$id")" "$REAP_STASHES" "$bytes" "$ahead"
+    "$(_ws_clip_manifest "$id")" \
+    "$( [[ "$REAP_STASHES" =~ ^[0-9]+$ ]] && echo "$REAP_STASHES" || echo null)" \
+    "$bytes" "$ahead"
   printf '"pr":{"number":%s,"url":%s,"mergeCommit":%s,"headRefOid":%s},' \
     "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" \
     "$(_json_str "$REAP_PRURL")" "$(_json_str "$REAP_MERGE")" "$(_json_str "$REAP_HEADOID")"
+  # `fetchedAt` is `null` until Phase C actually fetched — same rung. Its reset
+  # default of 0 is a real epoch second, and `ReapSheet` printed it through
+  # `days()`: "merged in #? (proof: none), 20669 days ago", a date for a fetch
+  # that never ran, on the same line as two fields (`pr.number`, `merge.proof`)
+  # that have said `null` for the same state since deviation 10.
   printf '"merge":{"proof":%s,"fetchedAt":%s},"transcript":%s,' \
     "$( [[ -n "$REAP_PROOF" ]] && _json_str "$REAP_PROOF" || echo null)" \
-    "$REAP_FETCHED" "$(_json_str "$transcript")"
+    "$( [[ "$REAP_FETCHED" =~ ^[0-9]+$ ]] && echo "$REAP_FETCHED" || echo null)" \
+    "$(_json_str "$transcript")"
   # Three verdicts, not two, and the third one is why: `reapable` MEANS a token.
   #
   # `token` is present ONLY when the verdict is reapable AND the tree was
@@ -3658,7 +3772,21 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   local id="$1" resumed="$2" project workdir branch main attic clips tomb bytes
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); branch=$(_reg_get "$id" branch)
   main="$PROJECTS_ROOT/$project"
-  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+  # THE RECEIPT IS A MEASUREMENT TOO — final-round tests review F2. This was
+  # `|| bytes=0`, the last of the three identical `_ws_gc_bytes "$workdir"`
+  # lines to still fabricate (ccd:1503 archive manifest and ccd:3006 audit were
+  # closed in earlier rounds), and it is the one printed AFTER the irreversible
+  # delete: `{"reaped":…,"bytes":0}` states "this deletion reclaimed nothing"
+  # on a `du` that never completed. On the RESUME path it is 0 EVERY time — the
+  # worktree was already removed at (f) of the interrupted run, `_ws_gc_bytes`
+  # answers `-` for a path that is not a readable directory, and the run that
+  # in fact reclaimed gigabytes reports zero.
+  #
+  # `ReapResult.bytes` is `number | null | undefined` on the wire and nothing in
+  # the PWA reads it today; that is the reason this was harmless, not a reason
+  # to leave it. A receipt is the record a human reaches for when they want to
+  # know what a delete cost, and it may not answer with a number nobody took.
+  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
 
   # A breadcrumb holding anything ccd did not write is not a phase this can
   # reason about, so it gets the stricter reading, not the looser one — the
@@ -4127,7 +4255,19 @@ _ws_gc_scan() {
     # The id is <project>-<slug> by construction. If the registry disagrees with
     # itself, report it and reconstruct nothing — a prune keyed off a wrong
     # reconstruction would delete a different session's entry.
-    [[ "$p-$s" == "$id" ]] || { printf 'dead-reg\t%s\t%s\t-\t-\t%s\n' "$id" "?" "$wd"; continue; }
+    #
+    # ITS OWN STATE, not `dead-reg` with a `?` in the slug column — final-round
+    # destructive review F4. This row used to be emitted as `dead-reg <id> ?`,
+    # and `_ws_gc_prune_row`'s dead-reg arm then did exactly what the sentence
+    # above forbids: it recomposed `"$project-$slug"`, i.e. the literal
+    # `<id>-?`, handed that to `_reg_purge`, and printed an unconditional
+    # `reclaimed dead registry entry <id>-?`. The purge matched nothing (the
+    # `?` arrives from a quoted expansion and cannot glob, so no stranger's
+    # file was at risk), so the row was a FABRICATED SUCCESS LINE: a `reclaimed`
+    # a human reads, and a footer increment, for work that did not happen and
+    # will be reported again on every run for ever. A state the prune arm can
+    # recognise is the fix; a sentinel inside a field it recomposes was the bug.
+    [[ "$p-$s" == "$id" ]] || { printf 'reg-broken\t%s\t%s\t-\t-\t%s\n' "$id" "-" "$wd"; continue; }
     printf 'dead-reg\t%s\t%s\t-\t-\t%s\n' "$p" "$s" "$wd"
   done
 }
@@ -4230,15 +4370,33 @@ _ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds 
     return 1
   fi
   if (( ${#REAP_IGNORED[@]} == 0 )); then
-    _gc_row contents "$p has nothing ignored — everything in it is in git"
+    # THE SENTENCE MAY ONLY STATE WHAT THIS FUNCTION MEASURED — F1's second
+    # half. It used to read "everything in it is in git", printed on the line
+    # immediately above `reclaimed removed orphan worktree …` and therefore
+    # exactly the reassurance a reader uses to believe the removal was safe.
+    # This function measured ONE thing: the ignored set is empty. It did not
+    # look at the index, at HEAD, or at whether any commit here is reachable
+    # from anything else — and on a detached orphan, whose commit was reachable
+    # only from the worktree HEAD reflog `worktree remove` deletes, the claim
+    # was false at the moment it was printed. The gate above now refuses that
+    # case, and this row no longer stands behind it either way: two independent
+    # fixes, because a guard restored under a sentence that would still lie if
+    # the guard moved is half a fix.
+    _gc_row contents "$p holds no ignored files — nothing gitignored goes with it"
     return 0
   fi
   # NUL-separated on both the sort and the read, and the byte field taken by
   # parameter expansion rather than by a fourth `read`: `_ws_collect_ignored`
   # builds its records to survive a path holding a TAB or a NEWLINE, and this is
   # the same treatment `_reap_ignored_json` gives the same array for the same
-  # reason. The bytes are guaranteed numeric by the collector's own
-  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`, so the sum cannot be fed a word.
+  # reason. The bytes are guaranteed numeric, so the sum cannot be fed a word —
+  # but NOT for the reason this comment used to give. It cited the collector's
+  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`; round 3 replaced that coercion with a
+  # REFUSAL (`_ws_collect_ignored`, ccd:2274-2279 — a `du` that did not finish
+  # fails the whole collection), and `_ws_gc_reclaimable` returns 1 above
+  # before this loop when it does. The conclusion survived the fix and the
+  # justification did not, which is the shape of stale comment that later
+  # licenses reintroducing the coercion "because the sum needs it".
   for rec in "${REAP_IGNORED[@]}"; do
     b="${rec#*$'\t'}"; b="${b%%$'\t'*}"
     n=$(( n + 1 )); total=$(( total + b ))
@@ -4282,6 +4440,13 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
     dead-reg)
       _reg_purge "$project-$slug"                                          # finding F3
       _gc_reclaimed "dead registry entry $project-$slug" ;;
+    reg-broken)
+      # `_ws_gc_scan` deliberately reconstructed NOTHING for this row (see
+      # there), so there is no id to purge and this arm must not invent one.
+      # The `$project` column carries the raw id. Reported every run rather
+      # than cleaned, because the remedy is a human deciding which of the two
+      # disagreeing fields is right — F4.
+      _gc_declined "$project's registry entry disagrees with itself: its project and workspace fields do not compose to its id, so ccd will not guess which session it belongs to — inspect $REG/$project.* by hand" ;;
     orphan)
       if _ws_gc_dirty "$p"; then
         # Two refusals, one exit code — round-3 P2. `has uncommitted changes` is
@@ -4293,9 +4458,51 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         fi
         return 0
       fi
+      # THE GATE WAS INVERTED — final-round destructive review, F1, and the one
+      # counter-example on this branch to "no sequence of actions destroys a
+      # workspace without a human first seeing an accurate description of what
+      # would be destroyed". This read the branch and then wrote
+      #
+      #     if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged …
+      #
+      # so the mergedness proof ran ONLY when a branch survives the removal —
+      # the case where nothing is lost either way — and was SKIPPED for the
+      # detached HEAD, the case where `worktree remove` deletes
+      # `$main/.git/worktrees/<slug>/` together with its HEAD reflog and leaves
+      # the commit referenced by NOTHING, on gc.pruneExpire's two-week fuse.
+      # Reproduced in the review: two byte-identical orphans, one on a branch
+      # and one detached, each holding one commit; the branched twin was
+      # `declined … is on unmerged branch`, the detached twin was `reclaimed`
+      # and `git fsck` then reported its commit `dangling`.
+      #
+      # Three rungs, in the polarity `_ws_gc_merged`'s own `unprovable` arm
+      # already uses and `_ws_reap_eval`'s Phase-A rungs (ccd:2492-2510) already
+      # spell out: NOTHING READ and NOTHING TO PROVE AGAINST are both refusals,
+      # never a pass. A detached orphan may well hold only commits that are on
+      # origin/HEAD, but this arm cannot tell that from a lost hour's work
+      # without the branch that names it — and "I cannot tell" resolves to doing
+      # nothing everywhere else in this command.
       local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
-      if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged "$main" "$branch"; then
-        # The branch would survive `worktree remove`, so nothing is lost either
+      if [[ -z "$branch" ]]; then
+        # Rung 3 — HEAD did not read at all (unborn, unreadable, not a
+        # worktree). `_ws_gc_dirty` above answers for the FILES; this answers
+        # for the HISTORY, and neither may be inferred from the other.
+        _gc_declined "could not read HEAD in $p — refusing to remove a tree whose history it cannot describe"
+        return 0
+      fi
+      if [[ "$branch" == HEAD ]]; then
+        # Rung 2 — `rev-parse --abbrev-ref` reports a detached HEAD as the
+        # literal string `HEAD`. That is a SENTINEL, not a branch name, and the
+        # old conjunct read it as "no branch, so no mergedness to prove".
+        # ws-reap refuses the same state outright (`detached-head`, ccd:2499)
+        # and cmd_ws_rm notes it (ccd:1115); the unattended sweep refuses and
+        # moves on, which is this command's own polarity for the same fact.
+        _gc_declined "$p is on a detached HEAD ($(git -C "$p" rev-parse --short HEAD 2>/dev/null || echo 'unreadable')) — nothing else references its commits, so removing the worktree removes the last reference to them: check it out on a branch first"
+        return 0
+      fi
+      if ! _ws_gc_merged "$main" "$branch"; then
+        # Rung 1 — on a branch, and the branch is not provably finished. The
+        # branch would survive `worktree remove`, so nothing is lost either
         # way — but a sweep should only reclaim what is provably finished, and
         # someone may be mid-way through this one.
         if [[ "$GC_MERGED_STATE" == unmerged ]]; then
@@ -4319,7 +4526,15 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # counted by the footer, and now sitting between two `reclaimed` rows
         # the listing above added. The row below is ccd's own account of the
         # same fact, in the report's own shape.
-        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
+        #
+        # The `[[ -n "$branch" && "$branch" != HEAD ]]` conjunct that used to
+        # stand here is GONE rather than kept as defence in depth (F1): the
+        # three rungs above now RETURN on both of those states, so leaving the
+        # test in place would read as "the detached case can reach this line",
+        # which is the exact misreading the inverted gate above rested on. If a
+        # future edit lets it reach here, the right repair is a rung, not a
+        # second silent skip.
+        if git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
           _gc_reclaimed "deleted merged branch $branch"
         fi
       else

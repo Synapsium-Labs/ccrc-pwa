@@ -24,6 +24,21 @@ const days = (epochSeconds: number): string => {
   return d <= 0 ? 'today' : `${d} day${d === 1 ? '' : 's'} ago`;
 };
 
+/** The one word this sheet uses for a read that never happened — final-round
+ *  tests review F3. It is a SINGLE constant rather than five string literals
+ *  because the rows below must be indistinguishable in kind: a reader who
+ *  learns what it means on the "not in git" row must not have to learn it
+ *  again on "uncommitted".
+ *
+ *  It is deliberately NOT `sizeText`'s "unknown" / "size unknown". Those two
+ *  say "a measurement was attempted and could not be completed" — a `du` that
+ *  failed on one subdirectory. This says "no measurement was attempted at
+ *  all", which is a different fact and, on a refusal that leaves the worktree
+ *  standing, the more important one. The seam pass's residual #8 asked for
+ *  exactly this: two kinds of "we are not telling you a number" on one sheet,
+ *  worded apart. */
+const NOT_SCANNED = 'not scanned';
+
 /** A byte total this screen was actually given, or the word for not having been
  *  given one. Every size on the delete-confirmation surface goes through here.
  *
@@ -192,7 +207,10 @@ export function ReapSheet({
   // showing it is sufficient: when anything was filtered, the entries are
   // expanded by default. The reader may still collapse them, and the collapsed
   // toggle always says how many entries it is hiding.
-  const expanded = showAll ?? (shown !== null && shown.sensitiveFiltered > 0);
+  //
+  // `?? 0` on `sensitiveFiltered` (F3): `null` means the filter never ran, so
+  // there is nothing it hid and nothing to expand for.
+  const expanded = showAll ?? (shown !== null && (shown.sensitiveFiltered ?? 0) > 0);
 
   const confirm = (): void => {
     // The token guard is a TYPE guard now, not a state the UI can reach:
@@ -238,7 +256,12 @@ export function ReapSheet({
                     `shown.pr.number ?? '?'` on the same line is NOT equivalent —
                     `number | null` admits `0`, a real (if unusual) PR number —
                     and is pinned by a dedicated test instead. */}
-                {`${shown.branch} — merged in #${shown.pr.number ?? '?'} (proof: ${shown.merge.proof ?? 'none'}), ${days(shown.merge.fetchedAt)}`}
+                {/* `fetchedAt` is `number | null` (F3). 0 is a real epoch
+                    second, so the old unconditional `days()` turned a refusal
+                    that never reached the PR fetch into "…, 20669 days ago" —
+                    a date, on the same line as two fields that were already
+                    saying `null` for that state. */}
+                {`${shown.branch} — merged in #${shown.pr.number ?? '?'} (proof: ${shown.merge.proof ?? 'none'}), ${shown.merge.fetchedAt === null ? `merge ${NOT_SCANNED}` : days(shown.merge.fetchedAt)}`}
               </dd>
 
               <dt>worktree</dt>
@@ -254,8 +277,17 @@ export function ReapSheet({
                 <span className="reap-size">{sizeText(shown.worktreeBytes)}</span>
               </dd>
 
+              {/* F3. `dirty` is `string[] | null`, and the null is the whole
+                  point: `[]` renders as **none**, the single most reassuring
+                  word on this sheet, and ccd used to emit `[]` both for "the
+                  tree is clean" and for "there was no tree to read, or the
+                  read failed". Those are opposite facts about a directory that
+                  a refusal leaves standing. */}
               <dt>uncommitted</dt>
-              <dd>{shown.dirty.length === 0 ? 'none' : `${shown.dirty.length} files`}</dd>
+              <dd>
+                {shown.dirty === null ? NOT_SCANNED
+                  : shown.dirty.length === 0 ? 'none' : `${shown.dirty.length} files`}
+              </dd>
 
               <dt>not in git</dt>
               <dd>
@@ -267,13 +299,22 @@ export function ReapSheet({
                     states a total it does not have or says `NaN B`. `sizeText`
                     refuses instead, in the same word the worktree row two
                     `<dd>`s above already uses. */}
-                {`${shown.ignoredCount} entries, ${sizeText(shown.ignoredBytes, 'size unknown')}`}
-                {shown.ignored.length > 0 && (
+                {/* AND THE COUNT IS `number | null` NOW (F3). `sizeText`
+                    already refused to invent the TOTAL; the ENTRY COUNT beside
+                    it was still printed raw, so an unscanned workspace read
+                    "0 entries, size unknown" — half honest, and the half that
+                    was not is the half a reader takes as "there is nothing
+                    here". Both halves come from the same scan, so they are
+                    unmeasured together or not at all. */}
+                {shown.ignoredCount === null
+                  ? NOT_SCANNED
+                  : `${shown.ignoredCount} entries, ${sizeText(shown.ignoredBytes, 'size unknown')}`}
+                {shown.ignored !== null && shown.ignored.length > 0 && (
                   <span className="reap-ignored">
                     {(expanded ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
                   </span>
                 )}
-                {shown.ignored.length > 3 && (
+                {shown.ignored !== null && shown.ignored.length > 3 && (
                   <button type="button" className="btn-ghost" onClick={() => setShowAll(!expanded)}>
                     {/* The collapsed label carries the total, so the size of
                         what is hidden is never itself hidden. */}
@@ -281,15 +322,21 @@ export function ReapSheet({
                   </button>
                 )}
                 {/* The count and the total are NEVER truncated: the judgement
-                    this whole design rests on is a human reading a filename. */}
-                <span className="reap-note">These are in no commit and cannot be recovered.</span>
+                    this whole design rests on is a human reading a filename.
+                    The note is suppressed when nothing was scanned: "These are
+                    in no commit and cannot be recovered" under a row that just
+                    said `not scanned` reads as a statement about a set the
+                    screen has, and it has none. */}
+                {shown.ignoredCount !== null && (
+                  <span className="reap-note">These are in no commit and cannot be recovered.</span>
+                )}
                 {/* F3 refinement (pre-merge fix round): a secret-shaped name
                     ending in a source, compiled or template extension is
                     filtered as vendored/build noise rather than flagged
                     sensitive. EXCLUDED must never mean INVISIBLE — this is
                     the count surfacing where a human can actually see it, so
                     a wrong filter is something anyone would notice. */}
-                {shown.sensitiveFiltered > 0 && (
+                {shown.ignored !== null && (shown.sensitiveFiltered ?? 0) > 0 && (
                   <span className="reap-note">
                     {`${shown.sensitiveFiltered} secret-shaped ${shown.sensitiveFiltered === 1 ? 'match' : 'matches'} filtered as vendored/template.`}
                     {/* Where to look. The sentence tracks the list's actual
@@ -329,19 +376,51 @@ export function ReapSheet({
                 )}
               </dd>
 
+              {/* F3, same rung: `stashes` is `number | null`, and a 0 nobody
+                  counted renders here as **none** — a promise that nothing
+                  stashed is at stake, made about a list `_ws_reap_eval` never
+                  opened because Phase A refused first. */}
               <dt>stashes</dt>
-              <dd>{shown.stashes === 0 ? 'none' : `${shown.stashes}`}</dd>
+              <dd>
+                {shown.stashes === null ? NOT_SCANNED
+                  : shown.stashes === 0 ? 'none' : `${shown.stashes}`}
+              </dd>
 
+              {/* THE "KEPT" ROW MAY NOT PROMISE A COUNT NOBODY HAS TAKEN —
+                  final-round tests review F5. This read
+                  `${result?.attic ?? shown.commitsAheadOfBase} commits pinned
+                  in the attic`, so BEFORE the reap the figure was
+                  `commitsAheadOfBase`, i.e.
+                  `git rev-list --count "$base..refs/heads/$branch"`. That is a
+                  different quantity from what `_ws_attic_pin` actually pins:
+                  one ref per DISTINCT REFLOG SHA, `sort -u | head -200`, plus
+                  the tip. The two are unequal in both directions — amends and
+                  rebases push the reflog above the commit count, and past 200
+                  the cap truncates — so on the sheet that describes an
+                  irreversible delete this row could promise MORE retention
+                  than the attic will provide. Overstating what survives is the
+                  dangerous direction here.
+
+                  So: before the reap, describe the RULE, which is exact and
+                  needs no measurement; after it, `result.attic` is the count
+                  `_ws_attic_pin` itself returned and the row states it. That
+                  leaves `commitsAheadOfBase` unrendered, deliberately — it is
+                  a real and useful figure in `ccd ws-audit`'s own output, and
+                  it was only ever wrong as an answer to "how much of this
+                  survives". */}
               <dt>kept</dt>
               <dd>
-                {`transcript, and ${result?.attic ?? shown.commitsAheadOfBase} commits pinned in the attic (ccd ws-attic)`}
+                {result?.attic !== undefined
+                  ? `transcript, and ${result.attic} commits pinned in the attic (ccd ws-attic)`
+                  : 'transcript, and the branch tip plus up to 200 more commits from its reflog,'
+                    + ' pinned in the attic (ccd ws-attic)'}
               </dd>
             </dl>
 
             {shown.verdict !== 'reapable' && (
               <>
                 <p className="reap-refusal">{shown.sentence}</p>
-                {shown.sensitive.length > 0 && (
+                {shown.sensitive !== null && shown.sensitive.length > 0 && (
                   <>
                     <ul className="reap-sensitive">
                       {shown.sensitive.map((p) => <li key={p}>{p}</li>)}
@@ -349,7 +428,7 @@ export function ReapSheet({
                     {/* The ONLY affordance a refusal ever gets, because the
                         remedy is to move these files. There is no override. */}
                     <button type="button" className="btn-ghost"
-                            onClick={() => { void navigator.clipboard?.writeText(shown.sensitive.join('\n')); toast('Paths copied', 'info'); }}>
+                            onClick={() => { void navigator.clipboard?.writeText((shown.sensitive ?? []).join('\n')); toast('Paths copied', 'info'); }}>
                       Copy paths
                     </button>
                   </>
