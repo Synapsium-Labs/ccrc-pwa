@@ -41,11 +41,35 @@ export function limitsFor(sessions: FleetSession[], wrapper: string): AccountLim
   return null;
 }
 
-/** Load score for "suggested" ranking — the tighter of the two windows. */
+/** Load score for "suggested" ranking — the tighter of the two windows, or
+ *  null when there is no such thing.
+ *
+ *  Fix round 3, verifier P7 (eleventh measurement forgery, adjudicated REAL).
+ *  This was `Math.max(l.five ?? 0, l.seven ?? 0)`, and `five`/`seven` are
+ *  `number | null` where null means THE WINDOW WAS NOT READ
+ *  (shared/api.ts). Both nulls is a producible state, not a hypothetical:
+ *  `readLimits` writes `{five: null, seven: null, …}` for any account whose
+ *  limits file is missing or unparseable (server/src/limits.ts), and
+ *  `server/src/fleet.ts` hands that straight to the session as a non-null
+ *  `limits` object. The row therefore rendered "5h — · 7d —" and wore the
+ *  "suggested" tag at the same time, beating a genuinely-measured account at
+ *  5%: an account nobody could read was recommended precisely BECAUSE nobody
+ *  could read it.
+ *
+ *  One known window is not enough either. The score is a MAXIMUM, so with the
+ *  other window unread the true score is only bounded below — `{five: 3,
+ *  seven: null}` scored 3 and won the ranking while its 7-day window could
+ *  have been at 99. A recommendation built on that is a guess about the number
+ *  that would have decided it.
+ *
+ *  Not scoring is not a refusal to help: an account with no score is simply
+ *  not ranked, its gauges still say `—`, and it remains tappable. What is gone
+ *  is ccrc telling the reader it is the emptiest pool. */
 const load = (l: AccountLimits): number | null =>
-  l === null ? null : Math.max(l.five ?? 0, l.seven ?? 0);
+  l === null || l.five === null || l.seven === null ? null : Math.max(l.five, l.seven);
 
-/** The least-loaded wrapper among those with known limits; null if none. */
+/** The least-loaded wrapper among those whose BOTH limit windows were actually
+ *  read; null if none was. */
 export function leastLoaded(sessions: FleetSession[], wrappers: string[]): string | null {
   let best: string | null = null;
   let bestLoad = Infinity;
