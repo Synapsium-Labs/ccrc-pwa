@@ -122,3 +122,36 @@ describe('the CcdArgv brand is phantom — it costs nothing at runtime', () => {
     expect([...argv]).toEqual(['ensure', 'demo-quiet-basin']);
   });
 });
+
+// Pre-merge fix round, finding 13S-F1: the brand's own comment, the task
+// report's §6(3) and plan deviation 82(c) all claimed the ONLY way past the
+// brand was "a deliberate cast" — false as written. Three cast-free shapes
+// launder an arbitrary argv past it: `Object.assign` onto a minted argv
+// (runtime-verified below to MUTATE THE REAL ARGV IN PLACE before this fix),
+// array covariance, and an `any`-typed value (e.g. `JSON.parse`). Only the
+// first is closeable at runtime — array covariance and `any` are inherent to
+// TypeScript. `ccdargv.ts`'s mint site now freezes every array it returns,
+// so the in-place mutation throws instead of silently succeeding.
+describe('the mint site freezes every argv — closing the Object.assign bypass (13S-F1)', () => {
+  it('Object.assign onto a minted argv throws, and leaves it unmutated', () => {
+    const argv = CCD_ARGV.ensure('demo-quiet-basin');
+    // Before the fix, this call SUCCEEDED and silently overwrote the real
+    // argv in place — `argv` itself became `['ws-rm', 'evil']`. Freezing at
+    // the mint site makes `Object.assign`'s own internal `Set(..., throw)`
+    // fail closed instead.
+    expect(() => Object.assign(argv, ['ws-rm', 'evil'])).toThrow(TypeError);
+    expect([...argv]).toEqual(['ensure', 'demo-quiet-basin']);
+  });
+
+  it('normal use is unaffected: spreading a frozen argv still copies its tokens into a mutable array', () => {
+    // `lifecycle.ts`'s ccdRunner spreads every CcdArgv before handing it to
+    // `run` (`run(cfg.ccdBin, [...args])`) — the copy must stay fully usable
+    // even though its source is now frozen.
+    const argv = CCD_ARGV.wsReap('a'.repeat(64), 'demo-quiet-basin');
+    const copy = [...argv];
+    copy.push('extra');
+    expect(copy).toEqual(['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin', 'extra']);
+    // The source argv is untouched by mutating its copy.
+    expect([...argv]).toEqual(['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin']);
+  });
+});

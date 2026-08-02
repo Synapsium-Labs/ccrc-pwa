@@ -12,6 +12,17 @@ declare const CcdArgvBrand: unique symbol;
  * const, aliased runner, renamed identifier). A text scan over a
  * Turing-complete language cannot enumerate the ways to name a value; a type
  * does not have to. See task 13S.
+ *
+ * WHAT STILL GETS PAST IT (pre-merge fix round, finding 13S-F1 — corrected
+ * from an earlier, narrower claim of "a deliberate cast" as the only
+ * residual class): a deliberate cast (`['ws-rm','x'] as unknown as
+ * CcdArgv`); array covariance (`const w: (readonly string[])[] = slots;
+ * w[0] = [...]`); or any `any`-typed value flowing in uncast (e.g.
+ * `JSON.parse(...)`). All three are inherent to TypeScript's structural and
+ * gradual typing and cannot be closed by a stronger brand — this is an
+ * accurate disclosure of the residual class, not a claim that the brand is
+ * total. A fourth shape, `Object.assign` onto a minted argv, IS closed — see
+ * `argv()`'s own comment below.
  */
 export type CcdArgv = readonly string[] & { readonly [CcdArgvBrand]: true };
 
@@ -20,8 +31,19 @@ export type CcdArgv = readonly string[] & { readonly [CcdArgvBrand]: true };
  * whose entire job is building them. Every entry in `CCD_ARGV` returns through
  * here, and nothing outside this file can mint one — which is what makes
  * `Deps.runCcd`'s parameter type a proof of origin rather than a hint.
+ *
+ * `Object.freeze` (pre-merge fix round, finding 13S-F1): without it,
+ * `Object.assign(CCD_ARGV.ensure('x'), ['ws-rm', 'evil'])` types as
+ * `CcdArgv & string[]` — no cast anywhere — and MUTATES THE REAL ARGV IN
+ * PLACE at runtime (measured). Freezing here makes that assignment throw
+ * (`Object.assign`'s own internal `Set(..., throw)` fails closed on a
+ * non-writable index) instead of silently succeeding. This closes exactly
+ * that one shape. It does not and cannot close array covariance
+ * (`const w: (readonly string[])[] = slots; w[0] = [...]`) or an
+ * `any`-typed value flowing in uncast (e.g. `JSON.parse(...)`) — both are
+ * inherent to TypeScript, not bugs in this function.
  */
-const argv = (parts: readonly string[]): CcdArgv => parts as CcdArgv;
+const argv = (parts: readonly string[]): CcdArgv => Object.freeze(parts) as CcdArgv;
 
 /**
  * The ONLY place ccd argv is constructed. Every route builds its call through
