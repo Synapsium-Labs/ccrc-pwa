@@ -515,12 +515,36 @@ describe('ws-archive', () => {
     expect(m.dirty).toBe(0);        // the stash took the edit with it
   });
 
-  it('substitutes 0 when the size cannot be measured, keeping the record JSON', () => {
+  // Pre-merge fix round, finding 5 — the seventh instance of the
+  // measurement-forgery class in this plan (deviation 10: "a number is a
+  // measurement"). Before this fix, a failed `du` on a workdir that EXISTS
+  // and IS readable wrote a literal `"worktreeBytes":0` — a false claim of
+  // "measured, zero bytes" when the truth was "could not measure it". The
+  // whole-directory-gone case is refused earlier (`[[ -d "$workdir" ]] ||
+  // die …` above, and `git -C "$workdir" status` failing before `_ws_gc_bytes`
+  // is ever reached) — this is the narrower window: the read itself failing
+  // on an otherwise-describable tree. `registry.ts`'s `manifestBytes` already
+  // treats anything but a finite JSON number as null (Task 19), so the ONLY
+  // gap was ccd writing the wrong JSON value in the first place.
+  it('records worktreeBytes as null, not a fabricated 0, when du fails on an existing readable worktree', () => {
     workspace('demo', 'quiet-basin');
-    // _ws_gc_bytes answers '-' when du fails. Unsubstituted that is
-    // "worktreeBytes":- — not JSON — and since the record is now parsed before it
-    // is persisted, dropping the fallback turns a measurable tree into a refusal.
-    h.sh(`${ARCH} _ws_gc_bytes() { echo -; }; cmd_ws_archive --session demo-quiet-basin`);
+    // `du() { return 1; }` — the established technique in this suite for a
+    // failed size read (ccd-ws-audit.test.ts's own `records 0 bytes rather
+    // than an empty field…` fixture) — reproduces the failure WITHOUT
+    // touching the directory itself: $workdir still exists and is still
+    // readable, only the measurement fails. `_ws_gc_bytes` then answers '-',
+    // which the manifest must record as JSON `null`, never a fabricated 0.
+    h.sh(`${ARCH} du() { return 1; }; cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.worktreeBytes).toBeNull();
+  });
+
+  it('still records a genuine ZERO-byte measurement as 0, not null — the two stay distinguishable', () => {
+    workspace('demo', 'quiet-basin');
+    // A successful `du` that genuinely answers 0 (rc 0, numeric output) must
+    // not be conflated with a failed read: 0 is a measurement, and this is
+    // the other half of that rule — a real zero must survive as 0.
+    h.sh(`${ARCH} du() { printf '0\\tx\\n'; }; cmd_ws_archive --session demo-quiet-basin`);
     const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
     expect(m.worktreeBytes).toBe(0);
   });

@@ -207,6 +207,25 @@ describe('archived size on the wire', () => {
     expect(fleet.find((s) => s.id === 'demo-quiet-basin')!.archivedBytes).toBe(1_200_000_000);
   });
 
+  // Pre-merge fix round, finding 5: ccd now writes the EXPLICIT JSON value
+  // `null` (not an omitted key) for `worktreeBytes` when a `du` failed on an
+  // otherwise-readable worktree. `manifestBytes`'s own `typeof n === 'number'`
+  // check already excludes `null` (`typeof null === 'object'`), so this closes
+  // the coverage gap for the exact shape ccd now emits — every sibling test in
+  // this block exercises a DIFFERENT shape (omitted key, unparseable JSON, no
+  // manifest file, non-finite number), none of them this one.
+  it('is null when the manifest explicitly writes worktreeBytes as JSON null — the failed-du shape ccd now emits', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'demo-lone-creek', 'claude');
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-lone-creek.workspace'), 'lone-creek');
+    writeFileSync(path.join(reg, 'demo-lone-creek.archived'), '1785300123');
+    writeFileSync(path.join(reg, 'demo-lone-creek.archivemanifest'),
+      JSON.stringify({ branch: 'ws/lone-creek', worktreeBytes: null }));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((s) => s.id === 'demo-lone-creek')!.archivedBytes).toBeNull();
+  });
+
   it('is null when there is no manifest, or it is unparseable', async () => {
     // A missing figure must read as "unknown", never as 0 — a footer claiming
     // 0 GB would argue against a cleanup that would actually free gigabytes.

@@ -1177,7 +1177,17 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # recomputes the count itself when it does. `worktreeHead` beside it is what
   # tells a reader which question the number answered.
   stashes=$(_ws_stash_count "$main" "$branch")
-  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+  # Pre-merge fix round, finding 5: `null`, not `0` — the seventh instance of
+  # the measurement-forgery class in this plan (deviation 10, "a number is a
+  # measurement"). The whole-directory-gone case already refuses earlier (the
+  # `[[ -d "$workdir" ]]` guard above `_ws_archive_manifest`, and the
+  # `git -C "$workdir" status` read a few lines up, both before this point);
+  # this is the narrower window — `du` failing on a workdir that DOES exist
+  # and IS otherwise readable. `registry.ts`'s `manifestBytes` already treats
+  # anything but a finite JSON number as unmeasured (Task 19), so writing the
+  # honest value here is the whole fix: a fabricated 0 would have argued
+  # against a cleanup that could free real disk.
+  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
   pr=$(_reg_get "$id" prnumber); [[ "$pr" =~ ^[0-9]+$ ]] || pr=null
   transcript=$(_transcript_path "$id") || transcript=""
   printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"transcript":%s}\n' \
