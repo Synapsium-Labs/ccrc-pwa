@@ -9,22 +9,17 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { ruleIn } from './cssRule';
 
 const chatCss = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
 const tokensCss = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'styles', 'tokens.css'), 'utf8');
 
-/** The declarations of the first rule whose selector list starts with `sel`
- *  in `text`, tolerating leading indentation. */
-function ruleIn(text: string, sel: string): string {
-  const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`\\n[ \\t]*${escaped}[ \\t]+\\{`);
-  const m = re.exec(text);
-  if (!m) throw new Error(`no rule for ${sel}`);
-  const open = text.indexOf('{', m.index);
-  return text.slice(open + 1, text.indexOf('}', open));
-}
+// Shared rule reader (test/cssRule.ts), not a third hand-rolled copy — fix
+// round 3, verifier P5. chat.css and tokens.css belong to the ui-css lane and
+// are being edited in parallel; the scrape must break on a changed
+// declaration, never on a changed indent.
 
 const rule = (sel: string): string => ruleIn(chatCss, sel);
 
