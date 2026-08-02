@@ -35,7 +35,9 @@ export function ReapSheet({
   const [audit, setAudit] = useState<WsAudit | null>(null);
   const [result, setResult] = useState<ReapResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  // `null` = the reader has not chosen; the default depends on the audit (see
+  // `expanded` below). Their choice, once made, wins for this target.
+  const [showAll, setShowAll] = useState<boolean | null>(null);
 
   const id = session?.id ?? null;
   // Final-round finding F2 (destructive review). `setAudit(null)` below fixed
@@ -82,6 +84,9 @@ export function ReapSheet({
     // fleet-screen.test.tsx). A null `audit` is what renders "Checking…"
     // instead of a stale confirm button while the fetch below is in flight.
     setAudit(null);
+    // The expand/collapse choice belonged to the PREVIOUS audit's list — a new
+    // target (or a Re-check) gets its own default, chosen from its own facts.
+    setShowAll(null);
     void api.workspaceAudit(id)
       .then((a) => { if (gen.current === mine) setAudit(a); })
       // The toast is generation-guarded too: an error belonging to a workspace
@@ -116,6 +121,25 @@ export function ReapSheet({
   // Fails safe: a mismatch renders "Checking…" — refusing to describe —
   // rather than describing the wrong workspace.
   const shown = audit !== null && audit.id === session.id ? audit : null;
+
+  // destructive F8 residual (critic2, uncovered). The FILTER POLICY is
+  // deliberately untouched — the human partner's question about it is open,
+  // and this is the display half only.
+  //
+  // The residual: the count of noise-filtered secret-shaped matches was
+  // rendered beside an ignored list capped at three, and a filtered entry is
+  // precisely the one that sorts last. ccd emits `ignored` sorted
+  // sensitive-first then bytes-descending (ccd:2561) and a noise-filtered
+  // match leaves the entry's `sensitive` at 0 (ccd:1996-2000), so its NAME sat
+  // below the cap while the NUMBER claiming it sat above — "excluded must
+  // never mean invisible" held for the count and failed for the name, which is
+  // the only thing a human can actually judge a wrong filter by.
+  //
+  // ccd caps nothing on the wire (the `ignored` array is the whole set), so
+  // showing it is sufficient: when anything was filtered, the entries are
+  // expanded by default. The reader may still collapse them, and the collapsed
+  // toggle always says how many entries it is hiding.
+  const expanded = showAll ?? (shown !== null && shown.sensitiveFiltered > 0);
 
   const confirm = (): void => {
     // The token guard is a TYPE guard now, not a state the UI can reach:
@@ -183,12 +207,14 @@ export function ReapSheet({
                 {`${shown.ignoredCount} entries, ${humanBytes(shown.ignoredBytes)}`}
                 {shown.ignored.length > 0 && (
                   <span className="reap-ignored">
-                    {(showAll ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
+                    {(expanded ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
                   </span>
                 )}
                 {shown.ignored.length > 3 && (
-                  <button type="button" className="btn-ghost" onClick={() => setShowAll((v) => !v)}>
-                    {showAll ? 'show fewer' : 'show all'}
+                  <button type="button" className="btn-ghost" onClick={() => setShowAll(!expanded)}>
+                    {/* The collapsed label carries the total, so the size of
+                        what is hidden is never itself hidden. */}
+                    {expanded ? 'show fewer' : `show all ${shown.ignored.length}`}
                   </button>
                 )}
                 {/* The count and the total are NEVER truncated: the judgement
@@ -203,6 +229,12 @@ export function ReapSheet({
                 {shown.sensitiveFiltered > 0 && (
                   <span className="reap-note">
                     {`${shown.sensitiveFiltered} secret-shaped ${shown.sensitiveFiltered === 1 ? 'match' : 'matches'} filtered as vendored/template.`}
+                    {/* Where to look. The sentence tracks the list's actual
+                        state, so it is never a promise the screen is not
+                        keeping (F8 residual). */}
+                    {expanded || shown.ignored.length <= 3
+                      ? ' Every ignored entry is named above.'
+                      : ` Tap "show all ${shown.ignored.length}" to see them.`}
                   </span>
                 )}
               </dd>
