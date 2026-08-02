@@ -342,17 +342,60 @@ describe('the audit and the lookup ask the same question', () => {
       .toThrow(/Undeclared grant\(s\): Symbol\(gh\)/);
   });
 
-  it('the lookup gates on the DECLARED set, so a planted own key grants nothing', () => {
-    // The other half of the P2 fix, and the one that matters if the audit is
-    // ever bypassed: `isExecAllowed` now asks `GRANTABLE_COMMANDS.includes`,
-    // not merely "does an own property exist". The real table is frozen, so
-    // this is asserted on the real object — defineProperty on a frozen object
-    // throws, which is itself the first line of defence.
-    expect(() => Object.defineProperty(EXEC_WHITELIST, 'gh', {
-      value: [['pr', 'merge']], enumerable: false,
-    })).toThrow(TypeError);
-    expect(isExecAllowed('gh', ['pr', 'merge', '1'])).toBe(false);
-    expect((GRANTABLE_COMMANDS as readonly string[]).includes('gh')).toBe(false);
+  // ROUND 3, P3 — SAID PLAINLY: the second half of the round-2 P2 fix, the
+  // `GRANTABLE_COMMANDS.includes(cmd)` line in `isExecAllowed`, IS NOT PINNED
+  // AND CANNOT BE. The round-2 report offered one measurement for "two changes
+  // so both ask the same question", and that measurement (a non-enumerable key
+  // planted on a FIXTURE, 11/11 -> 10 of 11 files failing) is produced entirely
+  // by the auditor's `Reflect.ownKeys` change above. Measured in round 3:
+  // delete the lookup's declared-set line and the agent suite is 191 passed /
+  // 12 files, `tsc --noEmit -p agent` clean, and server/test/
+  // whitelist-subset.test.ts 39/39. Nothing anywhere fails.
+  //
+  // That is a property of the design, not a gap someone can close. A
+  // distinguishing input needs an OWN key of EXEC_WHITELIST that is not in
+  // GRANTABLE_COMMANDS, and the three tests below are exactly the reasons no
+  // such state is reachable. So they pin the PREMISE. If any one of them ever
+  // fails, the declared-set line stops being redundant and starts being the
+  // thing holding the door — which is the moment someone needs to read this.
+  //
+  // The alternative — giving `isExecAllowed` an injectable table the way
+  // `auditExecWhitelist` has one — was considered and REJECTED. Injection into
+  // the audit can only cause a false throw; injection into the lookup would
+  // create an allow-path that does not exist today. A pin is not worth a
+  // bypass primitive in the one function standing between the PWA and `exec`.
+  describe('why the lookup\'s declared-set gate has no distinguishing input', () => {
+    it('the real table is frozen, so no own key can be planted at runtime', () => {
+      expect(Object.isFrozen(EXEC_WHITELIST)).toBe(true);
+      expect(() => Object.defineProperty(EXEC_WHITELIST, 'gh', {
+        value: [['pr', 'merge']], enumerable: false,
+      })).toThrow(TypeError);
+      expect(isExecAllowed('gh', ['pr', 'merge', '1'])).toBe(false);
+    });
+
+    it('its own-key set — enumerable or NOT, strings and symbols — IS the declared set', () => {
+      // `Reflect.ownKeys`, not `Object.keys`: own-enumerable-only is the exact
+      // blind spot the round-2 auditor fix existed to remove, and asserting the
+      // premise with the blind mechanism would reintroduce it here.
+      expect(Reflect.ownKeys(EXEC_WHITELIST).map(String).sort())
+        .toEqual([...GRANTABLE_COMMANDS].sort());
+    });
+
+    it('and a key outside that set cannot survive module load anyway', () => {
+      // The audit runs at import and refuses to boot, so even a source edit
+      // planting a non-enumerable key above the freeze never reaches the
+      // lookup. Asserted on a fixture because the real one would take the
+      // process down with it.
+      const planted: Record<string, unknown> = { tmux: [], ccd: [] };
+      Object.defineProperty(planted, 'gh', { value: [['pr', 'merge']], enumerable: false });
+      expect(() => auditExecWhitelist(planted)).toThrow(/forbidden command: gh/);
+      // ...and the asymmetry the declared-set gate answers, shown on that same
+      // fixture: `hasOwn` alone says yes to the planted key, the declared set
+      // says no. This is a DEMONSTRATION of the reasoning, not a pin of the
+      // shipped line — the shipped line is never reached with such a table.
+      expect(Object.hasOwn(planted, 'gh')).toBe(true);
+      expect((GRANTABLE_COMMANDS as readonly string[]).includes('gh')).toBe(false);
+    });
   });
 });
 

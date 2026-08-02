@@ -549,6 +549,31 @@ export function isExecAllowed(cmd: string, args: string[]): boolean {
   // audit now consult the same thing, which was the substance of P2. `hasOwn`
   // stays as the second guard: it is the one that survives GRANTABLE_COMMANDS
   // being widened, and neither is expensive.
+  //
+  // THIS LINE IS NOT PINNED BY ANY TEST, AND CANNOT BE. Stated here because
+  // round 2's report folded it into a measurement of the OTHER half of that
+  // fix (the auditor's `Reflect.ownKeys`), which reads as coverage it does not
+  // have; verify round 3, P3 caught that. Delete the line and the agent suite
+  // is 191/12, `tsc -p agent` is clean and the server's cross-package check is
+  // 39/39. The reason is structural, not an oversight: for the two guards to
+  // disagree, `EXEC_WHITELIST` would need an OWN key that is not in
+  // `GRANTABLE_COMMANDS`, and there is no reachable state in which it has one.
+  // The literal's keys are `Record<ExecCommand, …>` (compile error otherwise),
+  // `auditExecWhitelist()` runs at module load over `Reflect.ownKeys` and
+  // refuses to boot on an undeclared key, and the object is `Object.freeze`d
+  // before any test can run — so a distinguishing input cannot be constructed
+  // from outside, and one constructed INSIDE the module (a
+  // `Object.defineProperty(EXEC_WHITELIST,'gh',{enumerable:false})` inserted
+  // above the freeze) makes the import throw before this function exists.
+  //
+  // It is kept as defence-in-depth for the one future where that changes: the
+  // freeze removed, the audit weakened, or the table sourced from anywhere but
+  // a literal. What it must NOT become is a parameter — `auditExecWhitelist`
+  // takes its table as a defaulted argument and that is safe, because injecting
+  // there can only cause a false THROW. Injecting into the LOOKUP would create
+  // an allow-path that does not exist today. `whitelist-structural.test.ts`
+  // pins the PREMISE (own-key set === declared set, and frozen) rather than
+  // pretending to pin this line.
   if (!(GRANTABLE_COMMANDS as readonly string[]).includes(cmd)) return false;
   if (!Object.hasOwn(EXEC_WHITELIST, cmd)) return false;
   const entry = (EXEC_WHITELIST as Readonly<Record<string, readonly (readonly string[])[] | undefined>>)[cmd];
