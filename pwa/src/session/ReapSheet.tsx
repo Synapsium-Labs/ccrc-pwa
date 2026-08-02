@@ -12,15 +12,12 @@ import type { FleetSession, ReapResult, WsAudit } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
+// Pre-merge fix round, finding 6: byte-for-byte identical to the local
+// `bytes()` this file used to define — one shared formatter, imported,
+// rather than two copies that could drift. `ArchiveScreen.tsx` is the
+// existing home (`FleetScreen.tsx` already imports it from there).
+import { humanBytes } from '../screens/ArchiveScreen';
 import './chat.css';
-
-/** '1.2 GB' — the figure on the primary button, so the tap names its cost. */
-function bytes(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
-  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)} kB`;
-  return `${n} B`;
-}
 
 const days = (epochSeconds: number): string => {
   const d = Math.floor((Date.now() / 1000 - epochSeconds) / 86_400);
@@ -111,7 +108,7 @@ export function ReapSheet({
               <dd>
                 {audit.workdir}
                 {/* Its own node so the figure reads as a figure. */}
-                <span className="reap-size">{bytes(audit.worktreeBytes)}</span>
+                <span className="reap-size">{humanBytes(audit.worktreeBytes)}</span>
               </dd>
 
               <dt>uncommitted</dt>
@@ -119,7 +116,7 @@ export function ReapSheet({
 
               <dt>not in git</dt>
               <dd>
-                {`${audit.ignoredCount} entries, ${bytes(audit.ignoredBytes)}`}
+                {`${audit.ignoredCount} entries, ${humanBytes(audit.ignoredBytes)}`}
                 {audit.ignored.length > 0 && (
                   <span className="reap-ignored">
                     {(showAll ? audit.ignored : audit.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
@@ -156,7 +153,7 @@ export function ReapSheet({
               <dd>
                 {audit.clips.length === 0 ? 'none'
                   : `${audit.clips.length} pasted image${audit.clips.length === 1 ? '' : 's'}, `
-                    + bytes(audit.clips.reduce((n, c) => n + c.bytes, 0))}
+                    + humanBytes(audit.clips.reduce((n, c) => n + c.bytes, 0))}
                 {/* Distinguishable from the "not in git" row's identical-meaning
                     note just above (deviation, Task 17): both are `reap-note`
                     spans and RTL's `getByText` throws on more than one match,
@@ -203,7 +200,7 @@ export function ReapSheet({
 
             {audit.verdict === 'reapable' && result === null && (
               <button type="button" className="btn-primary reap-go" disabled={busy} onClick={confirm}>
-                {`Remove ${slug} · ${bytes(audit.worktreeBytes)}`}
+                {`Remove ${slug} · ${humanBytes(audit.worktreeBytes)}`}
               </button>
             )}
 
