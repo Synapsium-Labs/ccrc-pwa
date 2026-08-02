@@ -42,6 +42,20 @@ export function PrSheet({
   useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
 
   if (!session) return null;
+  // The fresh one-shot GET wins over the cached fleet-sweep value once it
+  // lands — `session.pr` is the fallback for the gap before it does, not a
+  // competing source of truth once `view` exists.
+  //
+  // MUTATION SURVIVOR, disclosed, on all three `??` below (same shape as
+  // PrKeycap.tsx's own disclosed one): `view?.pr` is `PrState | undefined`,
+  // `view?.facts` is `{...} | null | undefined`, `view?.draft` is
+  // `{...} | null | undefined` — none of those types admit `0`, `''`, `false`
+  // or any other falsy-but-not-nullish value, so `??` and `||` act on exactly
+  // the same inputs here and no distinguishing call can exist. Kept as `??`
+  // because the intent is "substitute when we have no fresher value", not
+  // "substitute when the fresher value looks empty" — a distinction PrState,
+  // the facts record and the draft record would all have to grow a falsy
+  // representation to ever matter.
   const pr = view?.pr ?? session.pr;
   const facts = view?.facts ?? null;
   const draft = view?.draft ?? null;

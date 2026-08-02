@@ -2,7 +2,7 @@
 // the screen-level api.interrupt wiring (incl. the 409 not-busy toast), and
 // the visualViewport keyboard-inset hook.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
@@ -345,6 +345,32 @@ describe('the PR cap in the header', () => {
     expect(screen.queryByText(/not checked yet/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/pull request/i));
     expect(await screen.findByText(/not checked yet/i)).toBeInTheDocument();
+  });
+
+  it('closes PrSheet (Task 16) via its own scrim, same as any other sheet', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
+    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    fireEvent.click(screen.getByLabelText(/pull request/i));
+    await screen.findByText(/not checked yet/i);
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    await waitFor(() => expect(screen.queryByText(/not checked yet/i)).not.toBeInTheDocument());
+  });
+
+  it('Clean up (Task 16) both closes the sheet and hands off to onReapWorkspace', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
+    const onReapWorkspace = vi.fn();
+    const mergedPr: FleetSession['pr'] = {
+      phase: 'merged', number: 42, url: 'u', title: null, checks: null, checkNames: null,
+      ahead: 0, reason: null, checkedAt: Date.now(), mergedAt: Date.now(), retryAt: null,
+    };
+    render(<SessionHeader {...props({
+      onReapWorkspace,
+      session: fleetSession({ workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr }),
+    })} />);
+    fireEvent.click(screen.getByLabelText(/pull request/i));
+    fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
+    expect(onReapWorkspace).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByTestId('sheet-overlay')).not.toBeInTheDocument());
   });
 
   it('sits after the ⋯ cap and before esc, which keeps the outer edge', () => {

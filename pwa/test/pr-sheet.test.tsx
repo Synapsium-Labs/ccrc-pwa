@@ -234,4 +234,172 @@ describe('unknown', () => {
     expect(screen.queryByRole('button', { name: /open pull request/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /clean up/i })).not.toBeInTheDocument();
   });
+
+  it('Retry re-fires the GET', async () => {
+    const unknown = pr({ phase: 'unknown', number: 42, reason: 'unauthenticated', checkedAt: Date.now() - 6 * 60_000 });
+    fetched = view({ pr: unknown, draft: null });
+    open(sess({ pr: unknown, archivedAt: null }));
+    await screen.findByRole('button', { name: /retry/i });
+    const before = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    await waitFor(() => expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length)
+      .toBeGreaterThan(before));
+  });
+});
+
+// The tests above pin the brief's own prose verbatim. These close gaps a
+// whole-diff mutation sweep found in that same prose's SURROUNDING behaviour
+// — buttons whose click handler nobody exercised, a fallback ordering nobody
+// distinguished, a busy flag nobody watched in flight. Recorded as plan
+// deviations 95+ (docs/superpowers/plans/2026-07-29-ccrc-pr-lifecycle.md).
+describe('mutation-sweep closures', () => {
+  it('shows the freshly-fetched PR once the one-shot GET resolves, not the stale cached one', async () => {
+    // `view?.pr ?? session.pr` must prefer the FRESH read once it lands —
+    // the cached session value is only the gap-filler before it does.
+    fetched = view({ pr: pr({ phase: 'open', number: 99, url: 'https://github.com/o/r/pull/99' }), draft: null });
+    open(sess({ pr: pr({ phase: 'merged', number: 1 }) }));
+    // The cached value renders first…
+    expect(screen.getByText(/#1/)).toBeInTheDocument();
+    // …and the fresh one wins once the GET resolves — the merged-phase
+    // chrome (no GitHub link) would never yield this link if the stale
+    // cached value stuck around instead.
+    expect(await screen.findByRole('link', { name: /open on github/i }))
+      .toHaveAttribute('href', 'https://github.com/o/r/pull/99');
+  });
+
+  it('names the workspace in the sheet heading', () => {
+    open();
+    expect(screen.getByRole('heading', { name: 'quiet-basin' })).toBeInTheDocument();
+  });
+
+  it('shows the generated body inside the read-only preview, not a blank one', async () => {
+    open();
+    const body = await screen.findByLabelText(/body preview/i);
+    expect(body).toHaveValue(fetched.draft!.body);
+  });
+
+  it('shows no uncommitted-files warning when the tree is clean', async () => {
+    // The default fixture's `dirty: 0` — genuinely nothing to warn about.
+    open();
+    await screen.findByText(/3 commits/);
+    expect(screen.queryByText(/files are not committed/)).not.toBeInTheDocument();
+  });
+
+  it('says the FULL unmeasured-dirty sentence, not merely that reading failed', async () => {
+    fetched = view({ facts: { branch: 'ws/quiet-basin', baseShort: 'main', repo: 'o/r', commits: 3, dirty: null } });
+    open();
+    expect(await screen.findByText(
+      'ccrc could not read this worktree, so it cannot say whether anything is uncommitted.',
+    )).toBeInTheDocument();
+  });
+
+  it('titles the confirm "Open pull request?" for the primary action', async () => {
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: /^open pull request$/i }));
+    expect(await screen.findByRole('heading', { name: 'Open pull request?' })).toBeInTheDocument();
+  });
+
+  it('titles the confirm "Open as draft?" and sends draft: true for the secondary action — a DIFFERENT consequence, not a synonym', async () => {
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: /open as draft/i }));
+    expect(await screen.findByRole('heading', { name: 'Open as draft?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Open as draft$/ }));
+    await waitFor(() => {
+      const post = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls
+        .find((c) => c[1]?.method === 'POST')!;
+      expect(JSON.parse(String(post[1].body))).toEqual({ title: 'the work', body: fetched.draft!.body, draft: true });
+    });
+  });
+
+  it('prefers the freshly-measured branch over the session\'s cached one in the consequence line', async () => {
+    fetched = view({ facts: { branch: 'fresh-branch', baseShort: 'main', repo: 'o/r', commits: 1, dirty: 0 } });
+    open(sess({ branch: 'stale-branch' }));
+    await screen.findByText(/fresh-branch/);
+    fireEvent.click(screen.getByRole('button', { name: /open pull request/i }));
+    const consequence = await screen.findByText(/Reviewers are notified/);
+    expect(consequence.textContent).toContain('fresh-branch');
+    expect(consequence.textContent).not.toContain('stale-branch');
+  });
+
+  it('disables the confirmed action while it is in flight, and re-enables it once it settles', async () => {
+    let resolvePost: (() => void) | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/pr') && (init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify(fetched), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if ((init?.method ?? 'GET') === 'POST') {
+        await new Promise<void>((resolve) => { resolvePost = resolve; });
+      }
+      return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    open();
+    const openBtn = await screen.findByRole('button', { name: /^open pull request$/i });
+    fireEvent.click(openBtn);
+    fireEvent.click(await screen.findByRole('button', { name: /^Open pull request$/ }));
+    await waitFor(() => expect(openBtn).toBeDisabled());
+    expect(resolvePost).not.toBeNull();
+    resolvePost!();
+    await waitFor(() => expect(openBtn).not.toBeDisabled());
+  });
+
+  it('shows the PR title text for an open PR', async () => {
+    fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u', title: 'fix the flaky retry' }), draft: null });
+    open(sess({ pr: fetched.pr }));
+    expect(await screen.findByText('fix the flaky retry')).toBeInTheDocument();
+  });
+
+  it('says "Checks passing" distinctly from "Checks running"', async () => {
+    fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u', checks: 'pass' }), draft: null });
+    open(sess({ pr: fetched.pr }));
+    expect(await screen.findByText('Checks passing')).toBeInTheDocument();
+    cleanup();
+    fetched = view({ pr: pr({ phase: 'open', number: 43, url: 'u', checks: 'pending' }), draft: null });
+    open(sess({ pr: fetched.pr }));
+    expect(await screen.findByText('Checks running')).toBeInTheDocument();
+  });
+
+  it('does not render an empty inert check-names block', async () => {
+    fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u', checks: 'fail', checkNames: [] }), draft: null });
+    open(sess({ pr: fetched.pr }));
+    await screen.findByText('Checks failing');
+    expect(screen.queryByTestId('pr-check-names')).not.toBeInTheDocument();
+  });
+
+  it('Copy link writes the PR url to the clipboard and confirms with a toast', async () => {
+    fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'https://github.com/o/r/pull/42' }), draft: null });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    open(sess({ pr: fetched.pr }));
+    fireEvent.click(await screen.findByRole('button', { name: /copy link/i }));
+    expect(writeText).toHaveBeenCalledWith('https://github.com/o/r/pull/42');
+    expect(await screen.findByText('Link copied')).toBeInTheDocument();
+  });
+
+  it('Refresh re-fires the GET', async () => {
+    fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u' }), draft: null });
+    open(sess({ pr: fetched.pr }));
+    await screen.findByRole('button', { name: /refresh/i });
+    const before = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+    await waitFor(() => expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length)
+      .toBeGreaterThan(before));
+  });
+
+  it('Restore calls api.restore', async () => {
+    const merged = pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 });
+    fetched = view({ pr: merged, draft: null });
+    open(sess({ pr: merged, archivedAt: 1 }));
+    fireEvent.click(await screen.findByRole('button', { name: /restore/i }));
+    await waitFor(() => expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .some((c) => String(c[0]).endsWith('/restore'))).toBe(true));
+  });
+
+  it('Archive now calls api.archive', async () => {
+    const merged = pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 });
+    fetched = view({ pr: merged, draft: null });
+    open(sess({ pr: merged, archivedAt: null }));
+    fireEvent.click(await screen.findByRole('button', { name: /archive now/i }));
+    await waitFor(() => expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .some((c) => String(c[0]).endsWith('/archive'))).toBe(true));
+  });
 });
