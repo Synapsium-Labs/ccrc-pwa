@@ -184,6 +184,13 @@ export function SessionHeader({
               {accountLabel(wrapper)}
             </span>
           )}
+          {/* Derived from archivedAt, never from pr.phase — a merged PR whose
+              archive was deferred must not claim it was archived. */}
+          {session?.archivedAt != null && (
+            <span className="chip chip--archived">
+              archived{session.pr?.number != null ? ` · merged #${session.pr.number}` : ''}
+            </span>
+          )}
           {/* Status, account, model, effort and branch share ONE wrapping row —
               two fixed rows cost a line of chat height on every screen to say
               what fits comfortably on one. */}

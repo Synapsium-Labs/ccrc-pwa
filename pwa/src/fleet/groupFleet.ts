@@ -21,6 +21,12 @@ export interface FleetGroup {
    *  session and `home` is non-nullable on the wire, so there is always at
    *  least one value to compare. */
   pin: string | null;
+  /** Archived members — folded out of the live list, never dropped. `/s/<id>`
+   *  still resolves and the transcript still renders, so a card that omitted
+   *  them entirely would leave the workspace reachable only by a URL nobody
+   *  has. They take no part in `attention`, `busy` or `pin`: an archived
+   *  session is stopped, so any status it still carries is stale. */
+  archived: FleetSession[];
 }
 
 /**
@@ -43,15 +49,24 @@ export function groupFleet(sessions: FleetSession[]): FleetGroup[] {
   for (const [project, members] of byProject) {
     // members is never empty (a Map entry is only created alongside its first
     // push), so the non-null assertions are safe under noUncheckedIndexedAccess.
-    const pin = members.every((m) => m.home === members[0]!.home) ? members[0]!.home : null;
+    const live = members.filter((m) => m.archivedAt === null);
+    const archived = members.filter((m) => m.archivedAt !== null);
+    // `live` can be empty (every workspace of a project archived), so the pin
+    // falls back to the whole membership rather than indexing an empty array.
+    const forPin = live.length > 0 ? live : members;
+    const pin = forPin.every((m) => m.home === forPin[0]!.home) ? forPin[0]!.home : null;
     groups.push({
       project,
-      sessions: members,
-      attention: members.some((m) => m.status !== 'dead' && m.dialogPending),
+      sessions: live,
+      archived,
+      attention: live.some((m) => m.status !== 'dead' && m.dialogPending),
       // Same predicate SessionLine renders, attention-first — see the field's
       // doc. Dead sessions need no clause: `dead` and `busy` are exclusive
       // statuses, which is also why `attention` needs its explicit one.
-      busy: members.filter((m) => m.status === 'busy' && !m.dialogPending).length,
+      // KEEP the `&& !m.dialogPending` clause: it is main's fix (4b5bb67) and
+      // two tests in groupFleet.test.ts pin it. `busy` is a claim about what
+      // the hidden rows SAY, and a row with a pending dialog says `waiting`.
+      busy: live.filter((m) => m.status === 'busy' && !m.dialogPending).length,
       pin,
     });
   }

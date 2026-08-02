@@ -245,3 +245,9 @@ describe('shell-nav overflow backstop', () => {
     expect(rule).toMatch(/backstop/i);
   });
 });
+
+describe('archived sub-fold (Task 18)', () => {
+  it('keeps the 44px thumb target on the toggle, same as every other tap row', () => {
+    expect(ruleFor('.proj-archived-toggle')).toContain('min-height: var(--tap-min)');
+  });
+});

@@ -169,6 +169,14 @@ button.metachip:active {
   color: var(--acct-active);
   background: var(--acct-active-tint);
 }
+/* --bg-raised, not --bg-well: ink-tertiary on well measures 3.17:1 in LIGHT
+   (contrast-check.mjs), under the 4.5 floor. ink-tertiary/raised is already
+   gated at 4.5+ in both themes, so this chip reuses that pairing rather than
+   a third un-gated one. */
+.chip--archived {
+  color: var(--ink-tertiary);
+  background: var(--bg-raised);
+}
 /* Keycaps — the machine's keys surfacing in the chrome (DIRECTION: the
    interrupt is "a keycap, not an icon"). Raised caps with a heavier bottom
    edge, mono legends, 44px targets; pressing compresses like a key. `esc`

@@ -476,6 +476,45 @@ describe('the PR cap in the header', () => {
   });
 });
 
+describe('archived chip', () => {
+  it('says the session is archived and names the PR', () => {
+    render(<SessionHeader {...props({ session: fleetSession({
+      workspace: 'quiet-basin', archivedAt: 1785300000,
+      pr: { phase: 'merged', number: 42, url: 'u', title: 't', checks: null, checkNames: null,
+        ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
+    }) })} />);
+    const chip = screen.getByText('archived · merged #42');
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveClass('chip--archived');
+  });
+
+  it('renders no chip for a live session', () => {
+    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', archivedAt: null }) })} />);
+    expect(screen.queryByText(/^archived/)).not.toBeInTheDocument();
+  });
+
+  it('says just "archived" when the PR number is not known', () => {
+    // Pins the ternary's OTHER branch — the first test above only exercises
+    // the "PR known" half, so a mutant collapsing both to one string would
+    // survive it.
+    render(<SessionHeader {...props({ session: fleetSession({
+      workspace: 'quiet-basin', archivedAt: 1785300000, pr: null,
+    }) })} />);
+    expect(screen.getByText('archived')).toBeInTheDocument();
+  });
+
+  it('does not derive from pr.phase — a merged PR alone is not an archive', () => {
+    // The context this chip exists for: a merged PR whose archive was
+    // deferred (session busy, say) must not claim it was archived.
+    render(<SessionHeader {...props({ session: fleetSession({
+      workspace: 'quiet-basin', archivedAt: null,
+      pr: { phase: 'merged', number: 42, url: 'u', title: 't', checks: null, checkNames: null,
+        ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
+    }) })} />);
+    expect(screen.queryByText(/^archived/)).not.toBeInTheDocument();
+  });
+});
+
 describe('useKeyboardInsets', () => {
   function Probe(): ReactNode {
     return <div data-testid="inset">{useKeyboardInsets()}</div>;

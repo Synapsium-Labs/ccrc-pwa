@@ -419,6 +419,10 @@ describe('FleetScreen', () => {
         })],
       });
 
+      // Archived (Task 18): folded out of the live list by default, so its
+      // row — and the ··· that opens this sheet — only reaches the DOM once
+      // the Archived (1) sub-fold is expanded.
+      fireEvent.click(screen.getByRole('button', { name: /archived \(1\)/i }));
       fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
       fireEvent.click(screen.getByText(/clean up workspace/i));
 
@@ -446,6 +450,9 @@ describe('FleetScreen', () => {
         })],
       });
 
+      // Archived (Task 18): see the sibling test above for why this fold has
+      // to open first.
+      fireEvent.click(screen.getByRole('button', { name: /archived \(1\)/i }));
       fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
       fireEvent.click(screen.getByText(/clean up workspace/i));
       fireEvent.click(await screen.findByRole('button', { name: /Remove quiet-mesa/ }));

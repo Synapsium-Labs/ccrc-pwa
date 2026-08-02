@@ -1,6 +1,6 @@
 // A card is always a project; a line is always a session. No bare path.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
@@ -18,7 +18,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, pin: 'claude', ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, pin: 'claude', archived: [], ...over,
 });
 
 describe('uniform shape', () => {
@@ -273,5 +273,67 @@ describe('session count', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('2')).toBeInTheDocument();
+  });
+});
+
+describe('the archived sub-fold', () => {
+  const archived = (id: string) => ({ ...sess({ id, workspace: id.slice(5) }), archivedAt: 1785300000 });
+
+  it('renders nothing when a project has no archived rows', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/^Archived/)).not.toBeInTheDocument();
+  });
+
+  it('shows a collapsed Archived (n) fold at the bottom of the card', () => {
+    const g = grp({ archived: [archived('demo-quiet-basin'), archived('demo-still-cove')] });
+    const { container } = render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: /archived \(2\)/i });
+    expect(toggle).toBeInTheDocument();
+    // Collapsed by DEFAULT: archived rows are context, not the fleet — and
+    // the toggle says so via aria-expanded, not only via what's absent from
+    // the DOM (which a hardcoded aria-expanded value would not catch).
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveTextContent('▸');
+    expect(container.querySelectorAll('.proj-archived-body .sess-line')).toHaveLength(0);
+  });
+
+  it('hides the archived fold along with the rest of the card when collapsed', () => {
+    // The project fold and the archive fold are two independent booleans
+    // (`collapsed` and `archivedOpen`) guarding the SAME block — collapsing
+    // the card must still hide the archived toggle, not just the live rows.
+    const g = grp({ archived: [archived('demo-quiet-basin')] });
+    render(<ProjectCard collapsed group={g} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /archived/i })).not.toBeInTheDocument();
+  });
+
+  it('expands to the rows, which still open', () => {
+    // ProjectCard is a pure, controlled component (fold state lives in
+    // FleetScreen, per this file's own header comment) — a click here only
+    // fires onToggle with the composite key; it is the RE-RENDER with
+    // archivedOpen flipped (FleetScreen's real response to that callback)
+    // that reveals the rows. Asserting the composite key itself doubles as
+    // the guard against it colliding with the project's own fold key.
+    const onOpen = vi.fn();
+    const onToggle = vi.fn();
+    const g = grp({ archived: [archived('demo-quiet-basin')] });
+    const { rerender } = render(
+      <ProjectCard group={g} onOpen={onOpen} onToggle={onToggle} onActions={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /archived \(1\)/i }));
+    expect(onToggle).toHaveBeenCalledWith('demo::archived');
+    rerender(
+      <ProjectCard group={g} onOpen={onOpen} onToggle={onToggle} onActions={() => {}} archivedOpen />);
+    const toggle = screen.getByRole('button', { name: /archived \(1\)/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveTextContent('▾');
+    fireEvent.click(screen.getByText('quiet-basin'));
+    expect(onOpen).toHaveBeenCalledWith('demo-quiet-basin');
+  });
+
+  it('carries selection into an archived row exactly as a live row would', () => {
+    const g = grp({ archived: [archived('demo-quiet-basin')] });
+    const { container } = render(
+      <ProjectCard group={g} selectedId="demo-quiet-basin" archivedOpen
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-archived-body .sess-line--active')).not.toBeNull();
   });
 });

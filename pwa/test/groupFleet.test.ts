@@ -121,3 +121,53 @@ describe('pin', () => {
     expect(g!.pin).toBe('claude-corp');
   });
 });
+
+describe('archived rows', () => {
+  const at = (id: string, archivedAt: number | null): FleetSession =>
+    ({ ...s({ id, project: 'demo' }), archivedAt });
+
+  it('splits archived sessions out of the live list without dropping them', () => {
+    const [g] = groupFleet([at('demo-a', null), at('demo-b', 1785300000)]);
+    expect(g!.sessions.map((x) => x.id)).toEqual(['demo-a']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['demo-b']);
+  });
+
+  it('keeps a project whose sessions are ALL archived', () => {
+    // Dropping it would make the workspace reachable only by a URL nobody has.
+    const [g] = groupFleet([at('demo-b', 1785300000)]);
+    expect(g!.sessions).toEqual([]);
+    expect(g!.archived).toHaveLength(1);
+  });
+
+  it('excludes archived rows from attention, busy and the pin', () => {
+    // demo-a and busyArchived deliberately disagree on home: if pin were
+    // computed over the whole membership (archived included), the mismatch
+    // would read as disagreement (pin: null). Excluding the archived row
+    // leaves demo-a as the pin's only voter.
+    const busyArchived = { ...at('demo-b', 1785300000), status: 'busy' as const, dialogPending: true, home: 'claude2' };
+    const [g] = groupFleet([{ ...at('demo-a', null), home: 'claude' }, busyArchived]);
+    expect(g!.busy).toBe(0);
+    expect(g!.attention).toBe(false);
+    expect(g!.pin).toBe('claude');
+  });
+
+  it('still computes a pin when every session is archived', () => {
+    // The `live.length > 0 ? live : members` fallback (see the comment in
+    // groupFleet.ts) exists so this branch never indexes an empty array —
+    // dropping the `: members` half leaves `forPin` empty here, which is
+    // exactly what the "ALL archived" test above does not check.
+    const [g] = groupFleet([{ ...at('demo-b', 1785300000), home: 'claude-corp' }]);
+    expect(g!.pin).toBe('claude-corp');
+  });
+
+  it('excludes a NOT-waiting busy archived row from the busy count', () => {
+    // The test above uses an archived row with dialogPending: true, which
+    // the `!m.dialogPending` clause excludes from `busy` regardless of
+    // whether it is scoped to `live` or the whole membership — it cannot by
+    // itself prove `busy` is scoped to `live`. This row is busy and NOT
+    // dialogPending, so a `members.filter` regression would count it.
+    const busyArchived = { ...at('demo-b', 1785300000), status: 'busy' as const };
+    const [g] = groupFleet([at('demo-a', null), busyArchived]);
+    expect(g!.busy).toBe(0);
+  });
+});

@@ -209,6 +209,11 @@ export function FleetScreen({
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}
                 onActions={openActionsFor}
+                /* INVERTED against the project fold on purpose: foldState
+                   stores what is COLLAPSED, so absence means open — right for
+                   a project, wrong for an archive fold that must start
+                   closed. Under this composite key, presence means EXPANDED. */
+                archivedOpen={folded.has(`${g.project}::archived`)}
               />
             ))}
           </div>

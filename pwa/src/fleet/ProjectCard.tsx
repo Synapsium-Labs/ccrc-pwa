@@ -29,6 +29,7 @@ export function ProjectCard({
   collapsed = false,
   onToggle,
   onActions,
+  archivedOpen = false,
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -45,6 +46,12 @@ export function ProjectCard({
   collapsed?: boolean;
   onToggle?: (project: string) => void;
   onActions: (session: FleetSession) => void;
+  /** Whether the `Archived (n)` sub-fold is expanded. Inverted against
+   *  `collapsed`: `foldState.ts` stores what is COLLAPSED (absent means
+   *  open), which is right for a project and wrong for an archive fold that
+   *  must start closed — under the composite `<project>::archived` key,
+   *  presence means EXPANDED. */
+  archivedOpen?: boolean;
 }): ReactNode {
   // Headroom, not load: "91% free" is the question being asked ("can this
   // workspace actually run?"), and the answer stays legible when the score is
@@ -154,6 +161,31 @@ export function ProjectCard({
               onActions={onActions}
             />
           ))}
+        </div>
+      )}
+
+      {!collapsed && group.archived.length > 0 && (
+        <div className="proj-archived">
+          {/* Folded, never hidden: the transcript still renders at /s/<id>, so
+              a card that omitted these would leave them reachable only by a
+              URL nobody has. Collapsed by default — archived rows are context,
+              not the fleet. */}
+          <button
+            type="button"
+            className="proj-archived-toggle"
+            aria-expanded={archivedOpen}
+            onClick={() => onToggle?.(`${group.project}::archived`)}
+          >
+            <span className="proj-card-chevron" aria-hidden="true">{archivedOpen ? '▾' : '▸'}</span>
+            Archived ({group.archived.length})
+          </button>
+          {archivedOpen && (
+            <div className="proj-archived-body">
+              {group.archived.map((s) => (
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>
