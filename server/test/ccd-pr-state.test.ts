@@ -833,6 +833,26 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     // is `none` — ready to compose — never `no-commits`.
     ['fork',            { isCrossRepository: true }, 'none', null],
     ['other base',      { baseRefName: 'release/9' }, 'none', null],
+    // THE TWO CONJUNCTS THE MATRIX USED TO HOLD CONSTANT — final-round
+    // integration New Finding 8. `bound()` (ccd) and `boundRow()`
+    // (prstate.ts:113) are each four conjuncts, and every row above varies one
+    // of only two of them: `isCrossRepository` and `baseRefName`. Both
+    // `headRefName === branch` and `ours === true` were the same on all seven
+    // rows, so DELETING either conjunct from either implementation left all
+    // nine agreement cases green — the exact drift this device exists to catch.
+    // Measured: with `&& row.headRefName === registryBranch` removed from
+    // prstate.ts, the matrix passed.
+    //
+    // The head-NAME rung: same head commit, same base, same repository, a
+    // different branch name. `gh pr list --head` matches the name across fork
+    // owners (prstate.ts:102), which is why the name is a conjunct and not a
+    // shorthand for the others.
+    ['other head name', { headRefName: 'ws/still-cove' }, 'none', null],
+    // The `ours` rung, i.e. proof 0: a well-formed head oid this repository
+    // has never seen. `is_ours`'s `cat-file -e` rung answers False, ccd
+    // annotates `ours: false`, and both sides must then refuse to bind — this
+    // is the row a recycled slug and a stranger's fork both produce.
+    ['head commit we do not have', { headRefOid: 'b'.repeat(40) }, 'none', null],
     // Binds, but the merge predicate fails a conjunct while gh still says
     // MERGED: `unknown`, never `merged`. The archive trigger hangs off this.
     // The reason is `merge-unproven` and NOT any read-failure token — the gh
@@ -857,6 +877,36 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     const s = phaseFor(l as never);
     expect(s.phase, 'prstate.ts disagrees with the matrix').toBe(expected);
     expect(s.reason, 'prstate.ts disagrees with the matrix about reason').toBe(expectedReason);
+  });
+
+  it('agrees that ahead === 0 with no PR is no-commits — and that a bound merge still wins', () => {
+    // The third variable New Finding 8 names, and the one the matrix above
+    // cannot carry: `ahead` is not a field of the gh row, it is a property of
+    // the FIXTURE, and every row above is built on `workspaceWithCommit`, so
+    // every one of them has `ahead === 1`. ccd chooses between the two with
+    // `('no-commits' if ahead == 0 else 'none')` and `phaseFor` with
+    // `line.ahead === 0 ? 'no-commits' : 'none'` (prstate.ts:166) — a whole
+    // branch of both implementations that no agreement case ever entered.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    h.ghRows([]);
+    const l = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(l.ahead, 'the fixture must actually be level with base').toBe(0);
+    expect(l.phase, 'ccd').toBe('no-commits');
+    const s = phaseFor(l as never);
+    expect(s.phase, 'prstate.ts').toBe('no-commits');
+    expect(s.reason, 'and neither side invents a reason for it').toBeNull();
+
+    // …and `ahead === 0` never overrides a binding: a level branch whose PR
+    // merged is `merged` on both sides. Without this half, an implementation
+    // that answered `no-commits` for every ahead-0 line — before consulting
+    // `boundRow` at all — would still agree with the first half.
+    const tip = h.git(path.join(h.home, 'worktrees', 'demo', 'quiet-basin'), 'rev-parse', 'HEAD');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    const l2 = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(l2.ahead).toBe(0);
+    expect(l2.phase, 'ccd').toBe('merged');
+    expect(phaseFor(l2 as never).phase, 'prstate.ts').toBe('merged');
   });
 
   // TWO MORE ROWS THE MATRIX ABOVE CANNOT EXPRESS, because what varies is not a
