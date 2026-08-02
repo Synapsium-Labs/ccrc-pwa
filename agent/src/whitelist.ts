@@ -574,6 +574,13 @@ export function isExecAllowed(cmd: string, args: string[]): boolean {
   // an allow-path that does not exist today. `whitelist-structural.test.ts`
   // pins the PREMISE (own-key set === declared set, and frozen) rather than
   // pretending to pin this line.
+  //
+  // The `Object.hasOwn` line below is in exactly the same position, and was
+  // measured the same way in round 3: delete it and the agent suite is 194/12,
+  // `tsc -p agent` clean. Same reason, same verdict — two redundant guards
+  // whose redundancy IS the point. The `Array.isArray(entry)` line after them
+  // is different and IS pinned: deleting it is a TS2322 at the re-annotation
+  // below plus one failing test.
   if (!(GRANTABLE_COMMANDS as readonly string[]).includes(cmd)) return false;
   if (!Object.hasOwn(EXEC_WHITELIST, cmd)) return false;
   const entry = (EXEC_WHITELIST as Readonly<Record<string, readonly (readonly string[])[] | undefined>>)[cmd];
