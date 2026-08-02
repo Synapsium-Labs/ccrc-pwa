@@ -1,9 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { afterAll } from 'vitest';
 import WebSocket from 'ws';
 import { startAgent, type AgentOpts, type RunningAgent } from '../src/server.js';
+import { mkTmp } from './tmpHelpers.js';
 
 export const TOKEN = 'test-token-abc123';
 
@@ -11,19 +10,14 @@ export const TOKEN = 'test-token-abc123';
  *  projects root and an "elsewhere" dir outside every whitelist prefix. */
 export interface Fixture { home: string; projectsRoot: string; outside: string }
 
-// Every fixture dir this module hands out, removed once per importing file.
-// Same discipline as the server suite's tmpHelpers: mkdtemp with no cleanup
-// leaked 2 dirs per run here, ×50-120 per mutation sweep, on a disk that has
-// twice filled with test fixtures. Never a global /tmp sweep — files run in
-// parallel processes and must only remove what they created.
-const made: string[] = [];
-afterAll(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); });
-
-function tmp(prefix: string): string {
-  const d = mkdtempSync(path.join(tmpdir(), prefix));
-  made.push(d);
-  return d;
-}
+// The registry that used to live here is now `./tmpHelpers.ts`, so the agent
+// package has ONE of them instead of one per file that happened to think of it
+// (critic2, gates 3 related sub-item: `whitelist.test.ts` imports none of this
+// module and cleaned up with a trailing `rmSync`, which a failing assertion
+// skips). Behaviour is unchanged: mkdtemp under os.tmpdir(), remembered, and
+// removed by a file-scoped `afterAll` — never a global /tmp sweep, because test
+// files run in parallel processes and must only remove what they created.
+const tmp = mkTmp;
 
 export function makeFixture(): Fixture {
   const home = tmp('ccrc-agent-home-');
