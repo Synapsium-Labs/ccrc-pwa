@@ -482,6 +482,92 @@ describe('mutation-sweep closures', () => {
     expect(await screen.findByText('4')).toBeInTheDocument();
   });
 
+  /* ── F3: a refusal must not read like a clean scan ────────────────────────
+   *
+   * Final-round tests review, and the fourteenth instance of the
+   * measurement-forgery class — the first to land on this surface. ccd emitted
+   * `_ws_reap_reset`'s defaults on every verdict, and this component rendered
+   * them unconditionally, so a workspace refused in Phase A (before
+   * `_ws_collect_ignored`, before the stash read, before the PR fetch) was
+   * described to the reader as "uncommitted: none / not in git: 0 entries, 0 B
+   * / stashes: none". Those Phase-A refusals all leave the worktree ON DISK.
+   *
+   * The Remove button is NOT reachable from this state — it renders on
+   * `verdict === 'reapable'` alone, and ccd converts the one
+   * reapable-without-measurement path to `reap-interrupted` — so the harm is a
+   * false description above a refusal, not a delete. That is why these are
+   * assertions about words rather than about the button.
+   *
+   * `WsAudit` now types all six `| null`, so every case below goes through
+   * `audit()` (which is `Partial<WsAudit>`) and is TYPE-CHECKED against the
+   * producer's shape — the pwa suite runs `--typecheck`. If ccd had landed
+   * this as an omitted field instead, these lines would not compile.
+   */
+  const unscanned = (): Partial<WsAudit> => ({
+    verdict: 'detached-head', sentence: 'git records this worktree on a detached HEAD.',
+    token: undefined,
+    dirty: null, ignored: null, ignoredCount: null, ignoredBytes: null,
+    sensitive: null, sensitiveFiltered: null, stashes: null,
+    merge: { proof: null, fetchedAt: null },
+  });
+
+  it('says "not scanned", never "none" or "0 entries", for a refusal that measured nothing', async () => {
+    auditBody = audit(unscanned());
+    open();
+    // One word, four rows: uncommitted, not-in-git, stashes, and the merge age
+    // on the branch line.
+    expect(await screen.findAllByText('not scanned')).toHaveLength(3);
+    expect(screen.getByText(/merge not scanned/)).toBeInTheDocument();
+    // The exact strings the sheet used to print about an unscanned workspace.
+    expect(screen.queryByText('none')).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 entries/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/days ago|today/)).not.toBeInTheDocument();
+  });
+
+  it('does not promise the unrecoverable-content note when there is no content list', async () => {
+    // "These are in no commit and cannot be recovered" under a row that just
+    // said `not scanned` reads as a statement about a set the screen has.
+    auditBody = audit(unscanned());
+    open();
+    await screen.findAllByText('not scanned');
+    expect(screen.queryByText(/These are in no commit/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show all/ })).not.toBeInTheDocument();
+    // And the refusal itself is still rendered, below the rows.
+    expect(screen.getByText(/detached HEAD/)).toBeInTheDocument();
+  });
+
+  it('keeps every honest row unchanged when the scan DID run', async () => {
+    // The other direction. Widening six fields to `| null` must not make the
+    // sheet a reader sees every day start hedging — the `0`/`[]` that IS a
+    // measurement still reads `none`.
+    auditBody = audit({ dirty: [], stashes: 0, clips: [] });
+    open();
+    expect(await screen.findByText(/3 entries, 420 MB/)).toBeInTheDocument();
+    expect(screen.getAllByText('none')).toHaveLength(3);
+    expect(screen.queryByText('not scanned')).not.toBeInTheDocument();
+    expect(screen.getByText(/6 days ago/)).toBeInTheDocument();
+  });
+
+  it('renders the count and the total together — an unscanned count never keeps a size beside it', async () => {
+    // The half-honest state the fix removes: `sizeText` already refused to
+    // invent the TOTAL, so before this the row read "0 entries, size unknown"
+    // — and "0 entries" is the half a reader takes as "there is nothing here".
+    auditBody = audit({ ignoredCount: null, ignoredBytes: null, ignored: null });
+    open();
+    await screen.findByText('not scanned');
+    expect(screen.queryByText(/entries/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/size unknown/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses the filtered-secrets note when the filter never ran', async () => {
+    // `sensitiveFiltered ?? 0`: null means no scan, so there is nothing it hid
+    // and nothing for the expand default to open.
+    auditBody = audit({ ...unscanned(), sensitiveFiltered: null });
+    open();
+    await screen.findAllByText('not scanned');
+    expect(screen.queryByText(/filtered as vendored/)).not.toBeInTheDocument();
+  });
+
   it('disables the primary button the instant a reap is in flight, and it is gone once one lands', async () => {
     let resolveReap!: (r: Response) => void;
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {

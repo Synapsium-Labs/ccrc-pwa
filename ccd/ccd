@@ -2248,6 +2248,17 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   local wd="$1" entry p b sens deadline outf errf err rc ih drc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""; REAP_IGNREASON=""
   REAP_SENSITIVE_FILTERED=0
+  # `REAP_IGNSCANNED` is the PROOF THIS RAN, cleared here and set on the single
+  # success path at the end — final-round tests review F3. Every other variable
+  # this function fills has a value that is indistinguishable from a real
+  # measurement when the function never ran at all: an empty `REAP_IGNORED`
+  # reads as "nothing ignored", a `REAP_SENSITIVE_FILTERED` of 0 reads as
+  # "nothing filtered", and `cmd_ws_audit` printed both onto the
+  # delete-confirmation sheet for workspaces refused in Phase A, i.e. never
+  # scanned. A flag rather than `[[ -n "$REAP_IGNDIGEST" ]]`, which is true on
+  # exactly the same condition today: the digest's job is the consent
+  # fingerprint, and a second job it happens to satisfy is how these two drift.
+  REAP_IGNSCANNED=0
   deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
   outf=$(mktemp) || return 1
   errf=$(mktemp) || { rm -f "$outf"; return 1; }
@@ -2345,6 +2356,10 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     REAP_IGNDIGEST=$(printf '' | sha256sum | cut -d' ' -f1)
   fi
   [[ "$REAP_IGNDIGEST" =~ ^[0-9a-f]{64}$ ]] || { REAP_IGNDIGEST=""; return 1; }
+  # The ONLY assignment, on the ONLY path that returns 0. Everything above
+  # returns 1 with the flag still 0, which is what makes "these figures are a
+  # measurement" a fact this function states rather than one the caller infers.
+  REAP_IGNSCANNED=1
 }
 
 _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
@@ -2403,10 +2418,21 @@ _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sen
 _ws_reap_reset() {
   REAP_VERDICT=""; REAP_DETAIL=""; REAP_PROOF=""; REAP_TOKEN=""
   REAP_TIP=""; REAP_HEADOID=""; REAP_MERGE=""; REAP_BASEOID=""; REAP_WTHEAD=""
-  REAP_DIRTY=0; REAP_STASHES=0; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""; REAP_IGNREASON=""
+  # `REAP_STASHES` and `REAP_FETCHED` are "" and not 0 — final-round tests
+  # review F3's class, swept over every default in this function that
+  # `cmd_ws_audit` puts on the wire. A reset default that is a VALID-LOOKING
+  # MEASUREMENT is the forgery: `stashes:0` renders "stashes: none" and
+  # `fetchedAt:0` renders "merged … 20669 days ago", both about a workspace
+  # whose stash list and whose PR were never read, because Phase A refused
+  # first. The audit's printf turns a non-numeric value into JSON `null`, the
+  # same shape `REAP_PRNUM` and `REAP_PROOF` have carried since deviation 10.
+  # `REAP_DIRTY` stays 0: it is a guard input (`(( REAP_DIRTY == 0 ))`), never
+  # a wire field — `cmd_ws_audit` builds its `dirty` list from its own read.
+  REAP_DIRTY=0; REAP_STASHES=""; REAP_IGNDIGEST=""; REAP_SENSDIGEST=""; REAP_IGNREASON=""
   REAP_CLIPDIGEST=""
-  REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=0
+  REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=""
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_SENSITIVE_FILTERED=0; _WS_INSIDE_HITS=()
+  REAP_IGNSCANNED=0
 }
 
 # MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
@@ -2837,8 +2863,25 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # `"bytes":b.log`, which is not JSON. So: `sort -z`, `read -d ''`, and the
   # two fixed-shape fields peeled off the FRONT with `${…%%}`/`${…#}` rather
   # than by word-splitting, which would collapse a run of tabs.
-  local ign_json="[" first=1 total=0 count=0 rec rest p b s
-  if (( ${#REAP_IGNORED[@]} )); then
+  #
+  # AND THE WHOLE BLOCK IS SKIPPED WHEN NOTHING WAS SCANNED — final-round tests
+  # review F3, the fourteenth instance of the measurement-forgery class and the
+  # first one to reach the delete-confirmation surface itself. These four
+  # fields used to be initialised to `[`/`0`/`0`/`[` and printed
+  # UNCONDITIONALLY, on every verdict, so a Phase-A refusal
+  # (`registry-branch-drift`, `foreign-worktree`, `no-worktree-record`,
+  # `detached-head`, `incomplete-registry` — every one of which leaves the
+  # worktree ON DISK, possibly full of work) emitted
+  # `"ignored":[],"ignoredCount":0,"ignoredBytes":0,"sensitive":[]` and
+  # `ReapSheet` rendered "not in git: 0 entries, 0 B" about a tree
+  # `_ws_collect_ignored` had never been asked to look at. `worktreeBytes` on
+  # the same document already said `null` (deviation 120); its four siblings
+  # did not. `null` is the answer, for the reason the whole class is closed
+  # that way: 0 is the claim "there is nothing here", and nobody looked.
+  local ign_json=null total=null count=null sens_json=null sfilt=null first=1 rec rest p b s
+  if (( REAP_IGNSCANNED )); then
+   ign_json="["; total=0; count=0; sfilt="${REAP_SENSITIVE_FILTERED:-0}"
+   if (( ${#REAP_IGNORED[@]} )); then
     while IFS= read -r -d '' rec; do
       s="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"
       b="${rest%%$'\t'*}"; p="${rest#*$'\t'}"
@@ -2854,16 +2897,23 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
       ign_json+="{\"path\":$(_json_str "$p"),\"bytes\":$b,\"sensitive\":$( ((s)) && echo true || echo false)}"
       total=$(( total + b )); count=$(( count + 1 ))
     done < <(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z -t$'\t' -k1,1nr -k2,2nr)
-  fi
-  ign_json+="]"
+   fi
+   ign_json+="]"
 
-  local sens_json="[" sfirst=1 sp
-  for sp in "${REAP_SENSITIVE[@]-}"; do
-    [[ -n "$sp" ]] || continue
-    (( sfirst )) || sens_json+=","; sfirst=0
-    sens_json+="$(_json_str "$sp")"
-  done
-  sens_json+="]"
+   # Inside the same `REAP_IGNSCANNED` block, and that is the point rather than
+   # tidiness: `sensitive` and `sensitiveFiltered` are two answers from the one
+   # scan, so a document that reports the scan's ignored set as unmeasured and
+   # its secret-shaped names as "none" would be self-contradictory in the
+   # direction that reassures.
+   local sfirst=1 sp
+   sens_json="["
+   for sp in "${REAP_SENSITIVE[@]-}"; do
+     [[ -n "$sp" ]] || continue
+     (( sfirst )) || sens_json+=","; sfirst=0
+     sens_json+="$(_json_str "$sp")"
+   done
+   sens_json+="]"
+  fi
 
   # `-z` HERE TOO, for the reason the ignored list has it: this array is read by
   # the same human, in the same document, before the same irreversible action,
@@ -2898,18 +2948,45 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # line in `_ws_collect_ignored` is kept: the next statement indexes `$dl`
   # positionally, and an empty record would put `""` into the one list this
   # design asks a human to read filenames out of.
-  local dirty_json="[" dfirst=1 dl dsrc
+  #
+  # AND `null` FOR A READ THAT DID NOT HAPPEN OR DID NOT FINISH — final-round
+  # tests review F3, the same rung as the ignored block above. This was
+  # `dirty_json="["` … `2>/dev/null`, so BOTH "there is no directory to read"
+  # and "git failed, or half-read the tree" produced `[]`, and `ReapSheet`
+  # renders `[]` as **uncommitted: none** — the single most reassuring row on a
+  # delete-confirmation sheet, stated about a tree nobody looked at.
+  #
+  # The rc AND the stderr, for the reason `_ws_gc_dirty` and Phase B both give
+  # in full: a PARTIALLY unreadable tree exits ZERO with empty stdout and the
+  # diagnostic on stderr (measured, git 2.43), so the exit code alone answers
+  # "clean" for a tree holding uncommitted work behind a chmod-000 directory.
+  # A temp file rather than the process substitution this used to have,
+  # because a pipeline's status is not the read's — the same two-statement
+  # shape Phase B states the rule for. The NULs survive a file exactly as they
+  # survive a pipe.
+  local dirty_json=null dfirst=1 dl dsrc dout derrf derr drc
   if [[ -d "$workdir" ]]; then
-    while IFS= read -r -d '' dl; do
-      [[ -n "$dl" ]] || continue
-      case "$dl" in
-        [RC]*) IFS= read -r -d '' dsrc && dl="${dl:0:3}$dsrc -> ${dl:3}" ;;
-      esac
-      (( dfirst )) || dirty_json+=","; dfirst=0
-      dirty_json+="$(_json_str "$dl")"
-    done < <(git -C "$workdir" status --porcelain -z 2>/dev/null)
+    dout=$(mktemp) || dout=""
+    derrf=$(mktemp) || derrf=""
+    if [[ -n "$dout" && -n "$derrf" ]]; then
+      git -C "$workdir" status --porcelain -z >"$dout" 2>"$derrf"; drc=$?
+      derr=$(cat "$derrf" 2>/dev/null)
+      if (( drc == 0 )) && [[ -z "$derr" ]]; then
+        dirty_json="["
+        while IFS= read -r -d '' dl; do
+          [[ -n "$dl" ]] || continue
+          case "$dl" in
+            [RC]*) IFS= read -r -d '' dsrc && dl="${dl:0:3}$dsrc -> ${dl:3}" ;;
+          esac
+          (( dfirst )) || dirty_json+=","; dfirst=0
+          dirty_json+="$(_json_str "$dl")"
+        done < "$dout"
+        dirty_json+="]"
+      fi
+    fi
+    [[ -n "$dout" ]]  && rm -f "$dout"
+    [[ -n "$derrf" ]] && rm -f "$derrf"
   fi
-  dirty_json+="]"
 
   local exists=false headmatch=false ahead=0 bytes=0
   [[ -d "$workdir" ]] && exists=true
@@ -2933,21 +3010,38 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
   printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
+  # Six fields, one source of truth for whether each is a measurement: `null`
+  # from the builders above whenever the read did not happen. See the two
+  # blocks for the reason; the printf is deliberately dumb so no third rule can
+  # appear here.
   printf '"dirty":%s,"ignored":%s,"ignoredCount":%s,"ignoredBytes":%s,"sensitive":%s,"sensitiveFiltered":%s,' \
-    "$dirty_json" "$ign_json" "$count" "$total" "$sens_json" "${REAP_SENSITIVE_FILTERED:-0}"
+    "$dirty_json" "$ign_json" "$count" "$total" "$sens_json" "$sfilt"
   # `clips` on the wire, because the sheet cannot ask a human to consent to a
   # deletion it does not list. `_ws_clip_manifest` is the same producer the
   # tombstone and the fingerprint use, and it is called HERE rather than read
   # from a variable so the field is present on every verdict — a refusal is the
   # answer a human reads too.
+  # `stashes` is `null` until `_ws_reap_eval` has actually read the stash list
+  # (its reset default is now "" rather than 0, see `_ws_reap_reset`): on a
+  # Phase-A refusal the read never happens, and `ReapSheet` renders a 0 there
+  # as **stashes: none** — a promise that nothing stashed is at stake, made
+  # about a list nobody opened.
   printf '"clips":%s,"stashes":%s,"worktreeBytes":%s,"commitsAheadOfBase":%s,' \
-    "$(_ws_clip_manifest "$id")" "$REAP_STASHES" "$bytes" "$ahead"
+    "$(_ws_clip_manifest "$id")" \
+    "$( [[ "$REAP_STASHES" =~ ^[0-9]+$ ]] && echo "$REAP_STASHES" || echo null)" \
+    "$bytes" "$ahead"
   printf '"pr":{"number":%s,"url":%s,"mergeCommit":%s,"headRefOid":%s},' \
     "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" \
     "$(_json_str "$REAP_PRURL")" "$(_json_str "$REAP_MERGE")" "$(_json_str "$REAP_HEADOID")"
+  # `fetchedAt` is `null` until Phase C actually fetched — same rung. Its reset
+  # default of 0 is a real epoch second, and `ReapSheet` printed it through
+  # `days()`: "merged in #? (proof: none), 20669 days ago", a date for a fetch
+  # that never ran, on the same line as two fields (`pr.number`, `merge.proof`)
+  # that have said `null` for the same state since deviation 10.
   printf '"merge":{"proof":%s,"fetchedAt":%s},"transcript":%s,' \
     "$( [[ -n "$REAP_PROOF" ]] && _json_str "$REAP_PROOF" || echo null)" \
-    "$REAP_FETCHED" "$(_json_str "$transcript")"
+    "$( [[ "$REAP_FETCHED" =~ ^[0-9]+$ ]] && echo "$REAP_FETCHED" || echo null)" \
+    "$(_json_str "$transcript")"
   # Three verdicts, not two, and the third one is why: `reapable` MEANS a token.
   #
   # `token` is present ONLY when the verdict is reapable AND the tree was

@@ -1279,6 +1279,127 @@ describe('identity refusals', () => {
 });
 
 /**
+ * A REFUSAL MUST BE DISTINGUISHABLE FROM A CLEAN SCAN — final-round tests
+ * review F3, the fourteenth instance of the measurement-forgery class and the
+ * first one to land on the delete-confirmation surface itself.
+ *
+ * `cmd_ws_audit` printed `"dirty":[],"ignoredCount":0,"ignoredBytes":0,
+ * "sensitive":[],"sensitiveFiltered":0,"stashes":0` on EVERY verdict, straight
+ * out of `_ws_reap_reset`'s defaults, and `ReapSheet.tsx` renders those rows
+ * unconditionally — so the sheet said "uncommitted: none / not in git: 0
+ * entries, 0 B / stashes: none" about a worktree Phase A had refused before
+ * anything was scanned. Every Phase-A refusal reachable from the PWA
+ * (`registry-branch-drift`, `foreign-worktree`, `no-worktree-record`,
+ * `detached-head`, `incomplete-registry`) leaves the worktree ON DISK, and it
+ * may be full of exactly the work those rows say is not there.
+ *
+ * `worktreeBytes` on the same document already answered `null` (deviation
+ * 120). These are its siblings, closed the same way and pinned in the two
+ * directions the earlier fixtures could not tell apart: the refusal says
+ * `null`, and the ordinary reapable sheet is unchanged.
+ */
+describe('the fields a refusal never measured', () => {
+  /** A Phase-A refusal that leaves a POPULATED worktree behind: an ignored
+   *  secret and an ignored bulk directory, neither of which any scan has run
+   *  over, because `detached-head` fires two phases earlier. */
+  const unscanned = (): { wt: string; secret: string } => {
+    const { wt } = squashMovedBase(['secret/', 'bulk/']);
+    const secret = path.join(wt, 'secret', '.env');
+    fs.mkdirSync(path.join(wt, 'secret'), { recursive: true });
+    fs.writeFileSync(secret, 'AWS_SECRET_ACCESS_KEY=live\n');
+    fs.mkdirSync(path.join(wt, 'bulk'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'bulk', 'blob.bin'), 'x'.repeat(4096));
+    h.sh(`cd "${wt}" && git checkout -q --detach`);
+    return { wt, secret };
+  };
+
+  it('answers null — not 0, not [] — for every figure Phase A refused before measuring', () => {
+    const { wt, secret } = unscanned();
+    const a = refusal(wt);
+    expect(a.verdict).toBe('detached-head');
+    // The five outputs of the one scan that never ran.
+    expect(a.ignored, 'no ignored manifest was collected').toBeNull();
+    expect(a.ignoredCount).toBeNull();
+    expect(a.ignoredBytes).toBeNull();
+    expect(a.sensitive).toBeNull();
+    expect(a.sensitiveFiltered).toBeNull();
+    // Two more reads Phase A refused before reaching: the stash list and the
+    // PR fetch. `stashes:0` renders "none" and `fetchedAt:0` renders a date.
+    expect(a.stashes).toBeNull();
+    expect(a.merge.fetchedAt).toBeNull();
+    // ABSENT-vs-ZERO, asserted in the one form that can tell them apart — the
+    // discrimination `x ?? 0` cannot make, which is why the older sibling test
+    // in this file passed against the forgery.
+    expect(Object.prototype.hasOwnProperty.call(a, 'ignoredCount'),
+      'the field is present and null, not dropped').toBe(true);
+    expect(JSON.stringify(a), 'no zero may appear for a read nobody took')
+      .not.toMatch(/"(ignoredCount|ignoredBytes|sensitiveFiltered|stashes)":0/);
+    // And the fact those rows were denying: the secret is on disk, unlisted.
+    expect(fs.existsSync(secret)).toBe(true);
+  });
+
+  it('keeps measuring `dirty` itself — it is this command\'s own read, not the eval\'s', () => {
+    // The other direction, and the reason `dirty` is not simply nulled with
+    // the rest: `cmd_ws_audit` reads the working tree itself, so on a Phase-A
+    // refusal whose worktree is present and readable the list IS a
+    // measurement and must stay one.
+    const { wt } = unscanned();
+    fs.writeFileSync(path.join(wt, 'unsaved.txt'), 'an hour of it\n');
+    const a = refusal(wt);
+    expect(a.dirty).toEqual(['?? unsaved.txt']);
+  });
+
+  it('answers null for `dirty` when there is no worktree to read', () => {
+    // `[]` here is the worst reading of the six, because "uncommitted: none"
+    // is the row a human scans first. Nothing was read at all.
+    const { wt } = squashMovedBase();
+    fs.rmSync(wt, { recursive: true, force: true });
+    const a = audit();
+    expect(a.verdict).toBe('worktree-missing');
+    expect(a.dirty).toBeNull();
+  });
+
+  it('answers null for `dirty` when the status read FAILS, rather than calling it clean', () => {
+    // The exit code AND the stderr, the same two-rung rule `_ws_gc_dirty` and
+    // Phase B both state: a partially unreadable tree exits 0 with the
+    // diagnostic on stderr. Only this command's own `-z` read is shadowed, so
+    // the eval still reaches `reapable` — a reapable document may carry a null
+    // `dirty`, because Phase B's own guard proved the count, not this list.
+    const { wt } = squashMovedBase();
+    const a = audit('git() { [[ "$*" == *"status --porcelain -z"* ]] && return 128; command git "$@"; };');
+    expect(a.verdict).toBe('reapable');
+    expect(a.dirty, 'a status this command could not read is not an empty one').toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('answers null for `dirty` when the status read writes a diagnostic but exits 0', () => {
+    const { wt } = squashMovedBase();
+    const a = audit('git() { [[ "$*" == *"status --porcelain -z"* ]]'
+      + ' && { echo "warning: could not open directory" >&2; return 0; }; command git "$@"; };');
+    expect(a.dirty, 'a PARTIAL read is not a clean one').toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('still reports real measurements on the ordinary reapable sheet', () => {
+    // The half a null-everywhere fix would break: widening the wire must not
+    // make the sheet a reader sees every day start hedging.
+    const { wt } = squashMovedBase(['bulk/']);
+    fs.mkdirSync(path.join(wt, 'bulk'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'bulk', 'blob.bin'), 'x'.repeat(4096));
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.dirty).toEqual([]);
+    expect(a.ignoredCount).toBe(1);
+    expect(a.ignoredBytes).toBeGreaterThan(0);
+    expect(a.sensitive).toEqual([]);
+    expect(a.sensitiveFiltered).toBe(0);
+    expect(a.stashes).toBe(0);
+    expect(a.merge.fetchedAt).toBeGreaterThan(0);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+});
+
+/**
  * The plan's own cases leave eleven refusals and the whole fingerprint
  * unpinned: their lines can be deleted with the suite still green, and two of
  * them (`session-busy`, `status-unknown`) are the §5.3 idle gate, evaluated on
