@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { PR_PHASES, type PrPhase } from '../../shared/api.js';
+import { isPrPhase, type PrPhase } from '../../shared/api.js';
 
 export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;
@@ -77,7 +77,12 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
       base,
       // A phase this build does not know degrades to null (= unchecked), never
       // to a raw string the PWA would switch on and render as nothing.
-      prPhase: PR_PHASES.includes(prPhaseRaw as PrPhase) ? (prPhaseRaw as PrPhase) : null,
+      // `isPrPhase`, not `PR_PHASES.includes(x as PrPhase)`: the old form cast
+      // the untrusted value twice, asserting the very thing the check asks
+      // (final review, integration 3). The predicate also rejects a non-string
+      // outright, so a half-written registry entry cannot reach `.includes`
+      // wearing a `PrPhase` annotation.
+      prPhase: isPrPhase(prPhaseRaw) ? prPhaseRaw : null,
       prNumber: numOrNull(prNumberRaw),
       prCheckedAt: numOrNull(prCheckedAtRaw),
       archivedAt: numOrNull(archivedRaw),

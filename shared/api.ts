@@ -104,6 +104,31 @@ export interface PrState {
 export const PR_PHASES: readonly PrPhase[] =
   ['unchecked', 'none', 'no-commits', 'open', 'draft', 'merged', 'closed', 'unknown'];
 
+/**
+ * The validator that goes with the list. Use THIS, never `PR_PHASES.includes(x
+ * as PrPhase)` (final review, integration finding 3).
+ *
+ * `PR_PHASES` is typed `readonly PrPhase[]`, so `.includes` demands a `PrPhase`
+ * argument — which forces a caller holding an untrusted string to write
+ * `raw as PrPhase`, asserting the very thing the check is asking, and then a
+ * SECOND cast on the result. `registry.ts` did exactly that
+ * (`PR_PHASES.includes(prPhaseRaw as PrPhase) ? (prPhaseRaw as PrPhase) : null`),
+ * three lines under a comment in this file telling it not to. Behaviourally it
+ * was fine — `null as PrPhase` is not in the array, so it fell through to
+ * `null` — but the same shape one refactor later ("the raw read is now
+ * `unknown`", "the phase list is now built from config") reads as validated
+ * while asserting its way past the validation.
+ *
+ * A predicate removes both casts and narrows for real: the `unknown` parameter
+ * means nothing can be smuggled in by claiming it is already a phase, and the
+ * `typeof` guard means a non-string (a `null` off a half-written registry
+ * entry, a number from a JSON snapshot) answers `false` rather than reaching
+ * `.includes` as a `PrPhase`-shaped lie.
+ */
+export function isPrPhase(v: unknown): v is PrPhase {
+  return typeof v === 'string' && (PR_PHASES as readonly string[]).includes(v);
+}
+
 /** What `GET /api/sessions/:id/pr` answers. `draft` is present ONLY in phase
  *  `none` — the one phase whose sheet is a composer — and `facts` is the line
  *  the composer always shows above the confirm. */
@@ -255,9 +280,7 @@ function revivePr(raw: unknown): PrState {
   // looks like, and both types carry a designated "we have not looked": degrade,
   // do not reject. Same stance as registry.ts reading `prphase` off disk.
   const phaseRaw = optStr(o, 'phase');
-  const phase: PrPhase =
-    phaseRaw !== null && (PR_PHASES as readonly string[]).includes(phaseRaw)
-      ? (phaseRaw as PrPhase) : 'unchecked';
+  const phase: PrPhase = isPrPhase(phaseRaw) ? phaseRaw : 'unchecked';
   const reasonRaw = optStr(o, 'reason');
   const reason = reasonRaw !== null && REASONS.includes(reasonRaw)
     ? (reasonRaw as PrState['reason']) : null;

@@ -1,0 +1,6 @@
+{
+  "_comment": "Final review, integration finding 3. `PR_PHASES` is typed `readonly PrPhase[]` ON PURPOSE, so `.includes(untrustedString)` cannot compile and a caller is pushed to `isPrPhase` instead of casting the input. This project MUST FAIL, and prphase.test.ts asserts the exact code — otherwise a future widening of PR_PHASES to `readonly string[]` would quietly make the double-cast shape legal again.",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["prphase/**/*.ts"]
+}
