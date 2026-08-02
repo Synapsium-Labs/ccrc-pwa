@@ -620,6 +620,32 @@ if mode == 'state':
         except FileNotFoundError:
             pass
 
+    # NARROW FIRST, WIDEN LAST — final-round integration New Finding 9. These
+    # are two files and there is no way to write two files atomically, so the
+    # question is not "can a kill land between them" (it can) but "which pairs
+    # can a kill leave on disk". The shipped order was `put('prphase')` first
+    # and the number nineteen lines later, whose intermediate state is
+    # {new phase, OLD number} — and for the commonest transition of all, a
+    # merged PR going away, that is precisely {'none', 42}: the one pair
+    # docket 1 proved otherwise unconstructible, the one `fleet.ts` renders as
+    # `#42` under copy that says "no pull request yet", and the one
+    # `ws-archive` files as `merged:#42` for a PR that no longer binds here.
+    #
+    # Three steps in this order instead, so every intermediate is a pair that
+    # was ACTUALLY answered together, or a phase with no number at all:
+    #     clear number  ->  {old phase, absent}
+    #     put phase     ->  {new phase, absent}
+    #     put number    ->  {new phase, new number}
+    # `{X, absent}` is not a new state to teach anyone: it is what a workspace
+    # that never had a PR looks like, what a `merged` row with no `number`
+    # field looks like, and `_reg_get`'s readers already treat a missing or
+    # non-numeric `prnumber` as null (ccd:1273, ccd:2650). The window is a
+    # DEGRADED reading, never a false one, and the old window's was false.
+    #
+    # The unconditional `clear` also costs one unlink on the path where the
+    # number is unchanged, which is the price of not having to reason about
+    # which transitions are safe.
+    clear('prnumber')
     put('prphase', phase)
     # phase and number are ONE answer, so a writer that persists half of it
     # lies. A PR that is deleted, force-pushed out of reachability, or whose
@@ -638,9 +664,7 @@ if mode == 'state':
     # `put`/`clear` runs. The comment here used to claim the first guard alone
     # made this unreachable; it did not, and a `gh` that exited 0 with an empty
     # or unparseable stdout cleared a persisted `merged:#42`.
-    if number is None:
-        clear('prnumber')
-    else:
+    if number is not None:
         put('prnumber', number)
     put('prcheckedat', checked_at)
 

@@ -745,6 +745,38 @@ describe('persistence', () => {
     expect(h.reg('demo-quiet-basin', 'prnumber')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'prphase')).toBe('none');
   });
+
+  it('never advances prphase past a prnumber write that did not happen', () => {
+    // Final-round integration New Finding 9. `prphase` and `prnumber` are two
+    // FILES, so no ordering makes the pair atomic — but the order decides which
+    // half-written pairs a kill can leave behind, and the shipped one
+    // (`put('prphase')` nineteen lines ahead of the number) left exactly
+    // {'none', 42}: the pair docket 1 proved otherwise unconstructible, the one
+    // fleet.ts renders as `#42` under "no pull request yet", and the one
+    // ws-archive files as `merged:#42`. `clear('prnumber')` now runs FIRST, so
+    // the intermediates are {old phase, absent} and {new phase, absent} — a
+    // degraded reading, never a false one.
+    //
+    // The interruption is injected where the test can see it: a DIRECTORY at
+    // the `prnumber` path makes `os.remove` raise `IsADirectoryError`, which
+    // `clear`'s `except FileNotFoundError` does not catch, so the write of the
+    // pair aborts at exactly the step the ordering is about. What is asserted
+    // is the ordering property itself — the phase must not have moved.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+
+    const numberPath = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.prnumber');
+    fs.rmSync(numberPath);
+    fs.mkdirSync(numberPath);
+    h.ghRows([]);                                  // the new answer is {none, no number}
+    h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'prphase'),
+      'the phase moved to a value whose number never landed').toBe('merged');
+    expect(fs.statSync(numberPath).isDirectory(), 'the fixture must survive the run').toBe(true);
+  });
 });
 
 describe('gh isolation', () => {
