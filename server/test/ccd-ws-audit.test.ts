@@ -463,11 +463,32 @@ describe('local-loss refusals', () => {
     const a = refusal(wt, 'du() { return 1; };');
     expect(a.verdict).toBe('tree-unreadable');
     expect(a.detail, a.detail).toContain("could not size the ignored entry dist/");
-    // The forged figures are ABSENT, not zero: a refusal document carries no
-    // ignored manifest at all, so there is no total to misread.
-    expect(a.ignored ?? [], 'no entry was recorded on a size nobody took').toEqual([]);
-    expect(a.ignoredBytes ?? 0).toBe(0);
-    expect(a.ignoredCount ?? 0).toBe(0);
+    // THE COMMENT AND THE ASSERTIONS ARE BOTH REWRITTEN — final-round tests
+    // review F4, and it is worth saying why both had to move rather than one.
+    //
+    // The old comment claimed "the forged figures are ABSENT, not zero: a
+    // refusal document carries no ignored manifest at all". That was FALSE of
+    // the ccd it described: `cmd_ws_audit` emitted `"ignoredCount":0,
+    // "ignoredBytes":0` on every verdict (F3, fixed this round). And the old
+    // assertions were written `x ?? 0` then `.toBe(0)` — the ONE form that
+    // cannot tell absence from a literal 0, which is exactly the
+    // discrimination the test's own title claims to make. So the file asserted
+    // an invariant it did not have, in a form that would have passed either
+    // way; a comment and a test can be wrong together and neither notices.
+    //
+    // Both are now true of what ships: the fields are PRESENT and NULL. Null
+    // rather than absent is deliberate — a dropped field degrades to
+    // `undefined` at every reader and reads as an older server, whereas null
+    // is ccd positively stating "this was not measured".
+    expect(a.ignored, 'no manifest was collected on a scan that refused').toBeNull();
+    expect(a.ignoredBytes, 'null, not 0 — nothing was summed').toBeNull();
+    expect(a.ignoredCount, 'null, not 0 — nothing was counted').toBeNull();
+    for (const k of ['ignored', 'ignoredBytes', 'ignoredCount']) {
+      expect(Object.prototype.hasOwnProperty.call(a, k), `${k} is present and null`).toBe(true);
+    }
+    // The assertion the `?? 0` form structurally could not make.
+    expect(JSON.stringify(a), 'no 0 for a read nobody took')
+      .not.toMatch(/"(ignoredCount|ignoredBytes)":0/);
   });
 
   it('refuses a PARTIAL du total — the failure that looks like an answer', () => {
