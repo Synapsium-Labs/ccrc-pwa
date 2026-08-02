@@ -14,7 +14,7 @@ import { Sheet } from '../components/Sheet';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
-import { prSentence, UNCHECKED_PR } from './PrKeycap';
+import { checkPhrase, prSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
 
 export function PrSheet({
@@ -98,8 +98,12 @@ export function PrSheet({
           )}
 
           {pr?.phase === 'no-commits' && (
-            <button type="button" className="btn-primary" disabled
-                    title={`${session.branch ?? 'This branch'} has no commits past its base.`}>
+            /* The disabled reason is the lede's own words, read from the same
+               variable that rendered it — not a second sentence saying the
+               same thing in slightly different ones (final-round integration
+               finding 5: this said "<branch> has no commits past its base.",
+               a hand copy of prSentence's own no-commits clause). */
+            <button type="button" className="btn-primary" disabled title={lede}>
               Open pull request
             </button>
           )}
@@ -151,12 +155,15 @@ export function PrSheet({
           {(pr?.phase === 'open' || pr?.phase === 'draft') && (
             <>
               {pr.title !== null && <p className="pr-title">{pr.title}</p>}
-              <p className="pr-checkline">
-                {pr.checks === null ? 'no checks configured'
-                  : pr.checks === 'pass' ? 'Checks passing'
-                  : pr.checks === 'pending' ? 'Checks running'
-                  : 'Checks failing'}
-              </p>
+              {/* Final-round integration finding 5. This was a hand-written
+                  four-way `PrChecks` → words mapping — a second copy of
+                  `PrKeycap`'s private `checkText`, which is exactly what
+                  `UNCHECKED_PR`'s docstring says will drift, and it had:
+                  "no checks configured" against "No checks configured.".
+                  `checkPhrase` is now the single source both this line and
+                  the cap's sentence read from, so the two cannot describe the
+                  same CI state in different words. */}
+              <p className="pr-checkline">{checkPhrase(pr)}</p>
               {/* INERT TEXT. These names come from GitHub and are
                   attacker-controllable on any repo that takes fork PRs; a
                   button beside them would inject them into an agent running
@@ -206,7 +213,14 @@ export function PrSheet({
 
           {pr?.phase === 'closed' && (
             <>
-              <p className="pr-note">Closed without merging. This branch&apos;s commits are not on main.</p>
+              {/* No note here. The lede above ALREADY reads "Pull request #N:
+                  closed without merging. This branch's commits are not on
+                  main." — prSentence's own `closed` case. This block used to
+                  repeat that second sentence verbatim, so the same words
+                  appeared twice on one screen (final-round integration
+                  finding 5), and the copy could drift from the one the cap's
+                  aria-label speaks. Deleting the second copy is the only fix
+                  that makes the drift impossible rather than merely absent. */}
               {pr.url !== null && (
                 <a className="btn-ghost" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
               )}

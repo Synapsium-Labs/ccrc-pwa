@@ -1,13 +1,21 @@
 // Fold state is a layout preference: every failure mode must resolve to
 // "everything expanded", never to a fleet the reader cannot see.
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { cleanup, renderHook, act } from '@testing-library/react';
 import { loadFolded, saveFolded, useFolded } from '../src/fleet/foldState';
 
 const KEY = 'ccrc.fleet-folded.v1';
 
 beforeEach(() => { window.localStorage.clear(); });
-afterEach(() => { vi.restoreAllMocks(); });
+// Final-round gates review, finding 7. `renderHook` below mounts into
+// `document.body`, and this suite has no vitest `globals`, so RTL's automatic
+// per-test cleanup (which is wired to a global `afterEach`) is NOT active
+// here. Without an explicit `cleanup()` the mounted hosts accumulate across
+// tests in this file and a later test can read state a previous one left
+// behind — passing for the wrong reason. `cleanup()` first: it unmounts, and
+// unmounting must not be looking at mocks `restoreAllMocks` has already
+// removed (the saveFolded test spies on `localStorage.setItem`).
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('loadFolded', () => {
   it('returns an empty set when nothing is stored — a first run opens everything', () => {
@@ -63,5 +71,21 @@ describe('useFolded', () => {
     first.unmount();
     const second = renderHook(() => useFolded());
     expect(second.result.current[0].has('alpha')).toBe(true);
+  });
+
+  // Finding 7's actual hazard, made visible. Both tests above end with
+  // 'alpha' persisted in localStorage; `beforeEach` clears the storage, but
+  // nothing unmounted the hooks. A fresh hook must read the CLEARED storage —
+  // if a previous test's mounted host were still live and its state observable
+  // here, "starts empty" would be indistinguishable from "the fold leaked".
+  it('starts from empty storage and an empty document, not from what the previous test mounted', () => {
+    // Nothing the two tests above mounted is still attached. Without the
+    // explicit `cleanup()`, their `renderHook` containers are all still in
+    // `document.body` when this runs (RTL's `unmount()` tears down the React
+    // tree but leaves the host div behind), and this reads 3.
+    expect(document.body.childElementCount).toBe(0);
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+    const { result } = renderHook(() => useFolded());
+    expect([...result.current[0]]).toEqual([]);
   });
 });

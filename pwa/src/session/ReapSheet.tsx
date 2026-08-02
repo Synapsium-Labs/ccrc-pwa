@@ -6,7 +6,7 @@
 //
 // There is no override for any refusal, anywhere: no flag, no config file, no
 // "Remove anyway". Move the files, or use a terminal.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ReapResult, WsAudit } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
@@ -38,8 +38,25 @@ export function ReapSheet({
   const [showAll, setShowAll] = useState(false);
 
   const id = session?.id ?? null;
+  // Final-round finding F2 (destructive review). `setAudit(null)` below fixed
+  // only the SYNCHRONOUS half of the stale-audit defect. The asynchronous half
+  // remained: two audits can be in flight at once (open on alpha → target
+  // switches to bravo), and whichever RESOLVES LAST wins. When that is alpha's,
+  // the sheet's header, title and confirm button say `bravo` (they come from
+  // the `session` prop) while every measured row — workdir, size, ignored
+  // paths, clips — and the TOKEN come from alpha. That is this whole surface
+  // failing at its one job: describing what is about to be destroyed.
+  //
+  // `gen` is the generation of the audit the sheet is currently willing to
+  // accept. It advances on every `load()` AND in the effect's cleanup, so it
+  // advances on every change of target and on every close — which means a
+  // response is rendered ONLY if no target change and no newer request has
+  // happened since it was issued. There is no path by which a superseded
+  // response reaches `setAudit`.
+  const gen = useRef(0);
   const load = (): void => {
     if (id === null) return;
+    const mine = (gen.current += 1);
     setResult(null);
     // Pre-merge fix round, finding 17-F1: this used to clear only `result`,
     // so while a fresh audit is in flight the sheet kept rendering the
@@ -47,15 +64,36 @@ export function ReapSheet({
     // Re-check re-posting the stale token, and FleetScreen briefly showing
     // one session's name/size next to another's stale path when the reap
     // target switches (both pinned in reap-sheet.test.tsx /
-    // fleet-screen.test.tsx). `audit === null` is what renders "Checking…"
+    // fleet-screen.test.tsx). A null `audit` is what renders "Checking…"
     // instead of a stale confirm button while the fetch below is in flight.
     setAudit(null);
-    void api.workspaceAudit(id).then(setAudit).catch((e) => toast(apiErrorText(e), 'error'));
+    void api.workspaceAudit(id)
+      .then((a) => { if (gen.current === mine) setAudit(a); })
+      // The toast is generation-guarded too: an error belonging to a workspace
+      // the reader has already navigated away from is a message about
+      // something that is no longer on screen.
+      .catch((e) => { if (gen.current === mine) toast(apiErrorText(e), 'error'); });
   };
   useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
 
   if (!session) return null;
   const slug = session.workspace ?? session.id;
+  // Second, independent gate on the same finding, and the one that does not
+  // depend on any reasoning about ordering: an audit is rendered ONLY if the
+  // audit itself says it is about this session. `WsAudit.id` is ccd's own
+  // first field (`_ws_audit`, ccd:2541) and the first line of the
+  // fingerprint the token hashes, so it is the response's own statement of
+  // what was measured — not a label this component attached to it.
+  //
+  // This also covers the one window the generation guard structurally cannot:
+  // `session` is `sessions.find(...) ?? null` at both call sites, so a fleet
+  // update can drop the target to `null` and bring a DIFFERENT one back, and
+  // the render that pairs the new session with the old `audit` state commits
+  // BEFORE the effect that would clear it.
+  //
+  // Fails safe: a mismatch renders "Checking…" — refusing to describe —
+  // rather than describing the wrong workspace.
+  const shown = audit !== null && audit.id === session.id ? audit : null;
 
   const confirm = (): void => {
     // The token guard is a TYPE guard now, not a state the UI can reach:
@@ -66,9 +104,9 @@ export function ReapSheet({
     // because a silent early return under a rendered primary button was
     // exactly the defect: it is now unreachable, which is the only acceptable
     // form of it.
-    if (audit?.token === undefined || busy) return;
+    if (shown?.token === undefined || busy) return;
     setBusy(true);
-    void api.workspaceReap(session.id, audit.token)
+    void api.workspaceReap(session.id, shown.token)
       .then((r) => { setResult(r); if (r.reaped !== undefined) onReaped(); })
       .catch((e) => toast(apiErrorText(e), 'error'))
       .finally(() => setBusy(false));
@@ -77,20 +115,20 @@ export function ReapSheet({
   return (
     <Sheet open={open} onClose={onClose} eyebrow={session.project} title={`Remove ${slug}?`}>
       <div className="reap-sheet">
-        {audit === null && <p className="reap-note">Checking…</p>}
+        {shown === null && <p className="reap-note">Checking…</p>}
 
-        {audit !== null && (
+        {shown !== null && (
           <>
             {/* The breadcrumb, said out loud. A retry after a killed reap used
                 to re-audit an empty directory and certify "0 files". */}
-            {audit.reaping !== null && (
-              <p className="reap-refusal">{`Cleanup stopped part-way (${audit.reaping}).`}</p>
+            {shown.reaping !== null && (
+              <p className="reap-refusal">{`Cleanup stopped part-way (${shown.reaping}).`}</p>
             )}
 
             <dl className="reap-rows">
               <dt>branch</dt>
               <dd>
-                {/* MUTATION SURVIVOR, disclosed, on `audit.merge.proof ?? 'none'`
+                {/* MUTATION SURVIVOR, disclosed, on `shown.merge.proof ?? 'none'`
                     only: `??` -> `||` survives because `WsAudit['merge']['proof']`
                     is `'ancestor' | 'tree' | 'patch-id' | 'cherry' | null` —
                     four non-empty string literals and `null`, so no value the
@@ -98,35 +136,35 @@ export function ReapSheet({
                     exactly the same inputs at every call site; a distinguishing
                     call would need the union to grow a falsy member. Same shape
                     as PrKeycap.tsx's and PrSheet.tsx's own disclosed survivors.
-                    `audit.pr.number ?? '?'` on the same line is NOT equivalent —
+                    `shown.pr.number ?? '?'` on the same line is NOT equivalent —
                     `number | null` admits `0`, a real (if unusual) PR number —
                     and is pinned by a dedicated test instead. */}
-                {`${audit.branch} — merged in #${audit.pr.number ?? '?'} (proof: ${audit.merge.proof ?? 'none'}), ${days(audit.merge.fetchedAt)}`}
+                {`${shown.branch} — merged in #${shown.pr.number ?? '?'} (proof: ${shown.merge.proof ?? 'none'}), ${days(shown.merge.fetchedAt)}`}
               </dd>
 
               <dt>worktree</dt>
               <dd>
-                {audit.workdir}
+                {shown.workdir}
                 {/* Its own node so the figure reads as a figure. Pre-merge fix
                     round, finding F: `worktreeBytes` is `number | null` —
                     `du` failing to read even one subdirectory used to hand
                     this a real, plausible, WRONG number instead of refusing
                     to answer. `null` says "unknown" rather than guess. */}
-                <span className="reap-size">{audit.worktreeBytes === null ? 'unknown' : humanBytes(audit.worktreeBytes)}</span>
+                <span className="reap-size">{shown.worktreeBytes === null ? 'unknown' : humanBytes(shown.worktreeBytes)}</span>
               </dd>
 
               <dt>uncommitted</dt>
-              <dd>{audit.dirty.length === 0 ? 'none' : `${audit.dirty.length} files`}</dd>
+              <dd>{shown.dirty.length === 0 ? 'none' : `${shown.dirty.length} files`}</dd>
 
               <dt>not in git</dt>
               <dd>
-                {`${audit.ignoredCount} entries, ${humanBytes(audit.ignoredBytes)}`}
-                {audit.ignored.length > 0 && (
+                {`${shown.ignoredCount} entries, ${humanBytes(shown.ignoredBytes)}`}
+                {shown.ignored.length > 0 && (
                   <span className="reap-ignored">
-                    {(showAll ? audit.ignored : audit.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
+                    {(showAll ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
                   </span>
                 )}
-                {audit.ignored.length > 3 && (
+                {shown.ignored.length > 3 && (
                   <button type="button" className="btn-ghost" onClick={() => setShowAll((v) => !v)}>
                     {showAll ? 'show fewer' : 'show all'}
                   </button>
@@ -140,9 +178,9 @@ export function ReapSheet({
                     sensitive. EXCLUDED must never mean INVISIBLE — this is
                     the count surfacing where a human can actually see it, so
                     a wrong filter is something anyone would notice. */}
-                {audit.sensitiveFiltered > 0 && (
+                {shown.sensitiveFiltered > 0 && (
                   <span className="reap-note">
-                    {`${audit.sensitiveFiltered} secret-shaped ${audit.sensitiveFiltered === 1 ? 'match' : 'matches'} filtered as vendored/template.`}
+                    {`${shown.sensitiveFiltered} secret-shaped ${shown.sensitiveFiltered === 1 ? 'match' : 'matches'} filtered as vendored/template.`}
                   </span>
                 )}
               </dd>
@@ -155,9 +193,9 @@ export function ReapSheet({
                   after this rendered refuses `state-changed`. */}
               <dt>clips</dt>
               <dd>
-                {audit.clips.length === 0 ? 'none'
-                  : `${audit.clips.length} pasted image${audit.clips.length === 1 ? '' : 's'}, `
-                    + humanBytes(audit.clips.reduce((n, c) => n + c.bytes, 0))}
+                {shown.clips.length === 0 ? 'none'
+                  : `${shown.clips.length} pasted image${shown.clips.length === 1 ? '' : 's'}, `
+                    + humanBytes(shown.clips.reduce((n, c) => n + c.bytes, 0))}
                 {/* Distinguishable from the "not in git" row's identical-meaning
                     note just above (deviation, Task 17): both are `reap-note`
                     spans and RTL's `getByText` throws on more than one match,
@@ -165,9 +203,9 @@ export function ReapSheet({
                     stylistic choice here — it is untestable. "pastes" keeps
                     the substring from ever colliding with the other row's
                     exact wording. */}
-                {audit.clips.length > 0 && (
+                {shown.clips.length > 0 && (
                   <span className="reap-note">
-                    {audit.clips.length === 1
+                    {shown.clips.length === 1
                       ? 'This paste is in no commit and cannot be recovered.'
                       : 'These pastes are in no commit and cannot be recovered.'}
                   </span>
@@ -175,26 +213,26 @@ export function ReapSheet({
               </dd>
 
               <dt>stashes</dt>
-              <dd>{audit.stashes === 0 ? 'none' : `${audit.stashes}`}</dd>
+              <dd>{shown.stashes === 0 ? 'none' : `${shown.stashes}`}</dd>
 
               <dt>kept</dt>
               <dd>
-                {`transcript, and ${result?.attic ?? audit.commitsAheadOfBase} commits pinned in the attic (ccd ws-attic)`}
+                {`transcript, and ${result?.attic ?? shown.commitsAheadOfBase} commits pinned in the attic (ccd ws-attic)`}
               </dd>
             </dl>
 
-            {audit.verdict !== 'reapable' && (
+            {shown.verdict !== 'reapable' && (
               <>
-                <p className="reap-refusal">{audit.sentence}</p>
-                {audit.sensitive.length > 0 && (
+                <p className="reap-refusal">{shown.sentence}</p>
+                {shown.sensitive.length > 0 && (
                   <>
                     <ul className="reap-sensitive">
-                      {audit.sensitive.map((p) => <li key={p}>{p}</li>)}
+                      {shown.sensitive.map((p) => <li key={p}>{p}</li>)}
                     </ul>
                     {/* The ONLY affordance a refusal ever gets, because the
                         remedy is to move these files. There is no override. */}
                     <button type="button" className="btn-ghost"
-                            onClick={() => { void navigator.clipboard?.writeText(audit.sensitive.join('\n')); toast('Paths copied', 'info'); }}>
+                            onClick={() => { void navigator.clipboard?.writeText(shown.sensitive.join('\n')); toast('Paths copied', 'info'); }}>
                       Copy paths
                     </button>
                   </>
@@ -202,12 +240,12 @@ export function ReapSheet({
               </>
             )}
 
-            {audit.verdict === 'reapable' && result === null && (
+            {shown.verdict === 'reapable' && result === null && (
               <button type="button" className="btn-primary reap-go" disabled={busy} onClick={confirm}>
                 {/* The confirm this whole design exists to protect: it must
                     say "unknown size", never a number `du` could not stand
                     behind (finding F). */}
-                {`Remove ${slug} · ${audit.worktreeBytes === null ? 'unknown size' : humanBytes(audit.worktreeBytes)}`}
+                {`Remove ${slug} · ${shown.worktreeBytes === null ? 'unknown size' : humanBytes(shown.worktreeBytes)}`}
               </button>
             )}
 
