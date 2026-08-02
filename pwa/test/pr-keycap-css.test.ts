@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ruleIn } from './cssRule';
+import { declValue, ruleIn } from './cssRule';
 
 const chatCss = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
@@ -79,7 +79,13 @@ describe('the PR keycap CSS', () => {
     // 3:1 contrast floor (see tokens.css's comment); aliasing an
     // already-themed token is what makes the single declaration correct in
     // both themes at once.
-    expect(tokensCss).toContain('--pr-merged: var(--acct-claude2);');
-    expect(tokensCss).toContain('--pr-dim:    var(--ink-tertiary);');
+    // Fix round 4, controller item 1: this pair used to be raw `toContain` on
+    // the file text, pinning the FOUR spaces tokens.css currently aligns
+    // `--pr-dim`'s value with — the same shape the shared reader exists to
+    // kill. Read the declaration out of `:root` instead, so re-aligning the
+    // column is free and changing the alias is not.
+    const root = ruleIn(tokensCss, ':root');
+    expect(declValue(root, '--pr-merged')).toBe('var(--acct-claude2)');
+    expect(declValue(root, '--pr-dim')).toBe('var(--ink-tertiary)');
   });
 });

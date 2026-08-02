@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ruleIn } from './cssRule';
+import { atBlock, declValue, ruleIn, selectorsOf } from './cssRule';
 
 const css = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -174,22 +174,30 @@ describe('selection is polarity, status is hue', () => {
     expect(() => ruleFor('.proj-card--busy')).toThrow();
     // Attention is the only status that asks the reader to act and the one a
     // fold must never hide — it keeps the perimeter, now monosemous.
-    expect(css).toContain('.proj-card--attention { border-color: var(--status-attention-text); }');
+    // Fix round 4, controller item 1: this was a whitespace-exact literal of
+    // the WHOLE rule, so reformatting the one-liner onto three lines failed it
+    // for nothing. The declaration is what "byte for byte" was ever about.
+    expect(declValue(ruleFor('.proj-card--attention'), 'border-color'))
+      .toBe('var(--status-attention-text)');
   });
 
   it('strips every status and account hue from the slab', () => {
-    // ruleFor anchors on `<sel> {`, so only the LAST selector of a list can
-    // fetch the block; the rest are asserted as members of that same list,
-    // read back from the block's own brace rather than from the whole file —
+    // Every coloured cell on the row must be neutralised by the SAME rule —
     // this is what catches a STRANDED cell when someone adds a new coloured
     // element to .sess-meta and forgets it here.
+    //
+    // Fix round 4, controller item 1: the membership check used to slice the
+    // file between the previous `}` and a literal `${last} {`, so it demanded
+    // exactly one space before the brace — the very copy the shared reader
+    // replaced elsewhere in this file, left standing inside one test.
+    // `selectorsOf` returns the rule's own normalised list, so re-indenting or
+    // re-ordering the group is free and dropping a member is not.
     const last = '.sess-line--active .sess-meta > *:not(:first-child)::before';
-    expect(ruleFor(last)).toContain('color: var(--edge-strong)');
-    const open = css.indexOf(`${last} {`);
-    const list = css.slice(css.lastIndexOf('}', open) + 1, open);
+    expect(declValue(ruleFor(last), 'color')).toBe('var(--edge-strong)');
+    const group = selectorsOf(css, last);
     for (const cell of ['.sess-meta', '.sess-state', '.sess-tally', '.sess-warn',
                         '.sess-acct', '.sess-acct-away']) {
-      expect(list).toContain(`.sess-line--active ${cell},`);
+      expect(group).toContain(`.sess-line--active ${cell}`);
     }
   });
 
@@ -225,9 +233,14 @@ describe('selection is polarity, status is hue', () => {
   it('survives forced colours, where the polarity channel does not exist', () => {
     // Canvas/CanvasText flatten fill AND ink, leaving font-weight alone. An
     // inset border is the channel that survives.
-    const at = css.indexOf('@media (forced-colors: active)');
-    expect(at).toBeGreaterThan(-1);
-    expect(ruleIn(css.slice(at), '.sess-line--active')).toContain('outline: 2px solid CanvasText');
+    // Fix round 4, controller item 1: `css.indexOf('@media (forced-colors:
+    // active)')` then a slice to END OF FILE would have accepted a
+    // `.sess-line--active` rule that had fallen OUT of the block, and pinned
+    // the space after the media feature's colon. `atBlock` returns the block's
+    // own body, so both go away at once.
+    const forced = atBlock(css, '@media (forced-colors: active)');
+    expect(declValue(ruleIn(forced, '.sess-line--active'), 'outline'))
+      .toBe('2px solid CanvasText');
   });
 });
 

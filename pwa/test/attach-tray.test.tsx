@@ -7,6 +7,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AttachTray } from '../src/session/AttachTray';
 import type { StagedImage } from '../src/session/useAttachImage';
+// Shared rule reader (test/cssRule.ts), not two more hand-rolled copies — fix
+// round 4, controller item 1. Both scrapes below read src/session/chat.css,
+// which the ui-css lane owns and is editing in parallel: they must break on a
+// changed declaration and never on a changed indent, a regrouped selector or
+// prettier flipping `[data-state='failed']` to double quotes.
+import { declValue, ruleIn } from './cssRule';
 
 afterEach(() => {
   cleanup();
@@ -71,9 +77,10 @@ describe('AttachTray', () => {
   it('does not reset `all` on the retry button (that silently strips outline/:focus-visible)', () => {
     const cssPath = path.resolve(process.cwd(), 'src/session/chat.css');
     const css = readFileSync(cssPath, 'utf8');
-    const rule = css.match(/\.attach-chip-retry\s*\{[^}]*\}/)?.[0] ?? '';
-    expect(rule).not.toBe('');
-    expect(rule).not.toMatch(/all\s*:\s*unset/);
+    // Stricter than the regex this replaces, deliberately: `all: revert` and
+    // `all: initial` strip the outline just as `unset` did, so the assertion
+    // is that the rule sets no `all` at ALL, not that it avoids one spelling.
+    expect(declValue(ruleIn(css, '.attach-chip-retry'), 'all')).toBeNull();
   });
 
   // Regression guard for a Critical real-browser finding: retry used to wrap
@@ -132,6 +139,10 @@ describe('AttachTray', () => {
   it('scopes the shrunk remove hit-area to failed chips only', () => {
     const cssPath = path.resolve(process.cwd(), 'src/session/chat.css');
     const css = readFileSync(cssPath, 'utf8');
-    expect(css).toMatch(/\.attach-chip\[data-state=['"]failed['"]\]\s+\.attach-remove::after\s*\{[^}]*\}/);
+    // `ruleIn` throws when the scoped rule is gone — a flattened-back
+    // stylesheet fails here rather than passing on a missing match — and the
+    // hit-area it exists to set must still be set.
+    const scoped = ruleIn(css, `.attach-chip[data-state='failed'] .attach-remove::after`);
+    expect(declValue(scoped, 'inset')).not.toBeNull();
   });
 });

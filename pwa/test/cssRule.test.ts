@@ -9,8 +9,14 @@
 // this helper existed; each must be green, and the last two describe the
 // failures that must SURVIVE, since a scrape that tolerates everything asserts
 // nothing.
+//
+// Fix round 4, controller item 1: two more hand-rolled copies (and three more
+// raw-text scrapes) were still standing after round 3. Closing them needed
+// three things this helper did not have — quote-insensitive attribute
+// selectors, the selector LIST of a rule, and the body of an at-rule — so
+// their contracts are pinned here too.
 import { describe, expect, it } from 'vitest';
-import { declValue, norm, ruleIn, stripComments } from './cssRule';
+import { atBlock, declValue, norm, normSel, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const CANONICAL = `
 .reap-go {
@@ -86,6 +92,71 @@ describe('ruleIn survives the reformats a stylesheet owner may reasonably make',
   it('takes the LAST value of a repeated property, as the cascade does', () => {
     expect(declValue('min-height: 20px; min-height: var(--tap-min);', 'min-height'))
       .toBe('var(--tap-min)');
+  });
+
+  it('finds an attribute selector however its value is quoted', () => {
+    // prettier rewrites `'` to `"` in CSS attribute selectors, which broke the
+    // hand-rolled copy in attach-tray.test.tsx by regex alternation only.
+    const dbl = `\n.chip[data-state="failed"] .x::after { inset: -5px; }\n`;
+    for (const asked of [`.chip[data-state='failed'] .x::after`,
+                         `.chip[data-state="failed"] .x::after`,
+                         `.chip[data-state=failed] .x::after`]) {
+      expect(declValue(ruleIn(dbl, asked), 'inset')).toBe('-5px');
+    }
+    expect(normSel(`.chip[data-state='failed']`)).toBe('.chip[data-state=failed]');
+  });
+});
+
+describe('selectorsOf reads the GROUP, so a stranded member is a failure', () => {
+  const grouped = `
+.row .a,
+.row .b ,
+  .row .c::before {
+  color: var(--edge-strong);
+}
+`;
+  it('returns every member of the list, normalised, whatever the whitespace', () => {
+    expect(selectorsOf(grouped, '.row .c::before'))
+      .toEqual(['.row .a', '.row .b', '.row .c::before']);
+  });
+
+  it('does not report a member that lives in a DIFFERENT rule', () => {
+    const split = '\n.row .a { color: red; }\n.row .b { color: red; }\n';
+    expect(selectorsOf(split, '.row .a')).toEqual(['.row .a']);
+  });
+
+  it('throws when the rule is gone, exactly as ruleIn does', () => {
+    expect(() => selectorsOf(grouped, '.row .d')).toThrow(/no rule for/);
+  });
+});
+
+describe('atBlock scopes a rule to the at-rule it must live inside', () => {
+  const sheet = `
+.sess-line--active { outline-color: var(--bg-page); }
+@media (forced-colors: active) {
+  .sess-line--active { outline: 2px solid CanvasText; }
+}
+`;
+  it('reads the rule inside the block, not the same-named one above it', () => {
+    const forced = atBlock(sheet, '@media (forced-colors: active)');
+    expect(declValue(ruleIn(forced, '.sess-line--active'), 'outline'))
+      .toBe('2px solid CanvasText');
+  });
+
+  it('matches the prelude however its whitespace is set', () => {
+    const tight = sheet.replace('(forced-colors: active)', '(forced-colors:active)');
+    expect(atBlock(tight, '@media (forced-colors: active)')).toMatch(/CanvasText/);
+  });
+
+  it('does not reach a rule that sits AFTER the block', () => {
+    const after = `${sheet}\n.sess-line--dead { outline: 2px solid CanvasText; }\n`;
+    expect(() => ruleIn(atBlock(after, '@media (forced-colors: active)'), '.sess-line--dead'))
+      .toThrow(/no rule for/);
+  });
+
+  it('throws when the at-rule is gone — a deleted forced-colours block is a failure', () => {
+    expect(() => atBlock(sheet, '@media (prefers-contrast: more)'))
+      .toThrow(/no at-rule for/);
   });
 });
 
