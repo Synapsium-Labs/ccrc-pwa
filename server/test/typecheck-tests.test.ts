@@ -95,29 +95,100 @@ describe('the tests-inclusive projects really do cover the directory', () => {
   // "the files are in the program". An `include` that silently matched nothing
   // would report clean forever, which is precisely what the excluded directory
   // already was: a gate that could not fail.
-  it('the server program really contains every test file on disk', () => {
-    const files = programFiles(serverRoot, 'test/tsconfig.tests.json');
-    const onDisk = readdirSync(here).filter((f) => f.endsWith('.ts'));
-    expect(onDisk.length).toBeGreaterThan(40);
-    for (const f of onDisk) {
-      expect(files, `${f} is on disk but not in the typechecked program`)
-        .toContain(path.join(here, f));
-    }
-    // The helpers too — `helpers.ts`/`ccdPrHelpers.ts` are not `*.test.ts`, so
-    // a `test/**/*.test.ts` include would have missed exactly the files most
-    // shared between suites.
-    expect(files).toContain(path.join(here, 'helpers.ts'));
-  }, 120_000);
+  //
+  // FINAL REVIEW ROUND 2, gates finding 4 — WHY THIS ENUMERATES.
+  // The first version of this gate read `readdirSync(here)`, where `here` is
+  // `server/test/`. It therefore checked, exhaustively and correctly, the one
+  // directory that was already covered — and could not see `server/test-e2e/`,
+  // 225 lines in NO project, sitting one directory over from the hole it was
+  // written to prevent recurring. A gate against "a whole directory is outside
+  // the typechecker" that takes the directory as an input cannot fail for the
+  // reason it exists. So the directory list is DISCOVERED from the package
+  // root, and the only thing hardcoded is the exemption — which is short,
+  // justified per entry, and asserted below to still describe something real.
+  // Same correction, same reasoning, as `agent/test/tmpfixtures.test.ts`'s
+  // move from a two-name file list to a directory scan.
+  const IGNORED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.vite']);
 
-  it('the agent program really contains every test file on disk', () => {
-    const agentTests = path.join(agentRoot, 'test');
-    const files = programFiles(agentRoot, 'test/tsconfig.tests.json');
-    const onDisk = readdirSync(agentTests).filter((f) => f.endsWith('.ts'));
-    expect(onDisk.length).toBeGreaterThan(5);
-    for (const f of onDisk) {
-      expect(files, `${f} is on disk but not in the typechecked program`)
-        .toContain(path.join(agentTests, f));
-    }
+  /** Every `.ts` file in a package that some typecheck project must contain.
+   *  Discovered by walking the package root, not listed. */
+  function typeSources(root: string): string[] {
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const abs = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (IGNORED_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+          // `test/types/**` and `test-e2e/types/**` are the deliberately
+          // non-compiling brand- and whitelist-bypass fixtures. They are NOT
+          // unchecked: they have their own projects and are asserted to FAIL by
+          // `ccdargv-brand.test.ts` and `agent/test/whitelist-structural.test.ts`.
+          // The positive control for this skip is the last test in this file.
+          if (e.name === 'types' && path.basename(dir).startsWith('test')) continue;
+          walk(abs);
+          continue;
+        }
+        if (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) out.push(abs);
+      }
+    };
+    walk(root);
+    return out.sort();
+  }
+
+  /** The union of everything the package's own projects put in a program. */
+  const covered = (root: string, projects: string[]): Set<string> =>
+    new Set(projects.flatMap((p) => programFiles(root, p)));
+
+  const PACKAGES: [pkg: string, root: string, projects: string[], floor: number][] = [
+    ['server', serverRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 100],
+    ['agent', agentRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 15],
+  ];
+
+  it.each(PACKAGES)('%s: EVERY .ts file in the package is in some typecheck project — directories discovered, not listed',
+    (pkg, root, projects, floor) => {
+      const inProgram = covered(root, projects);
+      const onDisk = typeSources(root);
+
+      // Guard the guard, both directions. A walk that found nothing would pass
+      // every assertion below without checking anything — the same "gate that
+      // cannot fail" this whole file exists to retire.
+      expect(onDisk.length, `the ${pkg} walk found almost no .ts files`).toBeGreaterThan(floor);
+
+      const uncovered = onDisk.filter((f) => !inProgram.has(f));
+      expect(uncovered.map((f) => path.relative(root, f)),
+        `these ${pkg} files are compiled by NO typecheck project — the shape that hid a live TS2769 in fleet.test.ts and then hid test-e2e/`)
+        .toEqual([]);
+
+      // And the directories are genuinely plural, so a package that collapsed
+      // to a single directory could not make this pass by shrinking.
+      const dirs = new Set(onDisk.map((f) => path.relative(root, f).split(path.sep)[0]));
+      expect(dirs.size, `${pkg} covered only ${[...dirs].join(', ')}`).toBeGreaterThan(1);
+    }, 240_000);
+
+  it('server: the discovery would actually notice a new sibling directory', () => {
+    // The failure mode this gate replaces was silent, so "no uncovered files"
+    // must be shown to be a measurement and not a vacuous truth. `test-e2e/`
+    // is the directory that was invisible to the previous version of this
+    // gate; it must now be BOTH discovered by the walk and present in a
+    // program. Naming it here is a positive control, not the coverage rule —
+    // the rule above names no directory at all.
+    const onDisk = typeSources(serverRoot).map((f) => path.relative(serverRoot, f));
+    expect(onDisk, 'the walk no longer discovers test-e2e/')
+      .toContain(path.join('test-e2e', 'session.e2e.test.ts'));
+    expect(onDisk, 'the walk no longer discovers the vitest configs at the package root')
+      .toContain('vitest.e2e.config.ts');
+    const inProgram = covered(serverRoot, ['tsconfig.json', 'test/tsconfig.tests.json']);
+    expect([...inProgram].some((f) => f.includes(`${path.sep}test-e2e${path.sep}`)),
+      'test-e2e/ is back outside every typecheck project').toBe(true);
+  }, 240_000);
+
+  it('the helpers are covered too, not just the *.test.ts files', () => {
+    // `helpers.ts`/`ccdPrHelpers.ts` are not `*.test.ts`, so a
+    // `test/**/*.test.ts` include would have missed exactly the files most
+    // shared between suites.
+    const files = programFiles(serverRoot, 'test/tsconfig.tests.json');
+    expect(files).toContain(path.join(here, 'helpers.ts'));
+    expect(files).toContain(path.join(serverRoot, 'test-e2e', 'helpers.ts'));
   }, 120_000);
 
   it('and it does NOT contain the fixtures that are supposed to be broken', () => {

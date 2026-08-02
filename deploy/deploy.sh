@@ -31,11 +31,22 @@ if [ "$TARGET" = "agent" ]; then
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist \
     infra/ccrc/agent infra/ccrc/shared infra/ccrc/deploy "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
-  "${SSH[@]}" "$BOX" 'cd ~/ccrc/agent && npm ci && npm run build \
+  # The trailing `verify-service.sh` is the agent's equivalent of the server
+  # path's `curl -fsS "$HEALTH_URL"` (final review round 2, gates finding 5).
+  # `systemctl restart` returns success the moment systemd FORKS, so without it
+  # an agent that throws during ESM evaluation — which `whitelist.ts` does BY
+  # DESIGN via `refuseToBoot`, and which is the one residual class no type can
+  # catch at build time — crash-loops every 3 seconds behind a deploy that
+  # exited 0. The script is read-only and fails loudly with the journal tail;
+  # because it is the last link of an `&&` chain, its exit status is the ssh
+  # exit status, and `set -e` at the top of this file aborts the deploy on it.
+  AGENT_CMD='cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
     && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
-    && systemctl --user restart ccrc-agent.service'
+    && systemctl --user restart ccrc-agent.service \
+    && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
+  "${SSH[@]}" "$BOX" "$AGENT_CMD"
 else
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist \
     infra/ccrc/server infra/ccrc/shared infra/ccrc/deploy "$BOX":ccrc/
