@@ -133,11 +133,34 @@ const EXEC_WHITELIST: Record<string, readonly (readonly string[])[]> = {
  * for why: an untyped WS frame reaching a node:path call unchecked is a
  * process-crashing bug class, and `path.basename`/`args[0]` on the wrong
  * type throws synchronously).
+ *
+ * PROTOTYPE-NAMED COMMANDS (final review, gates finding 6 / destructive F7).
+ * `EXEC_WHITELIST` is an object literal, so the old `EXEC_WHITELIST[cmd]`
+ * returned an INHERITED value for `constructor`, `__proto__`, `toString`,
+ * `valueOf`, `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable` and
+ * `toLocaleString` — truthy, so `if (!prefixes) return false` did not fire, and
+ * `prefixes.some(...)` threw `TypeError: prefixes.some is not a function`
+ * (measured on all eight). It failed CLOSED — the throw is a rejection that
+ * `server.ts`'s `handleReq(...).catch(...)` turns into a `fail` frame — so this
+ * was never an escalation, and it is pre-existing: the pre-branch
+ * `allowedSubs.includes(sub)` had the identical hazard. But a throw is the
+ * wrong answer to "is this allowed?", and it is one tidy-up `try { … } catch`
+ * away from becoming a real hole, in a function whose own siblings
+ * (`canonicalize`, `checkPath`) were already hardened against exactly this
+ * class. Two independent guards now answer it: `Object.hasOwn` (the
+ * semantically correct question — is this a key we DECLARED?) and
+ * `Array.isArray` (the structural one — an inherited function or prototype
+ * object is not a prefix list). Either alone suffices; both are cheap.
  */
 export function isExecAllowed(cmd: string, args: string[]): boolean {
   if (typeof cmd !== 'string' || cmd.length === 0 || cmd.includes('/')) return false;
-  const prefixes = EXEC_WHITELIST[cmd];
-  if (!prefixes) return false;
+  if (!Object.hasOwn(EXEC_WHITELIST, cmd)) return false;
+  const entry = EXEC_WHITELIST[cmd];
+  if (!Array.isArray(entry)) return false;
+  // Re-annotated rather than cast: `Array.isArray` narrows a `readonly T[]` to
+  // `any[]`, and letting that `any` flow into the callbacks below would silently
+  // un-typecheck the prefix comparison itself (measured: TS7006 on `tok`/`i`).
+  const prefixes: readonly (readonly string[])[] = entry;
   if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) return false;
   // MUTATION SURVIVOR, disclosed: `p.length <= args.length &&` is removable
   // with the suite green, and provably always will be. It is a fast path, not a
