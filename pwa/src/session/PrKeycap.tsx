@@ -9,7 +9,7 @@
 // A tap does exactly one thing in every state: open the sheet. No state of the
 // cap performs an action, so a misread badge can never cost anything.
 import type { ReactNode } from 'react';
-import type { PrChecks, PrState } from '../../../shared/api';
+import type { PrChecks, PrReason, PrState } from '../../../shared/api';
 import { UNCHECKED_PR } from '../../../shared/api';
 import './chat.css';
 
@@ -45,7 +45,16 @@ const CHECK_GLYPH: Record<Exclude<PrChecks, null>, string> = {
   pass: '✓', fail: '✕', pending: '▲',
 };
 
-const REASON_TEXT: Record<NonNullable<PrState['reason']>, string> = {
+/** Integration finding 7: the fourth site of the reason vocabulary, and the
+ *  ONLY one of the four that already failed when the vocabulary grew — a
+ *  `Record` over the union is exhaustive, so a tenth reason is a compile error
+ *  right here until somebody writes the sentence a human reads. That is the
+ *  property the other three now have too: `PrReason` is the union, `PR_REASONS`
+ *  is derived from it via `Record<PrReason, true>`, and both validators ask
+ *  `isPrReason`. Named type instead of `NonNullable<PrState['reason']>` so the
+ *  four sites read as one vocabulary rather than as three restatements of a
+ *  field. */
+const REASON_TEXT: Record<PrReason, string> = {
   timeout: 'GitHub did not answer in time.',
   offline: 'The sessions box could not reach GitHub.',
   unauthenticated: "GitHub CLI isn't logged in on the sessions box. Run `gh auth login` there.",

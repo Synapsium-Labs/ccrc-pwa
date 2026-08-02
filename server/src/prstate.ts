@@ -1,5 +1,5 @@
-import type { PrChecks, PrState, PrView, TaskItem } from '../../shared/api.js';
-import { UNCHECKED_PR } from '../../shared/api.js';
+import type { PrChecks, PrReason, PrState, PrView, TaskItem } from '../../shared/api.js';
+import { isPrReason, UNCHECKED_PR } from '../../shared/api.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -48,13 +48,19 @@ export interface CcdPrFailure { phase: 'unknown'; reason: PrState['reason'] }
  *  `rows` and throw. */
 export interface CcdPrSessionFailure { id: string; phase: 'unknown'; reason: PrState['reason'] }
 
-const REASONS = new Set(['timeout', 'offline', 'unauthenticated', 'rate-limit',
-  'no-remote', 'unsupported', 'agent-down', 'error', 'merge-unproven']);
-
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
-const asReason = (v: unknown): PrState['reason'] =>
-  typeof v === 'string' && REASONS.has(v) ? (v as PrState['reason']) : 'error';
+/** Integration finding 7: this was the third of four copies of the reason
+ *  vocabulary — a `new Set([...nine string literals])` that, being a
+ *  `Set<string>`, accepted a typo and stayed one short when the union grew. It
+ *  is `isPrReason` now, over `PR_REASONS`, which is derived from `PrReason`
+ *  itself. The `'error'` fallback is unchanged and is the right one HERE and
+ *  not in the reviver: this reads ccd's own output on this box, where an
+ *  unrecognised token means the two builds disagree about the vocabulary,
+ *  which is a failed read; the reviver reads a snapshot an OLDER build wrote,
+ *  where it means "a member that build did not have" and null is the honest
+ *  answer. */
+const asReason = (v: unknown): PrReason => (isPrReason(v) ? v : 'error');
 
 /**
  * Which of the three shapes this is. The discriminator is `rows`, NOT `id`: a

@@ -18,6 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PR_REASONS, isPrReason } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -78,5 +79,60 @@ describe('integration finding 6 — one UNCHECKED_PR', () => {
       expect(src, f).toContain('UNCHECKED_PR');
       expect(src, f).toMatch(/import .*UNCHECKED_PR.*from '\.\.[^']*shared\/api(\.js)?'/);
     }
+  });
+});
+
+describe('integration finding 7 — one reason vocabulary', () => {
+  // The compile-time half of this finding cannot be asserted from a test at
+  // all: `Record<PrReason, true>` and `Record<PrReason, string>` fail in `tsc`,
+  // which is a gate, not a case. What a test CAN do is the two things tsc
+  // cannot — check that the derived list really is derived and complete at
+  // runtime, and check that nobody has restated the vocabulary somewhere the
+  // compiler is not watching.
+
+  it('derives the runtime list from the union rather than restating it', () => {
+    // Nine, and every one of them recognised by the predicate that both
+    // validators now use. If `PR_REASONS` were ever hand-written back into an
+    // array this still passes — which is why the source scan below exists —
+    // but a DERIVED list that has gone out of step with the union is
+    // impossible to construct, and that is the point being recorded.
+    expect(PR_REASONS).toHaveLength(9);
+    expect(new Set(PR_REASONS).size).toBe(PR_REASONS.length);
+    for (const r of PR_REASONS) expect(isPrReason(r), r).toBe(true);
+    expect(isPrReason('not-a-reason')).toBe(false);
+    // Cast the constant, never the input — the predicate takes `unknown`, so a
+    // non-string is answered rather than smuggled through.
+    expect(isPrReason(null)).toBe(false);
+    expect(isPrReason(7)).toBe(false);
+  });
+
+  it('is enumerated only where the compiler enforces exhaustiveness', () => {
+    // The rule, stated as the assertion: a file may list the whole vocabulary
+    // ONLY if a `Record<PrReason, …>` over it makes a missing member a compile
+    // error. Two files qualify — `shared/api.ts` (the union, and
+    // `PR_REASON_MAP`) and `PrKeycap.tsx` (`REASON_TEXT`, the sentences a human
+    // reads). `prstate.ts`'s `Set` and `shared/api.ts`'s second `readonly
+    // string[]` were the two that did not, and both are gone.
+    //
+    // Membership is tested per token in ANY form, quoted or as an object key,
+    // because `REASON_TEXT` writes five of the nine unquoted — a
+    // quoted-literals-only scan would exclude it by accident rather than by
+    // rule, and would then miss a real copy written the same way.
+    const enumerates = (src: string): boolean =>
+      PR_REASONS.every((r) => new RegExp(`(?:'${r}'|(?<![\\w'-])${r}\\s*:)`).test(src));
+    const holders = ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['pwa/src/session/PrKeycap.tsx', 'shared/api.ts']);
+  });
+
+  it('routes both validators through the shared predicate', () => {
+    // Not just "the copies are gone": each former copy site must still be
+    // validating, and validating against the derived list.
+    for (const f of ['server/src/prstate.ts', 'shared/api.ts']) {
+      expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f).toContain('isPrReason');
+    }
+    // And the map that carries the human sentences is typed over the union, so
+    // a tenth reason cannot ship without one.
+    expect(readFileSync(path.join(ccrcRoot, 'pwa/src/session/PrKeycap.tsx'), 'utf8'))
+      .toContain('Record<PrReason, string>');
   });
 });

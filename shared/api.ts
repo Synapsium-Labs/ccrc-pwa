@@ -68,6 +68,72 @@ export type PrPhase =
  *  and rendered with different words. */
 export type PrChecks = 'pass' | 'fail' | 'pending' | null;
 
+/**
+ * Why a `PrState`'s phase is `unknown`. Every member but `merge-unproven` is a
+ * FAILED READ; `merge-unproven` is the opposite — GitHub answered fine and said
+ * MERGED, and a conjunct of the merge predicate did not hold, so ccrc declines
+ * to call it merged. It exists because `error` renders as "GitHub could not be
+ * read", which in that case is simply untrue.
+ *
+ * Integration finding 7. This vocabulary lived in FOUR places: this union
+ * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
+ * `REASONS` Set, and `PrKeycap.tsx`'s `REASON_TEXT`. Only the last of the four
+ * failed when a member was added — `Record<PrReason, string>` over the union is
+ * exhaustive — so a tenth reason could ship, be produced by ccd, be accepted by
+ * neither validator, and arrive at the cap as `null`: a greyed control with no
+ * explanation, which is the exact failure §6 forbids and the exact failure that
+ * looks like nothing is wrong.
+ *
+ * Naming the union is half the fix; the other half is `PR_REASONS` below, which
+ * is DERIVED from it rather than restated, so the runtime list gets the same
+ * compile-time exhaustiveness the map already had.
+ */
+export type PrReason =
+  | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
+  | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
+  | 'merge-unproven';
+
+/**
+ * The runtime list, derived from the type. `Record<PrReason, true>` is what
+ * makes adding a member to `PrReason` FAIL LOUDLY here — TS2739, "missing the
+ * following properties" — instead of silently producing a list that is one
+ * short. It fails in the other direction too (TS2353 on a key the union does
+ * not have), which a hand-maintained array cannot do at all: today's arrays
+ * were typed `readonly string[]`, and `readonly string[]` accepts a typo.
+ *
+ * This is the same technique `PR_PHASES`' own comment names for the phase list,
+ * applied to the value rather than only to a test.
+ *
+ * `Object.keys` is safe to derive an ORDER from here because the map's keys are
+ * all non-numeric strings, for which insertion order is specified. Nothing
+ * downstream depends on the order regardless — both consumers ask membership.
+ */
+const PR_REASON_MAP: Record<PrReason, true> = {
+  timeout: true, offline: true, unauthenticated: true, 'rate-limit': true,
+  'no-remote': true, unsupported: true, 'agent-down': true, error: true,
+  'merge-unproven': true,
+};
+export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
+
+/**
+ * The validator that goes with the list, and the only way to narrow an
+ * untrusted string to a `PrReason`. Same shape and same reasoning as
+ * `isPrPhase` below: the parameter is `unknown` so nothing can be smuggled in
+ * by claiming it is already a reason, and the CONSTANT is cast rather than the
+ * input — `PR_REASONS.includes(raw as PrReason)` asserts the very thing the
+ * check is asking.
+ *
+ * The `typeof` guard carries `isPrPhase`'s disclosed limitation verbatim: it
+ * cannot be pinned by a test, because `Array.prototype.includes` uses
+ * SameValueZero and no non-string is ever SameValueZero-equal to a string, so
+ * dropping it returns the identical answer for every value in the universe. It
+ * stays because the castless mutation is a type error, which means the only way
+ * to remove it is to write an assertion on untrusted input.
+ */
+export function isPrReason(v: unknown): v is PrReason {
+  return typeof v === 'string' && (PR_REASONS as readonly string[]).includes(v);
+}
+
 export interface PrState {
   phase: PrPhase;
   number: number | null;
@@ -79,15 +145,10 @@ export interface PrState {
    *  rendered: never a prompt, never an argv, never a shell word. */
   checkNames: string[] | null;
   ahead: number;                 // commits past base
-  /** Why `phase` is `unknown`. Every member but `merge-unproven` is a FAILED
-   *  READ; `merge-unproven` is the opposite — GitHub answered fine and said
-   *  MERGED, and a conjunct of the merge predicate did not hold, so ccrc
-   *  declines to call it merged. It exists because `error` renders as "GitHub
-   *  could not be read", which in that case is simply untrue. */
-  reason:
-    | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
-    | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
-    | 'merge-unproven' | null;
+  /** Why `phase` is `unknown` — see `PrReason` above, which is where the
+   *  vocabulary is defined and where a tenth member is added. Null when the
+   *  phase is not `unknown`, or when a read succeeded. */
+  reason: PrReason | null;
   checkedAt: number | null;      // epoch ms of the gh read that produced this
   mergedAt: number | null;
   /** Epoch ms the sweep will next try this project, or null when nothing is
@@ -362,10 +423,10 @@ const reqBool = (o: RawObj, k: string): boolean => {
 // asserts the very thing the check is asking. Cast the CONSTANT, never the input.
 const STATUSES: readonly string[] = ['busy', 'idle', 'dead'];
 const CHECKS: readonly string[] = ['pass', 'fail', 'pending'];
-const REASONS: readonly string[] = [
-  'timeout', 'offline', 'unauthenticated', 'rate-limit',
-  'no-remote', 'unsupported', 'agent-down', 'error', 'merge-unproven',
-];
+// The reason list is NOT restated here (integration finding 7). It was the
+// second of four copies; it is now `isPrReason`, over `PR_REASONS`, which is
+// derived from the union. The comment above about casting the constant rather
+// than the input is exactly why a predicate is the right shape for it.
 
 function revivePr(raw: unknown): PrState {
   const o = asObj(raw, 'pr');
@@ -376,8 +437,7 @@ function revivePr(raw: unknown): PrState {
   const phaseRaw = optStr(o, 'phase');
   const phase: PrPhase = isPrPhase(phaseRaw) ? phaseRaw : 'unchecked';
   const reasonRaw = optStr(o, 'reason');
-  const reason = reasonRaw !== null && REASONS.includes(reasonRaw)
-    ? (reasonRaw as PrState['reason']) : null;
+  const reason: PrReason | null = isPrReason(reasonRaw) ? reasonRaw : null;
 
   // `checks` is the opposite case: null means NO CHECKS ARE CONFIGURED, an
   // affirmative claim, so an unrecognised token has nothing safe to land on —
