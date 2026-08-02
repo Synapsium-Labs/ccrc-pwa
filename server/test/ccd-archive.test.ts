@@ -191,6 +191,49 @@ describe('_ws_stash_count', () => {
     expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`)).toBe('0');
   });
 
+  it('counts an UNNAMED stash — git writes "WIP on <branch>:", with a lowercase "on"', () => {
+    // Final-round integration review, docket item 7, first bullet — recorded
+    // there as "genuinely equivalent … `grep -F` is a substring match, so
+    // `-e "On ws/x:"` already matches `WIP on ws/x:`. No input distinguishes
+    // them." IT IS NOT EQUIVALENT, and this test is the input.
+    //
+    // `grep -F` is a substring match but it is CASE SENSITIVE, and the two
+    // subjects git writes differ in exactly that:
+    //     git stash push -m msg  ->  "stash@{0}: On ws/x: msg"        capital O
+    //     git stash push         ->  "stash@{0}: WIP on ws/x: 1a2b3c" lowercase
+    // so "On ws/x:" is NOT a substring of "WIP on ws/x:". Measured in a scratch
+    // repo holding one of each: both arms -> 2, `-e "On ws/x:"` alone -> 1.
+    //
+    // The unnamed form is the COMMON one — a bare `git stash` — and every other
+    // fixture in this file and in ccd-ws-audit.test.ts uses `stash push -m`,
+    // which is why deleting the WIP arm left the suite green. What it would
+    // cost: `_ws_reap_eval` gates `stashes-present` on this count (ccd:2357),
+    // so a workspace whose only stash was made with a bare `git stash` would
+    // read 0, the §7 guard would not fire, and the reap would CAS-delete the
+    // branch those stashes name.
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    fs.writeFileSync(path.join(wt, 'README.md'), 'edited\n');
+    h.git(wt, 'stash', 'push');                       // NO -m: "WIP on ws/quiet-basin: …"
+    expect(h.sh(`git -C "${main}" stash list`), 'the fixture must be the WIP form')
+      .toContain('WIP on ws/quiet-basin:');
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`)).toBe('1');
+
+    // AND THE WIP ARM IS SCOPED TOO — the other half of the same line, and the
+    // survivor the docket calls "stash scoping arg". A `WIP on ` pattern with
+    // the branch dropped, or with the trailing colon dropped, counts another
+    // branch's unnamed stash as this workspace's: over-counting refuses a
+    // legitimate reap and names stashes the human cannot find on this branch.
+    h.git(main, 'branch', 'ws/quiet-basin-2', 'main');
+    h.git(wt, 'checkout', '-q', 'ws/quiet-basin-2');
+    fs.writeFileSync(path.join(wt, 'README.md'), 'sibling work\n');
+    h.git(wt, 'stash', 'push');                       // NO -m, on the sibling
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin-2`)).toBe('1');
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`),
+      'the sibling\'s unnamed stash is not this branch\'s').toBe('1');
+    expect(h.sh(`_ws_stash_count "${main}" ws/other`)).toBe('0');
+  });
+
   it('matches the branch name FIXED — a dot is not a wildcard', () => {
     // -F on both patterns, which is what the comment above them justifies.
     // Without it `On ws.quiet-basin:` is a regex matching the real
@@ -256,6 +299,48 @@ describe('_ws_ignored_digest', () => {
     expect(clean.stdout.trim()).toBe(SHA256_EMPTY);
     expect(clean.code).toBe(0);                     // nothing ignored: a SUCCESS
     expect(shFail('_ws_ignored_digest /no/such/directory').code).not.toBe(0);
+  });
+
+  it('reads the ignored set from the START of each line — an untracked `a!! b` is not an ignored entry', () => {
+    // Final-round integration review, docket item 7 / new finding 4: the `^`
+    // anchor in this function's `grep '^!! '` was one of four mutation
+    // survivors sitting on comment-justified lines, and the only one of the
+    // four that is PINNABLE. It is pinned rather than justified here.
+    //
+    // `git status --porcelain` prefixes every line with a two-character status
+    // plus a space, so `!! ` at the start means "ignored" — and `grep -F`-style
+    // substring matching finds that same three-character sequence ANYWHERE. A
+    // single untracked file whose NAME contains `!! ` is therefore enough: git
+    // reports it as `?? "a!! b"` (quoted, because of the space), which an
+    // unanchored grep admits into the preimage as though it were an ignored
+    // entry.
+    //
+    // Measured in a scratch repo before this test existed — one untracked
+    // `a!! b`, one ignored directory:
+    //     with    ^ anchor -> 07f8c2c3b4cd2eee...
+    //     without ^ anchor -> 0ba8517d511c376e...
+    // The consequence is not cosmetic. `ignoredDigest` is the archive
+    // manifest's record of what was ignored at archive time; an untracked file
+    // that renames or disappears would move a digest that is supposed to
+    // describe the IGNORED set only, and the two names ccd would then be
+    // treating as the same kind of fact are not the same kind of fact.
+    const wt = workspace('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'ignored/\n');
+    fs.mkdirSync(path.join(wt, 'ignored'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'ignored', 'f'), 'x\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore');
+    // UNTRACKED, never committed and never ignored: the whole point is that it
+    // belongs to the `??` half of the porcelain and must not reach the digest.
+    fs.writeFileSync(path.join(wt, 'a!! b'), 'y\n');
+    // The exact preimage, not merely "64 hex chars": the entry list is ONE
+    // line, and asserting the digest of that one line is what kills the
+    // unanchored mutant, whose preimage carries `?? "a!! b"` as a second.
+    expect(h.sh(`_ws_ignored_digest "${wt}"`))
+      .toBe(createHash('sha256').update('!! ignored/\n').digest('hex'));
+    // Said again as the literal the review measured, so a future change to the
+    // fixture cannot quietly turn the assertion above into a tautology.
+    expect(h.sh(`_ws_ignored_digest "${wt}"`))
+      .toBe('07f8c2c3b4cd2eeef0e53352c025ca37548f9a1ec7b75652d59dc3e00b6f6422');
   });
 
   it('refuses an answer that is not a digest, however git exited', () => {
