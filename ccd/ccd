@@ -3631,6 +3631,79 @@ _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of ori
   git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null
 }
 
+# Final-round destructive review, finding F4. `ws-gc --prune`'s orphan arm was
+# the ONE place in the whole design where a workspace DIRECTORY is deleted with
+# no sensitive-ignored scan and no listing of what is inside it. `_ws_gc_dirty`
+# reads `git status --porcelain`, which does not see ignored files at all, so a
+# gitignored `.env` holding a real `AWS_SECRET_ACCESS_KEY` read CLEAN and the
+# tree went with the output line `reclaimed removed orphan worktree <path>` and
+# nothing whatever about what was in it. Measured in the review, reproduced here.
+#
+# `ws-reap` treats the same fact as a §7 NO-OVERRIDE refusal, and this is the
+# same rule at the same strength — with one difference of polarity that is
+# deliberate: `ws-reap` is one human confirming one deletion, and this is an
+# unattended sweep, so where the reap refuses and offers a remedy, the sweep
+# refuses and MOVES ON. Everything ambiguous in this command already resolves
+# toward doing nothing (`_ws_gc_merged`, `_ws_gc_dirty` both say so), and an
+# unreadable ignored set is ambiguous.
+#
+# THE LISTING IS THE OTHER HALF. Every other destructive path on this branch
+# names what it destroys before destroying it: the reap sheet enumerates the
+# ignored manifest, the tombstone records it, `_ws_clip_manifest` names each
+# clip. `--prune` is non-interactive, so "before" here means "on the line above
+# the reclaim, in the same output the human is reading" — the git-tracked
+# content is recoverable from the branch, and these entries are precisely the
+# part that is not.
+#
+# SORTED sensitive-first then bytes-first and CAPPED at ten, the same shape and
+# the same reason as `_reap_ignored_json`'s ordering: a 226-entry workspace
+# (custom-tools, measured) would otherwise bury the reclaim line, and the cap is
+# stated out loud rather than silently applied. The COUNT and the TOTAL are
+# never capped.
+#
+# COST, disclosed: `_ws_collect_ignored` walks every collapsed ignored directory
+# and `du`s each entry, under `REAP_SCAN_SECONDS`'s 30 s whole-workspace
+# deadline (3.4 s on the largest ignored tree on this box). It runs ONLY on an
+# `orphan` row, ONLY under `--prune`, and only after the dirty and merged checks
+# have already declined every row they can — so the sweep pays for it once per
+# directory it is actually about to delete.
+_ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds no secrets;
+                         #         prints the `  contents`/`  declined` lines either way
+  local p="$1" rec sens b path n=0 total=0 shown=0
+  _ws_collect_ignored "$p" || {
+    echo "  declined   could not read the ignored set at $p${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to remove a tree it cannot describe"
+    return 1
+  }
+  if (( ${#REAP_SENSITIVE[@]} != 0 )); then
+    echo "  declined   $p holds secret-shaped ignored file(s): ${REAP_SENSITIVE[*]} — move them, or remove it with the workspace sheet"
+    return 1
+  fi
+  if (( ${#REAP_IGNORED[@]} == 0 )); then
+    echo "  contents   $p has nothing ignored — everything in it is in git"
+    return 0
+  fi
+  # NUL-separated on both the sort and the read, and the byte field taken by
+  # parameter expansion rather than by a fourth `read`: `_ws_collect_ignored`
+  # builds its records to survive a path holding a TAB or a NEWLINE, and this is
+  # the same treatment `_reap_ignored_json` gives the same array for the same
+  # reason. The bytes are guaranteed numeric by the collector's own
+  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`, so the sum cannot be fed a word.
+  for rec in "${REAP_IGNORED[@]}"; do
+    b="${rec#*$'\t'}"; b="${b%%$'\t'*}"
+    n=$(( n + 1 )); total=$(( total + b ))
+  done
+  echo "  contents   $p also holds $n ignored entr$( (( n == 1 )) && echo y || echo ies), $(_ws_gc_human "$total") — none of it is in git, and all of it goes:"
+  while IFS=$'\t' read -r -d '' sens b path; do
+    (( shown < 10 )) || continue
+    shown=$(( shown + 1 ))
+    printf '  contents     %-10s %s\n' "$(_ws_gc_human "$b")" "$path"
+  done < <(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z -t$'\t' -k1,1nr -k2,2nr)
+  (( n > shown )) && echo "  contents     … and $(( n - shown )) more"
+  (( REAP_SENSITIVE_FILTERED == 0 )) \
+    || echo "  contents   ($REAP_SENSITIVE_FILTERED secret-shaped match(es) filtered as vendored/template — see ccd ws-audit)"
+  return 0
+}
+
 # Acts on ONE scanned row. Prints exactly one line per row, whether it acted or
 # not: a silent decline reads as "there was nothing there".
 _ws_gc_prune_row() {   # state project slug path already-pruned
@@ -3669,6 +3742,9 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # someone may be mid-way through this one.
         echo "  declined   $p is on unmerged branch $branch"; return 0
       fi
+      # Finding F4 — the §7 scan and the listing, immediately before the only
+      # step in this command that deletes a DIRECTORY. See `_ws_gc_reclaimable`.
+      _ws_gc_reclaimable "$p" || return 0
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
         echo "  reclaimed  removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.
