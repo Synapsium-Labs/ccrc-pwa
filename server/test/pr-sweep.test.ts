@@ -9,6 +9,7 @@ import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PrState } from '../../shared/api.js';
+import type { PushPayload } from '../src/push.js';
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
@@ -258,12 +259,17 @@ describe('level-triggered archiving', () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const notify = vi.fn(async () => {});
+    // Typed with `PushPayload`, not `async () => {}`: an untyped, zero-arg
+    // mock infers a zero-arg call-args TUPLE, so indexing `[0]` below does
+    // not typecheck under a test/-inclusive tsconfig — invisible here only
+    // because the real server tsconfig excludes test/ (pre-merge fix round,
+    // finding 14-M1; this was copied verbatim from the brief itself).
+    const notify = vi.fn(async (_payload: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    const payload = notify.mock.calls[0]![0] as { title: string; body: string; sessionId?: string };
+    const payload = notify.mock.calls[0]![0];
     expect(payload.title).toContain('merged');
     expect(payload.body).toContain('nothing deleted');
     expect(payload.sessionId).toBe('demo-quiet-basin');
