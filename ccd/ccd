@@ -121,6 +121,26 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # exactly one dot after the id and `$id.x-y.uuid` has two. This is
   # future-proof against a field this file adds tomorrow, which a hardcoded
   # allowlist would not be — the two are the same shape either way.
+  # AND THE ORDER IS PART OF THE CONTRACT — final-round verification P4. This
+  # loop unlinks one file at a time in GLOB order, i.e. alphabetically, so
+  # `archived` went first and `reaping` (r) several files later. A SIGKILL or an
+  # OOM between them — the failure model the reap lock exists for, and this
+  # project's speciality — left `$REG/<id>.reaping=clips` standing beside a
+  # MISSING `$REG/<id>.archived`. Pre-fix that state was resumable: the next
+  # `ws-reap` took the resume fork, re-ran (h) and re-ran this purge. Since the
+  # F5 archived re-read went into `_ws_reap_tail` it is not: the tail refuses
+  # `not-archived` for ever, and `ws-archive` cannot be re-run on a half-purged
+  # registry.
+  #
+  # The invariant that closes it is one line long — `reaping` must never outlive
+  # `archived` — so the two STATE markers are removed last and in that order,
+  # after every ordinary field. Every intermediate is then either still
+  # resumable (both markers present; the tail's clips arm needs only `$id`) or
+  # already past resuming. The residue of the very last window is a single empty
+  # `$id.archived` file with nothing else beside it: invisible to `ws-gc`'s
+  # dead-reg arm (which keys on `.workspace` and `.uuid`) and to `ws-reap`
+  # (which keys on `.uuid`), so it leaks — a zero-byte file, disclosed here,
+  # against a permanent wedge on the destructive path.
   local id="$1" f suffix
   for f in "$REG/$id".*; do
     # `[[ -e "$f" ]]` for the unmatched-glob case: this file does not set
@@ -129,8 +149,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     [[ -e "$f" ]] || continue
     suffix="${f#"$REG/$id."}"
     [[ "$suffix" == *.* ]] && continue
+    [[ "$suffix" == archived || "$suffix" == reaping ]] && continue
     rm -f "$f"
   done
+  rm -f "$REG/$id.reaping"
+  # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
+  # that did not take the breadcrumb must not be followed by one that takes the
+  # marker, because `reaping` standing beside a missing `archived` is precisely
+  # the wedge this ordering exists to prevent. It is also what makes the order
+  # observable to a test — nothing else about two adjacent unlinks is.
+  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
 }
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
   [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
@@ -3500,9 +3528,18 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # word `_ws_reap_eval` already uses for it (ccd:2056), and `wsaudit.ts`'s
   # SENTENCES already carries the sentence. Placed ahead of (a)/(b)/(c) so a
   # refusal writes NOTHING — no attic pin, no tombstone, no breadcrumb.
+  #
+  # THE DETAIL NAMES THE STATE, NOT A CULPRIT — final-round verification P4.
+  # It used to assert "ws-restore brought it back while this cleanup was
+  # pending", which is one cause of a missing marker and was, until `_reg_purge`
+  # was reordered in the same round, not the only one: a kill inside the purge
+  # unlinked `archived` before `reaping` and produced this refusal with a
+  # diagnosis naming a verb that had never run. The observable fact is that the
+  # marker is gone; who removed it is an inference, and an inference is not what
+  # belongs in the one line an operator acts on.
   [[ -f "$REG/$id.archived" ]] || {
     printf '{"refused":"not-archived","detail":%s,"paths":[]}\n' \
-      "$(_json_str "$id is no longer archived — ws-restore brought it back while this cleanup was pending; archive it again to finish")"
+      "$(_json_str "$id is no longer archived — the archive marker is gone (ws-restore removes it), so this cleanup will not continue; archive it again to finish")"
     return 0
   }
 

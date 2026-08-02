@@ -660,6 +660,46 @@ describe('ws-gc --prune', () => {
     expect(branches(), 'the bystander keeps its branch').toContain('ws/warm-cove');
   });
 
+  it('_reg_purge never leaves a reaping breadcrumb without its archived marker', () => {
+    // Final-round verification P4. The purge unlinks one file at a time in GLOB
+    // order, so `archived` (a) went several files before `reaping` (r). A
+    // SIGKILL or an OOM between them — the failure model the reap lock exists
+    // for — left `<id>.reaping=clips` standing beside a MISSING
+    // `<id>.archived`, which used to be resumable and, since the F5 archived
+    // re-read landed in `_ws_reap_tail`, answers `not-archived` for ever with
+    // `ws-archive` unable to run on a half-purged registry.
+    //
+    // The order is not otherwise observable — two adjacent unlinks leave no
+    // trace of which went first — so the fixture makes the FIRST of the pair
+    // fail: a DIRECTORY at the `reaping` path is something `rm -f` will not
+    // take, and the marker's removal is conditional on the breadcrumb's having
+    // gone. Under the old glob order `archived` was already unlinked before
+    // anything reached `reaping` at all.
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+    fs.mkdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
+
+    h.sh('_reg_purge demo-quiet-mesa');
+
+    expect(fs.existsSync(path.join(reg, 'demo-quiet-mesa.reaping')),
+      'the fixture only means anything if rm -f really refused it').toBe(true);
+    expect(fs.existsSync(path.join(reg, 'demo-quiet-mesa.archived')),
+      'the breadcrumb outlived the marker it needs — the wedge').toBe(true);
+    // …and the ordinary fields still go, so this is an ORDERING guarantee and
+    // not a purge that quietly stopped doing its job.
+    expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(h.reg('demo-quiet-mesa', 'workdir')).toBeNull();
+    expect(h.reg('demo-quiet-mesa', 'workspace')).toBeNull();
+
+    // With the breadcrumb gone the marker goes too: the normal path is
+    // unchanged, and nothing is left behind on it.
+    fs.rmdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
+    h.sh('_reg_purge demo-quiet-mesa');
+    expect(fs.readdirSync(reg).filter((f) => f.startsWith('demo-quiet-mesa.'))).toEqual([]);
+  });
+
   it('reports what it reclaimed and what it declined', () => {
     h.makeRepo('demo');
     addOrphan('demo', 'still-cove');
