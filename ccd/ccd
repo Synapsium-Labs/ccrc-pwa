@@ -307,33 +307,47 @@ _ws_stash_count() {   # main branch -> stash entries belonging to that branch
   # ATTRIBUTED BY THE BASE COMMIT, not by the message, because the message has
   # no name in it to match. A stash commit's FIRST PARENT is the commit HEAD was
   # on when it was taken, so an off-branch stash belongs to this branch exactly
-  # when that commit is reachable from it. This is deliberately not "any
-  # `(no branch)` stash blocks every workspace": ccd:2392 records, with a
-  # measurement behind it, that a repo-wide stash rule makes every workspace in
-  # a repository permanently un-reapable, and that cost was rejected once
-  # already.
+  # when that commit is reachable from it.
   #
-  # OVER-ATTRIBUTION IS THE CHOSEN DIRECTION, AND ITS COST IS NOT SMALL — said
-  # out loud rather than estimated away, because it was measured and the first
-  # draft of this comment guessed it wrong. An off-branch stash taken at a
-  # commit on SHARED history (typically: detached in a workspace before that
-  # workspace committed anything) is reachable from every branch in the
-  # repository, so it counts against all of them and every workspace of that
-  # project answers `stashes-present` until it is dealt with. Measured on a
-  # two-branch fixture: one `(no branch)` stash at the root commit, and both
-  # `ws/x` and `master` count 1.
+  # AND IT DOES REINTRODUCE THE FLEET-WIDE COST FOR ONE SHAPE OF INPUT —
+  # round-3 verification P3, which flagged that this arm and the "what the guard
+  # must NOT do" paragraph in `_ws_reap_eval` (search: `refs/stash exists`)
+  # could not both be read as written. The earlier text here cited that
+  # paragraph as though this arm avoided the cost, and then admitted three lines
+  # later that it does not. One statement, in both places, instead:
   #
-  # Taken anyway, for the reason every ambiguous case in this file resolves the
-  # same way. `stashes-present` is a refusal with an obvious, local remedy —
-  # `git stash list` names the entry, and pop / drop / `git stash branch`
-  # resolves it — which is exactly what `stash-unreadable` (ccd:2399) does NOT
-  # have, and it is the no-override-guard cost that paragraph weighs. The
-  # alternative narrowing considered and REJECTED: also require the base commit
-  # not to be an ancestor of the merge-base with `origin/HEAD`, which removes
-  # the fleet-wide case and is even arguably harmless (a base on shared history
-  # survives the branch delete). It is a second inference in front of a
-  # no-override guard, resting on "a reapable workspace always has commits of
-  # its own", and that is an argument about PR shape, not a fact about stashes.
+  #   • What `_ws_reap_eval` rejects, with a measurement, is attribution by
+  #     EXISTENCE — "refs/stash resolves ⇒ refuse". That fires on a NAMED stash
+  #     on another branch (main's own parked work, the ordinary case), which the
+  #     operator has a standing reason to keep, so the wedge has no end date.
+  #   • What this arm does is attribution by BASE COMMIT, and it fires only on
+  #     an ANONYMOUS entry: one that names no branch, that nothing else in this
+  #     design can associate with anything, and that nobody has a reason to keep
+  #     indefinitely.
+  #
+  # Different rules — and they SHARE the property the verifier objected to,
+  # which is not talked away. An off-branch stash taken at a commit on SHARED
+  # history (typically: detached in a workspace before that workspace committed
+  # anything) is reachable from every branch in the repository, so it counts
+  # against all of them and every workspace of that project answers
+  # `stashes-present` until it is dealt with. Measured on a two-branch fixture:
+  # one `(no branch)` stash at the root commit, and both `ws/x` and `master`
+  # count 1. Pinned by a test, so it is a chosen behaviour and not a discovery.
+  #
+  # Accepted, because in this file the cost of a no-override guard is measured
+  # in whether the operator can get OUT of it — the same standard
+  # `stash-unreadable` is held to, and the same conclusion: the remedy is local
+  # and exact, and it TRAVELS IN THE REFUSAL DETAIL rather than in this comment,
+  # because the operator the message reaches is the only one who can act.
+  #
+  # The alternative narrowing considered and REJECTED: also require the base
+  # commit not to be an ancestor of the merge-base with `origin/HEAD`. It
+  # removes the fleet-wide case — and most of docket 6 with it. A reap only runs
+  # behind a MERGED PR, so after a true merge every commit of the branch is
+  # already an ancestor of `origin/HEAD` and this arm would count nothing at
+  # all; it would survive only for squash merges. A guard whose coverage depends
+  # on which merge button a reviewer pressed is an argument about PR shape, not
+  # a fact about stashes.
   #
   # An unreadable entry counts too: `rev-parse` failing is not evidence of
   # absence.
@@ -2664,9 +2678,19 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # THAT SCOPING IS WHAT DOCKET 6 EXPLOITED, and the fix is in the count rather
   # than here: a stash taken from a DETACHED worktree says `(no branch)` and so
   # named nothing for the scoped grep to match, which is a 0 that authorised the
-  # delete. `_ws_stash_count` now attributes those by base commit — see its own
-  # comment for why that, and not "any (no branch) stash blocks everything",
-  # which is the rule the paragraph above rejects with a measurement.
+  # delete. `_ws_stash_count` now attributes those by base commit.
+  #
+  # AND THAT ARM DOES REACH FLEET-WIDE FOR ONE SHAPE OF INPUT — round-3
+  # verification P3, reconciled in one place (see `_ws_stash_count`, "AND IT
+  # DOES REINTRODUCE THE FLEET-WIDE COST") and cross-referenced here so this
+  # paragraph is not read as covering it. The rule rejected above is attribution
+  # by EXISTENCE, which fires on a NAMED stash the operator has a standing
+  # reason to keep. The arm attributes by BASE COMMIT and fires only on an
+  # ANONYMOUS entry; when that entry's base sits on shared history it is
+  # reachable from every branch, so it does block every workspace of the project
+  # until it is dealt with. That is accepted on the same test this file applies
+  # to `stash-unreadable` — can the operator get out of it — which is why the
+  # remedy is in the `stashes-present` detail below and not only in a comment.
   if git -C "$main" rev-parse --verify --quiet refs/stash >/dev/null 2>&1; then
     stashall=$(git -C "$main" stash list 2>/dev/null | grep -c .)
     (( stashall > 0 )) \
@@ -2674,7 +2698,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   fi
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \
-    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit)"; return 1; }
+    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
   up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null) \
     || { _reap_refuse no-upstream "$branch was never pushed"; return 1; }
   ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)

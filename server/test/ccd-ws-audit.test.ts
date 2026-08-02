@@ -943,6 +943,53 @@ describe('local-loss refusals', () => {
     expect(a.stashes).toBe(1);
   });
 
+  it('says how to get OUT of stashes-present, because it has no override', () => {
+    // Round-3 verification P3. The off-branch arm attributes an ANONYMOUS stash
+    // by its base commit, so one taken on shared history counts against EVERY
+    // branch in the repository — the fleet-wide, no-override refusal this file
+    // rejects for the "refs/stash resolves ⇒ refuse" rule 2200 lines earlier.
+    // The two are reconciled in the source (see `_ws_stash_count`, "AND IT DOES
+    // REINTRODUCE THE FLEET-WIDE COST"): the earlier rule fires on a NAMED
+    // stash an operator has a standing reason to keep, this one only on an
+    // entry that names nothing — and it is accepted on the same test this file
+    // applies to `stash-unreadable`, namely whether the operator can get out of
+    // it. That test is only passed if the REMEDY IS IN THE MESSAGE, which is
+    // where `stash-unreadable` puts its own and where this one had nothing.
+    //
+    // The fixture is the fleet-wide case itself, so the behaviour is pinned as
+    // CHOSEN rather than discovered: the stash is taken while detached at a
+    // commit on shared history, and a sibling branch that shares no work with
+    // this one counts it too.
+    const { wt, main } = squashMovedBase();
+    // The fork point: on the branch's history AND on main's, which is what
+    // makes the stash's base reachable from every branch in the repo.
+    const shared = h.git(main, 'merge-base', 'refs/heads/ws/quiet-basin', 'origin/main');
+    h.git(wt, 'checkout', '-q', '--detach', shared);
+    fs.writeFileSync(path.join(wt, 'stray.txt'), 'anonymous\n');
+    h.sh(`cd "${wt}" && git add stray.txt && git stash push -q`);
+    h.git(wt, 'checkout', '-q', 'ws/quiet-basin');
+    expect(h.sh(`git -C "${main}" stash list`)).toContain('WIP on (no branch):');
+
+    // Fleet-wide, measured: a branch cut from the shared commit, with none of
+    // this workspace's work in it, counts the same anonymous entry.
+    h.git(main, 'branch', 'ws/elsewhere', shared);
+    expect(h.sh(`_ws_stash_count "${main}" ws/elsewhere`),
+      'an anonymous stash on shared history reaches every branch — chosen, not accidental')
+      .toBe('1');
+
+    const a = refusal(wt);
+    expect(a.verdict).toBe('stashes-present');
+    expect(a.stashes).toBe(1);
+    // The refusal explains the reach…
+    expect(a.detail, a.detail).toContain('counts against every workspace of demo');
+    // …and hands over the two commands that end it, the way `stash-unreadable`
+    // does. Both directions, because "keep it" and "throw it away" are
+    // different decisions and only the operator may take either.
+    expect(a.detail, a.detail).toContain('stash list');
+    expect(a.detail, a.detail).toContain('git stash branch');
+    expect(a.detail, a.detail).toContain('stash drop');
+  });
+
   it('refuses a stash read that failed SILENTLY, instead of fingerprinting its 0', () => {
     // The third instance of the token-forgery class, and the one no status
     // check and no stderr check can reach. `_ws_stash_count` answers 0 for
