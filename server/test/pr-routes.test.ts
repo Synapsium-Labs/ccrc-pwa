@@ -25,7 +25,7 @@ function seedWorkspace(): string {
  * reads as "no evidence" and permits — what every test here but the 501 one
  * wants. Passing a list makes the deployed-ccd claim explicit.
  */
-async function app(stdout = '', code = 0, stderr = '', ccdVerbs?: string[]): Promise<{ app: FastifyInstance; calls: string[][] }> {
+async function app(stdout = '', code = 0, stderr = '', ccdVerbs?: string[] | null): Promise<{ app: FastifyInstance; calls: string[][] }> {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => { calls.push(args); return { code, stdout, stderr }; };
   const deps = testDeps(seedWorkspace(), run);
@@ -326,6 +326,35 @@ describe('audit and reap', () => {
     expect(res.json().indeterminate).toBe(true);
     expect(res.json().sentence).toMatch(/lost contact/i);
     await a.close();
+  });
+
+  it('501s when the deployed ccd has no ws-audit, and shells out to nothing', async () => {
+    // INTEGRATION NEW FINDING 10 — the audit route was the one ccd route with
+    // no verbSupported gate, so version skew came back as a bare 502 (ccd
+    // answers on stderr, parseAudit returns null) instead of the 'unsupported'
+    // answer every sibling route gives. Two halves, because either alone is
+    // satisfiable by the wrong fix: the STATUS AND BODY must match the reap
+    // route's (the sheet drives both from one flow), and ccd must not be
+    // called at all.
+    const { app: a, calls } = await app(AUDIT, 0, '', ['start', 'ws-reap']);
+    const res = await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/workspace/audit' });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
+    expect(calls).toEqual([]);
+    await a.close();
+  });
+
+  it('still audits when the fleet advertised ws-audit, and when it advertised nothing', async () => {
+    // The other direction, so "501 always" is not a passing fix. `null` verbs
+    // is NO EVIDENCE (local mode, or an agent too old to send the list) and
+    // must permit — an absent list must never grey out the fleet.
+    for (const verbs of [['ws-audit'], null] as (string[] | null)[]) {
+      const { app: a, calls } = await app(AUDIT, 0, '', verbs);
+      const res = await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/workspace/audit' });
+      expect(res.statusCode, JSON.stringify(verbs)).toBe(200);
+      expect(calls).toContainEqual(['ws-audit', '--session', 'demo-quiet-basin']);
+      await a.close();
+    }
   });
 
   it('501s ONCE when the deployed ccd has no ws-reap, and shells out to nothing', async () => {

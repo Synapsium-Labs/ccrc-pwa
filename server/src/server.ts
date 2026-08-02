@@ -479,7 +479,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const res = await deps.runCcd(CCD_ARGV.wsAudit(id));
+    const argv = CCD_ARGV.wsAudit(id);
+    // integration New Finding 10 — this was the ONE ccd route with no
+    // `verbSupported` gate (measured: server.ts:434, :456, :499 had it, the
+    // audit route did not). Against a fleet host running a ccd without
+    // `ws-audit`, the call went out anyway, ccd answered on stderr, `parseAudit`
+    // returned null and the route 502'd — so version skew rendered as a failure
+    // of the workspace rather than as the "unsupported" answer the rest of the
+    // branch gives. Same shape and same body as the reap route below, which is
+    // the route this one exists to feed: a 501 the client can tell apart from
+    // "ccd tried and could not".
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const res = await deps.runCcd(argv);
     const audit = parseAudit(res.stdout);
     if (audit === null) return reply.code(502).send({ ok: false, stderr: res.stderr });
     return audit;
