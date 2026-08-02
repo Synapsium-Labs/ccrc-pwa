@@ -355,9 +355,27 @@ export function ReapSheet({
                   and a deletion the sheet does not name is not one anybody
                   consented to. The digest is in the token, so a clip pasted
                   after this rendered refuses `state-changed`. */}
+              {/* AND `clips` IS `… [] | null` — the sixteenth instance of the
+                  measurement-forgery class, one rung above the thirteenth
+                  (`bytes`) documented on `clipsSizeText`. `[]` renders as
+                  **none** two lines below, and ccd emitted `[]` both for "the
+                  directory was read and holds nothing" and for "the directory
+                  exists and could not be opened at all" — the second stated as
+                  the first, above a Remove button that was reachable, about
+                  the one thing on this sheet that exists in no commit and
+                  nowhere else.
+
+                  NOT `NOT_SCANNED`, deliberately, and this is the taxonomy
+                  that constant's own comment sets out: "not scanned" means no
+                  measurement was attempted, and here one was attempted and
+                  failed — the third kind, worded apart from both, exactly as
+                  "unknown" is worded apart from "not scanned". A `clips-
+                  unreadable` refusal carries the remedy in its sentence
+                  below; this row's job is only to not say **none**. */}
               <dt>clips</dt>
               <dd>
-                {shown.clips.length === 0 ? 'none'
+                {shown.clips === null ? 'could not be read'
+                  : shown.clips.length === 0 ? 'none'
                   : `${shown.clips.length} pasted image${shown.clips.length === 1 ? '' : 's'}, `
                     + clipsSizeText(shown.clips)}
                 {/* Distinguishable from the "not in git" row's identical-meaning
@@ -367,7 +385,7 @@ export function ReapSheet({
                     stylistic choice here — it is untestable. "pastes" keeps
                     the substring from ever colliding with the other row's
                     exact wording. */}
-                {shown.clips.length > 0 && (
+                {shown.clips !== null && shown.clips.length > 0 && (
                   <span className="reap-note">
                     {shown.clips.length === 1
                       ? 'This paste is in no commit and cannot be recovered.'

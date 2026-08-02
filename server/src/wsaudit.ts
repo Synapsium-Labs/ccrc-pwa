@@ -85,6 +85,16 @@ export const SENTENCES: Record<string, string> = {
   // corrupted tombstone), the resume refuses rather than destroy clips a
   // document could not be made to name truthfully.
   'tombstone-unwritable': 'ccrc could not update this workspace’s cleanup record before finishing, so it stopped rather than delete anything it could not accurately describe. This needs a human to look at the tombstone file directly.',
+  // Final-round confirmation-surface review, the sixteenth instance of the
+  // measurement-forgery class. The clips directory EXISTS and ccd could not
+  // list what is in it, so the sheet cannot name what the delete would
+  // destroy — and an unlisted deletion is one nobody consented to. It gets its
+  // own sentence rather than `tree-unreadable`'s: that one is about a
+  // worktree, and this is about the pasted images, which are the one thing on
+  // this sheet that exists nowhere else at all. The remedy is IN THE SENTENCE
+  // for the reason `stash-unreadable` states — `ReapSheet` renders
+  // `audit.sentence` and never `audit.detail`.
+  'clips-unreadable': 'ccrc could not list this session’s pasted images (`~/.cc-clips/<session>`), so it cannot say what removing them would destroy. Nothing was removed. Check that directory’s permissions.',
 };
 
 export function refusalSentence(token: string): string {

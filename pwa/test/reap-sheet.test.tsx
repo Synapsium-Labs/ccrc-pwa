@@ -500,6 +500,46 @@ describe('mutation-sweep closures', () => {
     expect(await screen.findByText('1 pasted image, size unknown')).toBeInTheDocument();
   });
 
+  /* ── THE SIXTEENTH FORGERY: the LIST, not the size ────────────────────────
+   *
+   * Final-round confirmation-surface review. The three tests above are about
+   * a clip whose SIZE ccd could not take; this is about a clips directory ccd
+   * could not OPEN. `_ws_clip_manifest` answered `[]` for it, at exit 0, and
+   * this row rendered that as **none** — the most reassuring word available,
+   * about full-resolution pastes that exist in no commit and nowhere else, on
+   * a sheet whose Remove button was reachable. `WsAudit['clips']` is
+   * `… [] | null` now, so the honest branch is reachable from a real audit and
+   * this fixture is type-checked (`--typecheck` runs in this suite): if ccd's
+   * refusal had landed as an omitted field or as `[]` with a flag beside it,
+   * this line would not compile.
+   */
+  it('says the clips list could not be READ, never "none", when ccd could not open the directory', async () => {
+    auditBody = audit({
+      clips: null, verdict: 'clips-unreadable', token: undefined,
+      sentence: 'ccrc could not list this session’s pasted images (`~/.cc-clips/<session>`), '
+        + 'so it cannot say what removing them would destroy. Nothing was removed. '
+        + 'Check that directory’s permissions.',
+    });
+    open();
+    expect(await screen.findByText('could not be read')).toBeInTheDocument();
+    // The word this row must not print for this state — "none" IS the defect.
+    // Two remain and they are the honest ones: `dirty: []` and `stashes: 0`
+    // are measurements in this fixture (the sibling test with `clips: []`
+    // finds three), so counting them is what proves the missing one is the
+    // clips row rather than a query that matched nothing.
+    expect(screen.getAllByText('none')).toHaveLength(2);
+    // A COUNT is the other way of implying the list was read — and the match
+    // is anchored on the digit, because the refusal paragraph below the rows
+    // says "pasted images" too and saying it there is the point.
+    expect(screen.queryByText(/\d+ pasted image/)).not.toBeInTheDocument();
+    // And no promise ABOUT a set the screen was never given — same rule the
+    // not-in-git row follows for its own `null`.
+    expect(screen.queryByText(/pastes? (is|are) in no commit/)).not.toBeInTheDocument();
+    // No token, no confirm: an unlisted deletion is one nobody consented to.
+    expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/could not list this session/)).toBeInTheDocument();
+  });
+
   it('states the measured total unchanged when every clip WAS measured', async () => {
     // The other side of the same branch: widening the type must not make the
     // ordinary sheet start hedging. `clipsSizeText`'s `unmeasured === 0` arm

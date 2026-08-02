@@ -350,8 +350,25 @@ export interface WsAudit {
    *  reader; it never folds a null into the sum, because a partial total is
    *  banned by name alongside 0 — it states what was measured and discloses
    *  the rest ("1 MB + 1 unmeasured"). Same rule, same wording, as
-   *  `worktreeBytes` below and `archivedBytes` on the archive sheet. */
-  clips: { name: string; bytes: number | null }[];
+   *  `worktreeBytes` below and `archivedBytes` on the archive sheet.
+   *
+   *  AND THE ARRAY ITSELF IS `| null` — the sixteenth instance of the class
+   *  (final-round confirmation-surface review), one rung above the thirteenth.
+   *  The thirteenth typed an entry's SIZE; this types the LIST. A clips
+   *  directory that exists and cannot be enumerated (`chmod 000`, measured:
+   *  `find` exits 1 printing nothing) used to reach the wire as `[]`, and `[]`
+   *  is not a degraded answer on this surface — `ReapSheet` renders it as
+   *  **clips: none**, on a sheet whose Remove button was reachable, about
+   *  pastes that exist nowhere else. `clipsDigest` was taken over the same
+   *  `[]` on both sides, so the fingerprint agreed with itself and step (h)
+   *  destroyed what nothing had listed.
+   *
+   *  `null` is "nobody could open the directory", `[]` is "it was opened and
+   *  is empty", and ccd now refuses `clips-unreadable` rather than issue a
+   *  token beside the null — so the only documents carrying it are refusals.
+   *  Typed rather than documented for the reason `bytes` is: the empty array
+   *  is the answer that compiles. */
+  clips: { name: string; bytes: number | null }[] | null;
   /** `null` when `du` could not read the whole worktree — even partially, even
    *  a subdirectory — never a fabricated (and possibly ten-times-too-small)
    *  number (pre-merge fix round, finding F; deviation 10's rule). This is the
@@ -423,8 +440,18 @@ export interface WsTombstone {
   /** `bytes: number | null`, identical to `WsAudit.clips`, and re-measured on
    *  every resume by `_ws_tombstone_reclip` because (h) `rm -rf`s whatever is
    *  on disk at THAT instant. Null is a clip ccd could not size, never an
-   *  empty file and never "nothing was reclaimed here". */
-  clips: { name: string; bytes: number | null }[];
+   *  empty file and never "nothing was reclaimed here".
+   *
+   *  THE WHOLE FIELD IS `| null` for the sixteenth instance of the same class,
+   *  and here it is a RECORD rather than a refusal — the one consumer of
+   *  `_ws_clip_manifest` that gets one. `_ws_reap_tail` writes `null` when the
+   *  clips directory could not be enumerated, because this document outlives
+   *  the workspace and `[]` in it is the permanent statement "this cleanup
+   *  destroyed no pasted images" about a directory ccd could not open. The
+   *  other two consumers refuse instead (`clips-unreadable`); refusing HERE,
+   *  on the resume path, would strand a workspace half-deleted rather than
+   *  finish it with a truthful record. */
+  clips: { name: string; bytes: number | null }[] | null;
   transcript: string; attic: string[]; reflog: string; reapedAt: number;
 }
 
