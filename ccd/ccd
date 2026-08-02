@@ -97,6 +97,41 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
 _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+_reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
+  # final-review-destructive finding F3. The THREE call sites that used to spell
+  # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
+  # matches `$id.uuid` (this session's own field, one dot, no more) but ALSO
+  # `$id.x-y.uuid` — ANOTHER session's field, whose own id happens to be
+  # `$id.x-y`. Measured: `$REG/demo-quiet-basin.uuid`,
+  # `$REG/demo-quiet-basin.x-y.uuid` and `$REG/demo-quiet-basin.x-y.workdir`
+  # side by side, `rm -f "$REG/demo-quiet-basin".*` — zero survivors. Ids are
+  # `<project>-<slug>` and slugs are dot-free (`_ws_slug_valid`), so the dot
+  # has to come from a PROJECT DIRECTORY name (`demo-quiet-basin.x` beside
+  # `demo`) — contrived, but dots in project directory names are legal and
+  # ordinary, and the consequence is not local: the victim loses its `.uuid`,
+  # `_ws_gc_row` then classifies it `orphan`, and `ws-gc --prune`'s orphan
+  # arm runs `git worktree remove` and `git branch -d` on it.
+  #
+  # Fixed by filtering on the SUFFIX rather than matching every known field
+  # name — a field name never contains a dot (measured: `archived`,
+  # `archivedreason`, `archivemanifest`, `base`, `branch`, `home`,
+  # `lastcompact`, `lastswap`, `pool`, `prnumber`, `project`, `reaping`,
+  # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper` — every
+  # `_reg_set`/`_reg_get` field this file has today), so `$id.<field>` has
+  # exactly one dot after the id and `$id.x-y.uuid` has two. This is
+  # future-proof against a field this file adds tomorrow, which a hardcoded
+  # allowlist would not be — the two are the same shape either way.
+  local id="$1" f suffix
+  for f in "$REG/$id".*; do
+    # `[[ -e "$f" ]]` for the unmatched-glob case: this file does not set
+    # `nullglob`, so a glob with no matches stays the literal string
+    # `$REG/$id.*`, and `-e` on that is false — the loop body never runs.
+    [[ -e "$f" ]] || continue
+    suffix="${f#"$REG/$id."}"
+    [[ "$suffix" == *.* ]] && continue
+    rm -f "$f"
+  done
+}
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
   [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
 }
@@ -853,7 +888,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     echo "warn: no worktree record for $workdir; registry says branch '$reg_branch', which still exists — not deleting it unverified. If it is finished: git -C $main branch -d $reg_branch" >&2
   fi
 
-  rm -f "$REG/$id".*
+  _reg_purge "$id"                                                          # finding F3
   echo "removed workspace $id"
 }
 
@@ -2905,8 +2940,10 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # it with no verb in ccd able to clear it. Measured, same fixture, only the
   # signal changed: SIGTERM left the lock free and the next run resumed;
   # SIGKILL left it HELD and every later run answered
-  # `{"refused":"in-progress"}`, for ever. Step (i)'s `rm -f "$REG/$id".*` does
-  # not match this name, and nothing else in the file does either.
+  # `{"refused":"in-progress"}`, for ever. Step (i)'s `_reg_purge "$id"` does
+  # not match this name — it purges `$REG/$id.<field>`, and the lock is
+  # `$REG/.reap-$id.lock`, a different prefix entirely — and nothing else in
+  # the file does either.
   #
   # `flock` attaches an advisory lock to an OPEN FILE DESCRIPTION, and the
   # kernel drops it when the last copy of that description closes — which every
@@ -3314,7 +3351,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     [[ -n "$cdir" && -n "$croot" && "$cdir" == "$croot/$id" ]] && rm -rf "$cdir"
   fi
 
-  rm -f "$REG/$id".*                                                       # (i) LAST
+  _reg_purge "$id"                                                         # (i) LAST, finding F3
   # MUTATION SURVIVOR, disclosed: `${attic:-0}` is removable with the suite
   # green, because both arms above assign `attic` and neither can leave it
   # unset. It is `set -u` insurance on the ONE printf that reports a completed
@@ -3486,7 +3523,7 @@ _ws_gc_scan() {
     [[ -f "$REG/$id.uuid" ]] || continue
     # An archived workspace's registry is the ONLY record of where its branch
     # and worktree were, and a reaping breadcrumb is what makes the tail
-    # resumable. dead-reg's `rm -f $REG/<id>.*` would destroy either.
+    # resumable. dead-reg's `_reg_purge <id>` would destroy either.
     [[ -f "$REG/$id.archived" || -f "$REG/$id.reaping" ]] && continue
     wd=$(_reg_get "$id" workdir)
     [[ -n "$wd" && ! -d "$wd" ]] || continue
@@ -3533,7 +3570,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # to a temporarily-missing worktree; pruning it here would foreclose that.
       echo "  declined   $project/$slug is foreign metadata — ccd removes only what it created" ;;
     dead-reg)
-      rm -f "$REG/$project-$slug".*
+      _reg_purge "$project-$slug"                                          # finding F3
       echo "  reclaimed  dead registry entry $project-$slug" ;;
     orphan)
       if _ws_gc_dirty "$p"; then

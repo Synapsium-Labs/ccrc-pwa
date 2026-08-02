@@ -365,6 +365,59 @@ describe('ws-gc --prune', () => {
     expect(h.reg('demo-quiet-mesa', 'workspace')).toBeNull();
   });
 
+  // final-review-destructive finding F3: the dead-reg reclaim used to spell this
+  // `rm -f "$REG/$project-$slug".*` — an UNANCHORED glob. Ids are
+  // `<project>-<slug>`, and slugs are dot-free (`_ws_slug_valid`), so the
+  // only way one id can be a dot-prefix of another is a PROJECT DIRECTORY
+  // name carrying a dot — contrived, but legal and ordinary. Here: project
+  // `demo` (id `demo-quiet-mesa`, the one being reclaimed) beside project
+  // `demo-quiet-mesa.x` (id `demo-quiet-mesa.x-warm-cove`, a live, unrelated
+  // session). `demo-quiet-mesa.*` matches `demo-quiet-mesa.x-warm-cove.uuid`
+  // too. (`x` and `warm-cove` rather than a bare `x-y`: `_ws_slug_valid` is
+  // `^[a-z0-9][a-z0-9-]{1,30}$`, a two-character MINIMUM, so a one-letter
+  // slug is not a shape ccd can be made to create.)
+  //
+  // The consequence is not local, which is why this asserts across TWO
+  // sweeps. Run one destroys only registry files, so the bystander is still
+  // `tracked` in the row set run one already scanned. But it has lost its
+  // `.uuid`, so the NEXT scan classifies it `orphan`, and `--prune`'s orphan
+  // arm runs `git worktree remove` and `git branch -d` on a session nobody
+  // asked to reclaim at all. Measured pre-fix, exactly here: after sweep two
+  // the bystander's worktree directory and its `ws/warm-cove` branch are
+  // both gone.
+  it('a dead-reg reclaim never touches ANOTHER session whose id is a dot-prefix of it', () => {
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    h.git(path.join(h.home, 'projects', 'demo'), 'worktree', 'remove', wt);
+
+    const bystanderMain = h.makeRepo('demo-quiet-mesa.x');
+    const bystanderWt = addWs('demo-quiet-mesa.x', 'warm-cove');
+    const branches = (): string =>
+      h.git(bystanderMain, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/');
+
+    // The collision is a property of the fixture, so prove it from the
+    // registry directory rather than by eye: a bash `$REG/demo-quiet-mesa.*`
+    // is exactly the set of names starting `demo-quiet-mesa.`, and the
+    // bystander's files must be in it or this test pins nothing.
+    const reg = path.join(h.home, '.cc-sessions');
+    const globbed = fs.readdirSync(reg).filter((f) => f.startsWith('demo-quiet-mesa.'));
+    expect(globbed, 'the fixture itself must produce the collision')
+      .toEqual(expect.arrayContaining(['demo-quiet-mesa.uuid', 'demo-quiet-mesa.x-warm-cove.uuid']));
+
+    prune();
+    expect(h.reg('demo-quiet-mesa', 'uuid'), 'the dead entry is still reclaimed').toBeNull();
+    expect(h.reg('demo-quiet-mesa', 'workspace'), 'the dead entry is still reclaimed').toBeNull();
+    expect(h.reg('demo-quiet-mesa.x-warm-cove', 'uuid'), 'the bystander keeps its registry').not.toBeNull();
+    expect(h.reg('demo-quiet-mesa.x-warm-cove', 'workdir'), 'the bystander keeps its registry').not.toBeNull();
+    expect(h.reg('demo-quiet-mesa.x-warm-cove', 'workspace'), 'the bystander keeps its registry').not.toBeNull();
+
+    // The second sweep is where a de-registered bystander actually dies.
+    const out = prune();
+    expect(out, 'the bystander is never reclassified an orphan').not.toContain('orphan');
+    expect(fs.existsSync(bystanderWt), 'the bystander keeps its worktree').toBe(true);
+    expect(branches(), 'the bystander keeps its branch').toContain('ws/warm-cove');
+  });
+
   it('reports what it reclaimed and what it declined', () => {
     h.makeRepo('demo');
     addOrphan('demo', 'still-cove');
