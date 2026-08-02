@@ -94,11 +94,22 @@ describe('mkTmp (agent suite)', () => {
       ['tmpHelpers.ts', 'IS the registry'],
       // The PATH-containment setup file. It runs as a `setupFiles` entry, not
       // as a test module, so it makes its one directory before any test file's
-      // registry exists and must own it outright. Its cleanup is already a
-      // hook (`afterAll(() => rmSync(dir, ...))`), so it does not leak on a
-      // failing run, and rewiring it is forbidden by the standing constraint
-      // that has cost the live fleet four outages.
-      ['contain-path.setup.ts', 'setupFiles, not a test module; hook-cleaned; must not be rewired'],
+      // registry exists and must own it outright. It cannot route through
+      // `mkTmp` either: `mkTmp`'s `afterAll` belongs to whichever suite is
+      // being built when the module is imported, and a setup file is imported
+      // before there is one. Rewiring it is forbidden by the standing
+      // constraint that has cost the live fleet four outages.
+      //
+      // Its exemption is CONDITIONAL and the condition is checked below: the
+      // `afterAll` must still be there AND the run-scoped root must still be
+      // wired, because the hook alone was measurably not enough.
+      ['contain-path.setup.ts', 'setupFiles, not a test module; hook-cleaned inside a run-scoped root; must not be rewired'],
+      // The run-scoped root itself. It runs as a `globalSetup` entry in
+      // vitest's MAIN process — the only place in this package whose cleanup a
+      // destroyed worker cannot skip — and it removes what it made in the
+      // teardown it returns. It cannot route through `mkTmp` either: `mkTmp`'s
+      // `afterAll` needs a suite, and the main process has none.
+      ['contain-path.globalsetup.ts', 'globalSetup in the main process; removes its own root in its teardown'],
     ]);
 
     const files = readdirSync(here).filter((f) => f.endsWith('.ts')).sort();
@@ -137,11 +148,46 @@ describe('mkTmp (agent suite)', () => {
     // `contain-path.setup.ts` is excused because its cleanup is a HOOK. If that
     // ever becomes a trailing statement the exemption stops being true, and the
     // file would leak once per run of every agent test file.
+    //
+    // The hook alone WAS the exemption, and the exemption was wrong. A vitest
+    // `afterAll` only runs if vitest built a suite for the test file, and a
+    // `setupFiles` body runs BEFORE the test module is imported — so a test
+    // module that THROWS AT IMPORT leaves the directory behind with no hook to
+    // remove it. This project's own `whitelist.ts` throws at module load by
+    // design, so every over-permission mutant produces exactly that shape;
+    // the final review measured ten leaked directories from one mutant run.
+    //
+    // The exemption now requires the hook AND the run-scoped root, and both
+    // are asserted here. Note what these assertions are and are not: they are
+    // TEXT checks, so they can only prove the mechanism is present. Whether it
+    // FIRES is pinned behaviourally by `contain-path.test.ts`, which spawns a
+    // real vitest whose test module throws at import and counts what is left.
+    // Both are needed — the first fix for this finding used
+    // `process.on('exit')`, which is present, readable, and skipped outright
+    // when the `forks` pool destroys a worker: 2 leaks in 12 runs.
     const src = readFileSync(path.join(here, 'contain-path.setup.ts'), 'utf8');
-    expect(src, 'contain-path.setup.ts no longer cleans up in a hook').toContain('afterAll(() => rmSync(dir');
-    // And it is still wired, which is the constraint the standing rules put
+    const code = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    // Comments stripped first, so a commented-out registration cannot satisfy
+    // any of these — the same trap the `afterAll(removeTmpFixtures);` count
+    // above is written to avoid.
+    expect(code(src), 'contain-path.setup.ts no longer cleans up in a vitest hook')
+      .toContain('afterAll(removeContainedDir)');
+    expect(code(src).includes('rmSync(dir'), 'the cleanup no longer removes the contained dir').toBe(true);
+    expect(code(src), 'contain-path.setup.ts no longer puts its dir inside the run-scoped root')
+      .toContain('CONTAIN_PATH_ROOT_ENV');
+
+    // The root's own janitor: a `globalSetup` that made a directory and never
+    // removed it would be a leak of one per run instead of one per file.
+    const gsrc = code(readFileSync(path.join(here, 'contain-path.globalsetup.ts'), 'utf8'));
+    expect(gsrc, 'the global setup no longer returns a teardown that removes its root')
+      .toMatch(/return \(\) => \{[\s\S]*rmSync\(root/);
+
+    // And both are still wired, which is the constraint the standing rules put
     // above everything else in this package.
     const cfg = readFileSync(path.resolve(here, '..', 'vitest.config.ts'), 'utf8');
     expect(cfg).toContain("setupFiles: ['test/contain-path.setup.ts']");
+    expect(cfg, 'globalSetup is unwired — a module-load throw leaks again')
+      .toContain("globalSetup: ['test/contain-path.globalsetup.ts']");
   });
 });
