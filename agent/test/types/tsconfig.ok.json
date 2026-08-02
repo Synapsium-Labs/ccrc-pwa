@@ -1,0 +1,6 @@
+{
+  "_comment": "The positive control for the bypass pins next door, plus the type-level assertions that pin FORBIDDEN_COMMANDS's contents and ExecCommand's exact membership. This project MUST compile clean, so 'nothing compiles' cannot satisfy the bypass pins.",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"] },
+  "include": ["ok/**/*.ts"]
+}

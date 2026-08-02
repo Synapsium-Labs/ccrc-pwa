@@ -1,6 +1,18 @@
 // This file exists to FAIL LOUDLY if a `gh` key is ever added to
 // EXEC_WHITELIST, and to pin the two verbs that were removed from it.
 //
+// IT IS NO LONGER THE ONLY THING STANDING THERE (final review, gates finding
+// 4). Deleting this file and adding a `gh` key used to leave the agent suite at
+// 99/99 PASS and the server cross-check at 35/35 PASS — one `rm` silently
+// removed the branch's own stated most dangerous invariant. `src/whitelist.ts`
+// now carries the pin structurally: the key type is closed (a `gh` key does not
+// COMPILE, at any position in the literal), a disjointness proof makes widening
+// that type a second, separate compile error, and `auditExecWhitelist()` runs
+// at module load so a widened list is a BOOT FAILURE rather than a test
+// failure. See `whitelist-structural.test.ts` for the pins on those mechanisms
+// and `server/test/whitelist-subset.test.ts` layer 3 for the cross-package one.
+// This file remains the plain-language behavioural statement of the rule.
+//
 // The host's gh token carries the `repo` WRITE scope (gh auth status: gist,
 // read:org, repo, workflow) and there is no second layer — no read-only
 // credential, no cwd sandbox. Any `gh` entry makes this list the sole control

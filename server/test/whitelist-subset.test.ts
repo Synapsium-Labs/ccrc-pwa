@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isExecAllowed } from '../../agent/src/whitelist.js';
+import { EXEC_WHITELIST, FORBIDDEN_COMMANDS, isExecAllowed } from '../../agent/src/whitelist.js';
 import { CCD_ARGV, verbSupported } from '../src/ccdargv.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +70,28 @@ describe('layer 2 — every argv the server can build passes the agent whitelist
 // rather than implied, is written up there.
 
 describe('layer 3 — the list never drifts wider than the code', () => {
+  // FINAL REVIEW, gates finding 4. Everything else in layer 3 works off a SLICE
+  // of `whitelist.ts`'s source text that starts at the `ccd` key — so whether it
+  // sees a new grant depends on where in the object literal the key is written.
+  // Measured on `4e8b689`: a `gh` key added ABOVE the `ccd` one left this file
+  // at 35/35 PASS, because it sits outside the slice. This assertion reads the
+  // OBJECT, not the text, so position cannot matter; and it lives in a different
+  // package from the agent's own pins, so deleting agent tests cannot reach it.
+  it('EXEC_WHITELIST has exactly two keys, and `gh` is not one of them', () => {
+    expect(Object.keys(EXEC_WHITELIST).sort(),
+      'a gh grant makes EXEC_WHITELIST the sole control between the PWA and `gh pr merge`: ' +
+      'the host token carries the repo WRITE scope and there is no second credential')
+      .toEqual(['ccd', 'tmux']);
+  });
+
+  it('no forbidden command is grantable, and none is allowed with any argv', () => {
+    for (const cmd of FORBIDDEN_COMMANDS) {
+      expect(Object.keys(EXEC_WHITELIST), cmd).not.toContain(cmd);
+      expect(isExecAllowed(cmd, ['pr', 'merge', '1']), cmd).toBe(false);
+    }
+    expect((FORBIDDEN_COMMANDS as readonly string[])).toContain('gh');
+  });
+
   it('every ccd prefix the agent grants is reachable from some CCD_ARGV entry', () => {
     // The reverse direction. This is what catches a dead grant like `clip`.
     //
