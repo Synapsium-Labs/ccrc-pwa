@@ -104,6 +104,39 @@ describe('the manifest', () => {
     expect(await screen.findByText(/transcript, and .* pinned in the attic \(ccd ws-attic\)/)).toBeInTheDocument();
   });
 
+  /* ── F5: the "kept" row may not promise a count nobody has taken ──────────
+   *
+   * Final-round tests review. Before the reap this row printed
+   * `commitsAheadOfBase` — `git rev-list --count "$base..refs/heads/$branch"`
+   * — as though it were the attic's size. `_ws_attic_pin` pins one ref per
+   * DISTINCT REFLOG SHA, `sort -u | head -200`, plus the tip: unequal to the
+   * commit count in both directions (amends and rebases push the reflog above
+   * it; past 200 the cap truncates). On a sheet describing an irreversible
+   * delete, the row could therefore promise MORE retention than the attic
+   * provides, which is the dangerous direction.
+   */
+  it('describes the attic RULE before the reap rather than a commit count it is not', async () => {
+    auditBody = audit({ commitsAheadOfBase: 3 });
+    open();
+    expect(await screen.findByText(
+      /transcript, and the branch tip plus up to 200 more commits from its reflog, pinned in the attic/,
+    )).toBeInTheDocument();
+    // The specific overstatement: 3 commits ahead of base is not a promise
+    // that 3 commits are pinned, and this row no longer makes it.
+    expect(screen.queryByText(/transcript, and 3 commits pinned/)).not.toBeInTheDocument();
+  });
+
+  it('does not invent a count when ccd could not take one either', async () => {
+    // `commitsAheadOfBase` is `number | null` now (destructive review F2). The
+    // row never reads it, so a null cannot reach the screen as the word
+    // "null" — asserted rather than reasoned about, because the row DID read
+    // it until this round.
+    auditBody = audit({ commitsAheadOfBase: null });
+    open();
+    await screen.findByText(/pinned in the attic/);
+    expect(screen.queryByText(/null/)).not.toBeInTheDocument();
+  });
+
   // F3 refinement (pre-merge fix round): excluded must never mean invisible.
   it('names how many secret-shaped matches the F3 refinement filtered as noise, pluralized', async () => {
     auditBody = audit({ sensitiveFiltered: 1 });
@@ -610,8 +643,13 @@ describe('mutation-sweep closures', () => {
     open();
     fireEvent.click(await screen.findByRole('button', { name: 'Remove quiet-basin · 1.2 GB' }));
     expect(await screen.findByText(/transcript, and 0 commits pinned in the attic/)).toBeInTheDocument();
-    // Not the pre-reap 3 from `audit.commitsAheadOfBase` — a `??` -> `||`
-    // mutant falls back to it because 0 is falsy.
+    // ZERO IS A RESULT, and it must not fall back to the pre-reap sentence.
+    // The old shape guarded with `result?.attic ?? …`, where the distinguishing
+    // mutant was `??` -> `||`; the guard is now `!== undefined`, where it is
+    // truthiness (`result?.attic ? … : …`). Same falsy 0, same fallback, same
+    // assertion — an attic of 0 is the reap's own measurement and the row
+    // states it rather than reverting to a description of the rule.
+    expect(screen.queryByText(/branch tip plus up to 200 more/)).not.toBeInTheDocument();
     expect(screen.queryByText(/transcript, and 3 commits pinned in the attic/)).not.toBeInTheDocument();
   });
 

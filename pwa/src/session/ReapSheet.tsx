@@ -386,9 +386,34 @@ export function ReapSheet({
                   : shown.stashes === 0 ? 'none' : `${shown.stashes}`}
               </dd>
 
+              {/* THE "KEPT" ROW MAY NOT PROMISE A COUNT NOBODY HAS TAKEN —
+                  final-round tests review F5. This read
+                  `${result?.attic ?? shown.commitsAheadOfBase} commits pinned
+                  in the attic`, so BEFORE the reap the figure was
+                  `commitsAheadOfBase`, i.e.
+                  `git rev-list --count "$base..refs/heads/$branch"`. That is a
+                  different quantity from what `_ws_attic_pin` actually pins:
+                  one ref per DISTINCT REFLOG SHA, `sort -u | head -200`, plus
+                  the tip. The two are unequal in both directions — amends and
+                  rebases push the reflog above the commit count, and past 200
+                  the cap truncates — so on the sheet that describes an
+                  irreversible delete this row could promise MORE retention
+                  than the attic will provide. Overstating what survives is the
+                  dangerous direction here.
+
+                  So: before the reap, describe the RULE, which is exact and
+                  needs no measurement; after it, `result.attic` is the count
+                  `_ws_attic_pin` itself returned and the row states it. That
+                  leaves `commitsAheadOfBase` unrendered, deliberately — it is
+                  a real and useful figure in `ccd ws-audit`'s own output, and
+                  it was only ever wrong as an answer to "how much of this
+                  survives". */}
               <dt>kept</dt>
               <dd>
-                {`transcript, and ${result?.attic ?? shown.commitsAheadOfBase} commits pinned in the attic (ccd ws-attic)`}
+                {result?.attic !== undefined
+                  ? `transcript, and ${result.attic} commits pinned in the attic (ccd ws-attic)`
+                  : 'transcript, and the branch tip plus up to 200 more commits from its reflog,'
+                    + ' pinned in the attic (ccd ws-attic)'}
               </dd>
             </dl>
 
