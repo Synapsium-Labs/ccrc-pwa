@@ -265,9 +265,24 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   # pipeline already returned non-zero for the HEALTHY case (measured: rc=1 for a
   # clean workspace, rc=1 for /no/such/dir). Two statements, because
   # `local d=$(...)` would return local's status.
-  local d
-  d=$(git -C "$1" status --porcelain --ignored=matching 2>/dev/null \
-        | grep '^!! ' | sort | sha256sum | cut -d' ' -f1; exit "${PIPESTATUS[0]}") || return 1
+  #
+  # AND STDERR IS THE SECOND RUNG — final-round integration review, item 5 /
+  # new finding 3. `PIPESTATUS[0]` alone is not enough: `git status` over a
+  # PARTIALLY unreadable tree exits ZERO and writes the diagnostic to stderr
+  # only (measured on git 2.43: rc 0, empty stdout, `warning: could not open
+  # directory 'tracked/'`), so the digest hashed a SHORT set and answered
+  # success. `_ws_collect_ignored` has required an empty stderr since Task 6 for
+  # exactly this reason; this function keeps its own copy of that rung because
+  # the ARCHIVE manifest still calls it, and a manifest that records a complete
+  # digest over an incomplete set is the same forgery one layer down. An
+  # incomplete read is not a smaller answer, it is no answer.
+  local d errf err
+  errf=$(mktemp) || return 1
+  d=$(git -C "$1" status --porcelain --ignored=matching 2>"$errf" \
+        | grep '^!! ' | sort | sha256sum | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
+    || { rm -f "$errf"; return 1; }
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  [[ -z "$err" ]] || return 1
   [[ "$d" =~ ^[0-9a-f]{64}$ ]] || return 1
   printf '%s\n' "$d"
 }
@@ -1193,10 +1208,42 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   esac
   # Measured against whatever is checked out, which is what `worktreeHead` above
   # makes legible: on a drifted worktree this counts that branch's uncommitted
-  # work, and it is still the honest answer to "what is uncommitted here".
-  dirty=$(git -C "$workdir" status --porcelain 2>/dev/null) \
-    || { echo "manifest: could not read the tree at $workdir" >&2; return 1; }
+  # work, and it is still the honest answer to "what is uncommitted here" — but
+  # only once the read below is CHECKED, which is what the next paragraph is
+  # about, and which the previous version of this comment claimed without.
+  #
+  # AND STDERR IS CAPTURED — final-round integration review, item 5 / new
+  # finding 3. `git status --porcelain` over a PARTIALLY unreadable tree exits
+  # ZERO with EMPTY stdout and the diagnostic on stderr alone. Measured on git
+  # 2.43, `chmod 000` on a TRACKED directory holding a modified file:
+  #     rc 0, stdout empty, stderr "tracked/deep/code.txt: Permission denied"
+  #                                "warning: could not open directory 'tracked/'"
+  # so `2>/dev/null` plus an exit-code test recorded `"dirty":0` for a tree with
+  # uncommitted work in it. `_ws_reap_eval` (ccd:2205+) and `_ws_collect_ignored`
+  # were hardened against exactly this and this read was not; two reads, one
+  # rule, and this is the third site.
+  #
+  # THIS IS A REFUSAL, not a recorded field, and that is the ladder this
+  # function's own header draws rather than an exception to it: "a question git
+  # cannot answer at all … an unreadable tree or ignored set" is the REFUSED
+  # arm, and a tree that cannot be walked is exactly that. The RECORDED arm is
+  # for facts that are simply not the expected one — a drifted branch, a
+  # detached HEAD — and a partial read is not a fact about the workspace, it is
+  # the absence of one. The archive path deliberately records rather than
+  # refuses (ccd:1800's comment says so), which is precisely why the honesty of
+  # the numbers it does record is the only protection there is.
+  local derrf derr drc
+  derrf=$(mktemp) \
+    || { echo "manifest: could not make a scratch file to read the tree at $workdir" >&2; return 1; }
+  dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
+  derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
+  { (( drc == 0 )) && [[ -z "$derr" ]]; } \
+    || { echo "manifest: could not read the tree at $workdir${derr:+ ($derr)}" >&2; return 1; }
   dirty=$(printf '%s' "$dirty" | grep -c . || true)
+  # Same rule again, one line down: `_ws_ignored_digest` used to check only
+  # `PIPESTATUS[0]`, which is also 0 in the case above, so the recorded
+  # `ignoredDigest` silently covered an incomplete set. The guard now lives
+  # inside that function, where its own callers inherit it.
   ignored=$(_ws_ignored_digest "$workdir") \
     || { echo "manifest: could not read the ignored set at $workdir" >&2; return 1; }
   # $main answered rev-parse a moment ago — rc 0 or a clean "no such ref", both
@@ -1239,6 +1286,47 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+
+  # SERIALISED WITH `ws-reap`, ON WS-REAP'S OWN LOCK — final-round destructive
+  # review, finding F5. These two verbs are the only pair in the design that
+  # write the same fact from opposite directions: `ws-reap` requires
+  # `$REG/$id.archived` and this removes it. Unserialised, the two orders both
+  # end badly, and BOTH were measured:
+  #   - restore inside `_ws_reap_eval`'s Phase C (the <=12 s `gh pr list` plus
+  #     the <=60 s `git fetch`) is a lost update seconds to a minute wide: the
+  #     reap's token still matches, because it was computed in that same run and
+  #     `archived` is not one of the fingerprint's thirteen inputs, so the tail
+  #     destroys the workspace the human just brought back.
+  #   - restore between the tail's (e) and its (i) is worse in the other
+  #     direction: the reap has already unsupervised the session and killed the
+  #     pane, this re-`_spawn`s it and re-`_ws_supervise`s it, and then (f)/(i)
+  #     remove the worktree and purge the registry under a supervised unit and a
+  #     live pane — a session with `Restart=always` pointed at a directory that
+  #     no longer exists and no registry row to resurrect it from.
+  # `_ws_reap_tail` also re-reads the marker (see there), which is what covers
+  # the RESUME path — a breadcrumb outlives a restore by hours and no lock can
+  # span that. The lock is what closes the concurrent shapes.
+  #
+  # THE SAME LOCK, not a second mechanism: two locks for one invariant is two
+  # things to get out of step, and this one is already the kernel's — released
+  # on every form of death including SIGKILL, never unlinked, its whole argument
+  # written out at `cmd_ws_reap`. `-n`, so a restore declines rather than
+  # blocking a route behind a reap that may be sixty seconds inside a fetch;
+  # `in-progress` is the shape `ws-reap` itself answers for the mirror case.
+  #
+  # AFTER the `uuid` check and BEFORE the `archived` one. Before, so no lock
+  # file is created for an id with no registry at all; after, so `archived` and
+  # `workdir` — the two facts a concurrent reap can change — are read UNDER the
+  # lock rather than in front of it.
+  command -v flock >/dev/null 2>&1 \
+    || die "flock (util-linux) is unavailable — refusing to restore unserialised against ws-reap"
+  local lock="$REG/.reap-$id.lock" lfd
+  exec {lfd}>>"$lock" || die "cannot open the reap lock at $lock"
+  flock -n "$lfd" || {
+    exec {lfd}>&-
+    die "another ccd process is reaping $id and still holds the lock — refusing to restore mid-cleanup"
+  }
+
   [[ -f "$REG/$id.archived" ]]   || die "not archived: $id"
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
@@ -1246,6 +1334,13 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   _spawn "$id" resume
   _reg_set "$id" started 1
   _ws_supervise "$id"
+  # GIVEN BACK BEFORE THE VERB ANSWERS, for the reason `cmd_ws_reap` states at
+  # its own close: `flock` treats two `open()`s of one path in one process as
+  # two strangers, and ccd is SOURCED — by `ccd` itself and by its tests — so a
+  # descriptor left open here would refuse the next `ws-reap` in the same shell
+  # with `in-progress` for ever. The `die`s above need no close of their own:
+  # `die` exits, and the kernel closes what exits.
+  exec {lfd}>&-
   echo "restored $id — $workdir"
 }
 
@@ -3229,6 +3324,44 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       return 0 ;;
   esac
 
+  # THE ARCHIVED MARKER IS RE-READ HERE, immediately before the first step that
+  # writes anything — final-round destructive review, finding F5. `archived` is
+  # the ONE precondition of this whole verb that another ccd verb can withdraw:
+  # `cmd_ws_restore` (ccd:1234) removes `$REG/$id.archived`, re-`_spawn`s the
+  # session and re-`_ws_supervise`s it, turning the workspace back into an
+  # ordinary live one. Nothing re-read the marker after `_ws_reap_eval`'s Phase
+  # A (ccd:2055), and it is not one of `_ws_fingerprint`'s thirteen inputs, so
+  # the token cannot notice either.
+  #
+  # TWO REACHABLE SHAPES, both measured, and the sequential one is the one with
+  # the teeth:
+  #   - THE RESUME PATH, no race at all. A reap SIGKILLed at (c) leaves a
+  #     breadcrumb the human can only clear by restoring; restore then brings
+  #     the workspace back to life, and the breadcrumb OUTLIVES it. The next
+  #     `ws-reap` takes `_ws_reap_locked`'s resume fork, which skips
+  #     `_ws_reap_eval` entirely and therefore never asks the `not-archived`
+  #     question at all. Measured before this line existed:
+  #     `{"reaped":"demo-quiet-basin",…,"resumed":"worktree"}` — worktree
+  #     removed, branch CAS-deleted, registry purged, on a LIVE restored
+  #     workspace, hours after the tap that authorised it.
+  #   - THE EVALUATED PATH, a real race. Phase A checks the marker, Phase C
+  #     then spends up to 12 s in `gh pr list` and up to 60 s in `git fetch`; a
+  #     restore inside that window is a lost update seconds to a minute wide,
+  #     and D2 waves the token through because the token was computed in this
+  #     same run. `cmd_ws_restore` now takes THIS verb's own lock, which closes
+  #     the race at its source; this stays because a re-read costs one `stat`
+  #     and covers the resume shape too, which no lock can.
+  #
+  # `not-archived` rather than a new token: the state IS not-archived, it is the
+  # word `_ws_reap_eval` already uses for it (ccd:2056), and `wsaudit.ts`'s
+  # SENTENCES already carries the sentence. Placed ahead of (a)/(b)/(c) so a
+  # refusal writes NOTHING — no attic pin, no tombstone, no breadcrumb.
+  [[ -f "$REG/$id.archived" ]] || {
+    printf '{"refused":"not-archived","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$id is no longer archived — ws-restore brought it back while this cleanup was pending; archive it again to finish")"
+    return 0
+  }
+
   if [[ -z "$resumed" ]]; then
     attic=$(_ws_attic_pin "$main" "$id" "$workdir" "$REAP_TIP")            # (a)
     clips=$(_ws_clip_manifest "$id")
@@ -3545,6 +3678,79 @@ _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of ori
   git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null
 }
 
+# Final-round destructive review, finding F4. `ws-gc --prune`'s orphan arm was
+# the ONE place in the whole design where a workspace DIRECTORY is deleted with
+# no sensitive-ignored scan and no listing of what is inside it. `_ws_gc_dirty`
+# reads `git status --porcelain`, which does not see ignored files at all, so a
+# gitignored `.env` holding a real `AWS_SECRET_ACCESS_KEY` read CLEAN and the
+# tree went with the output line `reclaimed removed orphan worktree <path>` and
+# nothing whatever about what was in it. Measured in the review, reproduced here.
+#
+# `ws-reap` treats the same fact as a §7 NO-OVERRIDE refusal, and this is the
+# same rule at the same strength — with one difference of polarity that is
+# deliberate: `ws-reap` is one human confirming one deletion, and this is an
+# unattended sweep, so where the reap refuses and offers a remedy, the sweep
+# refuses and MOVES ON. Everything ambiguous in this command already resolves
+# toward doing nothing (`_ws_gc_merged`, `_ws_gc_dirty` both say so), and an
+# unreadable ignored set is ambiguous.
+#
+# THE LISTING IS THE OTHER HALF. Every other destructive path on this branch
+# names what it destroys before destroying it: the reap sheet enumerates the
+# ignored manifest, the tombstone records it, `_ws_clip_manifest` names each
+# clip. `--prune` is non-interactive, so "before" here means "on the line above
+# the reclaim, in the same output the human is reading" — the git-tracked
+# content is recoverable from the branch, and these entries are precisely the
+# part that is not.
+#
+# SORTED sensitive-first then bytes-first and CAPPED at ten, the same shape and
+# the same reason as `_reap_ignored_json`'s ordering: a 226-entry workspace
+# (custom-tools, measured) would otherwise bury the reclaim line, and the cap is
+# stated out loud rather than silently applied. The COUNT and the TOTAL are
+# never capped.
+#
+# COST, disclosed: `_ws_collect_ignored` walks every collapsed ignored directory
+# and `du`s each entry, under `REAP_SCAN_SECONDS`'s 30 s whole-workspace
+# deadline (3.4 s on the largest ignored tree on this box). It runs ONLY on an
+# `orphan` row, ONLY under `--prune`, and only after the dirty and merged checks
+# have already declined every row they can — so the sweep pays for it once per
+# directory it is actually about to delete.
+_ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds no secrets;
+                         #         prints the `  contents`/`  declined` lines either way
+  local p="$1" rec sens b path n=0 total=0 shown=0
+  _ws_collect_ignored "$p" || {
+    echo "  declined   could not read the ignored set at $p${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to remove a tree it cannot describe"
+    return 1
+  }
+  if (( ${#REAP_SENSITIVE[@]} != 0 )); then
+    echo "  declined   $p holds secret-shaped ignored file(s): ${REAP_SENSITIVE[*]} — move them, or remove it with the workspace sheet"
+    return 1
+  fi
+  if (( ${#REAP_IGNORED[@]} == 0 )); then
+    echo "  contents   $p has nothing ignored — everything in it is in git"
+    return 0
+  fi
+  # NUL-separated on both the sort and the read, and the byte field taken by
+  # parameter expansion rather than by a fourth `read`: `_ws_collect_ignored`
+  # builds its records to survive a path holding a TAB or a NEWLINE, and this is
+  # the same treatment `_reap_ignored_json` gives the same array for the same
+  # reason. The bytes are guaranteed numeric by the collector's own
+  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`, so the sum cannot be fed a word.
+  for rec in "${REAP_IGNORED[@]}"; do
+    b="${rec#*$'\t'}"; b="${b%%$'\t'*}"
+    n=$(( n + 1 )); total=$(( total + b ))
+  done
+  echo "  contents   $p also holds $n ignored entr$( (( n == 1 )) && echo y || echo ies), $(_ws_gc_human "$total") — none of it is in git, and all of it goes:"
+  while IFS=$'\t' read -r -d '' sens b path; do
+    (( shown < 10 )) || continue
+    shown=$(( shown + 1 ))
+    printf '  contents     %-10s %s\n' "$(_ws_gc_human "$b")" "$path"
+  done < <(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z -t$'\t' -k1,1nr -k2,2nr)
+  (( n > shown )) && echo "  contents     … and $(( n - shown )) more"
+  (( REAP_SENSITIVE_FILTERED == 0 )) \
+    || echo "  contents   ($REAP_SENSITIVE_FILTERED secret-shaped match(es) filtered as vendored/template — see ccd ws-audit)"
+  return 0
+}
+
 # Acts on ONE scanned row. Prints exactly one line per row, whether it acted or
 # not: a silent decline reads as "there was nothing there".
 _ws_gc_prune_row() {   # state project slug path already-pruned
@@ -3583,6 +3789,9 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # someone may be mid-way through this one.
         echo "  declined   $p is on unmerged branch $branch"; return 0
       fi
+      # Finding F4 — the §7 scan and the listing, immediately before the only
+      # step in this command that deletes a DIRECTORY. See `_ws_gc_reclaimable`.
+      _ws_gc_reclaimable "$p" || return 0
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
         echo "  reclaimed  removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.

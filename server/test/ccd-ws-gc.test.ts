@@ -285,6 +285,128 @@ describe('ws-gc --prune', () => {
     expect(fs.readFileSync(path.join(wt, 'scratch.txt'), 'utf8')).toBe('unsaved\n');
   });
 
+  /* ── finding F4: the one directory deletion with no sensitive scan ────────
+   *
+   * Final-round destructive review. `_ws_gc_dirty` reads
+   * `git status --porcelain`, which does not report gitignored files at all,
+   * so an orphan holding a gitignored `.env` read CLEAN and the whole tree was
+   * removed with the single line `reclaimed removed orphan worktree <path>` —
+   * no scan of what was in it, no listing of what went. Every other
+   * destructive path on this branch names what it destroys first; this was the
+   * only one that did not.
+   *
+   * `ws-gc` is correctly absent from EXEC_WHITELIST, so the PWA cannot reach
+   * it. That makes this a human-run terminal reclaimer, not a lower bar.
+   */
+
+  /** An orphan whose ignored content is given by `files`, kept out of git via a
+   *  COMMITTED `.gitignore` — so the tree still reads clean to `_ws_gc_dirty`
+   *  and to `git worktree remove`, which is the whole premise of the finding.
+   *  The branch is left at origin/HEAD… except for the .gitignore commit, so
+   *  the fixture pushes it, keeping `_ws_gc_merged` true. */
+  const orphanWithIgnored = (slug: string, files: Record<string, string>): string => {
+    const wt = addWs('demo', slug);
+    fs.writeFileSync(path.join(wt, '.gitignore'), `${Object.keys(files).join('\n')}\n`);
+    h.git(wt, 'add', '.gitignore');
+    h.git(wt, 'commit', '-m', 'ignore');
+    // The .gitignore lands on main too, so the branch stays an ancestor of
+    // origin/HEAD and `_ws_gc_merged` still says merged — otherwise the row
+    // declines `unmerged` and the test would be about the wrong guard.
+    const main = path.join(h.home, 'projects', 'demo');
+    fs.writeFileSync(path.join(main, '.gitignore'), `${Object.keys(files).join('\n')}\n`);
+    h.git(main, 'add', '.gitignore'); h.git(main, 'commit', '-m', 'ignore');
+    h.git(main, 'push', 'origin', 'main');
+    for (const [rel, body] of Object.entries(files)) {
+      const abs = path.join(wt, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body);
+    }
+    // The premise, asserted rather than assumed: the tree reads CLEAN even
+    // though it holds all of the above.
+    expect(h.sh(`_ws_gc_dirty "${wt}" && echo dirty || echo clean`),
+      'the fixture only means anything if the ignored content is invisible to git status')
+      .toBe('clean');
+    fs.rmSync(path.join(h.home, '.cc-sessions', `demo-${slug}.uuid`));
+    return wt;
+  };
+
+  it('does NOT reclaim an orphan holding a gitignored secret, and names the file', () => {
+    // Measured before the fix, on this exact fixture: `reclaimed removed
+    // orphan worktree <path>`, the directory gone, the AWS key gone, and
+    // nothing in the output that mentioned it ever existed.
+    h.makeRepo('demo');
+    const wt = orphanWithIgnored('still-cove', {
+      '.env': 'AWS_SECRET_ACCESS_KEY=real\n',
+      'build/out.o': 'ordinary rubbish\n',
+    });
+    const out = prune();
+    // The PREFIXED form, not the bare word: the run's footer reads
+    // "reclaimed 0, declined 1", so a `toContain('declined')` would pass on a
+    // run that declined nothing at all.
+    expect(out, out).toContain('  declined   ');
+    expect(out, 'the operator is told WHICH file, the way ws-reap does').toContain('.env');
+    expect(out, 'and the tally at the foot agrees').toContain('reclaimed 0, declined 1');
+    expect(fs.existsSync(wt), 'the worktree survives').toBe(true);
+    expect(fs.readFileSync(path.join(wt, '.env'), 'utf8')).toBe('AWS_SECRET_ACCESS_KEY=real\n');
+    expect(out, 'and it must not ALSO claim to have reclaimed it')
+      .not.toContain('removed orphan worktree');
+    // The branch is untouched too: the reclaim's second half never runs.
+    expect(h.git(path.join(h.home, 'projects', 'demo'), 'branch', '--list', 'ws/still-cove'))
+      .toContain('ws/still-cove');
+  }, 30000);
+
+  it('lists the ignored entries it is about to destroy, with sizes, before the reclaim line', () => {
+    // The other half of F4. Everything git tracks is recoverable from the
+    // branch; the ignored set is precisely the part that is not, so it is the
+    // part that has to be said out loud. `--prune` is non-interactive, so
+    // "before" means "on the lines above the reclaim, in the output the human
+    // is reading".
+    h.makeRepo('demo');
+    const wt = orphanWithIgnored('still-cove', {
+      'debug.log': 'l'.repeat(4096),
+      'node_modules/big.bin': 'x'.repeat(200_000),
+    });
+    const out = prune();
+    const lines = out.split('\n');
+    const contents = lines.filter((l) => l.startsWith('  contents'));
+    expect(contents.length, out).toBeGreaterThan(0);
+    expect(contents.join('\n')).toContain('debug.log');
+    expect(contents.join('\n')).toContain('node_modules/');
+    expect(out).toContain('2 ignored entries');
+    // ORDER MATTERS: a listing printed after the removal is a receipt, not a
+    // disclosure.
+    const iContents = lines.findIndex((l) => l.startsWith('  contents'));
+    const iReclaim = lines.findIndex((l) => l.includes('removed orphan worktree'));
+    expect(iReclaim, out).toBeGreaterThan(-1);
+    expect(iContents).toBeLessThan(iReclaim);
+    expect(fs.existsSync(wt), 'a clean orphan with no secrets is still reclaimed').toBe(false);
+    // And the `contents` lines are NOT counted as reclaims or declines — the
+    // tally at the foot of the run is about actions, not about disclosure.
+    expect(out).toContain('reclaimed 2, declined 0');
+  }, 30000);
+
+  it('does NOT reclaim an orphan whose ignored set it could not read', () => {
+    // Unknown counts as dirty — the rule `_ws_gc_dirty`'s own comment states
+    // for the tracked half, applied to the half it cannot see. `find` prints
+    // `Permission denied` and carries on, so the entries under a chmod-000
+    // directory are simply ABSENT, which is the answer that says "no secrets
+    // here" about files nobody enumerated.
+    h.makeRepo('demo');
+    const wt = orphanWithIgnored('still-cove', { 'build/out.o': 'rubbish\n' });
+    fs.mkdirSync(path.join(wt, 'build', 'locked'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'locked', '.env'), 'SECRET=1\n');
+    fs.chmodSync(path.join(wt, 'build', 'locked'), 0o000);
+    try {
+      const out = prune();
+      expect(out, out).toContain('  declined   ');
+      expect(out).toContain('could not read the ignored set');
+      expect(fs.existsSync(wt)).toBe(true);
+      expect(out).not.toContain('removed orphan worktree');
+    } finally {
+      fs.chmodSync(path.join(wt, 'build', 'locked'), 0o755);
+    }
+  }, 30000);
+
   // THE load-bearing guard. ws-rm already refuses a dirty workspace; a sweep
   // that overrode that would make the refusal meaningless.
   it('NEVER touches a dirty tracked workspace', () => {
@@ -644,11 +766,23 @@ describe('_ws_gc_bytes', () => {
  *  understated number `_ws_gc_bytes` used to hand them. */
 describe('worktreeBytes: null on a partial read, at both call sites (finding F)', () => {
   const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; }; tmux() { return 1; }; _alive() { return 1; };`;
+  // FIXTURE NARROWED (final-round integration item 5, same round): the two
+  // subdirectories are GITIGNORED. A chmod-000 directory git WALKS makes
+  // `git status --porcelain` print `warning: could not open directory` on
+  // stderr, and both the archive manifest's tree read and `_ws_ignored_digest`
+  // now refuse on any diagnostic — so the un-narrowed fixture stopped reaching
+  // `_ws_gc_bytes` and asserted a different guard. Measured: gitignored, plain
+  // `status --porcelain` is rc 0 with EMPTY stderr and `--ignored=matching`
+  // collapses `blocked_sub/` without descending, while `du -sb` still walks in,
+  // still fails, and still prints the partial total. The du blind spot is
+  // reproduced exactly and nothing else is.
   const blockedWorktree = (): { wt: string } => {
     h.makeRepo('demo');
     const wt = addWs('demo', 'quiet-basin');
     const readable = path.join(wt, 'readable_sub');
     const blocked = path.join(wt, 'blocked_sub');
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'blocked_sub/\nreadable_sub/\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore the fixture dirs');
     fs.mkdirSync(readable, { recursive: true });
     fs.mkdirSync(blocked, { recursive: true });
     fs.writeFileSync(path.join(readable, 'f'), Buffer.alloc(102_400));
