@@ -18,7 +18,10 @@
 //   - comments anywhere, including inside the rule;
 //   - the selector appearing anywhere in a GROUPED selector list;
 //   - any whitespace, newlines included, around selectors, commas and braces;
-//   - any whitespace inside a declaration, and inside `var( … )`.
+//   - any whitespace inside a declaration, and inside `var( … )`;
+//   - the quote style of an attribute selector's value — `[data-state='x']`,
+//     `[data-state="x"]` and `[data-state=x]` are one selector, and prettier
+//     rewrites the first into the second.
 //
 // What it still fails on is exactly what the tests are about: the declaration
 // going missing, or its value changing.
@@ -52,24 +55,73 @@ function blankComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '));
 }
 
-/** The declaration block of the first rule whose selector list CONTAINS `sel`
- *  as a whole selector. Grouping-tolerant: `.a,\n.b {` is a rule for `.b`.
- *  Nested blocks (`@media`) are walked into, since the inner rules match on
- *  their own. Throws when there is no such rule — a rule renamed out from
- *  under a test is a failure, not a pass. */
-export function ruleIn(text: string, sel: string): string {
+/** `norm` for a SELECTOR: additionally unquotes attribute values, which carry
+ *  no meaning for any selector in this codebase and which prettier rewrites
+ *  from `'` to `"` on sight. Declaration values do NOT go through here — a
+ *  quote in a `content:` is significant. */
+export function normSel(sel: string): string {
+  return norm(sel).replace(/=(['"])(.*?)\1\]/g, '=$2]');
+}
+
+/** The first rule whose selector list CONTAINS `sel` as a whole selector, as
+ *  its normalised selector list plus its raw declaration block.
+ *  Grouping-tolerant: `.a,\n.b {` is a rule for `.b`. Nested blocks (`@media`)
+ *  are walked into, since the inner rules match on their own. Throws when
+ *  there is no such rule — a rule renamed out from under a test is a failure,
+ *  not a pass. */
+function findRule(text: string, sel: string): { selectors: string[]; body: string } {
   const scan = blankComments(text);
   const re = /([^{}]+)\{([^{}]*)\}/g;
   for (let m = re.exec(scan); m !== null; m = re.exec(scan)) {
     const prelude = m[1] ?? '';
     const body = m[2] ?? '';
-    const selectors = prelude.split(',').map((s) => norm(s)).filter((s) => s !== '');
-    if (selectors.includes(norm(sel))) {
+    const selectors = prelude.split(',').map((s) => normSel(s)).filter((s) => s !== '');
+    if (selectors.includes(normSel(sel))) {
       const start = m.index + prelude.length + 1;   // just past the '{'
-      return text.slice(start, start + body.length);
+      return { selectors, body: text.slice(start, start + body.length) };
     }
   }
   throw new Error(`no rule for ${sel}`);
+}
+
+/** The declaration block of the rule `findRule` finds. */
+export function ruleIn(text: string, sel: string): string {
+  return findRule(text, sel).body;
+}
+
+/** The whole normalised selector list of the rule `findRule` finds — for the
+ *  assertions that are about the GROUPING itself ("every coloured cell on this
+ *  row is in the one rule that neutralises them"), where reading the group back
+ *  out of the file as a text slice is the hand-rolled scrape this file
+ *  replaces. */
+export function selectorsOf(text: string, sel: string): string[] {
+  return findRule(text, sel).selectors;
+}
+
+/** The body of the at-rule whose prelude matches `prelude`, so a test about a
+ *  rule INSIDE `@media (forced-colors: active)` can say so, rather than
+ *  slicing the file at a literal and hoping the next same-named rule is the
+ *  one inside. Whitespace-tolerant on both sides of the colon too, since a
+ *  media feature is `(name: value)` and a formatter may close that gap.
+ *  Throws when there is no such at-rule. */
+export function atBlock(text: string, prelude: string): string {
+  const scan = blankComments(text);
+  const key = (s: string): string => norm(s).replace(/\s*:\s*/g, ':');
+  const want = key(prelude);
+  for (let at = scan.indexOf('@'); at >= 0; at = scan.indexOf('@', at + 1)) {
+    const open = scan.indexOf('{', at);
+    if (open < 0) break;
+    if (key(scan.slice(at, open)) !== want) continue;
+    let depth = 1;
+    let i = open + 1;
+    for (; i < scan.length && depth > 0; i += 1) {
+      if (scan[i] === '{') depth += 1;
+      else if (scan[i] === '}') depth -= 1;
+    }
+    if (depth !== 0) break;              // unbalanced: not a block we can trust
+    return text.slice(open + 1, i - 1);
+  }
+  throw new Error(`no at-rule for ${prelude}`);
 }
 
 /** The normalised value of `prop` in a declaration block, or null when the

@@ -24,6 +24,47 @@ const days = (epochSeconds: number): string => {
   return d <= 0 ? 'today' : `${d} day${d === 1 ? '' : 's'} ago`;
 };
 
+/** A byte total this screen was actually given, or the word for not having been
+ *  given one. Every size on the delete-confirmation surface goes through here.
+ *
+ *  `A number is a measurement`: a failed `du` yields `null`, never `0` — the
+ *  house rule deviation 10 and pre-merge finding F already closed for
+ *  `worktreeBytes`. `ignoredBytes` is the same figure for the not-in-git tree
+ *  and ccd is being fixed (verifier round 3 P3, ccd lane) to stop answering a
+ *  failed read with `0`; this is the display half, and it is safe to land
+ *  first because the honest branch is simply unreachable while the producer
+ *  still fabricates.
+ *
+ *  The parameter is wider than `WsAudit` currently declares on purpose. The
+ *  wire type for `ignoredBytes` is still `number` (widening it is svc's, and
+ *  `worktreeBytes` is already `number | null`), so this accepts `undefined`
+ *  too: an old server, or a field dropped anywhere between ccd and here,
+ *  renders the honest word instead of `NaN B`. Nothing about that degradation
+ *  waits on another lane.
+ *
+ *  `unknown` is a parameter only because the two rows read differently: the
+ *  worktree row is a bare figure in its own `<span>`, the not-in-git row is
+ *  inline after a count, where a bare "unknown" would not say unknown WHAT. */
+const sizeText = (bytes: number | null | undefined, unknown = 'unknown'): string =>
+  (typeof bytes === 'number' ? humanBytes(bytes) : unknown);
+
+/** The clips' total, which is a SUM and therefore the one figure here that can
+ *  be wrong without any single input being wrong: `n + c.bytes` silently
+ *  under-counts an unmeasured clip (`3 + null === 3`) and produces `NaN` for a
+ *  missing one — a partial total, which the house rule bans by name alongside
+ *  `0`. Same producer class as the two rows above (`_ws_clip_manifest`'s
+ *  per-clip `du -sb`, ccd:2811, still answers a failed read with 0; that half
+ *  is the ccd lane's), and the same answer ArchiveScreen already gives for a
+ *  partially measured set: state what WAS measured and disclose the rest,
+ *  rather than fold the unknown into the number. */
+const clipsSizeText = (clips: { bytes: number }[]): string => {
+  const measured = clips.map((c) => c.bytes).filter((b): b is number => typeof b === 'number');
+  const unmeasured = clips.length - measured.length;
+  if (measured.length === 0) return 'size unknown';
+  const total = humanBytes(measured.reduce((n, b) => n + b, 0));
+  return unmeasured === 0 ? total : `${total} + ${unmeasured} unmeasured`;
+};
+
 export function ReapSheet({
   session, open, onClose, onReaped,
 }: {
@@ -195,8 +236,10 @@ export function ReapSheet({
                     round, finding F: `worktreeBytes` is `number | null` —
                     `du` failing to read even one subdirectory used to hand
                     this a real, plausible, WRONG number instead of refusing
-                    to answer. `null` says "unknown" rather than guess. */}
-                <span className="reap-size">{shown.worktreeBytes === null ? 'unknown' : humanBytes(shown.worktreeBytes)}</span>
+                    to answer. `null` says "unknown" rather than guess. The
+                    ternary is `sizeText` now — one refusal, shared with the
+                    not-in-git total below, rather than two spellings of it. */}
+                <span className="reap-size">{sizeText(shown.worktreeBytes)}</span>
               </dd>
 
               <dt>uncommitted</dt>
@@ -204,7 +247,15 @@ export function ReapSheet({
 
               <dt>not in git</dt>
               <dd>
-                {`${shown.ignoredCount} entries, ${humanBytes(shown.ignoredBytes)}`}
+                {/* Verifier round 3, P3 (display half). This is the sole size
+                    figure a human reads for the not-in-git tree before
+                    authorising an irreversible `rm -rf`, and it was printed
+                    with `humanBytes` directly — so the moment the producer
+                    hands over anything other than a number, the screen either
+                    states a total it does not have or says `NaN B`. `sizeText`
+                    refuses instead, in the same word the worktree row two
+                    `<dd>`s above already uses. */}
+                {`${shown.ignoredCount} entries, ${sizeText(shown.ignoredBytes, 'size unknown')}`}
                 {shown.ignored.length > 0 && (
                   <span className="reap-ignored">
                     {(expanded ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
@@ -249,7 +300,7 @@ export function ReapSheet({
               <dd>
                 {shown.clips.length === 0 ? 'none'
                   : `${shown.clips.length} pasted image${shown.clips.length === 1 ? '' : 's'}, `
-                    + humanBytes(shown.clips.reduce((n, c) => n + c.bytes, 0))}
+                    + clipsSizeText(shown.clips)}
                 {/* Distinguishable from the "not in git" row's identical-meaning
                     note just above (deviation, Task 17): both are `reap-note`
                     spans and RTL's `getByText` throws on more than one match,
@@ -298,8 +349,10 @@ export function ReapSheet({
               <button type="button" className="btn-primary reap-go" disabled={busy} onClick={confirm}>
                 {/* The confirm this whole design exists to protect: it must
                     say "unknown size", never a number `du` could not stand
-                    behind (finding F). */}
-                {`Remove ${slug} · ${shown.worktreeBytes === null ? 'unknown size' : humanBytes(shown.worktreeBytes)}`}
+                    behind (finding F). `sizeText` rather than a third spelling
+                    of the same ternary, so an ABSENT figure refuses here too
+                    instead of reaching the button as `NaN B`. */}
+                {`Remove ${slug} · ${sizeText(shown.worktreeBytes, 'unknown size')}`}
               </button>
             )}
 

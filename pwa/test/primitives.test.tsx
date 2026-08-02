@@ -8,6 +8,7 @@ import { Skeleton } from '../src/components/Skeleton';
 import { Sheet } from '../src/components/Sheet';
 import { QuickConfirm } from '../src/components/QuickConfirm';
 import { toast, ToastHost } from '../src/components/Toast';
+import { declValue, ruleIn } from './cssRule';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
 afterEach(() => {
@@ -183,15 +184,19 @@ describe('Sheet', () => {
       path.resolve(process.cwd(), 'src/components/primitives.css'),
       'utf8',
     );
-    const rule = (selector: string): string => {
-      const found = css.match(new RegExp(`^\\${selector}\\s*\\{[^}]*\\}`, 'm'))?.[0] ?? '';
-      expect(found).not.toBe('');
-      return found;
-    };
+    // Shared rule reader (test/cssRule.ts), not a hand-rolled copy — fix round
+    // 4, controller item 1. The copy that used to live here was `^`-anchored
+    // with the `m` flag, so re-indenting primitives.css — a file this lane does
+    // not own — or grouping `.sheet-title` with a sibling selector turned these
+    // assertions into a thrown "" and a failure about nothing. `declValue`
+    // reads the DECLARATION, so it still fails when the value changes or the
+    // declaration is dropped, and it also catches a later override of the same
+    // property inside the same rule, which `toMatch` did not.
+    const rule = (selector: string): string => ruleIn(css, selector);
 
     it('lets a long unbroken token in the title and the eyebrow wrap', () => {
-      expect(rule('.sheet-title')).toMatch(/overflow-wrap:\s*anywhere/);
-      expect(rule('.sheet-eyebrow')).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(declValue(rule('.sheet-title'), 'overflow-wrap')).toBe('anywhere');
+      expect(declValue(rule('.sheet-eyebrow'), 'overflow-wrap')).toBe('anywhere');
     });
 
     // The markup this replaced rendered the question in .dlg-body, capped at
@@ -201,8 +206,8 @@ describe('Sheet', () => {
     // heading. Short titles never reach the cap, so it stays invisible.
     it('caps the title with its own scroller, as .dlg-body was', () => {
       const title = rule('.sheet-title');
-      expect(title).toMatch(/max-height:\s*38vh/);
-      expect(title).toMatch(/overflow-y:\s*auto/);
+      expect(declValue(title, 'max-height')).toBe('38vh');
+      expect(declValue(title, 'overflow-y')).toBe('auto');
     });
   });
 });

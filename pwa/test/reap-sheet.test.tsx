@@ -167,6 +167,45 @@ describe('the manifest', () => {
       expect(screen.getByRole('button', { name: 'show all 5' })).toBeInTheDocument();
     });
 
+    // Fix round 4, controller item 2. `load()` resets `showAll` to null on
+    // every new target and every Re-check, so each audit's list opens on a
+    // default chosen from ITS OWN facts. The line was shipped in round 3 with
+    // the behaviour claimed in prose and never measured: deleting
+    // `setShowAll(null)` left the whole suite green. This is the pin.
+    //
+    // It matters here more than on most screens: this is the sheet whose
+    // primary button is an irreversible `rm -rf`, and the entry a stale
+    // `showAll = false` hides is precisely the noise-filtered secret-shaped
+    // one — ccd sorts it last (non-sensitive, ccd:1996-2000; sensitive-first
+    // then bytes-descending, ccd:2561), so it is the first thing the cap eats.
+    it('lets a new target choose its own default instead of inheriting the last one', async () => {
+      const first = audit({ ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020,
+        sensitiveFiltered: 1 });
+      const next = audit({ id: 'demo-far-shore', branch: 'ws/far-shore',
+        ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020, sensitiveFiltered: 3 });
+      vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+        new Response(JSON.stringify(String(url).includes('far-shore') ? next : first),
+          { status: 200, headers: { 'content-type': 'application/json' } })));
+      const sheet = (s: FleetSession): ReactElement => (
+        <><ToastHost /><ReapSheet session={s} open onClose={() => {}} onReaped={() => {}} /></>
+      );
+
+      // Session A filtered something, so its list opened expanded; the reader
+      // collapses it back.
+      const view = render(sheet(sess()));
+      fireEvent.click(await screen.findByRole('button', { name: 'show fewer' }));
+      expect(screen.queryByText(/config\/secrets\.template\.env/)).not.toBeInTheDocument();
+
+      // The reap target changes to a session that filtered THREE. Its own
+      // facts say expanded; the previous session's tap must not outvote them.
+      view.rerender(sheet(sess({ id: 'demo-far-shore', workspace: 'far-shore',
+        branch: 'ws/far-shore' })));
+      expect(await screen.findByText(/config\/secrets\.template\.env/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'show fewer' })).toBeInTheDocument();
+      expect(screen.getByText(/filtered as vendored\/template\./))
+        .toHaveTextContent('Every ignored entry is named above.');
+    });
+
     it('claims nothing about a list that is short enough to be whole', async () => {
       // Three entries are never capped, so the note must not send the reader
       // looking for a toggle that is not rendered.
@@ -318,6 +357,35 @@ describe('mutation-sweep closures', () => {
     expect(await screen.findByRole('button', { name: 'Remove quiet-basin · unknown size' })).toBeInTheDocument();
   });
 
+  // Verifier round 3, P3 — the twelfth measurement-forgery instance. ccd
+  // answers a failed `du` on an ignored entry with `bytes=0` (ccd:1990) and
+  // folds it into `ignoredBytes` (ccd:2559-2560), so an unreadable tree of
+  // gigabytes was printed as "1 entries, 0 B" as the sole size figure above an
+  // irreversible Remove. The producer half is the ccd lane's and the wire type
+  // (`ignoredBytes: number`) is svc's; THIS is the display half, and it lands
+  // first on purpose — the screen must already be honest on the day the 0
+  // stops being fabricated, and it must not print `NaN B` in the meanwhile if
+  // the field goes missing between ccd and here.
+  //
+  // Both fixtures therefore go round the compile-time type deliberately: they
+  // are what the RUNTIME can hand this component, which is the only thing the
+  // rendering can be judged against.
+  it('says "size unknown", never a number, when ignoredBytes is not a measurement', async () => {
+    auditBody = { ...audit(), ignoredBytes: null };
+    open();
+    expect(await screen.findByText(/3 entries, size unknown/)).toBeInTheDocument();
+    // The count and the names are still stated — refusing the TOTAL is not
+    // refusing the row.
+    expect(screen.getByText(/node_modules\/ · dist\/ · .ccrc\//)).toBeInTheDocument();
+  });
+
+  it('degrades to "size unknown" rather than NaN when the field is absent entirely', async () => {
+    const { ignoredBytes: _dropped, ...withoutTheField } = audit();
+    auditBody = withoutTheField;
+    open();
+    expect(await screen.findByText(/3 entries, size unknown/)).toBeInTheDocument();
+  });
+
   it('says "today" at the merge-age boundary, not "0 days ago"', async () => {
     auditBody = audit({ merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) } });
     open();
@@ -369,6 +437,28 @@ describe('mutation-sweep closures', () => {
     open();
     expect(await screen.findByText('2 pasted images, 3 MB')).toBeInTheDocument();
     expect(screen.getByText('These pastes are in no commit and cannot be recovered.')).toBeInTheDocument();
+  });
+
+  // Same class as the two rows above, and the only figure on this sheet that
+  // is a SUM: `clips.reduce((n, c) => n + c.bytes, 0)` under-counts an
+  // unmeasured clip silently (`3 + null === 3`) and NaNs a missing one, either
+  // way stating a total the sheet was not given. The producer half
+  // (`_ws_clip_manifest`, ccd:2811) is the ccd lane's; the disclosure is
+  // ArchiveScreen's existing answer for a partially measured set.
+  it('discloses an unmeasured clip instead of folding it into the total', async () => {
+    // Past the compile-time type on purpose, exactly as the two ignoredBytes
+    // fixtures above are: `clips[].bytes` is still `number` on the wire
+    // (widening it is svc's), and what this asserts is what the RUNTIME does
+    // with the value ccd is being fixed to send.
+    auditBody = { ...audit(), clips: [{ name: 'a.png', bytes: 1_000_000 }, { name: 'b.png', bytes: null }] };
+    open();
+    expect(await screen.findByText('2 pasted images, 1 MB + 1 unmeasured')).toBeInTheDocument();
+  });
+
+  it('refuses the clips total outright when no clip was measured at all', async () => {
+    auditBody = { ...audit(), clips: [{ name: 'a.png', bytes: null }] };
+    open();
+    expect(await screen.findByText('1 pasted image, size unknown')).toBeInTheDocument();
   });
 
   it('counts stashes instead of collapsing them to "none"', async () => {
