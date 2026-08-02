@@ -30,6 +30,7 @@ import {
   OPACITY_REGISTRY,
   SELF_GROUNDED_EXEMPT,
   audit,
+  bgOf,
   contrast,
   declOf,
   keyframeTroughs,
@@ -263,6 +264,36 @@ describe('the gate fails a mutated tree', () => {
     expect(o).toMatch(/FAIL\s+1\.00 .*chat\.css \.msg-assist \.md-body \.callout::before/);
   });
 
+  // ── the value the browser paints, not the first one written ───────────────
+  // verify3-css P2. `declOf` took the FIRST matching declaration; CSS applies
+  // the LAST. `background: <fallback>; background: var(--x)` is the standard
+  // progressive-enhancement idiom, so this was one ordinary rule away from
+  // auditing every duplicated property against a value nothing paints.
+  it.each([
+    [
+      'a duplicated `background` — the second one is what paints',
+      '.e7-mutant { color: var(--ink-secondary); background: var(--bg-surface); background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7-mutant/,
+    ],
+    [
+      'a duplicated `color` — the second one is what paints',
+      '.e7b-mutant { background: var(--bg-well); color: var(--ink-on-well); color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7b-mutant/,
+    ],
+    [
+      'a duplicated `opacity` — the second one is what fades',
+      '.e10-mutant { opacity: 1; opacity: 0.72; }',
+      /unregistered fade chat\.css \.e10-mutant 0\.72/,
+    ],
+    [
+      '`background: none` reset, then a `background-color` longhand',
+      '.e1-mutant { color: var(--ink-secondary); background: none; background-color: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.e1-mutant/,
+    ],
+  ])('the gate measures %s', (_n, rule, want) => {
+    expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
   it('a new element fade is added with no contrast decision', () => {
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 0.72; }\n.pr-check-names {'));
@@ -445,6 +476,33 @@ describe('the auditor itself', () => {
     ['calc(1 - 0.28)', null],
   ])('reads `opacity: %s` as %s', (raw, want) => {
     expect(opacityNumber(raw as string)).toBe(want);
+  });
+
+  it.each([
+    // body, prop, the value the BROWSER ends up with
+    ['color: var(--a)', 'color', 'var(--a)'],
+    ['color: var(--a); color: var(--b)', 'color', 'var(--b)'],
+    ['color: var(--a); color: var(--b); color: var(--c)', 'color', 'var(--c)'],
+    ['opacity: 1; opacity: 0.72', 'opacity', '0.72'],
+    // A longer property name is not a declaration of the shorter one.
+    ['background-image: url(x)', 'background', null],
+    ['-webkit-background: red', 'background', null],
+    ['border-color: red', 'color', null],
+  ])('declOf(%s, %s) is the LAST declaration: %s', (body, prop, want) => {
+    expect(declOf(body as string, prop as string)).toBe(want);
+  });
+
+  it.each([
+    // `background` and `background-color` write ONE cascaded value, so the
+    // answer is source order — neither is the other's fallback.
+    ['background: none; background-color: var(--bg-well)', 'var(--bg-well)'],
+    ['background-color: var(--bg-well); background: none', 'none'],
+    ['background: var(--bg-surface); background: var(--bg-well)', 'var(--bg-well)'],
+    ['background-color: var(--a); background-color: var(--b)', 'var(--b)'],
+    ['color: red', null],
+    ['background-image: url(x); background-position: 0 0', null],
+  ])('bgOf(%s) is %s', (body, want) => {
+    expect(bgOf(body as string)).toBe(want);
   });
 
   it('exposes exactly the report shape the types promise', () => {

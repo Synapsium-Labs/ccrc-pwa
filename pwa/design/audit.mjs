@@ -244,9 +244,29 @@ export function rulesOf(root, rel) {
 
 export const ruleKey = (r) => `${r.file} ${r.selector}`;
 
+/** The value a rule ends up with for `prop`, which is the value of its LAST
+ *  declaration of it — the auditor used to take the FIRST, so any rule with a
+ *  duplicated `color`, `background` or `opacity` was measured against a value
+ *  the browser does not paint. `background: <fallback>; background: var(--x)`
+ *  is the standard progressive-enhancement idiom, and both the reported 2.44:1
+ *  blocker shape and an unregistered fade passed green through it. */
 export const declOf = (body, prop) => {
-  const m = new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+)`).exec(body);
-  return m ? m[1].trim() : null;
+  let last = null;
+  for (const m of body.matchAll(new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+)`, 'g'))) last = m[1].trim();
+  return last;
+};
+
+/** The background PAINT a rule ends up with. `background` and
+ *  `background-color` write the SAME cascaded value, so the answer is whichever
+ *  is written last, not `background ?? background-color`:
+ *  `background: none; background-color: var(--bg-well)` paints the well, and
+ *  the auditor used to say it painted nothing. `background` here is the
+ *  shorthand, so a value with more than a colour in it will not resolve — and
+ *  must not: an unparsed paint is a FAIL, never a skip. */
+export const bgOf = (body) => {
+  let last = null;
+  for (const m of body.matchAll(/(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/g)) last = m[1].trim();
+  return last;
 };
 
 /** Custom properties a rule declares in its OWN body shadow the theme for that
@@ -512,7 +532,6 @@ export function audit(root = PWA_ROOT) {
     measured.push({ label: `${theme} ${label}`, ratio: r, floor, ok: r >= floor, detail });
 
   const isColour = (v) => v !== null && !/^(inherit|currentColor|unset|initial|revert)$/i.test(v);
-  const bgOf = (body) => declOf(body, 'background') ?? declOf(body, 'background-color');
   const isPaint = (v) => v !== null && !/^(none|inherit|unset|initial|revert)$/i.test(v);
 
   const selfGrounded = rules.filter(
