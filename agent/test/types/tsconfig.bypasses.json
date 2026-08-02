@@ -1,0 +1,6 @@
+{
+  "_comment": "Final review, gates finding 4: the four ways of granting `gh` (or drifting the key set) that must FAIL to compile. This project MUST FAIL, and whitelist-structural.test.ts asserts the exact error code per file. Kept out of the agent's real tsconfig and out of tsconfig.tests.json deliberately — these files are supposed to be broken.",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"] },
+  "include": ["bypasses/**/*.ts"]
+}

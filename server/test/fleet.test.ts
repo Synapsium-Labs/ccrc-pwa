@@ -177,7 +177,15 @@ describe('PR state on the wire', () => {
     seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', prphase: 'open', prnumber: '7' });
     const live = new Map<string, PrState>([['demo-quiet-basin', {
       phase: 'merged', number: 7, url: 'u', title: 't', checks: 'pass', checkNames: null,
-      ahead: 3, reason: null, checkedAt: 5, mergedAt: 4,
+      // `retryAt` is REQUIRED on `PrState` (shared/api.ts) and was missing here.
+      // Harmless at runtime — `assembleFleet` only reads `.phase` — but it was
+      // a real TS2769 that no gate could see, because the server's tsconfig
+      // `include` never covered `test/`. Deviation 80 carried it knowingly;
+      // final review, integration finding 4 confirmed it was the ONLY one
+      // hiding in the whole directory. `null` is the right value, not `0`: a
+      // merged PR has no scheduled retry, and a number here would be a
+      // measurement nobody made.
+      ahead: 3, reason: null, checkedAt: 5, mergedAt: 4, retryAt: null,
     }]]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })),

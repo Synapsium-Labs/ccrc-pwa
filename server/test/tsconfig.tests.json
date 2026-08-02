@@ -1,0 +1,7 @@
+{
+  "_comment": "Final review, integration finding 4: `server/tsconfig.json`'s include is [\"src/**/*.ts\",\"../shared/**/*.ts\"], so this whole directory was OUTSIDE the typechecker — which is how a live TS2769 in fleet.test.ts sat here undetected. This project is the same compilerOptions plus test/, run by typecheck-tests.test.ts so the EXISTING server suite gate covers it; it is deliberately separate from tsconfig.json rather than a widened include, because `npm run build` emits from that config and must not emit tests into dist/. `types/**` is excluded: those are the deliberately non-compiling brand- and whitelist-bypass fixtures, which have their own projects and MUST fail.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["../src/**/*.ts", "./**/*.ts", "../../shared/**/*.ts"],
+  "exclude": ["types/**"]
+}

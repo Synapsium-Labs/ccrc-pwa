@@ -90,10 +90,94 @@ export async function checkPath(
   return readAllowed ? canonicalTarget : null;
 }
 
+/**
+ * The CLOSED set of command names `EXEC_WHITELIST` may key on. `ExecWhitelist`
+ * below is `Record<ExecCommand, …>`, so writing `gh: [['pr','view']]` into that
+ * object literal is a COMPILE ERROR (TS2353 excess property / TS2561) — at any
+ * position in the literal, because a type has no notion of "above `ccd:`".
+ *
+ * WHY THIS SHAPE (final review, gates finding 4). The no-`gh` invariant — the
+ * branch's own stated most dangerous change — used to be pinned by exactly one
+ * test in one file: deleting `test/whitelist-noghosts.test.ts` and adding a
+ * `gh` key left the agent suite at 99/99 PASS and the server's cross-check at
+ * 35/35 PASS (both measured on `4e8b689`). A safety invariant a single `rm`
+ * silently removes is not enforced. The human partner's standing ruling on this
+ * class is STRUCTURAL OVER TEXTUAL — the same ruling that replaced layer 2b's
+ * source-text scan with the `CcdArgv` brand (`server/src/ccdargv.ts`) after
+ * four different ways of naming a value defeated four regexes in a row.
+ *
+ * So the pin is now four independent mechanisms in three different classes,
+ * only one of which is a test file:
+ *
+ *   1. TYPE (this union + `ExecWhitelist`) — the key fails to compile.
+ *   2. TYPE (`GRANTABLE_COMMANDS` below) — widening THIS union to make (1)
+ *      compile is itself a compile error, on a different line.
+ *   3. RUNTIME (`auditExecWhitelist`, called at module load) — a forbidden key
+ *      makes the agent process THROW ON IMPORT, i.e. refuse to boot. This one
+ *      is not a test and not a type: it survives a cast, an `as any`, a
+ *      `JSON.parse`, and a hand-edit of the compiled `dist/` JS — the exact
+ *      residual class `ccdargv.ts` documents that a brand CANNOT close.
+ *   4. TESTS — `test/whitelist-noghosts.test.ts` (agent, runtime),
+ *      `test/types/bypasses/*` + `whitelist-structural.test.ts` (agent, asserts
+ *      the compile errors of 1 and 2 actually occur), and layer 3 of
+ *      `server/test/whitelist-subset.test.ts` (a DIFFERENT PACKAGE, asserting
+ *      `Object.keys(EXEC_WHITELIST)` exactly — position-independent, unlike the
+ *      old source-text slice, which only saw keys written below the `ccd` one).
+ *
+ * Honest limit, stated rather than implied: nothing in a repository the editor
+ * fully controls can be un-removable. What changed is the cost and the
+ * visibility — granting `gh` now takes edits to three separately named
+ * constants in this file plus deletions in two packages, and every one of them
+ * says in its own name what it is for. It can no longer happen by `rm`, by
+ * accident, or by a diff that reads as ordinary.
+ */
+export const EXEC_COMMANDS = ['tmux', 'ccd'] as const;
+export type ExecCommand = (typeof EXEC_COMMANDS)[number];
+
+/**
+ * Names that must NEVER become grantable, whatever a future route claims to
+ * need. `gh` is the one that matters and the reason this list exists: the host
+ * token carries the `repo` WRITE scope and there is no second credential, so a
+ * single `gh` grant makes `EXEC_WHITELIST` the sole control between the PWA and
+ * `gh pr merge`. The rest are the obvious shell-equivalent escapes — anything
+ * here can spawn arbitrary commands, exfiltrate the token, or reach the network
+ * directly, which would make every other control in this file decorative.
+ */
+export const FORBIDDEN_COMMANDS = [
+  'gh', 'hub', 'git', 'glab',
+  'sh', 'bash', 'zsh', 'dash', 'env', 'xargs', 'eval', 'exec',
+  'node', 'npm', 'npx', 'tsx', 'python', 'python3', 'perl', 'ruby',
+  'ssh', 'scp', 'sftp', 'rsync', 'curl', 'wget', 'nc',
+  'sudo', 'doas', 'su', 'rm', 'dd', 'mkfs', 'chmod', 'chown',
+  'systemctl', 'journalctl', 'docker', 'podman', 'kubectl', 'crontab',
+] as const;
+export type ForbiddenCommand = (typeof FORBIDDEN_COMMANDS)[number];
+
+/**
+ * Mechanism 2. Evaluates to `ExecCommand` while the grantable and forbidden
+ * sets are disjoint, and to `never` the instant they overlap — so adding `'gh'`
+ * to `EXEC_COMMANDS` (the only way to make a `gh` key compile) turns the
+ * annotation below into `readonly never[]` and the initializer stops
+ * typechecking, TS2322. `[…] extends […]` rather than a bare conditional so the
+ * `Extract` result is checked as a whole and not distributed member-by-member.
+ */
+type ProvenGrantable = [Extract<ExecCommand, ForbiddenCommand>] extends [never] ? ExecCommand : never;
+
+/** The value of `EXEC_COMMANDS`, but only assignable while the proof holds.
+ *  Consumed by `auditExecWhitelist`, so this is a live constant and not an
+ *  unused type-test that a tidy-up could delete without noticing. */
+export const GRANTABLE_COMMANDS: readonly ProvenGrantable[] = EXEC_COMMANDS;
+
+/** The annotation on the real object literal below — exported so the negative
+ *  type fixtures in `test/types/bypasses/` can replay the exact mutation the
+ *  final review performed (`gh: [['pr','view']]`, above AND below `ccd:`)
+ *  against the same type the real site is checked against. */
+export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
+
 /** cmd -> allowed argv PREFIXES. `args` must begin with one of them; tokens
  *  after the prefix are unconstrained. One-token prefixes are exactly the old
  *  behaviour, so every pre-existing entry is bit-identical. */
-const EXEC_WHITELIST: Record<string, readonly (readonly string[])[]> = {
+export const EXEC_WHITELIST: ExecWhitelist = {
   tmux: [['has-session'], ['list-panes'], ['capture-pane'], ['send-keys'], ['resize-window']],
 
   // NO `gh` KEY, DELIBERATELY. The host token carries the `repo` WRITE scope
@@ -122,6 +206,66 @@ const EXEC_WHITELIST: Record<string, readonly (readonly string[])[]> = {
   ],
 };
 
+// The list is exported so a different package can assert its keys; freezing it
+// (outer object, each prefix list, each prefix) means "exported for reading"
+// stays true at RUNTIME too. Same reasoning as the mint-site freeze in
+// `server/src/ccdargv.ts`: the type already forbids `EXEC_WHITELIST.ccd.push`,
+// and the freeze is what stops the untyped shapes — `as any`, a `JSON.parse`
+// result, array covariance — from reaching in and widening the list in place.
+for (const prefixes of Object.values(EXEC_WHITELIST)) {
+  for (const prefix of prefixes) Object.freeze(prefix);
+  Object.freeze(prefixes);
+}
+Object.freeze(EXEC_WHITELIST);
+
+/**
+ * Mechanism 3 of the no-`gh` pin: a RUNTIME self-audit, run once at module
+ * load (see the call directly below), which throws — so the agent refuses to
+ * boot rather than serving a widened list.
+ *
+ * This is deliberately not a test and deliberately not a type. `ccdargv.ts`
+ * discloses that a nominal brand cannot stop a deliberate cast, array
+ * covariance, or an `any`-typed value; none of those help here, because this
+ * reads the ACTUAL object's own keys at runtime, after every cast has already
+ * happened. It also survives the case no type can reach at all: someone editing
+ * the compiled `dist/whitelist.js` on the fleet host.
+ *
+ * Two separate refusals, because "not forbidden" and "declared" are different
+ * questions: a `gh` key is a security failure, and a key that is merely absent
+ * from `GRANTABLE_COMMANDS` (or a declared command with no entry) is a drift
+ * failure that would otherwise ship as a silent 502 on the live fleet.
+ *
+ * Takes the object as a parameter, defaulted, so the pinning test can hand it a
+ * real widened whitelist and observe the real throw — rather than asserting
+ * only that today's list is fine, which would be a pin that cannot fail.
+ */
+export function auditExecWhitelist(
+  whitelist: Readonly<Record<string, unknown>> = EXEC_WHITELIST,
+): void {
+  const keys = Object.keys(whitelist);
+
+  const forbidden = keys.filter((k) => (FORBIDDEN_COMMANDS as readonly string[]).includes(k));
+  if (forbidden.length > 0) {
+    throw new Error(
+      `EXEC_WHITELIST grants a forbidden command: ${forbidden.join(', ')}. ` +
+      'Refusing to start. The host gh token carries the repo WRITE scope and ' +
+      'there is no second credential; a gh grant makes this list the sole ' +
+      'control between the PWA and `gh pr merge`. See whitelist.ts.',
+    );
+  }
+
+  const declared = [...GRANTABLE_COMMANDS].sort();
+  const actual = [...keys].sort();
+  if (actual.length !== declared.length || actual.some((k, i) => k !== declared[i])) {
+    throw new Error(
+      `EXEC_WHITELIST keys drifted from EXEC_COMMANDS: have [${actual.join(', ')}], ` +
+      `declared [${declared.join(', ')}]. Refusing to start.`,
+    );
+  }
+}
+
+auditExecWhitelist();
+
 /**
  * Requires an EXACT match against the bare command name (`tmux`/`ccd`) —
  * NOT a basename match. Basename matching would let an absolute path like
@@ -133,11 +277,34 @@ const EXEC_WHITELIST: Record<string, readonly (readonly string[])[]> = {
  * for why: an untyped WS frame reaching a node:path call unchecked is a
  * process-crashing bug class, and `path.basename`/`args[0]` on the wrong
  * type throws synchronously).
+ *
+ * PROTOTYPE-NAMED COMMANDS (final review, gates finding 6 / destructive F7).
+ * `EXEC_WHITELIST` is an object literal, so the old `EXEC_WHITELIST[cmd]`
+ * returned an INHERITED value for `constructor`, `__proto__`, `toString`,
+ * `valueOf`, `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable` and
+ * `toLocaleString` — truthy, so `if (!prefixes) return false` did not fire, and
+ * `prefixes.some(...)` threw `TypeError: prefixes.some is not a function`
+ * (measured on all eight). It failed CLOSED — the throw is a rejection that
+ * `server.ts`'s `handleReq(...).catch(...)` turns into a `fail` frame — so this
+ * was never an escalation, and it is pre-existing: the pre-branch
+ * `allowedSubs.includes(sub)` had the identical hazard. But a throw is the
+ * wrong answer to "is this allowed?", and it is one tidy-up `try { … } catch`
+ * away from becoming a real hole, in a function whose own siblings
+ * (`canonicalize`, `checkPath`) were already hardened against exactly this
+ * class. Two independent guards now answer it: `Object.hasOwn` (the
+ * semantically correct question — is this a key we DECLARED?) and
+ * `Array.isArray` (the structural one — an inherited function or prototype
+ * object is not a prefix list). Either alone suffices; both are cheap.
  */
 export function isExecAllowed(cmd: string, args: string[]): boolean {
   if (typeof cmd !== 'string' || cmd.length === 0 || cmd.includes('/')) return false;
-  const prefixes = EXEC_WHITELIST[cmd];
-  if (!prefixes) return false;
+  if (!Object.hasOwn(EXEC_WHITELIST, cmd)) return false;
+  const entry = (EXEC_WHITELIST as Readonly<Record<string, readonly (readonly string[])[] | undefined>>)[cmd];
+  if (!Array.isArray(entry)) return false;
+  // Re-annotated rather than cast: `Array.isArray` narrows a `readonly T[]` to
+  // `any[]`, and letting that `any` flow into the callbacks below would silently
+  // un-typecheck the prefix comparison itself (measured: TS7006 on `tok`/`i`).
+  const prefixes: readonly (readonly string[])[] = entry;
   if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) return false;
   // MUTATION SURVIVOR, disclosed: `p.length <= args.length &&` is removable
   // with the suite green, and provably always will be. It is a fast path, not a
