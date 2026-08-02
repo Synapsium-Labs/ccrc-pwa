@@ -252,6 +252,46 @@ describe('archive and restore', () => {
     expect(calls).toContainEqual(['ws-restore', '--session', 'demo-quiet-basin']);
     await a.close();
   });
+
+  // ROUND 3, NF10's class left open in the two routes ADJACENT to the one the
+  // round-2 fix closed. `ws-archive`/`ws-restore` are the same verb generation
+  // as `ws-audit` — added by this branch, consecutive in `ccd caps` — so on a
+  // fleet host with an older ccd the argv went out, ccd died in its own
+  // `[[ $# -eq 2 ]] || die "usage: ..."`, and `runCcdOr502` rendered a bare 502
+  // "the archive failed" for what is really "this host cannot do that yet".
+  // Both halves per route, because either alone is satisfiable by a wrong fix:
+  // the status AND body must match every sibling's, and ccd must not be called.
+  it.each([
+    ['archive', 'ws-archive', ['start', 'ws-restore']],
+    ['restore', 'ws-restore', ['start', 'ws-archive']],
+  ] as [string, string, string[]][])(
+    '501s when the deployed ccd has no %s verb, and shells out to nothing',
+    async (route, verb, others) => {
+      const { app: a, calls } = await app('', 0, '', others);
+      const res = await a.inject({ method: 'POST', url: `/api/sessions/demo-quiet-basin/${route}` });
+      expect(res.statusCode).toBe(501);
+      expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
+      expect(calls).toEqual([]);
+      // The sibling verb being advertised is what makes this a per-verb gate
+      // and not one shared "is the fleet new enough" flag.
+      expect(others).not.toContain(verb);
+      await a.close();
+    });
+
+  // The other direction, so "501 always" is not a passing fix, and `null`
+  // verbs (local mode, or an agent too old to send a list) must still permit.
+  it.each([
+    ['archive', 'ws-archive'],
+    ['restore', 'ws-restore'],
+  ])('still runs %s when the fleet advertised the verb, and when it advertised nothing', async (route, verb) => {
+    for (const verbs of [[verb], null] as (string[] | null)[]) {
+      const { app: a, calls } = await app('done', 0, '', verbs);
+      const res = await a.inject({ method: 'POST', url: `/api/sessions/demo-quiet-basin/${route}` });
+      expect(res.statusCode, JSON.stringify(verbs)).toBe(200);
+      expect(calls).toContainEqual([verb, '--session', 'demo-quiet-basin']);
+      await a.close();
+    }
+  });
 });
 
 describe('audit and reap', () => {

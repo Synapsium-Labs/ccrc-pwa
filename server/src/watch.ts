@@ -304,7 +304,16 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       if (pr?.phase !== 'merged') continue;                 // unknown NEVER archives
       if ((await this.archiveSafety(r.id)) !== 'ok') continue;   // defers; the next sweep retries
-      const res = await this.deps.runCcd(CCD_ARGV.wsArchive(r.id));
+      const argv = CCD_ARGV.wsArchive(r.id);
+      // The same gate the `pr-state` sweep above and the `/archive` route
+      // apply. Third instance of NF10's class, found in round 3: on a host
+      // whose ccd predates `ws-archive` this call can only fail its usage
+      // check, and being level-triggered it would re-fire for every merged
+      // session on every sweep, forever. Skipping writes no state — the level
+      // stays `merged`, so the archive happens on the first sweep after the
+      // host is upgraded.
+      if (!verbSupported(this.deps.fleetState, argv)) continue;
+      const res = await this.deps.runCcd(argv);
       if (!res.ok) continue;
       if (res.stdout.startsWith('already archived')) continue;   // idempotent re-fire: no second push
       // AFTER the fact, and it promises only navigation: PushPayload is

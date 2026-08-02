@@ -465,14 +465,29 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return runCcdOr502(reply, CCD_ARGV.wsArchive(id));
+    const argv = CCD_ARGV.wsArchive(id);
+    // `ws-archive` is the SAME verb generation as `ws-audit` and `ws-reap` —
+    // all four were added by this branch and all four sit consecutively in
+    // `ccd caps` — so a fleet host on an older ccd dies in the verb's own
+    // usage check, and `runCcdOr502` renders that as a bare 502 "the archive
+    // failed". Same 501 body as every sibling, so the client can tell
+    // "this host cannot" from "it tried and could not".
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    return runCcdOr502(reply, argv);
   });
 
   app.post('/api/sessions/:id/restore', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return runCcdOr502(reply, CCD_ARGV.wsRestore(id));
+    const argv = CCD_ARGV.wsRestore(id);
+    // Same generation, same skew, same answer as `/archive` above.
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    return runCcdOr502(reply, argv);
   });
 
   app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {
@@ -480,15 +495,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const argv = CCD_ARGV.wsAudit(id);
-    // integration New Finding 10 — this was the ONE ccd route with no
-    // `verbSupported` gate (measured: server.ts:434, :456, :499 had it, the
-    // audit route did not). Against a fleet host running a ccd without
+    // integration New Finding 10 — against a fleet host running a ccd without
     // `ws-audit`, the call went out anyway, ccd answered on stderr, `parseAudit`
     // returned null and the route 502'd — so version skew rendered as a failure
     // of the workspace rather than as the "unsupported" answer the rest of the
     // branch gives. Same shape and same body as the reap route below, which is
     // the route this one exists to feed: a 501 the client can tell apart from
     // "ccd tried and could not".
+    //
+    // ROUND-3 CORRECTION. The sentence that stood here claimed this was "the
+    // ONE ccd route with no `verbSupported` gate (measured: server.ts:434,
+    // :456, :499 had it, the audit route did not)". That was FALSE, and the
+    // measurement it cited is why: it grepped for the routes that ALREADY HAD
+    // a gate, not for the routes that NEEDED one. `/archive`, `/restore` and
+    // `FleetWatcher.archiveMerged` were all missing theirs, all three are the
+    // same verb generation as this route, and all three were added by this
+    // same branch. All three are gated now. The claim of completeness is no
+    // longer made in prose: `verb-gate.test.ts` parses `server/src` for every
+    // `CCD_ARGV.*` call site and fails on an ungated one it has not been told
+    // about, so the next omission breaks a test instead of being asserted away
+    // by a comment.
     if (!verbSupported(deps.fleetState, argv)) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }

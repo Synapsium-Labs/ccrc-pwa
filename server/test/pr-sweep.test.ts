@@ -646,6 +646,41 @@ describe('the unsupported-verb branch — a fleet that never advertised pr-state
     expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);   // never called at all
     w.stop();
   });
+
+  // ROUND 3 — the third instance of NF10's class, and the only one that is not
+  // a route. `archiveMerged` is LEVEL-triggered by design (see the retry test
+  // above), so on a host whose ccd predates `ws-archive` the ungated call did
+  // not fail once: it re-fired for every merged session on every sweep,
+  // forever. The gate has to sit here and not only on the two routes.
+  it('never fires the level-triggered ws-archive at a fleet that lacks the verb', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    // `pr-state` IS advertised — otherwise the sweep short-circuits upstream at
+    // watch.ts's own gate and this would pass for the wrong reason, proving
+    // nothing about archiveMerged.
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['pr-state'] } };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    await w.tick();
+    // Waiting on the merged PHASE is not enough and would make this pass both
+    // ways: `tick()` fires `sweepPr()` with `void`, and archiveMerged runs
+    // AFTER the phase lands, so the assertion would race the very call it
+    // forbids. `prSweepStartedAt` returns to 0 in sweepPr's own `finally`, so
+    // it is the one signal that the whole sweep — archiveMerged included —
+    // has finished. (Measured: without this wait, deleting the gate under test
+    // leaves the test green.)
+    const started = (): number => (w as unknown as { prSweepStartedAt: number }).prSweepStartedAt;
+    await vi.waitFor(() => { expect(started()).not.toBe(0); });
+    await vi.waitFor(() => { expect(started()).toBe(0); });
+    expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged');
+    expect(calls).toContainEqual(['pr-state', '--project', 'demo']);
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    // Level, not edge: the state is untouched, so the archive happens on the
+    // first sweep after the host is upgraded.
+    expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBeNull();
+    w.stop();
+  });
 });
 
 describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent ok', () => {

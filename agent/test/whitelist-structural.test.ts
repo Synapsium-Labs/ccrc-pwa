@@ -111,6 +111,35 @@ describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is writt
       .toEqual(exp.codes);
   });
 
+  it('every whitelist literal in the fixtures uses the SHIPPED construct', () => {
+    // ROUND 3, P4. g1/g2/g4 and the positive control's `good` were written
+    // `const x: ExecWhitelist = { … }` while the real site at whitelist.ts:309
+    // had become `} as const satisfies ExecWhitelist;`. The two are not the
+    // same check — excess-property behaviour under `satisfies` has moved across
+    // TS releases before — so a compile-failure pin in the annotation form
+    // proves nothing about the form that ships. Measured after converting:
+    // identical codes, TS2353 / TS2353 / TS2741, and the ok project still 0.
+    //
+    // Scanned, not listed, so a NINTH fixture written in the old form is caught
+    // too. `export const live: ExecWhitelist = EXEC_WHITELIST` is deliberately
+    // not matched: it checks the REAL value against the type, which is a
+    // different and still-wanted question from building a literal.
+    const dirs = [bypassDir, path.join(here, 'types', 'ok')];
+    const offenders: string[] = [];
+    for (const dir of dirs) {
+      for (const f of readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+        const src = readFileSync(path.join(dir, f), 'utf8');
+        if (/:\s*ExecWhitelist\s*=\s*\{/.test(src)) offenders.push(path.join(path.basename(dir), f));
+      }
+    }
+    expect(offenders, 'annotation-form whitelist literals; the real site uses `as const satisfies`').toEqual([]);
+    // Guard the guard: the scan must be looking at files, and at ones that do
+    // mention the type — otherwise "no offenders" is just an empty read.
+    const mentions = dirs.flatMap((d) => readdirSync(d).filter((n) => n.endsWith('.ts'))
+      .filter((n) => readFileSync(path.join(d, n), 'utf8').includes('ExecWhitelist')));
+    expect(mentions.length).toBeGreaterThan(4);
+  });
+
   it('g1 and g2 fail identically — the pin is position-independent', () => {
     // This is the specific improvement over the server's layer-3 source-text
     // slice, which starts at the `ccd` key and therefore could not see a grant
@@ -135,7 +164,7 @@ describe('the pins are not a blanket refusal, and they pin FORBIDDEN_COMMANDS it
     const src = readFileSync(path.join(here, 'types', 'ok', 'legit-whitelist.ts'), 'utf8');
     expect(src).toContain("Assert<'gh' extends ForbiddenCommand ? true : false>");
     expect(src).toContain("Assert<Equals<ExecCommand, 'tmux' | 'ccd'>>");
-    expect(src).toContain('const good: ExecWhitelist');
+    expect(src).toContain('export const good = {');
     // VERIFY ROUND 2, P1: and the value half. Without the positive control, a
     // `LawfulGrants` that collapsed to `never` for EVERY table (say, after a
     // rename left `IllegalGrant` matching nothing) would satisfy g5..g8 while
@@ -342,17 +371,60 @@ describe('the audit and the lookup ask the same question', () => {
       .toThrow(/Undeclared grant\(s\): Symbol\(gh\)/);
   });
 
-  it('the lookup gates on the DECLARED set, so a planted own key grants nothing', () => {
-    // The other half of the P2 fix, and the one that matters if the audit is
-    // ever bypassed: `isExecAllowed` now asks `GRANTABLE_COMMANDS.includes`,
-    // not merely "does an own property exist". The real table is frozen, so
-    // this is asserted on the real object — defineProperty on a frozen object
-    // throws, which is itself the first line of defence.
-    expect(() => Object.defineProperty(EXEC_WHITELIST, 'gh', {
-      value: [['pr', 'merge']], enumerable: false,
-    })).toThrow(TypeError);
-    expect(isExecAllowed('gh', ['pr', 'merge', '1'])).toBe(false);
-    expect((GRANTABLE_COMMANDS as readonly string[]).includes('gh')).toBe(false);
+  // ROUND 3, P3 — SAID PLAINLY: the second half of the round-2 P2 fix, the
+  // `GRANTABLE_COMMANDS.includes(cmd)` line in `isExecAllowed`, IS NOT PINNED
+  // AND CANNOT BE. The round-2 report offered one measurement for "two changes
+  // so both ask the same question", and that measurement (a non-enumerable key
+  // planted on a FIXTURE, 11/11 -> 10 of 11 files failing) is produced entirely
+  // by the auditor's `Reflect.ownKeys` change above. Measured in round 3:
+  // delete the lookup's declared-set line and the agent suite is 191 passed /
+  // 12 files, `tsc --noEmit -p agent` clean, and server/test/
+  // whitelist-subset.test.ts 39/39. Nothing anywhere fails.
+  //
+  // That is a property of the design, not a gap someone can close. A
+  // distinguishing input needs an OWN key of EXEC_WHITELIST that is not in
+  // GRANTABLE_COMMANDS, and the three tests below are exactly the reasons no
+  // such state is reachable. So they pin the PREMISE. If any one of them ever
+  // fails, the declared-set line stops being redundant and starts being the
+  // thing holding the door — which is the moment someone needs to read this.
+  //
+  // The alternative — giving `isExecAllowed` an injectable table the way
+  // `auditExecWhitelist` has one — was considered and REJECTED. Injection into
+  // the audit can only cause a false throw; injection into the lookup would
+  // create an allow-path that does not exist today. A pin is not worth a
+  // bypass primitive in the one function standing between the PWA and `exec`.
+  describe('why the lookup\'s declared-set gate has no distinguishing input', () => {
+    it('the real table is frozen, so no own key can be planted at runtime', () => {
+      expect(Object.isFrozen(EXEC_WHITELIST)).toBe(true);
+      expect(() => Object.defineProperty(EXEC_WHITELIST, 'gh', {
+        value: [['pr', 'merge']], enumerable: false,
+      })).toThrow(TypeError);
+      expect(isExecAllowed('gh', ['pr', 'merge', '1'])).toBe(false);
+    });
+
+    it('its own-key set — enumerable or NOT, strings and symbols — IS the declared set', () => {
+      // `Reflect.ownKeys`, not `Object.keys`: own-enumerable-only is the exact
+      // blind spot the round-2 auditor fix existed to remove, and asserting the
+      // premise with the blind mechanism would reintroduce it here.
+      expect(Reflect.ownKeys(EXEC_WHITELIST).map(String).sort())
+        .toEqual([...GRANTABLE_COMMANDS].sort());
+    });
+
+    it('and a key outside that set cannot survive module load anyway', () => {
+      // The audit runs at import and refuses to boot, so even a source edit
+      // planting a non-enumerable key above the freeze never reaches the
+      // lookup. Asserted on a fixture because the real one would take the
+      // process down with it.
+      const planted: Record<string, unknown> = { tmux: [], ccd: [] };
+      Object.defineProperty(planted, 'gh', { value: [['pr', 'merge']], enumerable: false });
+      expect(() => auditExecWhitelist(planted)).toThrow(/forbidden command: gh/);
+      // ...and the asymmetry the declared-set gate answers, shown on that same
+      // fixture: `hasOwn` alone says yes to the planted key, the declared set
+      // says no. This is a DEMONSTRATION of the reasoning, not a pin of the
+      // shipped line — the shipped line is never reached with such a table.
+      expect(Object.hasOwn(planted, 'gh')).toBe(true);
+      expect((GRANTABLE_COMMANDS as readonly string[]).includes('gh')).toBe(false);
+    });
   });
 });
 
