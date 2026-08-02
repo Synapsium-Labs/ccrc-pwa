@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { FleetSession, PrState, PrView } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { PrSheet } from '../src/session/PrSheet';
+import { checkPhrase, prSentence } from '../src/session/PrKeycap';
 
 const pr = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -177,7 +178,8 @@ describe('open and draft', () => {
   it('says "no checks configured" distinctly from pending', async () => {
     fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u', checks: null }), draft: null });
     open(sess({ pr: fetched.pr }));
-    expect(await screen.findByText(/no checks configured/i)).toBeInTheDocument();
+    // Capital N, terminal period: the cap's own words, via checkPhrase.
+    expect(await screen.findByText('No checks configured.')).toBeInTheDocument();
   });
 });
 
@@ -217,7 +219,12 @@ describe('closed', () => {
     const closed = pr({ phase: 'closed', number: 42, url: 'u' });
     fetched = view({ pr: closed, draft: null });
     open(sess({ pr: closed, archivedAt: 1 }));
-    expect(await screen.findByText(/Closed without merging\. This branch's commits are not on main\./)).toBeInTheDocument();
+    // The sentence lives in the lede now — prSentence's own `closed` case —
+    // and ONLY there: the sheet used to repeat it verbatim in a `.pr-note`
+    // right below, so the same words rendered twice on one screen.
+    expect(await screen.findByText(
+      "Pull request #42: closed without merging. This branch's commits are not on main.",
+    )).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /clean up/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /archive now/i })).not.toBeInTheDocument();
   });
@@ -351,17 +358,17 @@ describe('mutation-sweep closures', () => {
   it('says "Checks passing" distinctly from "Checks running"', async () => {
     fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u', checks: 'pass' }), draft: null });
     open(sess({ pr: fetched.pr }));
-    expect(await screen.findByText('Checks passing')).toBeInTheDocument();
+    expect(await screen.findByText('Checks passing.')).toBeInTheDocument();
     cleanup();
     fetched = view({ pr: pr({ phase: 'open', number: 43, url: 'u', checks: 'pending' }), draft: null });
     open(sess({ pr: fetched.pr }));
-    expect(await screen.findByText('Checks running')).toBeInTheDocument();
+    expect(await screen.findByText('Checks running.')).toBeInTheDocument();
   });
 
   it('does not render an empty inert check-names block', async () => {
     fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u', checks: 'fail', checkNames: [] }), draft: null });
     open(sess({ pr: fetched.pr }));
-    await screen.findByText('Checks failing');
+    await screen.findByText('Checks failing.');
     expect(screen.queryByTestId('pr-check-names')).not.toBeInTheDocument();
   });
 
@@ -401,5 +408,82 @@ describe('mutation-sweep closures', () => {
     fireEvent.click(await screen.findByRole('button', { name: /archive now/i }));
     await waitFor(() => expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
       .some((c) => String(c[0]).endsWith('/archive'))).toBe(true));
+  });
+});
+
+// Final-round integration review, finding 5. `PrKeycap.tsx` exports
+// `prSentence`, `prLegend` and `UNCHECKED_PR` precisely so the cap and the
+// sheet can never disagree about what a phase means, and `UNCHECKED_PR`'s
+// docstring says in as many words that a second copy would drift. A second
+// copy was made one layer down — three phase-keyed fragments re-declared
+// inside `PrSheet` — and one of them had already drifted ("no checks
+// configured" vs the cap's "No checks configured."). Re-syncing the words
+// would only have reset the clock. These tests pin the property, not the
+// strings: whatever the words become, the two surfaces must say the same ones.
+describe('one copy of the phase words (final-round integration finding 5)', () => {
+  const CI = [null, 'pass', 'pending', 'fail'] as const;
+
+  it('describes checks in the keycap sentence’s own words, in every CI state', async () => {
+    for (const checks of CI) {
+      const p = pr({ phase: 'open', number: 42, url: 'u', checks,
+        checkNames: checks === 'fail' ? ['e2e', 'lint'] : null });
+      fetched = view({ pr: p, draft: null });
+      open(sess({ pr: p }));
+      await screen.findByRole('button', { name: /copy link/i });
+      const line = document.querySelector('.pr-checkline');
+      const text = line?.textContent ?? '';
+      expect(text).not.toBe('');
+      // The sheet's line must be a literal clause of the sentence the cap
+      // speaks as its aria-label — not a paraphrase of it. Pre-fix, the
+      // `null` state rendered "no checks configured" against the cap's
+      // "No checks configured." and both assertions below failed.
+      //
+      // Minus the terminal period, because the cap's sentence continues the
+      // clause with the failing-check names ("Checks failing: e2e, lint.")
+      // where the sheet stops and hands them to the inert block.
+      expect(text.endsWith('.')).toBe(true);
+      expect(prSentence(p)).toContain(text.slice(0, -1));
+      // And it is the shared source that produced it, not a coincidence.
+      expect(text).toBe(checkPhrase(p));
+      cleanup();
+    }
+  });
+
+  it('keeps the failing check NAMES out of the line and in the inert block, exactly once', async () => {
+    // checkPhrase deliberately omits the names that prSentence appends: the
+    // sheet has a dedicated inert block for them, and printing the same
+    // GitHub-sourced text twice on one screen is what the split avoids.
+    const p = pr({ phase: 'open', number: 42, url: 'u', checks: 'fail', checkNames: ['e2e', 'lint'] });
+    fetched = view({ pr: p, draft: null });
+    open(sess({ pr: p }));
+    await screen.findByRole('button', { name: /copy link/i });
+    expect(document.querySelector('.pr-checkline')?.textContent).toBe('Checks failing.');
+    expect(screen.getByTestId('pr-check-names')).toHaveTextContent('e2e, lint');
+    expect(screen.getAllByText(/e2e/)).toHaveLength(1);
+  });
+
+  it('uses the lede’s own words as the no-commits disabled reason, not a second sentence', async () => {
+    const p = pr({ phase: 'no-commits', ahead: 0 });
+    fetched = view({ pr: p, draft: null });
+    open(sess({ pr: p }));
+    const btn = await screen.findByRole('button', { name: /open pull request/i });
+    // Pre-fix the tooltip was a hand-written "<branch> has no commits past
+    // its base." beside a lede that said "Pull request: `<branch>` has no
+    // commits past its base." — two sentences, one fact, already diverging in
+    // form.
+    expect(btn).toHaveAttribute('title', document.querySelector('.pr-lede')?.textContent ?? '');
+    expect(btn.getAttribute('title')).toBe(prSentence(p, 'ws/quiet-basin'));
+  });
+
+  it('says the closed sentence exactly ONCE on the screen', async () => {
+    const closed = pr({ phase: 'closed', number: 42, url: 'u' });
+    fetched = view({ pr: closed, draft: null });
+    open(sess({ pr: closed, archivedAt: 1 }));
+    await screen.findByRole('link', { name: /open on github/i });
+    const hits = [...document.querySelectorAll('p')]
+      .filter((el) => (el.textContent ?? '').includes('commits are not on main'));
+    // Pre-fix: two — the lede, and a `.pr-note` repeating its second sentence.
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.className).toBe('pr-lede');
   });
 });

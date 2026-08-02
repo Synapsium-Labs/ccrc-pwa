@@ -111,11 +111,41 @@ function retryText(retryAt: number | null): string {
   return ` Retrying in ${Math.ceil(ms / 60_000)}m.`;
 }
 
+/** THE words for a CI state, without their terminal period. Every rendering of
+ *  a PR's checks anywhere in the pwa comes from this record — `prSentence`'s
+ *  embedded clause below, and `PrSheet`'s own `.pr-checkline`, which used to
+ *  carry a hand-written four-way copy of exactly these four strings and had
+ *  already drifted from them ("no checks configured" vs "No checks
+ *  configured."). Re-syncing the words would only have reset the clock; the
+ *  point of the record is that there is no second place to edit. */
+const CHECK_PHRASE: Record<'none' | Exclude<PrChecks, null>, string> = {
+  none: 'No checks configured',
+  pass: 'Checks passing',
+  pending: 'Checks running',
+  fail: 'Checks failing',
+};
+
+/** The checks clause as its own sentence — `PrSheet`'s check line.
+ *
+ *  The failing-check NAMES are deliberately not here: `PrSheet` renders them
+ *  in a dedicated inert block below the line (`.pr-check-names`), and putting
+ *  them in both would print the same GitHub-sourced text twice on one screen.
+ *  `checkText` below appends them for the one-line sentence form, which has no
+ *  such block.
+ *
+ *  MUTATION SURVIVOR, disclosed, on `pr.checks ?? 'none'` (same shape as this
+ *  file's other one): `PrChecks` is `'pass' | 'fail' | 'pending' | null`, four
+ *  values of which exactly one is falsy and it is `null`, so `??` and `||` act
+ *  on identical inputs and no distinguishing call can exist. Kept as `??`
+ *  because the intent is "no checks were reported", not "the report looks
+ *  empty". */
+export function checkPhrase(pr: PrState): string {
+  return `${CHECK_PHRASE[pr.checks ?? 'none']}.`;
+}
+
 function checkText(pr: PrState): string {
-  if (pr.checks === null) return ' No checks configured.';
-  if (pr.checks === 'pass') return ' Checks passing.';
-  if (pr.checks === 'pending') return ' Checks running.';
-  return ` Checks failing${pr.checkNames?.length ? `: ${pr.checkNames.join(', ')}` : ''}.`;
+  const names = pr.checks === 'fail' && pr.checkNames?.length ? `: ${pr.checkNames.join(', ')}` : '';
+  return ` ${CHECK_PHRASE[pr.checks ?? 'none']}${names}.`;
 }
 
 export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => void }): ReactNode {
