@@ -329,6 +329,98 @@ describe('the gate fails a mutated tree', () => {
     expect(o).toMatch(/unregistered keyframe trough primitives\.css mutant-fade 0\.2/);
   });
 
+  // ── the branches that say "the auditor could not measure this" ────────────
+  // verify3-css P3. Every one of these was correct code with DECORATIVE
+  // coverage: each could be replaced with a bare `continue` and all 145 tests
+  // stayed green, and two of them are exactly the claims the round-3 report
+  // makes in prose ("a gate FAILURE rather than a skip", "unregistered, stale
+  // and non-literal stops are all gate failures"). A gate whose failure
+  // branches are untested is not a gate — an unmeasurable thing must FAIL, and
+  // that is the direction nothing was checking.
+  it('an `opacity` the auditor cannot read as a number is a FAILURE, not a skip', () => {
+    const o = expectFail('src/session/chat.css', (s) => `${s}\n.e11-mutant { opacity: var(--x-fade); }\n`);
+    expect(o).toMatch(/chat\.css \.e11-mutant: opacity "var\(--x-fade\)" is not a static value/);
+  });
+
+  it('a @keyframes stop the auditor cannot read as a number is a FAILURE, not a skip', () => {
+    const o = expectFail('src/components/primitives.css', (s) =>
+      s.replace('@keyframes skel-shimmer {', '@keyframes mutant-var { from { opacity: var(--x); } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
+    expect(o).toMatch(/@keyframes primitives\.css mutant-var has an opacity stop that is not a static value/);
+  });
+
+  it('a translucent background with no GROUNDS entry is a FAILURE, not a skip', () => {
+    // A rule whose fill is a wash cannot be measured without knowing what it
+    // is washed OVER, and that is the one thing this file still hand-writes.
+    // Skipping such a rule is how a translucent tint ships unmeasured.
+    const o = expectFail('src/session/chat.css', (s) =>
+      `${s}\n.e12-mutant { color: var(--ink-primary); background: color-mix(in srgb, var(--bg-well) 50%, transparent); }\n`);
+    expect(o).toMatch(/chat\.css \.e12-mutant: background .* is translucent and has no GROUNDS entry/);
+  });
+
+  it('a KEYFRAME_TROUGHS entry left behind by a renamed animation is a FAILURE', () => {
+    // The stale direction for OPACITY_REGISTRY was pinned; the stale direction
+    // for KEYFRAME_TROUGHS was not, so `keyframes: []` passed the whole suite.
+    const o = expectFail('src/session/chat.css', (s) => s.replace('@keyframes attach-spin {', '@keyframes attach-spin-2 {'));
+    expect(o).toMatch(/stale keyframes registry entry: chat\.css attach-spin 1/);
+  });
+
+  // The same sweep, run over EVERY failure branch in audit.mjs rather than the
+  // four the review named: each `problems.push` was neutered in turn and each
+  // `stale` direction set to []. Five more branches and three more stale
+  // directions were green under that, so they are pinned here too.
+  it('a PSEUDO-ELEMENT painting with a colour the auditor cannot resolve is a FAILURE', () => {
+    // The colour of the ::before label, replaced — not prepended: declOf reads
+    // the LAST declaration now, so a prepended one would be overwritten.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('  color: var(--callout-hue);\n', '  color: var(--no-such-token);\n'));
+    expect(o).toMatch(/chat\.css \.msg-assist \.callout::before.*unknown custom property --no-such-token/);
+  });
+
+  it('an INHERITED_GROUNDS entry whose rule was renamed away is a FAILURE', () => {
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {',
+        '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label-renamed {'));
+    // Two branches, one mutation: the hand-written ground names a rule that is
+    // gone, and the registry key is stale.
+    expect(o).toMatch(/stale INHERITED_GROUNDS entry: no rule fleet\.css \.proj-archived-body/);
+    expect(o).toMatch(/stale inherited registry entry: fleet\.css \.proj-archived-body/);
+  });
+
+  it('an INHERITED_GROUNDS rule that stops setting a colour of its own is a FAILURE', () => {
+    // The whole point of the entry is that the GROUND is hand-written and the
+    // COLOUR is read from the stylesheet. A rule that inherits its colour has
+    // nothing left for the auditor to read, so the entry measures nothing.
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
+        '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: inherit;'));
+    expect(o).toMatch(/INHERITED_GROUNDS fleet\.css \.proj-archived-body.* sets no colour of its own/);
+  });
+
+  it('an INHERITED_GROUNDS rule painting with an unresolvable colour is a FAILURE', () => {
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
+        '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--no-such-token);'));
+    expect(o).toMatch(/fleet\.css \.proj-archived-body.*unknown custom property --no-such-token/);
+  });
+
+  it('an OPACITY_REGISTRY pair the auditor cannot resolve is a FAILURE', () => {
+    // The pairs are hand-written in audit.mjs, so the mutant goes there — the
+    // gate tree carries its own copy of the auditor, which is the point.
+    const o = expectFail('design/audit.mjs', (s) =>
+      s.replace("[['running tool dot on a card', 'var(--status-busy)'", "[['running tool dot on a card', 'var(--no-such-token)'"));
+    expect(o).toMatch(/chat\.css \.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
+  });
+
+  it('a GROUNDS entry whose rule stopped being self-grounded is a FAILURE', () => {
+    const o = expectFail('src/session/chat.css', (s) => s.replace('.code-block-copy {\n', '.code-block-copy-renamed {\n'));
+    expect(o).toMatch(/stale grounds registry entry: chat\.css \.code-block-copy /);
+  });
+
+  it('a SELF_GROUNDED_EXEMPT entry left behind by a renamed rule is a FAILURE', () => {
+    const o = expectFail('src/session/chat.css', (s) => s.replace('.send-btn:disabled {\n', '.send-btn-renamed:disabled {\n'));
+    expect(o).toMatch(/stale exempt registry entry: chat\.css \.send-btn:disabled /);
+  });
+
   it('a rule paints with a colour the auditor cannot resolve', () => {
     // The failure direction that matters most: an unparsed colour must be a
     // FAIL, never a silent skip.
