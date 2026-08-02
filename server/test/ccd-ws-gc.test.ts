@@ -950,6 +950,57 @@ describe('ws-gc --prune', () => {
     expect(out.indexOf('STATE')).toBeLessThan(out.indexOf('removed orphan worktree'));
   });
 
+  /* ── F4: a `reclaimed` line for work that did not happen ──────────────────
+   *
+   * Final-round destructive review. `_ws_gc_scan` refuses to reconstruct an id
+   * when the registry disagrees with itself — "a prune keyed off a wrong
+   * reconstruction would delete a different session's entry" — and used to
+   * report that as `dead-reg <id> ?`. `_ws_gc_prune_row`'s dead-reg arm then
+   * recomposed `"$project-$slug"`, i.e. the literal `<id>-?`, purged nothing
+   * with it (the `?` arrives from a quoted expansion and cannot glob, so no
+   * stranger's file was ever at risk), and printed an unconditional
+   * `reclaimed dead registry entry <id>-?` plus a footer increment. A
+   * fabricated success line, repeated on every run for ever.
+   */
+  const brokenReg = (id: string): void => {
+    // The registry's own fields disagree with its id: `alpha-quiet-mesa`
+    // filed under project `beta`. `_ws_gc_scan` reads `.workspace` + `.uuid`
+    // and skips archived/reaping, so those three are what the fixture needs;
+    // the workdir must be gone for the row to be emitted at all.
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${id}.uuid`), 'u\n');
+    fs.writeFileSync(path.join(reg, `${id}.workspace`), 'quiet-mesa\n');
+    fs.writeFileSync(path.join(reg, `${id}.project`), 'beta\n');
+    fs.writeFileSync(path.join(reg, `${id}.workdir`), `${path.join(h.home, 'worktrees', 'gone')}\n`);
+  };
+
+  it('classifies a self-inconsistent registry entry as reg-broken, not dead-reg', () => {
+    h.makeRepo('demo');
+    brokenReg('alpha-quiet-mesa');
+    const r = scan().find((x) => x.project === 'alpha-quiet-mesa')!;
+    expect(r, 'the row is emitted at all').toBeDefined();
+    expect(r.state).toBe('reg-broken');
+    // The slug column carries no reconstruction — that is the whole point of
+    // the scan's refusal, and a `?` there was what the prune arm recomposed.
+    expect(r.slug).toBe('-');
+  });
+
+  it('DECLINES a self-inconsistent registry entry instead of reporting a purge it did not do', () => {
+    h.makeRepo('demo');
+    brokenReg('alpha-quiet-mesa');
+    const out = prune();
+    expect(out, out).toContain("alpha-quiet-mesa's registry entry disagrees with itself");
+    expect(out, out).toContain('will not guess which session it belongs to');
+    // The fabricated line and the footer over-count, both named.
+    expect(out, out).not.toContain('dead registry entry');
+    expect(out, out).not.toMatch(/reclaimed .*alpha-quiet-mesa/);
+    expect(out, out).toContain('reclaimed 0');
+    // And nothing was removed, because nothing could be: the entry is still
+    // there for a human to resolve.
+    expect(h.reg('alpha-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
   it('does not let a path containing "reclaimed" inflate the summary counts', () => {
     // Regression: the counting grep used to be unanchored and matched the
     // whole line, path included. A foreign worktree whose path contains the

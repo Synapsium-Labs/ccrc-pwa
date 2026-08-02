@@ -396,6 +396,38 @@ export interface ReapResult {
   sentence: string;
 }
 
+/** `$REG/.reaped/<id>.json` — the record that OUTLIVES the workspace.
+ *
+ *  DECLARED HERE THOUGH NOTHING IMPORTS IT YET, which is the point and is the
+ *  cross-lane seam pass's residual #1 closed: `clips[].bytes: null` reaches
+ *  `_ws_tombstone` (ccd:3199) and is round-tripped by `_ws_tombstone_reclip`
+ *  through `python3 json` on every resume, both JSON-transparent and both
+ *  exercised — but the tombstone had NO declared type at all, so the one
+ *  document that survives the delete was the only place on this branch where
+ *  "bytes may be null" existed purely as ccd's behaviour. `WsAudit.clips` says
+ *  it and is enforced; this said it nowhere. The first consumer written
+ *  against this file (`ccd ws-attic`'s reader, a recovery tool, a support
+ *  script) inherits the null instead of discovering it.
+ *
+ *  Written by ccd only. The field list is `_ws_tombstone`'s printf, in its
+ *  order; `reflog` is a raw text dump and `attic` holds full ref names
+ *  (`refs/ccrc/attic/<id>/…`), read back from git rather than passed in so the
+ *  list has one producer. */
+export interface WsTombstone {
+  id: string; project: string; workdir: string; branch: string; base: string; tip: string;
+  uuid: string; wrapper: string; mergeCommit: string; proof: string;
+  pr: number | null; prUrl: string;
+  /** Same shape and same producer as `WsAudit.ignored` — the manifest of what
+   *  the delete destroyed, which is this document's reason to exist. */
+  ignored: { path: string; bytes: number; sensitive: boolean }[];
+  /** `bytes: number | null`, identical to `WsAudit.clips`, and re-measured on
+   *  every resume by `_ws_tombstone_reclip` because (h) `rm -rf`s whatever is
+   *  on disk at THAT instant. Null is a clip ccd could not size, never an
+   *  empty file and never "nothing was reclaimed here". */
+  clips: { name: string; bytes: number | null }[];
+  transcript: string; attic: string[]; reflog: string; reapedAt: number;
+}
+
 /* ---------------------------------------------------------------------------
  * Snapshot revival — reading a FleetSession[] that an OLDER BUILD persisted.
  *

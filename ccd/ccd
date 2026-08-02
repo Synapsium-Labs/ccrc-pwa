@@ -2727,9 +2727,18 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
   up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null) \
     || { _reap_refuse no-upstream "$branch was never pushed"; return 1; }
+  # The DIRECTION is unchanged and the SENTENCE is not — round-3 P2's class,
+  # last instance, found by the final-round destructive review (F5b). A failed
+  # `rev-list` yields "", which is `!= 0`, so this refuses, which is right; but
+  # it then printed " commit(s) are not on the remote" — a count, with the
+  # number missing, about a comparison that never ran. `_ws_gc_merged` and
+  # `_ws_gc_dirty` both already say the rule for the file: report unprovable as
+  # unprovable.
   ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
   [[ "$ahead" == 0 ]] \
-    || { _reap_refuse unpushed-commits "$ahead commit(s) are not on the remote"; return 1; }
+    || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
+           && echo "$ahead commit(s) are not on the remote" \
+           || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
 
   # ── Phase C: the work is genuinely in main ─────────────────────
   REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
@@ -4246,7 +4255,19 @@ _ws_gc_scan() {
     # The id is <project>-<slug> by construction. If the registry disagrees with
     # itself, report it and reconstruct nothing — a prune keyed off a wrong
     # reconstruction would delete a different session's entry.
-    [[ "$p-$s" == "$id" ]] || { printf 'dead-reg\t%s\t%s\t-\t-\t%s\n' "$id" "?" "$wd"; continue; }
+    #
+    # ITS OWN STATE, not `dead-reg` with a `?` in the slug column — final-round
+    # destructive review F4. This row used to be emitted as `dead-reg <id> ?`,
+    # and `_ws_gc_prune_row`'s dead-reg arm then did exactly what the sentence
+    # above forbids: it recomposed `"$project-$slug"`, i.e. the literal
+    # `<id>-?`, handed that to `_reg_purge`, and printed an unconditional
+    # `reclaimed dead registry entry <id>-?`. The purge matched nothing (the
+    # `?` arrives from a quoted expansion and cannot glob, so no stranger's
+    # file was at risk), so the row was a FABRICATED SUCCESS LINE: a `reclaimed`
+    # a human reads, and a footer increment, for work that did not happen and
+    # will be reported again on every run for ever. A state the prune arm can
+    # recognise is the fix; a sentinel inside a field it recomposes was the bug.
+    [[ "$p-$s" == "$id" ]] || { printf 'reg-broken\t%s\t%s\t-\t-\t%s\n' "$id" "-" "$wd"; continue; }
     printf 'dead-reg\t%s\t%s\t-\t-\t%s\n' "$p" "$s" "$wd"
   done
 }
@@ -4368,8 +4389,14 @@ _ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds 
   # parameter expansion rather than by a fourth `read`: `_ws_collect_ignored`
   # builds its records to survive a path holding a TAB or a NEWLINE, and this is
   # the same treatment `_reap_ignored_json` gives the same array for the same
-  # reason. The bytes are guaranteed numeric by the collector's own
-  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`, so the sum cannot be fed a word.
+  # reason. The bytes are guaranteed numeric, so the sum cannot be fed a word —
+  # but NOT for the reason this comment used to give. It cited the collector's
+  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`; round 3 replaced that coercion with a
+  # REFUSAL (`_ws_collect_ignored`, ccd:2274-2279 — a `du` that did not finish
+  # fails the whole collection), and `_ws_gc_reclaimable` returns 1 above
+  # before this loop when it does. The conclusion survived the fix and the
+  # justification did not, which is the shape of stale comment that later
+  # licenses reintroducing the coercion "because the sum needs it".
   for rec in "${REAP_IGNORED[@]}"; do
     b="${rec#*$'\t'}"; b="${b%%$'\t'*}"
     n=$(( n + 1 )); total=$(( total + b ))
@@ -4413,6 +4440,13 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
     dead-reg)
       _reg_purge "$project-$slug"                                          # finding F3
       _gc_reclaimed "dead registry entry $project-$slug" ;;
+    reg-broken)
+      # `_ws_gc_scan` deliberately reconstructed NOTHING for this row (see
+      # there), so there is no id to purge and this arm must not invent one.
+      # The `$project` column carries the raw id. Reported every run rather
+      # than cleaned, because the remedy is a human deciding which of the two
+      # disagreeing fields is right — F4.
+      _gc_declined "$project's registry entry disagrees with itself: its project and workspace fields do not compose to its id, so ccd will not guess which session it belongs to — inspect $REG/$project.* by hand" ;;
     orphan)
       if _ws_gc_dirty "$p"; then
         # Two refusals, one exit code — round-3 P2. `has uncommitted changes` is

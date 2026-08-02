@@ -1162,6 +1162,43 @@ describe('destruction order', () => {
     expect(JSON.stringify(out)).not.toContain('"bytes":0');
   }, 30000);
 
+  /* ── the record that OUTLIVES the workspace carries the null too ──────────
+   *
+   * Cross-lane seam pass, residual #1. `clips[].bytes: null` reaches
+   * `_ws_tombstone` and is round-tripped by `_ws_tombstone_reclip` through
+   * `python3 json` on every resume. Both are JSON-transparent and both were
+   * already exercised — but only by fixtures whose clips were all measurable,
+   * so nothing asserted that a null SURVIVES either hop. `shared/api.ts` now
+   * declares `WsTombstone` with the same `number | null` as `WsAudit.clips`;
+   * this is the executable half of that claim.
+   */
+  it('writes and rewrites an unmeasured clip as null in the tombstone, never 0', () => {
+    ready();
+    const one = '[{"name":"a.png","bytes":null},{"name":"b.png","bytes":7}]';
+    const tomb = h.sh(`_ws_reap_reset; _ws_tombstone demo-quiet-basin '${one}'`);
+    expect(tomb).toContain('.reaped/demo-quiet-basin.json');
+    const t = JSON.parse(fs.readFileSync(tomb, 'utf8')) as Record<string, unknown>;
+    expect(t['clips'], 'the write hop').toEqual([
+      { name: 'a.png', bytes: null }, { name: 'b.png', bytes: 7 },
+    ]);
+    // The resume hop: `_ws_tombstone_reclip` parses and re-serialises the whole
+    // document with python3, which is where a null would most plausibly be
+    // coerced or dropped.
+    const two = '[{"name":"a.png","bytes":null},{"name":"c.png","bytes":null}]';
+    expect(h.run(`_ws_reap_reset; _ws_tombstone_reclip demo-quiet-basin '${two}'`).code).toBe(0);
+    const t2 = JSON.parse(fs.readFileSync(tomb, 'utf8')) as Record<string, unknown>;
+    expect(t2['clips'], 'the round-trip hop').toEqual([
+      { name: 'a.png', bytes: null }, { name: 'c.png', bytes: null },
+    ]);
+    // Every other field of the record survives the rewrite unchanged — the
+    // property `_ws_tombstone_reclip` exists to have.
+    for (const k of Object.keys(t)) {
+      if (k === 'clips') continue;
+      expect(t2[k], `${k} is not rewritten by a reclip`).toEqual(t[k]);
+    }
+    expect(JSON.stringify(t2)).not.toContain('"bytes":0');
+  }, 30000);
+
   it('reports a real figure when the worktree WAS sized', () => {
     // The other direction, unpinned until now in exactly the same way: the
     // mutation survived `null -> 0` as well as `0 -> null`.

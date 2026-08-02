@@ -1622,6 +1622,25 @@ describe('the refusals the ladder reaches last', () => {
     // The parse requirement, asserted rather than assumed: `refusal()` already
     // ran `JSON.parse` over this document, and the field is present.
     expect(Object.prototype.hasOwnProperty.call(a, 'commitsAheadOfBase')).toBe(true);
+    // AND THE SENTENCE (final-round destructive review F5b, round-3 P2's last
+    // instance). `_ws_reap_eval`'s `unpushed-commits` refusal is reached HERE
+    // by the same failed `rev-list`, and it printed " commit(s) are not on the
+    // remote" — a count with the number missing, about a comparison that never
+    // ran. The refusal's direction was always right; only its claim was not.
+    expect(a.detail, a.detail).toContain('could not count the commits between');
+    expect(a.detail, a.detail).toContain('refusing on a comparison that did not run');
+    expect(a.detail, a.detail).not.toMatch(/^ commit\(s\)/);
+  });
+
+  it('still names the real count when the rev-list DID run', () => {
+    // The other direction of the same sentence: an actual number of unpushed
+    // commits must still be reported as one.
+    const { wt } = squashMovedBase();
+    fs.writeFileSync(path.join(wt, 'z.txt'), 'unpushed\n');
+    h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'unpushed');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('unpushed-commits');
+    expect(a.detail, a.detail).toContain('1 commit(s) are not on the remote');
   });
 
   it('refuses when gh itself could not be read, naming the classified reason', () => {
