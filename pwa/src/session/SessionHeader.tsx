@@ -18,6 +18,7 @@ import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { PrKeycap } from './PrKeycap';
+import { PrSheet } from './PrSheet';
 import './chat.css';
 
 export interface SessionHeaderProps {
@@ -35,6 +36,9 @@ export interface SessionHeaderProps {
   onMoveAccount: () => void;
   /** Overflow menu: "Stop session" — opens the stop QuickConfirm. */
   onStopSession: () => void;
+  /** `PrSheet`'s merged phase "Clean up…" hands off here — Task 17 mounts
+   *  `ReapSheet` off it. A no-op until then. */
+  onReapWorkspace: () => void;
   /** Pre-snapshot identity derived from the session id (`wrapper:project`) —
    *  keeps the header instant on deep links before `/ws/fleet` lands. */
   fallback?: { title: string; wrapper: string };
@@ -72,12 +76,10 @@ export function SessionHeader({
   onChangeEffort,
   onMoveAccount,
   onStopSession,
+  onReapWorkspace,
   fallback,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
-  // Task 16 renders `PrSheet` off this; until then the state exists (so the
-  // cap has somewhere to write) with no consumer but the `data-pr-open`
-  // attribute below, which Task 16 removes when it adds the sheet.
   const [prOpen, setPrOpen] = useState(false);
   // Menu taps close the sheet first so the follow-up surface (swap sheet,
   // stop confirm, arriving model dialog) never fights it for the bottom edge.
@@ -153,7 +155,7 @@ export function SessionHeader({
   const branchDuplicatesCrumb = crumb !== null && branch === crumb;
 
   return (
-    <header className="chat-head" data-pr-open={prOpen || undefined}>
+    <header className="chat-head">
       <button type="button" className="chat-back" aria-label="Back to fleet" onClick={onBack}>
         ‹
       </button>
@@ -270,6 +272,13 @@ export function SessionHeader({
           </button>
         </div>
       </Sheet>
+
+      <PrSheet
+        session={session}
+        open={prOpen}
+        onClose={() => setPrOpen(false)}
+        onReap={() => { setPrOpen(false); onReapWorkspace(); }}
+      />
     </header>
   );
 }

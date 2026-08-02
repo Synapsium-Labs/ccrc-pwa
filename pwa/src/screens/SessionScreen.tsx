@@ -172,6 +172,8 @@ export function SessionScreen({
         onChangeEffort={changeEffort}
         onMoveAccount={() => setSwapOpen(true)}
         onStopSession={() => setStopOpen(true)}
+        // No-op until Task 17 mounts ReapSheet off it from the merged phase.
+        onReapWorkspace={() => {}}
         fallback={{ title: project, wrapper }}
       />
 

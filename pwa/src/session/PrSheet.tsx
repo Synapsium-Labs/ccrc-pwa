@@ -1,0 +1,223 @@
+// The PR sheet. Every action lives HERE — the cap only opens it — and every
+// outward-facing or destructive one goes through QuickConfirm's consequence
+// grammar, the primitive already used for stopping a session, swapping
+// accounts and rebooting the host. Two identical ghost buttons side by side on
+// a phone is not a confirmation.
+//
+// There is no merge button in any state, ever: merging is the irreversible
+// review decision and requires the diff, which is on github.com. That also
+// keeps ccrc's write surface at exactly one additive verb.
+import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import type { FleetSession, PrView } from '../../../shared/api';
+import { Sheet } from '../components/Sheet';
+import { QuickConfirm } from '../components/QuickConfirm';
+import { toast } from '../components/Toast';
+import { api, apiErrorText } from '../lib/api';
+import { prSentence, UNCHECKED_PR } from './PrKeycap';
+import './chat.css';
+
+export function PrSheet({
+  session, open, onClose, onReap,
+}: {
+  session: FleetSession | null;
+  open: boolean;
+  onClose: () => void;
+  /** Cleanup is handed UP, never done here: the reap flow owns the audit, the
+   *  manifest and the fingerprint, and this sheet must not be able to delete. */
+  onReap: () => void;
+}): ReactNode {
+  const [view, setView] = useState<PrView | null>(null);
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<null | 'open' | 'draft'>(null);
+
+  const id = session?.id ?? null;
+  const load = (): void => {
+    if (id === null) return;
+    void api.pr(id).then((v) => { setView(v); setTitle(v.draft?.title ?? ''); }).catch(() => { /* cached values stay */ });
+  };
+  // One-shot on open: the cached value from the fleet sweep is on screen
+  // meanwhile, so the sheet is never blank.
+  useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
+
+  if (!session) return null;
+  const pr = view?.pr ?? session.pr;
+  const facts = view?.facts ?? null;
+  const draft = view?.draft ?? null;
+  const archived = session.archivedAt !== null;
+
+  const act = async (label: string, fn: () => Promise<unknown>): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    try { await fn(); load(); }
+    catch (err) { toast(`${label} failed — ${apiErrorText(err)}`, 'error'); }
+    finally { setBusy(false); }
+  };
+
+  // The lede is prSentence's own words — the whole point of exporting it is
+  // that the cap and this sheet can never disagree about what a phase means.
+  // For 'open'/'draft' its trailing checks clause is dropped here only: that
+  // detail already has a dedicated, larger presentation below (`.pr-checkline`
+  // / `.pr-check-names`, the latter required to be a plain inert block for the
+  // failing check names), so repeating it verbatim in the lede would put the
+  // same GitHub-sourced words on screen twice. The base clause has no period
+  // before the one that ends it, so slicing at the first '.' is exactly that
+  // clause and nothing more.
+  const sentence = prSentence(pr ?? UNCHECKED_PR, session.branch ?? undefined);
+  const lede = pr && (pr.phase === 'open' || pr.phase === 'draft')
+    ? sentence.slice(0, sentence.indexOf('.') + 1)
+    : sentence;
+
+  return (
+    <>
+      {/* No "#N" here: the lede immediately below already opens with
+          "Pull request #N: …", and the eyebrow already names the project —
+          repeating the number in the heading only duplicates the lede's own
+          text on screen. */}
+      <Sheet open={open} onClose={onClose} eyebrow={session.project} title={session.workspace ?? session.project}>
+        <div className="pr-sheet">
+          <p className="pr-lede">{lede}</p>
+
+          {pr?.phase === 'unchecked' && (
+            <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Check now</button>
+          )}
+
+          {pr?.phase === 'no-commits' && (
+            <button type="button" className="btn-primary" disabled
+                    title={`${session.branch ?? 'This branch'} has no commits past its base.`}>
+              Open pull request
+            </button>
+          )}
+
+          {pr?.phase === 'none' && (
+            <>
+              <label className="pr-label" htmlFor="pr-title">Title</label>
+              {/* One field, one thumb height. */}
+              <input id="pr-title" className="pr-title-input" type="text" value={title}
+                     onChange={(e) => setTitle(e.target.value)} />
+              <label className="pr-label" htmlFor="pr-body">Body preview</label>
+              {/* Read-only: a multi-line editor in a bottom sheet is a bad
+                  surface, and the body is fully regenerable — prose edits
+                  happen on GitHub, one tap away via this sheet's own link. */}
+              <textarea id="pr-body" className="pr-body-preview" readOnly rows={10}
+                        value={draft?.body ?? ''} />
+              {facts !== null && (
+                <p className="pr-facts">
+                  {`${facts.branch} → ${facts.baseShort} · ${facts.repo} · `
+                   + (facts.commits === null ? 'commits unknown' : `${facts.commits} commits`)}
+                </p>
+              )}
+              {/* Three states, not two. `0` is "nothing uncommitted" and says
+                  nothing; `null` is "we could not look" (deviation 11: the
+                  worktree was not corroborated as this workspace's, or its tree
+                  would not read) and MUST say so — the same advisory being
+                  absent is what a reader takes for a clean tree. */}
+              {facts !== null && facts.dirty !== null && facts.dirty > 0 && (
+                <p className="pr-warn">
+                  {`${facts.dirty} files are not committed — they will not be in this PR.`}
+                </p>
+              )}
+              {facts !== null && facts.dirty === null && (
+                <p className="pr-warn">
+                  ccrc could not read this worktree, so it cannot say whether anything is uncommitted.
+                </p>
+              )}
+              <button type="button" className="btn-primary" disabled={busy || session.status === 'busy'}
+                      onClick={() => setConfirm('open')}>
+                Open pull request
+              </button>
+              <button type="button" className="btn-ghost" disabled={busy || session.status === 'busy'}
+                      onClick={() => setConfirm('draft')}>
+                Open as draft
+              </button>
+            </>
+          )}
+
+          {(pr?.phase === 'open' || pr?.phase === 'draft') && (
+            <>
+              {pr.title !== null && <p className="pr-title">{pr.title}</p>}
+              <p className="pr-checkline">
+                {pr.checks === null ? 'no checks configured'
+                  : pr.checks === 'pass' ? 'Checks passing'
+                  : pr.checks === 'pending' ? 'Checks running'
+                  : 'Checks failing'}
+              </p>
+              {/* INERT TEXT. These names come from GitHub and are
+                  attacker-controllable on any repo that takes fork PRs; a
+                  button beside them would inject them into an agent running
+                  --dangerously-skip-permissions. No button, no anchor, ever. */}
+              {pr.checkNames !== null && pr.checkNames.length > 0 && (
+                <p className="pr-check-names" data-testid="pr-check-names">{pr.checkNames.join(', ')}</p>
+              )}
+              {pr.url !== null && (
+                <a className="btn-ghost" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+              )}
+              <button type="button" className="btn-ghost"
+                      onClick={() => { void navigator.clipboard?.writeText(pr.url ?? ''); toast('Link copied', 'info'); }}>
+                Copy link
+              </button>
+              <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Refresh</button>
+              <p className="pr-note">
+                Merging happens on GitHub. When it merges, ccrc archives this workspace automatically.
+              </p>
+            </>
+          )}
+
+          {pr?.phase === 'merged' && (
+            <>
+              {pr.url !== null && (
+                <a className="btn-ghost" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+              )}
+              {archived ? (
+                <>
+                  <p className="pr-note">Archived — session stopped; nothing deleted</p>
+                  <button type="button" className="btn-ghost" disabled={busy}
+                          onClick={() => void act('Restoring', () => api.restore(session.id))}>
+                    Restore
+                  </button>
+                  <button type="button" className="btn-ghost" onClick={onReap}>Clean up…</button>
+                </>
+              ) : (
+                <>
+                  <p className="pr-note">Not archived yet (session busy)</p>
+                  <button type="button" className="btn-ghost" disabled={busy}
+                          onClick={() => void act('Archiving', () => api.archive(session.id))}>
+                    Archive now
+                  </button>
+                </>
+              )}
+            </>
+          )}
+
+          {pr?.phase === 'closed' && (
+            <>
+              <p className="pr-note">Closed without merging. This branch&apos;s commits are not on main.</p>
+              {pr.url !== null && (
+                <a className="btn-ghost" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+              )}
+            </>
+          )}
+
+          {pr?.phase === 'unknown' && (
+            <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Retry</button>
+          )}
+        </div>
+      </Sheet>
+      <QuickConfirm
+        open={confirm !== null}
+        onClose={() => setConfirm(null)}
+        title={confirm === 'draft' ? 'Open as draft?' : 'Open pull request?'}
+        consequence={
+          `Pushes \`${facts?.branch ?? session.branch ?? ''}\` to \`${facts?.repo ?? ''}\` and opens a public pull request. Reviewers are notified. ccrc cannot undo this.`
+        }
+        confirmLabel={confirm === 'draft' ? 'Open as draft' : 'Open pull request'}
+        onConfirm={() => {
+          const isDraft = confirm === 'draft';
+          void act('Opening the pull request', () =>
+            api.prOpen(session.id, { title, body: draft?.body ?? '', draft: isDraft }));
+        }}
+      />
+    </>
+  );
+}

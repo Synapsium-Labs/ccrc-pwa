@@ -72,6 +72,7 @@ const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
   onChangeEffort: vi.fn(),
   onMoveAccount: vi.fn(),
   onStopSession: vi.fn(),
+  onReapWorkspace: vi.fn(),
   ...over,
 });
 
@@ -336,12 +337,14 @@ describe('the PR cap in the header', () => {
     expect(screen.getByLabelText(/pull request/i)).toBeInTheDocument();
   });
 
-  it('marks the header when the PR cap is tapped, for the sheet Task 16 adds', () => {
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
-    const header = container.querySelector('.chat-head')!;
-    expect(header).not.toHaveAttribute('data-pr-open');
+  it('opens PrSheet (Task 16) when the PR cap is tapped', async () => {
+    // PrSheet fires a one-shot GET on open; stub it so this stays a unit test
+    // rather than reaching a real network.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
+    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    expect(screen.queryByText(/not checked yet/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/pull request/i));
-    expect(header).toHaveAttribute('data-pr-open', 'true');
+    expect(await screen.findByText(/not checked yet/i)).toBeInTheDocument();
   });
 
   it('sits after the ⋯ cap and before esc, which keeps the outer edge', () => {
