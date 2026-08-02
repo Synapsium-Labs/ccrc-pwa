@@ -20,6 +20,7 @@ import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { PickSheet } from '../session/PickSheet';
+import { ReapSheet } from '../session/ReapSheet';
 import { SessionHeader } from '../session/SessionHeader';
 import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
@@ -64,6 +65,7 @@ export function SessionScreen({
   const [swapOpen, setSwapOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
   const [picker, setPicker] = useState<'model' | 'effort' | null>(null);
+  const [reapOpen, setReapOpen] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -172,8 +174,7 @@ export function SessionScreen({
         onChangeEffort={changeEffort}
         onMoveAccount={() => setSwapOpen(true)}
         onStopSession={() => setStopOpen(true)}
-        // No-op until Task 17 mounts ReapSheet off it from the merged phase.
-        onReapWorkspace={() => {}}
+        onReapWorkspace={() => setReapOpen(true)}
         fallback={{ title: project, wrapper }}
       />
 
@@ -289,6 +290,12 @@ export function SessionScreen({
         onConfirm={() => void stopSession()}
       />
       <TerminalDrawer id={id} open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+      <ReapSheet
+        session={live}
+        open={reapOpen}
+        onClose={() => setReapOpen(false)}
+        onReaped={() => { setReapOpen(false); navigate('/'); }}
+      />
     </div>
   );
 }

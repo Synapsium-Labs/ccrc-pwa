@@ -18,6 +18,7 @@ import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { ReapSheet } from '../session/ReapSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
@@ -96,6 +97,12 @@ export function FleetScreen({
   const [actionsId, setActionsId] = useState<string | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [actionsSession, setActionsSession] = useState<FleetSession | null>(null);
+  // The guarded reap flow, reachable from the fleet line's ··· regardless of
+  // whether that session's chat screen is currently open — an archived
+  // workspace's only other route to cleanup is a screen there is no reason
+  // to open. Only the id is held: the session it names is looked up fresh
+  // from the live list below, same reasoning as `actionsSession` above.
+  const [reapId, setReapId] = useState<string | null>(null);
 
   useEffect(() => {
     if (actionsId === null) return;
@@ -218,7 +225,15 @@ export function FleetScreen({
         session={actionsSession}
         open={actionsOpen}
         onClose={() => setActionsOpen(false)}
+        onReap={setReapId}
         fleet={store}
+      />
+
+      <ReapSheet
+        session={sessions.find((sn) => sn.id === reapId) ?? null}
+        open={reapId !== null}
+        onClose={() => setReapId(null)}
+        onReaped={() => setReapId(null)}
       />
     </main>
   );

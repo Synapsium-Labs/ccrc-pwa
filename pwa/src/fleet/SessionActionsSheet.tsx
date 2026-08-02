@@ -29,11 +29,17 @@ export function SessionActionsSheet({
   session,
   open,
   onClose,
+  onReap,
   fleet = useFleetStore,
 }: {
   session: FleetSession | null;
   open: boolean;
   onClose: () => void;
+  /** The guarded replacement for the one-tap delete this sheet used to carry
+   *  (see the file banner above). Required, not optional: an actions sheet
+   *  that cannot reach cleanup is exactly the state the old unguarded button
+   *  left behind, and optionality is how it would come back for one caller. */
+  onReap: (id: string) => void;
   fleet?: FleetStore;
 }): ReactNode {
   // Every hook runs BEFORE the null guard below: `session` goes null whenever
@@ -90,6 +96,17 @@ export function SessionActionsSheet({
           <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}>
             Swap account
           </button>
+
+          {/* The guarded replacement for the one-tap delete this sheet used to
+              carry. Archived only: archive is the staging step, and the audit
+              this opens refuses `not-archived` anyway — offering it earlier
+              would just be a button that always refuses. */}
+          {session.workspace !== null && session.archivedAt !== null && (
+            <button type="button" className="btn-ghost sess-sheet-remove"
+                    onClick={() => onReap(session.id)}>
+              Clean up workspace…
+            </button>
+          )}
 
           {session.status !== 'dead' && session.wrapper !== session.home && (
             <p className="sess-sheet-note">

@@ -247,6 +247,19 @@ button.metachip:active {
 .pr-checkline { font-size: var(--text-sm); color: var(--ink-secondary); }
 .pr-note { font-size: var(--text-sm); color: var(--ink-secondary); line-height: var(--leading-normal); }
 
+.reap-sheet { display: grid; gap: var(--sp-3); }
+.reap-rows { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
+.reap-rows dt { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary); }
+.reap-rows dd { font-size: var(--text-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
+.reap-note { font-size: var(--text-xs); color: var(--ink-secondary); }
+/* The refusal is the whole content when there is one: no button sits beside it,
+   because there is no override. */
+.reap-refusal { color: var(--status-attention-text); font-size: var(--text-sm); line-height: var(--leading-normal); }
+.reap-sensitive { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
+.reap-size { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.reap-ignored { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+.reap-go { min-height: var(--tap-min); }
+
 /* Overflow menu — the session's lifecycle actions in one sheet. Rows echo
    the dialog sheet's grammar; mono hints carry the command truth (/model);
    the destructive row wears dead-red ink. */

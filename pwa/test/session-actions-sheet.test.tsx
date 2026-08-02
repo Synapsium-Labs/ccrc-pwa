@@ -32,13 +32,13 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe('composition', () => {
   it('renders nothing when no session is selected', () => {
     const { container } = render(
-      <SessionActionsSheet session={null} open={false} onClose={() => {}} />);
+      <SessionActionsSheet session={null} open={false} onClose={() => {}} onReap={() => {}} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it('explains the limit consequence that the line only had room to flag', () => {
     render(<SessionActionsSheet session={s({ limits: { five: 82, seven: 10 } })}
-                                open onClose={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} />);
     expect(screen.getByText(/5h limit near/i)).toBeInTheDocument();
   });
 
@@ -47,13 +47,13 @@ describe('composition', () => {
   // green. Pin it with the 7d window as the ONLY one over threshold.
   it('narrates the 7d window when only it is critical', () => {
     render(<SessionActionsSheet session={s({ limits: { five: 10, seven: 82 } })}
-                                open onClose={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} />);
     expect(screen.getByText(/7d limit near/i)).toBeInTheDocument();
   });
 
   it('says nothing about limits when neither window is critical', () => {
     render(<SessionActionsSheet session={s({ limits: { five: 10, seven: 10 } })}
-                                open onClose={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
   });
 
@@ -61,14 +61,14 @@ describe('composition', () => {
   // session that will never run again has nothing to warn about moving.
   it('says nothing about limits on a dead session, even past the threshold', () => {
     render(<SessionActionsSheet session={s({ status: 'dead', limits: { five: 90, seven: 90 } })}
-                                open onClose={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
   });
 });
 
 describe('actions', () => {
   it('restarts through api.ensure', async () => {
-    render(<SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} />);
+    render(<SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} onReap={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /restart/i }));
     // SwapSheet is mounted (hidden) alongside every SessionActionsSheet and
     // polls /api/accounts on its own effect (useDisabledWrappers), so the
@@ -83,7 +83,7 @@ describe('actions', () => {
     stubFetch({ ok: false, stderr: 'ccd: no such session: demo-quiet-mesa' });
     render(
       <>
-        <SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} />
+        <SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} onReap={() => {}} />
         <ToastHost />
       </>,
     );
@@ -96,12 +96,12 @@ describe('the unguarded delete is gone', () => {
   it('offers no Remove workspace button for a workspace session', () => {
     // A shallower unguarded door beside a careful one guarantees the
     // unguarded one gets used.
-    render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
+    render(<SessionActionsSheet session={s()} open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByText(/Remove workspace/)).not.toBeInTheDocument();
   });
 
   it('still offers restart and swap', () => {
-    render(<SessionActionsSheet session={s()} open onClose={() => {}} />);
+    render(<SessionActionsSheet session={s()} open onClose={() => {}} onReap={() => {}} />);
     expect(screen.getByText('Restart session')).toBeInTheDocument();
     expect(screen.getByText('Swap account')).toBeInTheDocument();
   });
@@ -110,13 +110,37 @@ describe('the unguarded delete is gone', () => {
 describe('away note', () => {
   it('spells out the swap, which the line only marks', () => {
     render(<SessionActionsSheet session={s({ wrapper: 'claude2', home: 'claude' })}
-                                open onClose={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} />);
     expect(screen.getByText(/Pinned to team·max, running on alt·max/)).toBeInTheDocument();
   });
 
   it('says nothing when the session is home', () => {
     render(<SessionActionsSheet session={s({ wrapper: 'claude', home: 'claude' })}
-                                open onClose={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByText(/Pinned to/)).not.toBeInTheDocument();
+  });
+});
+
+describe('cleanup, guarded', () => {
+  it('offers Clean up workspace… only once the workspace is ARCHIVED', () => {
+    // Archive is the staging step. Offering cleanup before it would put the
+    // confirmed path in front of a running session.
+    render(<SessionActionsSheet session={s({ archivedAt: null })} open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByText(/clean up workspace/i)).not.toBeInTheDocument();
+    cleanup();
+    render(<SessionActionsSheet session={s({ archivedAt: 1785300000 })} open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.getByText(/clean up workspace/i)).toBeInTheDocument();
+  });
+
+  it('hands the session UP rather than deleting anything itself', () => {
+    const onReap = vi.fn();
+    render(<SessionActionsSheet session={s({ archivedAt: 1785300000 })} open onClose={() => {}} onReap={onReap} />);
+    fireEvent.click(screen.getByText(/clean up workspace/i));
+    expect(onReap).toHaveBeenCalledWith('demo-quiet-mesa');
+  });
+
+  it('offers nothing for a main checkout', () => {
+    render(<SessionActionsSheet session={s({ workspace: null, archivedAt: 1785300000 })} open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByText(/clean up workspace/i)).not.toBeInTheDocument();
   });
 });
