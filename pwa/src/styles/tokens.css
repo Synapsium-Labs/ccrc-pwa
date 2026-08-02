@@ -10,9 +10,17 @@
    identity can never be misread as session state.
 
    Contrast: every value verified with WCAG 2.1 relative-luminance math
-   (design/contrast-check.mjs — 74 pairs, all pass). Ratios quoted in comments
-   are computed, not estimated. Text roles target AA 4.5:1; non-text UI roles
+   (design/contrast-check.mjs, all pass). Ratios quoted in comments are
+   computed, not estimated. Text roles target AA 4.5:1; non-text UI roles
    (dots, bar fills, focus ring) target 3:1 per WCAG 1.4.11.
+
+   The gate PARSES this file and every stylesheet under src/ — it does not
+   carry a copy of these hexes and it does not work from a list of pairs
+   somebody remembered to write down. Both of those shapes shipped live AA
+   failures under a green gate (a 2.44:1 text pair nobody had listed, and an
+   `opacity` fade the pair list could not see even in principle). A count of
+   pairs is deliberately not quoted here: this comment said "74 pairs" while
+   the gate measured 94, which is the same drift in miniature.
    ========================================================================== */
 
 :root {
@@ -61,6 +69,18 @@
   --status-dead:           #E06A55;  /* matte dot, never glows: 5.47:1 vs surface */
   --status-dead-text:      #E8836F;  /* "exited · 3h ago — chat is read-only": 6.80:1 vs surface */
   --status-dead-tint:      rgba(224, 106, 85, 0.12);  /* EXIT badge pill; dead-text on it 5.89:1 over surface */
+  /* The SAME 12% wash, pre-composited onto a card. --status-dead-tint is
+     translucent and tokens.css prices it over --bg-surface, so a banner that
+     floats on --bg-page lets a darker ground through and the text pair falls
+     to 4.44 in light. Three surfaces needed the corrected value and each of
+     them wrote the color-mix() out in full, which duplicated this token's own
+     definition with nothing binding the 12% or the hue to it — the same drift
+     class as a hand-typed palette. Declared once, in :root only: --status-dead
+     and --bg-surface are both re-declared for the light theme, so var()
+     resolves this per theme the way the browser does. design/audit.mjs pins
+     it against --status-dead-tint composited over --bg-surface, so retuning
+     one and not the other fails the gate. */
+  --status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
 
   /* PR keycap (Task 15). --pr-merged ALIASES --acct-claude2 rather than
      repeating its hex: a literal single hex here (#C7A7F4, dark-only) reads
