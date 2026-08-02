@@ -1005,9 +1005,15 @@ describe('partial failure and resume', () => {
     // Simulate a reap killed after the worktree went but before the branch did.
     h.sh(`_reg_set demo-quiet-basin reaping worktree`);
     fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    // `clips: []` is now PART of this minimal fixture, not an omission: a
+    // real tombstone always carries the field `_ws_tombstone` writes at (b),
+    // and finding E's fix (below) re-reads and rewrites exactly this field
+    // on every resume — an empty session-clips directory here, so the value
+    // it writes back is the same `[]`, and the round trip through python is
+    // what the "IS NOT REWRITTEN otherwise" assertion below now depends on.
     fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
       JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
-        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'), clips: [] }));
     h.git(main, 'worktree', 'remove', wt);
     const tomb = path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json');
     const journal = fs.readFileSync(tomb, 'utf8');
@@ -1018,11 +1024,95 @@ describe('partial failure and resume', () => {
     expect(out.resumed).toBe('worktree');
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
     expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
-    // AND THE JOURNAL IS NOT REWRITTEN. A resume that re-ran (a) and (b) would
-    // overwrite the tombstone from a world where the worktree is already gone:
-    // the ignored manifest of what was destroyed, the proof rung, the PR — all
-    // replaced by the empty values readable now. That document is the only
-    // thing left that describes the deletion, so it is written once.
+    // AND THE JOURNAL IS NOT REWRITTEN, OTHER THAN `clips` (finding E
+    // narrows this from the blanket claim it used to be). A resume that
+    // re-ran (a) and (b) in full would overwrite the tombstone from a world
+    // where the worktree is already gone: the ignored manifest of what was
+    // destroyed, the proof rung, the PR — all replaced by the empty values
+    // readable now. That document is the only thing left that describes the
+    // deletion, so those fields are still written once. `clips` is the one
+    // exception, re-measured and rewritten on every resume because (h) a
+    // few lines below `rm -rf`s whatever is on disk at THIS instant, not
+    // whatever was there when (b) ran — and here nothing changed, so the
+    // rewrite is a byte-identical no-op, which is the assertion.
+    expect(fs.readFileSync(tomb, 'utf8')).toBe(journal);
+  }, 30000);
+
+  // Pre-merge fix round, finding E — the undisclosed half of the tokenless
+  // resume `_ws_reap_locked` already documents (ccd:2916-2933): the resume
+  // re-proves Phase B and Phase D1 in full but used to never re-read
+  // `_ws_clip_manifest`, so a clip pasted between the original consent and
+  // the resume was destroyed at (h) and named in NO record at all. Same
+  // underlying gap as finding A; this is the resume-path half of it.
+  it('resume destroys a clip pasted AFTER the tombstone was written, and now records it too', () => {
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    h.sh(`_reg_set demo-quiet-basin reaping worktree`);
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'),
+        clips: [{ name: 'clip-a.png', bytes: 10 }] }));
+    h.git(main, 'worktree', 'remove', wt);
+    // A SECOND clip, pasted after the tombstone above was written — the
+    // window finding E closes. 3 MB, the size the review measured with.
+    fs.writeFileSync(path.join(clips, 'clip-b.png'), Buffer.alloc(3 * 1024 * 1024));
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout).reaped).toBe('demo-quiet-basin');
+    expect(fs.existsSync(clips), 'both clips are destroyed by (h), same as any other resume').toBe(false);
+    const tomb = path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json');
+    const t = JSON.parse(fs.readFileSync(tomb, 'utf8')) as Record<string, unknown>;
+    expect(t['clips']).toEqual([
+      { name: 'clip-a.png', bytes: 10 },
+      { name: 'clip-b.png', bytes: 3 * 1024 * 1024 },
+    ]);
+  }, 30000);
+
+  it('refuses to finish the resume rather than destroy clips it cannot record', () => {
+    // The record has to be updatable, or the resume must not proceed —
+    // never "proceed anyway and hope the stale clips list is close enough".
+    // `chmod 444` on the TOMBSTONE FILE itself: opening an EXISTING file for
+    // writing (python's `open(path, "w")`, which truncates in place) needs
+    // write permission on the FILE, not on the directory that holds it —
+    // measured directly against `_ws_tombstone_reclip` before writing this
+    // fixture, since a directory-only chmod does not reproduce the failure
+    // at all (the file can still be truncated in place).
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    h.sh(`_reg_set demo-quiet-basin reaping worktree`);
+    const reaped = path.join(h.home, '.cc-sessions', '.reaped');
+    fs.mkdirSync(reaped, { recursive: true });
+    const tomb = path.join(reaped, 'demo-quiet-basin.json');
+    const journal = JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+      tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'),
+      clips: [{ name: 'clip-a.png', bytes: 10 }] });
+    fs.writeFileSync(tomb, journal);
+    h.git(main, 'worktree', 'remove', wt);
+    fs.chmodSync(tomb, 0o444);
+    try {
+      const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+      expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+      const o = JSON.parse(r.stdout);
+      expect(o.refused).toBe('tombstone-unwritable');
+      expect(o.reaped).toBeUndefined();
+      // Nothing was destroyed: the clips this run could not truthfully
+      // record about survive, same as any other refusal in this design.
+      expect(fs.existsSync(clips)).toBe(true);
+      expect(fs.existsSync(path.join(clips, 'clip-a.png'))).toBe(true);
+      // The registry survives too — a refused resume is resumable again.
+      expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+    } finally {
+      fs.chmodSync(tomb, 0o644);
+    }
+    // And the untouched journal proves the refusal came BEFORE any write,
+    // not from a write that partially succeeded.
     expect(fs.readFileSync(tomb, 'utf8')).toBe(journal);
   }, 30000);
 

@@ -78,6 +78,13 @@ export const SENTENCES: Record<string, string> = {
   // the worktree-removal step and deleting the branch, clips and registry
   // anyway. Deviation 35.
   'reaping-phase-unknown': 'A previous cleanup left a marker ccrc does not recognise. Nothing was removed — this needs a human to look at it directly.',
+  // Pre-merge fix round, finding E: a resume now re-reads the clips
+  // directory and rewrites the tombstone's `clips` field before finishing —
+  // the record has to cover what THIS run destroys, not only what the
+  // original run saw. If that rewrite itself fails (a hand-edited or
+  // corrupted tombstone), the resume refuses rather than destroy clips a
+  // document could not be made to name truthfully.
+  'tombstone-unwritable': 'ccrc could not update this workspace’s cleanup record before finishing, so it stopped rather than delete anything it could not accurately describe. This needs a human to look at the tombstone file directly.',
 };
 
 export function refusalSentence(token: string): string {

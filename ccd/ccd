@@ -2797,6 +2797,70 @@ _ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
   echo "$f"
 }
 
+_ws_tombstone_reclip() {   # id clipsjson -> rewrites an EXISTING tombstone's
+                            # `clips` field in place; non-zero if it could not.
+  # Pre-merge fix round, finding E, same underlying gap as finding A: the
+  # resume path re-proves Phase B and Phase D1 in full but never re-reads
+  # `_ws_clip_manifest` — `tomb` on the resume branch is just the EXISTING
+  # file's path (ccd:3149) — so a clip pasted between the original consent
+  # and the resume is `rm -rf`'d at (h) and appears in NO record at all.
+  # Measured: a 3 MB clip pasted after the tombstone was written was
+  # destroyed on resume, and the tombstone still named only the first one.
+  # The tokenless resume is disclosed and defensible (the tombstone IS the
+  # consent record, ccd:2916-2933); the undisclosed half this closes is that
+  # the record has to cover what THIS run destroys, not what the original
+  # run saw.
+  #
+  # Only the `clips` field moves. `ignored`/`attic`/`reflog`/`pr`/`proof` etc.
+  # keep whatever the ORIGINAL evaluated run measured — re-deriving them here
+  # would need Phase C re-run (deliberately not, ccd:2929-2931) and Phase B's
+  # full ignored-set walk (the resume only re-proves dirty/sensitive-ignored
+  # as REFUSALS, ccd:3057-3068 — it never rebuilds `ignored[]` as a document).
+  # `clips` is the one field this resume both re-measures AND is about to
+  # destroy, so it is the one field this rewrites.
+  #
+  # Read-modify-write through python end to end, not a bash-side field
+  # substitution: the existing document's every OTHER field has to survive
+  # untouched, including ones this shell was never handed (`ignored`, `pr`,
+  # `attic`, `reflog`). `separators=(",", ":")` matches `_json_str`'s own
+  # compact style (no spaces) — without it a round-trip through python's
+  # default `json.dump` changes every byte in the file even when `clips`
+  # itself did not change, which would silently break
+  # `_ws_reap_tail`'s own promise (ccd:3055-3061, the ORIGINAL wording this
+  # finding narrows rather than removes) that an unrelated resume leaves the
+  # journal alone.
+  #
+  # Failure is REFUSED, not swallowed — measured with a real permission
+  # error (`chmod 444` on the tombstone file itself, which is what actually
+  # blocks python's `open(…, "w")`; a directory-only chmod does not, since
+  # overwriting an EXISTING file needs write on the FILE, not on the
+  # directory that holds it). The caller turns a non-zero return here into
+  # `tombstone-unwritable` before (h) runs — never destroy clips a document
+  # could not be made to name truthfully.
+  #
+  # MUTATION SURVIVOR, disclosed: `[[ -s "$f" ]] || return 1` is removable
+  # with the suite green. By the time either call site reaches this
+  # function the tombstone is either the one `_ws_tombstone` just wrote at
+  # (b) in THIS process, or the resume path's own `tombtip` read (ccd's
+  # `_ws_reap_locked`) already proved a non-empty tombstone exists moments
+  # earlier — no fixture can arrange this function running with the file
+  # genuinely absent. Kept as the same "refuse rather than guess" instinct
+  # every other guard in this file states for itself, not because a test
+  # can currently force the branch.
+  local id="$1" clips="$2" f="$REG/.reaped/$1.json"
+  [[ -s "$f" ]] || return 1
+  printf '%s' "$clips" | python3 -c '
+import json, sys
+path = sys.argv[1]
+clips = json.loads(sys.stdin.read())
+with open(path, "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+doc["clips"] = clips
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh, separators=(",", ":"))
+' "$f" 2>/dev/null
+}
+
 cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # The ONLY destructive verb. Every guard is re-evaluated HERE, on the box, at
   # the instant of deletion — the audit's verdict is not trusted, it is
@@ -3148,6 +3212,18 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # something is actually working, which is the part that could cost bytes.
     tomb="$REG/.reaped/$id.json"
     attic=$(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null | grep -c . || true)
+    # Pre-merge fix round, finding E: re-measure clips NOW, on the resume,
+    # not whatever `_ws_clip_manifest` answered at the ORIGINAL (b) — this
+    # run's (h), a few lines below, `rm -rf`s whatever is on disk at THIS
+    # instant, and a clip pasted in the gap must not be destroyed with no
+    # record of it anywhere. Before (h), same as everywhere else in this
+    # function guards run immediately before the step they guard.
+    clips=$(_ws_clip_manifest "$id")
+    _ws_tombstone_reclip "$id" "$clips" || {
+      printf '{"refused":"tombstone-unwritable","detail":%s,"paths":[]}\n' \
+        "$(_json_str "could not update the tombstone's clips record for $id — refusing to finish the cleanup without an accurate record")"
+      return 0
+    }
   fi
 
   if [[ "$resumed" == "" || "$resumed" == worktree ]]; then
