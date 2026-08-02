@@ -191,6 +191,45 @@ describe('_ws_stash_count', () => {
     expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`)).toBe('0');
   });
 
+  it('counts an OFF-BRANCH stash — a DETACHED worktree names no branch at all', () => {
+    // Final-round integration docket 6, "THE headline gap": a stash taken with
+    // a bare `git stash` from a worktree on a DETACHED HEAD. git writes the
+    // literal `(no branch)` in place of a name, so both `-e "On ws/x:"` and
+    // `-e "WIP on ws/x:"` matched nothing and the count came back an
+    // honest-looking 0 — §7's no-override `stashes-present` guard could not
+    // fire, and the reap went on to CAS-delete the branch the stash was taken
+    // from. Attribution is by BASE COMMIT (the stash commit's first parent),
+    // because the message carries no name to match.
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    // A commit of its own first: that is what makes this branch's history
+    // distinguishable from main's, and it is what every reapable workspace has
+    // (Phase C requires a merged PR bound to the branch).
+    fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
+    h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
+    h.git(wt, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(wt, 'README.md'), 'unsaved\n');
+    h.git(wt, 'stash', 'push');                       // NO -m: "WIP on (no branch): …"
+    expect(h.sh(`git -C "${main}" stash list`), 'the fixture must be the (no branch) form')
+      .toContain('WIP on (no branch):');
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`),
+      'a stash taken from this branch\'s worktree belongs to it, named or not').toBe('1');
+    // NOT attributed to a branch that does not contain the base commit — the
+    // whole point of using the parent rather than "any (no branch) stash".
+    h.git(main, 'branch', 'ws/elsewhere', 'main');
+    expect(h.sh(`_ws_stash_count "${main}" ws/elsewhere`)).toBe('0');
+
+    // The named form of the same state, `git stash push -m` while detached,
+    // which git writes as `On (no branch): <message>`. Two arms, two fixtures:
+    // the WIP-arm lesson one test down is that these two subjects differ by
+    // more than a prefix.
+    fs.writeFileSync(path.join(wt, 'README.md'), 'unsaved again\n');
+    h.git(wt, 'stash', 'push', '-m', 'detached and named');
+    expect(h.sh(`git -C "${main}" stash list`)).toContain('On (no branch): detached and named');
+    expect(h.sh(`_ws_stash_count "${main}" ws/quiet-basin`)).toBe('2');
+    expect(h.sh(`_ws_stash_count "${main}" ws/elsewhere`)).toBe('0');
+  });
+
   it('counts an UNNAMED stash — git writes "WIP on <branch>:", with a lowercase "on"', () => {
     // Final-round integration review, docket item 7, first bullet — recorded
     // there as "genuinely equivalent … `grep -F` is a substring match, so

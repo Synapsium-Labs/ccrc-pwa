@@ -240,7 +240,77 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
 _ws_stash_count() {   # main branch -> stash entries belonging to that branch
   # -F on both patterns: a branch name carrying a '.' would otherwise be a
   # wildcard and over-count, which here means refusing a legitimate reap.
-  git -C "$1" stash list 2>/dev/null | grep -cF -e "On $2:" -e "WIP on $2:" || true
+  #
+  # BOTH forms are needed and `grep -F` is case-sensitive: git writes
+  # `On <branch>: <message>` for `git stash push -m` and
+  # `WIP on <branch>: <sha> <subject>` for a bare `git stash`, and the bare form
+  # is the common one. (Measured, and re-measured by the round-1 verifier after
+  # the integration review adjudicated the two as equivalent — they are not.)
+  local main="$1" branch="$2" n sha gs base
+  n=$(git -C "$main" stash list 2>/dev/null | grep -cF -e "On $branch:" -e "WIP on $branch:" || true)
+
+  # ── the OFF-BRANCH arm — final-round integration docket 6 ────────
+  # `refs/stash` is SHARED across every worktree of a repository (measured on
+  # git 2.43: a stash pushed from a linked worktree is listed by `git -C $main
+  # stash list`), which is what makes the whole branch-scoped count possible.
+  # But a stash pushed from a worktree on a DETACHED HEAD does not carry a
+  # branch name at all — git writes the literal `(no branch)` — so the two
+  # patterns above match nothing and the count came back an honest-looking 0.
+  # A workspace holding unsaved work then read CLEAN: §7's `stashes-present`
+  # guard, the one with no override, could not fire, and the reap went on to
+  # CAS-delete the branch those stashes were taken from. The work itself
+  # survives while `refs/stash` does — what is lost is the association, and the
+  # sheet said there was nothing to associate.
+  #
+  # ATTRIBUTED BY THE BASE COMMIT, not by the message, because the message has
+  # no name in it to match. A stash commit's FIRST PARENT is the commit HEAD was
+  # on when it was taken, so an off-branch stash belongs to this branch exactly
+  # when that commit is reachable from it. This is deliberately not "any
+  # `(no branch)` stash blocks every workspace": ccd:2392 records, with a
+  # measurement behind it, that a repo-wide stash rule makes every workspace in
+  # a repository permanently un-reapable, and that cost was rejected once
+  # already.
+  #
+  # OVER-ATTRIBUTION IS THE CHOSEN DIRECTION, AND ITS COST IS NOT SMALL — said
+  # out loud rather than estimated away, because it was measured and the first
+  # draft of this comment guessed it wrong. An off-branch stash taken at a
+  # commit on SHARED history (typically: detached in a workspace before that
+  # workspace committed anything) is reachable from every branch in the
+  # repository, so it counts against all of them and every workspace of that
+  # project answers `stashes-present` until it is dealt with. Measured on a
+  # two-branch fixture: one `(no branch)` stash at the root commit, and both
+  # `ws/x` and `master` count 1.
+  #
+  # Taken anyway, for the reason every ambiguous case in this file resolves the
+  # same way. `stashes-present` is a refusal with an obvious, local remedy —
+  # `git stash list` names the entry, and pop / drop / `git stash branch`
+  # resolves it — which is exactly what `stash-unreadable` (ccd:2399) does NOT
+  # have, and it is the no-override-guard cost that paragraph weighs. The
+  # alternative narrowing considered and REJECTED: also require the base commit
+  # not to be an ancestor of the merge-base with `origin/HEAD`, which removes
+  # the fleet-wide case and is even arguably harmless (a base on shared history
+  # survives the branch delete). It is a second inference in front of a
+  # no-override guard, resting on "a reapable workspace always has commits of
+  # its own", and that is an argument about PR shape, not a fact about stashes.
+  #
+  # An unreadable entry counts too: `rev-parse` failing is not evidence of
+  # absence.
+  #
+  # `--format='%H%x09%gs'` and a TWO-field read: the stash commit first, then
+  # the reflog subject, which is free-form and goes LAST so that a message
+  # containing a tab lands in `$gs` entire rather than shifting the sha.
+  # `stash list` is `git log -g refs/stash`, so it takes log's formats.
+  while IFS=$'\t' read -r sha gs; do
+    case "$gs" in
+      'On (no branch):'*|'WIP on (no branch):'*) ;;
+      *) continue ;;
+    esac
+    base=$(git -C "$main" rev-parse --verify --quiet "$sha^1" 2>/dev/null) \
+      || { n=$(( n + 1 )); continue; }
+    git -C "$main" merge-base --is-ancestor "$base" "refs/heads/$branch" 2>/dev/null \
+      && n=$(( n + 1 ))
+  done < <(git -C "$main" stash list --format='%H%x09%gs' 2>/dev/null)
+  printf '%s\n' "$n"
 }
 
 _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
@@ -1276,7 +1346,10 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # field whose repository has already been proven healthy.
   #
   # Scoped to the `branch` field, NOT to `worktreeHead`: it is the count of
-  # entries whose subject names that branch, and pairing it with any other name
+  # entries BELONGING to that branch — those whose subject names it, plus those
+  # taken from it on a detached HEAD, which name no branch at all and are
+  # attributed by base commit (integration docket 6, see `_ws_stash_count`) —
+  # and pairing it with any other name
   # would make the record two things at once. So on a drifted worktree this can
   # read 0 while `worktreeHead`'s branch holds stashes — which is safe in the one
   # direction that matters, because `ws-reap` refuses drift (`registry-branch-drift`,
@@ -2436,6 +2509,13 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # whose main holds one stash permanently un-reapable, with no override. So the
   # corroboration is on the WHOLE list and the branch-scoped count stays
   # `_ws_stash_count`'s.
+  #
+  # THAT SCOPING IS WHAT DOCKET 6 EXPLOITED, and the fix is in the count rather
+  # than here: a stash taken from a DETACHED worktree says `(no branch)` and so
+  # named nothing for the scoped grep to match, which is a 0 that authorised the
+  # delete. `_ws_stash_count` now attributes those by base commit — see its own
+  # comment for why that, and not "any (no branch) stash blocks everything",
+  # which is the rule the paragraph above rejects with a measurement.
   if git -C "$main" rev-parse --verify --quiet refs/stash >/dev/null 2>&1; then
     stashall=$(git -C "$main" stash list 2>/dev/null | grep -c .)
     (( stashall > 0 )) \
@@ -2443,7 +2523,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   fi
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \
-    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) on $branch"; return 1; }
+    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit)"; return 1; }
   up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null) \
     || { _reap_refuse no-upstream "$branch was never pushed"; return 1; }
   ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)

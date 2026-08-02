@@ -878,6 +878,29 @@ describe('local-loss refusals', () => {
     expect(refusal(wt).verdict).toBe('unpushed-commits');
   });
 
+  it('refuses a stash taken from a DETACHED worktree, which names no branch', () => {
+    // Final-round integration docket 6, end to end on the verb that acts on the
+    // count. The stash is taken while the worktree is detached — git writes
+    // `WIP on (no branch):` — and the worktree is then put BACK on its branch,
+    // which is the state an operator who compared two commits leaves behind and
+    // the only state `ws-audit` can even reach (a detached worktree refuses
+    // `detached-head` two rungs earlier). Before the fix this workspace audited
+    // `reapable` with `stashes: 0`, handed out a token, and the reap
+    // CAS-deleted the branch the stash was taken from.
+    const { wt, main } = squashMovedBase();
+    h.git(wt, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'wip\n');
+    h.sh(`cd "${wt}" && git stash push -q`);           // NO -m: the common form
+    h.git(wt, 'checkout', '-q', 'ws/quiet-basin');
+    expect(h.sh(`git -C "${main}" stash list`), 'the fixture must be the (no branch) form')
+      .toContain('WIP on (no branch):');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('stashes-present');
+    // On the wire too: `stashes: 0` beside a `stashes-present` verdict would be
+    // two answers, and 0 is the one that would have authorised the delete.
+    expect(a.stashes).toBe(1);
+  });
+
   it('refuses a stash read that failed SILENTLY, instead of fingerprinting its 0', () => {
     // The third instance of the token-forgery class, and the one no status
     // check and no stderr check can reach. `_ws_stash_count` answers 0 for
