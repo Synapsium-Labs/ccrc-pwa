@@ -3,13 +3,10 @@
 // route returns 502 only on the live fleet — and it has already shipped once
 // (ws-add/ws-rm).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { EXEC_WHITELIST, FORBIDDEN_COMMANDS, isExecAllowed } from '../../agent/src/whitelist.js';
+import {
+  EXEC_WHITELIST, FORBIDDEN_COMMANDS, UNGRANTABLE_VERBS, isExecAllowed,
+} from '../../agent/src/whitelist.js';
 import { CCD_ARGV, verbSupported } from '../src/ccdargv.js';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** One representative call per entry. Every entry MUST appear: the exhaustive
  *  assertion below is what stops a new route hiding behind an untested one. */
@@ -95,26 +92,69 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   it('every ccd prefix the agent grants is reachable from some CCD_ARGV entry', () => {
     // The reverse direction. This is what catches a dead grant like `clip`.
     //
-    // The slice starts AFTER `ccd: [`, not at it. Starting at it makes the
-    // OUTER bracket the first match, `[^\]]*` swallows the first entry, and
-    // `granted[0]` comes back as the single token `['start` — unreachable by
-    // construction, so the test fails on a grant that is perfectly fine.
-    // (Measured on the real block: old parse gives ["['start"], new gives
-    // ["start"], every later entry identical.) Line comments are stripped so a
-    // `[` inside one — `['ws-gc'] would permit --prune` sits two lines above —
-    // can never be read as a grant.
-    const wl = readFileSync(path.resolve(here, '..', '..', 'agent', 'src', 'whitelist.ts'), 'utf8');
-    const open = wl.indexOf('ccd: [') + 'ccd: ['.length;
-    const block = wl.slice(open, wl.indexOf('};', open))
-      .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    const granted = [...block.matchAll(/\[([^\]]*)\]/g)]
-      .map((m) => m[1]!.split(',').map((t) => t.trim().replace(/^'|'$/g, '')).filter(Boolean))
-      .filter((p) => p.length > 0);
+    // READS THE OBJECT, not the source text (verify round 2, P1). This was the
+    // last source-text parse left in the file, and it carried every hazard the
+    // sibling assertion above was rewritten to escape: it sliced from
+    // `wl.indexOf('ccd: [')`, so it was position-dependent, it had to strip
+    // line comments so that `['ws-gc'] would permit --prune` in a comment was
+    // not read as a grant, and it silently `filter`ed OUT empty prefixes —
+    // the single widest grant expressible (`[].every(...)` is vacuously true,
+    // so one empty prefix permits every ccd verb). The exported object is
+    // already imported at the top of this file; parsing its own source instead
+    // was work in the wrong direction. Same values, no parse.
+    const granted: readonly (readonly string[])[] = EXEC_WHITELIST.ccd;
     const built = (Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])
       .map((k) => (CCD_ARGV[k] as (...a: unknown[]) => readonly string[])(...(SAMPLES[k] as unknown[])));
     for (const prefix of granted) {
+      expect(prefix.length, 'an empty prefix grants every ccd verb that exists').toBeGreaterThan(0);
       const reachable = built.some((argv) => prefix.every((tok, i) => argv[i] === tok));
       expect(reachable, `ccd ${prefix.join(' ')} is granted but no route builds it`).toBe(true);
+    }
+  });
+
+  // VERIFY ROUND 2, P1 — the CROSS-PACKAGE half of the `--expect` pin.
+  //
+  // The gh fix gave the key set four mechanisms in three classes and left the
+  // prefix VALUES with none. The verifier measured the consequence: changing
+  // `['ws-reap', '--expect']` to `['ws-reap']` left `tsc -p agent` clean, left
+  // the agent's module-load audit silent, and left THIS FILE at 37/37 — layer
+  // 2's reachability check passes on the mutant, because `['ws-reap']` is a
+  // genuine prefix of the argv `CCD_ARGV.wsReap` builds. Two deletable agent
+  // test files were the whole pin on a token-free reap.
+  //
+  // This assertion is the one that lives in a DIFFERENT PACKAGE, so deleting
+  // agent tests cannot reach it, and it reads the object rather than its text,
+  // so where the grant is written cannot matter.
+  it('ws-reap is grantable ONLY with its confirmation token, and no reap is grantable without one', () => {
+    const reap = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-reap');
+    expect(reap.length, 'exactly one ws-reap grant').toBe(1);
+    expect(reap[0],
+      'a bare `ws-reap` grant is not a narrower grant — it permits an UNCONFIRMED reap, ' +
+      'which is the one thing §7 says can never cross the wire')
+      .toEqual(['ws-reap', '--expect']);
+
+    // Behaviour, not just shape: the argv a caller would have to build to reap
+    // without a token must be refused by the agent's own lookup.
+    const tok = 'a'.repeat(64);
+    expect(isExecAllowed('ccd', ['ws-reap', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reap'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reap', tok, '--session', 'demo-quiet-basin'])).toBe(false);
+    // …and the one the server actually builds is still allowed, so this is not
+    // a blanket refusal of the verb.
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReap(tok, 'demo-quiet-basin')])).toBe(true);
+  });
+
+  it('no ungrantable ccd verb is granted, with any flags at all', () => {
+    // ws-rm is the unguarded legacy delete; ws-gc carries --prune. Both were
+    // previously kept out only by the reachability check above (no route builds
+    // them) — i.e. by an accident of the server's route list rather than by a
+    // rule. `UNGRANTABLE_VERBS` states the rule, and this asserts it from the
+    // other side of the package boundary.
+    const heads = EXEC_WHITELIST.ccd.map((p) => p[0]);
+    for (const verb of UNGRANTABLE_VERBS) {
+      expect(heads, `${verb} must never head a granted prefix`).not.toContain(verb);
+      expect(isExecAllowed('ccd', [verb, '--session', 'x']), verb).toBe(false);
+      expect(isExecAllowed('ccd', [verb, '--prune']), verb).toBe(false);
     }
   });
 

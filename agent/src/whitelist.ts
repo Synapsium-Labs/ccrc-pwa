@@ -174,10 +174,112 @@ export const GRANTABLE_COMMANDS: readonly ProvenGrantable[] = EXEC_COMMANDS;
  *  against the same type the real site is checked against. */
 export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
 
+/* ---------------------------------------------------------------------------
+ * PREFIX VALUES, not just the key set (verify round 2, P1).
+ *
+ * The gh-key pin above closed the reported instance and left the CLASS open:
+ * every mechanism it added looks at `Object.keys(EXEC_WHITELIST)` and none of
+ * them looks at what the prefix lists actually CONTAIN. Measured by the
+ * verifier: changing `['ws-reap', '--expect']` to `['ws-reap']` — deleting the
+ * confirmation token from the one verb whose own source comment says "no reap
+ * without a confirmation token" — left `tsc -p agent` clean, left
+ * `auditExecWhitelist()` silent, and left `server/test/whitelist-subset.test.ts`
+ * at 37/37 (layer 3's reachability check passes, because `['ws-reap']` IS a
+ * prefix of the legitimate argv the server builds). Exactly two agent test
+ * files failed. `rm` them and a token-free reap crosses the wire with a green
+ * suite — one file more than the original gh finding, in the same object the
+ * gh fix had just restructured.
+ *
+ * So the same three-class treatment is applied one level down, to values:
+ *   1. TYPE — `LawfulGrants` below turns an unlawful prefix into `never`, so
+ *      the assignment on the proof line stops compiling (TS2322). Replayed by
+ *      `test/types/bypasses/g5..g8` for all four unlawful shapes.
+ *   2. RUNTIME — `auditExecWhitelist` walks the prefix lists at module load and
+ *      refuses to boot, which survives a cast, an `any`, and a hand-edit of the
+ *      compiled `dist/whitelist.js` that no type can see.
+ *   3. TESTS — the behavioural pins in `test/exec.test.ts` /
+ *      `test/whitelist-noghosts.test.ts` that the verifier could delete, plus a
+ *      new cross-PACKAGE assertion in `server/test/whitelist-subset.test.ts`
+ *      that reads this object (not its source text) and demands the flag.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Verbs that are only ever grantable WITH a mandatory flag immediately after
+ * them. One entry, and it is the destructive one: `ccd ws-reap` deletes a
+ * workspace, its branch and its clips, and `--expect <fingerprint>` is the
+ * token ccd re-proves against the world before it does. A grant of bare
+ * `['ws-reap']` is not a smaller grant, it is a DIFFERENT one — it permits an
+ * UNCONFIRMED reap, i.e. the exact thing §7 says can never cross the wire.
+ *
+ * Kept as data rather than a hardcoded `if` so the type below and the runtime
+ * audit read the SAME source — the P2 failure mode (auditor and lookup asking
+ * different questions) is the one to avoid while fixing P1.
+ */
+export const REQUIRED_VERB_FLAG = { 'ws-reap': '--expect' } as const;
+type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
+
+/**
+ * Verbs no prefix may ever START with, whatever follows them. `ws-rm` is the
+ * unguarded legacy delete (no audit, no token, no confirmation) and `ws-gc`
+ * carries `--prune`, which a prefix of `['ws-gc']` would permit outright.
+ * Re-admitting either is caught cross-package today only by layer 3's
+ * reachability check; listing them here makes it a compile error and a boot
+ * failure as well, in the same pass that closes `--expect`.
+ */
+export const UNGRANTABLE_VERBS = ['ws-rm', 'ws-gc'] as const;
+type UngrantableVerb = (typeof UNGRANTABLE_VERBS)[number];
+
+/**
+ * `never` for a lawful prefix, and the prefix itself (i.e. something that is
+ * NOT `never`) for an unlawful one. Four unlawful shapes, all of them real:
+ *
+ *   * `[]`            — an EMPTY prefix. `isExecAllowed`'s `p.every(...)` is
+ *                       vacuously true on it, so one empty prefix in the `ccd`
+ *                       list grants every ccd verb that exists, `ws-rm` and
+ *                       `ws-gc --prune` included. The widest possible grant,
+ *                       written as the smallest possible diff.
+ *   * `['ws-rm', …]`  — an ungrantable verb at the head.
+ *   * `['ws-reap']`   — a gated verb with nothing after it.
+ *   * `['ws-reap', x]`— a gated verb with the WRONG token after it (the shape a
+ *                       plausible-looking edit produces: `--session`).
+ *
+ * `P` is a naked type parameter, so this distributes over the union of every
+ * prefix in the table and one bad entry anywhere poisons the whole result.
+ */
+export type IllegalGrant<P> =
+  P extends readonly [infer H, ...infer R]
+    ? H extends UngrantableVerb
+      ? P
+      : H extends GatedVerb
+        ? R extends readonly [infer F, ...unknown[]]
+          ? F extends (typeof REQUIRED_VERB_FLAG)[H & GatedVerb] ? never : P
+          : P
+        : never
+    : P;
+
+/**
+ * Mechanism 1 for VALUES, the counterpart of `ProvenGrantable` for keys:
+ * evaluates to `W` while every prefix in it is lawful, and to `never` the
+ * instant one is not — so the proof line below stops typechecking (TS2322).
+ * Exported so `test/types/bypasses/g5..g8` can replay each unlawful shape
+ * against the same machinery the real table is checked against, rather than
+ * against a lookalike.
+ */
+export type LawfulGrants<W extends Record<string, readonly (readonly string[])[]>> =
+  [IllegalGrant<W[keyof W][number]>] extends [never] ? W : never;
+
 /** cmd -> allowed argv PREFIXES. `args` must begin with one of them; tokens
  *  after the prefix are unconstrained. One-token prefixes are exactly the old
- *  behaviour, so every pre-existing entry is bit-identical. */
-export const EXEC_WHITELIST: ExecWhitelist = {
+ *  behaviour, so every pre-existing entry is bit-identical.
+ *
+ *  `as const satisfies ExecWhitelist` rather than a `: ExecWhitelist`
+ *  annotation: `satisfies` keeps every excess-property and missing-key error
+ *  the annotation gave (measured — a `gh` key is still TS2353 above AND below
+ *  `ccd:`, a missing `ccd` key is still TS2741), while `as const` preserves the
+ *  literal TUPLE types that `LawfulGrants` needs to see. Under the old
+ *  annotation every prefix widened to `readonly string[]` and no type could
+ *  tell `['ws-reap','--expect']` from `['ws-reap']`. */
+export const EXEC_WHITELIST = {
   tmux: [['has-session'], ['list-panes'], ['capture-pane'], ['send-keys'], ['resize-window']],
 
   // NO `gh` KEY, DELIBERATELY. The host token carries the `repo` WRITE scope
@@ -204,7 +306,19 @@ export const EXEC_WHITELIST: ExecWhitelist = {
     ['ws-reap',  '--expect'],   // load-bearing: no reap without a confirmation token
     ['ws-attic', '--session'],
   ],
-};
+} as const satisfies ExecWhitelist;
+
+/**
+ * The proof line. Typed `LawfulGrants<…>`, so it is the real table's own type
+ * while every prefix is lawful and `never` the moment one is not — which makes
+ * `['ws-reap']`, `['ws-reap','--session']`, `['ws-rm', …]` and `[]` COMPILE
+ * ERRORS on this line rather than green diffs (verify round 2, P1).
+ *
+ * Consumed as `auditExecWhitelist`'s default argument, exactly as
+ * `GRANTABLE_COMMANDS` is consumed by its body — a live constant on the real
+ * path, not an unused type test a tidy-up could delete without noticing.
+ */
+const LAWFUL_EXEC_WHITELIST: LawfulGrants<typeof EXEC_WHITELIST> = EXEC_WHITELIST;
 
 // The list is exported so a different package can assert its keys; freezing it
 // (outer object, each prefix list, each prefix) means "exported for reading"
@@ -212,7 +326,13 @@ export const EXEC_WHITELIST: ExecWhitelist = {
 // `server/src/ccdargv.ts`: the type already forbids `EXEC_WHITELIST.ccd.push`,
 // and the freeze is what stops the untyped shapes — `as any`, a `JSON.parse`
 // result, array covariance — from reaching in and widening the list in place.
-for (const prefixes of Object.values(EXEC_WHITELIST)) {
+//
+// Driven off `EXEC_COMMANDS` rather than `Object.values`: with the literal
+// (`as const`) type above, `Object.values` falls to its `(o: {}): any[]`
+// overload and both loop variables become `any`, which would silently
+// un-typecheck the freeze itself.
+for (const cmd of EXEC_COMMANDS) {
+  const prefixes: readonly (readonly string[])[] = EXEC_WHITELIST[cmd];
   for (const prefix of prefixes) Object.freeze(prefix);
   Object.freeze(prefixes);
 }
@@ -284,21 +404,22 @@ function reportNonFatal(message: string): void {
  * This is deliberately not a test and deliberately not a type. `ccdargv.ts`
  * discloses that a nominal brand cannot stop a deliberate cast, array
  * covariance, or an `any`-typed value; none of those help here, because this
- * reads the ACTUAL object's own keys at runtime, after every cast has already
- * happened. It also survives the case no type can reach at all: someone editing
- * the compiled `dist/whitelist.js` on the fleet host.
+ * reads the ACTUAL object at runtime, after every cast has already happened. It
+ * also survives the case no type can reach at all: someone editing the compiled
+ * `dist/whitelist.js` on the fleet host.
  *
- * Two separate refusals, because "not forbidden" and "declared" are different
- * questions: a `gh` key is a security failure, and a key that is merely absent
- * from `GRANTABLE_COMMANDS` (or a declared command with no entry) is a drift
- * failure that would otherwise ship as a silent 502 on the live fleet.
+ * Three separate questions, because they fail differently: a `gh` key is a
+ * security failure; a key that is merely absent from `GRANTABLE_COMMANDS` is
+ * drift that would otherwise ship as a silent 502; and — new in verify round 2,
+ * P1 — a prefix VALUE that grants more than its name says is a security failure
+ * that the old key-only audit could not see at all.
  *
  * Takes the object as a parameter, defaulted, so the pinning test can hand it a
  * real widened whitelist and observe the real throw — rather than asserting
  * only that today's list is fine, which would be a pin that cannot fail.
  */
 export function auditExecWhitelist(
-  whitelist: Readonly<Record<string, unknown>> = EXEC_WHITELIST,
+  whitelist: Readonly<Record<string, unknown>> = LAWFUL_EXEC_WHITELIST,
 ): void {
   // `Reflect.ownKeys`, NOT `Object.keys` (verify round 2, P2). `Object.keys`
   // returns own ENUMERABLE keys; `isExecAllowed` looks a command up with
@@ -339,6 +460,49 @@ export function auditExecWhitelist(
       `declared [${declared.join(', ')}]. Missing grant(s): ${missing.join(', ')} — ` +
       'every route that needs one will answer 502.',
     );
+  }
+
+  // THE VALUES (verify round 2, P1). Everything above this line reads the key
+  // SET, which is why deleting `--expect` from the one grant whose comment
+  // calls it load-bearing was invisible to every non-test mechanism.
+  for (const key of actual) {
+    const prefixes: unknown = whitelist[key];
+    if (!Array.isArray(prefixes)) {
+      // Under-permission: `isExecAllowed`'s own `Array.isArray` guard answers
+      // false for this command, so it grants nothing. Loud, not fatal.
+      reportNonFatal(`EXEC_WHITELIST['${key}'] is not a list of argv prefixes, so nothing is grantable under it.`);
+      continue;
+    }
+    for (const prefix of prefixes as unknown[]) {
+      if (!Array.isArray(prefix) || (prefix as unknown[]).some((t) => typeof t !== 'string')) {
+        // Fatal, and this one IS over-permission-shaped: a non-array prefix
+        // makes `p.every` THROW inside the lookup rather than answer, which is
+        // the destructive-F7 bug class the prototype guards were added for.
+        refuseToBoot(`EXEC_WHITELIST['${key}'] contains a prefix that is not a list of string tokens.`);
+      }
+      const tokens = prefix as string[];
+      if (tokens.length === 0) {
+        refuseToBoot(
+          `EXEC_WHITELIST['${key}'] contains an EMPTY prefix, which grants every ` +
+          `${key} subcommand that exists — ws-rm and ws-gc --prune included.`,
+        );
+      }
+      const [verb, second] = tokens;
+      if ((UNGRANTABLE_VERBS as readonly string[]).includes(verb!)) {
+        refuseToBoot(
+          `EXEC_WHITELIST['${key}'] grants the ungrantable verb '${verb!}' ` +
+          `(${tokens.join(' ')}). ws-rm is the unguarded legacy delete and ws-gc carries --prune.`,
+        );
+      }
+      const required = (REQUIRED_VERB_FLAG as Readonly<Record<string, string>>)[verb!];
+      if (required !== undefined && second !== required) {
+        refuseToBoot(
+          `EXEC_WHITELIST['${key}'] grants '${tokens.join(' ')}', but '${verb!}' is only ` +
+          `grantable with '${required}' immediately after it. A ${verb!} without ` +
+          `'${required}' is an UNCONFIRMED destructive call, not a narrower grant.`,
+        );
+      }
+    }
   }
 }
 

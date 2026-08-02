@@ -83,6 +83,14 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   'g2-gh-key-below-ccd.ts':   { what: 'the same grant written below it — a type has no notion of position', codes: ['TS2353'] },
   'g3-gh-as-exec-command.ts': { what: "widening the key union instead of the literal", codes: ['TS2322'] },
   'g4-missing-declared-key.ts': { what: 'the reverse drift: declared but not granted', codes: ['TS2741'] },
+  // VERIFY ROUND 2, P1 — the same treatment one level down, on prefix VALUES.
+  // Every g1..g4 mechanism reads the KEY SET; none of them looks inside a
+  // prefix list, which is why the verifier could delete `--expect` with tsc
+  // clean, the module-load audit silent and the server's cross-check at 37/37.
+  'g5-ws-reap-without-expect.ts': { what: "the verifier's own mutation: ws-reap with no confirmation token", codes: ['TS2322'] },
+  'g6-ws-reap-wrong-flag.ts':     { what: "the same grant with a plausible WRONG token (--session)", codes: ['TS2322'] },
+  'g7-ws-rm-readmitted.ts':       { what: 'the unguarded legacy delete, re-admitted', codes: ['TS2322'] },
+  'g8-empty-prefix.ts':           { what: 'an empty prefix — the widest grant expressible, as the smallest diff', codes: ['TS2322'] },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -128,6 +136,13 @@ describe('the pins are not a blanket refusal, and they pin FORBIDDEN_COMMANDS it
     expect(src).toContain("Assert<'gh' extends ForbiddenCommand ? true : false>");
     expect(src).toContain("Assert<Equals<ExecCommand, 'tmux' | 'ccd'>>");
     expect(src).toContain('const good: ExecWhitelist');
+    // VERIFY ROUND 2, P1: and the value half. Without the positive control, a
+    // `LawfulGrants` that collapsed to `never` for EVERY table (say, after a
+    // rename left `IllegalGrant` matching nothing) would satisfy g5..g8 while
+    // pinning nothing — "the bypasses fail" is only evidence when a legitimate
+    // table still builds.
+    expect(src).toContain('export const lawful: LawfulGrants<typeof lawfulTable>');
+    expect(src).toContain("Equals<(typeof REQUIRED_VERB_FLAG)['ws-reap'], '--expect'>");
   });
 });
 
@@ -199,6 +214,8 @@ describe('mechanism 3 — the runtime self-audit refuses to boot on a widened li
     for (const bad of [
       { tmux: [], ccd: [], gh: [['pr', 'view']] },
       { tmux: [], ccd: [], jq: [] },
+      { tmux: [], ccd: [['ws-reap']] },
+      { tmux: [], ccd: [[]] },
     ]) {
       let msg = '';
       try { auditExecWhitelist(bad); } catch (e) { msg = e instanceof Error ? e.message : String(e); }
@@ -207,7 +224,6 @@ describe('mechanism 3 — the runtime self-audit refuses to boot on a widened li
       expect(msg, msg).toMatch(/Refusing to start\.$/);
     }
   });
-
 
   it('accepts the real list — the audit is not a blanket refusal', () => {
     expect(() => auditExecWhitelist()).not.toThrow();
@@ -220,6 +236,82 @@ describe('mechanism 3 — the runtime self-audit refuses to boot on a widened li
     const src = readFileSync(path.join(agentRoot, 'src', 'whitelist.ts'), 'utf8');
     const topLevelCall = src.split('\n').some((l) => l === 'auditExecWhitelist();');
     expect(topLevelCall, 'whitelist.ts must call auditExecWhitelist() at module scope').toBe(true);
+  });
+});
+
+// VERIFY ROUND 2, P1 — the runtime half of the value pin. The type above is
+// erased at build time and the compiled `dist/whitelist.js` on the fleet host
+// is a plain object literal; this is the mechanism that survives that, a cast,
+// an `any`, and a `JSON.parse`.
+describe('mechanism 3, values — a prefix that grants more than it names is a boot failure', () => {
+  const withCcd = (prefixes: unknown[]): Record<string, unknown> => ({ tmux: [], ccd: prefixes });
+
+  it('throws on a ws-reap with no confirmation token — the reported instance', () => {
+    expect(() => auditExecWhitelist(withCcd([['start'], ['ws-reap']])))
+      .toThrow(/only grantable with '--expect'/);
+  });
+
+  it('throws on a ws-reap with the WRONG token, not merely a missing one', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reap', '--expect']]))).not.toThrow();
+    // Order matters: `--expect` has to be the token IMMEDIATELY after the verb,
+    // because that is the only position `isExecAllowed`'s prefix rule pins. A
+    // grant of `['ws-reap', '--session', '--expect']` would permit
+    // `ccd ws-reap --session <id>` outright, since a prefix constrains only its
+    // own length and nothing past it.
+    expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session', '--expect']])))
+      .toThrow(/only grantable with '--expect'/);
+  });
+
+  it('throws on an ungrantable verb at the head of a prefix', () => {
+    for (const verb of ['ws-rm', 'ws-gc']) {
+      expect(() => auditExecWhitelist(withCcd([[verb]])), verb).toThrow(/ungrantable verb/);
+      expect(() => auditExecWhitelist(withCcd([[verb, '--session']])), verb).toThrow(/ungrantable verb/);
+    }
+  });
+
+  it('throws on an EMPTY prefix — vacuously true, so it grants every subcommand', () => {
+    // `[].every(...)` is true, so `isExecAllowed('ccd', ['ws-rm', 'x'])` would
+    // answer TRUE with one empty prefix present. Demonstrated, not asserted:
+    expect([].every(() => false)).toBe(true);
+    expect(() => auditExecWhitelist(withCcd([['start'], []]))).toThrow(/EMPTY prefix/);
+  });
+
+  it('throws on a prefix that is not a list of string tokens', () => {
+    // A non-array prefix makes `p.every` THROW inside the lookup rather than
+    // answer — the destructive-F7 class, one `try/catch` from being a hole.
+    expect(() => auditExecWhitelist(withCcd(['ws-reap']))).toThrow(/not a list of string tokens/);
+    expect(() => auditExecWhitelist(withCcd([[1, 2]]))).toThrow(/not a list of string tokens/);
+  });
+
+  it('a value that is not a prefix list at all is under-permission — loud, not fatal', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => auditExecWhitelist({ tmux: [], ccd: 'nope' })).not.toThrow();
+      expect(String(spy.mock.calls[0]?.[0] ?? '')).toMatch(/is not a list of argv prefixes/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('the SHIPPED table survives its own audit, and ws-reap really does carry --expect', () => {
+    expect(() => auditExecWhitelist()).not.toThrow();
+    const reap = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-reap');
+    expect(reap.length, 'exactly one ws-reap grant').toBe(1);
+    expect(reap[0]).toEqual(['ws-reap', '--expect']);
+    expect(EXEC_WHITELIST.ccd.map((p) => p[0])).not.toContain('ws-rm');
+    expect(EXEC_WHITELIST.ccd.map((p) => p[0])).not.toContain('ws-gc');
+    expect(EXEC_WHITELIST.ccd.every((p) => p.length > 0)).toBe(true);
+  });
+
+  it('a token-free reap is refused by the lookup, not merely by the audit', () => {
+    // The behavioural end of the same invariant, stated here as well as in
+    // exec.test.ts and whitelist-noghosts.test.ts, because the verifier's
+    // finding was precisely that deleting those two files re-opened it.
+    expect(isExecAllowed('ccd', ['ws-reap', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reap'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'x'])).toBe(true);
   });
 });
 
