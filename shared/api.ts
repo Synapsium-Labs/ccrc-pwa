@@ -361,7 +361,12 @@ export interface WsAudit {
   /** `stashes` is `null` until `_ws_reap_eval` has read the stash list — 0 is
    *  the claim "nothing stashed is at stake", and the sheet renders it as the
    *  word "none". */
-  stashes: number | null; worktreeBytes: number | null; commitsAheadOfBase: number;
+  /** `commitsAheadOfBase` is `null` when `$base` did not resolve, `$branch` was
+   *  empty, or the `rev-list` failed — final-round destructive review F2, the
+   *  last surviving `|| x=0` in ccd. 0 is the claim "this branch is level with
+   *  base", which is what `_pr_state_one` (ccd:1650) already refuses to
+   *  fabricate for the identical figure on the PR sheet. */
+  stashes: number | null; worktreeBytes: number | null; commitsAheadOfBase: number | null;
   pr: { number: number | null; url: string; mergeCommit: string; headRefOid: string };
   /** `fetchedAt` is `null` until Phase C actually fetched. 0 is a real epoch
    *  second and the sheet printed it through a relative-date formatter, so a

@@ -2988,12 +2988,23 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     [[ -n "$derrf" ]] && rm -f "$derrf"
   fi
 
-  local exists=false headmatch=false ahead=0 bytes=0
+  # `ahead` starts at `null` and BOTH ways of not measuring it keep it there —
+  # final-round destructive review F2, the last surviving `|| x=0` in this
+  # file. The initialiser and the fallback were each a fabricated 0, and both
+  # are reachable: the `if` does not run at all when `$base` does not resolve
+  # or `$branch` is empty, and `rev-list` can fail inside it.
+  #
+  # ccd already litigated this exact value 1,340 lines earlier. `_pr_state_one`
+  # (ccd:1650) writes `ahead=""` under the comment: `"" is UNMEASURED, not
+  # zero. ahead=0 is the claim "this branch is level with base" … a ref that
+  # does not resolve has not been measured against anything.` The file
+  # disagreed with itself; it no longer does.
+  local exists=false headmatch=false ahead=null bytes=0
   [[ -d "$workdir" ]] && exists=true
   [[ -n "$REAP_WTHEAD" && "$REAP_WTHEAD" == "$branch" ]] && headmatch=true
   if [[ -n "$branch" ]] && git -C "$PROJECTS_ROOT/$project" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
     ahead=$(git -C "$PROJECTS_ROOT/$project" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)
-    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0
+    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=null
   fi
   # Pre-merge fix round, finding F: `null`, never a fabricated `0` — the same
   # rule `_ws_archive_manifest` (ccd:1190) already carries, applied here where

@@ -1380,6 +1380,35 @@ describe('the fields a refusal never measured', () => {
     expect(fs.existsSync(wt)).toBe(true);
   });
 
+  /* ── the last surviving `|| x=0` ──────────────────────────────────────────
+   *
+   * Final-round destructive review F2. `commitsAheadOfBase` was initialised
+   * `ahead=0` and fell back to `ahead=0`, and BOTH are reachable: the `if`
+   * never runs when `$base` does not resolve or `$branch` is empty, and the
+   * `rev-list` inside it can fail. ccd litigated this exact value 1,340 lines
+   * earlier — `_pr_state_one` writes `ahead=""` under `"" is UNMEASURED, not
+   * zero` — so the file disagreed with itself.
+   */
+  it('answers null for commitsAheadOfBase when the base does not resolve', () => {
+    const { wt } = squashMovedBase();
+    // The INITIALISER's arm: the `if` is skipped entirely, which no fallback
+    // fix would have covered.
+    h.sh('_reg_set demo-quiet-basin base refs/heads/no-such-base');
+    const a = refusal(wt);
+    expect(a.commitsAheadOfBase, 'a base that does not resolve was compared with nothing').toBeNull();
+    expect(JSON.stringify(a)).not.toContain('"commitsAheadOfBase":0');
+  });
+
+  it('answers null for commitsAheadOfBase when the rev-list itself fails', () => {
+    // The FALLBACK's arm. Only the counting read is shadowed, so the base
+    // still resolves and the `if` still runs.
+    const { wt } = squashMovedBase();
+    const a = audit('git() { [[ "$*" == *"rev-list --count"* && "$*" == *"refs/heads/ws/quiet-basin"* ]]'
+      + ' && return 128; command git "$@"; };');
+    expect(a.commitsAheadOfBase).toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
   it('still reports real measurements on the ordinary reapable sheet', () => {
     // The half a null-everywhere fix would break: widening the wire must not
     // make the sheet a reader sees every day start hedging.
@@ -1395,6 +1424,7 @@ describe('the fields a refusal never measured', () => {
     expect(a.sensitiveFiltered).toBe(0);
     expect(a.stashes).toBe(0);
     expect(a.merge.fetchedAt).toBeGreaterThan(0);
+    expect(a.commitsAheadOfBase).toBeGreaterThan(0);
     expect(fs.existsSync(wt)).toBe(true);
   });
 });
@@ -1548,16 +1578,29 @@ describe('the refusals the ladder reaches last', () => {
     expect(refusal(wt, NOTIP).verdict).toBe('branch-missing');
   });
 
-  it('publishes a NUMBER for commitsAheadOfBase even when the count fails', () => {
-    // `[[ "$ahead" =~ ^[0-9]+$ ]] || ahead=0` in the VERB, not the evaluator.
-    // Without it a failed `rev-list --count` prints `"commitsAheadOfBase":` and
-    // the whole manifest stops being JSON — including the refusal it was
-    // carrying, so the sheet would show a parse error instead of a sentence.
+  // RENAMED AND INVERTED, final-round destructive review F2 — this was
+  // `publishes a NUMBER for commitsAheadOfBase even when the count fails` and
+  // it PINNED THE FORGERY, in the same shape and for the same stated reason as
+  // the round-3 case eighty lines above it: `[[ "$ahead" =~ ^[0-9]+$ ]] ||
+  // ahead=0` turned a `rev-list` that never produced an answer into the number
+  // 0, and this test held it in place by asserting the 0.
+  //
+  // The half it legitimately defended is kept and is the reason the assertion
+  // is inverted rather than deleted: an EMPTY `$ahead` interpolates as
+  // `"commitsAheadOfBase":`, which is not JSON, and a manifest that does not
+  // parse takes the refusal down with it — the sheet shows an error instead of
+  // a sentence. `null` satisfies that requirement and states the truth; 0
+  // satisfies it and states a falsehood. The `JSON.parse` in `audit()` is what
+  // enforces the parse half, on every case in this file.
+  it('answers null — parseable, and not a claim — when the ahead count fails', () => {
     const { wt } = squashMovedBase();
     const NOCOUNT = `git() { [[ "$*" == *"rev-list --count"* ]] && return 128; command git "$@"; };`;
     const a = refusal(wt, NOCOUNT);
     expect(a.verdict).toBe('unpushed-commits');
-    expect(a.commitsAheadOfBase).toBe(0);
+    expect(a.commitsAheadOfBase, '0 is the claim "level with base" — nothing was compared').toBeNull();
+    // The parse requirement, asserted rather than assumed: `refusal()` already
+    // ran `JSON.parse` over this document, and the field is present.
+    expect(Object.prototype.hasOwnProperty.call(a, 'commitsAheadOfBase')).toBe(true);
   });
 
   it('refuses when gh itself could not be read, naming the classified reason', () => {
