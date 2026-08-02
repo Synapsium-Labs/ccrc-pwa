@@ -54,9 +54,13 @@ export interface AuditCounts {
   selfGrounded: number;
   selfGroundedContexts: number;
   pseudo: number;
+  /** Rules grounded on a self-grounded ancestor their own selector names. */
+  descendant: number;
   inherited: number;
   faded: number;
   keyframes: number;
+  /** Rules that set a colour whose ground no route could recover. */
+  uncovered: number;
 }
 
 export interface AuditReport {
@@ -66,6 +70,10 @@ export interface AuditReport {
   /** Structural defects: unregistered fades, unparsed colours, stale entries. */
   problems: string[];
   stale: StaleEntries;
+  /** The auditor's own blind spot, enumerated: `file selector` for every rule
+   *  that sets a colour and whose ground is not recoverable from the
+   *  stylesheets. Not failures — the honest limit of a parser without a DOM. */
+  uncovered: string[];
   counts: AuditCounts;
   fades: { key: string; value: number }[];
   troughs: KeyframeTrough[];
@@ -91,6 +99,9 @@ export const KEYFRAME_TROUGHS: Record<string, string>;
 export function stylesheets(root?: string): string[];
 export function loadThemes(root?: string): Themes;
 export function blockBody(src: string, open: string): string;
+/** The custom properties a declaration block declares, name -> value. Names are
+ *  case-SENSITIVE, per CSS Variables 1. */
+export function customProps(body: string): Record<string, string>;
 export function resolveColor(expr: string, theme: Theme, depth?: number): RGBA;
 export function over(fg: RGBA, bg: RGBA): RGBA;
 export function contrast(a: RGBA, b: RGBA): number;
@@ -101,6 +112,8 @@ export function ratio(
   opacity?: number,
 ): number;
 export function selectorList(sel: string): string[];
+/** The compounds of one complex selector, ancestors first, subject last. */
+export function compoundChain(sel: string): string[];
 export function subjectCompound(sel: string): string;
 /** The compound qualifiers `sel` adds to `base`'s subject element, `''` if it
  *  restates the same subject under a different ancestor chain, or null if it
@@ -114,6 +127,18 @@ export function declOf(body: string, prop: string): string | null;
 /** The last of `background` / `background-color` in source order: the two
  *  write the same cascaded value, so neither one is a fallback for the other. */
 export function bgOf(body: string): string | null;
+/** The background IMAGE a rule paints — the `background-image` longhand or an
+ *  image function inside the `background` shorthand — or null. An image cannot
+ *  be reduced to one colour, so a non-null answer is a gate FAILURE, not a
+ *  measurement: `bgOf` alone used to skip such a rule in silence. */
+export function bgImageOf(body: string): string | null;
+/** What a rule paints its own element with. `paints` is false only when the
+ *  rule supplies no ground at all and the audit must look elsewhere for one. */
+export function paintOf(body: string): {
+  colour: string | null;
+  image: string | null;
+  paints: boolean;
+};
 export function opacityNumber(raw: string): number | null;
 export function keyframeTroughs(root?: string): KeyframeTrough[];
 export function audit(root?: string): AuditReport;

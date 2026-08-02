@@ -18,7 +18,7 @@
 //   * MUTATION proofs — a copy of the stylesheets is mutated on disk and the
 //     REAL gate command is run against it, once per escape route that has
 //     actually been used to smuggle a failure past this gate.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -30,8 +30,13 @@ import {
   OPACITY_REGISTRY,
   SELF_GROUNDED_EXEMPT,
   audit,
+  bgImageOf,
   bgOf,
+  blockBody,
+  compoundChain,
   contrast,
+  customProps,
+  paintOf,
   declOf,
   keyframeTroughs,
   loadThemes,
@@ -292,6 +297,153 @@ describe('the gate fails a mutated tree', () => {
     ],
   ])('the gate measures %s', (_n, rule, want) => {
     expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
+  // ── the VARIANT SHAPE, not the four spellings of it ───────────────────────
+  // final2-gates F1, the MAJOR: `contextsFor` returned only the base unless the
+  // base declared custom properties, and then admitted only variants that
+  // REBOUND one of them. A variant that overrode `color` directly was never
+  // measured — which is how `.code-block-copy:hover,
+  // .code-block-copy[data-copied]` shipped 11px uppercase mono text at 3.03:1
+  // in the light theme with this gate printing ALL 234 PASS.
+  //
+  // Three rounds have each closed one spelling of "variant". These are the
+  // other ways the SHAPE occurs, enumerated with the auditor's own exports
+  // rather than from memory, and each one is a route that was green before this
+  // commit. Every mutant reintroduces the same reported blocker (--ink-secondary
+  // on the light-theme well, 2.44) so nothing here can pass by measuring
+  // something else.
+  it.each([
+    [
+      'overrides `color` on a :hover of a self-grounded rule',
+      'src/session/chat.css',
+      '.pr-body-preview:hover { color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview:hover\]/,
+    ],
+    [
+      'overrides `color` from ANOTHER stylesheet',
+      'src/fleet/fleet.css',
+      ".pr-body-preview[data-x] { color: var(--ink-secondary); }",
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as fleet\.css \.pr-body-preview\[data-x\]\]/,
+    ],
+    [
+      'swaps only the GROUND under an inherited ink',
+      'src/session/chat.css',
+      '.metachip.is-rogue { background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\.is-rogue\]/,
+    ],
+    [
+      'restates the WHOLE selector a second time, colour only',
+      'src/session/chat.css',
+      '.pr-body-preview { color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview\]/,
+    ],
+    [
+      'restates the whole selector a second time, ground only',
+      'src/session/chat.css',
+      '.metachip { background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\]/,
+    ],
+    [
+      'splits the ink and the ground across two rules with the SAME qualifier',
+      'src/session/chat.css',
+      '.metachip:hover { color: var(--ink-secondary); }\n.metachip:hover { background: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip:hover \+ \.metachip:hover\]/,
+    ],
+    [
+      'is a DESCENDANT of a self-grounded rule its own selector names',
+      'src/session/chat.css',
+      '.msg-assist pre .rogue { color: var(--ink-secondary); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist pre \.rogue \[in chat\.css \.msg-assist pre\]/,
+    ],
+  ])('a rule that %s cannot hide the well', (_n, rel, rule, want) => {
+    expect(expectFail(rel as string, (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
+  it('the live rule the MAJOR was found in is measured, in both themes', () => {
+    // Not a mutation — a pin on the live tree, because the defect was that
+    // NOTHING measured this rule. Both rows must exist and both must clear 4.5:
+    // the label is --text-2xs (11px) uppercase mono, so it is body text.
+    const rows = report.measured.filter((m) =>
+      m.label.includes('chat.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r.floor).toBe(4.5);
+      expect(r.detail).toContain('var(--accent-on-well)');
+      expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('retuning --accent-on-well back to the theme accent fails the gate', () => {
+    // The bind between the fix and the gate: --accent flips with the theme and
+    // the light one is tuned for paper, so on the well bar it is 3.03. If
+    // anybody "simplifies" this token away, the gate says so.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('color: var(--accent-on-well);\n  border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);',
+        'color: var(--accent);\n  border-color: color-mix(in srgb, var(--accent) 40%, transparent);'));
+    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT chat\.css \.code-block-copy \[as \.code-block-copy:hover/);
+  });
+
+  // ── background-image: read, or fail loudly. Never skipped ─────────────────
+  // final2-gates F3. `bgOf` matched only `background` / `background-color`, so
+  // a rule that painted its own opaque ground with a gradient and put
+  // unreadable text on it was skipped SILENTLY — contradicting this file's own
+  // claim that an unparsed paint is a FAIL and never a skip. There is no live
+  // instance today; this is the hole the next gradient walks through, and the
+  // design system already uses gradients (.attach-strip, .md-table-wrap,
+  // .skel-line).
+  it.each([
+    ['the `background-image` longhand', '.forge-bgimg { color: var(--ink-secondary); background-image: linear-gradient(var(--bg-well), var(--bg-well)); }'],
+    ['a url() image', '.forge-bgurl { color: var(--ink-secondary); background-image: url(x.png); }'],
+    ['an image inside the `background` shorthand', '.forge-bgshort { color: var(--ink-secondary); background: linear-gradient(#fff, #fff); }'],
+    ['an image ground introduced by a VARIANT', '.metachip.is-grad { background-image: linear-gradient(#fff, #fff); }'],
+  ])('%s is an unmeasurable paint and therefore a FAILURE', (_n, rule) => {
+    const o = expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`);
+    expect(o).toMatch(/background-image .* is a paint that cannot be reduced to a colour/);
+  });
+
+  // ── CASE. CSS property names are ASCII case-insensitive; this file was not ──
+  // final2-gates F2. `COLOR:` / `BACKGROUND:` / `OPACITY:` are declarations a
+  // browser paints, and every one of them was invisible to declOf, bgOf and the
+  // fade sweep — so the reported 2.44:1 blocker shape forged the whole gate to
+  // ALL 234 PASS just by being written in uppercase. Nobody hand-writes
+  // `COLOR:`, but "the gate reads a different stylesheet than the browser" is
+  // the class, not the spelling.
+  it.each([
+    [
+      'the blocker shape in UPPERCASE',
+      '.forge-upper { COLOR: var(--ink-secondary); BACKGROUND: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-upper/,
+    ],
+    [
+      'the blocker shape in MiXeD case, longhand background',
+      '.forge-mixed { CoLoR: var(--ink-secondary); Background-Color: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-mixed/,
+    ],
+    [
+      'an element fade spelled OPACITY',
+      '.forge-op { OPACITY: 0.4; }',
+      /unregistered fade chat\.css \.forge-op 0\.4/,
+    ],
+    [
+      'a whole animation spelled @KEYFRAMES with an UPPERCASE stop',
+      '@KEYFRAMES forge-kf { FROM { OPACITY: 0.2; } to { opacity: 1; } }',
+      /unregistered keyframe trough chat\.css forge-kf 0\.2/,
+    ],
+  ])('the gate reads %s exactly as a browser does', (_n, rule, want) => {
+    expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
+  it('an UPPERCASE stop cannot deepen an already-registered trough unseen', () => {
+    // The subtlest half of F2: the registry key is `file name min`, so an
+    // uppercase stop inside an animation that is ALREADY registered lowered the
+    // real trough without changing the key — the registry stayed green over a
+    // deeper dip. Both directions fire now: the new minimum is unregistered and
+    // the old one is stale.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('@keyframes working-dot {', '@keyframes working-dot { 10% { OPACITY: 0.05; }'));
+    expect(o).toMatch(/unregistered keyframe trough chat\.css working-dot 0\.05/);
+    expect(o).toMatch(/stale keyframes registry entry: chat\.css working-dot 0\.25/);
   });
 
   it('a new element fade is added with no contrast decision', () => {
@@ -580,6 +732,16 @@ describe('the auditor itself', () => {
     ['background-image: url(x)', 'background', null],
     ['-webkit-background: red', 'background', null],
     ['border-color: red', 'color', null],
+    // Property names are ASCII case-insensitive (CSS Syntax 3 §3.1) …
+    ['COLOR: var(--a)', 'color', 'var(--a)'],
+    ['CoLoR: var(--a); color: var(--b)', 'color', 'var(--b)'],
+    ['color: var(--a); COLOR: var(--b)', 'color', 'var(--b)'],
+    ['OPACITY: 0.4', 'opacity', '0.4'],
+    // … but CUSTOM property names are NOT (CSS Variables 1 §2), so the fold
+    // must stop at `--`. Reading `--Callout-Tint` as `--callout-tint` would
+    // make the auditor measure a token the browser never resolves.
+    ['--Callout-Tint: var(--a)', '--callout-tint', null],
+    ['--callout-tint: var(--a)', '--callout-tint', 'var(--a)'],
   ])('declOf(%s, %s) is the LAST declaration: %s', (body, prop, want) => {
     expect(declOf(body as string, prop as string)).toBe(want);
   });
@@ -593,21 +755,42 @@ describe('the auditor itself', () => {
     ['background-color: var(--a); background-color: var(--b)', 'var(--b)'],
     ['color: red', null],
     ['background-image: url(x); background-position: 0 0', null],
+    ['BACKGROUND: var(--bg-well)', 'var(--bg-well)'],
+    ['Background-Color: var(--bg-well)', 'var(--bg-well)'],
   ])('bgOf(%s) is %s', (body, want) => {
     expect(bgOf(body as string)).toBe(want);
+  });
+
+  it('resolves colour functions however they are cased', () => {
+    // `VAR()`, `RGB()`, `COLOR-MIX(IN SRGB, …)` are all functions a browser
+    // evaluates; the token name inside stays case-sensitive.
+    expect(resolveColor('VAR(--bg-well)', DARK)).toEqual(resolveColor('var(--bg-well)', DARK));
+    expect(resolveColor('RGBA(255, 0, 0, 0.5)', DARK)).toEqual([255, 0, 0, 0.5]);
+    expect(resolveColor('COLOR-MIX(IN SRGB, #FFFFFF 50%, #000000)', DARK))
+      .toEqual(resolveColor('color-mix(in srgb, #FFFFFF 50%, #000000)', DARK));
+    expect(() => resolveColor('var(--BG-WELL)', DARK)).toThrow(/unknown custom property/);
+  });
+
+  it('finds both theme blocks however the selectors are cased', () => {
+    // blockBody used indexOf, so `:ROOT` — a selector browsers match — read as
+    // "no :root block" and threw at gate time.
+    const tokens = readFileSync(path.join(ROOT, 'src/styles/tokens.css'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(blockBody(tokens.replace(':root {', ':ROOT {'), ':root')).toBe(blockBody(tokens, ':root'));
   });
 
   it('exposes exactly the report shape the types promise', () => {
     // The .d.mts beside audit.mjs is hand-written, i.e. a drift risk of the
     // same class as everything else here. This is the runtime check on it.
     expect(Object.keys(report).sort()).toEqual(
-      ['counts', 'fades', 'measured', 'problems', 'sheets', 'stale', 'themes', 'troughs'],
+      ['counts', 'fades', 'measured', 'problems', 'sheets', 'stale', 'themes', 'troughs', 'uncovered'],
     );
     expect(Object.keys(report.stale).sort()).toEqual(
       ['exempt', 'grounds', 'inherited', 'keyframes', 'opacity'],
     );
     expect(Object.keys(report.counts).sort()).toEqual(
-      ['faded', 'inherited', 'keyframes', 'pseudo', 'rules', 'selfGrounded', 'selfGroundedContexts'],
+      ['descendant', 'faded', 'inherited', 'keyframes', 'pseudo', 'rules', 'selfGrounded',
+        'selfGroundedContexts', 'uncovered'],
     );
   });
 });
@@ -645,6 +828,77 @@ describe('every stylesheet under src/ is audited', () => {
     expect(report.problems).toEqual([]);
   });
 
+  // ── the census of what the auditor cannot measure ─────────────────────────
+  // The through-line of every forge this gate has survived is the same: it
+  // measures the shapes someone thought of, and CSS has more shapes than that.
+  // So the audit computes its own blind spot instead of describing it, and this
+  // is the bind on the description: `uncovered` must be EXACTLY the rules whose
+  // ground cannot be recovered from the stylesheets. Re-derived here from the
+  // primitives, independently of how audit() partitions them — if a rule that
+  // names a painter, or restates a painter's subject, ever lands in the census
+  // again (which is what the MAJOR was), this fails.
+  describe('the uncovered census', () => {
+    const rules = stylesheets(ROOT).flatMap((rel) => rulesOf(ROOT, rel));
+    const paints = (r: { body: string }): boolean => paintOf(r.body).paints;
+    const painters = rules.filter((r) => declOf(r.body, 'color') !== null && paints(r));
+
+    it('is non-empty and smaller than the set it is drawn from', () => {
+      // Vacuity guards in both directions: an empty census would make the
+      // assertion below trivially true, and a census equal to every colour rule
+      // would mean nothing is measured at all.
+      const colourRules = rules.filter((r) => declOf(r.body, 'color') !== null);
+      expect(report.uncovered.length).toBeGreaterThan(0);
+      expect(report.uncovered.length).toBeLessThan(colourRules.length - 40);
+      expect(report.counts.uncovered).toBe(report.uncovered.length);
+    });
+
+    it('contains no rule whose ground the selector itself gives away', () => {
+      const recoverable = report.uncovered.filter((k) => {
+        const rule = rules.find((r) => ruleKey(r) === k);
+        if (rule === undefined) return true;
+        return painters.some(
+          (h) =>
+            ruleKey(h) !== k
+            && (variantSuffix(rule.selector, h.selector) !== null
+              || selectorList(rule.selector).some((s) =>
+                compoundChain(s).slice(0, -1).some((anc) =>
+                  selectorList(h.selector).some((hs) => subjectCompound(hs) === anc)))),
+        );
+      });
+      expect(recoverable).toEqual([]);
+    });
+
+    it('every entry really does set a colour and supply no ground', () => {
+      for (const k of report.uncovered) {
+        const rule = rules.find((r) => ruleKey(r) === k);
+        expect(rule, k).toBeDefined();
+        expect(declOf((rule as { body: string }).body, 'color'), k).not.toBeNull();
+        expect(paints(rule as { body: string }), k).toBe(false);
+      }
+    });
+
+    it('the gate prints the count, so the blind spot is in the output', () => {
+      expect(out).toMatch(
+        new RegExp(`# ${report.counts.uncovered} rules set a colour with no ground this auditor can recover`),
+      );
+    });
+  });
+
+  it('grounds the two rules on the code block bar that nothing measured', () => {
+    // The MAJOR's neighbourhood, enumerated rather than fixed one at a time:
+    // .code-block-copy and .code-block-lang are the two texts on
+    // .code-block-bar, and the bar (--well-bar-bg, 5% ink over the well) is what
+    // is behind them — not --bg-well, which the GROUNDS entry used to claim and
+    // which flattered every ratio here.
+    for (const sel of ['.code-block-copy', '.code-block-lang']) {
+      const rows = report.measured.filter((m) => m.label.endsWith(`chat.css ${sel}`));
+      expect(rows.map((m) => m.label), sel).toHaveLength(2);
+      for (const r of rows) expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(GROUNDS['chat.css .code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(INHERITED_GROUNDS['chat.css .code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
+  });
+
   it('clears its floor on every pair, in both themes', () => {
     expect(report.measured.filter((m) => !m.ok).map((m) => `${m.label} ${m.ratio.toFixed(2)}`)).toEqual([]);
   });
@@ -670,6 +924,144 @@ describe('every stylesheet under src/ is audited', () => {
       expect(g.why.length, k).toBeGreaterThan(20);
       expect(g.under.length, k).toBeGreaterThan(0);
     }
+  });
+});
+
+// ── nothing outside tokens.css re-types a colour without a bind ─────────────
+// final2-gates F6 / verify3-ui-css P7. index.html hand-types --bg-page four
+// times and vite.config.ts twice, and nothing held any of them to tokens.css:
+// retuning --bg-page left the pre-paint flash, the browser chrome and the
+// install splash on the old colour, silently. None of the six can be a var()
+// (a <meta> takes no custom property; the pre-paint <style> runs before any
+// stylesheet exists; the manifest is JSON), so the answer is a BIND, not a
+// deduplication — the same answer this whole file gives everywhere else.
+//
+// The sweep below is the part that matters: it walks the package and finds
+// EVERY hex that equals a tokens.css colour, so a seventh copy in a seventh
+// file is a failure rather than a discovery three rounds later. That is the
+// same reason design/audit.mjs discovers stylesheets instead of listing them.
+describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
+  const hexes = (s: string): string[] => (s.match(/#[0-9a-fA-F]{6}\b/g) ?? []).map((h) => h.toUpperCase());
+  const tokenHexes = new Set(
+    [...Object.values(DARK), ...Object.values(LIGHT)]
+      .filter((v) => /^#[0-9a-fA-F]{6}$/.test(v))
+      .map((v) => v.toUpperCase()),
+  );
+
+  /** Files allowed to contain a hex that equals a token, each with WHY it is
+   *  allowed and where the bind that holds it lives. A file not named here is
+   *  a failure — that is the point of the sweep. */
+  const BOUND: Record<string, string> = {
+    'index.html': 'the four pre-paint / theme-color literals — bound by the case below',
+    'vite.config.ts': 'the PWA manifest background_color + theme_color — bound by the case below',
+    'design/mockup.html': 'a self-contained static mockup that says it carries a verbatim copy of the token block — bound property-by-property by the case below',
+    'design/DIRECTION.md': 'the palette table the design doc calls "the map" — bound row-by-row by the case below',
+    'design/contrast-check.mjs': 'one hex inside a prose comment explaining why a pair takes attention-TEXT and not the dot hue; no colour is typed into the gate itself (palette() looks every one up by token)',
+    'test/contrast.test.ts': 'the hand-computed arithmetic controls this file exists to carry, each already asserted against resolveColor',
+    'test/fleet-css.test.ts': 'one hex inside a prose comment about --accent and --status-busy sharing a value',
+    'src/session/TerminalDrawer.tsx': 'the xterm 16-colour ANSI palette. The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
+  };
+
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (['node_modules', 'dist', '.git', 'public', 'coverage'].includes(e.name)) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p, out);
+      else if (e.isFile() && /\.(ts|tsx|html|css|mjs|md|json)$/.test(e.name)) out.push(p);
+    }
+    return out;
+  };
+
+  it('finds no copy in a file that is not bound here', () => {
+    const found = new Set<string>();
+    for (const abs of walk(ROOT)) {
+      const rel = path.relative(ROOT, abs).split(path.sep).join('/');
+      if (rel === 'src/styles/tokens.css') continue;
+      // CSS comments cite measured hexes as prose all over this tree; strip
+      // them the way the auditor does, so only DECLARATIONS count.
+      const src = readFileSync(abs, 'utf8');
+      const body = rel.endsWith('.css') ? src.replace(/\/\*[\s\S]*?\*\//g, '') : src;
+      if (hexes(body).some((h) => tokenHexes.has(h))) found.add(rel);
+    }
+    // Vacuity guard: a sweep that matched nothing would pass this trivially.
+    expect(found.size).toBeGreaterThan(4);
+    expect([...found].sort().filter((f) => !(f in BOUND))).toEqual([]);
+    // …and the other direction: a BOUND entry for a file that no longer
+    // re-types anything is a comment pretending to be a gate.
+    expect(Object.keys(BOUND).sort().filter((f) => !found.has(f))).toEqual([]);
+  });
+
+  it('gives a reason for every file it allows', () => {
+    for (const [f, why] of Object.entries(BOUND)) expect(why.length, f).toBeGreaterThan(20);
+  });
+
+  it("index.html's four literals are --bg-page in the theme the markup names", () => {
+    const html = readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const dark = (DARK['--bg-page'] as string).toUpperCase();
+    const light = (LIGHT['--bg-page'] as string).toUpperCase();
+    const meta = [...html.matchAll(/<meta name="theme-color"([^>]*)>/g)].map((m) => m[1]);
+    expect(meta).toHaveLength(2);
+    expect(hexes(meta[0] as string)).toEqual([dark]);
+    expect((meta[1] as string).includes('prefers-color-scheme: light')).toBe(true);
+    expect(hexes(meta[1] as string)).toEqual([light]);
+    const style = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '';
+    expect(hexes(blockBody(style, 'html {'))).toEqual([dark]);
+    expect(hexes(blockBody(style, "html[data-theme='light']"))).toEqual([light]);
+    // Nothing else in the file may carry a token colour.
+    expect(hexes(html).filter((h) => tokenHexes.has(h))).toEqual([dark, light, dark, light]);
+  });
+
+  it("vite.config.ts's manifest colours are the dark --bg-page", () => {
+    // The manifest is deliberately dark-only (the app is dark-first; light is an
+    // in-app [data-theme] override), so both entries take the DARK value.
+    const cfg = readFileSync(path.join(ROOT, 'vite.config.ts'), 'utf8');
+    const dark = (DARK['--bg-page'] as string).toUpperCase();
+    for (const key of ['background_color', 'theme_color']) {
+      const m = new RegExp(`${key}:\\s*'(#[0-9a-fA-F]{6})'`).exec(cfg);
+      expect(m?.[1], key).toBeDefined();
+      expect((m?.[1] ?? '').toUpperCase(), key).toBe(dark);
+    }
+  });
+
+  it("design/mockup.html's copied token block still equals tokens.css", () => {
+    // The file's own comment says "verbatim copy of src/styles/tokens.css". A
+    // verbatim copy that nothing compares is the drift class audit.mjs was
+    // written to end; this compares it with the auditor's own primitives.
+    const src = readFileSync(path.join(ROOT, 'design/mockup.html'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    let checked = 0;
+    for (const [open, theme] of [[':root', DARK], ["[data-theme='light']", LIGHT]] as const) {
+      for (const [k, v] of Object.entries(customProps(blockBody(src, open)))) {
+        if (theme[k] === undefined) continue;
+        expect(v.replace(/\s+/g, ''), `mockup.html ${open} ${k}`)
+          .toBe((theme[k] ?? '').replace(/\s+/g, ''));
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(50);
+  });
+
+  it("design/DIRECTION.md's palette table still equals tokens.css", () => {
+    const md = readFileSync(path.join(ROOT, 'design/DIRECTION.md'), 'utf8');
+    let checked = 0;
+    for (const line of md.split('\n')) {
+      const cells = line.split('|').map((c) => c.trim());
+      if (cells.length < 6) continue;
+      const names = (cells[2]?.match(/`([^`]+)`/g) ?? []).map((s) => s.slice(1, -1));
+      const head = names[0];
+      if (head === undefined || !head.startsWith('--')) continue;
+      // `--status-busy` / `-text` names --status-busy and --status-busy-text.
+      const full = names.map((n) => (n.startsWith('--') ? n : `${head}${n}`));
+      for (const [cell, theme] of [[cells[3], DARK], [cells[4], LIGHT]] as const) {
+        const vals = ((cell ?? '').match(/`([^`]+)`/g) ?? []).map((s) => s.slice(1, -1));
+        vals.forEach((v, i) => {
+          const name = full[i];
+          if (name === undefined || !/^#[0-9a-fA-F]{6}$/.test(v) || theme[name] === undefined) return;
+          expect(v.toUpperCase(), `DIRECTION.md ${name}`).toBe((theme[name] ?? '').toUpperCase());
+          checked++;
+        });
+      }
+    }
+    expect(checked).toBeGreaterThan(40);
   });
 });
 
@@ -751,6 +1143,35 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     expect(selectorList(":is(.a, .b) .c, .d[x~='y, z']")).toEqual([':is(.a, .b) .c', ".d[x~='y, z']"]);
     expect(subjectCompound('.a > .b + .c ~ .d')).toBe('.d');
     expect(subjectCompound(":not(.a, .b) .c[data-x='p q']")).toBe(".c[data-x='p q']");
+    // The descendant route walks this chain looking for a named painter.
+    expect(compoundChain('.a > .b + .c ~ .d')).toEqual(['.a', '.b', '.c', '.d']);
+    expect(compoundChain(":is(.a, .b) .c[data-x='p q']")).toEqual([':is(.a, .b)', ".c[data-x='p q']"]);
+  });
+
+  it.each([
+    // body, the image paint the auditor must refuse to reduce to a colour
+    ['background-image: linear-gradient(#fff, #000)', 'linear-gradient(#fff, #000)'],
+    ['background-image: url(a.png)', 'url(a.png)'],
+    ['background: repeating-linear-gradient(#fff, #000)', 'repeating-linear-gradient(#fff, #000)'],
+    ['BACKGROUND-IMAGE: URL(a.png)', 'URL(a.png)'],
+    // …and the shapes that are NOT images
+    ['background-image: none', null],
+    ['background: var(--bg-well)', null],
+    ['color: red', null],
+  ])('bgImageOf(%s) is %s', (body, want) => {
+    expect(bgImageOf(body as string)).toBe(want as string | null);
+  });
+
+  it.each([
+    ['background: var(--bg-well)', true],
+    ['background-image: url(a.png)', true],
+    ['background: none', false],
+    ['background-image: none', false],
+    ['color: red', false],
+  ])('paintOf(%s).paints is %s', (body, want) => {
+    // `paints` is the question "does this rule supply a ground of its own".
+    // Answering it with bgOf alone is what made an image ground invisible.
+    expect(paintOf(body as string).paints).toBe(want);
   });
 });
 

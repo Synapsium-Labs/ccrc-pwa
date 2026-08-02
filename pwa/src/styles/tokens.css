@@ -147,6 +147,12 @@
   --syn-inserted: var(--diff-add);
   --well-bar-bg:   color-mix(in srgb, var(--ink-on-well) 5%,  var(--bg-well));
   --well-bar-hair: color-mix(in srgb, var(--ink-on-well) 12%, var(--bg-well));
+  /* The accent as it must be spelled ON a well. --accent flips with the theme
+     and the light one (#0E7B3F) is tuned for paper: on the well bar it reads
+     3.03:1, which is how the code block's COPY / COPIED label shipped below the
+     4.5 floor for 11px text. Wells are dark in both themes, so the well accent
+     is the dark one in both themes — same rule as the syntax palette above. */
+  --accent-on-well: #45D67E;  /* 10.67:1 on the well, 9.91:1 on the well bar */
 
   /* ------------------------------------------------------------------ *
    *  TYPE                                                               *
