@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import type { FleetSession, WsAudit } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -43,6 +44,35 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const open = (onReaped = (): void => {}) =>
   render(<><ToastHost /><ReapSheet session={sess()} open onClose={() => {}} onReaped={onReaped} /></>);
+
+/** A fetch stub that hands back a resolver per URL substring instead of a
+ *  value, so a test can choose the ORDER two in-flight audits land in. */
+const deferredFetch = (): {
+  resolve: (match: string, body: unknown) => void;
+  reject: (match: string, message: string) => void;
+  posts: (string | undefined)[];
+} => {
+  const pending = new Map<string, { ok: (r: Response) => void; no: (e: Error) => void }>();
+  const posts: (string | undefined)[] = [];
+  const json = (body: unknown): Response =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (!u.includes('/audit')) { posts.push(init?.body === undefined ? undefined : String(init.body)); return json(reapBody); }
+    return new Promise<Response>((ok, no) => { pending.set(u, { ok, no: no as (e: Error) => void }); });
+  }));
+  const take = (match: string): { ok: (r: Response) => void; no: (e: Error) => void } => {
+    const hit = [...pending.entries()].find(([u]) => u.includes(match));
+    if (hit === undefined) throw new Error(`no in-flight audit for ${match}`);
+    pending.delete(hit[0]);
+    return hit[1];
+  };
+  return {
+    resolve: (match, body) => { take(match).ok(json(body)); },
+    reject: (match, message) => { take(match).no(new Error(message)); },
+    posts,
+  };
+};
 
 describe('the manifest', () => {
   it('names the branch, its proof rung and how long ago it merged', async () => {
@@ -471,5 +501,110 @@ describe('stale state (17-F1)', () => {
     // The second POST carries the FRESH token, never the one Re-check set
     // out to invalidate.
     expect(JSON.parse(String(reapCalls[1]))).toEqual({ expect: 'b'.repeat(64) });
+  });
+});
+
+// Final-round finding F2 (destructive review). 17-F1 closed the SYNCHRONOUS
+// half of the stale-audit defect. The asynchronous half survived: two audits
+// can be in flight at once, and before the generation guard whichever RESOLVED
+// LAST won. With a slow audit for the PREVIOUS session, the reader was shown a
+// confirmation whose title, header and button named one workspace and whose
+// every measured row — path, size, ignored entries, clips — and whose TOKEN
+// described another. ccd's own `id=$1` in `_ws_fingerprint` means nothing is
+// destroyed, but "the human saw what would be destroyed before authorising it"
+// is the entire safety model of this branch, and this broke it.
+describe('out-of-order audits (final-round F2)', () => {
+  const alphaSess = sess({ id: 'demo-alpha', workspace: 'alpha' });
+  const bravoSess = sess({ id: 'demo-bravo', workspace: 'bravo' });
+  const alphaAudit = audit({ id: 'demo-alpha', branch: 'ws/alpha', workdir: '/w/alpha',
+    worktreeBytes: 1_200_000_000, token: 'a'.repeat(64) });
+  const bravoAudit = audit({ id: 'demo-bravo', branch: 'ws/bravo', workdir: '/w/bravo',
+    worktreeBytes: 500_000_000, token: 'b'.repeat(64) });
+
+  const mount = (s: FleetSession): ReturnType<typeof render> =>
+    render(<><ToastHost /><ReapSheet session={s} open onClose={() => {}} onReaped={() => {}} /></>);
+  const swap = (rerender: (ui: ReactElement) => void, s: FleetSession): void =>
+    rerender(<><ToastHost /><ReapSheet session={s} open onClose={() => {}} onReaped={() => {}} /></>);
+
+  it('drops the previous session’s audit when it lands after the current one — no row, no size, no token', async () => {
+    const net = deferredFetch();
+    const { rerender } = mount(alphaSess);
+    swap(rerender, bravoSess);
+
+    // The current target answers first…
+    await act(async () => { net.resolve('demo-bravo', bravoAudit); });
+    // …and only then does the superseded request for alpha come back.
+    await act(async () => { net.resolve('demo-alpha', alphaAudit); });
+
+    // Every fact on screen is bravo's, and they agree with each other.
+    expect(await screen.findByRole('button', { name: 'Remove bravo · 500 MB' })).toBeInTheDocument();
+    expect(screen.getByText('/w/bravo')).toBeInTheDocument();
+    expect(screen.getByText(/ws\/bravo — merged in #42/)).toBeInTheDocument();
+    // Before the guard: '/w/alpha', 'ws/alpha …' and '1.2 GB' rendered under
+    // the heading "Remove bravo?" and beside the button "Remove bravo · 1.2 GB".
+    expect(screen.queryByText('/w/alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText(/ws\/alpha/)).not.toBeInTheDocument();
+    expect(screen.queryByText('1.2 GB')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove bravo · 1\.2 GB$/ })).not.toBeInTheDocument();
+
+    // And the token the confirm posts is the one that was measured for the
+    // workspace the confirm names.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove bravo · 500 MB' }));
+    await waitFor(() => expect(net.posts).toHaveLength(1));
+    expect(JSON.parse(String(net.posts[0]))).toEqual({ expect: 'b'.repeat(64) });
+  });
+
+  it('does not toast a failure belonging to a workspace the reader already navigated away from', async () => {
+    const net = deferredFetch();
+    const { rerender } = mount(alphaSess);
+    swap(rerender, bravoSess);
+
+    await act(async () => { net.resolve('demo-bravo', bravoAudit); });
+    await act(async () => { net.reject('demo-alpha', 'alpha audit died'); });
+
+    await screen.findByRole('button', { name: 'Remove bravo · 500 MB' });
+    expect(document.querySelector('.toast--error')).toBeNull();
+    expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
+  });
+
+  it('still renders — and still toasts — the CURRENT target’s own audit failure', async () => {
+    // The guard must drop superseded responses, not all of them.
+    const net = deferredFetch();
+    mount(bravoSess);
+    await act(async () => { net.reject('demo-bravo', 'bravo audit died'); });
+    await waitFor(() => expect(document.querySelector('.toast--error')).toHaveTextContent('bravo audit died'));
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+  });
+
+  // The second, independent gate. The generation guard reasons about ORDER;
+  // this one does not have to: `WsAudit.id` is ccd's own first field and the
+  // first line of the fingerprint the token hashes, so an audit that does not
+  // name this session is not a description of it, whatever order it arrived
+  // in. It also covers the window the generation guard structurally cannot —
+  // `session` is `sessions.find(...) ?? null` at both call sites, so the fleet
+  // can drop the target to null and bring a DIFFERENT one back, and that
+  // render commits before the effect that would clear the old audit.
+  it('refuses to describe a workspace the audit does not name — "Checking…", never the wrong facts', async () => {
+    const net = deferredFetch();
+    mount(bravoSess);
+    // The response for bravo's URL, carrying alpha's measurements and token.
+    await act(async () => { net.resolve('demo-bravo', alphaAudit); });
+    expect(await screen.findByText('Checking…')).toBeInTheDocument();
+    expect(screen.queryByText('/w/alpha')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
+  });
+
+  it('drops an audit that lands after the sheet closed, so re-opening never shows a pre-close measurement', async () => {
+    const net = deferredFetch();
+    const { rerender } = render(
+      <><ToastHost /><ReapSheet session={bravoSess} open onClose={() => {}} onReaped={() => {}} /></>);
+    // Close while the audit is in flight, then let it land.
+    rerender(<><ToastHost /><ReapSheet session={bravoSess} open={false} onClose={() => {}} onReaped={() => {}} /></>);
+    await act(async () => { net.resolve('demo-bravo', bravoAudit); });
+    // Re-open: a fresh audit is issued, and until it lands the sheet says so
+    // rather than resurrecting the one measured before the close.
+    rerender(<><ToastHost /><ReapSheet session={bravoSess} open onClose={() => {}} onReaped={() => {}} /></>);
+    expect(await screen.findByText('Checking…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
   });
 });

@@ -232,7 +232,12 @@ describe('SessionScreen reap wiring (Task 17)', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).includes('/workspace/audit')) {
         return new Response(JSON.stringify({
-          id: 'demo', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          // ccd echoes the REQUESTED session id back as the audit's own first
+          // field (`cmd_ws_audit`'s `local id=$2`, ccd:2416), and the sheet now
+          // refuses to render an audit that does not name the session it is
+          // describing (final-round F2). This fixture said 'demo' against a
+          // 'claude:OpenClawHetzner' session — a response ccd cannot produce.
+          id: 'claude:OpenClawHetzner', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
           project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
@@ -271,7 +276,12 @@ describe('SessionScreen reap wiring (Task 17)', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).includes('/workspace/audit')) {
         return new Response(JSON.stringify({
-          id: 'demo', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          // ccd echoes the REQUESTED session id back as the audit's own first
+          // field (`cmd_ws_audit`'s `local id=$2`, ccd:2416), and the sheet now
+          // refuses to render an audit that does not name the session it is
+          // describing (final-round F2). This fixture said 'demo' against a
+          // 'claude:OpenClawHetzner' session — a response ccd cannot produce.
+          id: 'claude:OpenClawHetzner', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
           project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
