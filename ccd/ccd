@@ -3752,7 +3752,21 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   local id="$1" resumed="$2" project workdir branch main attic clips tomb bytes
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); branch=$(_reg_get "$id" branch)
   main="$PROJECTS_ROOT/$project"
-  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+  # THE RECEIPT IS A MEASUREMENT TOO — final-round tests review F2. This was
+  # `|| bytes=0`, the last of the three identical `_ws_gc_bytes "$workdir"`
+  # lines to still fabricate (ccd:1503 archive manifest and ccd:3006 audit were
+  # closed in earlier rounds), and it is the one printed AFTER the irreversible
+  # delete: `{"reaped":…,"bytes":0}` states "this deletion reclaimed nothing"
+  # on a `du` that never completed. On the RESUME path it is 0 EVERY time — the
+  # worktree was already removed at (f) of the interrupted run, `_ws_gc_bytes`
+  # answers `-` for a path that is not a readable directory, and the run that
+  # in fact reclaimed gigabytes reports zero.
+  #
+  # `ReapResult.bytes` is `number | null | undefined` on the wire and nothing in
+  # the PWA reads it today; that is the reason this was harmless, not a reason
+  # to leave it. A receipt is the record a human reaches for when they want to
+  # know what a delete cost, and it may not answer with a number nobody took.
+  bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
 
   # A breadcrumb holding anything ccd did not write is not a phase this can
   # reason about, so it gets the stricter reading, not the looser one — the

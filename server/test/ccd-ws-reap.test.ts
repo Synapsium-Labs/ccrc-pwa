@@ -775,6 +775,15 @@ describe('destruction order', () => {
     // the refs the killed run pinned are what the sheet has to name, and the
     // resume is the run the human is looking at.
     expect(out.attic).toBeGreaterThan(0);
+    // And `bytes` IS a real figure here, which is the distinction worth
+    // pinning (final-round tests review F2, and a correction to the review's
+    // "0 every time on the resume path"). `_ws_reap_tail` sizes the worktree
+    // at its TOP, before (f) removes it, so a resume whose kill landed at (d)
+    // still has the tree to measure. Only a resume that re-enters past (f) —
+    // the fixture below, where the worktree is gone before ccd is invoked —
+    // has nothing left to size, and that one now answers null instead of 0.
+    expect(typeof out.bytes, 'the tree was still on disk when the tail re-ran').toBe('number');
+    expect(out.bytes).toBeGreaterThan(0);
   }, 30000);
 
   it('advances the journal to clips BEFORE it removes them', () => {
@@ -1126,6 +1135,42 @@ describe('destruction order', () => {
     const t = JSON.parse(fs.readFileSync(String(out.tombstone), 'utf8'));
     expect(t.transcript).toBe(transcript);
   }, 30000);
+
+  /* ── the RECEIPT is a measurement too ─────────────────────────────────────
+   *
+   * Final-round tests review F2. `_ws_reap_tail` was the last of the three
+   * identical `bytes=$(_ws_gc_bytes "$workdir"); … || bytes=0` lines
+   * (`_ws_archive_manifest` and `cmd_ws_audit`'s `worktreeBytes` were closed in
+   * earlier rounds), and it is the one printed AFTER the irreversible delete:
+   * `{"reaped":…,"bytes":0}` states "this reclaimed nothing" from a `du` that
+   * never completed. The mutation `0 <-> null` survived the whole 58-test file,
+   * in BOTH directions, because no test read `ReapResult.bytes` at all.
+   */
+  it('reports null bytes, not 0, when the worktree could not be sized', () => {
+    ready();
+    const tok = tokenOf();
+    // `_ws_gc_bytes`'s own documented answer for a path it cannot fully
+    // measure, shadowed rather than simulated with a chmod — the same device
+    // the branch-moved fixture above uses on the same function, and the reap
+    // must still complete, because an unmeasurable tree is not a refusal.
+    const r = h.run(`${GH_STUB} ${ARCH} _ws_gc_bytes() { echo '-'; };`
+      + ` cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.bytes, 'a delete whose size was never taken reports null').toBeNull();
+    expect(JSON.stringify(out)).not.toContain('"bytes":0');
+  }, 30000);
+
+  it('reports a real figure when the worktree WAS sized', () => {
+    // The other direction, unpinned until now in exactly the same way: the
+    // mutation survived `null -> 0` as well as `0 -> null`.
+    ready();
+    const out = JSON.parse(reap(tokenOf()).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(typeof out.bytes).toBe('number');
+    expect(out.bytes).toBeGreaterThan(0);
+  }, 30000);
 });
 
 describe('partial failure and resume', () => {
@@ -1158,6 +1203,11 @@ describe('partial failure and resume', () => {
     const out = JSON.parse(r.stdout);
     expect(out.reaped).toBe('demo-quiet-basin');
     expect(out.resumed).toBe('worktree');
+    // Final-round tests review F2. THIS is the resume the review meant: the
+    // worktree was removed before ccd was invoked, so `_ws_gc_bytes` answers
+    // `-` and there is nothing to size. It used to print `"bytes":0` — "this
+    // deletion reclaimed nothing" — on a run that reclaimed the whole tree.
+    expect(out.bytes, 'no worktree left to size on a resume past (f)').toBeNull();
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
     expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
     // AND THE JOURNAL IS NOT REWRITTEN, OTHER THAN `clips` (finding E

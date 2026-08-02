@@ -376,8 +376,16 @@ export interface WsAudit {
 
 /** `ccd ws-reap`. Exactly one of `reaped`, `refused` or `indeterminate` is set. */
 export interface ReapResult {
+  /** `bytes` is `number | null` — final-round tests review F2, the third and
+   *  last of ccd's `_ws_gc_bytes "$workdir"` sites to stop fabricating a 0
+   *  (`_ws_archive_manifest` and `cmd_ws_audit.worktreeBytes` were closed in
+   *  earlier rounds). This one is the RECEIPT, printed after the irreversible
+   *  delete, so `0` reads as "this deletion reclaimed nothing" — and on the
+   *  resume path, where the worktree was already removed by the interrupted
+   *  run, it was 0 every time. Nothing in the PWA renders it today; the type
+   *  is what stops a future reader folding it into a total. */
   reaped?: string; branch?: string; pr?: number | null; proof?: string;
-  tombstone?: string; attic?: number; bytes?: number; resumed?: string | null;
+  tombstone?: string; attic?: number; bytes?: number | null; resumed?: string | null;
   refused?: string; detail?: string; paths?: string[];
   indeterminate?: boolean;
   sentence: string;
