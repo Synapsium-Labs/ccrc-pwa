@@ -17,7 +17,10 @@ export interface ArchivedSummary {
 
 export function archivedSummary(sessions: readonly FleetSession[]): ArchivedSummary {
   const rows = sessions.filter((s) => s.archivedAt !== null);
-  const measured = rows.filter((s) => s.archivedBytes !== null);
+  // The sizes THEMSELVES, narrowed — not the rows: `?? 0` inside the sum is
+  // the exact keystroke this finding is about, and it must not survive here
+  // even as a type-narrowing artifact over an already-filtered list.
+  const sizes = rows.map((s) => s.archivedBytes).filter((b): b is number => b !== null);
   // Fix round 3, verifier P3 (integration new-finding 2). This used to fold an
   // unmeasured row in as `?? 0` and return a plain `number`, so three archives
   // nobody could measure rendered as a confident "Archived · 3 · 0 B" and a
@@ -32,10 +35,8 @@ export function archivedSummary(sessions: readonly FleetSession[]): ArchivedSumm
   // it, and no caller renders it anyway (both guard on `count > 0`).
   return {
     count: rows.length,
-    bytes: measured.length === 0 && rows.length > 0
-      ? null
-      : measured.reduce((n, s) => n + (s.archivedBytes ?? 0), 0),
-    unmeasured: rows.length - measured.length,
+    bytes: sizes.length === 0 && rows.length > 0 ? null : sizes.reduce((n, b) => n + b, 0),
+    unmeasured: rows.length - sizes.length,
   };
 }
 
