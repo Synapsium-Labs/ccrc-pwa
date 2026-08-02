@@ -2445,7 +2445,7 @@ _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
-  local st up ahead repo rows row registered errf err rc stashall dirt
+  local st up ahead repo rows row registered errf err rc stashall dirt clipsjson
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -2828,7 +2828,25 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # records at (a), so the record of what was deleted and the consent to delete
   # it cannot describe different files. Hashed rather than carried, because the
   # fingerprint is a line-per-fact document and a manifest holds newlines.
-  REAP_CLIPDIGEST=$(_ws_clip_manifest "$id" | sha256sum | cut -d' ' -f1)
+  #
+  # TWO STATEMENTS AND A REFUSAL — the sixteenth forgery (see
+  # `_ws_clip_manifest`). This was one line, `… | sha256sum | cut`, which
+  # reports the PIPE's status and therefore could not have noticed the
+  # producer failing even if it had looked. An unenumerable clips directory
+  # hashed as `[]`, deterministically, on both sides: the audit issued a token
+  # over it and ws-reap recomputed the same digest, so `--expect` matched and
+  # step (h) destroyed a directory nothing had listed. A digest is a claim that
+  # the thing digested was read; when it was not, there is no fingerprint to
+  # take and the answer is a refusal, exactly as `base-missing` and the ignored
+  # digest (deviation 6) are refusals rather than empty strings.
+  #
+  # `printf '%s\n'`, not `printf '%s'`: `$(…)` strips the trailing newline
+  # `_ws_clip_manifest`'s `echo` produced, and the digest of `[]` has to stay
+  # the digest of `[]\n` — the value every existing token fixture computes as
+  # `printf '[]\n' | sha256sum`. The refusal is the only thing that changes.
+  clipsjson=$(_ws_clip_manifest "$id") \
+    || { _reap_refuse clips-unreadable "could not list $HOME/.cc-clips/$id — the pasted images this cleanup would delete cannot be enumerated"; return 1; }
+  REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | sha256sum | cut -d' ' -f1)
   REAP_TOKEN=$(_ws_fingerprint "$id" "$branch" "$REAP_TIP" "$REAP_HEADOID" "$REAP_MERGE" "$REAP_PROOF" \
                  "$REAP_DIRTY" "$REAP_IGNDIGEST" "$REAP_SENSDIGEST" "$REAP_STASHES" "$REAP_WTHEAD" \
                  "$REAP_BASEOID" "$REAP_CLIPDIGEST")
@@ -3025,6 +3043,17 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # null` on the wire for exactly this reason (shared/api.ts).
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
 
+  # The clips manifest, read HERE so its status is visible — the sixteenth
+  # forgery (`_ws_clip_manifest`). `null` is "this directory exists and could
+  # not be enumerated", the same word and the same rule as `dirty`,
+  # `ignored`, `stashes` and `worktreeBytes` on this document: `[]` is the
+  # claim that there is nothing here, and nobody looked. `WsAudit.clips` is
+  # `… [] | null` on the wire so no consumer can be forced back into
+  # fabricating the empty array to compile, and `ReapSheet` renders the null
+  # as "could not be read" rather than as **none**.
+  local clips_json
+  clips_json=$(_ws_clip_manifest "$id") || clips_json=null
+
   printf '{"id":%s,"branch":%s,"base":%s,"workdir":%s,"project":%s,"repo":%s,' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$base")" \
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
@@ -3038,16 +3067,23 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$dirty_json" "$ign_json" "$count" "$total" "$sens_json" "$sfilt"
   # `clips` on the wire, because the sheet cannot ask a human to consent to a
   # deletion it does not list. `_ws_clip_manifest` is the same producer the
-  # tombstone and the fingerprint use, and it is called HERE rather than read
-  # from a variable so the field is present on every verdict — a refusal is the
-  # answer a human reads too.
+  # tombstone and the fingerprint use, and it is read on every verdict — a
+  # refusal is the answer a human reads too.
+  #
+  # `$clips_json` rather than a `$(…)` in this argument list, and that is the
+  # whole of the sixteenth forgery's fix on the wire: a command substitution
+  # inside a printf ARGUMENT LIST swallows the producer's status, so the field
+  # was `[]` for a directory nobody could open and `ReapSheet` rendered
+  # **clips: none** — the most reassuring row on the sheet, above a reachable
+  # Remove button. It is computed above, where the status is visible, and it is
+  # `null` (never `[]`) when the enumeration did not happen.
   # `stashes` is `null` until `_ws_reap_eval` has actually read the stash list
   # (its reset default is now "" rather than 0, see `_ws_reap_reset`): on a
   # Phase-A refusal the read never happens, and `ReapSheet` renders a 0 there
   # as **stashes: none** — a promise that nothing stashed is at stake, made
   # about a list nobody opened.
   printf '"clips":%s,"stashes":%s,"worktreeBytes":%s,"commitsAheadOfBase":%s,' \
-    "$(_ws_clip_manifest "$id")" \
+    "$clips_json" \
     "$( [[ "$REAP_STASHES" =~ ^[0-9]+$ ]] && echo "$REAP_STASHES" || echo null)" \
     "$bytes" "$ahead"
   printf '"pr":{"number":%s,"url":%s,"mergeCommit":%s,"headRefOid":%s},' \
@@ -3092,7 +3128,19 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # token-carrying delete and never asks for a confirmation the human cannot
   # give. `_ws_reap_eval` is deliberately untouched: its `reapable` is what the
   # resume path itself depends on.
-  if [[ "$REAP_VERDICT" == reapable && "$exists" == true ]]; then
+  #
+  # AND A THIRD STATE THAT MUST NOT SHARE ONE EITHER, for the identical reason
+  # — the sixteenth forgery. `_ws_reap_eval` refuses `clips-unreadable` when
+  # its own read fails, so this branch covers the WINDOW between that read and
+  # this one: the directory can be made unreadable in the microseconds
+  # between, and then the token above would certify a manifest while the
+  # document beside it says the manifest could not be taken. One state, one
+  # verdict: no token, and the same token name the eval uses, so the sheet
+  # reads the same sentence whichever read caught it.
+  if [[ "$REAP_VERDICT" == reapable && "$clips_json" == null ]]; then
+    printf '"verdict":"clips-unreadable","detail":%s}\n' \
+      "$(_json_str "could not list $HOME/.cc-clips/$id — the pasted images this cleanup would delete cannot be enumerated")"
+  elif [[ "$REAP_VERDICT" == reapable && "$exists" == true ]]; then
     printf '"verdict":"reapable","detail":"","token":%s}\n' "$(_json_str "$REAP_TOKEN")"
   elif [[ "$REAP_VERDICT" == reapable ]]; then
     printf '"verdict":"reap-interrupted","detail":%s}\n' \
@@ -3157,7 +3205,9 @@ _ws_attic_pin() {   # main id workdir tip -> echoes how many refs were created
   echo "$n"
 }
 
-_ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
+_ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else;
+                        # NOTHING at all, and non-zero, when the directory
+                        # exists and could not be enumerated
   # Pre-merge fix round, finding A — the EIGHTH instance of the
   # measurement-forgery class (deviation 10), and the one where two sides
   # AGREE on a value NEITHER measured: the wire manifest, the fingerprint
@@ -3189,13 +3239,18 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
   # depends on must not rest on an implementation detail merely because
   # today's filesystem happens to make it hold.
   #
-  # ONE MUTATION SURVIVOR, disclosed, pre-existing this fix and still true of
-  # it. `[[ -d "$dir" ]] || { echo "[]"; … }` is removable with
-  # the suite green because `find` on a nonexistent path prints nothing on
-  # stdout and a diagnostic on stderr (discarded below), so the loop reads no
-  # records either way — it stays as the early return that makes the empty
-  # answer a DECISION rather than an accident of `find`'s own exit code, which
-  # this function does not otherwise check.
+  # `[[ -d "$dir" ]] || { echo "[]"; … }` used to be a disclosed mutation
+  # survivor: `find` on a nonexistent path printed nothing on stdout and a
+  # diagnostic on stderr (discarded), so the loop read no records either way,
+  # and the guard stood only to make the empty answer a DECISION rather than an
+  # accident of `find`'s own exit code — "which this function does not
+  # otherwise check", as this comment said in as many words until the
+  # sixteenth forgery below made it check. It is a survivor no longer: with the
+  # enumeration status honoured, deleting this line turns a MISSING clips
+  # directory (no clips were ever pasted — a real, common, empty state) into
+  # the refusal an UNREADABLE one gets, and `refuses to enumerate a clips
+  # directory it cannot read, and still answers [] for one that is simply
+  # absent` fails on the second half.
   #
   # ── THE THIRTEENTH FORGERY (cross-lane seam round) ────────────────────────
   # Both size rungs below used to answer a FAILED READ with `0`, and the older
@@ -3244,6 +3299,68 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
   # is now always either digits or the four characters `null`, so the record is
   # valid JSON on every path — `"bytes":` with nothing after it, the document
   # that does not parse, is unreachable from either rung.
+  #
+  # ── THE SIXTEENTH FORGERY (final-round confirmation-surface review) ───────
+  # The thirteenth fix above closed the SIZE of an entry and left the LIST
+  # itself. A clips directory that EXISTS and cannot be ENUMERATED answered
+  # `[]` at exit 0 — a claim of emptiness nobody established — and `[]` is not
+  # a degraded answer on this surface, it is the most reassuring one:
+  # `ReapSheet.tsx` renders it as **clips: none**.
+  #
+  # REPRODUCED before the fix, `chmod 000` on `~/.cc-clips/<id>` under an
+  # isolated $HOME holding a 4 KB paste and a 1 MB subdirectory:
+  # `find` exits 1 printing nothing, this function echoed `[]` at rc 0, and
+  # `cmd_ws_audit` answered `"clips":[],…"verdict":"reapable"` WITH A TOKEN.
+  # The fingerprint is no defence and could not be: `clipsDigest` is this same
+  # `[]`, so ws-reap recomputes the identical digest, `--expect` matches, and
+  # step (h) `rm -rf`s a directory whose contents were never listed to the
+  # human — two sides agreeing on a value neither measured, which is the
+  # eighth forgery's shape (above) reached through a different door.
+  #
+  # `find`'S EXIT STATUS CANNOT BE THE WHOLE TEST, and this is the measurement
+  # that decides the shape of the guard. GNU findutils 4.9.0, same box:
+  #   - mode 000 (no `r`): `opendir` fails. rc 1, stdout EMPTY. Nothing was
+  #     enumerated — the case above.
+  #   - mode 400 (`r`, no `x`): `readdir` succeeds and every per-entry `stat`
+  #     fails. rc **1**, and stdout carries the COMPLETE list of names
+  #     (measured: `plain.png` and `sub` both printed, with a single
+  #     `Permission denied` for `sub` on stderr).
+  # Identical status, opposite facts. So the guard is `rc != 0 AND no records`,
+  # not `rc != 0`: the mode-400 shape is a complete list of names whose sizes
+  # are unmeasured, which is exactly what the per-entry `null` rungs below are
+  # for and what `a clip whose size stat cannot take is null, not 0 bytes`
+  # already pins. Refusing it would delete a pinned honest answer to close a
+  # different hole.
+  #
+  # A SCRATCH FILE, not the old process substitution, because a pipeline's
+  # status is not visible through `< <(…)` at all — the same two-statement rule
+  # Phase B and `cmd_ws_audit`'s dirty read both state, and NULs survive a file
+  # exactly as they survive a pipe. `pipefail` is set file-wide, so `lrc` is
+  # `find`'s (or `sort`'s).
+  #
+  # AND THE REFUSAL PRINTS NOTHING. `[]` plus a non-zero status was the obvious
+  # shape and is the wrong one: it leaves the forgery fully formed on stdout
+  # for any consumer that does not check the status — which is precisely how
+  # this instance existed, since two of the three consumers could not check a
+  # status they were never given (`… | sha256sum` reports the pipe's, and a
+  # `$(…)` inside a printf ARGUMENT LIST swallows it). Empty stdout is
+  # `cmd_ws_audit`'s own rule for its `_json_str` probe, stated there: when the
+  # honest answer cannot be produced, "print NOTHING and exit non-zero". A
+  # status-blind consumer then writes `"clips":` and fails to parse — loudly
+  # wrong instead of quietly reassuring — and all three consumers here DO check
+  # it: the audit refuses `clips-unreadable` and withholds the token, the
+  # fingerprint refuses the same rather than hash an emptiness nobody read, and
+  # the tombstone records `null` (see `_ws_reap_tail`), because a record that
+  # outlives the workspace must not say "none" about a directory nobody opened.
+  #
+  # RESIDUAL, disclosed rather than papered over: a `readdir` that dies PART
+  # WAY through a large directory (EIO, a network filesystem) exits non-zero
+  # with a TRUNCATED list, which this guard accepts as the mode-400 shape and
+  # publishes as complete. Separating those two needs a second, independent
+  # enumeration to disagree with — two reads of the same directory microseconds
+  # apart, which is a race of its own — and no fixture on this box can produce
+  # a partial `readdir` to pin either behaviour. What is closed here is the
+  # whole-directory case, which is reproducible with a `chmod`.
   # TWO `local` STATEMENTS, not one. `local id="$1" dir="$HOME/.cc-clips/$id"`
   # expands EVERY word before performing ANY assignment, so under `set -u` the
   # `$id` in the second word is unbound and the function dies
@@ -3256,8 +3373,15 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
   # exercised through a 30-second destructive end-to-end reap is a producer
   # whose failure rungs do not get pinned.
   local id="$1"
-  local dir="$HOME/.cc-clips/$id" f name b brc out="[" first=1
+  local dir="$HOME/.cc-clips/$id" f name b brc out="[" first=1 lf lrc
   [[ -d "$dir" ]] || { echo "[]"; return 0; }
+  lf=$(mktemp) || return 1
+  find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | sort -z >"$lf"; lrc=$?
+  # `-s` IS THE SECOND CONJUNCT, and it is a measurement of this read rather
+  # than a guess about why it failed: a non-empty file means `readdir` handed
+  # back at least one name, which no unenumerable directory can do, and an
+  # EMPTY one at rc 0 is a directory that is genuinely empty.
+  { (( lrc == 0 )) || [[ -s "$lf" ]]; } || { rm -f "$lf"; return 1; }
   while IFS= read -r -d '' f; do
     name="$(basename "$f")"
     if [[ -d "$f" ]]; then
@@ -3286,7 +3410,8 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else
     fi
     (( first )) || out+=","; first=0
     out+="{\"name\":$(_json_str "$name"),\"bytes\":$b}"
-  done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | sort -z)
+  done < "$lf"
+  rm -f "$lf"
   echo "$out]"
 }
 
@@ -3856,9 +3981,28 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     return 0
   }
 
+  # `|| clips=null` ON BOTH ARMS — the sixteenth forgery's third consumer, and
+  # the one that gets a RECORD rather than a refusal (`_ws_clip_manifest` sets
+  # out why in full). The tombstone outlives the workspace: `[]` in it is the
+  # permanent, unfalsifiable statement "this cleanup destroyed no pasted
+  # images", written about a directory ccd could not open, and it is the only
+  # document left once the branch, the reflog and the registry are gone. `null`
+  # is the fact — nobody enumerated it — and `WsTombstone.clips` is typed
+  # `… [] | null` to keep it representable.
+  #
+  # NOT a refusal, unlike the other two consumers, and the difference is the
+  # same one `_ws_collect_ignored`'s own comment draws: this arm runs on the
+  # RESUME, where the worktree may already be gone and a refusal converts one
+  # unreadable directory into a workspace stranded half-deleted forever. The
+  # record can still be made truthful, so it is made truthful and the cleanup
+  # finishes. (The evaluated arm cannot reach it except through the same
+  # microsecond window `cmd_ws_audit`'s verdict covers — Phase D2 recomputed
+  # the digest moments earlier and would have refused `clips-unreadable` — and
+  # it is written the same way there so the two arms cannot drift into
+  # describing one directory two ways.)
   if [[ -z "$resumed" ]]; then
     attic=$(_ws_attic_pin "$main" "$id" "$workdir" "$REAP_TIP")            # (a)
-    clips=$(_ws_clip_manifest "$id")
+    clips=$(_ws_clip_manifest "$id") || clips=null
     tomb=$(_ws_tombstone "$id" "$clips")                                   # (b)
     _reg_set "$id" reaping worktree                                        # (c)
     _ws_unsupervise "$id"                                                  # (d)
@@ -3882,7 +4026,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # instant, and a clip pasted in the gap must not be destroyed with no
     # record of it anywhere. Before (h), same as everywhere else in this
     # function guards run immediately before the step they guard.
-    clips=$(_ws_clip_manifest "$id")
+    clips=$(_ws_clip_manifest "$id") || clips=null
     _ws_tombstone_reclip "$id" "$clips" || {
       printf '{"refused":"tombstone-unwritable","detail":%s,"paths":[]}\n' \
         "$(_json_str "could not update the tombstone's clips record for $id — refusing to finish the cleanup without an accurate record")"

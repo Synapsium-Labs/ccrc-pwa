@@ -1108,6 +1108,136 @@ describe('destruction order', () => {
     } finally { fs.chmodSync(path.join(sub, 'locked'), 0o755); }
   }, 30000);
 
+  /* ── THE SIXTEENTH FORGERY: a directory that could not be OPENED ──────────
+   *
+   * Final-round confirmation-surface review. The thirteenth above closed the
+   * SIZE of an entry; this closes the LIST. `_ws_clip_manifest` answered `[]`
+   * at rc 0 for a clips directory that exists and cannot be enumerated, and
+   * `[]` is not a degraded answer on this surface — `ReapSheet` renders it as
+   * **clips: none**, and the same `[]` was the `clipsDigest` on BOTH sides, so
+   * the fingerprint agreed with itself and step (h) `rm -rf`'d a directory
+   * nothing had listed to the human.
+   *
+   * MEASURED BEFORE THE FIX, `chmod 000` on `~/.cc-clips/demo-quiet-basin`
+   * holding a 4 KB paste and a 1 MB subdirectory: `find` exits 1 printing
+   * nothing, `_ws_clip_manifest` echoed `[]` at rc 0, and `cmd_ws_audit`
+   * answered `"clips":[]` with `"verdict":"reapable"` AND A TOKEN.
+   */
+  it('refuses to enumerate a clips directory it cannot read, and still answers [] for one that is simply absent', () => {
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'secret.png'), 'x'.repeat(4096));
+    try {
+      fs.chmodSync(clips, 0o000);
+
+      // IN-FIXTURE PROBE, so the premise is measured on the box running the
+      // test: `find` cannot open the directory, exits non-zero, and prints
+      // NOTHING — which is what makes "no records" indistinguishable from
+      // "empty directory" unless the status is read.
+      const probe = h.run(`find "$HOME/.cc-clips/demo-quiet-basin" -mindepth 1 -maxdepth 1 -print0 2>/dev/null; echo "rc=$?"`);
+      expect(probe.stdout.trim()).toBe('rc=1');
+
+      const r = h.run('_ws_clip_manifest demo-quiet-basin');
+      expect(r.code, 'an enumeration that did not happen is a non-zero return').not.toBe(0);
+      // NOTHING on stdout, not `[]`. A status-blind consumer must break
+      // loudly rather than inherit a plausible empty manifest — the whole
+      // reason this instance existed at all.
+      expect(r.stdout.trim()).toBe('');
+      expect(r.stdout).not.toContain('[]');
+    } finally { fs.chmodSync(clips, 0o755); }
+
+    // THE OTHER HALF, and it is what keeps `[[ -d "$dir" ]]` from being a
+    // mutation survivor: a session that never had a clip pasted into it has
+    // no directory at all, and that is a real, common, EMPTY state — not a
+    // refusal. Delete the guard and this half fails.
+    fs.rmSync(clips, { recursive: true, force: true });
+    const gone = h.run('_ws_clip_manifest demo-quiet-basin');
+    expect(gone.code).toBe(0);
+    expect(gone.stdout.trim()).toBe('[]');
+  }, 30000);
+
+  it('answers [] at rc 0 for a clips directory that is readable and genuinely empty', () => {
+    // The third state, and the one the refusal must not swallow: opened,
+    // read, nothing in it. Without this, `return 1` on every empty answer
+    // would pass the test above and refuse every clean workspace on the box.
+    fs.mkdirSync(path.join(h.home, '.cc-clips', 'demo-quiet-basin'), { recursive: true });
+    const r = h.run('_ws_clip_manifest demo-quiet-basin');
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe('[]');
+  }, 30000);
+
+  it('audits an unreadable clips directory as clips-unreadable with NO token, and never as "none"', () => {
+    ready();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'secret.png'), 'x'.repeat(4096));
+    fs.mkdirSync(path.join(clips, 'archive'));
+    fs.writeFileSync(path.join(clips, 'archive', 'big.bin'), Buffer.alloc(1024 * 1024));
+    try {
+      fs.chmodSync(clips, 0o000);
+      const raw = h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`);
+      // Still ONE parseable JSON object — the refusal is an ANSWER, and the
+      // empty stdout the producer now returns must not reach the document.
+      const a = JSON.parse(raw);
+      expect(a.clips, 'null is "nobody opened it"; [] is "it was opened and is empty"').toBeNull();
+      expect(raw, 'the empty array must not appear on this document at all').not.toContain('"clips":[]');
+      // NO TOKEN. This is the half that makes it a consent-boundary hole
+      // rather than a display bug: the token is the consent, and the digest
+      // behind it was taken over an emptiness nobody established.
+      expect(a.verdict).toBe('clips-unreadable');
+      expect(a.token).toBeUndefined();
+      expect(a.detail).toContain('.cc-clips/demo-quiet-basin');
+    } finally { fs.chmodSync(clips, 0o755); }
+  }, 30000);
+
+  it('withholds the token when the directory becomes unreadable BETWEEN the eval and the wire read', () => {
+    // The window `cmd_ws_audit`'s own `clips-unreadable` branch covers.
+    // `_ws_reap_eval` reads the manifest for the fingerprint and
+    // `cmd_ws_audit` reads it again for the wire; a `chmod` in between leaves
+    // the first read succeeding (token computed) and the second failing.
+    //
+    // SHADOWED WITH A COUNTER rather than raced, the same device this file
+    // already uses on `_ws_gc_bytes` — and the shadow's failure is the REAL
+    // one, measured two tests above: non-zero, with nothing on stdout. The
+    // first call delegates to the genuine function.
+    ready();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    const shadow = '_ws_clip_manifest() { if [[ -f "$HOME/clip-called" ]]; then return 1; fi;'
+      + ' : > "$HOME/clip-called"; echo \'[{"name":"clip-a.png","bytes":10}]\'; };';
+    const raw = h.sh(`${GH_STUB} ${ARCH} ${shadow} cmd_ws_audit --session demo-quiet-basin`);
+    const a = JSON.parse(raw);
+    expect(a.clips).toBeNull();
+    expect(a.verdict, 'two different states must not share a verdict').toBe('clips-unreadable');
+    expect(a.token).toBeUndefined();
+    // And the fingerprint DID succeed on the first read — proof the shadow
+    // exercised the audit's own branch and not the eval's refusal.
+    expect(fs.existsSync(path.join(h.home, 'clip-called'))).toBe(true);
+  }, 30000);
+
+  it('refuses the REAP itself on a stale token when the clips directory has since become unreadable', () => {
+    // The destructive verb, which re-evaluates every guard on the box at the
+    // instant of deletion. The token was issued while the directory was
+    // readable; `_ws_reap_eval` re-reads the manifest for the digest, and a
+    // producer that could not enumerate is a refusal there rather than a
+    // digest over `[]` that would MATCH the stale token and wave the delete
+    // through — which is exactly what it did before this fix.
+    const { wt, main } = ready();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    const tok = tokenOf();
+    expect(typeof tok, 'the token is issued while the directory IS readable').toBe('string');
+    try {
+      fs.chmodSync(clips, 0o000);
+      const o = refused(tok, wt, main);
+      expect(o.refused).toBe('clips-unreadable');
+    } finally { fs.chmodSync(clips, 0o755); }
+    // Nothing was destroyed, the clip included.
+    expect(fs.existsSync(path.join(clips, 'clip-a.png'))).toBe(true);
+  }, 30000);
+
   it('never touches the transcript or the shared info/exclude', () => {
     const { main, wt } = ready();
     const exclude = path.join(main, '.git', 'info', 'exclude');
@@ -1293,6 +1423,52 @@ describe('partial failure and resume', () => {
       { name: 'clip-a.png', bytes: 10 },
       { name: 'clip-b.png', bytes: 3 * 1024 * 1024 },
     ]);
+  }, 30000);
+
+  it('records an unenumerable clips directory in the tombstone as null — never as the empty list', () => {
+    // The sixteenth forgery's THIRD consumer, and the only one that gets a
+    // record instead of a refusal. The tombstone outlives the workspace: `[]`
+    // in it is the permanent statement "this cleanup destroyed no pasted
+    // images", and here it would be written about a directory ccd could not
+    // open — and about a stale list (`clip-a.png`, 10 B) that this run is no
+    // longer entitled to restate, since finding E's whole point is that the
+    // record must cover what THIS run destroys.
+    //
+    // Not a refusal HERE, unlike the audit and the fingerprint: this is the
+    // resume path, the worktree is already gone, and refusing would strand
+    // the workspace half-deleted rather than finish it with a truthful
+    // record. `tombstone-unwritable` (below) is for a record that cannot be
+    // written at all; this one can be written truthfully.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
+    fs.mkdirSync(clips, { recursive: true });
+    fs.writeFileSync(path.join(clips, 'clip-a.png'), 'x'.repeat(10));
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    const reaped = path.join(h.home, '.cc-sessions', '.reaped');
+    fs.mkdirSync(reaped, { recursive: true });
+    const tomb = path.join(reaped, 'demo-quiet-basin.json');
+    fs.writeFileSync(tomb, JSON.stringify({ id: 'demo-quiet-basin', project: 'demo',
+      branch: 'ws/quiet-basin', tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'),
+      clips: [{ name: 'clip-a.png', bytes: 10 }] }));
+    h.git(main, 'worktree', 'remove', wt);
+    try {
+      fs.chmodSync(clips, 0o000);
+      const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+      expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+      expect(JSON.parse(r.stdout).reaped, 'the resume finishes').toBe('demo-quiet-basin');
+      const t = JSON.parse(fs.readFileSync(tomb, 'utf8')) as Record<string, unknown>;
+      expect(t['clips'], 'the one document that outlives the workspace says "unread"').toBeNull();
+      expect(fs.readFileSync(tomb, 'utf8')).not.toContain('"clips":[]');
+      // And it does not silently keep the ORIGINAL run's list either, which
+      // would be the same lie with more detail in it.
+      expect(fs.readFileSync(tomb, 'utf8')).not.toContain('clip-a.png');
+    } finally { fs.chmodSync(clips, 0o755); }
+    // MEASURED, and recorded because it bounds the damage: step (h)'s
+    // `rm -rf` cannot remove a directory it cannot open either (GNU coreutils
+    // 9.4, rc 1, "Permission denied"), so the pastes are still there. The
+    // tombstone naming them `null` is what makes that state legible.
+    expect(fs.existsSync(path.join(clips, 'clip-a.png'))).toBe(true);
   }, 30000);
 
   it('refuses to finish the resume rather than destroy clips it cannot record', () => {

@@ -111,6 +111,19 @@ describe('refusalSentence', () => {
       .toBe('ccrc declined: some-future-token-nobody-mapped-yet.');
   });
 
+  it('maps clips-unreadable, and says WHICH directory rather than describing a worktree', () => {
+    // The sixteenth measurement forgery: `~/.cc-clips/<id>` exists and ccd
+    // cannot list it, so the sheet cannot name what the delete would destroy.
+    // `tree-unreadable`'s copy is about a WORKTREE and would send the reader
+    // to the wrong directory; the pastes are the one thing on that sheet that
+    // exists in no commit and nowhere else. `ReapSheet` renders
+    // `audit.sentence` and never `audit.detail`, so the remedy has to be here.
+    const s = refusalSentence('clips-unreadable');
+    expect(s).toMatch(/pasted images/i);
+    expect(s).toContain('.cc-clips');
+    expect(s).toMatch(/nothing was removed/i);
+  });
+
   it('maps reaping-phase-unknown — the Task 7 token this task was holding open for', () => {
     // Deviation 35: fires when a `reaping` breadcrumb names a phase ccd never
     // wrote. The run refuses and destroys nothing — the sentence must say so,
