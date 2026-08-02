@@ -5,7 +5,7 @@
 // wears a mono "suggested" tag. Tapping a target opens a QuickConfirm whose
 // consequence sentence does the explaining; confirming posts api.swap — the
 // restart itself then plays out over the fleet stream.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
@@ -162,6 +162,32 @@ export function SwapSheet({
   const sessions = fleet((s) => s.sessions);
   // The target awaiting its consequence confirm (null = still browsing).
   const [target, setTarget] = useState<string | null>(null);
+
+  // ADJUDICATED, cross-lane seam round. The ui-tsx lane listed this as a stale
+  // target left behind by a CONFIRMED move — `move()` calls the sheet's
+  // `onClose` and never clears `target`. Measured: that path is already clean.
+  // `QuickConfirm`'s own confirm button runs `onConfirm(); onClose();`
+  // (QuickConfirm.tsx:33-34) and this component's `onClose` for it IS
+  // `setTarget(null)`, so confirm, cancel and scrim all clear it. The proposed
+  // one-liner would have been dead code.
+  //
+  // The CLASS is real by a different trigger, and it is reachable: the
+  // QuickConfirm is a SIBLING of the outer `Sheet`, not a child, so it does not
+  // go away when the sheet does. `SessionActionsSheet`'s reset-on-close effect
+  // (SessionActionsSheet.tsx:55-58) sets `swapOpen = false` whenever the
+  // actions sheet is dismissed, and FleetScreen keeps both components MOUNTED
+  // across that close (its findings 2 and 3). So: open session A's actions ->
+  // Swap -> pick alt·max -> dismiss the actions sheet. `open` goes false, the
+  // sheet closes, and "Move to alt·max?" is left on screen with nothing under
+  // it. Tap session B and the confirm is still there — and `move()` closes over
+  // the CURRENT `session`, so confirming a dialog raised for A now swaps B.
+  //
+  // Same class as the reap sheet's `setShowAll(null)`: per-target state on a
+  // sheet reused across targets. Same answer, and the same shape
+  // `SessionActionsSheet`'s own comment cites as the pattern — except keyed on
+  // `session.id` as well as `open`, because "this state belongs to this target"
+  // is the actual invariant and closing is only the way it usually ends.
+  useEffect(() => { setTarget(null); }, [open, session.id]);
 
   const disabledWrappers = useDisabledWrappers(open);
   const wrappers = pickableWrappers(sessions, disabledWrappers).filter((w) => w !== session.wrapper);
