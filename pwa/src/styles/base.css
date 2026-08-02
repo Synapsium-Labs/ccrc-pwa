@@ -43,6 +43,7 @@
   --color-status-dead: var(--status-dead);
   --color-status-dead-text: var(--status-dead-text);
   --color-status-dead-tint: var(--status-dead-tint);
+  --color-status-dead-tint-solid: var(--status-dead-tint-solid);
 
   /* Accounts (cool half of the wheel; --acct-active rebinds per [data-acct]) */
   --color-acct-claude: var(--acct-claude);

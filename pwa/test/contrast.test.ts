@@ -360,12 +360,12 @@ const DECLARED_PAIRS: readonly (readonly [string, string, readonly string[], num
   ['callout tip body', 'var(--ink-secondary)', ['var(--bg-page)', 'var(--accent-tint)'], 4.5],
   ['callout important body', 'var(--ink-secondary)', ['var(--bg-page)', 'var(--acct-claude2-tint)'], 4.5],
   ['callout warning body', 'var(--ink-secondary)', ['var(--bg-page)', 'var(--status-attention-tint)'], 4.5],
-  ['callout caution body', 'var(--ink-secondary)', ['var(--bg-page)', 'color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface))'], 4.5],
+  ['callout caution body', 'var(--ink-secondary)', ['var(--bg-page)', 'var(--status-dead-tint-solid)'], 4.5],
   ['callout note label', 'var(--acct-corp)', ['var(--bg-page)', 'var(--acct-corp-tint)'], 4.5],
   ['callout tip label', 'var(--status-busy-text)', ['var(--bg-page)', 'var(--accent-tint)'], 4.5],
   ['callout important label', 'var(--acct-claude2)', ['var(--bg-page)', 'var(--acct-claude2-tint)'], 4.5],
   ['callout warning label', 'var(--status-attention-text)', ['var(--bg-page)', 'var(--status-attention-tint)'], 4.5],
-  ['callout caution label', 'var(--status-dead-text)', ['var(--bg-page)', 'color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface))'], 4.5],
+  ['callout caution label', 'var(--status-dead-text)', ['var(--bg-page)', 'var(--status-dead-tint-solid)'], 4.5],
 ];
 
 describe('contrast gate', () => {
@@ -491,6 +491,21 @@ describe('the auditor itself', () => {
   it('refuses to silently pass a colour it cannot parse', () => {
     expect(() => resolveColor('CanvasText', DARK)).toThrow(/unparsed colour/);
     expect(() => resolveColor('var(--no-such-token)', DARK)).toThrow(/unknown custom property/);
+  });
+
+  it.each(THEMES)('%s binds --status-dead-tint-solid to the tint it derives from', (_n, theme) => {
+    // The 12%-over-a-card correction was written out as a color-mix() in three
+    // stylesheets and five rows of this file, duplicating --status-dead-tint's
+    // own definition with nothing binding the 12% or the base hue to it:
+    // retuning tokens.css diverged from all three surfaces silently. tokens.css
+    // owns the value now, and this is the pin that keeps the two spellings of
+    // it — the translucent pill tint and the pre-composited banner fill — from
+    // drifting apart.
+    const composited = over(
+      resolveColor('var(--status-dead-tint)', theme as Record<string, string>),
+      resolveColor('var(--bg-surface)', theme as Record<string, string>),
+    );
+    expect(resolveColor('var(--status-dead-tint-solid)', theme as Record<string, string>)).toEqual(composited);
   });
 
   it('reads BOTH theme blocks out of tokens.css, not a copy of them', () => {
@@ -687,9 +702,9 @@ describe('hand-declared pairs whose ground is inherited', () => {
     ['chat.css', '.msg-attach-gone', 'color', 'var(--syn-comment)'],
     ['fleet.css', '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label', 'color', 'var(--ink-secondary)'],
     // The three places the 12%-dead tint had to stop compositing over the page.
-    ['chat.css', '.chat-banner--dead', 'background', 'color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface))'],
-    ['fleet.css', '.fleet-host-banner', 'background', 'color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface))'],
-    ['chat.css', ".msg-assist .callout[data-callout='caution']", '--callout-tint', 'color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface))'],
+    ['chat.css', '.chat-banner--dead', 'background', 'var(--status-dead-tint-solid)'],
+    ['fleet.css', '.fleet-host-banner', 'background', 'var(--status-dead-tint-solid)'],
+    ['chat.css', ".msg-assist .callout[data-callout='caution']", '--callout-tint', 'var(--status-dead-tint-solid)'],
   ])('%s %s still sets %s: %s', (file, selector, prop, value) => {
     const rule = ALL_RULES.find((r) => r.file === file && r.selector === selector);
     expect(rule, `${file} has no rule for ${selector}`).toBeDefined();

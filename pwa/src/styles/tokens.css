@@ -61,6 +61,18 @@
   --status-dead:           #E06A55;  /* matte dot, never glows: 5.47:1 vs surface */
   --status-dead-text:      #E8836F;  /* "exited · 3h ago — chat is read-only": 6.80:1 vs surface */
   --status-dead-tint:      rgba(224, 106, 85, 0.12);  /* EXIT badge pill; dead-text on it 5.89:1 over surface */
+  /* The SAME 12% wash, pre-composited onto a card. --status-dead-tint is
+     translucent and tokens.css prices it over --bg-surface, so a banner that
+     floats on --bg-page lets a darker ground through and the text pair falls
+     to 4.44 in light. Three surfaces needed the corrected value and each of
+     them wrote the color-mix() out in full, which duplicated this token's own
+     definition with nothing binding the 12% or the hue to it — the same drift
+     class as a hand-typed palette. Declared once, in :root only: --status-dead
+     and --bg-surface are both re-declared for the light theme, so var()
+     resolves this per theme the way the browser does. design/audit.mjs pins
+     it against --status-dead-tint composited over --bg-surface, so retuning
+     one and not the other fails the gate. */
+  --status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
 
   /* PR keycap (Task 15). --pr-merged ALIASES --acct-claude2 rather than
      repeating its hex: a literal single hex here (#C7A7F4, dark-only) reads

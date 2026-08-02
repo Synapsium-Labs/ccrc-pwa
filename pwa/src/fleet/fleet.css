@@ -144,9 +144,10 @@
   gap: var(--sp-3);
   /* Same correction as .chat-banner--dead (chat.css): the 12%-alpha tint is
      priced over a card in tokens.css, and this banner floats on the fleet's
-     --bg-page, which drops the text pair to 4.44 in light. Mixed over
-     --bg-surface: 5.88 dark / 4.81 light. */
-  background: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
+     --bg-page, which drops the text pair to 4.44 in light.
+     --status-dead-tint-solid is that wash pre-composited on --bg-surface:
+     5.88 dark / 4.81 light. */
+  background: var(--status-dead-tint-solid);
   border: 1px solid var(--status-dead);
   border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);

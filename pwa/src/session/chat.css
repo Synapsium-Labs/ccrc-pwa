@@ -346,10 +346,13 @@ button.metachip:active {
   /* --status-dead-tint is 12% alpha and tokens.css prices it over a CARD
      ("dead-text on it 4.81:1 over surface"); this banner floats on the chat
      screen's --bg-page, where the same tint lets more of a darker ground
-     through and the pair falls to 4.44 in light — under the floor. Mixing over
-     --bg-surface explicitly buys back the ground the token was measured
-     against: 5.88 dark / 4.81 light. */
-  background: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
+     through and the pair falls to 4.44 in light — under the floor.
+     --status-dead-tint-solid IS that tint pre-composited on --bg-surface,
+     which buys back the ground the token was measured against: 5.88 dark /
+     4.81 light. It is a token and not a color-mix() written out here because
+     three surfaces needed the same correction and three copies of a mix is a
+     drift class — tokens.css owns the 12%. */
+  background: var(--status-dead-tint-solid);
   color: var(--status-dead-text);
 }
 .chat-banner--dead .banner-copy {
@@ -917,7 +920,7 @@ button.metachip:active {
    so it alone let the page ground through and its ::before label measured 4.44
    in light where the other four sit at 4.94-5.73. Mixed over --bg-surface it
    becomes opaque like its siblings and reads 5.88 / 4.81. */
-.msg-assist .callout[data-callout='caution']   { --callout-hue: var(--status-dead-text);      --callout-tint: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface)); }
+.msg-assist .callout[data-callout='caution']   { --callout-hue: var(--status-dead-text);      --callout-tint: var(--status-dead-tint-solid); }
 .msg-assist .callout[data-callout='note']::before      { content: '● NOTE'; }
 .msg-assist .callout[data-callout='tip']::before       { content: '★ TIP'; }
 .msg-assist .callout[data-callout='important']::before { content: '◆ IMPORTANT'; }
