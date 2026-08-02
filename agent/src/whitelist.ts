@@ -218,6 +218,64 @@ for (const prefixes of Object.values(EXEC_WHITELIST)) {
 }
 Object.freeze(EXEC_WHITELIST);
 
+/** Every message this audit emits — fatal or not — carries the same prefix the
+ *  rest of the agent logs with (`index.ts`), so whatever ends up printing it
+ *  (node's uncaught-exception dump for the module-load throw, journald for the
+ *  warning) shows up under `journalctl -u ccrc-agent | grep ccrc-agent:` next
+ *  to every other line the agent ever wrote. See `refuseToBoot`. */
+const LOG_PREFIX = 'ccrc-agent:';
+
+/**
+ * WHY THIS KILLS THE PROCESS, and where the line is drawn (verify round 2,
+ * item 3 — the reviewer's availability objection, answered rather than waved
+ * through).
+ *
+ * The objection is real and it is not theoretical: this box runs 11 live
+ * sessions, and a module-load throw converts a class of future mistake from a
+ * red test suite into a fleet-wide outage. So the audit no longer treats every
+ * discrepancy the same way. The rule, stated once and applied below:
+ *
+ *   **Refuse to boot for OVER-permission. Never refuse to boot for UNDER-
+ *   permission.**
+ *
+ * Over-permission (a forbidden key, an undeclared key, a prefix that grants
+ * more than it names) is a control failure: the agent would be serving a
+ * capability nobody in this file declared, and there is no second credential
+ * behind it. A dead agent is loudly, obviously broken and takes one operator
+ * minute to diagnose from the message below; a live agent with a `gh` grant or
+ * a token-free `ws-reap` is silently, unrecoverably worse. That trade is worth
+ * making, and it is the only trade this throw makes.
+ *
+ * Under-permission (a declared command with no entry; a value that is not a
+ * prefix list at all) cannot escalate anything — the worst case is one route
+ * answering 502 on the fleet. That is exactly the "dead agent" cost the
+ * reviewer objected to, paid for a defect that CANNOT be a security failure, so
+ * it is now a loud non-fatal error instead (see the `missing` branch). It is
+ * also already caught three other ways before it could ever reach a host:
+ * `Record<ExecCommand, …>` makes it TS2741 (fixture `g4-missing-declared-key`),
+ * `whitelist-structural.test.ts` asserts it, and layer 3 of the server's
+ * `whitelist-subset.test.ts` fails on the missing grant.
+ *
+ * DIAGNOSABILITY: the throw happens while this ESM module is being evaluated,
+ * i.e. before `index.ts`'s body runs at all — so the `unhandledRejection`
+ * backstop there cannot swallow it (a static import is evaluated before the
+ * importing module's first statement), node prints the message and the stack to
+ * stderr, and the process exits non-zero. The message names the offending key
+ * or prefix, says what the rule is, and carries `LOG_PREFIX`. Disclosed
+ * residual: if the static `import { startAgent } from './server.js'` in
+ * `index.ts` were ever converted to a dynamic `await import()` inside a `try`,
+ * that backstop COULD catch this and keep a widened agent alive. Nothing does
+ * that today and nothing should.
+ */
+function refuseToBoot(message: string): never {
+  throw new Error(`${LOG_PREFIX} ${message} Refusing to start.`);
+}
+
+/** The under-permission half: say it loudly, keep serving. */
+function reportNonFatal(message: string): void {
+  console.error(`${LOG_PREFIX} ${message} Continuing — this cannot grant anything.`);
+}
+
 /**
  * Mechanism 3 of the no-`gh` pin: a RUNTIME self-audit, run once at module
  * load (see the call directly below), which throws — so the agent refuses to
@@ -257,20 +315,29 @@ export function auditExecWhitelist(
 
   const forbidden = keys.filter((k) => (FORBIDDEN_COMMANDS as readonly string[]).includes(k));
   if (forbidden.length > 0) {
-    throw new Error(
+    refuseToBoot(
       `EXEC_WHITELIST grants a forbidden command: ${forbidden.join(', ')}. ` +
-      'Refusing to start. The host gh token carries the repo WRITE scope and ' +
-      'there is no second credential; a gh grant makes this list the sole ' +
-      'control between the PWA and `gh pr merge`. See whitelist.ts.',
+      'The host gh token carries the repo WRITE scope and there is no second ' +
+      'credential; a gh grant makes this list the sole control between the PWA ' +
+      'and `gh pr merge`. See whitelist.ts.',
     );
   }
 
-  const declared = [...GRANTABLE_COMMANDS].sort();
-  const actual = [...keys].sort();
-  if (actual.length !== declared.length || actual.some((k, i) => k !== declared[i])) {
-    throw new Error(
+  const declared: string[] = [...GRANTABLE_COMMANDS].sort();
+  const actual: string[] = [...keys].sort();
+  const extra = actual.filter((k) => !declared.includes(k));
+  const missing = declared.filter((k) => !actual.includes(k));
+  if (extra.length > 0) {
+    refuseToBoot(
       `EXEC_WHITELIST keys drifted from EXEC_COMMANDS: have [${actual.join(', ')}], ` +
-      `declared [${declared.join(', ')}]. Refusing to start.`,
+      `declared [${declared.join(', ')}]. Undeclared grant(s): ${extra.join(', ')}.`,
+    );
+  }
+  if (missing.length > 0) {
+    reportNonFatal(
+      `EXEC_WHITELIST keys drifted from EXEC_COMMANDS: have [${actual.join(', ')}], ` +
+      `declared [${declared.join(', ')}]. Missing grant(s): ${missing.join(', ')} — ` +
+      'every route that needs one will answer 502.',
     );
   }
 }

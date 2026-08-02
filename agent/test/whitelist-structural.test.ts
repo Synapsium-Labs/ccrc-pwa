@@ -31,7 +31,7 @@
 // each of which says in its own name what it is for, plus deletions in two
 // packages. What is closed is the class the old pin lost to: one `rm` of one
 // file, and a diff that reads as ordinary.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -160,9 +160,54 @@ describe('mechanism 3 — the runtime self-audit refuses to boot on a widened li
       .toThrow(/drifted from EXEC_COMMANDS/);
   });
 
-  it('throws when a declared command has no entry at all', () => {
-    expect(() => auditExecWhitelist({ tmux: [] })).toThrow(/drifted from EXEC_COMMANDS/);
+  // VERIFY ROUND 2, item 3 — the availability objection, answered by drawing a
+  // line rather than by keeping or dropping the throw wholesale. The audit now
+  // refuses to boot ONLY for over-permission. A declared command with NO entry
+  // cannot grant anything (the worst case is one route answering 502), so
+  // killing an agent on a host running 11 live sessions for it was the wrong
+  // trade; it is a loud non-fatal error now. It is still caught before a host
+  // ever sees it by TS2741 (fixture g4), by the assertion above, and by layer 3
+  // of the server's whitelist-subset.test.ts.
+  it('does NOT throw when a declared command is merely MISSING — that grants nothing', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => auditExecWhitelist({ tmux: [] })).not.toThrow();
+      expect(spy).toHaveBeenCalledTimes(1);
+      const msg = String(spy.mock.calls[0]?.[0] ?? '');
+      expect(msg).toMatch(/drifted from EXEC_COMMANDS/);
+      expect(msg).toMatch(/Missing grant\(s\): ccd/);
+      // Diagnosability: the agent's own log prefix, so this line is findable
+      // with the same grep as every other thing the agent ever printed.
+      expect(msg.startsWith('ccrc-agent:')).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
+
+  it('an UNDECLARED key is still fatal — missing is under-permission, extra is not', () => {
+    // The pair that shows the line is drawn where the comment says it is, and
+    // not simply "drift no longer throws".
+    expect(() => auditExecWhitelist({ tmux: [], ccd: [], jq: [] }))
+      .toThrow(/Undeclared grant\(s\): jq/);
+  });
+
+  it('every fatal message carries the agent log prefix and says it is refusing', () => {
+    // The throw happens during ESM evaluation, before index.ts's body runs, so
+    // nothing in the agent gets to format it — node prints it and exits. The
+    // message is therefore the ENTIRE diagnostic, and it has to read like an
+    // agent log line rather than a bare assertion.
+    for (const bad of [
+      { tmux: [], ccd: [], gh: [['pr', 'view']] },
+      { tmux: [], ccd: [], jq: [] },
+    ]) {
+      let msg = '';
+      try { auditExecWhitelist(bad); } catch (e) { msg = e instanceof Error ? e.message : String(e); }
+      expect(msg, JSON.stringify(bad)).not.toBe('');
+      expect(msg.startsWith('ccrc-agent: '), msg).toBe(true);
+      expect(msg, msg).toMatch(/Refusing to start\.$/);
+    }
+  });
+
 
   it('accepts the real list — the audit is not a blanket refusal', () => {
     expect(() => auditExecWhitelist()).not.toThrow();
@@ -195,14 +240,14 @@ describe('the audit and the lookup ask the same question', () => {
   it('a non-enumerable UNDECLARED key is caught too, not just a forbidden one', () => {
     const sneaky: Record<string, unknown> = { tmux: [], ccd: [] };
     Object.defineProperty(sneaky, 'jq', { value: [['.']], enumerable: false });
-    expect(() => auditExecWhitelist(sneaky)).toThrow(/drifted from EXEC_COMMANDS/);
+    expect(() => auditExecWhitelist(sneaky)).toThrow(/Undeclared grant\(s\): jq/);
   });
 
   it('a SYMBOL-keyed grant lands in the drift branch instead of vanishing', () => {
     const sneaky: Record<PropertyKey, unknown> = { tmux: [], ccd: [] };
     sneaky[Symbol('gh')] = [['pr', 'merge']];
     expect(() => auditExecWhitelist(sneaky as Record<string, unknown>))
-      .toThrow(/drifted from EXEC_COMMANDS/);
+      .toThrow(/Undeclared grant\(s\): Symbol\(gh\)/);
   });
 
   it('the lookup gates on the DECLARED set, so a planted own key grants nothing', () => {
