@@ -502,6 +502,45 @@ describe('dirty is a measurement of OUR tree, or it is null', () => {
       fs.chmodSync(idx, 0o644);
     }
   });
+
+  it('is null when the tree could only be PARTIALLY read — rc 0 is not an answer', () => {
+    // Final-round verification P2, the reporting half of the same class the
+    // destructive verbs carry. The test above reaches the exit-code rung (an
+    // unreadable index makes git exit non-zero); this reaches the one it cannot
+    // see. Measured on git 2.43: `chmod 000` on a TRACKED directory holding a
+    // MODIFIED file gives rc 0, EMPTY stdout, and the diagnostic on stderr — so
+    // `grep -c .` counted nothing and the wire carried `"dirty":0`, an
+    // affirmative "nothing is uncommitted here" about a file nobody looked at.
+    // `dirty` already had an honest unmeasured value; this branch just never
+    // used it.
+    const { wt } = workspaceWithCommit('demo', 'quiet-basin');
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    h.git(wt, 'add', '-A');
+    h.git(wt, 'commit', '-m', 'the work');
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'UNCOMMITTED\n');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      // The premise, measured in the fixture: rc 0 and empty stdout, which is
+      // what makes this a DIFFERENT rung from the unreadable-index test.
+      const probe = h.sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+
+      h.ghRows([]);
+      const out = h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin 2>"$HOME/pr-err"`);
+      expect(line(out).dirty, 'a partial read is UNMEASURED, never a clean 0').toBeNull();
+      const err = fs.readFileSync(path.join(h.home, 'pr-err'), 'utf8');
+      expect(err).toContain('could not read the tree');
+      expect(err).toContain('demo-quiet-basin');
+    } finally {
+      fs.chmodSync(tracked, 0o755);
+    }
+  });
 });
 
 describe('failure is an ANSWER, not an error', () => {
@@ -706,6 +745,38 @@ describe('persistence', () => {
     expect(h.reg('demo-quiet-basin', 'prnumber')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'prphase')).toBe('none');
   });
+
+  it('never advances prphase past a prnumber write that did not happen', () => {
+    // Final-round integration New Finding 9. `prphase` and `prnumber` are two
+    // FILES, so no ordering makes the pair atomic — but the order decides which
+    // half-written pairs a kill can leave behind, and the shipped one
+    // (`put('prphase')` nineteen lines ahead of the number) left exactly
+    // {'none', 42}: the pair docket 1 proved otherwise unconstructible, the one
+    // fleet.ts renders as `#42` under "no pull request yet", and the one
+    // ws-archive files as `merged:#42`. `clear('prnumber')` now runs FIRST, so
+    // the intermediates are {old phase, absent} and {new phase, absent} — a
+    // degraded reading, never a false one.
+    //
+    // The interruption is injected where the test can see it: a DIRECTORY at
+    // the `prnumber` path makes `os.remove` raise `IsADirectoryError`, which
+    // `clear`'s `except FileNotFoundError` does not catch, so the write of the
+    // pair aborts at exactly the step the ordering is about. What is asserted
+    // is the ordering property itself — the phase must not have moved.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+
+    const numberPath = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.prnumber');
+    fs.rmSync(numberPath);
+    fs.mkdirSync(numberPath);
+    h.ghRows([]);                                  // the new answer is {none, no number}
+    h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'prphase'),
+      'the phase moved to a value whose number never landed').toBe('merged');
+    expect(fs.statSync(numberPath).isDirectory(), 'the fixture must survive the run').toBe(true);
+  });
 });
 
 describe('gh isolation', () => {
@@ -762,6 +833,26 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     // is `none` — ready to compose — never `no-commits`.
     ['fork',            { isCrossRepository: true }, 'none', null],
     ['other base',      { baseRefName: 'release/9' }, 'none', null],
+    // THE TWO CONJUNCTS THE MATRIX USED TO HOLD CONSTANT — final-round
+    // integration New Finding 8. `bound()` (ccd) and `boundRow()`
+    // (prstate.ts:113) are each four conjuncts, and every row above varies one
+    // of only two of them: `isCrossRepository` and `baseRefName`. Both
+    // `headRefName === branch` and `ours === true` were the same on all seven
+    // rows, so DELETING either conjunct from either implementation left all
+    // nine agreement cases green — the exact drift this device exists to catch.
+    // Measured: with `&& row.headRefName === registryBranch` removed from
+    // prstate.ts, the matrix passed.
+    //
+    // The head-NAME rung: same head commit, same base, same repository, a
+    // different branch name. `gh pr list --head` matches the name across fork
+    // owners (prstate.ts:102), which is why the name is a conjunct and not a
+    // shorthand for the others.
+    ['other head name', { headRefName: 'ws/still-cove' }, 'none', null],
+    // The `ours` rung, i.e. proof 0: a well-formed head oid this repository
+    // has never seen. `is_ours`'s `cat-file -e` rung answers False, ccd
+    // annotates `ours: false`, and both sides must then refuse to bind — this
+    // is the row a recycled slug and a stranger's fork both produce.
+    ['head commit we do not have', { headRefOid: 'b'.repeat(40) }, 'none', null],
     // Binds, but the merge predicate fails a conjunct while gh still says
     // MERGED: `unknown`, never `merged`. The archive trigger hangs off this.
     // The reason is `merge-unproven` and NOT any read-failure token — the gh
@@ -786,6 +877,36 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     const s = phaseFor(l as never);
     expect(s.phase, 'prstate.ts disagrees with the matrix').toBe(expected);
     expect(s.reason, 'prstate.ts disagrees with the matrix about reason').toBe(expectedReason);
+  });
+
+  it('agrees that ahead === 0 with no PR is no-commits — and that a bound merge still wins', () => {
+    // The third variable New Finding 8 names, and the one the matrix above
+    // cannot carry: `ahead` is not a field of the gh row, it is a property of
+    // the FIXTURE, and every row above is built on `workspaceWithCommit`, so
+    // every one of them has `ahead === 1`. ccd chooses between the two with
+    // `('no-commits' if ahead == 0 else 'none')` and `phaseFor` with
+    // `line.ahead === 0 ? 'no-commits' : 'none'` (prstate.ts:166) — a whole
+    // branch of both implementations that no agreement case ever entered.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    h.ghRows([]);
+    const l = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(l.ahead, 'the fixture must actually be level with base').toBe(0);
+    expect(l.phase, 'ccd').toBe('no-commits');
+    const s = phaseFor(l as never);
+    expect(s.phase, 'prstate.ts').toBe('no-commits');
+    expect(s.reason, 'and neither side invents a reason for it').toBeNull();
+
+    // …and `ahead === 0` never overrides a binding: a level branch whose PR
+    // merged is `merged` on both sides. Without this half, an implementation
+    // that answered `no-commits` for every ahead-0 line — before consulting
+    // `boundRow` at all — would still agree with the first half.
+    const tip = h.git(path.join(h.home, 'worktrees', 'demo', 'quiet-basin'), 'rev-parse', 'HEAD');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    const l2 = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(l2.ahead).toBe(0);
+    expect(l2.phase, 'ccd').toBe('merged');
+    expect(phaseFor(l2 as never).phase, 'prstate.ts').toBe('merged');
   });
 
   // TWO MORE ROWS THE MATRIX ABOVE CANNOT EXPRESS, because what varies is not a

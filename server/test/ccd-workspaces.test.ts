@@ -98,6 +98,109 @@ describe('slug rules', () => {
   });
 });
 
+// Round-3 verification P1. `_reg_purge` removes `.archived` and `.reaping` LAST
+// (round-2 P4, so `reaping` can never outlive `archived`), which makes both of
+// them outlive `.uuid` BY CONSTRUCTION. `_ws_slug_free` used to ask only about
+// `.uuid`, so a SIGKILL or an OOM in that window freed the slug while leaving
+// the state markers, and the next workspace to draw the slug inherited them:
+// `ws-archive` answering `already archived` at exit 0, the reap archived gate
+// passing on a workspace nobody archived, and — with `.reaping` — the reap
+// resume fork, which does not check the token and does not re-run the merged-PR
+// proof. The property is not "the two markers are noticed": it is that a
+// PARTIALLY-PURGED ID IS NEVER REUSED AS A CLEAN ONE, wherever the interruption
+// landed. So the residue is constructed directly, at every interruption point
+// the purge has.
+describe('a partially purged registry never frees the slug', () => {
+  // Every field `_reg_set`/`_reg_get` names in ccd today. The purge's own
+  // comment keeps this list; it is repeated here so the fixture is a full
+  // registry entry rather than a plausible subset.
+  const FIELDS = ['archived', 'archivedreason', 'archivemanifest', 'base', 'branch',
+    'home', 'lastcompact', 'lastswap', 'pool', 'prnumber', 'project', 'reaping',
+    'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+
+  const seedFullEntry = (): string => {
+    const regdir = path.join(home, '.cc-sessions');
+    for (const f of fs.readdirSync(regdir)) {
+      fs.rmSync(path.join(regdir, f), { recursive: true, force: true });
+    }
+    for (const f of FIELDS) fs.writeFileSync(path.join(regdir, `demo-quiet-mesa.${f}`), 'x\n');
+    return regdir;
+  };
+
+  it('holds at EVERY interruption point of _reg_purge, not just the disclosed one', () => {
+    // A SIGKILL is modelled where it actually bites: the unlink. `rm` is
+    // shadowed by a function with a budget, so run k performs the first k
+    // unlinks of the purge and no more — which is exactly the on-disk residue a
+    // kill after k unlinks leaves. k runs past the purge's last unlink so the
+    // terminal state (nothing left, slug genuinely free) is covered too, and
+    // the assertion is keyed off the MEASURED residue rather than off a
+    // hardcoded expectation of which field goes when.
+    const verdicts: string[] = [];
+    for (let k = 0; k <= FIELDS.length + 2; k++) {
+      seedFullEntry();
+      const out = sh(
+        `rm() { if (( RMBUDGET-- > 0 )); then command rm "$@"; fi; }
+         RMBUDGET=${k}
+         _reg_purge demo-quiet-mesa
+         unset -f rm
+         _ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN
+         _ws_slug_residue demo quiet-mesa`);
+      const [verdict, residue] = [out.split('\n')[0], out.split('\n').slice(1).join('\n')];
+      verdicts.push(`${k}:${verdict}`);
+      if (residue === '') {
+        expect(verdict, `k=${k}: the registry is empty, so the slug IS free`).toBe('FREE');
+      } else {
+        expect(verdict, `k=${k}: registry still holds {${residue}}`).toBe('TAKEN');
+      }
+    }
+    // The enumeration only means something if it reached both ends: at least
+    // one interruption that left residue, and the completed purge.
+    expect(verdicts.filter((v) => v.endsWith('TAKEN')).length,
+      'the budget never actually interrupted anything').toBeGreaterThan(0);
+    expect(verdicts[verdicts.length - 1],
+      'the purge never ran to completion, so FREE was never proved reachable')
+      .toBe(`${FIELDS.length + 2}:FREE`);
+  });
+
+  it('refuses ws-add on the residue the purge is documented to leave', () => {
+    // The one-field residue fix3-ccd.md disclosed and called harmless: an empty
+    // `<id>.archived` and nothing else. Pre-fix ws-add built a workspace on it.
+    makeRepo('demo');
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.archived'), '');
+
+    // The operator path: `ccd ws-add <project> <slug>`, i.e. the slug given
+    // positionally, which is the arm that reports WHY it refused.
+    const out = sh(`${WS_ADD} ( cmd_ws_add demo quiet-mesa ) 2>&1 || echo REFUSED`);
+
+    expect(out, 'the refusal happened').toContain('REFUSED');
+    expect(out, 'and it names the files holding the slug, which is the reclaim step')
+      .toContain('slug in use: quiet-mesa');
+    expect(out).toContain('demo-quiet-mesa.{archived}');
+    // Nothing was created: no worktree, no branch, no registry entry.
+    expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid'), 'no new session inherited the marker').toBeNull();
+    expect(sh(`git -C "$HOME/projects/demo" branch --format='%(refname:short)'`))
+      .not.toContain('ws/quiet-mesa');
+  });
+
+  it('keeps the generator off a residue slug as well as the explicit one', () => {
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');
+    expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`)).toBe('EXHAUSTED');
+  });
+
+  it('does not let ANOTHER session id wedge this slug', () => {
+    // `_reg_purge`'s hazard in the mirror: `demo-quiet-mesa.x-y.uuid` is the id
+    // `demo-quiet-mesa.x-y` (project `demo-quiet-mesa.x`, slug `y`) — legal,
+    // because project DIRECTORY names may hold dots. A prefix match would read
+    // it as a field of `demo-quiet-mesa` and refuse slug `quiet-mesa` in
+    // project `demo` for ever. The two-dot skip is what stops that.
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.x-y.uuid'), 'x');
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.x-y.archived'), '');
+    expect(sh(`_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN`)).toBe('FREE');
+    expect(sh(`_ws_slug_residue demo quiet-mesa`)).toBe('');
+  });
+});
+
 describe('ws-add', () => {
   it('creates a worktree on a new branch off origin/HEAD', () => {
     makeRepo('demo');
@@ -539,6 +642,49 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(wt)).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
+  });
+
+  // THE OTHER HALF OF "could not read" — final-round verification P2, and the
+  // same shape already closed at `_ws_reap_eval` and `_ws_archive_manifest`
+  // while this destructive verb kept the rc-only form three lines under the
+  // comment describing the fix. A `chmod 000` on a TRACKED directory holding a
+  // MODIFIED file is not an error to git: measured on git 2.43, `git status
+  // --porcelain` exits 0 with EMPTY stdout and writes `warning: could not open
+  // directory 'tracked/'` to stderr. So the guard above read CLEAN, the run
+  // went on to `_ws_unsupervise` and `tmux kill-session`, and only `git
+  // worktree remove` refused — leaving the session dead, out of supervision,
+  // and a refusal message about unlocking a tree that says nothing about the
+  // uncommitted work still in it.
+  it('refuses a worktree it could only PARTIALLY read, before any teardown', () => {
+    const wt = addOne();
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    execFileSync('git', ['-C', wt, 'add', '-A'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'the work'], { env: gitEnv() });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'UNCOMMITTED\n');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      // The premise, measured rather than assumed: rc 0, empty stdout, a
+      // diagnostic on stderr. Without this the test could be passing on the
+      // exit-code rung that was already there.
+      const probe = sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+
+      expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
+      expect(calls(), 'REFUSE FIRST: neither the unit nor the pane may be touched').toEqual([]);
+      expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+      expect(fs.existsSync(wt)).toBe(true);
+      expect(branches('ws/quiet-mesa')).not.toBe('');
+    } finally {
+      // rmSync cannot recurse into a 0o000 directory: without this the
+      // harness's own cleanup throws and leaks the fixture HOME.
+      fs.chmodSync(tracked, 0o755);
+    }
   });
 
   // The test above hand-picks the one variant of "not our worktree" that the

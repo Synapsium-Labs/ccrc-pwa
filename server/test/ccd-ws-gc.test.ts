@@ -207,6 +207,37 @@ describe('ws-gc report', () => {
     expect(out).toContain('hardlink');
   });
 
+  it('gives no grand total at all when du could not read every worktree', () => {
+    // Round-3 item 3, the `du` sweep. `du -scb` over a set containing a
+    // partially readable tree exits 1, writes to stderr, and STILL prints a
+    // `total` line holding a partial sum — measured below and, outside the
+    // suite, on GNU coreutils 9.4 (5000 for a tree holding 14000).
+    // `_ws_gc_human` only answers `-` for a NON-numeric input, so that partial
+    // sum used to render as a figure under the words "what removing all of
+    // them would free".
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    const locked = path.join(wt, 'locked');
+    fs.mkdirSync(locked, { recursive: true });
+    fs.writeFileSync(path.join(locked, 'big.bin'), 'x'.repeat(9000));
+    fs.writeFileSync(path.join(wt, 'visible.bin'), 'v'.repeat(5000));
+    fs.chmodSync(locked, 0o000);
+    try {
+      const probe = h.sh(`du -scb "${wt}" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
+        + `echo "err=[$(cat "$HOME/du-err")]"; echo "out=[$(cat "$HOME/du-out")]"`);
+      expect(probe, probe).toContain('rc=1');
+      expect(probe, probe).toContain('Permission denied');
+      expect(probe, probe).toContain('total');   // …and it still printed one
+
+      const out = gc();
+      expect(out, out).toContain('total unmeasured across 1 worktree');
+      expect(out, out).toContain('du could not read all of them');
+      expect(out, out).not.toContain('what removing all of them would free');
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  }, 30000);
+
   it('says so plainly when there is nothing to report', () => {
     h.makeRepo('demo');
     expect(gc()).toContain('nothing to report');
@@ -256,11 +287,20 @@ describe('ws-gc --prune', () => {
   it('leaves an orphan alone when it cannot resolve origin/HEAD at all', () => {
     // No origin means no base to compare against, so "merged" is unprovable.
     // Unprovable must resolve to declining, not to deleting.
+    //
+    // ROUND 3, P2 class sweep — and it must not resolve to CLAIMING either.
+    // This test used to assert the report said `unmerged`, which is the same
+    // wrong-diagnosis shape as `_ws_gc_dirty`'s: nothing was compared, so
+    // "the branch has unmerged commits" is a sentence about a comparison that
+    // never ran. The test below, where the branch really is ahead, is what pins
+    // the affirmative wording — and the two must not read alike.
     const main = h.makeRepo('demo');
     const wt = addOrphan('demo', 'still-cove');
     h.git(main, 'remote', 'remove', 'origin');
     const out = prune();
-    expect(out).toContain('unmerged');
+    expect(out, out).toContain('could not tell whether branch ws/still-cove is merged');
+    expect(out, out).toContain('refusing to remove');
+    expect(out, out).not.toContain('is on unmerged branch');
     expect(fs.existsSync(wt)).toBe(true);
   });
 
@@ -271,7 +311,10 @@ describe('ws-gc --prune', () => {
     h.git(wt, 'add', 'work.txt');
     h.git(wt, 'commit', '-m', 'ahead of base');
     const out = prune();
-    expect(out).toContain('unmerged');
+    // The affirmative sentence, and it is only ever printed on a comparison
+    // that actually returned "not an ancestor" (round-3 P2 class sweep).
+    expect(out, out).toContain('is on unmerged branch ws/still-cove');
+    expect(out, out).not.toContain('could not tell whether');
     expect(fs.existsSync(wt)).toBe(true);
   });
 
@@ -304,16 +347,21 @@ describe('ws-gc --prune', () => {
    *  and to `git worktree remove`, which is the whole premise of the finding.
    *  The branch is left at origin/HEAD… except for the .gitignore commit, so
    *  the fixture pushes it, keeping `_ws_gc_merged` true. */
-  const orphanWithIgnored = (slug: string, files: Record<string, string>): string => {
+  const orphanWithIgnored = (
+    slug: string, files: Record<string, string>, patterns?: string[],
+  ): string => {
+    // `patterns` overrides the default "one line per file" ignore list, for the
+    // fixtures that need a DIRECTORY ignored rather than the paths inside it.
+    const ignore = `${(patterns ?? Object.keys(files)).join('\n')}\n`;
     const wt = addWs('demo', slug);
-    fs.writeFileSync(path.join(wt, '.gitignore'), `${Object.keys(files).join('\n')}\n`);
+    fs.writeFileSync(path.join(wt, '.gitignore'), ignore);
     h.git(wt, 'add', '.gitignore');
     h.git(wt, 'commit', '-m', 'ignore');
     // The .gitignore lands on main too, so the branch stays an ancestor of
     // origin/HEAD and `_ws_gc_merged` still says merged — otherwise the row
     // declines `unmerged` and the test would be about the wrong guard.
     const main = path.join(h.home, 'projects', 'demo');
-    fs.writeFileSync(path.join(main, '.gitignore'), `${Object.keys(files).join('\n')}\n`);
+    fs.writeFileSync(path.join(main, '.gitignore'), ignore);
     h.git(main, 'add', '.gitignore'); h.git(main, 'commit', '-m', 'ignore');
     h.git(main, 'push', 'origin', 'main');
     for (const [rel, body] of Object.entries(files)) {
@@ -385,6 +433,61 @@ describe('ws-gc --prune', () => {
     expect(out).toContain('reclaimed 2, declined 0');
   }, 30000);
 
+  it('a gitignored filename holding a NEWLINE cannot forge a row or move the tally', () => {
+    // Final-round verification P1, and the tenth instance of the
+    // measurement-forgery class on this branch — the first one this project's
+    // own fix round created. The listing above is the only place `ws-gc
+    // --prune` prints a string somebody else chose: `_ws_collect_ignored`
+    // reads ignored paths NUL-separated precisely because a filename may hold
+    // a TAB or a NEWLINE, and the listing then printed them raw into a report
+    // whose rows are lines, while `cmd_ws_gc` computed the footer by
+    // `grep -c '^  reclaimed '` over that same rendered text.
+    //
+    // Measured before the fix, on this exact fixture: five rows where four
+    // were written, and `reclaimed 3, declined 1` for a sweep that reclaimed
+    // two and declined nothing.
+    //
+    // The fixture uses a `*.log` pattern rather than the `orphanWithIgnored`
+    // helper on purpose: that helper builds `.gitignore` with
+    // `Object.keys(files).join('\n')`, so a key containing a newline would
+    // become two ignore lines and quietly stop ignoring anything.
+    const main = h.makeRepo('demo');
+    const wt = addWs('demo', 'still-cove');
+    for (const dir of [wt, main]) {
+      fs.writeFileSync(path.join(dir, '.gitignore'), '*.log\n');
+      h.git(dir, 'add', '.gitignore');
+      h.git(dir, 'commit', '-m', 'ignore logs');
+    }
+    h.git(main, 'push', 'origin', 'main');
+    // No `/` anywhere in it: this is ONE filename, not a path, and a slash
+    // would make `path.join` ask for a directory the fixture never created.
+    const evil = 'a\n  reclaimed  removed orphan worktree elsewhere'
+      + '\n  declined   demo-other is dirty — never removed\n.log';
+    fs.writeFileSync(path.join(wt, evil), 'payload\n');
+    expect(h.sh(`_ws_gc_dirty "${wt}" && echo dirty || echo clean`),
+      'the fixture only means anything if the injected name is INVISIBLE to git status')
+      .toBe('clean');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-still-cove.uuid'));
+
+    const out = prune();
+    const lines = out.split('\n');
+    // THE FOOTER. Two real actions: the worktree, then its merged branch.
+    expect(out, out).toContain('reclaimed 2, declined 0');
+    // THE ROWS. Exactly the two reclaims the sweep performed, and no decline
+    // at all — a raw print puts both forged prefixes at the start of a line.
+    const reclaims = lines.filter((l) => l.startsWith('  reclaimed '));
+    expect(reclaims.length, out).toBe(2);
+    expect(reclaims.some((l) => l.includes('elsewhere')),
+      'a forged reclaim row got in among the real ones').toBe(false);
+    expect(lines.filter((l) => l.startsWith('  declined ')).length, out).toBe(0);
+    // AND THE NAME IS STILL DISCLOSED — sanitising is not suppressing. One
+    // row, one entry, control bytes rendered `?` the way `ls` renders them.
+    const contents = lines.filter((l) => l.startsWith('  contents'));
+    expect(contents.join('\n'), out).toContain('a?  reclaimed  removed orphan worktree elsewhere?');
+    expect(out).toContain('1 ignored entry');
+    expect(fs.existsSync(wt), 'a clean orphan with no secrets is still reclaimed').toBe(false);
+  }, 30000);
+
   it('does NOT reclaim an orphan whose ignored set it could not read', () => {
     // Unknown counts as dirty — the rule `_ws_gc_dirty`'s own comment states
     // for the tracked half, applied to the half it cannot see. `find` prints
@@ -392,7 +495,18 @@ describe('ws-gc --prune', () => {
     // directory are simply ABSENT, which is the answer that says "no secrets
     // here" about files nobody enumerated.
     h.makeRepo('demo');
-    const wt = orphanWithIgnored('still-cove', { 'build/out.o': 'rubbish\n' });
+    // FIXTURE NARROWED (final-round verification P2, same round): `build/` is
+    // ignored as a DIRECTORY, not `build/out.o` as a path. `_ws_gc_dirty` now
+    // refuses any tree whose `git status --porcelain` writes a diagnostic, and
+    // a chmod-000 directory git WALKS produces exactly that — so the
+    // un-narrowed fixture declined `has uncommitted changes` one gate earlier
+    // and never reached the ignored-set guard this test is about. Measured:
+    // with `build/` ignored, plain `status --porcelain` is rc 0 with EMPTY
+    // stderr (git never descends into an ignored directory), while
+    // `--ignored=matching` collapses it to one entry and the `find` inside it
+    // still fails on `locked/` — which is the blind spot this guard exists for,
+    // reproduced exactly and nothing else.
+    const wt = orphanWithIgnored('still-cove', { 'build/out.o': 'rubbish\n' }, ['build/']);
     fs.mkdirSync(path.join(wt, 'build', 'locked'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'build', 'locked', '.env'), 'SECRET=1\n');
     fs.chmodSync(path.join(wt, 'build', 'locked'), 0o000);
@@ -406,6 +520,144 @@ describe('ws-gc --prune', () => {
       fs.chmodSync(path.join(wt, 'build', 'locked'), 0o755);
     }
   }, 30000);
+
+  it('reads a PARTIALLY unreadable tree as dirty, not as clean', () => {
+    // Final-round verification P2. `_ws_gc_dirty` is the function whose own
+    // comment states the rule the rest of the file quotes — "a status we could
+    // not read is not a clean one" — and it was the last of the four sites
+    // still testing only the exit code. Measured on git 2.43: `chmod 000` on a
+    // TRACKED directory holding a MODIFIED file gives rc 0, EMPTY stdout and
+    // the diagnostic on stderr, so this answered CLEAN.
+    //
+    // Both halves are asserted, because the answer feeds two different things:
+    // `_ws_gc_row` classifies the workspace off it, and `_ws_gc_prune_row`'s
+    // orphan arm uses it as the FIRST of the three gates in front of `git
+    // worktree remove`. Before the fix the orphan was saved only because
+    // `_ws_collect_ignored` refuses the same tree a few lines later — which is
+    // being right by accident of the next guard, and the decline said the wrong
+    // thing about why.
+    //
+    // ROUND 3, P2 — the name is kept deliberately even though it now overstates
+    // what is asserted: round-2 verification confirmed this test by name as the
+    // pin on the stderr rung, and a rename would leave that reference dangling.
+    // What it pins is unchanged in the direction that matters — a partially
+    // unreadable tree is NEVER read as clean, and `--prune` never removes it —
+    // but the verdict is now `tree-unreadable`, not `dirty`, because saying
+    // `dirty` was a claim about files git could not open. `_ws_gc_dirty` still
+    // exits 0 ("do not touch") for both; the distinction rides on
+    // GC_DIRTY_STATE. The zero-uncommitted-changes case — where the old wording
+    // was not merely imprecise but false — is the test immediately below.
+    const main = h.makeRepo('demo');
+    const wt = addWs('demo', 'still-cove');
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    h.git(wt, 'add', '-A'); h.git(wt, 'commit', '-m', 'the work');
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'UNCOMMITTED\n');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      const probe = h.sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+
+      expect(h.sh(`_ws_gc_dirty "${wt}" && echo refused || echo clean`),
+        'unknown is never clean — the function\'s own contract').toBe('refused');
+      expect(h.sh(`_ws_gc_dirty "${wt}"; echo "$GC_DIRTY_STATE"`),
+        'and it is refused for the reason that was measured').toBe('tree-unreadable');
+      expect(find(scan(), 'still-cove')?.state, 'and the scan says so too').toBe('tree-unreadable');
+
+      // …and as an ORPHAN — the one row `--prune` can delete — it declines for
+      // THIS reason, ahead of the ignored-set scan that used to catch it.
+      fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-still-cove.uuid'));
+      const out = prune();
+      expect(out, out).toContain('could not read the status of');
+      expect(out, out).toContain('refusing to remove a tree it cannot describe');
+      expect(out, out).not.toContain('has uncommitted changes');
+      expect(out, out).not.toContain('removed orphan worktree');
+      expect(fs.existsSync(wt)).toBe(true);
+      expect(h.git(main, 'branch', '--list', 'ws/still-cove')).toContain('ws/still-cove');
+    } finally {
+      // rmSync cannot recurse into a 0o000 directory.
+      fs.chmodSync(tracked, 0o755);
+    }
+  }, 30000);
+
+  it('never says a tree HAS uncommitted changes when it could not read one', () => {
+    // Round-3 verification P2. The fixture above has a real modified file, so
+    // `has uncommitted changes` was merely unproved there. Here the worktree is
+    // COMMITTED CLEAN and one tracked directory is `chmod 000`: `git status
+    // --porcelain` gives rc=0, EMPTY stdout and the diagnostic on stderr
+    // (measured, git 2.43, reproduced by the probe below), so the number of
+    // uncommitted changes is ZERO and the old report printed
+    // `declined  <path> has uncommitted changes` about them — an affirmative
+    // sentence over files nobody looked at, on the destructive path's report.
+    //
+    // The refusal direction is not what changed and is asserted here too: this
+    // tree is still never removed. What changed is that the report now uses the
+    // vocabulary the same file already owns two functions away
+    // (`_ws_gc_reclaimable`: "refusing to remove a tree it cannot describe").
+    const main = h.makeRepo('demo');
+    const wt = addWs('demo', 'still-cove');
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    h.git(wt, 'add', '-A'); h.git(wt, 'commit', '-m', 'the work');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      // The fixture only means anything if the tree really is clean-and-blind.
+      const probe = h.sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+      // Zero uncommitted changes: the same status, read where git CAN read it.
+      expect(h.sh(`git -C "${wt}" status --porcelain --untracked-files=no -- ':!tracked' 2>/dev/null`))
+        .toBe('');
+
+      expect(h.sh(`_ws_gc_dirty "${wt}"; echo "$GC_DIRTY_STATE"`)).toBe('tree-unreadable');
+
+      // As a LIVE workspace first — the row `--prune` reports but never acts
+      // on. It used to be declined as `dirty`; the arm has its own sentence now
+      // and, unlike the orphan arm, no measurement to attach to it.
+      const live = prune();
+      expect(live, live).not.toContain('has uncommitted changes');
+      expect(live, live).toContain('refusing to remove a tree it cannot describe');
+
+      fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-still-cove.uuid'));
+      const out = prune();
+      expect(out, out).not.toContain('has uncommitted changes');
+      expect(out, out).toContain('could not read the status of');
+      expect(out, out).toContain('refusing to remove a tree it cannot describe');
+      // The measurement travels with the refusal: git's own diagnostic, one
+      // line of it, rather than a diagnosis ccd invented.
+      expect(out, out).toContain('Permission denied');
+      // Refusal direction unchanged — this is a wording fix, not a policy one.
+      expect(out, out).not.toContain('removed orphan worktree');
+      expect(fs.existsSync(wt)).toBe(true);
+      expect(h.git(main, 'branch', '--list', 'ws/still-cove')).toContain('ws/still-cove');
+    } finally {
+      fs.chmodSync(tracked, 0o755);
+    }
+  }, 30000);
+
+  it('a mktemp failure refuses as unreadable, never as dirty', () => {
+    // The second rung of the same function, round-3 P2. Without a scratch file
+    // the status is never run at all, so there is even less known about the
+    // tree than in the blind-directory case — and the answer must still be
+    // "do not touch", said in the vocabulary of a read that did not happen.
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    expect(h.sh(`mktemp() { return 1; }; _ws_gc_dirty "${wt}" && echo refused || echo clean`))
+      .toBe('refused');
+    expect(h.sh(`mktemp() { return 1; }; _ws_gc_dirty "${wt}"; echo "$GC_DIRTY_STATE"`))
+      .toBe('tree-unreadable');
+    expect(h.sh(`mktemp() { return 1; }; _ws_gc_dirty "${wt}"; echo "$GC_DIRTY_WHY"`))
+      .toContain('the status was never read');
+  });
 
   // THE load-bearing guard. ws-rm already refuses a dirty workspace; a sweep
   // that overrode that would make the refusal meaningless.
@@ -538,6 +790,46 @@ describe('ws-gc --prune', () => {
     expect(out, 'the bystander is never reclassified an orphan').not.toContain('orphan');
     expect(fs.existsSync(bystanderWt), 'the bystander keeps its worktree').toBe(true);
     expect(branches(), 'the bystander keeps its branch').toContain('ws/warm-cove');
+  });
+
+  it('_reg_purge never leaves a reaping breadcrumb without its archived marker', () => {
+    // Final-round verification P4. The purge unlinks one file at a time in GLOB
+    // order, so `archived` (a) went several files before `reaping` (r). A
+    // SIGKILL or an OOM between them — the failure model the reap lock exists
+    // for — left `<id>.reaping=clips` standing beside a MISSING
+    // `<id>.archived`, which used to be resumable and, since the F5 archived
+    // re-read landed in `_ws_reap_tail`, answers `not-archived` for ever with
+    // `ws-archive` unable to run on a half-purged registry.
+    //
+    // The order is not otherwise observable — two adjacent unlinks leave no
+    // trace of which went first — so the fixture makes the FIRST of the pair
+    // fail: a DIRECTORY at the `reaping` path is something `rm -f` will not
+    // take, and the marker's removal is conditional on the breadcrumb's having
+    // gone. Under the old glob order `archived` was already unlinked before
+    // anything reached `reaping` at all.
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+    fs.mkdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
+
+    h.sh('_reg_purge demo-quiet-mesa');
+
+    expect(fs.existsSync(path.join(reg, 'demo-quiet-mesa.reaping')),
+      'the fixture only means anything if rm -f really refused it').toBe(true);
+    expect(fs.existsSync(path.join(reg, 'demo-quiet-mesa.archived')),
+      'the breadcrumb outlived the marker it needs — the wedge').toBe(true);
+    // …and the ordinary fields still go, so this is an ORDERING guarantee and
+    // not a purge that quietly stopped doing its job.
+    expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(h.reg('demo-quiet-mesa', 'workdir')).toBeNull();
+    expect(h.reg('demo-quiet-mesa', 'workspace')).toBeNull();
+
+    // With the breadcrumb gone the marker goes too: the normal path is
+    // unchanged, and nothing is left behind on it.
+    fs.rmdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
+    h.sh('_reg_purge demo-quiet-mesa');
+    expect(fs.readdirSync(reg).filter((f) => f.startsWith('demo-quiet-mesa.'))).toEqual([]);
   });
 
   it('reports what it reclaimed and what it declined', () => {

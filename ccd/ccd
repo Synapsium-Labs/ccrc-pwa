@@ -121,6 +121,40 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # exactly one dot after the id and `$id.x-y.uuid` has two. This is
   # future-proof against a field this file adds tomorrow, which a hardcoded
   # allowlist would not be — the two are the same shape either way.
+  # AND THE ORDER IS PART OF THE CONTRACT — final-round verification P4. This
+  # loop unlinks one file at a time in GLOB order, i.e. alphabetically, so
+  # `archived` went first and `reaping` (r) several files later. A SIGKILL or an
+  # OOM between them — the failure model the reap lock exists for, and this
+  # project's speciality — left `$REG/<id>.reaping=clips` standing beside a
+  # MISSING `$REG/<id>.archived`. Pre-fix that state was resumable: the next
+  # `ws-reap` took the resume fork, re-ran (h) and re-ran this purge. Since the
+  # F5 archived re-read went into `_ws_reap_tail` it is not: the tail refuses
+  # `not-archived` for ever, and `ws-archive` cannot be re-run on a half-purged
+  # registry.
+  #
+  # The invariant that closes it is one line long — `reaping` must never outlive
+  # `archived` — so the two STATE markers are removed last and in that order,
+  # after every ordinary field. Every intermediate is then either still
+  # resumable (both markers present; the tail's clips arm needs only `$id`) or
+  # already past resuming. The residue of the very last window is a single empty
+  # `$id.archived` file with nothing else beside it: invisible to `ws-gc`'s
+  # dead-reg arm (which keys on `.workspace` and `.uuid`) and to `ws-reap`
+  # (which keys on `.uuid`), so it leaks — a zero-byte file, disclosed here,
+  # against a permanent wedge on the destructive path.
+  #
+  # THE COST OF THAT ORDERING IS PAID AT `_ws_slug_free`, verification round 3
+  # P1. Removing the two markers last makes them OUTLIVE `.uuid` by
+  # construction, and `_ws_slug_free` used to ask only `[[ ! -f $id.uuid ]]`.
+  # So the residue above is not merely leaked, it is INHERITED: the slug reads
+  # free, `cmd_ws_add` re-uses it (it purges nothing first), and the brand-new
+  # workspace is born wearing a stranger's `.archived`/`.reaping`. Measured on
+  # that state: `ws-archive` answers `already archived` at exit 0 having
+  # stopped no session and written no manifest (ccd:1222 below), `_ws_reap_eval`
+  # Phase A and `_ws_reap_tail` both PASS the archived gate on a workspace that
+  # was never archived, and with `.reaping` present `_ws_reap_locked` takes the
+  # resume fork — where the token is not checked and Phase C, the merged-PR
+  # proof, is deliberately not re-run. `_ws_slug_free` is therefore an
+  # ANY-FIELD check now; see the note there.
   local id="$1" f suffix
   for f in "$REG/$id".*; do
     # `[[ -e "$f" ]]` for the unmatched-glob case: this file does not set
@@ -129,8 +163,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     [[ -e "$f" ]] || continue
     suffix="${f#"$REG/$id."}"
     [[ "$suffix" == *.* ]] && continue
+    [[ "$suffix" == archived || "$suffix" == reaping ]] && continue
     rm -f "$f"
   done
+  rm -f "$REG/$id.reaping"
+  # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
+  # that did not take the breadcrumb must not be followed by one that takes the
+  # marker, because `reaping` standing beside a missing `archived` is precisely
+  # the wedge this ordering exists to prevent. It is also what makes the order
+  # observable to a test — nothing else about two adjacent unlinks is.
+  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
 }
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
   [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
@@ -240,7 +282,91 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
 _ws_stash_count() {   # main branch -> stash entries belonging to that branch
   # -F on both patterns: a branch name carrying a '.' would otherwise be a
   # wildcard and over-count, which here means refusing a legitimate reap.
-  git -C "$1" stash list 2>/dev/null | grep -cF -e "On $2:" -e "WIP on $2:" || true
+  #
+  # BOTH forms are needed and `grep -F` is case-sensitive: git writes
+  # `On <branch>: <message>` for `git stash push -m` and
+  # `WIP on <branch>: <sha> <subject>` for a bare `git stash`, and the bare form
+  # is the common one. (Measured, and re-measured by the round-1 verifier after
+  # the integration review adjudicated the two as equivalent — they are not.)
+  local main="$1" branch="$2" n sha gs base
+  n=$(git -C "$main" stash list 2>/dev/null | grep -cF -e "On $branch:" -e "WIP on $branch:" || true)
+
+  # ── the OFF-BRANCH arm — final-round integration docket 6 ────────
+  # `refs/stash` is SHARED across every worktree of a repository (measured on
+  # git 2.43: a stash pushed from a linked worktree is listed by `git -C $main
+  # stash list`), which is what makes the whole branch-scoped count possible.
+  # But a stash pushed from a worktree on a DETACHED HEAD does not carry a
+  # branch name at all — git writes the literal `(no branch)` — so the two
+  # patterns above match nothing and the count came back an honest-looking 0.
+  # A workspace holding unsaved work then read CLEAN: §7's `stashes-present`
+  # guard, the one with no override, could not fire, and the reap went on to
+  # CAS-delete the branch those stashes were taken from. The work itself
+  # survives while `refs/stash` does — what is lost is the association, and the
+  # sheet said there was nothing to associate.
+  #
+  # ATTRIBUTED BY THE BASE COMMIT, not by the message, because the message has
+  # no name in it to match. A stash commit's FIRST PARENT is the commit HEAD was
+  # on when it was taken, so an off-branch stash belongs to this branch exactly
+  # when that commit is reachable from it.
+  #
+  # AND IT DOES REINTRODUCE THE FLEET-WIDE COST FOR ONE SHAPE OF INPUT —
+  # round-3 verification P3, which flagged that this arm and the "what the guard
+  # must NOT do" paragraph in `_ws_reap_eval` (search: `refs/stash exists`)
+  # could not both be read as written. The earlier text here cited that
+  # paragraph as though this arm avoided the cost, and then admitted three lines
+  # later that it does not. One statement, in both places, instead:
+  #
+  #   • What `_ws_reap_eval` rejects, with a measurement, is attribution by
+  #     EXISTENCE — "refs/stash resolves ⇒ refuse". That fires on a NAMED stash
+  #     on another branch (main's own parked work, the ordinary case), which the
+  #     operator has a standing reason to keep, so the wedge has no end date.
+  #   • What this arm does is attribution by BASE COMMIT, and it fires only on
+  #     an ANONYMOUS entry: one that names no branch, that nothing else in this
+  #     design can associate with anything, and that nobody has a reason to keep
+  #     indefinitely.
+  #
+  # Different rules — and they SHARE the property the verifier objected to,
+  # which is not talked away. An off-branch stash taken at a commit on SHARED
+  # history (typically: detached in a workspace before that workspace committed
+  # anything) is reachable from every branch in the repository, so it counts
+  # against all of them and every workspace of that project answers
+  # `stashes-present` until it is dealt with. Measured on a two-branch fixture:
+  # one `(no branch)` stash at the root commit, and both `ws/x` and `master`
+  # count 1. Pinned by a test, so it is a chosen behaviour and not a discovery.
+  #
+  # Accepted, because in this file the cost of a no-override guard is measured
+  # in whether the operator can get OUT of it — the same standard
+  # `stash-unreadable` is held to, and the same conclusion: the remedy is local
+  # and exact, and it TRAVELS IN THE REFUSAL DETAIL rather than in this comment,
+  # because the operator the message reaches is the only one who can act.
+  #
+  # The alternative narrowing considered and REJECTED: also require the base
+  # commit not to be an ancestor of the merge-base with `origin/HEAD`. It
+  # removes the fleet-wide case — and most of docket 6 with it. A reap only runs
+  # behind a MERGED PR, so after a true merge every commit of the branch is
+  # already an ancestor of `origin/HEAD` and this arm would count nothing at
+  # all; it would survive only for squash merges. A guard whose coverage depends
+  # on which merge button a reviewer pressed is an argument about PR shape, not
+  # a fact about stashes.
+  #
+  # An unreadable entry counts too: `rev-parse` failing is not evidence of
+  # absence.
+  #
+  # `--format='%H%x09%gs'` and a TWO-field read: the stash commit first, then
+  # the reflog subject, which is free-form and goes LAST so that a message
+  # containing a tab lands in `$gs` entire rather than shifting the sha.
+  # `stash list` is `git log -g refs/stash`, so it takes log's formats.
+  while IFS=$'\t' read -r sha gs; do
+    case "$gs" in
+      'On (no branch):'*|'WIP on (no branch):'*) ;;
+      *) continue ;;
+    esac
+    base=$(git -C "$main" rev-parse --verify --quiet "$sha^1" 2>/dev/null) \
+      || { n=$(( n + 1 )); continue; }
+    git -C "$main" merge-base --is-ancestor "$base" "refs/heads/$branch" 2>/dev/null \
+      && n=$(( n + 1 ))
+  done < <(git -C "$main" stash list --format='%H%x09%gs' 2>/dev/null)
+  printf '%s\n' "$n"
 }
 
 _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
@@ -550,6 +676,32 @@ if mode == 'state':
         except FileNotFoundError:
             pass
 
+    # NARROW FIRST, WIDEN LAST — final-round integration New Finding 9. These
+    # are two files and there is no way to write two files atomically, so the
+    # question is not "can a kill land between them" (it can) but "which pairs
+    # can a kill leave on disk". The shipped order was `put('prphase')` first
+    # and the number nineteen lines later, whose intermediate state is
+    # {new phase, OLD number} — and for the commonest transition of all, a
+    # merged PR going away, that is precisely {'none', 42}: the one pair
+    # docket 1 proved otherwise unconstructible, the one `fleet.ts` renders as
+    # `#42` under copy that says "no pull request yet", and the one
+    # `ws-archive` files as `merged:#42` for a PR that no longer binds here.
+    #
+    # Three steps in this order instead, so every intermediate is a pair that
+    # was ACTUALLY answered together, or a phase with no number at all:
+    #     clear number  ->  {old phase, absent}
+    #     put phase     ->  {new phase, absent}
+    #     put number    ->  {new phase, new number}
+    # `{X, absent}` is not a new state to teach anyone: it is what a workspace
+    # that never had a PR looks like, what a `merged` row with no `number`
+    # field looks like, and `_reg_get`'s readers already treat a missing or
+    # non-numeric `prnumber` as null (ccd:1273, ccd:2650). The window is a
+    # DEGRADED reading, never a false one, and the old window's was false.
+    #
+    # The unconditional `clear` also costs one unlink on the path where the
+    # number is unchanged, which is the price of not having to reason about
+    # which transitions are safe.
+    clear('prnumber')
     put('prphase', phase)
     # phase and number are ONE answer, so a writer that persists half of it
     # lies. A PR that is deleted, force-pushed out of reachability, or whose
@@ -568,9 +720,7 @@ if mode == 'state':
     # `put`/`clear` runs. The comment here used to claim the first guard alone
     # made this unreachable; it did not, and a `gh` that exited 0 with an empty
     # or unparseable stdout cleared a persisted `merged:#42`.
-    if number is None:
-        clear('prnumber')
-    else:
+    if number is not None:
         put('prnumber', number)
     put('prcheckedat', checked_at)
 
@@ -613,7 +763,54 @@ WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove 
 
 _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 
-_ws_slug_free() { [[ ! -f "$REG/$1-$2.uuid" ]]; }   # project slug
+# A slug is free only when the registry holds NOTHING for `<project>-<slug>` —
+# verification round 3 P1. The old form was `[[ ! -f "$REG/$1-$2.uuid" ]]`, i.e.
+# one field standing in for eighteen, and `_reg_purge` (see the long note there)
+# now removes `.archived` and `.reaping` AFTER `.uuid` on purpose. A SIGKILL or
+# an OOM in that window — this project's speciality — leaves state markers with
+# no `.uuid`, which the old test read as a clean slug and handed to the next
+# `ws-add`; `cmd_ws_add` purges nothing for the id it creates, so the markers
+# became the new workspace's. The property this establishes is not "the markers
+# in particular are seen" but that a PARTIALLY-PURGED ID CANNOT BE REUSED AS IF
+# IT WERE CLEAN, wherever the interruption landed and whichever function was
+# interrupted — `cmd_ws_add`'s own `_reg_set` run has the same windows, and a
+# field added tomorrow is covered without anyone remembering to come back here.
+#
+# The `*.*` skip is `_reg_purge`'s, for `_reg_purge`'s reason and measured the
+# same way: a field name never contains a dot, so `$id.<field>` has exactly one
+# dot after the id, while `$REG/demo-quiet-mesa.x-y.uuid` — the id
+# `demo-quiet-mesa.x-y`, project `demo-quiet-mesa.x`, slug `y`, legal because
+# project DIRECTORY names may hold dots — has two. Without the skip that
+# stranger would wedge slug `quiet-mesa` in project `demo` permanently.
+#
+# The direction of the residual leak changes with this and does not go away: a
+# purge interrupted in its last window now costs a SLUG (144 per project,
+# recycled by ws-reap) rather than costing the next workspace its archive and
+# reap gates. Refusing to build is the safe direction, it is visible — `ws-add`
+# names the files below — and `rm` on the named files reclaims it.
+_ws_slug_free() {   # project slug -> 0 when no registry file exists for the id
+  local id="$1-$2" f suffix
+  for f in "$REG/$id".*; do
+    # Unmatched-glob case, exactly as in `_reg_purge`: no `nullglob` here, so a
+    # glob with no matches stays its own literal text and `-e` is false.
+    [[ -e "$f" ]] || continue
+    suffix="${f#"$REG/$id."}"
+    [[ "$suffix" == *.* ]] && continue
+    return 1
+  done
+  return 0
+}
+
+_ws_slug_residue() {   # project slug -> the field names the registry still holds
+  local id="$1-$2" f suffix out=""
+  for f in "$REG/$id".*; do
+    [[ -e "$f" ]] || continue
+    suffix="${f#"$REG/$id."}"
+    [[ "$suffix" == *.* ]] && continue
+    out+="${out:+, }$suffix"
+  done
+  printf '%s' "$out"
+}
 
 _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   local project="$1" slug i
@@ -671,8 +868,14 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   (( free >= CCD_DISK_FLOOR_GB )) \
     || die "only ${free}G free on $WORKTREES_ROOT, floor is ${CCD_DISK_FLOOR_GB}G — reclaim space first: ccd ws-gc (archived workspaces are listed there and removed only on confirmation; pinned commits: ccd ws-attic --session <id>)"
 
+  # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
+  # (round-3 P1), so it also refuses a slug whose only trace is the residue of
+  # an interrupted purge — and "slug in use" on its own would send the operator
+  # looking for a workspace that is not there. The field list is the reclaim
+  # instruction: those are the files, in $REG, and nothing else holds the slug.
   [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
-                        _ws_slug_free "$project" "$slug" || die "slug in use: $slug"; }
+                        _ws_slug_free "$project" "$slug" \
+                          || die "slug in use: $slug — $REG/$project-$slug.{$(_ws_slug_residue "$project" "$slug")}"; }
   [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
                         || die "could not find a free slug for $project"; }
 
@@ -848,9 +1051,34 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # work intact but the session dead and out of supervision — and the refusal
     # would be lying about it. A status we could not read is not a clean one
     # (same rule as _ws_gc_dirty).
-    local dirty
-    dirty=$(git -C "$workdir" status --porcelain 2>/dev/null) \
-      || die "could not read $workdir — nothing was touched"
+    #
+    # AND THE EXIT CODE IS ONLY HALF OF "COULD NOT READ" — final-round
+    # verification P2. The integration-5 class was closed at `_ws_reap_eval`
+    # (ccd:2340) and `_ws_archive_manifest` (ccd:1238) and left open HERE, in
+    # the one destructive verb a human types by hand, three lines under the
+    # comment that already states the rule. Measured on git 2.43: `chmod 000` on
+    # a TRACKED directory holding a modified file gives rc 0, EMPTY stdout and
+    # `warning: could not open directory 'tracked/'` on stderr — so `$dirty` was
+    # empty, the guard passed, `_ws_unsupervise` and `tmux kill-session` ran,
+    # and only `git worktree remove` finally refused ("Directory not empty"),
+    # printing a message about unlocking a tree while the uncommitted work it
+    # never saw was still in it. Exactly the outcome this block's own comment
+    # exists to prevent. The uncommitted file survived only because a directory
+    # git cannot read is also one git cannot rmdir; that is luck, not a design.
+    #
+    # ANY diagnostic refuses, with the polarity `_ws_reap_eval` states out loud
+    # for the same read: a benign `warning:` a future git decides to print makes
+    # this workspace un-removable until the warning is fixed. That is the right
+    # direction for a verb whose whole contract is "refuses anything it might
+    # destroy", and the alternative — a wording allowlist — is walked straight
+    # through by a translated warning. Two statements and a scratch file rather
+    # than a pipeline, because `local x=$(cmd)` returns local's status.
+    local dirty derrf derr drc
+    derrf=$(mktemp) || die "could not make a scratch file to read $workdir — nothing was touched"
+    dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
+    derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
+    { (( drc == 0 )) && [[ -z "$derr" ]]; } \
+      || die "could not read $workdir${derr:+ ($derr)} — nothing was touched"
     [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
   fi
 
@@ -1251,7 +1479,10 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # field whose repository has already been proven healthy.
   #
   # Scoped to the `branch` field, NOT to `worktreeHead`: it is the count of
-  # entries whose subject names that branch, and pairing it with any other name
+  # entries BELONGING to that branch — those whose subject names it, plus those
+  # taken from it on a detached HEAD, which name no branch at all and are
+  # attributed by base commit (integration docket 6, see `_ws_stash_count`) —
+  # and pairing it with any other name
   # would make the record two things at once. So on a drifted worktree this can
   # read 0 while `worktreeHead`'s branch holds stashes — which is safe in the one
   # direction that matters, because `ws-reap` refuses drift (`registry-branch-drift`,
@@ -1479,9 +1710,24 @@ _pr_state_one() {   # id main repo rows -> one JSON line
   if (( registered != 0 )) || [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
     echo "pr-state: $workdir is not a corroborated worktree of $main — dirty unknown for $id" >&2
   else
-    porcelain=$(git -C "$workdir" status --porcelain 2>/dev/null); prc=$?
-    if (( prc == 0 )); then dirty=$(printf '%s' "$porcelain" | grep -c . || true)
-    else echo "pr-state: could not read the tree at $workdir — dirty unknown for $id" >&2; fi
+    # THE STDERR RUNG, final-round verification P2. `dirty` already has an
+    # honest UNMEASURED value — `""`, which becomes JSON `null` — and this was
+    # the branch that failed to use it: a partially unreadable tree exits ZERO
+    # with the diagnostic on stderr (measured, git 2.43), so `grep -c .` counted
+    # the empty stdout and the wire carried `"dirty":0`, an affirmative "nothing
+    # is uncommitted here" about files nobody looked at. Same shape, same round,
+    # same fix as `cmd_ws_rm` and `_ws_gc_dirty`; here it lands on `null` rather
+    # than on a refusal, because this function REPORTS and those two DESTROY.
+    local perrf perr
+    perrf=$(mktemp) || perrf=""
+    if [[ -z "$perrf" ]]; then
+      echo "pr-state: could not make a scratch file to read $workdir — dirty unknown for $id" >&2
+    else
+      porcelain=$(git -C "$workdir" status --porcelain 2>"$perrf"); prc=$?
+      perr=$(cat "$perrf" 2>/dev/null); rm -f "$perrf"
+      if (( prc == 0 )) && [[ -z "$perr" ]]; then dirty=$(printf '%s' "$porcelain" | grep -c . || true)
+      else echo "pr-state: could not read the tree at $workdir — dirty unknown for $id" >&2; fi
+    fi
   fi
   tmpl=""
   [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
@@ -1949,6 +2195,33 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # lines (measured: `cut -f1` alone returned `1\nd.log`, which fails the
   # numeric test and silently became 0).
   #
+  # AND A `du` THAT DID NOT FINISH REFUSES THE WHOLE COLLECTION — round-3 item 3,
+  # routed here by the ui-tsx verifier, and the TWELFTH instance of the
+  # measurement-forgery class on this branch (after `_ws_gc_bytes`, c140dbd, and
+  # this round's own `_ws_gc_dirty`). The rung used to be
+  # `[[ "$b" =~ ^[0-9]+$ ]] || b=0`, which forged in BOTH of du's failure modes:
+  #   - `du` stubbed to fail / the entry gone: `b` empty, recorded as 0;
+  #   - `du -sb` on a PARTIALLY readable directory: measured, GNU coreutils 9.4,
+  #     `chmod 000` on one subdirectory gives rc=1, stderr
+  #     `du: cannot read directory '…/sub': Permission denied` and stdout
+  #     `5000  top` for a tree that really holds 14000 bytes. The old test was
+  #     `^[0-9]+$`, so the PARTIAL TOTAL passed as a measurement — worse than
+  #     the 0, because 0 looks like a bug and 5000 looks like an answer.
+  # Both land in `ignoredBytes`, which `ReapSheet.tsx` prints as a stated total
+  # immediately above the Remove button.
+  #
+  # The fix is not a `null` in the record: `ignoredBytes` is `number` on the
+  # wire (shared/api.ts:155) and `humanBytes(null)` renders `0 B`, so a null
+  # would relocate the forgery into the PWA rather than close it. It is the
+  # refusal this function already owns — the same `return 1` + `REAP_IGNREASON`
+  # the git-status rungs and the inside-walk rungs use, which every caller
+  # already handles: `_ws_reap_eval` refuses `tree-unreadable` (ccd:2580),
+  # `_ws_reap_tail` refuses rather than finishing "on a guess" (ccd:3487), and
+  # `_ws_gc_reclaimable` declines "refusing to remove a tree it cannot describe"
+  # (ccd:4107). A size ccd could not take is a tree ccd cannot describe, and the
+  # only thing this function's answer is used for is authorising a deletion.
+  # `pipefail` is set at the top of this file, so the pipeline's status IS du's.
+  #
   # THREE MORE MUTATION SURVIVORS, disclosed with the reason each is one, and
   # two of them are the same reason — an empty temp-file name is itself a
   # failing redirect, so the read never runs and the NEXT guard refuses:
@@ -1972,7 +2245,7 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   #     because the loop's other two lines both dereference `$p` into a
   #     filesystem path, and an empty one would size `$wd/` — the whole
   #     workspace — as an "ignored entry".
-  local wd="$1" entry p b sens deadline outf errf err rc ih
+  local wd="$1" entry p b sens deadline outf errf err rc ih drc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""; REAP_IGNREASON=""
   REAP_SENSITIVE_FILTERED=0
   deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
@@ -1987,7 +2260,12 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     case "$entry" in '!! '*) ;; *) continue ;; esac
     p="${entry#!! }"
     [[ -n "$p" ]] || continue
-    b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); [[ "$b" =~ ^[0-9]+$ ]] || b=0
+    b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); drc=$?
+    { (( drc == 0 )) && [[ "$b" =~ ^[0-9]+$ ]]; } || {
+      rm -f "$outf"
+      REAP_IGNREASON="could not size the ignored entry $p"
+      return 1
+    }
     sens=0
     if _ws_sensitive_match "$p"; then
       # NOISE is counted, not silenced: `_ws_sensitive_noise` is the F3
@@ -2396,6 +2674,23 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # whose main holds one stash permanently un-reapable, with no override. So the
   # corroboration is on the WHOLE list and the branch-scoped count stays
   # `_ws_stash_count`'s.
+  #
+  # THAT SCOPING IS WHAT DOCKET 6 EXPLOITED, and the fix is in the count rather
+  # than here: a stash taken from a DETACHED worktree says `(no branch)` and so
+  # named nothing for the scoped grep to match, which is a 0 that authorised the
+  # delete. `_ws_stash_count` now attributes those by base commit.
+  #
+  # AND THAT ARM DOES REACH FLEET-WIDE FOR ONE SHAPE OF INPUT — round-3
+  # verification P3, reconciled in one place (see `_ws_stash_count`, "AND IT
+  # DOES REINTRODUCE THE FLEET-WIDE COST") and cross-referenced here so this
+  # paragraph is not read as covering it. The rule rejected above is attribution
+  # by EXISTENCE, which fires on a NAMED stash the operator has a standing
+  # reason to keep. The arm attributes by BASE COMMIT and fires only on an
+  # ANONYMOUS entry; when that entry's base sits on shared history it is
+  # reachable from every branch, so it does block every workspace of the project
+  # until it is dealt with. That is accepted on the same test this file applies
+  # to `stash-unreadable` — can the operator get out of it — which is why the
+  # remedy is in the `stashes-present` detail below and not only in a comment.
   if git -C "$main" rev-parse --verify --quiet refs/stash >/dev/null 2>&1; then
     stashall=$(git -C "$main" stash list 2>/dev/null | grep -c .)
     (( stashall > 0 )) \
@@ -2403,7 +2698,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   fi
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \
-    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) on $branch"; return 1; }
+    || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
   up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null) \
     || { _reap_refuse no-upstream "$branch was never pushed"; return 1; }
   ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
@@ -3356,9 +3651,18 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # word `_ws_reap_eval` already uses for it (ccd:2056), and `wsaudit.ts`'s
   # SENTENCES already carries the sentence. Placed ahead of (a)/(b)/(c) so a
   # refusal writes NOTHING — no attic pin, no tombstone, no breadcrumb.
+  #
+  # THE DETAIL NAMES THE STATE, NOT A CULPRIT — final-round verification P4.
+  # It used to assert "ws-restore brought it back while this cleanup was
+  # pending", which is one cause of a missing marker and was, until `_reg_purge`
+  # was reordered in the same round, not the only one: a kill inside the purge
+  # unlinked `archived` before `reaping` and produced this refusal with a
+  # diagnosis naming a verb that had never run. The observable fact is that the
+  # marker is gone; who removed it is an inference, and an inference is not what
+  # belongs in the one line an operator acts on.
   [[ -f "$REG/$id.archived" ]] || {
     printf '{"refused":"not-archived","detail":%s,"paths":[]}\n' \
-      "$(_json_str "$id is no longer archived — ws-restore brought it back while this cleanup was pending; archive it again to finish")"
+      "$(_json_str "$id is no longer archived — the archive marker is gone (ws-restore removes it), so this cleanup will not continue; archive it again to finish")"
     return 0
   }
 
@@ -3566,15 +3870,112 @@ _ws_gc_human() {   # bytes -> human, or '-' unchanged
   numfmt --to=iec "$1" 2>/dev/null || echo "$1"
 }
 
+# ── the pruning report's one writer ────────────────────────────────
+# Every row of `ws-gc --prune`'s report goes through here, and nothing else may
+# write one. Two jobs, and they are the two halves of final-round verification
+# P1 (see `_ws_gc_reclaimable`):
+#
+#   1. ONE ROW PER CALL. `_ws_line_safe` replaces every C0 control character —
+#      NEWLINE first among them, but also CR and TAB, which move a cursor about
+#      a column-aligned report just as effectively — with `?`, the substitution
+#      `ls` has made conventional for a byte a terminal must not be handed. The
+#      strings this report prints include gitignored FILENAMES, which are
+#      chosen by whatever wrote them and are read NUL-separated everywhere else
+#      in this file for exactly that reason.
+#   2. THE TALLY IS A COUNT OF ACTIONS. `GC_RECLAIMED`/`GC_DECLINED` are
+#      incremented HERE, where the action is announced, so the footer is
+#      arithmetic over events and not `grep -c` over rendered text.
+#
+# WHICH HALF IS PINNED, measured rather than assumed. Mutant A (`_ws_line_safe`
+# made a passthrough) is KILLED by `a gitignored filename holding a NEWLINE
+# cannot forge a row or move the tally`: three `  reclaimed ` rows where two
+# were written — and the footer still read 2, which is the counters doing their
+# job with the sanitiser gone. Mutant B (the counters kept but the footer put
+# back on `grep -c` over the captured text) SURVIVES, and is DISCLOSED here
+# rather than chased with a fixture, because with (1) in force no input can
+# distinguish the two. The proof is an enumeration of what the pruning section
+# can print: every row is `_gc_row`'s `printf '  %-10s %s\n'` over a LABEL that
+# is a literal in this file and a payload with no control bytes in it, so the
+# label alone decides the prefix and one call is one line; the only other
+# writers are this function's own `echo`s of fixed strings and the stdout of
+# `git worktree prune` / `git worktree remove` / `_reg_purge`, none of which
+# emits a line beginning with two spaces (`git branch -d`'s did not either, and
+# it is silenced now for the separate reason at its call site). The counters
+# stay because that enumeration is a property of TODAY's row writers, and the
+# next one added here will be written by someone reading the report, not this
+# comment.
+#
+# Initialised at FILE scope, not only in `cmd_ws_gc`: ccd runs under `set -u`
+# and this file is sourced by its tests, which call `_ws_gc_prune_row` on its
+# own. An unbound counter would kill the process at the moment it announced a
+# deletion it had already performed.
+GC_RECLAIMED=0
+GC_DECLINED=0
+_ws_line_safe() { printf '%s' "${1//[[:cntrl:]]/?}"; }
+_gc_row()       { printf '  %-10s %s\n' "$1" "$(_ws_line_safe "$2")"; }
+_gc_reclaimed() { GC_RECLAIMED=$(( GC_RECLAIMED + 1 )); _gc_row reclaimed "$1"; }
+_gc_declined()  { GC_DECLINED=$((  GC_DECLINED  + 1 )); _gc_row declined  "$1"; }
+
+# WHY the last `_ws_gc_dirty` said "do not touch". Round-3 verification P2: the
+# refusal below is right and stays, but the function is a BOOLEAN and its two
+# callers put a SENTENCE in front of a human. A tree with zero uncommitted
+# changes that git could only partially read was printed
+# `declined  <path> has uncommitted changes` and listed with STATE `dirty` — a
+# claim about files nobody looked at, which is exactly the class this branch
+# spent eleven rounds closing. So the verdict now travels with its reason, and
+# the two callers say which of the two things they measured.
+#
+# Globals rather than a return code, deliberately: a third exit status would
+# make `if _ws_gc_dirty …; then refuse` — the shape both callers use, and the
+# shape whoever adds the third caller will copy — silently stop refusing on the
+# unreadable branch. "Do not touch" stays exit 0 for every reason there is.
+# `$rows` is captured through `$(_ws_gc_scan)`, so these do not survive into
+# `_ws_gc_prune_row`'s `case`; the state token in the row does.
+GC_DIRTY_STATE=''   # dirty | tree-unreadable | clean
+GC_DIRTY_WHY=''     # the measurement behind tree-unreadable, one line, or empty
+
 _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked files,
                    #            OR when we could not find out
-  local out
+                   #            (GC_DIRTY_STATE says which)
+  local out errf err rc
+  # Assume the worst before measuring, so no path out of this function can
+  # forget to set it.
+  GC_DIRTY_STATE=tree-unreadable; GC_DIRTY_WHY=''
   # `git status` failing means unreadable, corrupt, or not a worktree at all —
   # NOT clean. Swallowing the exit code and testing an empty string would report
   # every unreadable tree as safe to delete, which is the one answer that loses
   # work. Unknown counts as dirty.
-  out=$(git -C "$1" status --porcelain 2>/dev/null) || return 0
-  [[ -n "$out" ]]
+  #
+  # AND THE STDERR RUNG, final-round verification P2 — this function states the
+  # rule the rest of the file quotes ("a status we could not read is not a clean
+  # one") and was, until now, the last of the four sites still testing only the
+  # exit code. A PARTIALLY unreadable tree exits ZERO with empty stdout and the
+  # diagnostic on stderr (measured, git 2.43), so `out` was empty and this
+  # answered CLEAN — which in `_ws_gc_row` classifies the workspace `tracked`
+  # instead of `dirty`, and in `_ws_gc_prune_row`'s orphan arm is the first of
+  # the three gates in front of `git worktree remove`. It was saved there only
+  # because `_ws_collect_ignored` refuses the same tree a few lines later; a
+  # guard that is right by accident of the guard after it is not a guard.
+  #
+  # A mktemp failure refuses too — the one direction that cannot lose work —
+  # and it is `tree-unreadable` rather than `dirty` for the same reason as the
+  # rung below: the status was never read, so nothing whatever is known about
+  # this tree's files.
+  errf=$(mktemp) || {
+    GC_DIRTY_WHY='no scratch file to capture git stderr, so the status was never read'
+    return 0
+  }
+  out=$(git -C "$1" status --porcelain 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  { (( rc == 0 )) && [[ -z "$err" ]]; } || {
+    # First line only: git's diagnostic is one line per unreadable directory
+    # (measured, git 2.43) and the report this feeds is line-oriented. It goes
+    # through `_ws_line_safe` at the row, like every other string here.
+    GC_DIRTY_WHY="git status exited $rc${err:+: ${err%%$'\n'*}}"
+    return 0
+  }
+  [[ -n "$out" ]] && { GC_DIRTY_STATE=dirty; return 0; }
+  GC_DIRTY_STATE=clean; return 1
 }
 
 # One TSV row per finding: state project slug bytes agedays path
@@ -3616,7 +4017,7 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   if   [[ ! -f "$REG/$project-$slug.uuid" ]];    then state=orphan
   elif [[ -f "$REG/$project-$slug.reaping" ]];   then state=reaping
   elif [[ -f "$REG/$project-$slug.archived" ]];  then state=archived
-  elif _ws_gc_dirty "$wt";                       then state=dirty
+  elif _ws_gc_dirty "$wt";                       then state=$GC_DIRTY_STATE
   else                                                state=tracked
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$project" "$slug" "$bytes" "$age" "$wt"
@@ -3669,13 +4070,32 @@ _ws_gc_scan() {
   done
 }
 
+# Set by every `_ws_gc_merged`, for the reason `GC_DIRTY_STATE` exists: the
+# refusal is one exit code and the report is a sentence. Found by the round-3 P2
+# class sweep over every `_gc_declined` in this file — this was the second and
+# last producer that named a measured cause on a read that did not happen.
+GC_MERGED_STATE=''   # unmerged | merged | unprovable
+
 _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of origin/HEAD
   local main="$1" branch="$2" base
   # No origin/HEAD means there is no base to compare against, so "merged" is
   # unprovable — and unprovable returns 1, i.e. NOT merged, i.e. do not remove.
   # Every ambiguous case in this command resolves toward doing nothing.
+  #
+  # THE DIRECTION IS UNCHANGED AND THE SENTENCE IS NOT (round-3 P2 class sweep).
+  # `merge-base --is-ancestor` exits 1 for "not an ancestor" and 128 for an
+  # error — an unreadable object, a `refs/heads/$branch` that does not resolve —
+  # and the caller printed `$p is on unmerged branch $branch` for all three
+  # cases, including the two where nothing was compared. Unprovable is reported
+  # as unprovable.
+  GC_MERGED_STATE=unprovable
   base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) || return 1
   git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null
+  case $? in
+    0) GC_MERGED_STATE=merged;   return 0 ;;
+    1) GC_MERGED_STATE=unmerged; return 1 ;;
+    *) return 1 ;;   # 128 and anything else: nothing was compared
+  esac
 }
 
 # Final-round destructive review, finding F4. `ws-gc --prune`'s orphan arm was
@@ -3714,19 +4134,41 @@ _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of ori
 # `orphan` row, ONLY under `--prune`, and only after the dirty and merged checks
 # have already declined every row they can — so the sweep pays for it once per
 # directory it is actually about to delete.
+#
+# THE REPORT IS LINE-ORIENTED AND THE PATHS ARE NOT — final-round verification,
+# P1, and the TENTH instance of the measurement-forgery class on this branch,
+# introduced by the fix round that closed the ninth. The listing above prints
+# gitignored filenames, which are the one class of string in this command an
+# ATTACKER (or an ordinary build tool) chooses: `_ws_collect_ignored` reads them
+# NUL-separated precisely because a path may contain a TAB or a NEWLINE, and
+# this function then printed them raw into a report whose own rows are lines. A
+# file named $'a\n  reclaimed  removed orphan worktree /x' therefore injected a
+# whole fabricated row — and `cmd_ws_gc` computed the run's footer by grepping
+# that rendered text, so the injected row was COUNTED. Measured: a sweep that
+# reclaimed 2 and declined 0 reported "reclaimed 3, declined 1".
+#
+# BOTH HALVES ARE CLOSED, because either alone leaves a forgery standing:
+#   - the FOOTER counts actions in `GC_RECLAIMED`/`GC_DECLINED`, incremented at
+#     the point the action is taken. No string a path can hold reaches it.
+#   - the PRINT goes through `_ws_line_safe`, so a record occupies exactly one
+#     row and cannot open a second. A tally nobody can forge is still read
+#     beside a report a human is being asked to believe.
+# `_ws_line_safe` is applied to EVERY row of this report, not only to the ones
+# that carry an ignored path today, for the reason the class keeps recurring:
+# the next producer added here will not remember to ask.
 _ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds no secrets;
                          #         prints the `  contents`/`  declined` lines either way
   local p="$1" rec sens b path n=0 total=0 shown=0
   _ws_collect_ignored "$p" || {
-    echo "  declined   could not read the ignored set at $p${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to remove a tree it cannot describe"
+    _gc_declined "could not read the ignored set at $p${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to remove a tree it cannot describe"
     return 1
   }
   if (( ${#REAP_SENSITIVE[@]} != 0 )); then
-    echo "  declined   $p holds secret-shaped ignored file(s): ${REAP_SENSITIVE[*]} — move them, or remove it with the workspace sheet"
+    _gc_declined "$p holds secret-shaped ignored file(s): ${REAP_SENSITIVE[*]} — move them, or remove it with the workspace sheet"
     return 1
   fi
   if (( ${#REAP_IGNORED[@]} == 0 )); then
-    echo "  contents   $p has nothing ignored — everything in it is in git"
+    _gc_row contents "$p has nothing ignored — everything in it is in git"
     return 0
   fi
   # NUL-separated on both the sort and the read, and the byte field taken by
@@ -3739,15 +4181,15 @@ _ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds 
     b="${rec#*$'\t'}"; b="${b%%$'\t'*}"
     n=$(( n + 1 )); total=$(( total + b ))
   done
-  echo "  contents   $p also holds $n ignored entr$( (( n == 1 )) && echo y || echo ies), $(_ws_gc_human "$total") — none of it is in git, and all of it goes:"
+  _gc_row contents "$p also holds $n ignored entr$( (( n == 1 )) && echo y || echo ies), $(_ws_gc_human "$total") — none of it is in git, and all of it goes:"
   while IFS=$'\t' read -r -d '' sens b path; do
     (( shown < 10 )) || continue
     shown=$(( shown + 1 ))
-    printf '  contents     %-10s %s\n' "$(_ws_gc_human "$b")" "$path"
+    _gc_row contents "$(printf '  %-10s %s' "$(_ws_gc_human "$b")" "$path")"
   done < <(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z -t$'\t' -k1,1nr -k2,2nr)
-  (( n > shown )) && echo "  contents     … and $(( n - shown )) more"
+  (( n > shown )) && _gc_row contents "  … and $(( n - shown )) more"
   (( REAP_SENSITIVE_FILTERED == 0 )) \
-    || echo "  contents   ($REAP_SENSITIVE_FILTERED secret-shaped match(es) filtered as vendored/template — see ccd ws-audit)"
+    || _gc_row contents "($REAP_SENSITIVE_FILTERED secret-shaped match(es) filtered as vendored/template — see ccd ws-audit)"
   return 0
 }
 
@@ -3763,54 +4205,81 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # project already reclaimed every prunable registration in it. Calling
         # it again would succeed (it is idempotent) and print a SECOND
         # "reclaimed" line for work that already happened.
-        echo "  covered    stale metadata for $project/$slug — reclaimed with an earlier row in $project"
+        _gc_row covered "stale metadata for $project/$slug — reclaimed with an earlier row in $project"
       elif git -C "$main" worktree prune 2>/dev/null; then
-        echo "  reclaimed  stale metadata for $project/$slug"
+        _gc_reclaimed "stale metadata for $project/$slug"
       else
         # Metadata, not data — worth saying, not worth failing over.
-        echo "  declined   could not prune metadata for $project/$slug"
+        _gc_declined "could not prune metadata for $project/$slug"
       fi ;;
     foreign-stale)
       # A prunable registration outside our tree is still someone else's
       # metadata. `git worktree repair` may be the owning tool's only way back
       # to a temporarily-missing worktree; pruning it here would foreclose that.
-      echo "  declined   $project/$slug is foreign metadata — ccd removes only what it created" ;;
+      _gc_declined "$project/$slug is foreign metadata — ccd removes only what it created" ;;
     dead-reg)
       _reg_purge "$project-$slug"                                          # finding F3
-      echo "  reclaimed  dead registry entry $project-$slug" ;;
+      _gc_reclaimed "dead registry entry $project-$slug" ;;
     orphan)
       if _ws_gc_dirty "$p"; then
-        echo "  declined   $p has uncommitted changes"; return 0
+        # Two refusals, one exit code — round-3 P2. `has uncommitted changes` is
+        # a statement about files; only say it when files were actually seen.
+        if [[ "$GC_DIRTY_STATE" == dirty ]]; then
+          _gc_declined "$p has uncommitted changes"
+        else
+          _gc_declined "could not read the status of $p${GC_DIRTY_WHY:+ — $GC_DIRTY_WHY} — refusing to remove a tree it cannot describe"
+        fi
+        return 0
       fi
       local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
       if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged "$main" "$branch"; then
         # The branch would survive `worktree remove`, so nothing is lost either
         # way — but a sweep should only reclaim what is provably finished, and
         # someone may be mid-way through this one.
-        echo "  declined   $p is on unmerged branch $branch"; return 0
+        if [[ "$GC_MERGED_STATE" == unmerged ]]; then
+          _gc_declined "$p is on unmerged branch $branch"
+        else
+          _gc_declined "could not tell whether branch $branch is merged (no origin/HEAD, or the comparison failed) — refusing to remove $p on an unproved merge"
+        fi
+        return 0
       fi
       # Finding F4 — the §7 scan and the listing, immediately before the only
       # step in this command that deletes a DIRECTORY. See `_ws_gc_reclaimable`.
       _ws_gc_reclaimable "$p" || return 0
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
-        echo "  reclaimed  removed orphan worktree $p"
+        _gc_reclaimed "removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.
-        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null; then
-          echo "  reclaimed  deleted merged branch $branch"
+        #
+        # `>/dev/null` on stdout as well as stderr — final-round verification,
+        # P6. `git branch -d` prints `Deleted branch ws/x (was 2df8d40).`, and
+        # with only stderr redirected that sentence landed in the middle of the
+        # report as a bare unprefixed line: not a row this command wrote, not
+        # counted by the footer, and now sitting between two `reclaimed` rows
+        # the listing above added. The row below is ccd's own account of the
+        # same fact, in the report's own shape.
+        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
+          _gc_reclaimed "deleted merged branch $branch"
         fi
       else
-        echo "  declined   git refused to remove $p"
+        _gc_declined "git refused to remove $p"
       fi ;;
     archived)
       # Archived is the STAGING for a confirmed deletion, not a queue a sweep
       # drains. No timer, no grace window, no "reclaim opens in 11 days".
-      echo "  declined   $p is archived — remove it with the workspace sheet, never on a timer" ;;
+      _gc_declined "$p is archived — remove it with the workspace sheet, never on a timer" ;;
     reaping)
-      echo "  declined   $p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
+      _gc_declined "$p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
     dirty)
-      echo "  declined   $p is dirty — never removed, at any flag" ;;
+      _gc_declined "$p is dirty — never removed, at any flag" ;;
+    tree-unreadable)
+      # Same refusal as `dirty`, different sentence, because a different thing
+      # was measured — round-3 P2. The reason `_ws_gc_dirty` recorded during the
+      # scan does not reach here (`$rows` came back through a command
+      # substitution), and inventing one would be the defect this arm exists to
+      # fix, so the row says only what it knows.
+      _gc_declined "could not read the status of $p — refusing to remove a tree it cannot describe" ;;
     foreign)
-      echo "  declined   $p is foreign — ccd removes only what it created" ;;
+      _gc_declined "$p is foreign — ccd removes only what it created" ;;
     tracked)
       : ;;   # a live workspace: not a finding to act on
   esac
@@ -3831,8 +4300,16 @@ cmd_ws_gc() {   # [--prune]
   local -a paths=()
   printf '%-11s %-18s %-22s %7s %5s  %s\n' STATE PROJECT WORKSPACE SIZE IDLE PATH
   while IFS=$'\t' read -r state project slug bytes age p; do
+    # `_ws_line_safe` on the three name fields for the reason `_gc_row` carries
+    # it. DISCLOSED, because it is a display fix and not a read fix: `$rows` is
+    # TSV read line by line, so a project or workspace directory whose NAME held
+    # a TAB or a NEWLINE would already have been split wrong upstream in
+    # `_ws_gc_scan`. What this stops is the rendered table being reshaped by a
+    # name; what it does not do is make the scan NUL-safe, and ccd's own slug
+    # rule (`_ws_slug_valid`) is why that has never mattered.
     printf '%-11s %-18s %-22s %7s %5s  %s\n' \
-      "$state" "$project" "$slug" "$(_ws_gc_human "$bytes")" "$age" "$p"
+      "$state" "$(_ws_line_safe "$project")" "$(_ws_line_safe "$slug")" \
+      "$(_ws_gc_human "$bytes")" "$age" "$(_ws_line_safe "$p")"
     n=$(( n + 1 ))
     [[ -d "$p" ]] && paths+=("$p")
   done <<< "$rows"
@@ -3840,34 +4317,64 @@ cmd_ws_gc() {   # [--prune]
   # One du across every path at once: it de-dupes inodes shared between
   # worktrees, so this is the exact figure that removing the lot would free.
   # The per-row sizes are independent measurements and can sum to more.
-  local total='-'
+  #
+  # RC AND STDERR, the same three conjuncts as `_ws_gc_bytes` — found by the
+  # round-3 item-3 sweep over every `du` in this file, and the last unguarded
+  # one left in it. `du -scb` over a set containing a partially readable tree
+  # exits 1, writes the diagnostic to stderr and STILL prints a `total` line
+  # holding a partial sum (measured, GNU coreutils 9.4: 5000 for a tree holding
+  # 14000). `_ws_gc_human` only answers `-` for a NON-numeric input, so that
+  # partial sum rendered as a figure under a sentence that says "what removing
+  # all of them would free" — an affirmative total over a read that did not
+  # finish, which is the class this branch has closed eleven times.
+  local total='-' tf terr trc
   if (( ${#paths[@]} > 0 )); then
-    total=$(du -scb "${paths[@]}" 2>/dev/null | awk '$2 == "total" {print $1}')
+    tf=$(mktemp) || tf=''
+    if [[ -n "$tf" ]]; then
+      total=$(du -scb "${paths[@]}" 2>"$tf" | awk '$2 == "total" {print $1}'); trc=$?
+      terr=$(cat "$tf" 2>/dev/null); rm -f "$tf"
+      { (( trc == 0 )) && [[ -z "$terr" ]]; } || total='-'
+    fi
     total=$(_ws_gc_human "$total")
   fi
   echo
-  echo "total $total across $n worktree$( (( n == 1 )) || echo s ) — what removing all of them would free."
+  # A total that was not measured does not get the sentence that claims one.
+  if [[ "$total" == '-' ]]; then
+    echo "total unmeasured across $n worktree$( (( n == 1 )) || echo s ) — du could not read all of them, so there is no figure to give."
+  else
+    echo "total $total across $n worktree$( (( n == 1 )) || echo s ) — what removing all of them would free."
+  fi
   echo "Rows are measured independently, so they can sum to more than the total when workspaces share hardlinks."
 
   (( prune )) || return 0
 
   echo
   echo "pruning:"
-  local reclaimed=0 declined=0 out already
+  # COUNTED, NOT GREPPED — final-round verification P1. This loop used to
+  # capture each row's rendered text and derive the footer with
+  # `grep -c '^  reclaimed '` over it, which made the tally a function of
+  # strings the report prints rather than of actions the sweep took; a
+  # gitignored filename holding a newline injected rows and was counted. The
+  # row writers (`_gc_reclaimed`/`_gc_declined`) now increment these two, and
+  # `_ws_gc_prune_row` prints STRAIGHT to stdout so those increments survive:
+  # a `$(…)` around the call would put them in a subshell and the footer would
+  # read 0 for every run. `while … done <<< "$rows"` is not a subshell, so the
+  # loop body shares this function's variables. The `[[ -n "$out" ]] || continue`
+  # the capture needed is gone with it: the one silent state (`tracked`) prints
+  # nothing and so contributes nothing, which is the same result by
+  # construction rather than by a test on rendered text.
+  local already
+  GC_RECLAIMED=0; GC_DECLINED=0
   local -A meta_pruned=()   # projects whose stale metadata this run already reclaimed
   while IFS=$'\t' read -r state project slug bytes age p; do
     already=0
     if [[ "$state" == stale-meta ]]; then
       if [[ -n "${meta_pruned[$project]:-}" ]]; then already=1; else meta_pruned[$project]=1; fi
     fi
-    out=$(_ws_gc_prune_row "$state" "$project" "$slug" "$p" "$already")
-    [[ -n "$out" ]] || continue
-    echo "$out"
-    reclaimed=$(( reclaimed + $(grep -c '^  reclaimed ' <<< "$out") ))
-    declined=$((  declined  + $(grep -c '^  declined '  <<< "$out") ))
+    _ws_gc_prune_row "$state" "$project" "$slug" "$p" "$already"
   done <<< "$rows"
   echo
-  echo "reclaimed $reclaimed, declined $declined"
+  echo "reclaimed $GC_RECLAIMED, declined $GC_DECLINED"
 }
 
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses

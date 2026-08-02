@@ -447,19 +447,61 @@ describe('local-loss refusals', () => {
     expect(paths).toBe('dist/');
   });
 
-  it('records 0 bytes rather than an empty field when the size read fails', () => {
-    // `[[ "$b" =~ ^[0-9]+$ ]] || b=0`. Without it a failed `du` puts "" into the
-    // record and `cmd_ws_audit` prints `"bytes":`, which is not JSON at all —
-    // so `JSON.parse` inside `audit()` is the assertion, and what it defends is
-    // the manifest a human reads before authorising a delete.
+  // RENAMED, round-3 item 3, routed here by the ui-tsx verifier. This was
+  // `records 0 bytes rather than an empty field when the size read fails`, and
+  // it PINNED A FORGERY: `[[ "$b" =~ ^[0-9]+$ ]] || b=0` turned a `du` that
+  // never ran into the number `0`, the record went into `ignoredBytes`, and
+  // `ReapSheet.tsx:161` prints that as a stated total immediately above the
+  // Remove button. A test asserting the 0 is worse than no test, so the
+  // assertion is inverted rather than deleted — and the half it legitimately
+  // defended (an empty `b` makes `"bytes":`, which is not JSON) is kept: the
+  // `JSON.parse` in `audit()`/`refusal()` still runs on every case below.
+  it('refuses the collection when an entry\'s size read FAILS, and records no 0', () => {
     const { wt } = squashMovedBase(['dist/']);
     fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
-    const a = audit('du() { return 1; };');
-    expect(a.verdict).toBe('reapable');
-    expect(a.ignored).toEqual([{ path: 'dist/', bytes: 0, sensitive: false }]);
-    expect(a.ignoredBytes).toBe(0);
+    const a = refusal(wt, 'du() { return 1; };');
+    expect(a.verdict).toBe('tree-unreadable');
+    expect(a.detail, a.detail).toContain("could not size the ignored entry dist/");
+    // The forged figures are ABSENT, not zero: a refusal document carries no
+    // ignored manifest at all, so there is no total to misread.
+    expect(a.ignored ?? [], 'no entry was recorded on a size nobody took').toEqual([]);
+    expect(a.ignoredBytes ?? 0).toBe(0);
+    expect(a.ignoredCount ?? 0).toBe(0);
   });
+
+  it('refuses a PARTIAL du total — the failure that looks like an answer', () => {
+    // The second and nastier half of the same rung. `du -sb` on a directory it
+    // can only partly read exits 1, writes the diagnostic to stderr, and still
+    // prints a PARTIAL total on stdout — measured below, and on GNU coreutils
+    // 9.4 outside the suite: 5000 for a tree holding 14000. `^[0-9]+$` accepted
+    // that, so the old rung did not merely record 0 on a hard failure, it
+    // recorded a plausible under-count on a soft one. 0 looks like a bug;
+    // an under-count looks like an answer, and it is the answer the Remove
+    // button prints.
+    const { wt } = squashMovedBase(['dist/']);
+    const locked = path.join(wt, 'dist', 'locked');
+    fs.mkdirSync(locked, { recursive: true });
+    fs.writeFileSync(path.join(wt, 'dist', 'visible.bin'), 'v'.repeat(5000));
+    fs.writeFileSync(path.join(locked, 'hidden.bin'), 'h'.repeat(9000));
+    fs.chmodSync(locked, 0o000);
+    try {
+      // The fixture only means anything if du really behaves this way here.
+      const probe = h.sh(`du -sb "${wt}/dist" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
+        + `echo "out=[$(cat "$HOME/du-out")]"; echo "err=[$(cat "$HOME/du-err")]"`);
+      expect(probe, probe).toContain('rc=1');
+      expect(probe, probe).toContain('Permission denied');
+      expect(probe, probe).toMatch(/out=\[5\d{3}\s/);   // partial: 9000 bytes missing
+
+      const a = refusal(wt, '');
+      expect(a.verdict).toBe('tree-unreadable');
+      expect(a.detail, a.detail).toContain("could not size the ignored entry dist/");
+      expect(JSON.stringify(a), 'the partial total never reaches the wire')
+        .not.toMatch(/"bytes":5\d{3}/);
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  }, 30000);
 
   it('removes its scratch file on EVERY path that refuses, and on the one that does not', () => {
     // Five exits, four `rm -f "$outf"`, and each one is only reachable through
@@ -876,6 +918,76 @@ describe('local-loss refusals', () => {
     fs.writeFileSync(path.join(wt, 'z.txt'), 'unpushed\n');
     h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'unpushed');
     expect(refusal(wt).verdict).toBe('unpushed-commits');
+  });
+
+  it('refuses a stash taken from a DETACHED worktree, which names no branch', () => {
+    // Final-round integration docket 6, end to end on the verb that acts on the
+    // count. The stash is taken while the worktree is detached — git writes
+    // `WIP on (no branch):` — and the worktree is then put BACK on its branch,
+    // which is the state an operator who compared two commits leaves behind and
+    // the only state `ws-audit` can even reach (a detached worktree refuses
+    // `detached-head` two rungs earlier). Before the fix this workspace audited
+    // `reapable` with `stashes: 0`, handed out a token, and the reap
+    // CAS-deleted the branch the stash was taken from.
+    const { wt, main } = squashMovedBase();
+    h.git(wt, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'wip\n');
+    h.sh(`cd "${wt}" && git stash push -q`);           // NO -m: the common form
+    h.git(wt, 'checkout', '-q', 'ws/quiet-basin');
+    expect(h.sh(`git -C "${main}" stash list`), 'the fixture must be the (no branch) form')
+      .toContain('WIP on (no branch):');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('stashes-present');
+    // On the wire too: `stashes: 0` beside a `stashes-present` verdict would be
+    // two answers, and 0 is the one that would have authorised the delete.
+    expect(a.stashes).toBe(1);
+  });
+
+  it('says how to get OUT of stashes-present, because it has no override', () => {
+    // Round-3 verification P3. The off-branch arm attributes an ANONYMOUS stash
+    // by its base commit, so one taken on shared history counts against EVERY
+    // branch in the repository — the fleet-wide, no-override refusal this file
+    // rejects for the "refs/stash resolves ⇒ refuse" rule 2200 lines earlier.
+    // The two are reconciled in the source (see `_ws_stash_count`, "AND IT DOES
+    // REINTRODUCE THE FLEET-WIDE COST"): the earlier rule fires on a NAMED
+    // stash an operator has a standing reason to keep, this one only on an
+    // entry that names nothing — and it is accepted on the same test this file
+    // applies to `stash-unreadable`, namely whether the operator can get out of
+    // it. That test is only passed if the REMEDY IS IN THE MESSAGE, which is
+    // where `stash-unreadable` puts its own and where this one had nothing.
+    //
+    // The fixture is the fleet-wide case itself, so the behaviour is pinned as
+    // CHOSEN rather than discovered: the stash is taken while detached at a
+    // commit on shared history, and a sibling branch that shares no work with
+    // this one counts it too.
+    const { wt, main } = squashMovedBase();
+    // The fork point: on the branch's history AND on main's, which is what
+    // makes the stash's base reachable from every branch in the repo.
+    const shared = h.git(main, 'merge-base', 'refs/heads/ws/quiet-basin', 'origin/main');
+    h.git(wt, 'checkout', '-q', '--detach', shared);
+    fs.writeFileSync(path.join(wt, 'stray.txt'), 'anonymous\n');
+    h.sh(`cd "${wt}" && git add stray.txt && git stash push -q`);
+    h.git(wt, 'checkout', '-q', 'ws/quiet-basin');
+    expect(h.sh(`git -C "${main}" stash list`)).toContain('WIP on (no branch):');
+
+    // Fleet-wide, measured: a branch cut from the shared commit, with none of
+    // this workspace's work in it, counts the same anonymous entry.
+    h.git(main, 'branch', 'ws/elsewhere', shared);
+    expect(h.sh(`_ws_stash_count "${main}" ws/elsewhere`),
+      'an anonymous stash on shared history reaches every branch — chosen, not accidental')
+      .toBe('1');
+
+    const a = refusal(wt);
+    expect(a.verdict).toBe('stashes-present');
+    expect(a.stashes).toBe(1);
+    // The refusal explains the reach…
+    expect(a.detail, a.detail).toContain('counts against every workspace of demo');
+    // …and hands over the two commands that end it, the way `stash-unreadable`
+    // does. Both directions, because "keep it" and "throw it away" are
+    // different decisions and only the operator may take either.
+    expect(a.detail, a.detail).toContain('stash list');
+    expect(a.detail, a.detail).toContain('git stash branch');
+    expect(a.detail, a.detail).toContain('stash drop');
   });
 
   it('refuses a stash read that failed SILENTLY, instead of fingerprinting its 0', () => {
