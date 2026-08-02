@@ -167,6 +167,45 @@ describe('the manifest', () => {
       expect(screen.getByRole('button', { name: 'show all 5' })).toBeInTheDocument();
     });
 
+    // Fix round 4, controller item 2. `load()` resets `showAll` to null on
+    // every new target and every Re-check, so each audit's list opens on a
+    // default chosen from ITS OWN facts. The line was shipped in round 3 with
+    // the behaviour claimed in prose and never measured: deleting
+    // `setShowAll(null)` left the whole suite green. This is the pin.
+    //
+    // It matters here more than on most screens: this is the sheet whose
+    // primary button is an irreversible `rm -rf`, and the entry a stale
+    // `showAll = false` hides is precisely the noise-filtered secret-shaped
+    // one — ccd sorts it last (non-sensitive, ccd:1996-2000; sensitive-first
+    // then bytes-descending, ccd:2561), so it is the first thing the cap eats.
+    it('lets a new target choose its own default instead of inheriting the last one', async () => {
+      const first = audit({ ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020,
+        sensitiveFiltered: 1 });
+      const next = audit({ id: 'demo-far-shore', branch: 'ws/far-shore',
+        ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020, sensitiveFiltered: 3 });
+      vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+        new Response(JSON.stringify(String(url).includes('far-shore') ? next : first),
+          { status: 200, headers: { 'content-type': 'application/json' } })));
+      const sheet = (s: FleetSession): ReactElement => (
+        <><ToastHost /><ReapSheet session={s} open onClose={() => {}} onReaped={() => {}} /></>
+      );
+
+      // Session A filtered something, so its list opened expanded; the reader
+      // collapses it back.
+      const view = render(sheet(sess()));
+      fireEvent.click(await screen.findByRole('button', { name: 'show fewer' }));
+      expect(screen.queryByText(/config\/secrets\.template\.env/)).not.toBeInTheDocument();
+
+      // The reap target changes to a session that filtered THREE. Its own
+      // facts say expanded; the previous session's tap must not outvote them.
+      view.rerender(sheet(sess({ id: 'demo-far-shore', workspace: 'far-shore',
+        branch: 'ws/far-shore' })));
+      expect(await screen.findByText(/config\/secrets\.template\.env/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'show fewer' })).toBeInTheDocument();
+      expect(screen.getByText(/filtered as vendored\/template\./))
+        .toHaveTextContent('Every ignored entry is named above.');
+    });
+
     it('claims nothing about a list that is short enough to be whole', async () => {
       // Three entries are never capped, so the note must not send the reader
       // looking for a toggle that is not rendered.
