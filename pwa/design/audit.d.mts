@@ -100,6 +100,12 @@ export function ratio(
   theme: Theme,
   opacity?: number,
 ): number;
+export function selectorList(sel: string): string[];
+export function subjectCompound(sel: string): string;
+/** The compound qualifiers `sel` adds to `base`'s subject element, `''` if it
+ *  restates the same subject under a different ancestor chain, or null if it
+ *  is not a variant of `base` at all. */
+export function variantSuffix(sel: string, base: string): string | null;
 export function rulesOf(root: string, rel: string): Rule[];
 export function ruleKey(r: Rule): string;
 export function declOf(body: string, prop: string): string | null;

@@ -40,7 +40,10 @@ import {
   resolveColor,
   ruleKey,
   rulesOf,
+  selectorList,
   stylesheets,
+  subjectCompound,
+  variantSuffix,
 } from '../design/audit.mjs';
 
 const ROOT = process.cwd();
@@ -206,6 +209,58 @@ describe('the gate fails a mutated tree', () => {
         "[data-callout='warning']   { --callout-hue: var(--status-attention-tint);",
       ));
     expect(o).toMatch(/FAIL.*chat\.css \.msg-assist \.callout::before \[as .*warning/);
+  });
+
+  // ── the three spellings that forged the "unforgeable" claim ───────────────
+  // verify3-css P1. The variant check used to compare whole selector STRINGS
+  // with startsWith, so each of these reintroduced the reported 2.44:1 blocker
+  // — --ink-secondary body ink on the light-theme well — with the gate printing
+  // ALL 234 PASS and exiting 0. Every one is an ordinary way to write CSS; the
+  // grouped one is how anybody writes two variants that share a tint, and the
+  // tree already groups selectors for exactly that (`.dot--busy, .dot--attention`).
+  const CALLOUT_BEFORE = '.msg-assist .callout::before {';
+  const forge = (rule: string): ((s: string) => string) =>
+    (s) => s.replace(CALLOUT_BEFORE, `${rule}\n${CALLOUT_BEFORE}`);
+
+  it.each([
+    [
+      'GROUPED with a second variant',
+      ".msg-assist .callout[data-callout='warning'], .msg-assist .callout[data-callout='caution'] { --callout-tint: var(--bg-well); }",
+    ],
+    [
+      'given an extra ancestor',
+      ".msg-assist .md-body .callout[data-callout='warning'] { --callout-tint: var(--bg-well); }",
+    ],
+    [
+      "qualified on the variant's ancestor",
+      ".msg-assist[data-md] .callout[data-callout='warning'] { --callout-tint: var(--bg-well); }",
+    ],
+    [
+      'written without the ancestor at all',
+      ".callout[data-callout='rogue'] { --callout-tint: var(--bg-well); }",
+    ],
+  ])('a callout variant %s still cannot hide the well', (_n, rule) => {
+    const o = expectFail('src/session/chat.css', forge(rule));
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout::before \[as /);
+  });
+
+  it('a callout variant hides the well from ANOTHER stylesheet', () => {
+    // The same-file filter was a filter, not a fact: a component sheet
+    // retinting a primitive is ordinary, and the browser does not care which
+    // file a custom property was rebound in.
+    const o = expectFail('src/fleet/fleet.css', (s) =>
+      `${s}\n.msg-assist .callout[data-callout='crossfile'] { --callout-tint: var(--bg-well); }\n`);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as fleet\.css /);
+  });
+
+  it("a pseudo-element spells its host differently from the rule that paints it", () => {
+    // The same string comparison, one function down: the ::before host was
+    // looked up by exact `file selector` key, so a pseudo hanging off a
+    // differently-spelled host was silently unmeasured.
+    const o = expectFail('src/session/chat.css', (s) =>
+      `${s}\n.msg-assist .md-body .callout::before { color: var(--callout-tint); }\n`);
+    expect(o).toMatch(/FAIL\s+1\.00 .*chat\.css \.msg-assist \.md-body \.callout::before/);
   });
 
   it('a new element fade is added with no contrast decision', () => {
@@ -499,6 +554,53 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
       expect(declOf(r.body, '--callout-tint'), r.selector).not.toBeNull();
       expect(declOf(r.body, '--callout-hue'), r.selector).not.toBeNull();
     }
+  });
+
+  it('measures EVERY rule that rebinds --callout-tint, however it is spelled', () => {
+    // verify3-css P1: the assertion above counts only the five single-compound
+    // spellings, so a sixth variant written as a grouped selector, with an
+    // extra ancestor, or in another stylesheet left it green while walking the
+    // blocker straight past the gate. This is the spelling-agnostic bind —
+    // every rule anywhere under src/ that rebinds the property the callout
+    // paints with must appear as a measured context of the base rule.
+    const rebinders = stylesheets(ROOT)
+      .flatMap((rel) => rulesOf(ROOT, rel))
+      .filter((r) => r.selector !== '.msg-assist .callout' && declOf(r.body, '--callout-tint') !== null);
+    expect(rebinders.map(ruleKey)).toHaveLength(VARIANTS.length);
+    for (const r of rebinders) {
+      const as = r.file === 'chat.css' ? r.selector : ruleKey(r);
+      expect(
+        report.measured.some((m) => m.label.endsWith(`chat.css .msg-assist .callout [as ${as}]`)),
+        `no measured context for ${ruleKey(r)}`,
+      ).toBe(true);
+    }
+  });
+
+  it.each([
+    // sel, base, the qualifier it adds (null = not a variant)
+    [".msg-assist .callout[data-callout='warning']", ".msg-assist .callout", "[data-callout='warning']"],
+    [".msg-assist .callout[data-callout='w'], .msg-assist .callout[data-callout='c']", '.msg-assist .callout', "[data-callout='w']"],
+    [".msg-assist .md-body .callout[data-callout='w']", '.msg-assist .callout', "[data-callout='w']"],
+    [".msg-assist[data-md] .callout[data-callout='w']", '.msg-assist .callout', "[data-callout='w']"],
+    ["main > .callout[data-callout='w']", '.msg-assist .callout', "[data-callout='w']"],
+    ['.msg-assist .md-body .callout', '.msg-assist .callout', ''],
+    // A variant of a GROUPED base — rulesOf stores `.dot--busy, .dot--attention` whole.
+    ['.dot--attention.is-loud', '.dot--busy, .dot--attention', '.is-loud'],
+    // Not variants: a different element, a descendant, a pseudo, a prefix that
+    // is not a compound boundary.
+    ['.msg-assist .callout strong', '.msg-assist .callout', null],
+    [".msg-assist .callout[data-callout='w']::before", '.msg-assist .callout', null],
+    ['.calloutish', '.callout', null],
+    ['.callout-wrap', '.callout', null],
+    ['.msg-assist .callout', '.msg-assist .callout', null],
+  ])('variantSuffix(%s, %s) is %s', (sel, base, want) => {
+    expect(variantSuffix(sel as string, base as string)).toBe(want);
+  });
+
+  it('splits selector lists and finds subjects without tripping over nesting', () => {
+    expect(selectorList(":is(.a, .b) .c, .d[x~='y, z']")).toEqual([':is(.a, .b) .c', ".d[x~='y, z']"]);
+    expect(subjectCompound('.a > .b + .c ~ .d')).toBe('.d');
+    expect(subjectCompound(":not(.a, .b) .c[data-x='p q']")).toBe(".c[data-x='p q']");
   });
 });
 
