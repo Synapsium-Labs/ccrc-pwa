@@ -1239,6 +1239,47 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+
+  # SERIALISED WITH `ws-reap`, ON WS-REAP'S OWN LOCK — final-round destructive
+  # review, finding F5. These two verbs are the only pair in the design that
+  # write the same fact from opposite directions: `ws-reap` requires
+  # `$REG/$id.archived` and this removes it. Unserialised, the two orders both
+  # end badly, and BOTH were measured:
+  #   - restore inside `_ws_reap_eval`'s Phase C (the <=12 s `gh pr list` plus
+  #     the <=60 s `git fetch`) is a lost update seconds to a minute wide: the
+  #     reap's token still matches, because it was computed in that same run and
+  #     `archived` is not one of the fingerprint's thirteen inputs, so the tail
+  #     destroys the workspace the human just brought back.
+  #   - restore between the tail's (e) and its (i) is worse in the other
+  #     direction: the reap has already unsupervised the session and killed the
+  #     pane, this re-`_spawn`s it and re-`_ws_supervise`s it, and then (f)/(i)
+  #     remove the worktree and purge the registry under a supervised unit and a
+  #     live pane — a session with `Restart=always` pointed at a directory that
+  #     no longer exists and no registry row to resurrect it from.
+  # `_ws_reap_tail` also re-reads the marker (see there), which is what covers
+  # the RESUME path — a breadcrumb outlives a restore by hours and no lock can
+  # span that. The lock is what closes the concurrent shapes.
+  #
+  # THE SAME LOCK, not a second mechanism: two locks for one invariant is two
+  # things to get out of step, and this one is already the kernel's — released
+  # on every form of death including SIGKILL, never unlinked, its whole argument
+  # written out at `cmd_ws_reap`. `-n`, so a restore declines rather than
+  # blocking a route behind a reap that may be sixty seconds inside a fetch;
+  # `in-progress` is the shape `ws-reap` itself answers for the mirror case.
+  #
+  # AFTER the `uuid` check and BEFORE the `archived` one. Before, so no lock
+  # file is created for an id with no registry at all; after, so `archived` and
+  # `workdir` — the two facts a concurrent reap can change — are read UNDER the
+  # lock rather than in front of it.
+  command -v flock >/dev/null 2>&1 \
+    || die "flock (util-linux) is unavailable — refusing to restore unserialised against ws-reap"
+  local lock="$REG/.reap-$id.lock" lfd
+  exec {lfd}>>"$lock" || die "cannot open the reap lock at $lock"
+  flock -n "$lfd" || {
+    exec {lfd}>&-
+    die "another ccd process is reaping $id and still holds the lock — refusing to restore mid-cleanup"
+  }
+
   [[ -f "$REG/$id.archived" ]]   || die "not archived: $id"
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
@@ -1246,6 +1287,13 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   _spawn "$id" resume
   _reg_set "$id" started 1
   _ws_supervise "$id"
+  # GIVEN BACK BEFORE THE VERB ANSWERS, for the reason `cmd_ws_reap` states at
+  # its own close: `flock` treats two `open()`s of one path in one process as
+  # two strangers, and ccd is SOURCED — by `ccd` itself and by its tests — so a
+  # descriptor left open here would refuse the next `ws-reap` in the same shell
+  # with `in-progress` for ever. The `die`s above need no close of their own:
+  # `die` exits, and the kernel closes what exits.
+  exec {lfd}>&-
   echo "restored $id — $workdir"
 }
 
@@ -3228,6 +3276,44 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
         "$(_json_str "breadcrumb phase '$resumed' for $id is not one ccd ever writes — refusing to guess which steps already ran")"
       return 0 ;;
   esac
+
+  # THE ARCHIVED MARKER IS RE-READ HERE, immediately before the first step that
+  # writes anything — final-round destructive review, finding F5. `archived` is
+  # the ONE precondition of this whole verb that another ccd verb can withdraw:
+  # `cmd_ws_restore` (ccd:1234) removes `$REG/$id.archived`, re-`_spawn`s the
+  # session and re-`_ws_supervise`s it, turning the workspace back into an
+  # ordinary live one. Nothing re-read the marker after `_ws_reap_eval`'s Phase
+  # A (ccd:2055), and it is not one of `_ws_fingerprint`'s thirteen inputs, so
+  # the token cannot notice either.
+  #
+  # TWO REACHABLE SHAPES, both measured, and the sequential one is the one with
+  # the teeth:
+  #   - THE RESUME PATH, no race at all. A reap SIGKILLed at (c) leaves a
+  #     breadcrumb the human can only clear by restoring; restore then brings
+  #     the workspace back to life, and the breadcrumb OUTLIVES it. The next
+  #     `ws-reap` takes `_ws_reap_locked`'s resume fork, which skips
+  #     `_ws_reap_eval` entirely and therefore never asks the `not-archived`
+  #     question at all. Measured before this line existed:
+  #     `{"reaped":"demo-quiet-basin",…,"resumed":"worktree"}` — worktree
+  #     removed, branch CAS-deleted, registry purged, on a LIVE restored
+  #     workspace, hours after the tap that authorised it.
+  #   - THE EVALUATED PATH, a real race. Phase A checks the marker, Phase C
+  #     then spends up to 12 s in `gh pr list` and up to 60 s in `git fetch`; a
+  #     restore inside that window is a lost update seconds to a minute wide,
+  #     and D2 waves the token through because the token was computed in this
+  #     same run. `cmd_ws_restore` now takes THIS verb's own lock, which closes
+  #     the race at its source; this stays because a re-read costs one `stat`
+  #     and covers the resume shape too, which no lock can.
+  #
+  # `not-archived` rather than a new token: the state IS not-archived, it is the
+  # word `_ws_reap_eval` already uses for it (ccd:2056), and `wsaudit.ts`'s
+  # SENTENCES already carries the sentence. Placed ahead of (a)/(b)/(c) so a
+  # refusal writes NOTHING — no attic pin, no tombstone, no breadcrumb.
+  [[ -f "$REG/$id.archived" ]] || {
+    printf '{"refused":"not-archived","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$id is no longer archived — ws-restore brought it back while this cleanup was pending; archive it again to finish")"
+    return 0
+  }
 
   if [[ -z "$resumed" ]]; then
     attic=$(_ws_attic_pin "$main" "$id" "$workdir" "$REAP_TIP")            # (a)

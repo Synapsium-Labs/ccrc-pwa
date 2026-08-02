@@ -1434,3 +1434,158 @@ describe('partial failure and resume', () => {
     expect(h.reg('demo-quiet-basin', 'reaping')).toBe('sometime-else');
   }, 30000);
 });
+
+/**
+ * Final-round destructive review, finding F5 — `ws-restore` and `ws-reap` were
+ * not serialised with each other, and nothing re-read `$REG/<id>.archived`
+ * after Phase A.
+ *
+ * `not-archived` is the refusal ccd already owns for "this workspace is not
+ * staged for deletion" (`_ws_reap_eval`, ccd:2055-2056), and it is the one
+ * emitted here: the state IS not-archived, and re-using the token keeps
+ * `wsaudit.ts`'s SENTENCES table complete without inventing a thirty-sixth
+ * word for the same fact.
+ */
+describe('serialisation with ws-restore', () => {
+  const archivedMarker = (): string =>
+    path.join(h.home, '.cc-sessions', 'demo-quiet-basin.archived');
+
+  /** A reap SIGKILLed at (c): breadcrumb down, tombstone written, worktree and
+   *  branch still on disk — the ONLY interrupted state `ws-restore` can reach,
+   *  because every later phase has already removed the worktree and restore
+   *  refuses `worktree is gone`. */
+  const interruptedAtC = (main: string): void => {
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'), clips: [] }));
+  };
+
+  it('does not finish a cleanup on a workspace ws-restore brought back to life', () => {
+    // NO RACE AT ALL — this is the sequential shape, and it is the one with the
+    // teeth. A reap dies at (c). The human restores the workspace: `.archived`
+    // is removed, `_spawn` puts the session back, `_ws_supervise` re-arms boot
+    // persistence, and the workspace is live again, indistinguishable from one
+    // that was never archived. The breadcrumb, however, outlives all of that —
+    // no ccd verb clears it — so the NEXT `ws-reap` takes the resume path,
+    // which skips `_ws_reap_eval` entirely and therefore never asks the
+    // `not-archived` question at all. Measured before the fix: the run answered
+    // `{"reaped":"demo-quiet-basin", "resumed":"worktree"}` and removed the
+    // worktree, CAS-deleted the branch and purged the registry of a LIVE,
+    // restored, un-archived workspace — with no human having confirmed
+    // anything about the workspace in its current state.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    interruptedAtC(main);
+
+    expect(h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`))
+      .toContain('restored demo-quiet-basin');
+    expect(fs.existsSync(archivedMarker()), 'ws-restore clears the archived marker').toBe(false);
+
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `a refusal is an ANSWER — exit 0 with JSON. stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.refused, r.stdout).toBe('not-archived');
+    expect(out.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(fs.existsSync(wt), 'the restored worktree survives').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch survives')
+      .toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry survives').not.toBeNull();
+    // And the breadcrumb is left exactly as found: refusing resolves nothing
+    // about it, and re-archiving is what makes the cleanup finishable again.
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+  }, 30000);
+
+  it('re-reads the archived marker on the EVALUATED path too, not only on resume', () => {
+    // The race half of F5, injected where the review measured it: inside the
+    // `gh` call, i.e. in Phase C, AFTER Phase A's archived check and BEFORE the
+    // tail. Phase C is where the <=12 s `gh pr list` and the <=60 s `git fetch`
+    // live, so this window is seconds to a minute wide, not microseconds. The
+    // token still matches — `_ws_reap_eval` computed it in this same run, and
+    // `.archived` is not one of its thirteen inputs — so D2 waves it through.
+    //
+    // The `gh` stub is what stands in for the restore landing in the gap; the
+    // real `cmd_ws_restore` cannot be called from inside it, because the fix's
+    // own lock would (correctly) refuse a restore while this reap holds it.
+    // What is reproduced here is the restore's EFFECT on the registry, which is
+    // exactly what the tail must notice.
+    const { wt, main } = ready();
+    const tok = tokenOf();
+    const RESTORE_MIDFLIGHT = GH_STUB.replace('gh() {',
+      'gh() {\n  rm -f "$HOME/.cc-sessions/demo-quiet-basin.archived"');
+    expect(RESTORE_MIDFLIGHT, 'a .replace() that matched nothing is a silent no-op')
+      .not.toBe(GH_STUB);
+    const r = h.run(`${RESTORE_MIDFLIGHT} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.refused).toBe('not-archived');
+    expect(out.reaped).toBeUndefined();
+    expect(fs.existsSync(wt), 'the worktree survives the lost update').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
+    // NOTHING was written on the way to the refusal: the check sits ahead of
+    // (a) the attic pin, (b) the tombstone and (c) the breadcrumb, so a
+    // refused reap leaves no journal to resume from later.
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'no breadcrumb is left behind').toBeNull();
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json')),
+      'no tombstone is written for a reap that did not happen').toBe(false);
+  }, 30000);
+
+  it('ws-restore declines while a reap holds the lock, rather than un-archiving under it', () => {
+    // The other direction, and the one the marker re-read alone cannot close:
+    // a restore that lands between the tail's (d)/(e) and its (i). The reap
+    // has already unsupervised the session and killed the pane; the restore
+    // then re-`_spawn`s it, re-supervises it and clears `.archived` — and the
+    // reap goes on to remove the worktree out from under the pane it just
+    // re-created and purge the registry, leaving a supervised systemd unit and
+    // a tmux session pointed at a directory that no longer exists. Serialising
+    // restore on ws-reap's OWN lock is what makes that unspellable; a second
+    // mechanism would just be a second thing to get out of step.
+    //
+    // A REAL holder, the way the `in-progress` fixture does it: under `flock`
+    // the lock is a property of an open file description a live process owns,
+    // so the only way to occupy it is to have a process occupying it.
+    const { wt } = ready();
+    const lock = path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock');
+    const out = h.sh(`${ARCH}
+      : > "${lock}"
+      flock "${lock}" -c 'touch "$HOME/held"; sleep 25' >/dev/null 2>&1 &
+      hp=$!
+      for _ in $(seq 200); do [[ -f "$HOME/held" ]] && break; sleep 0.05; done
+      [[ -f "$HOME/held" ]] || { echo "holder never took the lock"; kill "$hp" 2>/dev/null; exit 1; }
+      # A SUBSHELL, because \`die\` exits: ccd is sourced here, so without it the
+      # refusal would take this whole script down and leave the holder running.
+      msg=$( ( cmd_ws_restore --session demo-quiet-basin ) 2>&1 ); rc=$?
+      kill -9 "$hp" 2>/dev/null; wait "$hp" 2>/dev/null || true
+      echo "rc=$rc"
+      echo "$msg"`);
+    expect(out, `restore must refuse while the reap lock is held: ${out}`).toContain('rc=1');
+    expect(out).toContain('reaping demo-quiet-basin');
+    // Nothing about the archive was undone, and nothing was re-spawned.
+    expect(fs.existsSync(archivedMarker()), 'the archived marker survives a declined restore')
+      .toBe(true);
+    expect(h.reg('demo-quiet-basin', 'archivemanifest'),
+      'the archive manifest survives too').not.toBeNull();
+    expect(fs.existsSync(wt)).toBe(true);
+  }, 30000);
+
+  it('gives the reap lock back, so a restore and a reap can still follow one another', () => {
+    // The counterpart to `gives the lock back when the FUNCTION returns`: a
+    // restore that TOOK the lock must give it back, or the very next `ws-reap`
+    // in the same shell — ccd is sourced — answers `in-progress` for ever, and
+    // the recovery path is wedged by the recovery path.
+    const { wt, main } = ready();
+    interruptedAtC(main);
+    expect(h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`))
+      .toContain('restored demo-quiet-basin');
+    expect(lockFree(), 'ws-restore must not leave the reap lock held').toBe(true);
+    // And the workspace is reachable again by the ordinary route: archive it a
+    // second time and the interrupted cleanup finishes.
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${'f'.repeat(64)} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).reaped, r.stdout).toBe('demo-quiet-basin');
+    expect(fs.existsSync(wt)).toBe(false);
+  }, 30000);
+});
