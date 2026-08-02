@@ -117,21 +117,42 @@ const readCss = (root, rel) => stripComments(readFileSync(path.join(root, rel), 
 
 // ── tokens.css ──────────────────────────────────────────────────────────────
 
-/** The brace-balanced body of the first `open …{ }` block. Comments are
- *  stripped BEFORE this runs: `:root` and `[data-theme='light']` both appear
- *  in tokens.css's own prose, and a naive indexOf lands on the comment. */
-export function blockBody(src, open) {
-  const at = src.indexOf(open);
-  if (at < 0) throw new Error(`no ${open} block`);
-  const start = src.indexOf('{', at);
+/** Escape a literal for use inside a RegExp. */
+const rx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The brace-balanced body starting at the `{` at or after `from`. */
+function balancedAt(src, from) {
+  const start = src.indexOf('{', from);
+  if (start < 0) return null;
   let depth = 0;
   for (let i = start; i < src.length; i++) {
     if (src[i] === '{') depth++;
     else if (src[i] === '}' && --depth === 0) return src.slice(start + 1, i);
   }
-  throw new Error(`unbalanced braces after ${open}`);
+  return null;
 }
 
+/** The brace-balanced body of the first `open …{ }` block. Comments are
+ *  stripped BEFORE this runs: `:root` and `[data-theme='light']` both appear
+ *  in tokens.css's own prose, and a naive indexOf lands on the comment.
+ *
+ *  The search is case-INSENSITIVE, like every other match in this file: `:ROOT`
+ *  and `[DATA-THEME='light']` are selectors a browser matches, so an auditor
+ *  that only finds the lowercase spelling reads a palette the page does not
+ *  paint with. (The custom-property NAMES inside the block stay
+ *  case-sensitive — those genuinely are, per CSS Variables 1.) */
+export function blockBody(src, open) {
+  const at = src.search(new RegExp(rx(open), 'i'));
+  if (at < 0) throw new Error(`no ${open} block`);
+  const body = balancedAt(src, at);
+  if (body === null) throw new Error(`unbalanced braces after ${open}`);
+  return body;
+}
+
+// Custom property names ARE case-sensitive (CSS Variables 1 §2): `--Foo` and
+// `--foo` are two different properties. This is the one place in the file that
+// must NOT fold case, and the reason declOf takes the distinction as an
+// argument rather than a flag.
 const customProps = (body) =>
   Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
 
@@ -166,19 +187,21 @@ export function resolveColor(expr, theme, depth = 0) {
   if (/^transparent$/i.test(e)) return [0, 0, 0, 0];
   const hex = hexToRgba(e);
   if (hex) return hex;
-  let m = /^var\(\s*(--[\w-]+)\s*\)$/.exec(e);
+  // Function names and keywords are ASCII case-insensitive (`VAR()`, `RGB()`,
+  // `COLOR-MIX(IN SRGB, …)` all paint); the custom-property name inside is not.
+  let m = /^var\(\s*(--[\w-]+)\s*\)$/i.exec(e);
   if (m) {
     const v = theme[m[1]];
     if (v === undefined) throw new Error(`unknown custom property ${m[1]}`);
     return resolveColor(v, theme, depth + 1);
   }
-  m = /^rgba?\(([^)]*)\)$/.exec(e);
+  m = /^rgba?\(([^)]*)\)$/i.exec(e);
   if (m) {
     const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
     if (p.length < 3 || p.some(Number.isNaN)) throw new Error(`bad rgb(): ${e}`);
     return [p[0], p[1], p[2], p[3] ?? 1];
   }
-  m = /^color-mix\(\s*in srgb\s*,\s*(.+?)\s+([\d.]+)%\s*,\s*(.+?)\s*\)$/.exec(e);
+  m = /^color-mix\(\s*in srgb\s*,\s*(.+?)\s+([\d.]+)%\s*,\s*(.+?)\s*\)$/i.exec(e);
   if (m) {
     // CSS Color 5: mixing in a rectangular space is done in PREMULTIPLIED
     // alpha. Interpolating the raw channels instead (which the first auditor
@@ -249,23 +272,33 @@ export const ruleKey = (r) => `${r.file} ${r.selector}`;
  *  duplicated `color`, `background` or `opacity` was measured against a value
  *  the browser does not paint. `background: <fallback>; background: var(--x)`
  *  is the standard progressive-enhancement idiom, and both the reported 2.44:1
- *  blocker shape and an unregistered fade passed green through it. */
+ *  blocker shape and an unregistered fade passed green through it.
+ *
+ *  Property names are matched case-INSENSITIVELY, because CSS matches them that
+ *  way (Syntax 3 §3.1: ASCII case-insensitive). `COLOR:` / `BACKGROUND:` /
+ *  `OPACITY:` are declarations a browser paints, and while this file was
+ *  case-sensitive every one of them was invisible to it — the reported 2.44:1
+ *  blocker shape forged the whole gate to ALL PASS just by being written in
+ *  uppercase. CUSTOM properties are the documented exception (`--Foo` and
+ *  `--foo` really are two properties), so the fold is switched off for them. */
 export const declOf = (body, prop) => {
+  const flags = prop.startsWith('--') ? 'g' : 'gi';
   let last = null;
-  for (const m of body.matchAll(new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+)`, 'g'))) last = m[1].trim();
+  for (const m of body.matchAll(new RegExp(`(?:^|[;\\s])${rx(prop)}\\s*:\\s*([^;]+)`, flags))) last = m[1].trim();
   return last;
 };
 
-/** The background PAINT a rule ends up with. `background` and
+/** The background COLOUR a rule ends up with. `background` and
  *  `background-color` write the SAME cascaded value, so the answer is whichever
  *  is written last, not `background ?? background-color`:
  *  `background: none; background-color: var(--bg-well)` paints the well, and
  *  the auditor used to say it painted nothing. `background` here is the
  *  shorthand, so a value with more than a colour in it will not resolve — and
- *  must not: an unparsed paint is a FAIL, never a skip. */
+ *  must not: an unparsed paint is a FAIL, never a skip. Case-insensitive, for
+ *  the reason declOf gives. */
 export const bgOf = (body) => {
   let last = null;
-  for (const m of body.matchAll(/(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/g)) last = m[1].trim();
+  for (const m of body.matchAll(/(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/gi)) last = m[1].trim();
   return last;
 };
 
@@ -275,7 +308,8 @@ export const bgOf = (body) => {
 const localVars = (body) =>
   Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
 
-const KEYFRAME_STOP = /^(from|to|[\d.]+%)$/;
+// `FROM` / `TO` are the same keyframe selectors as `from` / `to`.
+const KEYFRAME_STOP = /^(from|to|[\d.]+%)$/i;
 const isKeyframeStop = (r) => r.selector.split(',').every((s) => KEYFRAME_STOP.test(s.trim()));
 
 /** Split a selector on separators that are at bracket/paren depth zero, so a
@@ -487,9 +521,13 @@ export function keyframeTroughs(root = PWA_ROOT) {
   for (const rel of stylesheets(root)) {
     const css = readCss(root, rel);
     const file = rel.split('/').pop();
-    for (const m of css.matchAll(/@keyframes\s+([\w-]+)\s*\{/g)) {
-      const body = blockBody(css.slice(m.index), `@keyframes ${m[1]}`);
-      const stops = [...body.matchAll(/(?:^|[;{\s])opacity\s*:\s*([^;}]+)/g)].map((s) => opacityNumber(s[1]));
+    // `@KEYFRAMES` is the same at-rule, and the body is taken from the MATCH
+    // position rather than by re-finding the prelude by string — a re-find is
+    // what made the case fold unsafe here.
+    for (const m of css.matchAll(/@keyframes\s+([\w-]+)\s*\{/gi)) {
+      const body = balancedAt(css, m.index + m[0].length - 1);
+      if (body === null) throw new Error(`unbalanced braces after @keyframes ${m[1]}`);
+      const stops = [...body.matchAll(/(?:^|[;{\s])opacity\s*:\s*([^;}]+)/gi)].map((s) => opacityNumber(s[1]));
       if (stops.some((v) => v === null)) {
         found.push({ file, name: m[1], min: null, key: `${file} ${m[1]} ?` });
         continue;

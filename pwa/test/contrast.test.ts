@@ -31,6 +31,7 @@ import {
   SELF_GROUNDED_EXEMPT,
   audit,
   bgOf,
+  blockBody,
   contrast,
   declOf,
   keyframeTroughs,
@@ -292,6 +293,50 @@ describe('the gate fails a mutated tree', () => {
     ],
   ])('the gate measures %s', (_n, rule, want) => {
     expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
+  // ── CASE. CSS property names are ASCII case-insensitive; this file was not ──
+  // final2-gates F2. `COLOR:` / `BACKGROUND:` / `OPACITY:` are declarations a
+  // browser paints, and every one of them was invisible to declOf, bgOf and the
+  // fade sweep — so the reported 2.44:1 blocker shape forged the whole gate to
+  // ALL 234 PASS just by being written in uppercase. Nobody hand-writes
+  // `COLOR:`, but "the gate reads a different stylesheet than the browser" is
+  // the class, not the spelling.
+  it.each([
+    [
+      'the blocker shape in UPPERCASE',
+      '.forge-upper { COLOR: var(--ink-secondary); BACKGROUND: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-upper/,
+    ],
+    [
+      'the blocker shape in MiXeD case, longhand background',
+      '.forge-mixed { CoLoR: var(--ink-secondary); Background-Color: var(--bg-well); }',
+      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-mixed/,
+    ],
+    [
+      'an element fade spelled OPACITY',
+      '.forge-op { OPACITY: 0.4; }',
+      /unregistered fade chat\.css \.forge-op 0\.4/,
+    ],
+    [
+      'a whole animation spelled @KEYFRAMES with an UPPERCASE stop',
+      '@KEYFRAMES forge-kf { FROM { OPACITY: 0.2; } to { opacity: 1; } }',
+      /unregistered keyframe trough chat\.css forge-kf 0\.2/,
+    ],
+  ])('the gate reads %s exactly as a browser does', (_n, rule, want) => {
+    expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
+  });
+
+  it('an UPPERCASE stop cannot deepen an already-registered trough unseen', () => {
+    // The subtlest half of F2: the registry key is `file name min`, so an
+    // uppercase stop inside an animation that is ALREADY registered lowered the
+    // real trough without changing the key — the registry stayed green over a
+    // deeper dip. Both directions fire now: the new minimum is unregistered and
+    // the old one is stale.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('@keyframes working-dot {', '@keyframes working-dot { 10% { OPACITY: 0.05; }'));
+    expect(o).toMatch(/unregistered keyframe trough chat\.css working-dot 0\.05/);
+    expect(o).toMatch(/stale keyframes registry entry: chat\.css working-dot 0\.25/);
   });
 
   it('a new element fade is added with no contrast decision', () => {
@@ -580,6 +625,16 @@ describe('the auditor itself', () => {
     ['background-image: url(x)', 'background', null],
     ['-webkit-background: red', 'background', null],
     ['border-color: red', 'color', null],
+    // Property names are ASCII case-insensitive (CSS Syntax 3 §3.1) …
+    ['COLOR: var(--a)', 'color', 'var(--a)'],
+    ['CoLoR: var(--a); color: var(--b)', 'color', 'var(--b)'],
+    ['color: var(--a); COLOR: var(--b)', 'color', 'var(--b)'],
+    ['OPACITY: 0.4', 'opacity', '0.4'],
+    // … but CUSTOM property names are NOT (CSS Variables 1 §2), so the fold
+    // must stop at `--`. Reading `--Callout-Tint` as `--callout-tint` would
+    // make the auditor measure a token the browser never resolves.
+    ['--Callout-Tint: var(--a)', '--callout-tint', null],
+    ['--callout-tint: var(--a)', '--callout-tint', 'var(--a)'],
   ])('declOf(%s, %s) is the LAST declaration: %s', (body, prop, want) => {
     expect(declOf(body as string, prop as string)).toBe(want);
   });
@@ -593,8 +648,28 @@ describe('the auditor itself', () => {
     ['background-color: var(--a); background-color: var(--b)', 'var(--b)'],
     ['color: red', null],
     ['background-image: url(x); background-position: 0 0', null],
+    ['BACKGROUND: var(--bg-well)', 'var(--bg-well)'],
+    ['Background-Color: var(--bg-well)', 'var(--bg-well)'],
   ])('bgOf(%s) is %s', (body, want) => {
     expect(bgOf(body as string)).toBe(want);
+  });
+
+  it('resolves colour functions however they are cased', () => {
+    // `VAR()`, `RGB()`, `COLOR-MIX(IN SRGB, …)` are all functions a browser
+    // evaluates; the token name inside stays case-sensitive.
+    expect(resolveColor('VAR(--bg-well)', DARK)).toEqual(resolveColor('var(--bg-well)', DARK));
+    expect(resolveColor('RGBA(255, 0, 0, 0.5)', DARK)).toEqual([255, 0, 0, 0.5]);
+    expect(resolveColor('COLOR-MIX(IN SRGB, #FFFFFF 50%, #000000)', DARK))
+      .toEqual(resolveColor('color-mix(in srgb, #FFFFFF 50%, #000000)', DARK));
+    expect(() => resolveColor('var(--BG-WELL)', DARK)).toThrow(/unknown custom property/);
+  });
+
+  it('finds both theme blocks however the selectors are cased', () => {
+    // blockBody used indexOf, so `:ROOT` — a selector browsers match — read as
+    // "no :root block" and threw at gate time.
+    const tokens = readFileSync(path.join(ROOT, 'src/styles/tokens.css'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(blockBody(tokens.replace(':root {', ':ROOT {'), ':root')).toBe(blockBody(tokens, ':root'));
   });
 
   it('exposes exactly the report shape the types promise', () => {
