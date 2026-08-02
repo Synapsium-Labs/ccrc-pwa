@@ -1,0 +1,7 @@
+{
+  "_comment": "Same hole, same shape, on the agent side: `agent/tsconfig.json` also excludes test/. Clean today (the final review measured 0 errors here), which is exactly why it needs a gate — a directory that is clean and unchecked becomes a directory that is dirty and unchecked without anything saying so. Run by typecheck-tests.test.ts. `types/**` is excluded: those fixtures MUST fail to compile.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["../src/**/*.ts", "./**/*.ts", "../../shared/**/*.ts"],
+  "exclude": ["types/**"]
+}
