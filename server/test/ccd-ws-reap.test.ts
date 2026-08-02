@@ -1575,10 +1575,31 @@ describe('serialisation with ws-restore', () => {
     // restore that TOOK the lock must give it back, or the very next `ws-reap`
     // in the same shell — ccd is sourced — answers `in-progress` for ever, and
     // the recovery path is wedged by the recovery path.
+    // ASKED IN THE SAME PROCESS, which is the only place the leak is
+    // observable at all — final-round verification P3. `lockFree()` runs
+    // `h.sh(...)`, i.e. a NEW bash, AFTER the restoring shell has already
+    // exited, and the kernel closes what exits: measured, this test passed with
+    // the whole lock block removed from `cmd_ws_restore` AND with only
+    // `exec {lfd}>&-` removed, so it pinned nothing in either direction.
+    // `flock` treats two `open()`s of one path in ONE process as two strangers
+    // (flock(2): "an attempt to lock the file using one of these file
+    // descriptors may be denied by a lock that the calling process has already
+    // placed via another"), so a second acquire from the same shell is exactly
+    // the question "did cmd_ws_restore give its descriptor back".
     const { wt, main } = ready();
     interruptedAtC(main);
-    expect(h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`))
-      .toContain('restored demo-quiet-basin');
+    const lock = path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock');
+    const out = h.sh(`${ARCH}
+      cmd_ws_restore --session demo-quiet-basin
+      exec {probe}>>"${lock}"
+      if flock -n "$probe"; then echo SAMESHELL=free; else echo SAMESHELL=held; fi
+      exec {probe}>&-`);
+    expect(out).toContain('restored demo-quiet-basin');
+    expect(out, 'cmd_ws_restore left its lock descriptor open in the calling shell')
+      .toContain('SAMESHELL=free');
+    // The cross-process form is kept beside it: it is the only one that would
+    // catch a restore that somehow outlived its own shell, and it costs a
+    // subprocess.
     expect(lockFree(), 'ws-restore must not leave the reap lock held').toBe(true);
     // And the workspace is reachable again by the ordinary route: archive it a
     // second time and the interrupted cleanup finishes.
