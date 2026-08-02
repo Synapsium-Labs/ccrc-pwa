@@ -3566,6 +3566,52 @@ _ws_gc_human() {   # bytes -> human, or '-' unchanged
   numfmt --to=iec "$1" 2>/dev/null || echo "$1"
 }
 
+# ── the pruning report's one writer ────────────────────────────────
+# Every row of `ws-gc --prune`'s report goes through here, and nothing else may
+# write one. Two jobs, and they are the two halves of final-round verification
+# P1 (see `_ws_gc_reclaimable`):
+#
+#   1. ONE ROW PER CALL. `_ws_line_safe` replaces every C0 control character —
+#      NEWLINE first among them, but also CR and TAB, which move a cursor about
+#      a column-aligned report just as effectively — with `?`, the substitution
+#      `ls` has made conventional for a byte a terminal must not be handed. The
+#      strings this report prints include gitignored FILENAMES, which are
+#      chosen by whatever wrote them and are read NUL-separated everywhere else
+#      in this file for exactly that reason.
+#   2. THE TALLY IS A COUNT OF ACTIONS. `GC_RECLAIMED`/`GC_DECLINED` are
+#      incremented HERE, where the action is announced, so the footer is
+#      arithmetic over events and not `grep -c` over rendered text.
+#
+# WHICH HALF IS PINNED, measured rather than assumed. Mutant A (`_ws_line_safe`
+# made a passthrough) is KILLED by `a gitignored filename holding a NEWLINE
+# cannot forge a row or move the tally`: three `  reclaimed ` rows where two
+# were written — and the footer still read 2, which is the counters doing their
+# job with the sanitiser gone. Mutant B (the counters kept but the footer put
+# back on `grep -c` over the captured text) SURVIVES, and is DISCLOSED here
+# rather than chased with a fixture, because with (1) in force no input can
+# distinguish the two. The proof is an enumeration of what the pruning section
+# can print: every row is `_gc_row`'s `printf '  %-10s %s\n'` over a LABEL that
+# is a literal in this file and a payload with no control bytes in it, so the
+# label alone decides the prefix and one call is one line; the only other
+# writers are this function's own `echo`s of fixed strings and the stdout of
+# `git worktree prune` / `git worktree remove` / `_reg_purge`, none of which
+# emits a line beginning with two spaces (`git branch -d`'s did not either, and
+# it is silenced now for the separate reason at its call site). The counters
+# stay because that enumeration is a property of TODAY's row writers, and the
+# next one added here will be written by someone reading the report, not this
+# comment.
+#
+# Initialised at FILE scope, not only in `cmd_ws_gc`: ccd runs under `set -u`
+# and this file is sourced by its tests, which call `_ws_gc_prune_row` on its
+# own. An unbound counter would kill the process at the moment it announced a
+# deletion it had already performed.
+GC_RECLAIMED=0
+GC_DECLINED=0
+_ws_line_safe() { printf '%s' "${1//[[:cntrl:]]/?}"; }
+_gc_row()       { printf '  %-10s %s\n' "$1" "$(_ws_line_safe "$2")"; }
+_gc_reclaimed() { GC_RECLAIMED=$(( GC_RECLAIMED + 1 )); _gc_row reclaimed "$1"; }
+_gc_declined()  { GC_DECLINED=$((  GC_DECLINED  + 1 )); _gc_row declined  "$1"; }
+
 _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked files,
                    #            OR when we could not find out
   local out
@@ -3714,19 +3760,41 @@ _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of ori
 # `orphan` row, ONLY under `--prune`, and only after the dirty and merged checks
 # have already declined every row they can — so the sweep pays for it once per
 # directory it is actually about to delete.
+#
+# THE REPORT IS LINE-ORIENTED AND THE PATHS ARE NOT — final-round verification,
+# P1, and the TENTH instance of the measurement-forgery class on this branch,
+# introduced by the fix round that closed the ninth. The listing above prints
+# gitignored filenames, which are the one class of string in this command an
+# ATTACKER (or an ordinary build tool) chooses: `_ws_collect_ignored` reads them
+# NUL-separated precisely because a path may contain a TAB or a NEWLINE, and
+# this function then printed them raw into a report whose own rows are lines. A
+# file named $'a\n  reclaimed  removed orphan worktree /x' therefore injected a
+# whole fabricated row — and `cmd_ws_gc` computed the run's footer by grepping
+# that rendered text, so the injected row was COUNTED. Measured: a sweep that
+# reclaimed 2 and declined 0 reported "reclaimed 3, declined 1".
+#
+# BOTH HALVES ARE CLOSED, because either alone leaves a forgery standing:
+#   - the FOOTER counts actions in `GC_RECLAIMED`/`GC_DECLINED`, incremented at
+#     the point the action is taken. No string a path can hold reaches it.
+#   - the PRINT goes through `_ws_line_safe`, so a record occupies exactly one
+#     row and cannot open a second. A tally nobody can forge is still read
+#     beside a report a human is being asked to believe.
+# `_ws_line_safe` is applied to EVERY row of this report, not only to the ones
+# that carry an ignored path today, for the reason the class keeps recurring:
+# the next producer added here will not remember to ask.
 _ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds no secrets;
                          #         prints the `  contents`/`  declined` lines either way
   local p="$1" rec sens b path n=0 total=0 shown=0
   _ws_collect_ignored "$p" || {
-    echo "  declined   could not read the ignored set at $p${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to remove a tree it cannot describe"
+    _gc_declined "could not read the ignored set at $p${REAP_IGNREASON:+ — $REAP_IGNREASON} — refusing to remove a tree it cannot describe"
     return 1
   }
   if (( ${#REAP_SENSITIVE[@]} != 0 )); then
-    echo "  declined   $p holds secret-shaped ignored file(s): ${REAP_SENSITIVE[*]} — move them, or remove it with the workspace sheet"
+    _gc_declined "$p holds secret-shaped ignored file(s): ${REAP_SENSITIVE[*]} — move them, or remove it with the workspace sheet"
     return 1
   fi
   if (( ${#REAP_IGNORED[@]} == 0 )); then
-    echo "  contents   $p has nothing ignored — everything in it is in git"
+    _gc_row contents "$p has nothing ignored — everything in it is in git"
     return 0
   fi
   # NUL-separated on both the sort and the read, and the byte field taken by
@@ -3739,15 +3807,15 @@ _ws_gc_reclaimable() {   # path -> 0 when the ignored set is readable and holds 
     b="${rec#*$'\t'}"; b="${b%%$'\t'*}"
     n=$(( n + 1 )); total=$(( total + b ))
   done
-  echo "  contents   $p also holds $n ignored entr$( (( n == 1 )) && echo y || echo ies), $(_ws_gc_human "$total") — none of it is in git, and all of it goes:"
+  _gc_row contents "$p also holds $n ignored entr$( (( n == 1 )) && echo y || echo ies), $(_ws_gc_human "$total") — none of it is in git, and all of it goes:"
   while IFS=$'\t' read -r -d '' sens b path; do
     (( shown < 10 )) || continue
     shown=$(( shown + 1 ))
-    printf '  contents     %-10s %s\n' "$(_ws_gc_human "$b")" "$path"
+    _gc_row contents "$(printf '  %-10s %s' "$(_ws_gc_human "$b")" "$path")"
   done < <(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z -t$'\t' -k1,1nr -k2,2nr)
-  (( n > shown )) && echo "  contents     … and $(( n - shown )) more"
+  (( n > shown )) && _gc_row contents "  … and $(( n - shown )) more"
   (( REAP_SENSITIVE_FILTERED == 0 )) \
-    || echo "  contents   ($REAP_SENSITIVE_FILTERED secret-shaped match(es) filtered as vendored/template — see ccd ws-audit)"
+    || _gc_row contents "($REAP_SENSITIVE_FILTERED secret-shaped match(es) filtered as vendored/template — see ccd ws-audit)"
   return 0
 }
 
@@ -3763,54 +3831,62 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # project already reclaimed every prunable registration in it. Calling
         # it again would succeed (it is idempotent) and print a SECOND
         # "reclaimed" line for work that already happened.
-        echo "  covered    stale metadata for $project/$slug — reclaimed with an earlier row in $project"
+        _gc_row covered "stale metadata for $project/$slug — reclaimed with an earlier row in $project"
       elif git -C "$main" worktree prune 2>/dev/null; then
-        echo "  reclaimed  stale metadata for $project/$slug"
+        _gc_reclaimed "stale metadata for $project/$slug"
       else
         # Metadata, not data — worth saying, not worth failing over.
-        echo "  declined   could not prune metadata for $project/$slug"
+        _gc_declined "could not prune metadata for $project/$slug"
       fi ;;
     foreign-stale)
       # A prunable registration outside our tree is still someone else's
       # metadata. `git worktree repair` may be the owning tool's only way back
       # to a temporarily-missing worktree; pruning it here would foreclose that.
-      echo "  declined   $project/$slug is foreign metadata — ccd removes only what it created" ;;
+      _gc_declined "$project/$slug is foreign metadata — ccd removes only what it created" ;;
     dead-reg)
       _reg_purge "$project-$slug"                                          # finding F3
-      echo "  reclaimed  dead registry entry $project-$slug" ;;
+      _gc_reclaimed "dead registry entry $project-$slug" ;;
     orphan)
       if _ws_gc_dirty "$p"; then
-        echo "  declined   $p has uncommitted changes"; return 0
+        _gc_declined "$p has uncommitted changes"; return 0
       fi
       local branch; branch=$(git -C "$p" rev-parse --abbrev-ref HEAD 2>/dev/null)
       if [[ -n "$branch" && "$branch" != HEAD ]] && ! _ws_gc_merged "$main" "$branch"; then
         # The branch would survive `worktree remove`, so nothing is lost either
         # way — but a sweep should only reclaim what is provably finished, and
         # someone may be mid-way through this one.
-        echo "  declined   $p is on unmerged branch $branch"; return 0
+        _gc_declined "$p is on unmerged branch $branch"; return 0
       fi
       # Finding F4 — the §7 scan and the listing, immediately before the only
       # step in this command that deletes a DIRECTORY. See `_ws_gc_reclaimable`.
       _ws_gc_reclaimable "$p" || return 0
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
-        echo "  reclaimed  removed orphan worktree $p"
+        _gc_reclaimed "removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.
-        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" 2>/dev/null; then
-          echo "  reclaimed  deleted merged branch $branch"
+        #
+        # `>/dev/null` on stdout as well as stderr — final-round verification,
+        # P6. `git branch -d` prints `Deleted branch ws/x (was 2df8d40).`, and
+        # with only stderr redirected that sentence landed in the middle of the
+        # report as a bare unprefixed line: not a row this command wrote, not
+        # counted by the footer, and now sitting between two `reclaimed` rows
+        # the listing above added. The row below is ccd's own account of the
+        # same fact, in the report's own shape.
+        if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
+          _gc_reclaimed "deleted merged branch $branch"
         fi
       else
-        echo "  declined   git refused to remove $p"
+        _gc_declined "git refused to remove $p"
       fi ;;
     archived)
       # Archived is the STAGING for a confirmed deletion, not a queue a sweep
       # drains. No timer, no grace window, no "reclaim opens in 11 days".
-      echo "  declined   $p is archived — remove it with the workspace sheet, never on a timer" ;;
+      _gc_declined "$p is archived — remove it with the workspace sheet, never on a timer" ;;
     reaping)
-      echo "  declined   $p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
+      _gc_declined "$p is mid-cleanup (breadcrumb: $(_reg_get "$project-$slug" reaping)) — re-run ccd ws-reap to finish it" ;;
     dirty)
-      echo "  declined   $p is dirty — never removed, at any flag" ;;
+      _gc_declined "$p is dirty — never removed, at any flag" ;;
     foreign)
-      echo "  declined   $p is foreign — ccd removes only what it created" ;;
+      _gc_declined "$p is foreign — ccd removes only what it created" ;;
     tracked)
       : ;;   # a live workspace: not a finding to act on
   esac
@@ -3831,8 +3907,16 @@ cmd_ws_gc() {   # [--prune]
   local -a paths=()
   printf '%-11s %-18s %-22s %7s %5s  %s\n' STATE PROJECT WORKSPACE SIZE IDLE PATH
   while IFS=$'\t' read -r state project slug bytes age p; do
+    # `_ws_line_safe` on the three name fields for the reason `_gc_row` carries
+    # it. DISCLOSED, because it is a display fix and not a read fix: `$rows` is
+    # TSV read line by line, so a project or workspace directory whose NAME held
+    # a TAB or a NEWLINE would already have been split wrong upstream in
+    # `_ws_gc_scan`. What this stops is the rendered table being reshaped by a
+    # name; what it does not do is make the scan NUL-safe, and ccd's own slug
+    # rule (`_ws_slug_valid`) is why that has never mattered.
     printf '%-11s %-18s %-22s %7s %5s  %s\n' \
-      "$state" "$project" "$slug" "$(_ws_gc_human "$bytes")" "$age" "$p"
+      "$state" "$(_ws_line_safe "$project")" "$(_ws_line_safe "$slug")" \
+      "$(_ws_gc_human "$bytes")" "$age" "$(_ws_line_safe "$p")"
     n=$(( n + 1 ))
     [[ -d "$p" ]] && paths+=("$p")
   done <<< "$rows"
@@ -3853,21 +3937,31 @@ cmd_ws_gc() {   # [--prune]
 
   echo
   echo "pruning:"
-  local reclaimed=0 declined=0 out already
+  # COUNTED, NOT GREPPED — final-round verification P1. This loop used to
+  # capture each row's rendered text and derive the footer with
+  # `grep -c '^  reclaimed '` over it, which made the tally a function of
+  # strings the report prints rather than of actions the sweep took; a
+  # gitignored filename holding a newline injected rows and was counted. The
+  # row writers (`_gc_reclaimed`/`_gc_declined`) now increment these two, and
+  # `_ws_gc_prune_row` prints STRAIGHT to stdout so those increments survive:
+  # a `$(…)` around the call would put them in a subshell and the footer would
+  # read 0 for every run. `while … done <<< "$rows"` is not a subshell, so the
+  # loop body shares this function's variables. The `[[ -n "$out" ]] || continue`
+  # the capture needed is gone with it: the one silent state (`tracked`) prints
+  # nothing and so contributes nothing, which is the same result by
+  # construction rather than by a test on rendered text.
+  local already
+  GC_RECLAIMED=0; GC_DECLINED=0
   local -A meta_pruned=()   # projects whose stale metadata this run already reclaimed
   while IFS=$'\t' read -r state project slug bytes age p; do
     already=0
     if [[ "$state" == stale-meta ]]; then
       if [[ -n "${meta_pruned[$project]:-}" ]]; then already=1; else meta_pruned[$project]=1; fi
     fi
-    out=$(_ws_gc_prune_row "$state" "$project" "$slug" "$p" "$already")
-    [[ -n "$out" ]] || continue
-    echo "$out"
-    reclaimed=$(( reclaimed + $(grep -c '^  reclaimed ' <<< "$out") ))
-    declined=$((  declined  + $(grep -c '^  declined '  <<< "$out") ))
+    _ws_gc_prune_row "$state" "$project" "$slug" "$p" "$already"
   done <<< "$rows"
   echo
-  echo "reclaimed $reclaimed, declined $declined"
+  echo "reclaimed $GC_RECLAIMED, declined $GC_DECLINED"
 }
 
 _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses

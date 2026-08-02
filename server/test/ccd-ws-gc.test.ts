@@ -385,6 +385,61 @@ describe('ws-gc --prune', () => {
     expect(out).toContain('reclaimed 2, declined 0');
   }, 30000);
 
+  it('a gitignored filename holding a NEWLINE cannot forge a row or move the tally', () => {
+    // Final-round verification P1, and the tenth instance of the
+    // measurement-forgery class on this branch — the first one this project's
+    // own fix round created. The listing above is the only place `ws-gc
+    // --prune` prints a string somebody else chose: `_ws_collect_ignored`
+    // reads ignored paths NUL-separated precisely because a filename may hold
+    // a TAB or a NEWLINE, and the listing then printed them raw into a report
+    // whose rows are lines, while `cmd_ws_gc` computed the footer by
+    // `grep -c '^  reclaimed '` over that same rendered text.
+    //
+    // Measured before the fix, on this exact fixture: five rows where four
+    // were written, and `reclaimed 3, declined 1` for a sweep that reclaimed
+    // two and declined nothing.
+    //
+    // The fixture uses a `*.log` pattern rather than the `orphanWithIgnored`
+    // helper on purpose: that helper builds `.gitignore` with
+    // `Object.keys(files).join('\n')`, so a key containing a newline would
+    // become two ignore lines and quietly stop ignoring anything.
+    const main = h.makeRepo('demo');
+    const wt = addWs('demo', 'still-cove');
+    for (const dir of [wt, main]) {
+      fs.writeFileSync(path.join(dir, '.gitignore'), '*.log\n');
+      h.git(dir, 'add', '.gitignore');
+      h.git(dir, 'commit', '-m', 'ignore logs');
+    }
+    h.git(main, 'push', 'origin', 'main');
+    // No `/` anywhere in it: this is ONE filename, not a path, and a slash
+    // would make `path.join` ask for a directory the fixture never created.
+    const evil = 'a\n  reclaimed  removed orphan worktree elsewhere'
+      + '\n  declined   demo-other is dirty — never removed\n.log';
+    fs.writeFileSync(path.join(wt, evil), 'payload\n');
+    expect(h.sh(`_ws_gc_dirty "${wt}" && echo dirty || echo clean`),
+      'the fixture only means anything if the injected name is INVISIBLE to git status')
+      .toBe('clean');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-still-cove.uuid'));
+
+    const out = prune();
+    const lines = out.split('\n');
+    // THE FOOTER. Two real actions: the worktree, then its merged branch.
+    expect(out, out).toContain('reclaimed 2, declined 0');
+    // THE ROWS. Exactly the two reclaims the sweep performed, and no decline
+    // at all — a raw print puts both forged prefixes at the start of a line.
+    const reclaims = lines.filter((l) => l.startsWith('  reclaimed '));
+    expect(reclaims.length, out).toBe(2);
+    expect(reclaims.some((l) => l.includes('elsewhere')),
+      'a forged reclaim row got in among the real ones').toBe(false);
+    expect(lines.filter((l) => l.startsWith('  declined ')).length, out).toBe(0);
+    // AND THE NAME IS STILL DISCLOSED — sanitising is not suppressing. One
+    // row, one entry, control bytes rendered `?` the way `ls` renders them.
+    const contents = lines.filter((l) => l.startsWith('  contents'));
+    expect(contents.join('\n'), out).toContain('a?  reclaimed  removed orphan worktree elsewhere?');
+    expect(out).toContain('1 ignored entry');
+    expect(fs.existsSync(wt), 'a clean orphan with no secrets is still reclaimed').toBe(false);
+  }, 30000);
+
   it('does NOT reclaim an orphan whose ignored set it could not read', () => {
     // Unknown counts as dirty — the rule `_ws_gc_dirty`'s own comment states
     // for the tracked half, applied to the half it cannot see. `find` prints
