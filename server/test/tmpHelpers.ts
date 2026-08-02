@@ -6,8 +6,18 @@
 // 140 directories, measured, and a mutation sweep runs the suite 50-120 times.
 // /tmp held 7,830 of them when this landed, five weeks after the 47k/1.4 GiB
 // failure CONSTRAINTS already paid for, on the box whose OOM/disk incident
-// history is the reason this project exists. `trap 'rm -rf "$TMPHOME"' EXIT` is
-// the same rule on the ccd side of the harness.
+// history is the reason this project exists.
+//
+// The sentence that used to end this paragraph — "`trap 'rm -rf "$TMPHOME"'
+// EXIT` is the same rule on the ccd side of the harness" — was FALSE and is
+// removed (critic2, gates Cannot-verify 3; declined twice as out-of-lane, made
+// zero times). `TMPHOME` appears nowhere in this repository except that
+// sentence: `grep -rn TMPHOME infra/` returns exactly one hit, the comment
+// itself, and `ccd` arms no such trap. Whether it was ever true is unknown; it
+// was cited by a review as corroboration for this file's discipline, which is
+// how a false comment does damage. The discipline stands on its own — it is the
+// `afterAll` below, and its ccd-side counterpart is whatever the ccd tests
+// actually do, which is not this.
 //
 // A file-scoped `afterAll` rather than a global sweep of `/tmp/ccrc-*`: test
 // FILES run in parallel processes, so removing everything that matches the
