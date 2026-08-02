@@ -1,19 +1,24 @@
-import { describe, it, expect, afterEach, afterAll } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { describe, it, expect, afterEach } from 'vitest';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 /** A fake `tmux` binary that echoes its args, so exec tests can assert real
  *  stdout/stderr/code flow through the agent without depending on a real
  *  tmux install or an actual session existing in this sandbox. */
-const stubDirs: string[] = [];
-afterAll(() => { for (const d of stubDirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
-
+//
+// ROUND 3. This file used to keep its OWN `stubDirs` array plus its own
+// `afterAll` — a second temp-dir registry inside a package that already has
+// one, which is exactly the pattern the previous round's class_check claimed
+// had been resisted ("the registry is now one per package"). It never leaked,
+// because its hook was a hook; the defect was that the discipline was
+// re-derived here instead of imported, so the guard in `tmpfixtures.test.ts`
+// could not see it, and the next file to copy this one would copy the
+// re-derivation and not necessarily the hook. `mkTmp` is the one registry.
 function makeStubBinary(name: string, body: string): string {
-  const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-agent-bin-'));
-  stubDirs.push(dir);
+  const dir = mkTmp('ccrc-agent-bin-');
   const file = path.join(dir, name);
   writeFileSync(file, `#!/bin/sh\n${body}\n`);
   chmodSync(file, 0o755);

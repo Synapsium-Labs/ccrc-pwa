@@ -4,7 +4,7 @@
 // i.e. on exactly the runs a mutation sweep produces, 50-120 per sweep, on the
 // box whose OOM/disk history is why this project exists.
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -65,17 +65,83 @@ describe('mkTmp (agent suite)', () => {
       'exactly one afterAll registration in tmpHelpers.ts').toBe(1);
   });
 
-  it('no agent test file removes a fixture with a trailing rmSync any more', () => {
-    // The class, not the instance. `whitelist.test.ts` was the last file in
-    // this directory doing it; three new test files were added here in the
-    // previous fix round without anyone noticing the pattern next to them.
-    // A bare `mkdtempSync` in a test file is the marker: it means the file made
-    // a directory the shared registry does not know about, so nothing removes
-    // it on a failing run.
-    const files = ['whitelist.test.ts', 'helpers.ts'];
-    for (const f of files) {
-      const src = readFileSync(path.join(here, f), 'utf8');
-      expect(src.includes('mkdtempSync('), `${f} makes an unregistered temp dir`).toBe(false);
+  it('no file in this directory makes a temp dir outside the one registry', () => {
+    // THE CLASS, and this time by SCAN. The round-2 version of this test named
+    // two files — `['whitelist.test.ts', 'helpers.ts']` — and the round-2
+    // report claimed on the strength of it that the pin "fails if any agent
+    // test file goes back to a bare `mkdtempSync`" and that "the registry is
+    // now one per package". Both claims were false when they were written:
+    // `exec.test.ts` was sitting in this same directory with its own
+    // `stubDirs` array, its own `afterAll`, and a bare `mkdtempSync` — a second
+    // local registry, i.e. the very pattern the class_check said had been
+    // resisted. It was invisible to a guard that names its files, which is the
+    // whole point: the finding that produced this guard was "three new test
+    // files were added here without anyone noticing the pattern next to them",
+    // and a two-name list cannot notice the fourth. So the file list is read
+    // from the directory and the only thing hardcoded is the exemption, which
+    // is short, justified per entry, and asserted to be non-empty of purpose
+    // by the two tests below.
+    //
+    // What the marker means, stated accurately (the round-2 comment overstated
+    // it): a bare `mkdtempSync` does not prove a leak — `exec.test.ts` cleaned
+    // up in an `afterAll` and leaked nothing. It proves the file DERIVED the
+    // discipline instead of importing it, so whether it leaks depends on that
+    // file's author getting the hook right, every time, forever. One registry
+    // means one place to get it right.
+    const exempt = new Map<string, string>([
+      // The registry itself: this is the one legitimate `mkdtempSync` call in
+      // the package, and mkTmp is what every other file must route through.
+      ['tmpHelpers.ts', 'IS the registry'],
+      // The PATH-containment setup file. It runs as a `setupFiles` entry, not
+      // as a test module, so it makes its one directory before any test file's
+      // registry exists and must own it outright. Its cleanup is already a
+      // hook (`afterAll(() => rmSync(dir, ...))`), so it does not leak on a
+      // failing run, and rewiring it is forbidden by the standing constraint
+      // that has cost the live fleet four outages.
+      ['contain-path.setup.ts', 'setupFiles, not a test module; hook-cleaned; must not be rewired'],
+    ]);
+
+    const files = readdirSync(here).filter((f) => f.endsWith('.ts')).sort();
+    // Guard the guard: a scan that reads an empty directory passes every
+    // assertion below without checking anything. Both directions again — an
+    // exemption naming a file that no longer exists is folklore.
+    expect(files.length, 'the directory scan found no .ts files').toBeGreaterThan(5);
+    for (const name of exempt.keys()) {
+      expect(files, `${name} is exempted but no longer exists — stale exemption`).toContain(name);
     }
+
+    // The marker is assembled rather than written, because otherwise THIS file
+    // is its own first offender: the literal below would match itself, and the
+    // only way out would be to exempt the guard from the guard.
+    const MARKER = `mkdtemp${'Sync'}(`;
+    // Comments stripped first: prose about the pattern (this file is full of
+    // it) is not the pattern. Line comments and block comments only — enough
+    // for a directory of test files, and a false positive here is a loud,
+    // one-line-to-fix failure rather than a silent pass.
+    const code = (src: string): string => src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+
+    const offenders = files.filter((f) => !exempt.has(f)
+      && code(readFileSync(path.join(here, f), 'utf8')).includes(MARKER));
+    expect(offenders, 'these files make temp dirs the shared registry does not know about').toEqual([]);
+
+    // ...and the scan is shown to be capable of finding one, so "no offenders"
+    // cannot mean "the matcher is broken". The registry is exempt from the
+    // verdict, not from the matcher.
+    expect(code(readFileSync(path.join(here, 'tmpHelpers.ts'), 'utf8')).includes(MARKER),
+      'the matcher no longer recognises the registry\'s own mkdtempSync call').toBe(true);
+  });
+
+  it('the exempted files are exempted for the reason given, not by habit', () => {
+    // `contain-path.setup.ts` is excused because its cleanup is a HOOK. If that
+    // ever becomes a trailing statement the exemption stops being true, and the
+    // file would leak once per run of every agent test file.
+    const src = readFileSync(path.join(here, 'contain-path.setup.ts'), 'utf8');
+    expect(src, 'contain-path.setup.ts no longer cleans up in a hook').toContain('afterAll(() => rmSync(dir');
+    // And it is still wired, which is the constraint the standing rules put
+    // above everything else in this package.
+    const cfg = readFileSync(path.resolve(here, '..', 'vitest.config.ts'), 'utf8');
+    expect(cfg).toContain("setupFiles: ['test/contain-path.setup.ts']");
   });
 });
