@@ -541,6 +541,49 @@ describe('ws-rm', () => {
     expect(branches('ws/quiet-mesa')).not.toBe('');
   });
 
+  // THE OTHER HALF OF "could not read" — final-round verification P2, and the
+  // same shape already closed at `_ws_reap_eval` and `_ws_archive_manifest`
+  // while this destructive verb kept the rc-only form three lines under the
+  // comment describing the fix. A `chmod 000` on a TRACKED directory holding a
+  // MODIFIED file is not an error to git: measured on git 2.43, `git status
+  // --porcelain` exits 0 with EMPTY stdout and writes `warning: could not open
+  // directory 'tracked/'` to stderr. So the guard above read CLEAN, the run
+  // went on to `_ws_unsupervise` and `tmux kill-session`, and only `git
+  // worktree remove` refused — leaving the session dead, out of supervision,
+  // and a refusal message about unlocking a tree that says nothing about the
+  // uncommitted work still in it.
+  it('refuses a worktree it could only PARTIALLY read, before any teardown', () => {
+    const wt = addOne();
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    execFileSync('git', ['-C', wt, 'add', '-A'], { env: gitEnv() });
+    execFileSync('git', ['-C', wt, 'commit', '-m', 'the work'], { env: gitEnv() });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'UNCOMMITTED\n');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      // The premise, measured rather than assumed: rc 0, empty stdout, a
+      // diagnostic on stderr. Without this the test could be passing on the
+      // exit-code rung that was already there.
+      const probe = sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+
+      expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
+      expect(calls(), 'REFUSE FIRST: neither the unit nor the pane may be touched').toEqual([]);
+      expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+      expect(fs.existsSync(wt)).toBe(true);
+      expect(branches('ws/quiet-mesa')).not.toBe('');
+    } finally {
+      // rmSync cannot recurse into a 0o000 directory: without this the
+      // harness's own cleanup throws and leaks the fixture HOME.
+      fs.chmodSync(tracked, 0o755);
+    }
+  });
+
   // The test above hand-picks the one variant of "not our worktree" that the
   // record cannot lie about: it prunes first, so `registered` is 1. Without the
   // prune the record is STALE — git still claims this path, so `registered` is

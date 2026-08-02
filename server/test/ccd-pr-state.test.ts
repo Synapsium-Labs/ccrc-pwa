@@ -502,6 +502,45 @@ describe('dirty is a measurement of OUR tree, or it is null', () => {
       fs.chmodSync(idx, 0o644);
     }
   });
+
+  it('is null when the tree could only be PARTIALLY read — rc 0 is not an answer', () => {
+    // Final-round verification P2, the reporting half of the same class the
+    // destructive verbs carry. The test above reaches the exit-code rung (an
+    // unreadable index makes git exit non-zero); this reaches the one it cannot
+    // see. Measured on git 2.43: `chmod 000` on a TRACKED directory holding a
+    // MODIFIED file gives rc 0, EMPTY stdout, and the diagnostic on stderr — so
+    // `grep -c .` counted nothing and the wire carried `"dirty":0`, an
+    // affirmative "nothing is uncommitted here" about a file nobody looked at.
+    // `dirty` already had an honest unmeasured value; this branch just never
+    // used it.
+    const { wt } = workspaceWithCommit('demo', 'quiet-basin');
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    h.git(wt, 'add', '-A');
+    h.git(wt, 'commit', '-m', 'the work');
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'UNCOMMITTED\n');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      // The premise, measured in the fixture: rc 0 and empty stdout, which is
+      // what makes this a DIFFERENT rung from the unreadable-index test.
+      const probe = h.sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+
+      h.ghRows([]);
+      const out = h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin 2>"$HOME/pr-err"`);
+      expect(line(out).dirty, 'a partial read is UNMEASURED, never a clean 0').toBeNull();
+      const err = fs.readFileSync(path.join(h.home, 'pr-err'), 'utf8');
+      expect(err).toContain('could not read the tree');
+      expect(err).toContain('demo-quiet-basin');
+    } finally {
+      fs.chmodSync(tracked, 0o755);
+    }
+  });
 });
 
 describe('failure is an ANSWER, not an error', () => {

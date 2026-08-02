@@ -304,16 +304,21 @@ describe('ws-gc --prune', () => {
    *  and to `git worktree remove`, which is the whole premise of the finding.
    *  The branch is left at origin/HEAD… except for the .gitignore commit, so
    *  the fixture pushes it, keeping `_ws_gc_merged` true. */
-  const orphanWithIgnored = (slug: string, files: Record<string, string>): string => {
+  const orphanWithIgnored = (
+    slug: string, files: Record<string, string>, patterns?: string[],
+  ): string => {
+    // `patterns` overrides the default "one line per file" ignore list, for the
+    // fixtures that need a DIRECTORY ignored rather than the paths inside it.
+    const ignore = `${(patterns ?? Object.keys(files)).join('\n')}\n`;
     const wt = addWs('demo', slug);
-    fs.writeFileSync(path.join(wt, '.gitignore'), `${Object.keys(files).join('\n')}\n`);
+    fs.writeFileSync(path.join(wt, '.gitignore'), ignore);
     h.git(wt, 'add', '.gitignore');
     h.git(wt, 'commit', '-m', 'ignore');
     // The .gitignore lands on main too, so the branch stays an ancestor of
     // origin/HEAD and `_ws_gc_merged` still says merged — otherwise the row
     // declines `unmerged` and the test would be about the wrong guard.
     const main = path.join(h.home, 'projects', 'demo');
-    fs.writeFileSync(path.join(main, '.gitignore'), `${Object.keys(files).join('\n')}\n`);
+    fs.writeFileSync(path.join(main, '.gitignore'), ignore);
     h.git(main, 'add', '.gitignore'); h.git(main, 'commit', '-m', 'ignore');
     h.git(main, 'push', 'origin', 'main');
     for (const [rel, body] of Object.entries(files)) {
@@ -447,7 +452,18 @@ describe('ws-gc --prune', () => {
     // directory are simply ABSENT, which is the answer that says "no secrets
     // here" about files nobody enumerated.
     h.makeRepo('demo');
-    const wt = orphanWithIgnored('still-cove', { 'build/out.o': 'rubbish\n' });
+    // FIXTURE NARROWED (final-round verification P2, same round): `build/` is
+    // ignored as a DIRECTORY, not `build/out.o` as a path. `_ws_gc_dirty` now
+    // refuses any tree whose `git status --porcelain` writes a diagnostic, and
+    // a chmod-000 directory git WALKS produces exactly that — so the
+    // un-narrowed fixture declined `has uncommitted changes` one gate earlier
+    // and never reached the ignored-set guard this test is about. Measured:
+    // with `build/` ignored, plain `status --porcelain` is rc 0 with EMPTY
+    // stderr (git never descends into an ignored directory), while
+    // `--ignored=matching` collapses it to one entry and the `find` inside it
+    // still fails on `locked/` — which is the blind spot this guard exists for,
+    // reproduced exactly and nothing else.
+    const wt = orphanWithIgnored('still-cove', { 'build/out.o': 'rubbish\n' }, ['build/']);
     fs.mkdirSync(path.join(wt, 'build', 'locked'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'build', 'locked', '.env'), 'SECRET=1\n');
     fs.chmodSync(path.join(wt, 'build', 'locked'), 0o000);
@@ -459,6 +475,55 @@ describe('ws-gc --prune', () => {
       expect(out).not.toContain('removed orphan worktree');
     } finally {
       fs.chmodSync(path.join(wt, 'build', 'locked'), 0o755);
+    }
+  }, 30000);
+
+  it('reads a PARTIALLY unreadable tree as dirty, not as clean', () => {
+    // Final-round verification P2. `_ws_gc_dirty` is the function whose own
+    // comment states the rule the rest of the file quotes — "a status we could
+    // not read is not a clean one" — and it was the last of the four sites
+    // still testing only the exit code. Measured on git 2.43: `chmod 000` on a
+    // TRACKED directory holding a MODIFIED file gives rc 0, EMPTY stdout and
+    // the diagnostic on stderr, so this answered CLEAN.
+    //
+    // Both halves are asserted, because the answer feeds two different things:
+    // `_ws_gc_row` classifies the workspace off it, and `_ws_gc_prune_row`'s
+    // orphan arm uses it as the FIRST of the three gates in front of `git
+    // worktree remove`. Before the fix the orphan was saved only because
+    // `_ws_collect_ignored` refuses the same tree a few lines later — which is
+    // being right by accident of the next guard, and the decline said the wrong
+    // thing about why.
+    const main = h.makeRepo('demo');
+    const wt = addWs('demo', 'still-cove');
+    const tracked = path.join(wt, 'tracked');
+    fs.mkdirSync(path.join(tracked, 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'committed\n');
+    h.git(wt, 'add', '-A'); h.git(wt, 'commit', '-m', 'the work');
+    fs.writeFileSync(path.join(tracked, 'deep', 'code.txt'), 'UNCOMMITTED\n');
+    fs.chmodSync(tracked, 0o000);
+    try {
+      const probe = h.sh(`git -C "${wt}" status --porcelain 2>"$HOME/probe-err"; echo "rc=$?"; `
+        + `echo "out=[$(git -C "${wt}" status --porcelain 2>/dev/null)]"; `
+        + `echo "err=[$(cat "$HOME/probe-err")]"`);
+      expect(probe, probe).toContain('rc=0');
+      expect(probe, probe).toContain('out=[]');
+      expect(probe, probe).toContain('Permission denied');
+
+      expect(h.sh(`_ws_gc_dirty "${wt}" && echo dirty || echo clean`),
+        'unknown counts as dirty — the function\'s own contract').toBe('dirty');
+      expect(find(scan(), 'still-cove')?.state, 'and the scan says so too').toBe('dirty');
+
+      // …and as an ORPHAN — the one row `--prune` can delete — it declines for
+      // THIS reason, ahead of the ignored-set scan that used to catch it.
+      fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-still-cove.uuid'));
+      const out = prune();
+      expect(out, out).toContain('has uncommitted changes');
+      expect(out, out).not.toContain('removed orphan worktree');
+      expect(fs.existsSync(wt)).toBe(true);
+      expect(h.git(main, 'branch', '--list', 'ws/still-cove')).toContain('ws/still-cove');
+    } finally {
+      // rmSync cannot recurse into a 0o000 directory.
+      fs.chmodSync(tracked, 0o755);
     }
   }, 30000);
 
