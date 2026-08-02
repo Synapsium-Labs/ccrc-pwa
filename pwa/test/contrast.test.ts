@@ -92,4 +92,17 @@ describe('contrast gate', () => {
     expect(min).toBe(floor);
     expect(ratio).toBeGreaterThanOrEqual(floor);
   });
+
+  // The PR keycap's merged dot (Task 15) is a non-text graphical object, so
+  // 3:1 — not the 4.5 body-text floor. Both themes clear 4.5 too (8.06 dark,
+  // 5.93 light), so without pinning the min itself here, a mutant that
+  // loosened the pair's threshold to 4.5 would still print PASS and survive.
+  it.each([
+    'DARK  pr-merged / raised',
+    'LIGHT pr-merged / raised',
+  ])('measures %s at the 3:1 UI threshold, not 4.5 body', (label) => {
+    const { ratio, min } = measured(label);
+    expect(min).toBe(3);
+    expect(ratio).toBeGreaterThanOrEqual(3);
+  });
 });

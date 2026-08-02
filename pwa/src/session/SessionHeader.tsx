@@ -17,6 +17,7 @@ import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import { sessionLabel } from '../fleet/sessionLabel';
+import { PrKeycap } from './PrKeycap';
 import './chat.css';
 
 export interface SessionHeaderProps {
@@ -74,6 +75,10 @@ export function SessionHeader({
   fallback,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
+  // Task 16 renders `PrSheet` off this; until then the state exists (so the
+  // cap has somewhere to write) with no consumer but the `data-pr-open`
+  // attribute below, which Task 16 removes when it adds the sheet.
+  const [prOpen, setPrOpen] = useState(false);
   // Menu taps close the sheet first so the follow-up surface (swap sheet,
   // stop confirm, arriving model dialog) never fights it for the bottom edge.
   const menuAct = (fn: () => void): void => {
@@ -148,7 +153,7 @@ export function SessionHeader({
   const branchDuplicatesCrumb = crumb !== null && branch === crumb;
 
   return (
-    <header className="chat-head">
+    <header className="chat-head" data-pr-open={prOpen || undefined}>
       <button type="button" className="chat-back" aria-label="Back to fleet" onClick={onBack}>
         ‹
       </button>
@@ -221,6 +226,12 @@ export function SessionHeader({
       >
         <span aria-hidden="true">⋯</span>
       </button>
+      {/* Top right, to the right of the ···. `esc` keeps the OUTER edge because
+          it is the interrupt and its position is muscle memory; on a fine
+          pointer esc is absent and this becomes rightmost naturally. */}
+      {session !== null && session.workspace !== null && (
+        <PrKeycap pr={session.pr} onOpen={() => setPrOpen(true)} />
+      )}
       {!finePointer && (
         <button
           type="button"

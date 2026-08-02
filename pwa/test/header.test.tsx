@@ -296,6 +296,66 @@ describe('breadcrumb', () => {
   });
 });
 
+describe('the PR cap in the header', () => {
+  it('renders for a workspace session, whatever its pr value is', () => {
+    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    expect(screen.getByLabelText(/pull request/i)).toBeInTheDocument();
+  });
+
+  it('does NOT render for a project main checkout', () => {
+    render(<SessionHeader {...props({ session: fleetSession({ workspace: null, pr: null }) })} />);
+    expect(screen.queryByLabelText(/pull request/i)).not.toBeInTheDocument();
+  });
+
+  // These two pin the "unconditional" half of the rule directly, beyond what
+  // the pr: null case above already covers: a session whose PR read came back
+  // `unknown` (a gh outage, mid-sweep) and a session whose agent link is down
+  // (status 'dead' — tmux gone) both still get the cap. Gating visibility on
+  // either would hide the retry affordance behind a control that isn't there.
+  it('renders during a gh outage — phase unknown is not phase absent', () => {
+    render(<SessionHeader {...props({ session: fleetSession({
+      workspace: 'quiet-basin',
+      pr: {
+        phase: 'unknown', number: null, url: null, title: null, checks: null, checkNames: null,
+        ahead: 0, reason: 'offline', checkedAt: Date.now(), mergedAt: null, retryAt: null,
+      },
+    }) })} />);
+    // Beyond mere presence: this pins that `session.pr` is what actually
+    // reaches PrKeycap — a header that hardcoded `pr={null}` regardless of
+    // the session would pass every OTHER assertion in this describe block
+    // (every phase's sentence still contains "pull request"), and only a
+    // phase-specific check like this one catches that the wiring is real.
+    expect(screen.getByLabelText(/pull request/i)).toHaveAttribute('data-phase', 'unknown');
+  });
+
+  it('renders while the agent link is down (status dead)', () => {
+    render(<SessionHeader {...props({
+      status: 'dead',
+      session: fleetSession({ workspace: 'quiet-basin', status: 'dead', pr: null }),
+    })} />);
+    expect(screen.getByLabelText(/pull request/i)).toBeInTheDocument();
+  });
+
+  it('marks the header when the PR cap is tapped, for the sheet Task 16 adds', () => {
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    const header = container.querySelector('.chat-head')!;
+    expect(header).not.toHaveAttribute('data-pr-open');
+    fireEvent.click(screen.getByLabelText(/pull request/i));
+    expect(header).toHaveAttribute('data-pr-open', 'true');
+  });
+
+  it('sits after the ⋯ cap and before esc, which keeps the outer edge', () => {
+    // esc is the interrupt and its position is muscle memory.
+    stubPointer(false);
+    const { container } = render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin' }), status: 'busy' })} />);
+    const caps = [...container.querySelectorAll('.chat-head .keycap')].map((n) => n.className);
+    expect(caps.findIndex((c) => c.includes('keycap--more')))
+      .toBeLessThan(caps.findIndex((c) => c.includes('keycap--pr')));
+    expect(caps.findIndex((c) => c.includes('keycap--pr')))
+      .toBeLessThan(caps.findIndex((c) => c.includes('keycap--esc')));
+  });
+});
+
 describe('useKeyboardInsets', () => {
   function Probe(): ReactNode {
     return <div data-testid="inset">{useKeyboardInsets()}</div>;

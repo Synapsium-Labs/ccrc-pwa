@@ -62,6 +62,19 @@
   --status-dead-text:      #E8836F;  /* "exited · 3h ago — chat is read-only": 6.80:1 vs surface */
   --status-dead-tint:      rgba(224, 106, 85, 0.12);  /* EXIT badge pill; dead-text on it 5.89:1 over surface */
 
+  /* PR keycap (Task 15). --pr-merged ALIASES --acct-claude2 rather than
+     repeating its hex: a literal single hex here (#C7A7F4, dark-only) reads
+     8.06:1 on dark --bg-raised but only 1.75:1 on LIGHT's --bg-raised — well
+     under the 3:1 non-text floor — because it never gets a light-theme
+     override. Aliasing the already-themed, already contrast-proven account
+     token fixes both themes with no new literal colour to drift.
+     --pr-dim aliases --ink-tertiary for the same reason: its own name says
+     "== --ink-tertiary", so a second hardcoded copy is exactly the kind of
+     duplicate this file's own account-hue mechanism (--acct-active,
+     below) exists to avoid. */
+  --pr-merged: var(--acct-claude2);   /* violet, filled — merged: DARK 8.06:1, LIGHT 5.93:1 vs --bg-raised */
+  --pr-dim:    var(--ink-tertiary);   /* the "nothing to say" dot */
+
   /* Account accents — chip text on chip tint. Cool half of the wheel only
      (hues ~190/222/265/330), 40°+ apart, so no account hue collides with
      status green/amber/red. Chips always carry the account name in mono;

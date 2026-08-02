@@ -200,6 +200,29 @@ button.metachip:active {
   cursor: default;
 }
 
+/* The PR cap. It must NOT be the one sub-44px control in the header, so the
+   min-width stays at the tap floor and only the inline padding tightens. */
+.keycap--pr { min-width: var(--tap-min); padding-inline: 6px; gap: 3px; }
+.keycap--pr .pr-legend { font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono); }
+.keycap--pr .pr-glyph  { font-size: var(--text-2xs); }
+.keycap--pr .pr-dot {
+  width: 6px; height: 6px; border-radius: var(--r-full);
+  border: 1px solid currentColor; background: currentColor;
+}
+/* unchecked: hollow AND dashed — "we have not looked" must not look like
+   "there is nothing here". */
+.keycap--pr[data-phase='unchecked'] .pr-dot { background: none; border-style: dashed; color: var(--pr-dim); }
+.keycap--pr[data-phase='no-commits'] .pr-dot { background: none; border: 0; }
+.keycap--pr[data-phase='none'] .pr-dot { background: none; border: 0; color: var(--accent); }
+.keycap--pr[data-phase='draft'] .pr-dot { background: none; }
+.keycap--pr[data-phase='merged'] .pr-dot { color: var(--pr-merged); }
+.keycap--pr[data-phase='closed'] { color: var(--pr-dim); }
+.keycap--pr[data-phase='closed'] .pr-legend { text-decoration: line-through; }
+.keycap--pr[data-phase='unknown'] .pr-dot { background: none; border-style: dashed; color: var(--pr-dim); }
+.keycap--pr[data-checks='pass'] .pr-dot { color: var(--status-busy); }
+.keycap--pr[data-checks='fail'] .pr-dot { color: var(--status-dead); }
+.keycap--pr[data-checks='pending'] .pr-dot { color: var(--status-attention); }
+
 /* Overflow menu — the session's lifecycle actions in one sheet. Rows echo
    the dialog sheet's grammar; mono hints carry the command truth (/model);
    the destructive row wears dead-red ink. */

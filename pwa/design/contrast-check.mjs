@@ -30,6 +30,9 @@ const D = {
   gpt: "#F0A3C8", gptT: "#331B28",
   track: "#242A25", lOk: "#45D67E", lWarn: "#F2B84B", lCrit: "#E06A55",
   diffAdd: "#57E08B", diffDel: "#F08A78",
+  // --pr-merged (tokens.css) aliases --acct-claude2, so it is literally this
+  // same hex per theme, not a second colour to keep in sync.
+  prMerged: "#C7A7F4",
 };
 const Lt = {
   page: "#F4F6F3", surface: "#FFFFFF", raised: "#EAEEEA", well: "#141715",
@@ -45,6 +48,7 @@ const Lt = {
   gpt: "#A62667", gptT: "#FAE3EE",
   track: "#E3E7E2", lOk: "#178A48", lWarn: "#B27400", lCrit: "#B2402C",
   diffAdd: "#57E08B", diffDel: "#F08A78",
+  prMerged: "#6D3FB4",
 };
 
 const pairs = (T, name) => [
@@ -126,6 +130,9 @@ const pairs = (T, name) => [
   [`${name} acct claude2 / surface (sess-acct)`, T.claude2, T.surface, 4.5],
   [`${name} acct corp / surface (sess-acct)`, T.corp, T.surface, 4.5],
   [`${name} acct gpt / surface (sess-acct)`, T.gpt, T.surface, 4.5],
+  // The PR keycap's merged dot (--pr-merged, tokens.css) on the keycap's own
+  // background (--bg-raised). A non-text graphical object, so 3:1, not 4.5.
+  [`${name} pr-merged / raised (UI 3:1)`, T.prMerged, T.raised, 3],
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
