@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { ArchiveScreen, archivedSummary } from '../src/screens/ArchiveScreen';
+import { ArchiveScreen, archivedSizeText, archivedSummary } from '../src/screens/ArchiveScreen';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -16,19 +16,41 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
 describe('archivedSummary', () => {
   it('counts the archived rows and totals their bytes', () => {
     expect(archivedSummary([s(), s({ id: 'demo-still-cove', archivedBytes: 1_100_000_000 }), s({ id: 'demo-live', archivedAt: null })]))
-      .toEqual({ count: 2, bytes: 2_300_000_000 });
+      .toEqual({ count: 2, bytes: 2_300_000_000, unmeasured: 0 });
   });
 
-  it('totals only what it actually knows, and says nothing about the rest', () => {
-    // An unknown size contributes 0 to the total rather than inventing one;
-    // the count still includes the row, so the two numbers stay honest
-    // independently.
+  // Fix round 3, verifier P3. Before: this returned a bare `number` and an
+  // unmeasured row was folded in as `?? 0`, so the caller could not tell a
+  // measured total from a partial one and rendered the partial AS the total.
+  it('reports the measured total and how many rows it leaves out — never a partial total on its own', () => {
     expect(archivedSummary([s(), s({ id: 'demo-x', archivedBytes: null })]))
-      .toEqual({ count: 2, bytes: 1_200_000_000 });
+      .toEqual({ count: 2, bytes: 1_200_000_000, unmeasured: 1 });
+    expect(archivedSizeText(archivedSummary([s(), s({ id: 'demo-x', archivedBytes: null })])))
+      .toBe('1.2 GB + 1 unmeasured');
+  });
+
+  it('has no total at all when nothing archived was measured — null, never 0', () => {
+    const sum = archivedSummary([
+      s({ id: 'a', archivedBytes: null }),
+      s({ id: 'b', archivedBytes: null }),
+      s({ id: 'c', archivedBytes: null }),
+    ]);
+    expect(sum).toEqual({ count: 3, bytes: null, unmeasured: 3 });
+    // `humanBytes(0)` is the string '0 B' — a stated total for three
+    // workspaces nobody sized. The count stays exact: it counts rows.
+    expect(archivedSizeText(sum)).toBe('size unknown');
+  });
+
+  it('keeps a genuine zero-byte archive a measurement, distinct from an unmeasured one', () => {
+    const sum = archivedSummary([s({ id: 'a', archivedBytes: 0 })]);
+    expect(sum).toEqual({ count: 1, bytes: 0, unmeasured: 0 });
+    expect(archivedSizeText(sum)).toBe('0 B');
   });
 
   it('is zero-count for a fleet with nothing archived', () => {
-    expect(archivedSummary([s({ archivedAt: null })])).toEqual({ count: 0, bytes: 0 });
+    // No archived row means no failed read either — an empty sum is a true 0,
+    // not an unknown.
+    expect(archivedSummary([s({ archivedAt: null })])).toEqual({ count: 0, bytes: 0, unmeasured: 0 });
   });
 });
 
@@ -60,6 +82,25 @@ describe('ArchiveScreen', () => {
   it('shows each row size and the total', () => {
     render(<ArchiveScreen sessions={[s(), s({ id: 'demo-still-cove', workspace: 'still-cove', archivedBytes: 1_100_000_000 })]} onOpen={() => {}} />);
     expect(screen.getByText('2.3 GB')).toBeInTheDocument();
+  });
+
+  // Fix round 3, verifier P3 — the screen half of the same defect the fleet
+  // footer had. The total and the per-row glyph must agree about what is
+  // known: rows that read '—' cannot be silently worth 0 in the figure above
+  // them.
+  it('qualifies the total when a row was never measured, and refuses one entirely when none was', () => {
+    const { container, rerender } = render(<ArchiveScreen sessions={[
+      s({ id: 'demo-quiet-basin' }),
+      s({ id: 'demo-still-cove', workspace: 'still-cove', archivedBytes: null }),
+    ]} onOpen={() => {}} />);
+    expect(container.querySelector('.archive-total')).toHaveTextContent('2 archived · 1.2 GB + 1 unmeasured');
+
+    rerender(<ArchiveScreen sessions={[
+      s({ id: 'demo-quiet-basin', archivedBytes: null }),
+      s({ id: 'demo-still-cove', workspace: 'still-cove', archivedBytes: null }),
+    ]} onOpen={() => {}} />);
+    expect(container.querySelector('.archive-total')).toHaveTextContent('2 archived · size unknown');
+    expect(screen.queryByText('0 B')).not.toBeInTheDocument();
   });
 
   it('opens the session — the transcript still renders', () => {

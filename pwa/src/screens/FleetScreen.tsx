@@ -19,7 +19,7 @@ import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ReapSheet } from '../session/ReapSheet';
-import { archivedSummary, humanBytes } from './ArchiveScreen';
+import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
@@ -83,6 +83,9 @@ export function FleetScreen({
   };
 
   const projected = useProjectedHome();
+  // Once, not three times in one interpolation: the footer's count and its
+  // size must describe the same pass over the same list.
+  const archived = archivedSummary(sessions);
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
@@ -218,12 +221,18 @@ export function FleetScreen({
               />
             ))}
           </div>
-          {archivedSummary(sessions).count > 0 && (
+          {archived.count > 0 && (
             /* Folded, never hidden — and never a place that DELETES anything:
                this routes to a list, and every removal still goes through the
-               audit and the fingerprint. */
+               audit and the fingerprint.
+
+               The size half is `archivedSizeText`, shared with the archive
+               screen's own total (fix round 3, P3): a fleet whose archives
+               were never measured used to read "Archived · 3 · 0 B" — a
+               stated total for three workspaces nobody sized — and a
+               half-measured fleet stated its measured part as the whole. */
             <button type="button" className="fleet-archived-row" onClick={() => navigate('/archive')}>
-              {`Archived · ${archivedSummary(sessions).count} · ${humanBytes(archivedSummary(sessions).bytes)}`}
+              {`Archived · ${archived.count} · ${archivedSizeText(archived)}`}
             </button>
           )}
         </>
