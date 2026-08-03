@@ -5,15 +5,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(here, '../../scripts/extraction-manifest.sh');
 
 let tmp: string;
-beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-manifest-')); });
+beforeEach(() => { tmp = mkTmp('ccrc-manifest-'); });
 afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 
 function write(rel: string, body: string): void {
@@ -86,6 +86,28 @@ describe('standalone layout', () => {
     write('server/src/a.ts', 'A');
     write('ccd/ccd', 'CCD');
     expect(Object.keys(parse(run())).sort()).toEqual(['ccd/ccd', 'server/src/a.ts']);
+  });
+});
+
+describe('the checksum column', () => {
+  // Every other test in this file reads `Object.keys(...)` — it checks which
+  // paths appear, never what the second column actually contains. A script
+  // that emitted a constant, or the wrong cut field, or a hash of the path
+  // instead of the file, would pass every test above unchanged. The failure
+  // mode that coverage misses is not a red suite — it is two manifests
+  // comparing equal on a corrupted extraction, a false "verified" on an
+  // irreversible move.
+  it('the checksum column is the file content, not a constant or the path', () => {
+    write('infra/ccrc/server/src/a.ts', 'hello');
+    expect(parse(run())['server/src/a.ts'])
+      .toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+  });
+
+  it('a changed byte changes the manifest', () => {
+    write('infra/ccrc/server/src/a.ts', 'hello');
+    const before = run();
+    write('infra/ccrc/server/src/a.ts', 'hellp');
+    expect(run()).not.toBe(before);
   });
 });
 
