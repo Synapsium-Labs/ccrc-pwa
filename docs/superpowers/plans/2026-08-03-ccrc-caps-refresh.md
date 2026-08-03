@@ -104,50 +104,88 @@ inferring it forever from the ready frame the agent sent at boot."
 Create `infra/ccrc/agent/test/caps.test.ts`. It follows the suite's existing shape — a real agent on port 0 via `boot(fixture)`, a real `ws` client, and a `#!/bin/sh` stub ccd written into `fixture.home/.local/bin/ccd`, which works because `resolveSpawnCmd` resolves against `home` rather than PATH.
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { boot, TestClient } from './helpers.js';
-import { mkTmp } from './tmpHelpers.js';
-import { writeFile, chmod, mkdir } from 'node:fs/promises';
+import { describe, it, expect, afterEach } from 'vitest';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { RunningAgent } from '../src/server.js';
+import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
 
-async function writeCcd(home: string, body: string): Promise<void> {
+interface CapsRes { ok: boolean; verbs?: string[]; err?: string }
+
+/** Writes the ccd the agent will actually exec: `resolveSpawnCmd` resolves
+ *  `ccd` against `home`, never PATH, so a stub here is the whole fake. */
+function writeCcd(home: string, body: string): void {
   const dir = path.join(home, '.local', 'bin');
-  await mkdir(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true });
   const p = path.join(dir, 'ccd');
-  await writeFile(p, `#!/bin/sh\n${body}\n`);
-  await chmod(p, 0o755);
+  writeFileSync(p, `#!/bin/sh\n${body}\n`);
+  chmodSync(p, 0o755);
 }
 
 describe('caps op', () => {
-  it('answers with the verbs ccd currently prints, not the ones it printed at boot', async () => {
-    const home = await mkTmp();
-    await writeCcd(home, 'echo start\necho stop');
-    const agent = await boot({ home });
-    const client = await TestClient.connect(agent);
+  let agent: RunningAgent | undefined;
+  let fixture: Fixture | undefined;
+  let client: TestClient | undefined;
 
-    expect(await client.req({ op: 'caps' })).toEqual({ verbs: ['start', 'stop'] });
-
-    // A new ccd lands under the running agent — the case the outage was.
-    await writeCcd(home, 'echo start\necho stop\necho ws-rename');
-    expect(await client.req({ op: 'caps' })).toEqual({ verbs: ['start', 'stop', 'ws-rename'] });
-
-    await client.close(); await agent.close();
+  afterEach(async () => {
+    client?.ws.close();
+    client = undefined;
+    if (agent) await agent.close();
+    agent = undefined;
+    if (fixture) {
+      rmSync(fixture.home, { recursive: true, force: true });
+      rmSync(fixture.projectsRoot, { recursive: true, force: true });
+      rmSync(fixture.outside, { recursive: true, force: true });
+    }
+    fixture = undefined;
   });
 
-  it('a caps read that fails yields [] without clearing a list that worked', async () => {
-    const home = await mkTmp();
-    await writeCcd(home, 'echo start');
-    const agent = await boot({ home });
-    const client = await TestClient.connect(agent);
-    expect(await client.req({ op: 'caps' })).toEqual({ verbs: ['start'] });
+  it('answers with the verbs ccd currently prints, not the ones it printed at boot', async () => {
+    fixture = makeFixture();
+    writeCcd(fixture.home, 'echo start\necho stop');
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
 
-    await writeCcd(home, 'exit 1');
-    expect(await client.req({ op: 'caps' })).toEqual({ verbs: [] });
+    expect(await client.req<CapsRes>(1, { op: 'caps' }))
+      .toMatchObject({ ok: true, verbs: ['start', 'stop'] });
 
-    await client.close(); await agent.close();
+    // A new ccd lands under the running agent — the case the outage was.
+    writeCcd(fixture.home, 'echo start\necho stop\necho ws-rename');
+    expect(await client.req<CapsRes>(2, { op: 'caps' }))
+      .toMatchObject({ ok: true, verbs: ['start', 'stop', 'ws-rename'] });
+  });
+
+  it('a caps read that fails yields [] rather than keeping a list that no longer holds', async () => {
+    fixture = makeFixture();
+    writeCcd(fixture.home, 'echo start');
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    expect(await client.req<CapsRes>(1, { op: 'caps' })).toMatchObject({ verbs: ['start'] });
+
+    writeCcd(fixture.home, 'exit 1');
+    expect(await client.req<CapsRes>(2, { op: 'caps' })).toMatchObject({ verbs: [] });
+  });
+
+  it('an unchanged ccd is not re-execed', async () => {
+    fixture = makeFixture();
+    // Appends a line per invocation, so the file's length counts execs.
+    const marker = path.join(fixture.home, 'execs');
+    writeCcd(fixture.home, `echo x >> ${marker}\necho start`);
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+
+    await client.req<CapsRes>(1, { op: 'caps' });
+    const after1 = readFileSync(marker, 'utf8').length;
+    await client.req<CapsRes>(2, { op: 'caps' });
+    expect(readFileSync(marker, 'utf8').length).toBe(after1);
   });
 });
 ```
+
+`readFileSync` joins the `node:fs` import above. The third test is the stat gate's only direct proof — without it a mutant that always re-execs passes every other assertion in this file.
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -273,39 +311,83 @@ actually exec, so an unchanged ccd costs a stat rather than a bash process."
 Create `infra/ccrc/server/test/caps-refresh.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { fakeAgent } from './remoteHelpers.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { RunningAgent } from '../../agent/src/server.js';
+import { type ConnectedFleet } from '../src/remote/client.js';
+import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+
+function writeCcd(home: string, body: string): void {
+  const dir = path.join(home, '.local', 'bin');
+  mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, 'ccd');
+  writeFileSync(p, `#!/bin/sh\n${body}\n`);
+  chmodSync(p, 0o755);
+}
 
 describe('caps refresh', () => {
-  it('updates fleetState.ccdVerbs from the agent reply', async () => {
-    const agent = fakeAgent({ ready: { ccdVerbs: ['start'] }, caps: ['start', 'ws-rename'] });
-    const client = await agent.connectClient();
-    expect(client.state.ccdVerbs).toEqual(['start']);
+  let agent: RunningAgent | undefined;
+  let fixture: RemoteFixture | undefined;
+  let fleet: ConnectedFleet | undefined;
 
-    await client.caps().then((v) => { if (v !== null) client.state.ccdVerbs = v; });
-    expect(client.state.ccdVerbs).toEqual(['start', 'ws-rename']);
-    await agent.close();
+  afterEach(async () => {
+    await fleet?.close(); fleet = undefined;
+    if (agent) await agent.close(); agent = undefined;
+    if (fixture) {
+      rmSync(fixture.home, { recursive: true, force: true });
+      rmSync(fixture.projectsRoot, { recursive: true, force: true });
+    }
+    fixture = undefined;
   });
 
-  it('an agent that does not know the op leaves the list alone', async () => {
-    const agent = fakeAgent({ ready: { ccdVerbs: ['start'] }, caps: 'bad-request' });
-    const client = await agent.connectClient();
-    expect(await client.caps()).toBeNull();
-    expect(client.state.ccdVerbs).toEqual(['start']);
-    await agent.close();
+  it('caps() returns what ccd prints now, not what it printed at agent boot', async () => {
+    fixture = makeFixture();
+    writeCcd(fixture.home, 'echo start');
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port);
+    await vi.waitFor(() => expect(fleet!.state.ccdVerbs).toEqual(['start']), { timeout: 3000 });
+
+    writeCcd(fixture.home, 'echo start\necho ws-rename');
+    expect(await fleet.client.caps()).toEqual(['start', 'ws-rename']);
   });
 
-  it('a reconnect after a refresh does not regress to the boot list', async () => {
-    const agent = fakeAgent({ ready: { ccdVerbs: ['start', 'ws-rename'] }, caps: ['start', 'ws-rename'] });
-    const client = await agent.connectClient();
-    await agent.dropAndAwaitReconnect();
-    expect(client.state.ccdVerbs).toEqual(['start', 'ws-rename']);
-    await agent.close();
+  it('answers null — not [] — when there is no answer to trust', async () => {
+    // No ccd in the fixture home at all: the agent's boot read failed, so its
+    // ready frame carried []. A caps() that cannot be trusted must be null, or
+    // the seam in index.ts would overwrite a good list with an empty one.
+    fixture = makeFixture();
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port);
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    await fleet.close(); fleet = undefined;
+    // With the transport gone, caps() must resolve null rather than throw.
+    expect(await fleet?.client.caps() ?? null).toBeNull();
+  });
+
+  it('a reconnect after a refresh does not regress to the agent boot list', async () => {
+    fixture = makeFixture();
+    writeCcd(fixture.home, 'echo start');
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port);
+    await vi.waitFor(() => expect(fleet!.state.ccdVerbs).toEqual(['start']), { timeout: 3000 });
+
+    writeCcd(fixture.home, 'echo start\necho ws-rename');
+    expect(await fleet.client.caps()).toEqual(['start', 'ws-rename']);
+
+    // Force a reconnect. onReady reassigns state.ccdVerbs from the ready frame,
+    // so this fails unless the agent's ready frame serves the refreshed holder.
+    fleet.client.ws?.close();
+    await vi.waitFor(
+      () => expect(fleet!.state.ccdVerbs).toEqual(['start', 'ws-rename']),
+      { timeout: 5000 },
+    );
   });
 });
 ```
 
-The third test is the regression guard for Task 2 Step 4: it fails if the agent's `ready` frame ever goes back to serving a boot-time snapshot. Reuse whatever fake-agent helper `remote-connect.test.ts` already uses; if it has no `caps` knob, extend it rather than writing a second fake.
+The third test is the regression guard for Task 2 Step 4 and the reason that step exists: it fails if the agent's `ready` frame ever goes back to serving a boot-time snapshot. If `FleetClient` exposes no handle to force a reconnect, add the narrowest one the test needs rather than reaching into private state — and say so in the report.
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -386,23 +468,41 @@ agent too old to know the op cannot be mistaken for a fleet with no verbs."
 
 Append to `test/caps-refresh.test.ts`:
 
+In a new `describe` block in the same file, using the `testDeps` factory the
+server suite already has (`test/helpers.ts:31`) and the concrete `Bus`:
+
 ```ts
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { testDeps } from './helpers.js';
+
+describe('the caps lane', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
   it('asks once a minute, not once a tick', async () => {
     let calls = 0;
-    const deps = fakeDeps({ refreshCaps: async () => { calls += 1; } });
-    const w = new FleetWatcher(deps, fakeBus(), 2000);
+    const deps = { ...testDeps(), refreshCaps: async () => { calls += 1; } };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+
+    vi.useFakeTimers();
     await w.tick(); await w.tick(); await w.tick();
     expect(calls).toBe(1);
-    vi.setSystemTime(Date.now() + 61_000);
+
+    await vi.advanceTimersByTimeAsync(61_000);
     await w.tick();
     expect(calls).toBe(2);
   });
 
   it('local mode has nothing to refresh and does not throw', async () => {
-    const w = new FleetWatcher(fakeDeps({}), fakeBus(), 2000);
+    const w = new FleetWatcher(testDeps(), new Bus(), 2000);
     await expect(w.tick()).resolves.not.toThrow();
   });
+});
 ```
+
+`testDeps()` supplies a `runCcd` that always fails, which is what the rest of a
+tick wants here — this test asserts only the lane's cadence, and a tick that
+finds no sessions is the cheapest way to reach it.
 
 - [ ] **Step 2: Run it and watch it fail**
 
