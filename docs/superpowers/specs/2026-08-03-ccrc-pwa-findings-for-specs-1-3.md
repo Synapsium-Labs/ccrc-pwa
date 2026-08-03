@@ -31,6 +31,14 @@ a boot-time snapshot (re-read on each connection, or on a cheap mtime check), or
 the install order must be *enforced by the installer* rather than remembered by
 the operator. A comment in a README is not a mechanism.
 
+**Resolved out of spec 3, 2026-08-03.** The first branch is taken by
+`2026-08-03-ccrc-caps-refresh-design.md`: a `caps` protocol op on a 60s lane, with
+the agent's cached list becoming mutable state that `ready` serves. It left spec 3
+because the caps handshake is agent and server TypeScript that migrates to
+`ccrc-pwa` intact, while the installer half targets a `deploy.sh` spec 3 replaces.
+Spec 3 keeps the installer and inherits a fleet that no longer depends on it for
+correctness.
+
 **This is the third instance of the same class on this branch.** The first was a
 `deploy.sh` that never builds the PWA (a Jul 29 bundle served for four days
 behind a green deploy). The second was a `deploy.sh` that never ships `ccd` (the
@@ -132,3 +140,14 @@ concrete reason it matters rather than a tidiness argument.
   repos is cheap insurance.
 - **No `engines` field** in any of the four `package.json` files, despite Node
   ≥22 being a hard requirement documented only in prose. Spec 3's prereq check.
+- **`CCRC_SSH_KEY` defaults to a key that does not exist on the fleet host** —
+  `$HOME/.ssh/your-key-a`, where openclaw calls it `your-key-b`. The
+  difference is documented in `deploy.sh:4-6` without being acted on, so a deploy
+  driven from the fleet host fails at first contact with a bare
+  `Permission denied (publickey)`. Spec 3: try both, and name both when neither
+  exists. Added 2026-08-03.
+- **The PWA-build gap has a sharper edge than "never builds it."** `deploy.sh`'s
+  `rsync --delete` excludes `node_modules` and `dist` but **not** `server/dist-pwa`
+  — the PWA's build output (`pwa/vite.config.ts:68`). So the failure mode is not
+  only a stale bundle: a deploy run from a machine with no local `dist-pwa`
+  *deletes* the one serving the fleet. Added 2026-08-03.
