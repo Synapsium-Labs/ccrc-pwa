@@ -7,7 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { mkTmp } from './tmpHelpers.js';
 
-export const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
 /** ws-add spawns a session; tmux is not available under test, so stub _spawn and
  *  the systemd call. Everything else runs for real. `tmux` is shadowed too,
