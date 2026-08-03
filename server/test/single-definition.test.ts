@@ -143,17 +143,30 @@ describe('extraction finding — one path to the ccd script', () => {
   // tree must be byte-identical to its origin — which is what makes the
   // extraction verifiable by checksum instead of by review.
   //
-  // Scans server/test, which the ROOTS above deliberately do not cover.
+  // Scans server/test AND server/test-e2e, which the ROOTS above deliberately
+  // do not cover. test-e2e is a real sibling TypeScript tree (helpers.ts,
+  // session.e2e.test.ts) that talks about ccd and holds no copy today — but
+  // an unscanned sibling directory is exactly the "clean and unchecked becomes
+  // dirty and unchecked with nothing saying so" shape that
+  // test/tsconfig.tests.json already closed for the typechecker by enumerating
+  // its sibling directories rather than naming one; this scan does the same.
   const testDir = path.join(ccrcRoot, 'server', 'test');
-  const testFiles = sources(testDir);
+  const testDirs = [testDir, path.join(ccrcRoot, 'server', 'test-e2e')];
+  const testFiles = testDirs.flatMap(sources);
 
   // Matches any literal naming the script: the `../../../ccrc-portability/ccd`
   // form, the path.join(..., `ccrc-portability`, `ccd`) form that
-  // wsaudit.test.ts used, and the `../../ccd/ccd` form it becomes after the
-  // move. All three must be caught, or the guard stops working the moment the
+  // wsaudit.test.ts used, the `../../ccd/ccd` form it becomes after the move,
+  // and the parts form an author could just as easily reach for post-move —
+  // two adjacent path.join arguments that both spell the four-letter script
+  // name, the same split style wsaudit.test.ts (one of the original seven)
+  // already used pre-move. That last shape needs its own case: relying on the
+  // pre-move `ccrc-portability` alternative alone would miss it, since
+  // that string stops existing the instant the extraction lands. All four
+  // shapes must be caught, or the guard stops working the moment the
   // extraction lands.
   //
-  // Anchored to the exact three shapes rather than a bare 'ccrc-portability'
+  // Anchored to these exact shapes rather than a bare 'ccrc-portability'
   // or a bare quoted 'ccd' — this file's server/test tree also legitimately
   // says "ccrc-portability" (extraction-manifest.test.ts's fixtures,
   // ccd-ccclip.test.ts's OTHER script) and legitimately quotes 'ccd' for
@@ -161,13 +174,19 @@ describe('extraction finding — one path to the ccd script', () => {
   // and remote-runner stubbing a binary literally named ccd). A looser regex
   // over-matches this file's own comment too, describing the very literal it
   // hunts for. Backticks above, not quotes, keep this comment from being a
-  // fourth false positive of its own making.
-  const NAMES_CCD = /['"]\.\.\/\.\.\/\.\.\/ccrc-portability\/ccd['"]|'ccrc-portability',\s*'ccd'|['"]\.\.\/\.\.\/ccd\/ccd['"]/;
+  // false positive of its own making — and this paragraph deliberately never
+  // writes the two script-name arguments themselves, quoted and adjacent, for
+  // the same reason.
+  const NAMES_CCD = /['"]\.\.\/\.\.\/\.\.\/ccrc-portability\/ccd['"]|'ccrc-portability',\s*'ccd'|['"]\.\.\/\.\.\/ccd\/ccd['"]|['"]ccd['"]\s*,\s*['"]ccd['"]/;
 
   it('found the test tree it is scanning', () => {
-    // A scan over an empty list passes everything.
+    // A scan over an empty list passes everything. Each directory is checked
+    // separately so a moved or renamed sibling turns this red on its own,
+    // rather than the other directory's file count silently covering for it.
+    for (const d of testDirs) expect(sources(d).length, rel(d)).toBeGreaterThan(0);
     expect(testFiles.length).toBeGreaterThan(40);
     expect(testFiles.map(rel)).toContain('server/test/ccdWsHelpers.ts');
+    expect(testFiles.map(rel)).toContain('server/test-e2e/helpers.ts');
   });
 
   it('is spelled in exactly one file, and that file is ccdWsHelpers.ts', () => {

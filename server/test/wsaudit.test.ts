@@ -1,11 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
 import { CCD } from './ccdWsHelpers.js';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * The refusal-token <-> copy linkage, required by Task 13. `ccd` answers
