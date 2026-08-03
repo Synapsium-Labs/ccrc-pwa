@@ -85,7 +85,7 @@ export class FleetClient {
   readonly state: FleetState = { connected: false, downSince: null, ccdVerbs: null };
 
   private readonly cfg: ResolvedConfig;
-  private ws: WebSocket | null = null;
+  private socket: WebSocket | null = null;
   private ready = false;
   private everConnected = false;
   private closed = false;
@@ -124,6 +124,13 @@ export class FleetClient {
     return () => this.stateListeners.delete(cb);
   }
 
+  /** Exposes the live socket only so a test can kill it out from under the
+   *  client to force a reconnect (`fleet.client.ws?.close()`) — everything
+   *  else should go through `request`/`sendPty`, not this. */
+  get ws(): WebSocket | null {
+    return this.socket;
+  }
+
   /**
    * Fires on EVERY successful handshake — including the very first one — so
    * `remote/io.ts` can (re)establish a tail subscription no matter when
@@ -158,16 +165,16 @@ export class FleetClient {
    *  the request/pending-table machinery entirely. Silently dropped when
    *  disconnected, same stance as `tailClose` on a dead socket. */
   sendPty(msg: PtyInput | PtyResize | PtyClose): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(msg));
     }
   }
 
   request(payload: AgentReqPayload, timeoutMs?: number): Promise<ResOk> {
-    if (!this.ready || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ready || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('disconnected'));
     }
-    const ws = this.ws;
+    const ws = this.socket;
     const id = this.nextId++;
     const wait = timeoutMs ?? this.cfg.requestTimeoutMs;
     return new Promise<ResOk>((resolve, reject) => {
@@ -181,6 +188,21 @@ export class FleetClient {
     });
   }
 
+  /** `null` means "no answer to trust" — an agent that predates the op replies
+   *  `bad-request` (its `validateReq` rejects unknown ops before `handleReq`),
+   *  and a transport failure looks the same. Neither is evidence the fleet has
+   *  no verbs, so neither may overwrite a list that worked. */
+  async caps(): Promise<string[] | null> {
+    try {
+      const res = await this.request({ t: 'req', op: 'caps' });
+      const verbs = (res as { verbs?: unknown }).verbs;
+      if (!Array.isArray(verbs) || !verbs.every((v) => typeof v === 'string')) return null;
+      return verbs as string[];
+    } catch {
+      return null;
+    }
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     if (this.reconnectTimer) {
@@ -191,8 +213,8 @@ export class FleetClient {
     this.rejectAllPending(new Error('disconnected'));
     this.tailListeners.clear();
     this.ptyListeners.clear();
-    const ws = this.ws;
-    this.ws = null;
+    const ws = this.socket;
+    this.socket = null;
     this.ready = false;
     if (!ws) return;
     await new Promise<void>((resolve) => {
@@ -211,7 +233,7 @@ export class FleetClient {
       this.scheduleReconnect();
       return;
     }
-    this.ws = ws;
+    this.socket = ws;
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
@@ -223,7 +245,7 @@ export class FleetClient {
   }
 
   private onMessage(ws: WebSocket, raw: WebSocket.RawData): void {
-    if (ws !== this.ws) return; // stale listener from an already-replaced socket
+    if (ws !== this.socket) return; // stale listener from an already-replaced socket
     let msg: unknown;
     try {
       msg = JSON.parse(raw.toString());
@@ -288,8 +310,8 @@ export class FleetClient {
   }
 
   private onClose(ws: WebSocket): void {
-    if (ws !== this.ws) return; // a stale handler for a socket we already replaced
-    this.ws = null;
+    if (ws !== this.socket) return; // a stale handler for a socket we already replaced
+    this.socket = null;
     this.ready = false;
     this.stopHeartbeat();
     this.rejectAllPending(new Error('disconnected'));
@@ -351,13 +373,13 @@ export class FleetClient {
       if (this.awaitingPong) {
         this.missedPongs++;
         if (this.missedPongs >= HEARTBEAT_MISS_LIMIT) {
-          this.ws?.terminate(); // -> 'close' -> reconnect
+          this.socket?.terminate(); // -> 'close' -> reconnect
           return;
         }
       }
       this.awaitingPong = true;
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ t: 'ping' }));
+      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+        this.socket.send(JSON.stringify({ t: 'ping' }));
       }
     }, this.cfg.heartbeatMs);
     this.heartbeatTimer.unref?.();
@@ -370,6 +392,9 @@ export class FleetClient {
 }
 
 export interface ConnectedFleet {
+  /** The underlying client — `caps()` (refresh) and, in tests, `ws` (force a
+   *  reconnect) live here rather than being re-exposed one seam up. */
+  client: FleetClient;
   runner: Runner;
   io: FleetIO;
   spawnPty: SpawnPty;
@@ -382,6 +407,7 @@ export function connectFleet(cfg: RemoteFleetConfig): ConnectedFleet {
   const client = new FleetClient(cfg);
   client.start();
   return {
+    client,
     runner: createRunner(client),
     io: createIo(client),
     spawnPty: createSpawnPty(client),

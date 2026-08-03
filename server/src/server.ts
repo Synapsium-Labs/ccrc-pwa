@@ -51,6 +51,10 @@ export interface Deps {
   /** Remote-mode reachability, straight from `connectFleet().state` — absent
    *  (or ignored) in local mode, where the fleet is always "connected". */
   fleetState?: FleetState;
+  /** Remote mode only. Local mode reads ccd directly and has nothing to
+   *  refresh, so its absence is the mode test — the same shape `fleetState`
+   *  already uses. */
+  refreshCaps?: () => Promise<void>;
   /** Override for tests; defaults to `fleetstate.ts`'s `defaultCachePath()`. */
   stateCachePath?: string;
   /** Web Push — present only when VAPID keys are configured. */

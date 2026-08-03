@@ -30,7 +30,14 @@ if (cfg.fleetMode === 'remote') {
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
-  deps = { cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty, fleetState: fleet.state, push };
+  deps = {
+    cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push,
+    refreshCaps: async () => {
+      const verbs = await fleet.client.caps();
+      if (verbs !== null) fleet.state.ccdVerbs = verbs;
+    },
+  };
 } else {
   deps = { cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty, push };
 }
