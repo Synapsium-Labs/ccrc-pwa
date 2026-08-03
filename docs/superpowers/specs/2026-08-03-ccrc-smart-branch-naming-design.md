@@ -66,15 +66,26 @@ minute to learn nothing costs real work.
 On each sweep, for each session where:
 
 1. `workspace !== null` — a workspace, not a main checkout, and
-2. `branch === 'ws/' + workspace` — the branch is still exactly its born name, and
+2. `SessionRecord.branch === 'ws/' + workspace` — the branch is still exactly its
+   born name, and
 3. the transcript carries an `ai-title`, and
 4. this `(id, derived-branch)` pair has not been attempted before,
 
 derive a branch name from the title and rename.
 
+**Condition 2 reads the registry, not the assembled `FleetSession`.** This matters
+and is easy to get wrong. `FleetSession.branch` is `sl?.branch ?? r.branch ?? null`
+(`fleet.ts:100`) — the tmux statusline wins over the registry, deliberately,
+because it is a live pane capture. But `cmd_ws_rename` writes the registry
+synchronously (`ccd:1242`) while the statusline only moves when Claude Code
+re-renders it, so for some number of ticks after a successful rename the assembled
+branch still reads `ws/<slug>`. The sweep therefore calls `readRegistry` itself and
+compares `SessionRecord.branch`, matching what `sweepTasks` and `sweepPr` already
+do.
+
 **Idempotence needs no new state.** Condition 2 *is* the marker. After a successful
-rename the branch no longer equals `ws/<workspace>`, so the rule can never fire
-twice on the same workspace. There is no registry field to add, no marker file to
+rename the registry branch no longer equals `ws/<workspace>`, so the rule can never
+fire twice on the same workspace. There is no registry field to add, no marker file to
 write, no migration, and nothing to clean up when a workspace is reaped. A born
 name is a fact already on the wire (`FleetSession.workspace`, `FleetSession.branch`),
 and the comparison between them is the whole mechanism.
@@ -105,6 +116,30 @@ refusal token. Two implementations of one rule drift; that is what they do.
 
 A title that slugifies to the empty string, or to the name it already has, is not
 a rename — no call is made.
+
+### Reading the title without re-reading the world
+
+The title is read by tailing the transcript's last bytes, the way `ask.ts` already
+does. Measured across the 600 transcripts on this box that have one, the last
+`ai-title` sits at most 45,996 bytes from EOF (p95 31,177; median 12,687), so the
+sweep reads a 256 KB tail — 5.5× headroom, where 64 KB would be 1.4× and too tight.
+The constant carries that measurement in its comment, as `TAIL_BYTES` and
+`BACKLOG_TAIL_BYTES` both do.
+
+**A transcript with no `ai-title` is a permanent state, not a startup window.**
+Nine of the 609 transcripts on this box carry none at all, including some very
+large ones. Re-reading those every sweep forever is a real recurring cost the naive
+rule does not price — roughly 7.7 MB/min across the agent WS in a steady state
+where nothing changes. So the read is stat-gated the way `sessionws.ts:135-150`'s
+`claimAskRead` gates the ask reader: unchanged size and mtime means the bytes
+cannot have started saying something they did not say last time, and the read is
+skipped.
+
+**Inherited limitation, stated rather than fixed.** `<id>.uuid` is written once at
+`ccd start` and never refreshed, so after a `/clear` the resolved transcript path
+points at the superseded file. The chat stream and `sessionCommands` share this;
+the sweep inherits it and does not fix it, and in practice fires minutes after
+creation when the uuid is fresh.
 
 ### The retry-storm guard
 
@@ -139,6 +174,17 @@ whose entire purpose is to be forgotten.
 
 The rename **joins the queue** on the session id, which serialises it against every
 other server-originated write on that session; the rename makes six.
+
+**The queue has to be hoisted before the watcher can reach it.** Today it is a
+local const inside `buildServer` (`server.ts:234`,
+`const sendDeps: SendDeps = { tmux: deps.tmux, queue: new KeyedQueue() };`), never
+exported, while `FleetWatcher` is constructed at `index.ts:39` — one line before
+`buildServer` is called. The watcher's only existing ccd write, `archiveMerged`
+(`watch.ts:316`), calls `this.deps.runCcd` directly and serialises nothing. The
+queue moves to `index.ts` and is passed to both, rather than the rename following
+that unserialised precedent: the reap it must not race is `POST /workspace/reap`,
+which is server-originated and already queued, so joining buys real protection
+rather than a formality.
 
 It does **not** serialise against a `ws-reap` or `ws-restore` run by hand on the
 box — those take the flock, which `ws-rename` does not. That residue is accepted:
@@ -293,7 +339,13 @@ stdout at exit 0, the success object, and `ccd:1241` keeping its non-zero exit.
 **Server** — the sweep rule: fires on a born name with a title; does not fire once
 renamed; does not fire without a title; does not fire for `workspace === null`;
 does not re-fire after a refusal; does not mark attempted when the verb is
-unsupported; joins the queue. Derivation: the 40-character budget excludes `ws/`;
+unsupported; joins the queue. **Reads the registry branch, not the assembled one**
+— a session whose statusline still reports the born branch after a successful
+rename must not fire again. **The stat gate holds**: an unchanged transcript is not
+re-read, and a grown one is. A title that changes mid-flight is tested
+synthetically: measured on a 91 MB transcript, `ai-title` is rewritten once per
+turn but the value never changed (1,809 lines, one distinct value), so real data
+cannot exercise that branch. Derivation: the 40-character budget excludes `ws/`;
 the boundary drops back rather than forward; a single 45-character word hard-cuts.
 Plus `whitelist-subset.test.ts`'s compile-enforced `SAMPLES`/`EXPECTED` (a missing
 key is TS2741) and the `REQUIRED_VERB_FLAG` audit.
