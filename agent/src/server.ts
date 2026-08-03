@@ -5,6 +5,7 @@ import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
   AgentReq,
+  CapsReq,
   ExecReq,
   PtyData,
   PtyExit,
@@ -113,8 +114,13 @@ interface ConnCtx {
   spawnPty: PtySpawn;
 }
 
-async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx): Promise<void> {
+async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
   switch (req.op) {
+    case 'caps': {
+      const verbs = await refreshVerbs(verbCache, ctx.cfg.home);
+      send(ws, { t: 'res', id: req.id, ok: true, verbs });
+      return;
+    }
     case 'exec': {
       if (!isExecAllowed(req.cmd, req.args)) { send(ws, fail(req.id, 'forbidden')); return; }
       const result = await runExec(resolveSpawnCmd(req.cmd, ctx.cfg.home), req.args, clampTimeout(req.timeoutMs));
@@ -285,6 +291,8 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
       if (typeof msg.rows !== 'number') return null;
       return { t: 'req', id, op: 'ptyOpen', sessionId: msg.sessionId, cols: msg.cols, rows: msg.rows } satisfies PtyOpenReq;
     }
+    case 'caps':
+      return { t: 'req', id, op: 'caps' } satisfies CapsReq;
     default:
       return null;
   }
@@ -305,7 +313,28 @@ async function readCcdVerbs(home: string): Promise<string[]> {
   return res.stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
 }
 
-function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, ccdVerbs: string[]): void {
+/** The list `readCcdVerbs` last produced, plus the stat of the script that
+ *  produced it. Per-`startAgent` state, never module-level: the test suite
+ *  boots several agents in one process and they must not share a cache. */
+type VerbCache = { verbs: string[]; mtimeMs: number | null; size: number | null };
+
+/** Re-exec `ccd caps` only when the script it would exec has changed. `caps`
+ *  is a static heredoc and does no I/O, but a spawn on every server tick would
+ *  be tens of thousands of bash processes a day to learn nothing. A replacement
+ *  identical in mtime AND size reads as no change — the accepted cost of not
+ *  hashing. */
+async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
+  const st = await statPath(resolveSpawnCmd('ccd', home));
+  const mtimeMs = st === null ? null : st.mtimeMs;
+  const size = st === null ? null : st.size;
+  if (mtimeMs === cache.mtimeMs && size === cache.size) return cache.verbs;
+  cache.verbs = await readCcdVerbs(home);
+  cache.mtimeMs = mtimeMs;
+  cache.size = size;
+  return cache.verbs;
+}
+
+function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache): void {
   let authed = false;
   const ctx: ConnCtx = {
     cfg: { home: opts.home, projectsRoot: opts.projectsRoot },
@@ -337,7 +366,7 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       }
       authed = true;
       clearTimeout(helloTimer);
-      send(ws, { t: 'ready', v: 1, ccdVerbs });
+      send(ws, { t: 'ready', v: 1, ccdVerbs: verbCache.verbs });
       return;
     }
 
@@ -360,7 +389,7 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       // Defense in depth: even a validated request could hit an unforeseen
       // rejection downstream — this `.catch` guarantees no rejection from
       // the fire-and-forget dispatch is ever left unhandled.
-      handleReq(ws, req, ctx).catch((e) => {
+      handleReq(ws, req, ctx, verbCache).catch((e) => {
         send(ws, fail(req.id, e instanceof Error ? e.message : String(e)));
       });
       return;
@@ -414,11 +443,15 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
-  const ccdVerbs = await readCcdVerbs(opts.home);
+  const verbCache: VerbCache = {
+    verbs: await readCcdVerbs(opts.home),
+    mtimeMs: null,
+    size: null,
+  };
 
   const httpServer: Server = createServer();
   const wss = new WebSocketServer({ server: httpServer });
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, ccdVerbs));
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
