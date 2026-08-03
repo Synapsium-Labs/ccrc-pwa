@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
+import { CCD } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const CCD_PATH = path.resolve(here, '..', '..', '..', 'ccrc-portability', 'ccd');
 
 /**
  * The refusal-token <-> copy linkage, required by Task 13. `ccd` answers
@@ -54,7 +54,7 @@ const CCD_PATH = path.resolve(here, '..', '..', '..', 'ccrc-portability', 'ccd')
  * reason `wsaudit.ts` never sees them.
  */
 describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCES)', () => {
-  const ccdSrc = readFileSync(CCD_PATH, 'utf8');
+  const ccdSrc = readFileSync(CCD, 'utf8');
 
   const tokens = new Set<string>();
   for (const m of ccdSrc.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
@@ -66,7 +66,7 @@ describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCE
   const ccdTokens = [...tokens].sort();
 
   it('found a plausible number of tokens in ccd\'s source (sanity floor on the scan itself)', () => {
-    // Guards against the scan finding nothing because CCD_PATH is wrong, or a
+    // Guards against the scan finding nothing because CCD is wrong, or a
     // ccd refactor moving every refusal behind one indirection the regexes
     // above cannot see — either of which would make every assertion below
     // vacuously true over an empty set.

@@ -6,10 +6,9 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let isolatedHome: string;
 
 beforeEach(() => {

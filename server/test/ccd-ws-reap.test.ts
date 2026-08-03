@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { WS_ADD } from './ccdWsHelpers.js';
+import { CCD, WS_ADD } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -125,7 +125,7 @@ describe('argv', () => {
     // assertion is about executable text. `systemctl --user disable --now` is
     // legitimate and unrelated, so `--now` is checked only inside the reap
     // path rather than over the whole file.
-    const src = fs.readFileSync(path.resolve(__dirname, '../../../ccrc-portability/ccd'), 'utf8');
+    const src = fs.readFileSync(CCD, 'utf8');
     const code = src.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
     for (const banned of ['--drop-ignored', '--force-branch', 'ignored=discard']) {
       expect(code, `ccd must not contain ${banned}`).not.toContain(banned);

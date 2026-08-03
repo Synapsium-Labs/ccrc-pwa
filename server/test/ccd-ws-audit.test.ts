@@ -263,7 +263,7 @@ describe('the proof ladder', () => {
     // Verified in this worktree: `-- A B` exits 0 for ANY two shas (the
     // revisions become pathspecs) while `A B --` exits 1 correctly. A grep is
     // the only assertion that catches the wrong form being reintroduced.
-    const src = fs.readFileSync(path.resolve(__dirname, '../../../ccrc-portability/ccd'), 'utf8');
+    const src = fs.readFileSync(CCD, 'utf8');
     expect(src).not.toMatch(/diff --quiet\s+--\s+"/);
     expect(src).toContain('diff --quiet "$M" "$tip" --');
   });

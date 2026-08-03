@@ -136,3 +136,56 @@ describe('integration finding 7 — one reason vocabulary', () => {
       .toContain('Record<PrReason, string>');
   });
 });
+
+describe('extraction finding — one path to the ccd script', () => {
+  // Seven files each spelled this path, and the extraction has to repoint it.
+  // One definition means one line changes and every other file in the moved
+  // tree must be byte-identical to its origin — which is what makes the
+  // extraction verifiable by checksum instead of by review.
+  //
+  // Scans server/test, which the ROOTS above deliberately do not cover.
+  const testDir = path.join(ccrcRoot, 'server', 'test');
+  const testFiles = sources(testDir);
+
+  // Matches any literal naming the script: the `../../../ccrc-portability/ccd`
+  // form, the path.join(..., `ccrc-portability`, `ccd`) form that
+  // wsaudit.test.ts used, and the `../../ccd/ccd` form it becomes after the
+  // move. All three must be caught, or the guard stops working the moment the
+  // extraction lands.
+  //
+  // Anchored to the exact three shapes rather than a bare 'ccrc-portability'
+  // or a bare quoted 'ccd' — this file's server/test tree also legitimately
+  // says "ccrc-portability" (extraction-manifest.test.ts's fixtures,
+  // ccd-ccclip.test.ts's OTHER script) and legitimately quotes 'ccd' for
+  // unrelated reasons (ccd-pr-state.test.ts's assertion label, remote-connect
+  // and remote-runner stubbing a binary literally named ccd). A looser regex
+  // over-matches this file's own comment too, describing the very literal it
+  // hunts for. Backticks above, not quotes, keep this comment from being a
+  // fourth false positive of its own making.
+  const NAMES_CCD = /['"]\.\.\/\.\.\/\.\.\/ccrc-portability\/ccd['"]|'ccrc-portability',\s*'ccd'|['"]\.\.\/\.\.\/ccd\/ccd['"]/;
+
+  it('found the test tree it is scanning', () => {
+    // A scan over an empty list passes everything.
+    expect(testFiles.length).toBeGreaterThan(40);
+    expect(testFiles.map(rel)).toContain('server/test/ccdWsHelpers.ts');
+  });
+
+  it('is spelled in exactly one file, and that file is ccdWsHelpers.ts', () => {
+    const holders = testFiles
+      .filter((f) => NAMES_CCD.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/ccdWsHelpers.ts']);
+  });
+
+  it('is what the six former copy sites now import', () => {
+    // Not merely "the copies are gone" — deleting the tests would satisfy that.
+    // Each site must still reach the shared constant.
+    for (const f of ['ccd-clip.test.ts', 'projected-home.test.ts',
+      'ccd-limits.test.ts', 'ccd-ws-reap.test.ts', 'ccd-ws-audit.test.ts',
+      'wsaudit.test.ts']) {
+      const src = readFileSync(path.join(testDir, f), 'utf8');
+      expect(src, f).toMatch(/import\s*\{[^}]*\bCCD\b[^}]*\}\s*from\s*'\.\/ccdWsHelpers\.js'/);
+    }
+  });
+});

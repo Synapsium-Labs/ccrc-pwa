@@ -7,10 +7,9 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { rolloverCases } from './fixtures/rollover.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let home: string;
 
 /** ccd reads the clock itself, so fixtures are written relative to real now. */

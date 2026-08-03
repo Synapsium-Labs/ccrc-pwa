@@ -16,8 +16,8 @@ import { localIO } from '../src/io.js';
 import { readLimits, projectHome } from '../src/limits.js';
 import { leastLoadedCases } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
+import { CCD } from './ccdWsHelpers.js';
 
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
 let home: string;
 
 /** ccd reads the clock itself, so fixtures live against real now. */
