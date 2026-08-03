@@ -1,0 +1,63 @@
+# The monorepo had no CI at all — these suites have only ever been run by hand,
+# which is how an installed ccd sat 4,258 lines behind main without anyone
+# noticing. This is the mechanism that keeps the extraction honest after the
+# day it lands.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [server, agent, pwa]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      # tmux and git are real dependencies of the server suite: the ccd tests
+      # execute the real bash script against fixture HOMEs. They are contained,
+      # never reaching a real tmux server or a real remote, but the binaries
+      # must exist.
+      - name: Install system dependencies
+        if: matrix.package == 'server'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install
+        working-directory: ${{ matrix.package }}
+        run: npm ci
+
+      # Local binary, never npx: `npx vitest` resolves to a global cache copy
+      # with no jsdom and falsely reports "no tests" alongside 39 errors.
+      - name: Test
+        working-directory: ${{ matrix.package }}
+        run: ./node_modules/.bin/vitest run
+
+      - name: Typecheck
+        working-directory: ${{ matrix.package }}
+        run: ./node_modules/.bin/tsc --noEmit
+
+  build-pwa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pwa/package-lock.json
+      - working-directory: pwa
+        run: npm ci && npm run build
+      # The build is only proven by its output existing. A green build step with
+      # no artifact is the failure this repo has already shipped once.
+      - run: test -f server/dist-pwa/index.html
