@@ -37,6 +37,15 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: npm ci
 
+      # server/test/typecheck-tests.test.ts spawns tsc against agent/'s own
+      # tests-inclusive project too (`agentRoot` resolved two levels up) — a
+      # deliberate cross-package check, so it needs agent/node_modules present
+      # even though this job only ran `npm ci` in server/.
+      - name: Install agent dependencies (needed by server's cross-package typecheck test)
+        if: matrix.package == 'server'
+        working-directory: agent
+        run: npm ci
+
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       - name: Test
