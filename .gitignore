@@ -14,3 +14,9 @@ deploy/ccrc-agent.env
 
 # migration working artifacts
 .extraction/
+
+# session tooling state this box generates in live checkouts
+.claude/worktrees/
+.worktrees/
+.superpowers/
+.remember/
