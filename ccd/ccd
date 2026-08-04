@@ -2020,6 +2020,35 @@ _ws_sensitive_noise() {   # path -> 0 when a secret-shaped name is vendored/temp
   return 1
 }
 
+# ── D1: the nested-checkout guard ──────────────────────────────────────────
+# A registered child, a plain `git init`, a clone, a linked-worktree pointer
+# file: every one of them is a `.git` entry at depth ≥ 2. `git worktree list`
+# structurally cannot see the independent ones (measured), so this is a
+# FILESYSTEM walk. rc 0 = the walk completed (stdout may be empty); rc 1 = it
+# did not, with the reason in _WS_NESTED_WHY — same polarity as every Phase B
+# read: unreadable refuses, it never guesses.
+_WS_NESTED_WHY=''
+_ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
+  local dir="$1" outf errf err rc f p
+  _WS_NESTED_WHY=''
+  outf=$(mktemp) || { _WS_NESTED_WHY='could not make a scratch file'; return 1; }
+  errf=$(mktemp) || { rm -f "$outf"; _WS_NESTED_WHY='could not make a scratch file'; return 1; }
+  timeout "$REAP_SCAN_SECONDS" find "$dir" -mindepth 2 -name .git -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 124 )); then
+    rm -f "$outf"
+    _WS_NESTED_WHY="the nested-checkout walk did not finish within ${REAP_SCAN_SECONDS}s"
+    return 1
+  fi
+  (( rc == 0 )) || { rm -f "$outf"; _WS_NESTED_WHY='could not walk the tree'; return 1; }
+  [[ -z "$err" ]] || { rm -f "$outf"; _WS_NESTED_WHY="could not read all of the tree ($err)"; return 1; }
+  while IFS= read -r -d '' f; do
+    p=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || p="${f%/.git}"
+    printf '%s\n' "$p"
+  done <"$outf" | LC_ALL=C sort
+  rm -f "$outf"
+}
+
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete

@@ -1966,3 +1966,39 @@ describe('the manifest', () => {
     expect(second.token).not.toBe(first);
   }, 30000);
 });
+
+describe('the nested-checkout walk (D1)', () => {
+  it('lists a stray git init under an ignored path, resolved, and nothing else', () => {
+    const { wt } = squashMovedBase();
+    fs.mkdirSync(path.join(wt, '.claude', 'worktrees', 'agent-x'), { recursive: true });
+    execFileSync('git', ['init', '-q', path.join(wt, '.claude', 'worktrees', 'agent-x')]);
+    const out = h.sh(`_ws_nested_checkouts "${wt}"`);
+    expect(out.split('\n')).toHaveLength(1);
+    expect(out).toContain('agent-x');
+    expect(out.startsWith('/')).toBe(true);
+  }, 30000);
+
+  it('answers empty for a workspace with no nested checkouts, rc 0', () => {
+    const { wt } = squashMovedBase();
+    expect(h.sh(`_ws_nested_checkouts "${wt}" && echo WALKED`)).toBe('WALKED');
+  }, 30000);
+
+  it('fails rc 1 with a reason when a directory cannot be read — never guesses', () => {
+    const { wt } = squashMovedBase();
+    const locked = path.join(wt, 'locked');
+    fs.mkdirSync(locked); fs.chmodSync(locked, 0o000);
+    try {
+      const r = h.run(`_ws_nested_checkouts "${wt}" || { echo "WHY=$_WS_NESTED_WHY"; exit 3; }`);
+      expect(r.code).toBe(3);
+      expect(r.stdout).toContain('WHY=');
+    } finally { fs.chmodSync(locked, 0o755); }
+  }, 30000);
+
+  it('sees a .git FILE (a linked worktree pointer), not only directories', () => {
+    const { wt } = squashMovedBase();
+    const fake = path.join(wt, 'sub');
+    fs.mkdirSync(fake);
+    fs.writeFileSync(path.join(fake, '.git'), 'gitdir: /nowhere\n');
+    expect(h.sh(`_ws_nested_checkouts "${wt}"`)).toContain('sub');
+  }, 30000);
+});
