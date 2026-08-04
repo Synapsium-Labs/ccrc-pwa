@@ -7,7 +7,7 @@ import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { connectFleet } from './remote/client.js';
-import { makeRefreshCaps } from './refresh-caps.js';
+import { makeRefreshCaps } from './refreshcaps.js';
 import { PushService } from './push.js';
 import path from 'node:path';
 

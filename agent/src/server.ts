@@ -298,18 +298,21 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
   }
 }
 
-/** One `ccd caps` read per agent process, at start. Not whitelisted and never
- *  reachable from a connection: it is the agent's own account of what the
- *  DEPLOYED script implements, and the server uses it to render `unsupported`
- *  instead of a control that silently answers `forbidden` on the fleet. */
-async function readCcdVerbs(home: string): Promise<string[]> {
+/** Reachable as the `caps` op on any connection, not just once at agent boot —
+ *  but always off the `exec` whitelist: it is the agent's own account of what
+ *  the DEPLOYED script implements, and the server uses it to render
+ *  `unsupported` instead of a control that silently answers `forbidden` on
+ *  the fleet. Returns `null` — not `[]` — when the exec itself could not be
+ *  trusted (nonzero exit, spawn error), so a caller can tell "ccd says
+ *  nothing" from "we don't know what ccd says" and act accordingly. */
+async function readCcdVerbs(home: string): Promise<string[] | null> {
   // 10s, same ceiling as every other pre-connection exec on this box. Not
   // independently provable by a fast stub-script test — any value big enough
   // to let a trivial `sh` process finish behaves identically here — so this
   // bound is disclosed rather than pinned: `caps` just lists whitelist keys,
   // it does no I/O, and 10s already matches the rest of the file's defaults.
   const res = await runExec(resolveSpawnCmd('ccd', home), ['caps'], 10_000);
-  if (res.code !== 0) return [];
+  if (res.code !== 0) return null;
   return res.stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
 }
 
@@ -322,15 +325,30 @@ type VerbCache = { verbs: string[]; mtimeMs: number | null; size: number | null 
  *  is a static heredoc and does no I/O, but a spawn on every server tick would
  *  be tens of thousands of bash processes a day to learn nothing. A replacement
  *  identical in mtime AND size reads as no change — the accepted cost of not
- *  hashing. */
+ *  hashing.
+ *
+ *  Two situations are "no evidence" and must leave `cache` untouched — neither
+ *  writes back `mtimeMs`/`size`, and neither overwrites `cache.verbs`:
+ *   - `ccd` missing at stat time (a deploy moving it aside mid-install): the
+ *     refresh is a no-op, not a clearing event.
+ *   - the exec itself failing once the stat DID differ (a timeout under load,
+ *     a fork failure, the `+x` bit lost mid-write): a previously-good list
+ *     survives instead of being pinned to `[]`.
+ *  Because neither writes back the stat, the NEXT caller (the 60 s fleet lane,
+ *  not the 2 s pane poll — the exec only happens from that once-a-minute call
+ *  path) sees the exact same mismatch it saw this time and retries, so a
+ *  transient failure self-heals within a minute instead of being served
+ *  forever from a cache entry that (wrongly) claims to already reflect the
+ *  current file. */
 async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
   const st = await statPath(resolveSpawnCmd('ccd', home));
-  const mtimeMs = st === null ? null : st.mtimeMs;
-  const size = st === null ? null : st.size;
-  if (mtimeMs === cache.mtimeMs && size === cache.size) return cache.verbs;
-  cache.verbs = await readCcdVerbs(home);
-  cache.mtimeMs = mtimeMs;
-  cache.size = size;
+  if (st === null) return cache.verbs;
+  if (st.mtimeMs === cache.mtimeMs && st.size === cache.size) return cache.verbs;
+  const verbs = await readCcdVerbs(home);
+  if (verbs === null) return cache.verbs;
+  cache.verbs = verbs;
+  cache.mtimeMs = st.mtimeMs;
+  cache.size = st.size;
   return cache.verbs;
 }
 
@@ -444,7 +462,10 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
-    verbs: await readCcdVerbs(opts.home),
+    // `?? []`: an unreadable ccd at boot is "no evidence" same as any other
+    // failed read, and there is no prior list yet to fall back to — [] is the
+    // correct answer here, not a special case of it.
+    verbs: (await readCcdVerbs(opts.home)) ?? [],
     mtimeMs: null,
     size: null,
   };

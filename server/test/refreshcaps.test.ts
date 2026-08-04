@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { makeRefreshCaps } from '../src/refresh-caps.js';
+import { makeRefreshCaps } from '../src/refreshcaps.js';
 import type { FleetState } from '../src/remote/client.js';
 
 // `index.ts` (the composition root) is never imported by a test — it loads

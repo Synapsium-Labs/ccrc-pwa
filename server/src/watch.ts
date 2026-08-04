@@ -145,7 +145,12 @@ export class FleetWatcher {
     void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
     if (this.deps.refreshCaps && Date.now() - this.lastCapsAt >= CAPS_REFRESH_MS) {
       this.lastCapsAt = Date.now();
-      await this.deps.refreshCaps();
+      // NEVER awaited: same reasoning as sweepPr immediately above — caps()
+      // swallows its own failures today, but a wedged-yet-connected agent
+      // must not stall assembleFleet behind an up-to-15s request timeout,
+      // and a future implementation that DOES reject must not become an
+      // unhandled rejection via start()'s `void this.tick()`.
+      void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
     }
     const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates);
     // Push on a busy→idle finish (a session completed a turn). Skip the priming

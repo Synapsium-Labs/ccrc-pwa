@@ -50,7 +50,13 @@ describe('caps op', () => {
       .toMatchObject({ ok: true, verbs: ['start', 'stop', 'ws-rename'] });
   });
 
-  it('a caps read that fails yields [] rather than keeping a list that no longer holds', async () => {
+  it('a caps read that fails after a working list retains that list, not []', async () => {
+    // Review finding 1 (final whole-branch review): a failed exec used to be
+    // written back as a confirmed `[]`, which then read as "unchanged" on
+    // every later stat and pinned the outage this feature exists to remove.
+    // The fix leaves `cache.verbs` exactly as it was on a failed read — a
+    // previously-good list survives a transient failure instead of being
+    // cleared by it.
     fixture = makeFixture();
     writeCcd(fixture.home, 'echo start');
     agent = await boot(fixture);
@@ -59,7 +65,47 @@ describe('caps op', () => {
     expect(await client.req<CapsRes>(1, { op: 'caps' })).toMatchObject({ verbs: ['start'] });
 
     writeCcd(fixture.home, 'exit 1');
+    expect(await client.req<CapsRes>(2, { op: 'caps' })).toMatchObject({ verbs: ['start'] });
+  });
+
+  it('a failed read with ccd untouched between calls is retried, not pinned to [] (review finding 1)', async () => {
+    // Isolates the actual bug: a failed exec must NOT write back the stat.
+    // If it did, the second call's stat would match the (poisoned) cache and
+    // hit it, never re-execing — served as [] forever until the agent
+    // restarts or ccd is rewritten. The marker-file exec count is the only
+    // way to observe "re-exec happened" when the ccd file itself never
+    // changes between the two calls.
+    fixture = makeFixture();
+    const marker = path.join(fixture.home, 'execs');
+    writeCcd(fixture.home, `echo x >> ${marker}\nexit 1`);
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+
+    expect(await client.req<CapsRes>(1, { op: 'caps' })).toMatchObject({ verbs: [] });
+    const after1 = readFileSync(marker, 'utf8').length;
+
+    // ccd is NOT rewritten between calls — same mtime, same size. Only
+    // whether a failed read retries on the next call (rather than pinning
+    // the failure via a written-back stat) is under test.
     expect(await client.req<CapsRes>(2, { op: 'caps' })).toMatchObject({ verbs: [] });
+    expect(readFileSync(marker, 'utf8').length).toBeGreaterThan(after1);
+  });
+
+  it('ccd missing at stat time after a good read retains the cached list (review finding 2)', async () => {
+    // `deploy.sh` moves ccd aside mid-install — a stat miss here must be a
+    // no-op, not a clearing event: the old bug re-exec'd (ENOENT -> code 1 ->
+    // []) the moment the stat stopped matching, wiping a working list for the
+    // whole deploy window.
+    fixture = makeFixture();
+    writeCcd(fixture.home, 'echo start\necho stop');
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    expect(await client.req<CapsRes>(1, { op: 'caps' })).toMatchObject({ verbs: ['start', 'stop'] });
+
+    rmSync(path.join(fixture.home, '.local', 'bin', 'ccd'));
+    expect(await client.req<CapsRes>(2, { op: 'caps' })).toMatchObject({ verbs: ['start', 'stop'] });
   });
 
   it('an unchanged ccd is not re-execed', async () => {
