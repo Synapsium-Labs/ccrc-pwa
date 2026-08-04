@@ -70,14 +70,17 @@ describe('monorepo layout', () => {
     expect(Object.keys(parse(run()))).toEqual(['server/src/a.ts']);
   });
 
-  it('excludes node_modules, dist, dist-pwa and ccd-ccclip.test.ts', () => {
+  it('excludes node_modules, dist and dist-pwa; the ccclip test ships now it lives in the product tree', () => {
     write('infra/ccrc/server/src/a.ts', 'A');
     write('infra/ccrc/server/node_modules/pkg/i.js', 'X');
     write('infra/ccrc/server/dist/o.js', 'X');
     write('infra/ccrc/server/dist-pwa/i.html', 'X');
-    write('infra/ccrc/server/test/ccd-ccclip.test.ts', 'X');
+    write('infra/ccrc/server/test/ccd-ccclip.test.ts', 'C');
 
-    expect(Object.keys(parse(run()))).toEqual(['server/src/a.ts']);
+    expect(Object.keys(parse(run())).sort()).toEqual([
+      'server/src/a.ts',
+      'server/test/ccd-ccclip.test.ts',
+    ]);
   });
 });
 
