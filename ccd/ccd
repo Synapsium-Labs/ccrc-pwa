@@ -2066,7 +2066,11 @@ _ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
   (( rc == 0 )) || { rm -f "$outf"; _WS_NESTED_WHY='could not walk the tree'; return 1; }
   [[ -z "$err" ]] || { rm -f "$outf"; _WS_NESTED_WHY="could not read all of the tree ($err)"; return 1; }
   while IFS= read -r -d '' f; do
-    p=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || p="${f%/.git}"
+    # `>/dev/null 2>&1`, not `2>/dev/null` alone — same reasoning as the operand
+    # resolution above, and the same defect class: a `cd` exported as a shell
+    # function prints whatever it likes on STDOUT, straight into this capture,
+    # corrupting the entry this loop reports for a real nested checkout.
+    p=$(cd "$(dirname "$f")" >/dev/null 2>&1 && pwd -P) || p="${f%/.git}"
     printf '%s\n' "$p"
   done <"$outf" | LC_ALL=C sort
   rm -f "$outf"
@@ -2497,7 +2501,7 @@ _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
-  local st up ahead repo rows row registered errf err rc stashall dirt clipsjson
+  local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -2704,6 +2708,20 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       || { _reap_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"; return 1; }
     (( ${#REAP_SENSITIVE[@]} == 0 )) \
       || { _reap_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
+    # LAST rung of Phase B, deliberately, and after `sensitive-ignored` for the
+    # same reason it sits after every other Phase B guard: the ladder is walked
+    # outermost-cheapest first, and a nested checkout is a whole-tree `find`
+    # (bounded by `REAP_SCAN_SECONDS`, same as the ignored-set walk this rung
+    # sits beside) — no reason to pay for it ahead of the guards a `git status`
+    # and a directory listing already answer. `ccd ws-rm` walks the identical
+    # three rungs — dirty, sensitive-ignored, then this — in the same order
+    # (ccd:1082-1087), and the audit's verdict must read the same ladder or the
+    # sheet and the CLI would refuse two different workspaces for the same
+    # `nested`.
+    nested=$(_ws_nested_checkouts "$workdir") \
+      || { _reap_refuse tree-unreadable "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
+    [[ -z "$nested" ]] \
+      || { _reap_refuse nested-checkouts-present "$(printf '%s\n' "$nested" | grep -c .) nested checkout(s) live under this workspace: ${nested//$'\n'/, }"; return 1; }
   fi
 
   # THE STASH READ THAT CANNOT FAIL SILENTLY — corroborated here rather than
@@ -4092,6 +4110,24 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       # ws-restore recovers it, whereas losing the registry would not be
       # recoverable.
       #
+      # THE TAIL BACKSTOP — the audit's `_ws_reap_eval` rung above proves no
+      # nested checkout existed at CONSENT time, and this is the box-side
+      # instant of deletion §5.3 requires re-proving guards at: `_ws_unsupervise`
+      # (d) and `tmux kill-session` (e) already ran, above, before this line is
+      # reached, and either is an arbitrary external command in a live
+      # deployment (a supervisor hook, a tmux hook) — nothing in this file's
+      # contract says one cannot `git init` a checkout under $workdir on its way
+      # out. Fail-shut on an unscannable tree, the same polarity as every other
+      # guard on this ladder: an answer this cannot prove clean is not "go
+      # ahead", it is `(unscannable: …)`, which is non-empty and refuses below.
+      local nested
+      if ! nested=$(_ws_nested_checkouts "$workdir"); then nested="(unscannable: ${_WS_NESTED_WHY})"; fi
+      if [[ -n "$nested" ]]; then
+        printf '{"refused":"nested-checkouts-present","detail":%s,"paths":[]}\n' \
+          "$(_json_str "nested checkouts under $workdir: ${nested//$'\n'/, } — remove or finish them, then re-run ws-reap")"
+        return 0
+      fi
+
       # ONE invocation, with its stderr captured. Re-running the command just
       # to read its message can SUCCEED the second time — a lock released, a
       # file closed — and then this prints a refusal while the worktree is

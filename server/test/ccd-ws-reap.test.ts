@@ -2036,4 +2036,33 @@ describe('ws-rm refuses nested checkouts (D1)', () => {
     expect(h.calls().filter((l) => l.startsWith('unsupervise')).length,
       'cmd_ws_rm must refuse before calling _ws_unsupervise').toBe(unsupervisesBefore);
   }, 30000);
+
+  it('the audit names nested-checkouts-present BEFORE any tap, and reap refuses', () => {
+    const { wt, main } = ready(['.claude/']);
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-b');
+    fs.mkdirSync(path.join(wt, '.claude', 'worktrees'), { recursive: true });
+    execFileSync('git', ['init', '-q', child]);
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(a.detail).toContain('agent-b');
+    // `tokenOf()` cannot be used here — the audit answers no token on a
+    // refusal — so the reap call below carries a sentinel and the assertion
+    // is that the refusal is `nested-checkouts-present`, not `state-changed`:
+    // the eval rung fires and refuses before the token is ever compared.
+    const o = refused('0'.repeat(64), wt, main);
+    expect(o.refused).toBe('nested-checkouts-present');
+    expect(fs.existsSync(child), 'the child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a child spawned between consent and the tail still cannot die — the tail backstop', () => {
+    const { wt } = ready(['.claude/']);
+    const tok = tokenOf();
+    const SPAWN = `_ws_unsupervise() { git init -q "${wt}/.claude/worktrees/agent-late"; };`;
+    const r = h.run(`${GH_STUB} ${ARCH.replace('_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };', SPAWN)} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('nested-checkouts-present');
+    expect(fs.existsSync(path.join(wt, '.claude', 'worktrees', 'agent-late'))).toBe(true);
+    expect(fs.existsSync(wt), 'the parent worktree survives').toBe(true);
+  }, 30000);
 });
