@@ -2063,3 +2063,40 @@ describe('the nested-checkout walk (D1)', () => {
     expect(r.stdout).toMatch(/WHY=.+/);
   }, 30000);
 });
+
+describe('registered-child enumeration (D2)', () => {
+  const addChild = (main: string, wt: string, leaf: string, branch: string): string => {
+    const dir = path.join(wt, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+
+  it('lists only worktrees strictly inside the parent, tab-separated, sorted', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    addChild(main, wt, 'agent-a', 'ca');
+    const out = h.sh(`_ws_children "${main}" "${wt}"`);
+    const rows = out.split('\n').map((l) => l.split('\t'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]![0]).toContain('agent-a');
+    expect(rows[0]![1]).toBe('ca');
+    expect(rows[0]![2]).toMatch(/^[0-9a-f]{40}$/);
+  }, 30000);
+
+  it('containment is computed on RESOLVED paths — a symlinked parent still owns its children', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    addChild(main, wt, 'agent-s', 'cs');
+    const link = path.join(h.home, 'link-to-wt');
+    fs.symlinkSync(wt, link);
+    expect(h.sh(`_ws_children "${main}" "${link}"`)).toContain('agent-s');
+  }, 30000);
+
+  it('a sibling worktree outside the parent is NOT a child', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    h.git(main, 'worktree', 'add', path.join(h.home, 'elsewhere'), '-b', 'sib');
+    expect(h.sh(`_ws_children "${main}" "${wt}" | grep -c . || true`)).toBe('0');
+  }, 30000);
+});

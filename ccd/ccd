@@ -2076,6 +2076,31 @@ _ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
   rm -f "$outf"
 }
 
+# Registered children = entries of `git worktree list --porcelain` whose
+# RESOLVED path sits strictly inside the parent's resolved dir. Registration is
+# FLAT at every depth (measured); nesting is a filesystem accident, so the tree
+# is reconstructed here by path prefix — resolved on BOTH sides, or the fleet's
+# symlinked roots make every containment test pass vacuously.
+_ws_children() {   # main parentdir -> "resolvedpath\tbranch\theadoid" per child
+  local main="$1" parent wt="" head="" br="" out=""
+  parent=$(cd "$2" 2>/dev/null && pwd -P) || return 1
+  local porc; porc=$(git -C "$main" worktree list --porcelain 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) wt="${line#worktree }" ;;
+      "HEAD "*)     head="${line#HEAD }" ;;
+      "branch "*)   br="${line#branch refs/heads/}" ;;
+      "")
+        if [[ -n "$wt" ]]; then
+          local rp; rp=$(cd "$wt" 2>/dev/null && pwd -P) || rp="$wt"
+          [[ "$rp" == "$parent"/* ]] && out+="$rp"$'\t'"$br"$'\t'"$head"$'\n'
+        fi
+        wt=""; head=""; br="" ;;
+    esac
+  done <<< "$porc"$'\n'
+  printf '%s' "$out" | LC_ALL=C sort
+}
+
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
