@@ -2770,7 +2770,12 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # (it has no `_ws_collect_ignored` call at all), but the two rungs they
     # DO share run in the same relative order there, and the audit's verdict
     # must read the same ladder or the sheet and the CLI would refuse two
-    # different workspaces for the same `nested`.
+    # different workspaces for the same `nested`. That symmetry held while
+    # both refused on ANY nested checkout; D2 below narrows only the AUDIT's
+    # rung to strays. `cmd_ws_rm` deliberately keeps the blanket refusal —
+    # untouched by this task — and `_ws_reap_tail`'s tail backstop (ccd:4139+)
+    # narrows to match only once Task 8 lands; until then a consented reap
+    # over a workspace with a healthy registered child still stops there.
     #
     # D2 — CHILD-AWARE DESCENT. A nested checkout is no longer an automatic
     # refusal: one git registered under `$main` (`_ws_children`, ccd:2084-2102)
@@ -2789,8 +2794,31 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       || { _reap_refuse tree-unreadable "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
     children=$(_ws_children "$main" "$workdir") \
       || { _reap_refuse tree-unreadable "could not enumerate registered worktrees"; return 1; }
-    strays=$(comm -23 <(printf '%s\n' "$nested" | grep . | LC_ALL=C sort) \
-                       <(printf '%s\n' "$children" | cut -f1 | LC_ALL=C sort))
+    # An IN-BASH set difference, not `comm` over two `sort`ed process
+    # substitutions — fix round 1, two measured defects in that form. First:
+    # `comm` requires both inputs pre-sorted in the SAME collation it compares
+    # under, and this pipeline sorted with `LC_ALL=C` while `comm` itself read
+    # the ambient locale — under a UTF-8 locale a path holding a non-ASCII
+    # byte can sort differently under the two, desyncing `comm`'s merge and
+    # manufacturing a spurious stray over a perfectly healthy child. Second:
+    # `strays=$(comm ...)` captures only `comm`'s own exit status — a `sort`
+    # or `printf` failing inside either `<(...)` is invisible to
+    # `[[ -z "$strays" ]]`, and an invisible failure here reads as "no
+    # strays", which is fail-open on the one rung this file never allows an
+    # override for. An associative array has no subprocess to fail and no
+    # locale to disagree with.
+    local -A _ws_childset=(); local _wcline _wcpath
+    while IFS= read -r _wcline; do
+      [[ -n "$_wcline" ]] || continue
+      _wcpath="${_wcline%%$'\t'*}"
+      _ws_childset["$_wcpath"]=1
+    done <<< "$children"$'\n'
+    strays=""
+    while IFS= read -r _wcline; do
+      [[ -n "$_wcline" ]] || continue
+      [[ -v _ws_childset["$_wcline"] ]] || strays+="$_wcline"$'\n'
+    done <<< "$nested"$'\n'
+    strays="${strays%$'\n'}"
     [[ -z "$strays" ]] \
       || { _reap_refuse nested-checkouts-present "$(printf '%s\n' "$strays" | grep -c .) unregistered checkout(s): ${strays//$'\n'/, }"; return 1; }
     # The per-child ladder itself, outermost-cheapest first and in the same
@@ -2840,6 +2868,35 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       crest="${childline#*$'\t'}"
       cbr="${crest%%$'\t'*}"
       chead="${crest#*$'\t'}"
+      # OWNERSHIP, reproven live — the FIRST rung inside this loop, before
+      # anything else touches `$cpath`, exactly the position Phase B's own
+      # foreign-worktree rung holds for `$workdir` (ccd:2661-2664). `_ws_children`
+      # enumerated this path once, from a `worktree list` snapshot; a lot can
+      # happen to the filesystem between that read and this line.
+      #
+      # TWO checks, AND-combined, because fix round 1 measured that neither
+      # alone proves ownership. `_ws_common_dir "$cpath" == $mainreal` catches
+      # a foreign clone dropped at a registered child's path — its own
+      # unrelated `.git` resolves to a different common dir — but NOT the
+      # sibling failure the same review measured: delete `$cpath/.git`
+      # outright and git's upward discovery walks past the empty spot, finds
+      # `$workdir`'s OWN `.git` two directories up (a child always lives
+      # nested inside its parent's working tree), and answers with
+      # $workdir's common dir — which IS $mainreal, because $workdir is
+      # itself main's worktree. Measured on git 2.43: `_ws_common_dir`
+      # cannot tell "$cpath is a healthy linked worktree" from "$cpath's own
+      # `.git` is gone and every read of it is secretly reading $workdir
+      # instead" — both answer $mainreal. `--show-toplevel` is what
+      # distinguishes them: for an intact child it answers `$cpath` itself;
+      # for the `.git`-less case it answers `$workdir`, because upward
+      # discovery roots the repository at whichever ancestor's `.git` it
+      # actually found. Neither probe alone proves ownership — a foreign
+      # clone's own toplevel IS itself, and a `.git`-less child's common-dir
+      # IS $mainreal — so both run.
+      local ccommon; ccommon=$(_ws_common_dir "$cpath") || ccommon=""
+      local ctop; ctop=$(git -C "$cpath" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || ctop=""
+      [[ -n "$ccommon" && "$ccommon" == "$mainreal" && -n "$ctop" && "$ctop" == "$cpath" ]] \
+        || { _reap_refuse nested-checkouts-present "the checkout at $cpath is not $main's worktree any more"; return 1; }
       local cop; cop=$(_ws_child_op "$cpath") \
         || { _reap_refuse tree-unreadable "could not probe $cpath for an in-progress operation"; return 1; }
       [[ -z "$cop" ]] || { _reap_refuse child-busy "$cop in progress at $cpath"; return 1; }

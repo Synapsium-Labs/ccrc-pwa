@@ -2226,4 +2226,41 @@ describe('the per-child ladder in the reap eval (D2)', () => {
     expect(fs.existsSync(child), 'the registered child survives').toBe(true);
     expect(fs.existsSync(stray), 'the stray survives a read-only audit').toBe(true);
   }, 30000);
+
+  it('a registered child whose .git was deleted refuses nested-checkouts-present, never reapable', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-gone', 'cg');
+    // Fix round 1, finding 1: with `$cpath/.git` gone, git's upward discovery
+    // from `$cpath` walks past the empty spot and finds `$wt`'s OWN `.git`
+    // (a child always lives nested inside its parent's working tree), so a
+    // common-dir-only ownership check would misread this as healthy — both
+    // `$cpath` and `$wt` answer the SAME common dir, $mainreal. Only
+    // `--show-toplevel` tells them apart (an intact child answers itself;
+    // this answers `$wt`), which is why the ownership rung checks both.
+    fs.rmSync(path.join(child, '.git'), { recursive: true, force: true });
+    const a = refusal(wt);
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(a.detail).toContain('agent-gone');
+    expect(fs.existsSync(child), 'the .git-less child directory itself survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a child whose branch is ALSO checked out elsewhere refuses child-branch-elsewhere', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-b2', 'ca');
+    // `git worktree add <path> ca` on a SECOND worktree refuses outright
+    // ("'ca' is already used by worktree at ...") — that exclusivity check
+    // lives in `worktree add`/`checkout`/`switch`, not in the ref itself. A
+    // second, genuinely detached worktree (OUTSIDE the parent, so it is not
+    // itself scanned as a nested checkout) followed by `symbolic-ref HEAD`
+    // directly — plumbing, no exclusivity check — reproduces the real
+    // two-holder state `git worktree list --porcelain` reports live.
+    const sibling = path.join(h.home, 'sibling-holder');
+    h.git(main, 'worktree', 'add', '--detach', sibling);
+    h.git(sibling, 'symbolic-ref', 'HEAD', 'refs/heads/ca');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-branch-elsewhere');
+    expect(a.detail).toContain('ca');
+    expect(a.detail).toMatch(/2 worktrees/);
+    expect(fs.existsSync(child), 'the child survives the refusal').toBe(true);
+  }, 30000);
 });
