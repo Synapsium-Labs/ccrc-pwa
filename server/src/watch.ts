@@ -20,6 +20,12 @@ import { UNCHECKED_PR } from '../../shared/api.js';
  *  live regardless. */
 const TASK_SWEEP_MS = 10_000;
 
+/** The fourth lane. A ccd install is a deliberate act by a human who is
+ *  waiting, so a minute is the longest anyone should have to wonder whether
+ *  the fleet noticed — and the agent's stat gate means an unchanged ccd costs
+ *  a stat, not a bash process. */
+const CAPS_REFRESH_MS = 60_000;
+
 /** The third lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour
  *  against a 5000/hr budget with ~4900 free — about 5%. Measured latency
  *  0.51-0.69 s per call. */
@@ -68,6 +74,10 @@ export class FleetWatcher {
    *  or silence the other seven. */
   private prBackoff = new Map<string, { until: number; step: number }>();
   private lastPrSweep = 0;
+  /** The fourth lane's clock. Starts at 0 so the first tick after start
+   *  always refreshes — which is what recovers a server that connected to an
+   *  agent whose boot-time caps read had already failed. */
+  private lastCapsAt = 0;
   /** Epoch ms the in-flight sweep started, or 0 when none is. A TIMESTAMP, not
    *  a boolean: see `PR_SWEEP_STUCK_MS`. */
   private prSweepStartedAt = 0;
@@ -133,6 +143,10 @@ export class FleetWatcher {
     // --timeout, so awaiting it would stall the dialog detector and the
     // busy->idle push behind GitHub's reachability.
     void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
+    if (this.deps.refreshCaps && Date.now() - this.lastCapsAt >= CAPS_REFRESH_MS) {
+      this.lastCapsAt = Date.now();
+      await this.deps.refreshCaps();
+    }
     const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates);
     // Push on a busy→idle finish (a session completed a turn). Skip the priming
     // tick — otherwise a restart notifies for every currently-idle session.

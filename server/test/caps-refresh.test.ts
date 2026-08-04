@@ -4,6 +4,9 @@ import path from 'node:path';
 import type { RunningAgent } from '../../agent/src/server.js';
 import { type ConnectedFleet } from '../src/remote/client.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { testDeps } from './helpers.js';
 
 function writeCcd(home: string, body: string): void {
   const dir = path.join(home, '.local', 'bin');
@@ -71,5 +74,28 @@ describe('caps refresh', () => {
       () => expect(fleet!.state.ccdVerbs).toEqual(['start', 'ws-rename']),
       { timeout: 5000 },
     );
+  });
+});
+
+describe('the caps lane', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('asks once a minute, not once a tick', async () => {
+    let calls = 0;
+    const deps = { ...testDeps(), refreshCaps: async () => { calls += 1; } };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+
+    vi.useFakeTimers();
+    await w.tick(); await w.tick(); await w.tick();
+    expect(calls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await w.tick();
+    expect(calls).toBe(2);
+  });
+
+  it('local mode has nothing to refresh and does not throw', async () => {
+    const w = new FleetWatcher(testDeps(), new Bus(), 2000);
+    await expect(w.tick()).resolves.not.toThrow();
   });
 });
