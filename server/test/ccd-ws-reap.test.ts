@@ -2066,3 +2066,182 @@ describe('ws-rm refuses nested checkouts (D1)', () => {
     expect(fs.existsSync(wt), 'the parent worktree survives').toBe(true);
   }, 30000);
 });
+
+/**
+ * Task 8 — the `children` breadcrumb phase and the ordered teardown loop it
+ * guards, plus resume coherence across it. `_ws_reap_eval`'s own per-child
+ * ladder (D2, exercised in `ccd-ws-audit.test.ts`'s "the per-child ladder in
+ * the reap eval" describe) decides WHICH children are safe to consent to;
+ * this suite is about what happens to that consented set once `ws-reap`
+ * actually tears it down — order, partial failure, and what a resume may
+ * finish versus what it must refuse.
+ *
+ * `addChild` is re-declared locally, matching the audit file's own
+ * precedent for the same helper: separate closures, self-contained
+ * fixtures.
+ */
+describe('child teardown (D2/D3)', () => {
+  const addChild = (main: string, parentDir: string, leaf: string, branch: string): string => {
+    const dir = path.join(parentDir, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+
+  it('removes two nested levels innermost-first, then branches with plain -d, then the parent CAS', () => {
+    // The grandchild is registered FROM `$main` too (`_ws_children`'s own
+    // comment: registration is FLAT at every depth, nesting is a filesystem
+    // accident) — a leaf under the CHILD's own path, branched from `$main`'s
+    // current, already-pushed HEAD exactly as every other clean-child
+    // fixture in this file does, so it is 0 commits ahead of origin/HEAD and
+    // inherits the same committed `.gitignore` (`.claude/`) that keeps the
+    // grandchild from dirtying the child's own `git status` the same way a
+    // registered child keeps the PARENT clean.
+    const { wt, main } = ready(['.claude/']);
+    const child = addChild(main, wt, 'agent-a', 'ca');
+    const grandchild = addChild(main, child, 'agent-inner', 'cb');
+    const tok = tokenOf();
+
+    // ORDER, PINNED VIA THE REFUSAL PATH — not via "a wrong-order remove
+    // would have failed", which a scratch fixture disproved before this test
+    // was written. Measured: `git worktree remove` on a directory that
+    // still physically contains ANOTHER worktree's checkout does not
+    // refuse at all when that nested path is gitignored (as it must be,
+    // here, for the child to stay clean around its own grandchild, the same
+    // way the parent stays clean around a registered child) — git just
+    // treats the nested checkout as ordinary ignored content and deletes
+    // the whole subtree outright, rc 0, PAST EVEN A `git worktree lock` ON
+    // THE NESTED ONE. A lock is checked only when that exact path is
+    // itself the target of `worktree remove`, never when an ancestor
+    // directory happens to physically contain it — so a parent-first
+    // removal would succeed and silently destroy the locked grandchild's
+    // files out from under git's own admin record, not fail.
+    //
+    // What IS observable: lock the GRANDCHILD, then run the reap. If the
+    // loop is innermost-first, it reaches the grandchild FIRST, its own
+    // `worktree remove` hits the lock and fails, and the run refuses
+    // BEFORE the child is ever touched — the child survives a run that
+    // removed nothing at all. If the loop instead walked outermost-first,
+    // the child (and, silently, the grandchild inside it) would already be
+    // gone by the time anything noticed the lock. The child's survival is
+    // therefore the strongest proof of order reality allows here.
+    h.git(main, 'worktree', 'lock', grandchild);
+    const refusedOut = JSON.parse(reap(tok).stdout);
+    expect(refusedOut.refused).toBe('worktree-remove-failed');
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb stays at children').toBe('children');
+    expect(fs.existsSync(grandchild), 'the locked grandchild survives its own failed removal').toBe(true);
+    expect(fs.existsSync(child), 'the OUTER child was never reached — the order proof').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'cb'), 'the grandchild branch was never reached either').toContain('cb');
+    expect(h.git(main, 'branch', '--list', 'ca'), 'the child branch is untouched').toContain('ca');
+    expect(fs.existsSync(wt), 'the parent is nowhere near this yet').toBe(true);
+
+    // Unlock and let the SAME consented set finish — the rest of this
+    // test's title: branches by plain -d, then the parent's own CAS.
+    h.git(main, 'worktree', 'unlock', grandchild);
+    const out = JSON.parse(reap(tok).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.resumed).toBe('children');
+    expect(fs.existsSync(grandchild)).toBe(false);
+    expect(fs.existsSync(child)).toBe(false);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'cb'), 'plain -d succeeded — no squash, no divergence').toBe('');
+    expect(h.git(main, 'branch', '--list', 'ca')).toBe('');
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the parent branch is CAS-deleted last').toBe('');
+    expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBeNull();
+  }, 30000);
+
+  it('a child branch checked out elsewhere stops the run BEFORE the parent falls', () => {
+    // The same fixture `ccd-ws-audit.test.ts`'s "a child whose branch is
+    // ALSO checked out elsewhere refuses child-branch-elsewhere" uses,
+    // walked through `cmd_ws_reap` instead of a bare audit — proving the
+    // SAME ladder that gates consent also gates the destructive verb, and
+    // that a refusal there never lets the parent fall. `refused()` needs no
+    // real token: `_ws_reap_eval` runs fresh inside `cmd_ws_reap`
+    // regardless of what is passed, and a genuinely unreapable fixture
+    // reports ITS OWN verdict before any token is ever compared (the same
+    // reason the very first "refusals are answers" fixture in this file
+    // can pass a bare `'0'.repeat(64)`).
+    const { wt, main } = ready(['.claude/']);
+    const child = addChild(main, wt, 'agent-b2', 'ca');
+    const sibling = path.join(h.home, 'sibling-holder');
+    h.git(main, 'worktree', 'add', '--detach', sibling);
+    h.git(sibling, 'symbolic-ref', 'HEAD', 'refs/heads/ca');
+    const o = refused('0'.repeat(64), wt, main);
+    expect(o.refused).toBe('child-branch-elsewhere');
+    expect(fs.existsSync(child), 'the child survives — the parent never even got a token').toBe(true);
+  }, 30000);
+
+  it('resume in the children phase finishes only the SAME set — a new child refuses state-changed', () => {
+    // TWO consented children, same depth, deliberately DIFFERENT path
+    // lengths so the innermost-first sort is unambiguous without leaning on
+    // a tie-break: `agent-alpha` is longer than `agent-b`, so it sorts
+    // first regardless of how ties between equal-length keys resolve.
+    const { wt, main } = ready(['.claude/']);
+    const childA = addChild(main, wt, 'agent-alpha', 'ca');
+    const childB = addChild(main, wt, 'agent-b', 'cb');
+    const tok = tokenOf();
+    // LOCK, not dirty or chmod: a locked worktree still passes `git status
+    // --porcelain` and every other rung of the eval's own per-child ladder,
+    // so the descent still consents to BOTH children and issues a token
+    // that covers them — the failure this fixture wants happens only
+    // inside the TEARDOWN LOOP's own `git worktree remove`, not earlier.
+    h.git(main, 'worktree', 'lock', childB);
+    const out = JSON.parse(reap(tok).stdout);
+    expect(out.refused).toBe('worktree-remove-failed');
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('children');
+    expect(fs.existsSync(childA), 'the first (innermost by length) child was already removed').toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ca')).toBe('');
+    expect(fs.existsSync(childB), 'the locked child survives its own failed removal').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'cb')).toContain('cb');
+
+    // A NEW stray under the parent, appearing while the run is stopped mid
+    // consented-set — the state the resume's own live-vs-consented
+    // re-derivation exists to catch.
+    const stray = path.join(wt, '.claude', 'worktrees', 'stray-x');
+    fs.mkdirSync(stray, { recursive: true });
+    execFileSync('git', ['init', '-q', stray]);
+
+    const r2 = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r2.code, `stderr: ${r2.stderr}`).toBe(0);
+    const out2 = JSON.parse(r2.stdout);
+    expect(out2.refused).toBe('state-changed');
+    expect(out2.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb is untouched by a refusal').toBe('children');
+    expect(fs.existsSync(childB), 'nothing further is removed').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'cb')).toContain('cb');
+    expect(fs.existsSync(stray), 'and the stray itself survives too — a refusal destroys nothing').toBe(true);
+  }, 30000);
+
+  it('resume in the worktree phase with a live child refuses — old tombstones read as consented-empty', () => {
+    // The `:1799`-style hand-write idiom: a breadcrumb and a tombstone
+    // written directly, standing in for a resume whose journal predates
+    // Task 8 — no `children` field at all, exactly what a tombstone written
+    // by the PREVIOUS commit on this branch would still have on disk the
+    // day this commit ships beside it. `ready(['.claude/'])`, not bare
+    // `ready()`: the injected child must not ALSO trip the parent's own
+    // `git status`-based dirty-tree re-check, which runs first and would
+    // otherwise refuse `dirty-tree` before this test ever reaches the
+    // child-set re-derivation it means to exercise.
+    const { wt, main } = ready(['.claude/']);
+    const tok = tokenOf();
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-x');
+    fs.mkdirSync(path.join(wt, '.claude', 'worktrees'), { recursive: true });
+    execFileSync('git', ['init', '-q', child]);
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.refused).toBe('state-changed');
+    expect(out.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(fs.existsSync(wt), 'the worktree survives').toBe(true);
+    expect(fs.existsSync(child), 'the live child survives too').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch survives').toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry survives').not.toBeNull();
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb is left exactly as found').toBe('worktree');
+  }, 30000);
+});
