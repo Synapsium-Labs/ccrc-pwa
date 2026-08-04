@@ -2083,7 +2083,7 @@ _ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
 # symlinked roots make every containment test pass vacuously.
 _ws_children() {   # main parentdir -> "resolvedpath\tbranch\theadoid" per child
   local main="$1" parent wt="" head="" br="" out=""
-  parent=$(cd "$2" 2>/dev/null && pwd -P) || return 1
+  parent=$(cd "$2" >/dev/null 2>&1 && pwd -P) || return 1
   local porc; porc=$(git -C "$main" worktree list --porcelain 2>/dev/null) || return 1
   while IFS= read -r line; do
     case "$line" in
@@ -2092,7 +2092,7 @@ _ws_children() {   # main parentdir -> "resolvedpath\tbranch\theadoid" per child
       "branch "*)   br="${line#branch refs/heads/}" ;;
       "")
         if [[ -n "$wt" ]]; then
-          local rp; rp=$(cd "$wt" 2>/dev/null && pwd -P) || rp="$wt"
+          local rp; rp=$(cd "$wt" >/dev/null 2>&1 && pwd -P) || rp="$wt"
           [[ "$rp" == "$parent"/* ]] && out+="$rp"$'\t'"$br"$'\t'"$head"$'\n'
         fi
         wt=""; head=""; br="" ;;

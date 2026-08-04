@@ -2099,4 +2099,23 @@ describe('registered-child enumeration (D2)', () => {
     h.git(main, 'worktree', 'add', path.join(h.home, 'elsewhere'), '-b', 'sib');
     expect(h.sh(`_ws_children "${main}" "${wt}" | grep -c . || true`)).toBe('0');
   }, 30000);
+
+  it('a sibling sharing the parent\'s string prefix without the slash is NOT a child', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    h.git(main, 'worktree', 'add', `${wt}-two`, '-b', 'prefix-collision');
+    expect(h.sh(`_ws_children "${main}" "${wt}" | grep -c . || true`)).toBe('0');
+  }, 30000);
+
+  it('a detached child is listed with an empty branch field', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    const dir = path.join(wt, '.claude', 'worktrees', 'agent-d');
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', '--detach', dir);
+    const out = h.sh(`_ws_children "${main}" "${wt}"`);
+    const rows = out.split('\n').map((l) => l.split('\t'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]![1]).toBe('');
+  }, 30000);
 });
