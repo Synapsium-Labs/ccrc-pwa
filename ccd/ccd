@@ -2713,11 +2713,12 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # outermost-cheapest first, and a nested checkout is a whole-tree `find`
     # (bounded by `REAP_SCAN_SECONDS`, same as the ignored-set walk this rung
     # sits beside) — no reason to pay for it ahead of the guards a `git status`
-    # and a directory listing already answer. `ccd ws-rm` walks the identical
-    # three rungs — dirty, sensitive-ignored, then this — in the same order
-    # (ccd:1082-1087), and the audit's verdict must read the same ladder or the
-    # sheet and the CLI would refuse two different workspaces for the same
-    # `nested`.
+    # and a directory listing already answer. `cmd_ws_rm` (ccd:1076-1087) walks
+    # only two rungs — `dirty`, then this one — never `sensitive-ignored`
+    # (it has no `_ws_collect_ignored` call at all), but the two rungs they
+    # DO share run in the same relative order there, and the audit's verdict
+    # must read the same ladder or the sheet and the CLI would refuse two
+    # different workspaces for the same `nested`.
     nested=$(_ws_nested_checkouts "$workdir") \
       || { _reap_refuse tree-unreadable "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
     [[ -z "$nested" ]] \
