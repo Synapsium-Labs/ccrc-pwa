@@ -318,7 +318,8 @@ must name what it will actually remove.
 | condition | behaviour |
 |---|---|
 | no `ai-title` in the transcript | no call; re-checked next sweep |
-| title slugifies to empty or to the current name | no call; pair marked attempted |
+| title slugifies to the name it already has | no call; pair marked attempted |
+| title slugifies to empty | no call, and **no pair to mark** — the retry key is `<id>:<derived-branch>` and an empty slug derives no branch. The stat gate is what stops the re-read, which is the same protection a marked pair gets. |
 | ccd refuses (any token) | logged with the token; pair marked attempted; branch keeps its born name |
 | `git branch -m` fails (`ccd:1241`) | non-zero exit, ordinary non-ok `CcdResult`; logged; pair marked attempted |
 | fleet down / transport failure | ordinary non-ok `CcdResult`; pair marked attempted; one retry after a server restart |
@@ -328,6 +329,30 @@ must name what it will actually remove.
 The `verbSupported` row is the one worth stating: a fleet running an older ccd must
 not have its workspaces marked attempted, or upgrading ccd would leave every
 existing workspace permanently unnamed.
+
+**And it constrains the order of the checks, which is easy to get wrong.** The
+natural sequence — conditions, stat gate, read, derive, then `verbSupported` —
+defeats that row silently: it records a stat probe for a session the fleet cannot
+rename, so a fleet that later installs a newer ccd skips the re-read of every
+unchanged transcript and never names any of them. `verbSupported` is therefore
+asked **before** the transcript is claimed, using a probe argv built from the born
+branch; the probe is never sent, because `verbSupported` reads `argv[0]` only.
+
+**Refusal tokens reach `wsaudit.ts`, not the PWA.** `server/test/wsaudit.test.ts:52-101`
+scans ccd's source for every `"refused":"<token>"` and asserts set equality in both
+directions against `SENTENCES` in `server/src/wsaudit.ts`. Nine of the thirteen
+tokens here are new, so nine sentences must be written that no sheet renders —
+this spec builds no manual rename control. They are written anyway rather than
+making the linkage test verb-aware, because that test is an approved mechanism and
+weakening it to fit a new caller is the wrong trade. Their wording is for the
+server log and for whoever reads them next.
+
+**Vocabulary deferral, recorded rather than fixed:** the reap side already says
+`detached-head`, `foreign-worktree` and `no-worktree-record` where this table says
+`detached`, `worktree-foreign` and `worktree-unregistered`. That is a real
+inconsistency. It is left as specified because nothing renders these strings, so
+aligning them later is cheap, and churning both a written plan and this table for
+a cosmetic gain is not worth it now.
 
 ## Testing
 
