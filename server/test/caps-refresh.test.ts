@@ -89,7 +89,15 @@ describe('the caps lane', () => {
     await w.tick(); await w.tick(); await w.tick();
     expect(calls).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(61_000);
+    // Less than the interval: must NOT fire yet. This is the assertion a
+    // mutant that shrinks CAPS_REFRESH_MS (e.g. to 1ms) cannot survive — at
+    // 30s elapsed a 1ms interval would already have fired.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await w.tick();
+    expect(calls).toBe(1);
+
+    // Past the interval (61s total since the first call): must fire.
+    await vi.advanceTimersByTimeAsync(31_000);
     await w.tick();
     expect(calls).toBe(2);
   });
