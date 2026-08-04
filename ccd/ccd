@@ -1080,6 +1080,11 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
       || die "could not read $workdir${derr:+ ($derr)} — nothing was touched"
     [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+    local nested
+    nested=$(_ws_nested_checkouts "$workdir") \
+      || die "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched"
+    [[ -z "$nested" ]] \
+      || die "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched"
   fi
 
   _ws_unsupervise "$id"
@@ -2040,7 +2045,14 @@ _ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
   # certainty, and every caller proceeds straight to `git worktree remove` on
   # the strength of it. Resolving first also means every entry `find` walks,
   # and everything the loop below prints, already hangs off the real root.
-  dir=$(cd "$1" 2>/dev/null && pwd -P) \
+  # `>/dev/null` on the cd, not merely `2>` — same reasoning as `_ws_realpath`
+  # above: a `cd` exported as a shell function (BASH_FUNC_cd%%, the shape
+  # zoxide/direnv/a .bashrc `cd` wrapper take) prints whatever it likes on
+  # STDOUT, straight into this capture, and that is reachable from `cmd_ws_rm`
+  # in a real shell. `2>/dev/null` alone left `$dir` carrying the hook's own
+  # line ahead of `pwd -P`'s, which sent a corrupt path into `find` below and
+  # refused a perfectly healthy workspace.
+  dir=$(cd "$1" >/dev/null 2>&1 && pwd -P) \
     || { _WS_NESTED_WHY="could not resolve $1"; return 1; }
   outf=$(mktemp) || { _WS_NESTED_WHY='could not make a scratch file'; return 1; }
   errf=$(mktemp) || { rm -f "$outf"; _WS_NESTED_WHY='could not make a scratch file'; return 1; }
