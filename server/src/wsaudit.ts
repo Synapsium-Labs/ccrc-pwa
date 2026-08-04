@@ -35,6 +35,8 @@ export const SENTENCES: Record<string, string> = {
   // advice about files, and this is a worktree ccrc could not open at all.
   'tree-unreadable': 'ccrc could not read this worktree, so it cannot prove nothing here would be lost. Nothing was removed.',
   'sensitive-ignored': 'There are secret-shaped files here that are in no commit and cannot be recovered. Move them out, then try again — there is no override.',
+  'nested-checkouts-present':
+    'Checkouts of their own live under this workspace — they are not build output. Remove or finish them first; ccd deletes no repository it did not create.',
   'stashes-present': 'This branch has stashed changes, which are in no commit.',
   // A stash read that FAILED, and it gets its own sentence for the same reason
   // `tree-unreadable` does: `git stash list` answers rc 0 with empty output for

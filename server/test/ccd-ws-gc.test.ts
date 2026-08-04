@@ -284,6 +284,25 @@ describe('ws-gc --prune', () => {
     expect(branches).toBe('');
   });
 
+  it('declines to prune an orphan that holds a nested checkout (D1)', () => {
+    // Build the file's standard orphan (registered worktree, registry row gone),
+    // then git init a child inside it. The decline must name the reason and
+    // the child must survive a full `ws-gc --prune`.
+    h.makeRepo('demo');
+    const wt = addOrphan('demo', 'still-cove');
+    // Exclude the child via the untracked `info/exclude`, not a committed
+    // .gitignore: a commit here would move the branch tip past origin/HEAD and
+    // trip the unmerged-branch gate before the nested-checkout guard is ever
+    // reached. This proves the new guard fires on its own, not riding the dirty
+    // check that a plain untracked directory would otherwise trigger.
+    fs.appendFileSync(path.join(h.home, 'projects', 'demo', '.git', 'info', 'exclude'), 'nested/\n');
+    execFileSync('git', ['init', '-q', path.join(wt, 'nested')]);
+    const out = prune();
+    expect(out, out).toMatch(/nested checkout/);
+    expect(out, out).not.toContain('removed orphan worktree');
+    expect(fs.existsSync(wt), 'the orphan is still on disk').toBe(true);
+  }, 30000);
+
   it('leaves an orphan alone when it cannot resolve origin/HEAD at all', () => {
     // No origin means no base to compare against, so "merged" is unprovable.
     // Unprovable must resolve to declining, not to deleting.

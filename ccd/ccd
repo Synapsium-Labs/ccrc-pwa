@@ -1080,6 +1080,11 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
       || die "could not read $workdir${derr:+ ($derr)} — nothing was touched"
     [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+    local nested
+    nested=$(_ws_nested_checkouts "$workdir") \
+      || die "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched"
+    [[ -z "$nested" ]] \
+      || die "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched"
   fi
 
   _ws_unsupervise "$id"
@@ -2020,6 +2025,57 @@ _ws_sensitive_noise() {   # path -> 0 when a secret-shaped name is vendored/temp
   return 1
 }
 
+# ── D1: the nested-checkout guard ──────────────────────────────────────────
+# A registered child, a plain `git init`, a clone, a linked-worktree pointer
+# file: every one of them is a `.git` entry at depth ≥ 2. `git worktree list`
+# structurally cannot see the independent ones (measured), so this is a
+# FILESYSTEM walk. rc 0 = the walk completed (stdout may be empty); rc 1 = it
+# did not, with the reason in _WS_NESTED_WHY — same polarity as every Phase B
+# read: unreadable refuses, it never guesses.
+_WS_NESTED_WHY=''
+_ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
+  local dir outf errf err rc f p
+  _WS_NESTED_WHY=''
+  # Resolve the OPERAND before it ever reaches `find`. `find`'s default `-P`
+  # refuses to descend a symlink given as the exact top-level path (measured:
+  # `find "$symlinkToDir" -mindepth 1` walks nothing at all — no error, rc 0,
+  # empty stdout), so an unresolved symlink here would make the walk answer
+  # "no nested checkouts" on a tree it never looked at. That is the one shape
+  # of wrong this guard cannot afford: rc 0 with an empty answer reads as
+  # certainty, and every caller proceeds straight to `git worktree remove` on
+  # the strength of it. Resolving first also means every entry `find` walks,
+  # and everything the loop below prints, already hangs off the real root.
+  # `>/dev/null` on the cd, not merely `2>` — same reasoning as `_ws_realpath`
+  # above: a `cd` exported as a shell function (BASH_FUNC_cd%%, the shape
+  # zoxide/direnv/a .bashrc `cd` wrapper take) prints whatever it likes on
+  # STDOUT, straight into this capture, and that is reachable from `cmd_ws_rm`
+  # in a real shell. `2>/dev/null` alone left `$dir` carrying the hook's own
+  # line ahead of `pwd -P`'s, which sent a corrupt path into `find` below and
+  # refused a perfectly healthy workspace.
+  dir=$(cd "$1" >/dev/null 2>&1 && pwd -P) \
+    || { _WS_NESTED_WHY="could not resolve $1"; return 1; }
+  outf=$(mktemp) || { _WS_NESTED_WHY='could not make a scratch file'; return 1; }
+  errf=$(mktemp) || { rm -f "$outf"; _WS_NESTED_WHY='could not make a scratch file'; return 1; }
+  timeout "$REAP_SCAN_SECONDS" find "$dir" -mindepth 2 -name .git -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 124 )); then
+    rm -f "$outf"
+    _WS_NESTED_WHY="the nested-checkout walk did not finish within ${REAP_SCAN_SECONDS}s"
+    return 1
+  fi
+  (( rc == 0 )) || { rm -f "$outf"; _WS_NESTED_WHY='could not walk the tree'; return 1; }
+  [[ -z "$err" ]] || { rm -f "$outf"; _WS_NESTED_WHY="could not read all of the tree ($err)"; return 1; }
+  while IFS= read -r -d '' f; do
+    # `>/dev/null 2>&1`, not `2>/dev/null` alone — same reasoning as the operand
+    # resolution above, and the same defect class: a `cd` exported as a shell
+    # function prints whatever it likes on STDOUT, straight into this capture,
+    # corrupting the entry this loop reports for a real nested checkout.
+    p=$(cd "$(dirname "$f")" >/dev/null 2>&1 && pwd -P) || p="${f%/.git}"
+    printf '%s\n' "$p"
+  done <"$outf" | LC_ALL=C sort
+  rm -f "$outf"
+}
+
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
@@ -2445,7 +2501,7 @@ _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
-  local st up ahead repo rows row registered errf err rc stashall dirt clipsjson
+  local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -2652,6 +2708,21 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       || { _reap_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"; return 1; }
     (( ${#REAP_SENSITIVE[@]} == 0 )) \
       || { _reap_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
+    # LAST rung of Phase B, deliberately, and after `sensitive-ignored` for the
+    # same reason it sits after every other Phase B guard: the ladder is walked
+    # outermost-cheapest first, and a nested checkout is a whole-tree `find`
+    # (bounded by `REAP_SCAN_SECONDS`, same as the ignored-set walk this rung
+    # sits beside) — no reason to pay for it ahead of the guards a `git status`
+    # and a directory listing already answer. `cmd_ws_rm` (ccd:1076-1087) walks
+    # only two rungs — `dirty`, then this one — never `sensitive-ignored`
+    # (it has no `_ws_collect_ignored` call at all), but the two rungs they
+    # DO share run in the same relative order there, and the audit's verdict
+    # must read the same ladder or the sheet and the CLI would refuse two
+    # different workspaces for the same `nested`.
+    nested=$(_ws_nested_checkouts "$workdir") \
+      || { _reap_refuse tree-unreadable "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
+    [[ -z "$nested" ]] \
+      || { _reap_refuse nested-checkouts-present "$(printf '%s\n' "$nested" | grep -c .) nested checkout(s) live under this workspace: ${nested//$'\n'/, }"; return 1; }
   fi
 
   # THE STASH READ THAT CANNOT FAIL SILENTLY — corroborated here rather than
@@ -4040,6 +4111,24 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       # ws-restore recovers it, whereas losing the registry would not be
       # recoverable.
       #
+      # THE TAIL BACKSTOP — the audit's `_ws_reap_eval` rung above proves no
+      # nested checkout existed at CONSENT time, and this is the box-side
+      # instant of deletion §5.3 requires re-proving guards at: `_ws_unsupervise`
+      # (d) and `tmux kill-session` (e) already ran, above, before this line is
+      # reached, and either is an arbitrary external command in a live
+      # deployment (a supervisor hook, a tmux hook) — nothing in this file's
+      # contract says one cannot `git init` a checkout under $workdir on its way
+      # out. Fail-shut on an unscannable tree, the same polarity as every other
+      # guard on this ladder: an answer this cannot prove clean is not "go
+      # ahead", it is `(unscannable: …)`, which is non-empty and refuses below.
+      local nested
+      if ! nested=$(_ws_nested_checkouts "$workdir"); then nested="(unscannable: ${_WS_NESTED_WHY})"; fi
+      if [[ -n "$nested" ]]; then
+        printf '{"refused":"nested-checkouts-present","detail":%s,"paths":[]}\n' \
+          "$(_json_str "nested checkouts under $workdir: ${nested//$'\n'/, } — remove or finish them, then re-run ws-reap")"
+        return 0
+      fi
+
       # ONE invocation, with its stderr captured. Re-running the command just
       # to read its message can SUCCEED the second time — a lock released, a
       # file closed — and then this prints a refusal while the worktree is
@@ -4673,6 +4762,24 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # Finding F4 — the §7 scan and the listing, immediately before the only
       # step in this command that deletes a DIRECTORY. See `_ws_gc_reclaimable`.
       _ws_gc_reclaimable "$p" || return 0
+      # D1 — the same guard `cmd_ws_rm` and both reap sites already carry, here
+      # at the last remaining removal site, and LAST for the same reason
+      # `_ws_reap_eval`'s Phase B puts it last (ccd:2711-2721): the ladder runs
+      # outermost-cheapest first, and this is a whole-tree `find` no cheaper
+      # than the ignored-set walk `_ws_gc_reclaimable` just paid for above — no
+      # reason to run it ahead of the guards a `git status` and a directory
+      # listing already answer. An orphan is exactly the state a nested
+      # checkout survives INTO: its parent's registry row is gone, but a child
+      # worktree or `git init` still lives under it, and `git worktree remove`
+      # recurses through the whole tree with no notion that part of it is a
+      # second repository ccd never created.
+      local nested
+      if ! nested=$(_ws_nested_checkouts "$p"); then
+        _gc_declined "$p could not be scanned for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)}"; return 0
+      fi
+      if [[ -n "$nested" ]]; then
+        _gc_declined "$p holds nested checkouts — ccd removes only what it created"; return 0
+      fi
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
         _gc_reclaimed "removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.

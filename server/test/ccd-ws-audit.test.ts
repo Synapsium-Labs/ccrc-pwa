@@ -1966,3 +1966,100 @@ describe('the manifest', () => {
     expect(second.token).not.toBe(first);
   }, 30000);
 });
+
+describe('the nested-checkout walk (D1)', () => {
+  it('lists a stray git init under an ignored path, resolved, and nothing else', () => {
+    const { wt } = squashMovedBase();
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-x');
+    fs.mkdirSync(child, { recursive: true });
+    execFileSync('git', ['init', '-q', child]);
+    const out = h.sh(`_ws_nested_checkouts "${wt}"`);
+    expect(out.split('\n')).toHaveLength(1);
+    expect(out).toContain('agent-x');
+    expect(out.startsWith('/')).toBe(true);
+    // The emitted line must be the checkout ROOT, not the raw `.git` entry
+    // `find` matched — a `.git`-suffixed path here would mean the walk forgot
+    // to strip back to the parent directory.
+    expect(out).not.toMatch(/\/\.git$/);
+    expect(out).toBe(fs.realpathSync(child));
+  }, 30000);
+
+  it('answers empty for a workspace with no nested checkouts, rc 0', () => {
+    const { wt } = squashMovedBase();
+    expect(h.sh(`_ws_nested_checkouts "${wt}" && echo WALKED`)).toBe('WALKED');
+  }, 30000);
+
+  it('fails rc 1 with a reason when a directory cannot be read — never guesses', () => {
+    const { wt } = squashMovedBase();
+    const locked = path.join(wt, 'locked');
+    fs.mkdirSync(locked); fs.chmodSync(locked, 0o000);
+    try {
+      const r = h.run(`_ws_nested_checkouts "${wt}" || { echo "WHY=$_WS_NESTED_WHY"; exit 3; }`);
+      expect(r.code).toBe(3);
+      // `toContain('WHY=')` alone would pass even if `_WS_NESTED_WHY` was never
+      // set — the literal "WHY=" is printed either way. Requiring text AFTER
+      // the "=" pins that a reason was actually assigned, not just echoed.
+      expect(r.stdout).toMatch(/WHY=.+/);
+    } finally { fs.chmodSync(locked, 0o755); }
+  }, 30000);
+
+  it('sees a .git FILE (a linked worktree pointer), not only directories', () => {
+    const { wt } = squashMovedBase();
+    const fake = path.join(wt, 'sub');
+    fs.mkdirSync(fake);
+    fs.writeFileSync(path.join(fake, '.git'), 'gitdir: /nowhere\n');
+    const out = h.sh(`_ws_nested_checkouts "${wt}"`);
+    expect(out).toContain('sub');
+    expect(out).not.toMatch(/\/\.git$/);
+  }, 30000);
+
+  it('resolves through a symlink to the real path (pwd -P), not the link path', () => {
+    const { wt } = squashMovedBase();
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-x');
+    fs.mkdirSync(child, { recursive: true });
+    execFileSync('git', ['init', '-q', child]);
+    // `find`'s default `-P` leaves a symlink UNFOLLOWED only when it is itself
+    // the exact operand handed to it (measured: `find "$symlinkToDir"` walks
+    // nothing at all — no -H/-L, no descent, rc 0, empty). Passing the plain
+    // symlink straight to `_ws_nested_checkouts` therefore proves nothing about
+    // `pwd -P`; it never reaches a `.git` to resolve. Routing through a
+    // symlinked ANCESTOR instead keeps the walk real (the operand's own lstat
+    // sees a plain directory, since only its last component is inspected, so
+    // `find` recurses exactly as it would for any other directory) while every
+    // path it prints still carries the symlink text one level up — which is
+    // exactly what `cd "$(dirname "$f")" && pwd -P` has to resolve away.
+    const link = path.join(h.home, 'link-to-parent');
+    fs.symlinkSync(path.dirname(wt), link);
+    const dirThroughLink = path.join(link, path.basename(wt));
+    const out = h.sh(`_ws_nested_checkouts "${dirThroughLink}"`);
+    const real = fs.realpathSync(child);
+    expect(out).toBe(real);
+    expect(out.startsWith(link)).toBe(false);
+  }, 30000);
+
+  it('finds a child through a symlinked workspace root, and refuses cleanly on one that does not exist', () => {
+    const { wt } = squashMovedBase();
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-x');
+    fs.mkdirSync(child, { recursive: true });
+    execFileSync('git', ['init', '-q', child]);
+    // THE HOLE fix-round-2 closes. Before resolving the operand up front, this
+    // exact call — the workspace ROOT itself a symlink, not one of its
+    // ancestors — answered rc 0 with EMPTY stdout: `find`'s default -P
+    // refuses to descend a symlink OPERAND, so the walk silently saw nothing
+    // on a tree it never entered. Every caller reads rc 0 as "walk completed,
+    // trust the (empty) list" and proceeds straight to `git worktree remove`
+    // — exactly the data-loss path this guard exists to close.
+    const wtLink = path.join(h.home, 'wt-link');
+    fs.symlinkSync(wt, wtLink);
+    const out = h.sh(`_ws_nested_checkouts "${wtLink}"`);
+    expect(out).toBe(fs.realpathSync(child));
+
+    // The other side of resolving up front: a `cd` into a nonexistent operand
+    // fails fast with a reason, rather than a `find` on it silently walking
+    // nothing.
+    const missing = path.join(h.home, 'does-not-exist');
+    const r = h.run(`_ws_nested_checkouts "${missing}" || { echo "WHY=$_WS_NESTED_WHY"; exit 3; }`);
+    expect(r.code).toBe(3);
+    expect(r.stdout).toMatch(/WHY=.+/);
+  }, 30000);
+});

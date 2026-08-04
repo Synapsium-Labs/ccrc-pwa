@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD } from './ccdWsHelpers.js';
@@ -2007,5 +2008,61 @@ describe('serialisation with ws-restore', () => {
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
     expect(JSON.parse(r.stdout).reaped, r.stdout).toBe('demo-quiet-basin');
     expect(fs.existsSync(wt)).toBe(false);
+  }, 30000);
+});
+
+describe('ws-rm refuses nested checkouts (D1)', () => {
+  it('refuses before stopping anything, and the child survives', () => {
+    const { wt } = ready();
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-a');
+    fs.mkdirSync(path.join(wt, '.claude', 'worktrees'), { recursive: true });
+    execFileSync('git', ['init', '-q', child]);
+    // .claude/worktrees is NOT ignored here, so first prove the dirty rung
+    // still wins when it applies; then ignore it and prove the new guard fires.
+    fs.writeFileSync(path.join(wt, '.gitignore'), '.claude/\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore');
+    // Baseline, not a bare 0: `ready()` archived this workspace, and
+    // `cmd_ws_archive` unsupervises too — same reasoning as `killsBefore`
+    // above — so the log already carries one "unsupervise" line before this
+    // `cmd_ws_rm` call, and the fact under test is that the count does not
+    // move, not that it is zero.
+    const unsupervisesBefore = h.calls().filter((l) => l.startsWith('unsupervise')).length;
+    const r = h.run(`${ARCH} cmd_ws_rm demo-quiet-basin`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/nested checkout/);
+    expect(r.stderr).toMatch(/nothing was touched/);
+    expect(fs.existsSync(child)).toBe(true);
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'registry survives').not.toBeNull();
+    expect(h.calls().filter((l) => l.startsWith('unsupervise')).length,
+      'cmd_ws_rm must refuse before calling _ws_unsupervise').toBe(unsupervisesBefore);
+  }, 30000);
+
+  it('the audit names nested-checkouts-present BEFORE any tap, and reap refuses', () => {
+    const { wt, main } = ready(['.claude/']);
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-b');
+    fs.mkdirSync(path.join(wt, '.claude', 'worktrees'), { recursive: true });
+    execFileSync('git', ['init', '-q', child]);
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(a.detail).toContain('agent-b');
+    // `tokenOf()` cannot be used here — the audit answers no token on a
+    // refusal — so the reap call below carries a sentinel and the assertion
+    // is that the refusal is `nested-checkouts-present`, not `state-changed`:
+    // the eval rung fires and refuses before the token is ever compared.
+    const o = refused('0'.repeat(64), wt, main);
+    expect(o.refused).toBe('nested-checkouts-present');
+    expect(fs.existsSync(child), 'the child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a child spawned between consent and the tail still cannot die — the tail backstop', () => {
+    const { wt } = ready(['.claude/']);
+    const tok = tokenOf();
+    const SPAWN = `_ws_unsupervise() { git init -q "${wt}/.claude/worktrees/agent-late"; };`;
+    const r = h.run(`${GH_STUB} ${ARCH.replace('_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };', SPAWN)} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('nested-checkouts-present');
+    expect(fs.existsSync(path.join(wt, '.claude', 'worktrees', 'agent-late'))).toBe(true);
+    expect(fs.existsSync(wt), 'the parent worktree survives').toBe(true);
   }, 30000);
 });
