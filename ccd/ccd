@@ -1531,7 +1531,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   #   - restore inside `_ws_reap_eval`'s Phase C (the <=12 s `gh pr list` plus
   #     the <=60 s `git fetch`) is a lost update seconds to a minute wide: the
   #     reap's token still matches, because it was computed in that same run and
-  #     `archived` is not one of the fingerprint's thirteen inputs, so the tail
+  #     `archived` is not one of the fingerprint's fourteen inputs, so the tail
   #     destroys the workspace the human just brought back.
   #   - restore between the tail's (e) and its (i) is worse in the other
   #     direction: the reap has already unsupervised the session and killed the
@@ -2507,8 +2507,8 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
-_ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest
-  # THIRTEEN facts, and the thirteenth is the clips. `~/.cc-clips/<id>` is
+_ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest childrenDigest
+  # FOURTEEN facts, and the thirteenth is the clips. `~/.cc-clips/<id>` is
   # `rm -rf`'d at (h) — 3.8 MB full-resolution screenshots per the spec — and
   # until this argument existed the fingerprint could not see it at all:
   # measured, pasting two clips between the sheet rendering and the tap left the
@@ -2516,9 +2516,17 @@ _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sen
   # them. A change to WHAT GETS DELETED that no human consented to in any form
   # is the one thing D2 exists to refuse, so the manifest is now both on the
   # wire (`cmd_ws_audit`'s `clips`) and in the token.
+  #
+  # The fourteenth is `childrenDigest` (D3): a registered child spawned after
+  # the sheet rendered is a set the human never saw, and until the descent
+  # loop's `REAP_CHILDLINES` was fingerprinted the token did not move when one
+  # was added, even though the parent's own facts were all unchanged —
+  # exactly the TOCTOU `_ws_reap_eval`'s reason for the clips digest describes,
+  # one line up, for a different set.
   printf '%s\n' "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
     "dirtyCount=$7" "ignoredDigest=$8" "sensitiveDigest=$9" "stashCount=${10}" \
-    "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" | sha256sum | cut -d' ' -f1
+    "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" "childrenDigest=${14}" \
+    | sha256sum | cut -d' ' -f1
 }
 
 _ws_reap_reset() {
@@ -2540,6 +2548,7 @@ _ws_reap_reset() {
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_SENSITIVE_FILTERED=0; _WS_INSIDE_HITS=()
   REAP_IGNSCANNED=0
   REAP_CHILDLINES=""
+  REAP_CHILDDIGEST=""
 }
 
 # MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
@@ -3112,9 +3121,16 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   clipsjson=$(_ws_clip_manifest "$id") \
     || { _reap_refuse clips-unreadable "could not list $HOME/.cc-clips/$id — the pasted images this cleanup would delete cannot be enumerated"; return 1; }
   REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | sha256sum | cut -d' ' -f1)
+  # `printf '%s'`, not `printf '%s\n'`: unlike the clips manifest above,
+  # `REAP_CHILDLINES` is not `$(…)`-captured (it is built in place by the
+  # descent loop), so there is no subshell trailing-newline strip to
+  # compensate for — an empty child set is the literal empty string, and its
+  # digest is `sha256sum` of nothing, exactly what a fixture with no
+  # registered children computes by hand.
+  REAP_CHILDDIGEST=$(printf '%s' "$REAP_CHILDLINES" | sha256sum | cut -d' ' -f1)
   REAP_TOKEN=$(_ws_fingerprint "$id" "$branch" "$REAP_TIP" "$REAP_HEADOID" "$REAP_MERGE" "$REAP_PROOF" \
                  "$REAP_DIRTY" "$REAP_IGNDIGEST" "$REAP_SENSDIGEST" "$REAP_STASHES" "$REAP_WTHEAD" \
-                 "$REAP_BASEOID" "$REAP_CLIPDIGEST")
+                 "$REAP_BASEOID" "$REAP_CLIPDIGEST" "$REAP_CHILDDIGEST")
   REAP_VERDICT=reapable
   return 0
 }
@@ -3980,7 +3996,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
     # drift refuses `state-changed`" — and the argv still requires a shape-valid
     # 64-hex string, so `ws-reap` cannot be spelled without one. What it is not
     # is compared: there is nothing to compare it to. The token is
-    # `_ws_reap_eval`'s, built from twelve facts Phase B and Phase C measured,
+    # `_ws_reap_eval`'s, built from fourteen facts Phase B and Phase C measured,
     # and on a resume the worktree is usually already gone — Phase B has no tree
     # to read and Phase C would need a gh call an outage could withhold for
     # ever, which is the wedge §5.6 exists to end. `cmd_ws_audit` says the same
@@ -4205,7 +4221,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # `cmd_ws_restore` (ccd:1234) removes `$REG/$id.archived`, re-`_spawn`s the
   # session and re-`_ws_supervise`s it, turning the workspace back into an
   # ordinary live one. Nothing re-read the marker after `_ws_reap_eval`'s Phase
-  # A (ccd:2055), and it is not one of `_ws_fingerprint`'s thirteen inputs, so
+  # A (ccd:2055), and it is not one of `_ws_fingerprint`'s fourteen inputs, so
   # the token cannot notice either.
   #
   # TWO REACHABLE SHAPES, both measured, and the sequential one is the one with

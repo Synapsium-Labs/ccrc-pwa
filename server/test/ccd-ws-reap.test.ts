@@ -1903,7 +1903,7 @@ describe('serialisation with ws-restore', () => {
     // tail. Phase C is where the <=12 s `gh pr list` and the <=60 s `git fetch`
     // live, so this window is seconds to a minute wide, not microseconds. The
     // token still matches — `_ws_reap_eval` computed it in this same run, and
-    // `.archived` is not one of its thirteen inputs — so D2 waves it through.
+    // `.archived` is not one of its fourteen inputs — so D2 waves it through.
     //
     // The `gh` stub is what stands in for the restore landing in the gap; the
     // real `cmd_ws_restore` cannot be called from inside it, because the fix's

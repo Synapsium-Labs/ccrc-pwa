@@ -1833,7 +1833,7 @@ describe('the dispatcher', () => {
 });
 
 describe('the manifest', () => {
-  it('fingerprints thirteen DISTINCT facts, and nothing else', () => {
+  it('fingerprints fourteen DISTINCT facts, and nothing else', () => {
     // The token is what `ws-reap --expect` re-proves against at the instant of
     // deletion, so every field has to be in it and no two fields may be
     // interchangeable. Moving one fact at a time through the helper is the only
@@ -1842,13 +1842,16 @@ describe('the manifest', () => {
     //
     // The thirteenth is `clipsDigest`: `~/.cc-clips/<id>` is `rm -rf`'d by the
     // reap, so a clip pasted between the sheet and the tap is deleted — and
-    // until it was fingerprinted the token did not move when one was.
+    // until it was fingerprinted the token did not move when one was. The
+    // fourteenth is `childrenDigest` (D3): a registered child spawned after
+    // the sheet rendered is a set the human never saw, and until it was
+    // fingerprinted the token did not move when one was added either.
     const facts = ['id', 'branch', 'tip', 'head', 'merge', 'proof',
-      '0', 'igndigest', 'sensdigest', '0', 'wthead', 'baseoid', 'clipsdigest'];
+      '0', 'igndigest', 'sensdigest', '0', 'wthead', 'baseoid', 'clipsdigest', 'childdigest'];
     const call = (a: string[]): string => h.sh(`_ws_fingerprint ${a.map((x) => `'${x}'`).join(' ')}`);
     const first = call(facts);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
-    expect(call(facts), 'same thirteen facts, same token').toBe(first);
+    expect(call(facts), 'same fourteen facts, same token').toBe(first);
     const seen = new Map<string, number>([[first, -1]]);
     facts.forEach((_v, i) => {
       const moved = [...facts];
@@ -1863,8 +1866,8 @@ describe('the manifest', () => {
   it('the token IS the fingerprint of the facts it reports', () => {
     // `changes the token when ANY fingerprinted fact moves` can only move the
     // ONE fact a fixture can move without changing the verdict, and
-    // `fingerprints twelve DISTINCT facts` exercises the helper in isolation.
-    // Neither says the verb feeds it the right twelve. Measured as five
+    // `fingerprints fourteen DISTINCT facts` exercises the helper in isolation.
+    // Neither says the verb feeds it the right fourteen. Measured as five
     // mutation survivors: the proof argument, `baseOid`, the sensitive digest
     // and its `sort`, and `headRefOid` — every one of them could be replaced
     // by a constant with the whole file still green, because nothing ever
@@ -1890,14 +1893,69 @@ describe('the manifest', () => {
     // reaches a token, because a non-empty set is `sensitive-ignored` and
     // refuses — which is why its `sort` cannot be pinned behaviourally.
     const sensdigest = h.sh(`printf '%s\\n' "" | sort | sha256sum | cut -d' ' -f1`);
+    // No registered children under `<wt>/.claude/worktrees/` for this fixture,
+    // so `REAP_CHILDLINES` never accumulates a line and the digest is the
+    // digest of the empty string exactly as ccd computes it
+    // (`printf '%s' "$REAP_CHILDLINES"` with `REAP_CHILDLINES` empty stays
+    // empty — no trailing newline to strip, unlike `clipsdigest` above).
+    const childdigest = h.sh(`printf '%s' "" | sha256sum | cut -d' ' -f1`);
     const args = ['demo-quiet-basin', 'ws/quiet-basin', tip, tip, merge, 'patch-id',
-      '0', igndigest, sensdigest, '0', 'ws/quiet-basin', baseOid, clipsdigest];
+      '0', igndigest, sensdigest, '0', 'ws/quiet-basin', baseOid, clipsdigest, childdigest];
     expect(a.token).toBe(h.sh(`_ws_fingerprint ${args.map((x) => `'${x}'`).join(' ')}`));
     // and the wire says the same things the token was built from.
     expect(a.pr.headRefOid).toBe(tip);
     expect(a.pr.mergeCommit).toBe(merge);
     expect(a.merge.proof).toBe('patch-id');
   });
+
+  it('the token moves when the child set changes after the sheet rendered (D3 TOCTOU)', () => {
+    // squashMovedBase-style reapable parent with `.claude/` ignored — exactly
+    // the `the per-child ladder in the reap eval (D2)` describe's fixture.
+    //
+    // The child is created ONCE, before EITHER audit, and deliberately not
+    // between them. Measured directly (raw git, before writing this fixture):
+    // spawning a brand-new child under a gitignored directory ALSO moves
+    // `ignoredDigest` (fact 8) — `git worktree add` grows `du -sb` on that
+    // directory's bytes, whether by making a previously-absent `.claude/`
+    // newly appear as an ignored entry or by growing an existing one — so a
+    // before/after pair straddling the ADD would not isolate what actually
+    // moved the token; it would pass even without `childrenDigest` wired in,
+    // for a reason this test does not claim to be about.
+    //
+    // What moves ONLY `REAP_CHILDLINES` — and so only `childrenDigest` — is
+    // renaming the child's branch AT THE SAME COMMIT. `git branch -m` on a
+    // linked worktree's checked-out branch updates the ref (which lives in
+    // `$main`'s `.git`, not under `.claude/`) without touching a single
+    // checked-out byte, so `du -sb .claude` and `git status
+    // --ignored=matching`'s single `!! .claude/` line are unchanged — verified
+    // directly (67 bytes, identical entry, before and after the rename) before
+    // this fixture was written this way.
+    const { wt: parentWt, main } = squashMovedBase(['.claude/']);
+    fs.mkdirSync(path.join(parentWt, '.claude', 'worktrees'), { recursive: true });
+    const childDir = path.join(parentWt, '.claude', 'worktrees', 'agent-x');
+    h.git(main, 'worktree', 'add', childDir, '-b', 'cx');
+    const before = audit();
+    expect(before.verdict).toBe('reapable');
+    h.git(childDir, 'branch', '-m', 'cx', 'cx2');
+    const after = audit();
+    // The renamed branch is still 0 commits ahead of `origin/HEAD`, clean and
+    // attached — nothing else in the ladder has a reason to refuse it. A
+    // verdict that flipped to a refusal here would be testing the wrong
+    // thing: D3 exists for the healthy case, the one no other rung catches.
+    expect(after.verdict, 'the point is a passing child, not a refusing one').toBe('reapable');
+    expect(after.token, 'consent must move when the child set changes, even though nothing else did')
+      .not.toBe(before.token);
+    // Reap with the OLD token: the sheet it was read from no longer describes
+    // the world, and D2's `state-changed` check is what refuses rather than
+    // deleting the parent out from under the renamed child.
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${before.token} --session demo-quiet-basin`);
+    expect(r.code, `a refusal is an ANSWER — exit 0 with JSON on stdout. stderr: ${r.stderr}`).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('state-changed');
+    expect(o.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(fs.existsSync(parentWt), 'a refusal must never remove the parent worktree').toBe(true);
+    expect(fs.existsSync(childDir), 'the renamed child survives the refused reap').toBe(true);
+  }, 30000);
 
   it('carries the transcript path, the stash count and the worktree size', () => {
     squashMovedBase();
