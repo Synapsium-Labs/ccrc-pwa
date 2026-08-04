@@ -71,9 +71,23 @@ the committed `*.env.example` templates and fill in real tokens; the real
 files are never committed). The service units use `/usr/bin/env node` (box
 node is in `/usr/local/bin`). Every run stamps its backups (previous ccd,
 notify.sh, served dist trees) into `~/ccrc-backups/<timestamp>/` on the
-target before overwriting anything. The agent deploy installs `ccd` BEFORE
-restarting the agent — the agent caches `ccd caps` at boot, so the reverse
-order pins a stale verb set.
+target before overwriting anything — and a backup copy that *fails* aborts
+the deploy before `rsync --delete` can destroy the state it failed to save.
+The agent deploy installs `ccd` BEFORE restarting the agent — the agent
+caches `ccd caps` at boot, so the reverse order pins a stale verb set.
+
+**Restore** (manual, from the target box — pick the `<ts>` to roll back to):
+
+```bash
+# fleet host (agent target)
+cp -a ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
+cp -a ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
+cp -a ~/ccrc-backups/<ts>/agent-dist/. ~/ccrc/agent/dist/
+systemctl --user restart ccrc-agent.service
+# server box
+cp -a ~/ccrc-backups/<ts>/dist-pwa/. ~/ccrc/server/dist-pwa/
+systemctl --user restart ccrc.service
+```
 
 ## Remote fleet mode
 

@@ -39,11 +39,14 @@ ship_env() {
 if [ "$TARGET" = "agent" ]; then
   # Back up what the previous deploy left before rsync --delete rewrites it,
   # and before ccd/notify.sh are overwritten. cp -a keeps modes and mtimes.
+  # `[ ! -e X ] || cp` and NOT `[ -e X ] && cp || true`: absent-source is the
+  # only skippable case — a cp that FAILS must abort the deploy before
+  # --delete destroys the very state it failed to save.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS ~/.local/bin ~/.cc-sessions \
-    && { [ -d ~/ccrc/agent/dist ] && cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist || true; } \
-    && { [ -f ~/.local/bin/ccd ] && cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd || true; } \
-    && { [ -f ~/.cc-sessions/notify.sh ] && cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh || true; }"
-  rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist \
+    && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
+    && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
+    && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; }"
+  rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     agent shared deploy "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
   # ccd installs BEFORE the agent restart, never after: the agent caches
@@ -81,10 +84,11 @@ else
   IDX_MTIME="$(stat -c %Y server/dist-pwa/index.html)"
   [ "$IDX_MTIME" -ge "$RUN_START" ] \
     || { echo "deploy: server/dist-pwa/index.html predates this run — refusing to ship a stale bundle" >&2; exit 1; }
-  # Back up the served bundle before rsync --delete replaces it.
+  # Back up the served bundle before rsync --delete replaces it. Same rule as
+  # the agent path: only an ABSENT source is skippable, a failed cp aborts.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS \
-    && { [ -d ~/ccrc/server/dist-pwa ] && cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa || true; }"
-  rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist \
+    && { [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; }"
+  rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     server shared deploy "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
   REMOTE_CMD='cd ~/ccrc/server && npm ci && npm run build \
