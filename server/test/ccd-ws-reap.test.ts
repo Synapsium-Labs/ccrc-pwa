@@ -153,7 +153,7 @@ describe('argv', () => {
       const next = rest.search(/\n(?:cmd_|_ws_|_pr_|_gh_|_attic_|_reap_)[a-z_]+\(\)/);
       return next < 0 ? rest : rest.slice(0, next);
     };
-    for (const name of ['_ws_reap_eval', 'cmd_ws_reap', '_ws_reap_tail', 'cmd_ws_audit']) {
+    for (const name of ['_ws_reap_eval', 'cmd_ws_reap', '_ws_reap_tail', 'cmd_ws_audit', '_ws_reap_locked']) {
       for (const banned of ['--now', '--force']) {
         expect(fnBody(name), `${name} must not contain ${banned}`).not.toContain(banned);
       }
@@ -2243,5 +2243,40 @@ describe('child teardown (D2/D3)', () => {
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch survives').toContain('ws/quiet-basin');
     expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry survives').not.toBeNull();
     expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb is left exactly as found').toBe('worktree');
+  }, 30000);
+
+  it('resume in the children phase against an old tombstone (no children field) with a REGISTERED live child refuses state-changed', () => {
+    // Fix round 1, caveat 5 — the one arm the bash-regex decoder this
+    // replaced could have gotten wrong silently: an old tombstone with no
+    // `children` key at all, breadcrumb STILL `children` (not `worktree`,
+    // the sibling test above), and a live child that is REGISTERED (a real
+    // `git worktree add`, via `addChild`, not a bare `git init` stray) —
+    // the shape a garbage or partial decode could most plausibly wave
+    // through as "matches", since a registered child looks the most like
+    // something that was legitimately consented to. `_ws_tomb_children`
+    // now reads the missing field via `doc.get("children", [])` in python,
+    // which is unambiguous; this pins that the CALLER (the phase-`children`
+    // match in `_ws_reap_locked`) still treats the resulting empty
+    // consent set as "nothing was ever promised" rather than "everything
+    // passes".
+    const { wt, main } = ready(['.claude/']);
+    const tok = tokenOf();
+    h.sh('_reg_set demo-quiet-basin reaping children');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
+    const child = addChild(main, wt, 'agent-y', 'cy');
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.refused).toBe('state-changed');
+    expect(out.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(fs.existsSync(wt), 'the worktree survives').toBe(true);
+    expect(fs.existsSync(child), 'the registered child survives too').toBe(true);
+    expect(h.git(main, 'branch', '--list', 'cy'), 'the child branch survives').toContain('cy');
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the parent branch survives').toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry survives').not.toBeNull();
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb is left exactly as found').toBe('children');
   }, 30000);
 });

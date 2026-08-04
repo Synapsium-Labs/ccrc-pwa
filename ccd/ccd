@@ -3899,51 +3899,58 @@ with open(path, "w", encoding="utf-8") as fh:
 
 _ws_tomb_children() {   # tombstone-json-file -> one raw
                           # "path<TAB>branch<TAB>head<TAB>dirty" line per
-                          # CONSENTED child on stdout; nothing at all when the
-                          # field is absent (an old tombstone, written before
-                          # Task 8, reads as consented-empty — there is
-                          # nothing to compare a live child against, so the
-                          # caller must treat any live child as new) or when
-                          # the array is empty (a workspace with no
-                          # registered children).
+                          # CONSENTED child on stdout, rc 0; empty output at
+                          # rc 0 when the field is absent (an old tombstone,
+                          # written before Task 8, reads as consented-empty)
+                          # or the array itself is empty (a workspace with no
+                          # registered children); NON-ZERO — a refusal at
+                          # EVERY call site, never a silently-accepted
+                          # consented-empty — when the document could not be
+                          # opened or parsed at all.
   #
-  # jq is not available on this box, and the tombstone is written by ccd
-  # itself, one line, so this follows the SAME pattern `_ws_reap_locked`
-  # already reads `tip` with (a `sed` capture keyed on the field's own
-  # name) rather than reaching for a JSON library ccd cannot assume is
-  # installed — `_json_str` needs python3 for the ENCODE direction only;
-  # nothing else in this file decodes JSON at all.
+  # PYTHON, not a bash-regex decoder (fix round 1, finding 2 — the decoder
+  # this replaced could not close two gaps at once). `_json_str`
+  # (`json.dumps`, `ensure_ascii=True`) escapes any non-ASCII byte in a path
+  # or branch name as `\uXXXX`; three bash string substitutions have no way
+  # to decode that back to the original byte and would leave it literal.
+  # Worse, the substitution ORDER was wrong for a path that itself contains
+  # a literal backslash-t: `/a\test` encodes as `\\test` (an escaped
+  # backslash, then plain text) and unescaping `\t` BEFORE `\\` reads those
+  # two characters as the FIELD DELIMITER, injecting a tab nobody consented
+  # to — a decode bug that could desynchronise the very field split the
+  # caller relies on. `cmd_ws_reap` already makes python3 a hard
+  # precondition of every reap path (the `_json_str probe` gate at its own
+  # entry, before either the fresh or the resume fork), so this adds no new
+  # dependency — only a decoder that is actually closed, mirroring
+  # `_ws_tombstone_reclip`'s own idiom: `[[ -s "$f" ]] || return 1` first
+  # (a genuinely missing tombstone is impossible by the time either caller
+  # reaches this function, since both run only after the SAME file's `tip`
+  # was already read successfully — kept anyway for the same "refuse rather
+  # than guess" instinct that function states for itself), then hand the
+  # read-and-print entirely to python and return ITS status, never masking
+  # a failure into empty-but-successful output.
   #
-  # A `tip` is a bare hex string with no escapes to undo; `children` is an
-  # ARRAY OF STRINGS, and each string is the exact `_json_str` (python
-  # `json.dumps`) encoding of a raw tab-joined line — so the DECODE side has
-  # real work to do that `tip`'s sed one-liner never needed. The regex below
-  # walks one quoted element at a time (`(\\.|[^"\\])*` — an escaped pair or
-  # any character that is neither a bare quote nor a bare backslash) so an
-  # escaped quote or backslash inside an element cannot desynchronise the
-  # loop early; the two escapes this content can actually contain — `\"` and
-  # `\\`, for a path holding one of those two bytes — are unescaped
-  # afterwards, and `\t` is unescaped back to the literal tab the FIELD
-  # DELIMITER depends on. `json.dumps`'s other escapes (`\n`, `\r`,
-  # `\uXXXX`) are not ones this content produces (paths, branch names, a
-  # 40-hex sha and a digit hold none of the bytes that trigger them) and are
-  # deliberately not decoded here — the same narrower-than-general-JSON
-  # trade `tip`'s hex-only sed already makes for the same reason.
-  local f="$1" body rest elem
-  body=$(sed -n 's/.*"children"[[:space:]]*:[[:space:]]*\[\(.*\)/\1/p' "$f" 2>/dev/null | head -1)
-  [[ -n "$body" ]] || return 0
-  body="${body%%]*}"      # the array's own close — the first `]` after the
-                            # opening `[`, exactly as far as this content
-                            # (never itself containing a literal `]`) needs.
-  rest="$body"
-  while [[ "$rest" =~ ^[[:space:]]*\"((\\.|[^\"\\])*)\"[[:space:]]*,?(.*)$ ]]; do
-    elem="${BASH_REMATCH[1]}"
-    rest="${BASH_REMATCH[3]}"
-    elem="${elem//\\t/$'\t'}"
-    elem="${elem//\\\"/\"}"
-    elem="${elem//\\\\/\\}"
-    printf '%s\n' "$elem"
-  done
+  # `LC_ALL=C.UTF-8` on the invocation, for the reason `_json_str`'s own
+  # comment gives in full for the ENCODE side: this function's whole job is
+  # printing RAW BYTES to stdout for a bash reader, and Python's text-mode
+  # stdout encoding is locale-dependent unless pinned — the read side is
+  # already locale-proof (`ensure_ascii=True` makes the FILE pure ASCII, so
+  # `open(..., encoding="utf-8")` cannot vary by box), but nothing pins the
+  # WRITE side without this.
+  local f="$1"
+  [[ -s "$f" ]] || return 1
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+children = doc.get("children", [])
+if children is None:
+    children = []
+for line in children:
+    sys.stdout.write(line)
+    sys.stdout.write("\n")
+' "$f" 2>/dev/null
 }
 
 cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
@@ -4258,8 +4265,18 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
       # The CONSENTED set the tombstone recorded — `_ws_tomb_children` reads
       # `[]` and an absent field alike as "nothing", which is exactly right
       # here: an OLD tombstone (written before Task 8) never promised
-      # anything about children, so every live one below reads as new.
-      local rcconsented; rcconsented=$(_ws_tomb_children "$REG/.reaped/$id.json")
+      # anything about children, so every live one below reads as new. Its
+      # FAILURE is a different fact from either — the document could not be
+      # read at all — and fix round 1's finding 2 is exactly that a garbage
+      # decode must never silently pass as "nothing was consented" (which
+      # would UNDER-refuse a phase-`worktree` resume, where empty-live is
+      # the PASS condition) so a parse failure is checked here and refused
+      # on its own, before it can be mistaken for a measurement.
+      local rcconsented; rcconsented=$(_ws_tomb_children "$REG/.reaped/$id.json") || {
+        printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+          "$(_json_str "could not read the consented child set from the tombstone for $id — refusing to finish the cleanup on a guess")"
+        return 0
+      }
       local rcchanged=""
       if [[ "$resumed" == children ]]; then
         # Every live child must still BE the line that was consented,
@@ -4279,20 +4296,38 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
           [[ -n "$_rcline" ]] || continue
           if [[ -v _rc_consentset["$_rcline"] ]]; then
             local _rccpath="${_rcline%%$'\t'*}"
-            local _rcerrf _rcerr _rcrc _rcdirt
-            _rcerrf=$(mktemp) || {
-              printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
-                "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
-              return 0
-            }
-            _rcdirt=$(git -C "$_rccpath" status --porcelain 2>"$_rcerrf"); _rcrc=$?
-            _rcerr=$(cat "$_rcerrf" 2>/dev/null); rm -f "$_rcerrf"
-            { (( _rcrc == 0 )) && [[ -z "$_rcerr" ]]; } || {
-              printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
-                "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
-              return 0
-            }
-            [[ -z "$_rcdirt" ]] || rcchanged+="$_rccpath is dirty now; "
+            # REGISTERED BUT ABSENT = SKIP, NOT tree-unreadable — fix round
+            # 1, caveat 4. `_ws_children` lists a child straight out of
+            # `git worktree list --porcelain`, which keeps reporting a
+            # PRUNABLE record (directory gone, admin metadata still there)
+            # long after the directory itself is gone — the exact state a
+            # hand-deleted child, or a teardown loop killed between its own
+            # `worktree remove` succeeding and the next step, leaves behind,
+            # and the teardown loop's own skip-already-gone rung treats it
+            # as normal, not as damage. `git -C "$_rccpath" status` on a
+            # path that does not exist cannot succeed — it was refusing
+            # `tree-unreadable` here, permanently, over a state ccd itself
+            # produces routinely. There is nothing to read for dirt when
+            # there is nothing on disk, so this reads as clean and moves on;
+            # the CONSENT match above already proved this is the same child
+            # that was promised, which is the fact this branch exists to
+            # check.
+            if [[ -d "$_rccpath" ]]; then
+              local _rcerrf _rcerr _rcrc _rcdirt
+              _rcerrf=$(mktemp) || {
+                printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+                  "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
+                return 0
+              }
+              _rcdirt=$(git -C "$_rccpath" status --porcelain 2>"$_rcerrf"); _rcrc=$?
+              _rcerr=$(cat "$_rcerrf" 2>/dev/null); rm -f "$_rcerrf"
+              { (( _rcrc == 0 )) && [[ -z "$_rcerr" ]]; } || {
+                printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+                  "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
+                return 0
+              }
+              [[ -z "$_rcdirt" ]] || rcchanged+="$_rccpath is dirty now; "
+            fi
           else
             rcchanged+="$_rcline is not among the consented children; "
           fi
@@ -4519,7 +4554,11 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     if [[ -z "$resumed" ]]; then
       childlines="$REAP_CHILDLINES"
     else
-      childlines=$(_ws_tomb_children "$tomb")
+      childlines=$(_ws_tomb_children "$tomb") || {
+        printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+          "$(_json_str "could not read the consented child set from the tombstone for $id — refusing to finish the cleanup on a guess")"
+        return 0
+      }
     fi
     # INNERMOST FIRST — `awk`'s injected length key, sorted numerically
     # descending, `cut` drops the key back off. Order is not a nicety here:
@@ -4534,9 +4573,37 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # happens to contain it). So this order is not git enforcing anything
     # for us; it is the only order in which each child's OWN
     # `worktree remove` is what actually removes it.
-    local sorted; sorted=$(printf '%s' "$childlines" | awk '{print length($1) "\t" $0}' | sort -rn | cut -f2-)
+    # FIX ROUND 1, FINDING 1a: the pipeline's own status, checked — it was
+    # not, despite `set -o pipefail` (ccd:4) already making it MEAN
+    # something. `awk`/`sort`/`cut` failing here is unmeasured but not
+    # unimaginable (a scratch-space exhaustion mid-sort, say), and a failed
+    # sort silently reads as an EMPTY `sorted`, which is indistinguishable
+    # from "no consented children" — the loop below would then walk past
+    # every one of them, unremoved, straight to the post-loop check. `LC_ALL=C`
+    # on the sort itself — house rule consistency with every other
+    # LC_ALL=C sort in this file (`_ws_nested_checkouts`, `_ws_children`):
+    # an ambient locale must not change which child a numeric tie resolves
+    # to first.
+    local sorted
+    sorted=$(printf '%s' "$childlines" | awk '{print length($1) "\t" $0}' | LC_ALL=C sort -rn | cut -f2-) || {
+      printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+        "$(_json_str "could not order the consented child set for $id — refusing to finish the cleanup on a guess")"
+      return 0
+    }
     local mainreal; mainreal=$(_ws_common_dir "$main") || mainreal=""
-    local cline crest ccpath ccbr
+    # RESOLVED, not the raw registry string — `ccpath` (both origins: fresh
+    # `REAP_CHILDLINES` and the tombstone that recorded it) is always a
+    # `pwd -P` result (`_ws_children`'s own containment test resolves its
+    # `$workdir` argument the identical way before comparing), and
+    # `$workdir` itself is not guaranteed to already be one: this file's own
+    # header notes `$HOME/projects -> /data/projects` is a SYMLINK in
+    # production. Comparing a resolved path against an unresolved one is
+    # the exact class of bug a symlinked ancestor manufactures elsewhere in
+    # this file (search: "symlinked ancestor cannot make a registered child
+    # misread"), and the fallback to the raw value on a failed resolve
+    # keeps this a containment CHECK, never a silent pass.
+    local workdirreal; workdirreal=$(cd "$workdir" >/dev/null 2>&1 && pwd -P) || workdirreal="$workdir"
+    local cline crest crest2 ccpath ccbr cchead
     while IFS= read -r cline; do
       [[ -n "$cline" ]] || continue
       # Parameter expansion, NOT `IFS=$'\t' read`, for the identical measured
@@ -4544,13 +4611,54 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       # read -r childline"): tab is IFS whitespace even when it is the only
       # character in IFS, so a detached child's empty branch column would
       # silently shift every later field left under the IFS form. The
-      # trailing `dirty` column is not read here — Phase B/D2 already proved
-      # it 0 at consent time (fresh: this same process, moments ago; resume:
-      # `_ws_reap_locked`'s live re-check, moments ago) — so nothing below
-      # re-reads it.
+      # trailing `dirty` column is still not read — Phase B/D2 already
+      # proved it 0 at consent time — but `cchead` now is, for the
+      # mergeability probe below.
       ccpath="${cline%%$'\t'*}"
       crest="${cline#*$'\t'}"
       ccbr="${crest%%$'\t'*}"
+      crest2="${crest#*$'\t'}"
+      cchead="${crest2%%$'\t'*}"
+
+      # CONTAINMENT, RE-DERIVED — fix round 1, caveat 8. On a resume,
+      # `ccpath` is read off the TOMBSTONE, a file on disk, not measured
+      # live off `$workdir` the way the fresh path's `REAP_CHILDLINES` was
+      # — so this is the same "re-derive, never trust" instinct every other
+      # rung on this ladder states for itself, applied to the one value
+      # here that a resume takes from a RECORD rather than a live read.
+      [[ "$ccpath" == "$workdirreal"/* ]] || {
+        printf '{"refused":"worktree-remove-failed","detail":%s,"paths":[]}\n' \
+          "$(_json_str "$ccpath is not under $workdir — refusing to act on a consented child line outside the workspace")"
+        return 0
+      }
+
+      # THE EXACT PREDICATE `branch -d` APPLIES, PROVEN BEFORE ANYTHING IS
+      # REMOVED — fix round 1, finding 3. Consent measured this child as 0
+      # commits ahead of `origin/HEAD` (`_ws_reap_eval`'s own descent,
+      # `cahead` against `$cbase=origin/HEAD`), but `branch -d` does not
+      # check against `origin/HEAD` at all: these children carry no
+      # upstream (`git worktree add -b` configures none), so `branch -d`'s
+      # own "fully merged" rule falls back to `$main`'s CURRENT LOCAL HEAD.
+      # Phase C's mandatory fetch — run once per reap, to prove the
+      # PARENT's own merge — advances the remote-tracking `origin/HEAD`
+      # without touching `$main`'s local branch at all, so a child proven
+      # merged into an origin that has since moved ahead of `$main`'s local
+      # checkout can fail this SAME check `branch -d` is about to make.
+      # `merge-base --is-ancestor` is the plumbing `branch -d` itself
+      # answers this with; probing it BEFORE `worktree remove` turns a
+      # would-be half-torn-down child (worktree gone, branch alive, every
+      # later resume repeating the same failed `branch -d`) into a
+      # refusal that touches nothing at all. Skipped when the branch is
+      # already gone — nothing left to probe reachability OF.
+      local cbrexists=0
+      if git -C "$main" rev-parse --verify --quiet "refs/heads/$ccbr" >/dev/null 2>&1; then
+        cbrexists=1
+        if ! git -C "$main" merge-base --is-ancestor "$cchead" HEAD 2>/dev/null; then
+          printf '{"refused":"worktree-remove-failed","detail":%s,"paths":[]}\n' \
+            "$(_json_str "$ccpath ($ccbr, $cchead) is not reachable from $main's current HEAD — origin has moved ahead of $main locally; pull $main (git -C $main pull) and retry")"
+          return 0
+        fi
+      fi
 
       # STILL REGISTERED? — the skip-already-gone rung. A consented child
       # THIS SAME breadcrumb already finished (worktree AND branch both
@@ -4592,13 +4700,13 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       fi
 
       # PLAIN -d, never -D and never --force — the same global rule (g)
-      # below states for the PARENT's own branch. Existence checked FIRST: a
-      # branch THIS SAME breadcrumb already deleted on a killed prior
-      # attempt (worktree gone, branch gone, then killed) is legitimately
-      # absent, and `branch -d` on an absent ref fails outright (measured:
-      # "error: branch '<name>' not found") — which is not this child having
-      # changed, it is this child already being DONE.
-      if git -C "$main" rev-parse --verify --quiet "refs/heads/$ccbr" >/dev/null 2>&1; then
+      # below states for the PARENT's own branch. `cbrexists`, not another
+      # `rev-parse --verify` here: the mergeability probe above already
+      # asked and answered this exact question moments ago, in the same
+      # iteration, and a branch THIS SAME breadcrumb already deleted on a
+      # killed prior attempt is legitimately absent — which is not this
+      # child having changed, it is this child already being DONE.
+      if (( cbrexists )); then
         local cbrout cbrrc
         cbrout=$(git -C "$main" branch -d "$ccbr" 2>&1); cbrrc=$?
         if (( cbrrc != 0 )); then
@@ -4608,6 +4716,35 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
         fi
       fi
     done <<< "$sorted"$'\n'
+
+    # FIX ROUND 1, FINDING 1b: THE BREADCRUMB ADVANCES ONLY ON A PROVEN
+    # EMPTY SET, never unconditionally. Three reads inside the loop above
+    # can fail SILENTLY into "nothing to do" rather than a refusal — the
+    # sort pipeline is now checked (1a, above), but `worktree list
+    # 2>/dev/null` failing reads as "not registered" (the correct polarity
+    # for a genuine prunable record, and indistinguishable from a transient
+    # git failure from inside the loop), and this function's own resume
+    # arm cannot itself tell an incomplete `_ws_tomb_children` read (now
+    # refused explicitly, above) from a complete one describing a smaller
+    # set than reality. Any of those would let a child that was NOT
+    # actually torn down slip past this loop unremoved — and
+    # `_ws_reap_locked`'s own re-derivation treats an EMPTY live set as the
+    # PASS condition for every phase after `children`, so a breadcrumb
+    # advanced on a guess here would wedge that later resume forever, the
+    # exact recoverability defect this whole fix round exists to close. So
+    # the advance re-derives and checks, one more time, live, exactly what
+    # it is about to promise.
+    local postchildren
+    postchildren=$(_ws_children "$main" "$workdir") || {
+      printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
+        "$(_json_str "could not verify the children were fully torn down under $workdir — refusing to finish the cleanup on a guess")"
+      return 0
+    }
+    if [[ -n "$postchildren" ]]; then
+      printf '{"refused":"worktree-remove-failed","detail":%s,"paths":[]}\n' \
+        "$(_json_str "child checkout(s) still registered under $workdir after the teardown loop: ${postchildren//$'\n'/, } — refusing to advance past the children phase")"
+      return 0
+    fi
     _reg_set "$id" reaping worktree
   fi
 
