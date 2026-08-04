@@ -4762,6 +4762,24 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # Finding F4 — the §7 scan and the listing, immediately before the only
       # step in this command that deletes a DIRECTORY. See `_ws_gc_reclaimable`.
       _ws_gc_reclaimable "$p" || return 0
+      # D1 — the same guard `cmd_ws_rm` and both reap sites already carry, here
+      # at the last remaining removal site, and LAST for the same reason
+      # `_ws_reap_eval`'s Phase B puts it last (ccd:2711-2721): the ladder runs
+      # outermost-cheapest first, and this is a whole-tree `find` no cheaper
+      # than the ignored-set walk `_ws_gc_reclaimable` just paid for above — no
+      # reason to run it ahead of the guards a `git status` and a directory
+      # listing already answer. An orphan is exactly the state a nested
+      # checkout survives INTO: its parent's registry row is gone, but a child
+      # worktree or `git init` still lives under it, and `git worktree remove`
+      # recurses through the whole tree with no notion that part of it is a
+      # second repository ccd never created.
+      local nested
+      if ! nested=$(_ws_nested_checkouts "$p"); then
+        _gc_declined "$p could not be scanned for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)}"; return 0
+      fi
+      if [[ -n "$nested" ]]; then
+        _gc_declined "$p holds nested checkouts — ccd removes only what it created"; return 0
+      fi
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
         _gc_reclaimed "removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.
