@@ -2142,15 +2142,15 @@ _ws_child_op() {   # childdir -> op name on stdout ('' = idle), rc 1 = unprobeab
 #           caller falls back to `null`, never to a partial array: an
 #           enumeration a human trusts is either whole or absent.
 #
-# A registered child that fails the ownership pair `_ws_reap_eval`'s D2 rung
-# proves (`_ws_common_dir` + `--show-toplevel`, copied verbatim from
-# ccd:2914-2917 rather than re-derived, so the two can never quietly diverge)
-# is reported `"stray":true` rather than aborting the whole call: `$main`'s
-# registration for that path is stale — a foreign clone dropped there, or the
-# child's own `.git` deleted out from under it — so from the human reading
-# this sheet it IS a stray, something at that path `$main` cannot vouch for.
-# The one thing this producer must never do over ONE bad entry is go silent
-# about every other one.
+# A registered child that fails the ownership pair `_ws_reap_eval`'s D2 child
+# descent proves (`_ws_common_dir` + `--show-toplevel`, copied verbatim from
+# that same ownership rung rather than re-derived, so the two can never
+# quietly diverge) is reported `"stray":true` rather than aborting the whole
+# call: `$main`'s registration for that path is stale — a foreign clone
+# dropped there, or the child's own `.git` deleted out from under it — so
+# from the human reading this sheet it IS a stray, something at that path
+# `$main` cannot vouch for. The one thing this producer must never do over
+# ONE bad entry is go silent about every other one.
 _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NOTHING when it could not complete
   local main="$1" workdir="$2" mainreal
   mainreal=$(_ws_common_dir "$main") || return 1
@@ -2159,12 +2159,13 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
   nested=$(_ws_nested_checkouts "$workdir") || return 1
   children=$(_ws_children "$main" "$workdir") || return 1
 
-  # The identical in-bash set difference the eval's D2 uses (ccd:2828-2839),
-  # for the identical reason stated there: `comm` needs both sides pre-sorted
-  # in the SAME collation it compares under, and its own exit status is the
-  # only thing a caller can see — a `sort` or `printf` failing inside either
-  # `<(...)` is invisible to it. An associative array has no subprocess to
-  # fail and no locale to disagree with.
+  # The identical in-bash set difference `_ws_reap_eval`'s D2 stray
+  # computation uses, for the identical reason stated there: `comm` needs
+  # both sides pre-sorted in the SAME collation it compares under, and its
+  # own exit status is the only thing a caller can see — a `sort` or
+  # `printf` failing inside either `<(...)` is invisible to it. An
+  # associative array has no subprocess to fail and no locale to disagree
+  # with.
   local -A childset=(); local cline cpath
   while IFS= read -r cline; do
     [[ -n "$cline" ]] || continue
@@ -2178,9 +2179,9 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
   done <<< "$nested"$'\n'
   strays="${strays%$'\n'}"
 
-  # Registered children first. `crest`/`cbr`/`chead` split the SAME way the
-  # eval's loop splits them (ccd:2885-2888): parameter expansion, never
-  # `IFS=$'\t' read`, because bash treats tab as IFS WHITESPACE even when it
+  # Registered children first. `crest`/`cbr`/`chead` split the SAME way
+  # `_ws_reap_eval`'s child loop splits them — parameter expansion, never
+  # `IFS=$'\t' read` — because bash treats tab as IFS WHITESPACE even when it
   # is the only character in IFS — a detached child's empty branch column
   # (`path<TAB><TAB>headoid`) would collapse and shift `chead` into `cbr`.
   local out="[" first=1 crest cbr chead ccommon ctop cop errf err rc dirt cdirty entry
@@ -2194,8 +2195,8 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
     ctop=$(git -C "$cpath" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || ctop=""
     if [[ -n "$ccommon" && "$ccommon" == "$mainreal" && -n "$ctop" && "$ctop" == "$cpath" ]]; then
       # `_ws_child_op` failing means "could not tell", never "idle" — the
-      # same polarity the eval's D2 rung reads it with (ccd:2918-2920) — and
-      # a `git status` that fails outright or writes a diagnostic on stderr
+      # same polarity `_ws_reap_eval`'s D2 rung reads it with — and a `git
+      # status` that fails outright or writes a diagnostic on stderr
       # while exiting 0 is the identical partial-read shape Phase B's own
       # `dirty-tree` rung refuses on. Either one here means this ONE child's
       # state could not be measured, and that takes the WHOLE array down
@@ -3454,14 +3455,15 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   # refused before Phase A finished proving identity, or the enumeration
   # itself failed outright. `$REAP_WTHEAD` is the SAME signal
   # `headMatchesRegistry` below already reads for "Phase A passed" — it is
-  # set (ccd:2716) only once the eval has walked registry-branch-drift,
-  # detached-head, no-worktree-record AND foreign-worktree without refusing,
-  # and stays `""` (its `_ws_reap_reset` default) on every refusal at or
-  # before those rungs, workdir-missing included. Gated on nothing deeper
-  # than that: a Phase-B refusal further down the ladder (dirty-tree,
-  # sensitive-ignored, nested-checkouts-present, any per-child rung) must
-  # still see a populated `children[]` — that is the whole point of D4, the
-  # sheet that shows a human WHY the eval is about to refuse.
+  # assigned at the end of `_ws_reap_eval`'s Phase A, only once the eval has
+  # walked registry-branch-drift, detached-head, no-worktree-record AND
+  # foreign-worktree without refusing, and stays `""` (its `_ws_reap_reset`
+  # default) on every refusal at or before those rungs, workdir-missing
+  # included. Gated on nothing deeper than that: a Phase-B refusal further
+  # down the ladder (dirty-tree, sensitive-ignored, nested-checkouts-present,
+  # any per-child rung) must still see a populated `children[]` — that is
+  # the whole point of D4, the sheet that shows a human WHY the eval is
+  # about to refuse.
   local children_json=null main="$PROJECTS_ROOT/$project"
   if [[ -n "$REAP_WTHEAD" && -d "$workdir" ]]; then
     children_json=$(_ws_child_manifest "$main" "$workdir") || children_json=null
