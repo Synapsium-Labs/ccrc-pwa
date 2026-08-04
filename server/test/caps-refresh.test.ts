@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { WebSocketServer } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
-import { type ConnectedFleet } from '../src/remote/client.js';
-import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
+import { bootAgent, connectToAgent, makeFixture, TOKEN, type RemoteFixture } from './remoteHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
@@ -105,5 +106,91 @@ describe('the caps lane', () => {
   it('local mode has nothing to refresh and does not throw', async () => {
     const w = new FleetWatcher(testDeps(), new Bus(), 2000);
     await expect(w.tick()).resolves.not.toThrow();
+  });
+
+  it('fires exactly at the interval boundary, not only after it', async () => {
+    let calls = 0;
+    const deps = { ...testDeps(), refreshCaps: async () => { calls += 1; } };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+
+    vi.useFakeTimers();
+    await w.tick();
+    expect(calls).toBe(1);
+
+    // Exactly the interval, not one tick past it. The gate is `>=`, so this
+    // must fire; a boundary mutant that narrows it to `>` would not.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await w.tick();
+    expect(calls).toBe(2);
+  });
+});
+
+/** A hand-rolled minimal agent: speaks hello/ready, then answers ANY `caps`
+ *  request with a fixed, deliberately malformed `verbs` payload — something
+ *  the real ccrc-agent, whose `caps` handler always sends a validated
+ *  `string[]`, can never produce. Isolates `FleetClient.caps()`'s payload
+ *  validation from the real agent's own guarantees (mirrors `fakeReadyAgent`
+ *  in `remote-connect.test.ts`, but answers a `req` rather than just `hello`). */
+function fakeCapsAgent(verbs: unknown): Promise<{ port: number; close(): Promise<void> }> {
+  return new Promise((resolve) => {
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => {
+      const address = wss.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      resolve({
+        port,
+        close: () =>
+          new Promise<void>((res) => {
+            for (const client of wss.clients) client.terminate();
+            wss.close(() => res());
+          }),
+      });
+    });
+    wss.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg: unknown = JSON.parse(raw.toString());
+        if (typeof msg !== 'object' || msg === null) return;
+        const m = msg as { t?: unknown; id?: unknown };
+        if (m.t === 'hello') { ws.send(JSON.stringify({ t: 'ready', v: 1, ccdVerbs: [] })); return; }
+        if (m.t === 'req' && typeof m.id === 'number') {
+          ws.send(JSON.stringify({ t: 'res', id: m.id, ok: true, verbs }));
+        }
+      });
+    });
+  });
+}
+
+// The distinction the whole design rests on: `null` = no evidence, permit
+// (keep whatever list already worked); `[]` = the fleet said it has no
+// verbs, refuse everything. A malformed-but-well-formed-shaped `res` (agent
+// answered, but `verbs` isn't a string array) must land on the `null` side,
+// same as a transport failure — never on the `[]` side, which is reserved
+// for an agent that genuinely replied with an empty list.
+describe('caps() — a well-formed res with a malformed verbs field', () => {
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  it('verbs is not an array at all — resolves null, never []', async () => {
+    server = await fakeCapsAgent('nope');
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const result = await fleet.client.caps();
+    expect(result).toBeNull();
+  });
+
+  it('verbs is an array with non-string elements — resolves null, never []', async () => {
+    server = await fakeCapsAgent([1, 2]);
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const result = await fleet.client.caps();
+    expect(result).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
@@ -75,5 +75,65 @@ describe('caps op', () => {
     const after1 = readFileSync(marker, 'utf8').length;
     await client.req<CapsRes>(2, { op: 'caps' });
     expect(readFileSync(marker, 'utf8').length).toBe(after1);
+  });
+
+  // The gate is `mtimeMs === cache.mtimeMs && size === cache.size` — a cache
+  // hit requires BOTH to match. The two tests below force one to match while
+  // the other genuinely changes, isolating each half: neither alone may be
+  // enough to justify serving the cache. Real writes always move mtime AND
+  // size together, so `utimesSync` with an explicit, whole-second timestamp
+  // is used to decouple them deterministically (an OS-assigned mtime can
+  // carry sub-millisecond precision `Date` truncates, so re-deriving one from
+  // a stat and feeding it back in isn't safe — reusing the SAME literal
+  // `Date` input twice is, since the filesystem write is byte-for-byte
+  // deterministic for identical input).
+
+  it('a same-size rewrite with a different mtime is re-execed (isolates the mtime half of the stat gate)', async () => {
+    fixture = makeFixture();
+    const marker = path.join(fixture.home, 'execs');
+    const ccdPath = path.join(fixture.home, '.local', 'bin', 'ccd');
+    // 'start' and 'begin' are both 5 letters, so these two bodies are
+    // byte-identical in length — only the forced mtime differs between reads.
+    writeCcd(fixture.home, `echo x >> ${marker}\necho start`);
+    const t1 = new Date('2024-01-01T00:00:00.000Z');
+    utimesSync(ccdPath, t1, t1);
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+
+    expect(await client.req<CapsRes>(1, { op: 'caps' })).toMatchObject({ verbs: ['start'] });
+    const after1 = readFileSync(marker, 'utf8').length;
+    const sizeBefore = statSync(ccdPath).size;
+
+    writeCcd(fixture.home, `echo x >> ${marker}\necho begin`);
+    expect(statSync(ccdPath).size).toBe(sizeBefore); // sanity: size really is unchanged
+    const t2 = new Date('2024-01-02T00:00:00.000Z'); // a day later — mtime differs
+    utimesSync(ccdPath, t2, t2);
+
+    expect(await client.req<CapsRes>(2, { op: 'caps' })).toMatchObject({ verbs: ['begin'] });
+    expect(readFileSync(marker, 'utf8').length).toBeGreaterThan(after1);
+  });
+
+  it('a same-mtime rewrite with a different size is re-execed (isolates the size half of the stat gate)', async () => {
+    fixture = makeFixture();
+    const marker = path.join(fixture.home, 'execs');
+    const ccdPath = path.join(fixture.home, '.local', 'bin', 'ccd');
+    writeCcd(fixture.home, `echo x >> ${marker}\necho start`);
+    const t1 = new Date('2024-01-01T00:00:00.000Z');
+    utimesSync(ccdPath, t1, t1);
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+
+    expect(await client.req<CapsRes>(1, { op: 'caps' })).toMatchObject({ verbs: ['start'] });
+    const after1 = readFileSync(marker, 'utf8').length;
+    const sizeBefore = statSync(ccdPath).size;
+
+    writeCcd(fixture.home, `echo x >> ${marker}\necho start\necho stop`); // longer body
+    expect(statSync(ccdPath).size).not.toBe(sizeBefore); // sanity: size really did change
+    utimesSync(ccdPath, t1, t1); // force mtime back to the exact same instant
+
+    expect(await client.req<CapsRes>(2, { op: 'caps' })).toMatchObject({ verbs: ['start', 'stop'] });
+    expect(readFileSync(marker, 'utf8').length).toBeGreaterThan(after1);
   });
 });
