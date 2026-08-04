@@ -2029,8 +2029,19 @@ _ws_sensitive_noise() {   # path -> 0 when a secret-shaped name is vendored/temp
 # read: unreadable refuses, it never guesses.
 _WS_NESTED_WHY=''
 _ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
-  local dir="$1" outf errf err rc f p
+  local dir outf errf err rc f p
   _WS_NESTED_WHY=''
+  # Resolve the OPERAND before it ever reaches `find`. `find`'s default `-P`
+  # refuses to descend a symlink given as the exact top-level path (measured:
+  # `find "$symlinkToDir" -mindepth 1` walks nothing at all — no error, rc 0,
+  # empty stdout), so an unresolved symlink here would make the walk answer
+  # "no nested checkouts" on a tree it never looked at. That is the one shape
+  # of wrong this guard cannot afford: rc 0 with an empty answer reads as
+  # certainty, and every caller proceeds straight to `git worktree remove` on
+  # the strength of it. Resolving first also means every entry `find` walks,
+  # and everything the loop below prints, already hangs off the real root.
+  dir=$(cd "$1" 2>/dev/null && pwd -P) \
+    || { _WS_NESTED_WHY="could not resolve $1"; return 1; }
   outf=$(mktemp) || { _WS_NESTED_WHY='could not make a scratch file'; return 1; }
   errf=$(mktemp) || { rm -f "$outf"; _WS_NESTED_WHY='could not make a scratch file'; return 1; }
   timeout "$REAP_SCAN_SECONDS" find "$dir" -mindepth 2 -name .git -print0 >"$outf" 2>"$errf"; rc=$?
