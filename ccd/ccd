@@ -2126,6 +2126,111 @@ _ws_child_op() {   # childdir -> op name on stdout ('' = idle), rc 1 = unprobeab
   printf '%s' "$op"
 }
 
+# D4 — `cmd_ws_audit`'s OWN child enumeration, deliberately independent of
+# `_ws_reap_eval`'s D2 descent above. That descent stops at the FIRST child
+# that fails a rung and refuses right there — exactly right for a verdict,
+# which needs only one reason. `children[]` is read by a human deciding
+# whether to TRUST that refusal, so it cannot inherit the short-circuit: this
+# function re-walks `_ws_nested_checkouts` and `_ws_children` itself and
+# reports every child's own measured state, whether or not the eval's loop
+# ever reached it — the sheet that shows WHY the eval will refuse, not merely
+# THAT it did.
+#
+#   stdout: JSON array of {path,branch,headOid,dirty,busy,stray}
+#   exit:   0 = the array is complete; 1 = NOTHING on stdout — the walk, the
+#           `worktree list` read, or a per-child probe failed outright. The
+#           caller falls back to `null`, never to a partial array: an
+#           enumeration a human trusts is either whole or absent.
+#
+# A registered child that fails the ownership pair `_ws_reap_eval`'s D2 rung
+# proves (`_ws_common_dir` + `--show-toplevel`, copied verbatim from
+# ccd:2914-2917 rather than re-derived, so the two can never quietly diverge)
+# is reported `"stray":true` rather than aborting the whole call: `$main`'s
+# registration for that path is stale — a foreign clone dropped there, or the
+# child's own `.git` deleted out from under it — so from the human reading
+# this sheet it IS a stray, something at that path `$main` cannot vouch for.
+# The one thing this producer must never do over ONE bad entry is go silent
+# about every other one.
+_ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NOTHING when it could not complete
+  local main="$1" workdir="$2" mainreal
+  mainreal=$(_ws_common_dir "$main") || return 1
+
+  local nested children
+  nested=$(_ws_nested_checkouts "$workdir") || return 1
+  children=$(_ws_children "$main" "$workdir") || return 1
+
+  # The identical in-bash set difference the eval's D2 uses (ccd:2828-2839),
+  # for the identical reason stated there: `comm` needs both sides pre-sorted
+  # in the SAME collation it compares under, and its own exit status is the
+  # only thing a caller can see — a `sort` or `printf` failing inside either
+  # `<(...)` is invisible to it. An associative array has no subprocess to
+  # fail and no locale to disagree with.
+  local -A childset=(); local cline cpath
+  while IFS= read -r cline; do
+    [[ -n "$cline" ]] || continue
+    cpath="${cline%%$'\t'*}"
+    childset["$cpath"]=1
+  done <<< "$children"$'\n'
+  local strays=""
+  while IFS= read -r cline; do
+    [[ -n "$cline" ]] || continue
+    [[ -v childset["$cline"] ]] || strays+="$cline"$'\n'
+  done <<< "$nested"$'\n'
+  strays="${strays%$'\n'}"
+
+  # Registered children first. `crest`/`cbr`/`chead` split the SAME way the
+  # eval's loop splits them (ccd:2885-2888): parameter expansion, never
+  # `IFS=$'\t' read`, because bash treats tab as IFS WHITESPACE even when it
+  # is the only character in IFS — a detached child's empty branch column
+  # (`path<TAB><TAB>headoid`) would collapse and shift `chead` into `cbr`.
+  local out="[" first=1 crest cbr chead ccommon ctop cop errf err rc dirt cdirty entry
+  while IFS= read -r cline; do
+    [[ -n "$cline" ]] || continue
+    cpath="${cline%%$'\t'*}"
+    crest="${cline#*$'\t'}"
+    cbr="${crest%%$'\t'*}"
+    chead="${crest#*$'\t'}"
+    ccommon=$(_ws_common_dir "$cpath") || ccommon=""
+    ctop=$(git -C "$cpath" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || ctop=""
+    if [[ -n "$ccommon" && "$ccommon" == "$mainreal" && -n "$ctop" && "$ctop" == "$cpath" ]]; then
+      # `_ws_child_op` failing means "could not tell", never "idle" — the
+      # same polarity the eval's D2 rung reads it with (ccd:2918-2920) — and
+      # a `git status` that fails outright or writes a diagnostic on stderr
+      # while exiting 0 is the identical partial-read shape Phase B's own
+      # `dirty-tree` rung refuses on. Either one here means this ONE child's
+      # state could not be measured, and that takes the WHOLE array down
+      # with it rather than silently reporting the rest as though nothing
+      # were missing.
+      cop=$(_ws_child_op "$cpath") || return 1
+      errf=$(mktemp) || return 1
+      dirt=$(git -C "$cpath" status --porcelain 2>"$errf"); rc=$?
+      err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+      { (( rc == 0 )) && [[ -z "$err" ]]; } || return 1
+      # Measured even when non-zero — unlike the eval's `child-dirty` rung,
+      # THIS producer reports rather than refuses; a non-zero count is data,
+      # not a reason to stop.
+      cdirty=$(printf '%s' "$dirt" | grep -c . || true)
+      entry="{\"path\":$(_json_str "$cpath"),\"branch\":$( [[ -n "$cbr" ]] && _json_str "$cbr" || echo null),\"headOid\":$( [[ -n "$chead" ]] && _json_str "$chead" || echo null),\"dirty\":$cdirty,\"busy\":$( [[ -n "$cop" ]] && _json_str "$cop" || echo null),\"stray\":false}"
+    else
+      entry="{\"path\":$(_json_str "$cpath"),\"branch\":null,\"headOid\":null,\"dirty\":null,\"busy\":null,\"stray\":true}"
+    fi
+    (( first )) || out+=","; first=0
+    out+="$entry"
+  done <<< "$children"$'\n'
+
+  # Filesystem strays — unregistered checkouts `$main` has no record of at
+  # all, the set difference computed above.
+  while IFS= read -r cline; do
+    [[ -n "$cline" ]] || continue
+    entry="{\"path\":$(_json_str "$cline"),\"branch\":null,\"headOid\":null,\"dirty\":null,\"busy\":null,\"stray\":true}"
+    (( first )) || out+=","; first=0
+    out+="$entry"
+  done <<< "$strays"$'\n'
+
+  out+="]"
+  printf '%s' "$out"
+}
+
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
@@ -3344,6 +3449,24 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   local clips_json
   clips_json=$(_ws_clip_manifest "$id") || clips_json=null
 
+  # `children[]` — D4, `_ws_child_manifest`. `null` shares its rule with
+  # `dirty`/`ignored`/`clips` above: the workdir is gone, or `_ws_reap_eval`
+  # refused before Phase A finished proving identity, or the enumeration
+  # itself failed outright. `$REAP_WTHEAD` is the SAME signal
+  # `headMatchesRegistry` below already reads for "Phase A passed" — it is
+  # set (ccd:2716) only once the eval has walked registry-branch-drift,
+  # detached-head, no-worktree-record AND foreign-worktree without refusing,
+  # and stays `""` (its `_ws_reap_reset` default) on every refusal at or
+  # before those rungs, workdir-missing included. Gated on nothing deeper
+  # than that: a Phase-B refusal further down the ladder (dirty-tree,
+  # sensitive-ignored, nested-checkouts-present, any per-child rung) must
+  # still see a populated `children[]` — that is the whole point of D4, the
+  # sheet that shows a human WHY the eval is about to refuse.
+  local children_json=null main="$PROJECTS_ROOT/$project"
+  if [[ -n "$REAP_WTHEAD" && -d "$workdir" ]]; then
+    children_json=$(_ws_child_manifest "$main" "$workdir") || children_json=null
+  fi
+
   printf '{"id":%s,"branch":%s,"base":%s,"workdir":%s,"project":%s,"repo":%s,' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$base")" \
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
@@ -3388,6 +3511,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$( [[ -n "$REAP_PROOF" ]] && _json_str "$REAP_PROOF" || echo null)" \
     "$( [[ "$REAP_FETCHED" =~ ^[0-9]+$ ]] && echo "$REAP_FETCHED" || echo null)" \
     "$(_json_str "$transcript")"
+  printf '"children":%s,' "$children_json"
   # Three verdicts, not two, and the third one is why: `reapable` MEANS a token.
   #
   # `token` is present ONLY when the verdict is reapable AND the tree was

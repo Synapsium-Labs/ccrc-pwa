@@ -2322,3 +2322,90 @@ describe('the per-child ladder in the reap eval (D2)', () => {
     expect(fs.existsSync(child), 'the child survives the refusal').toBe(true);
   }, 30000);
 });
+
+/**
+ * D4 — `children[]` on the audit wire, `_ws_child_manifest`. Deliberately
+ * NOT the same fixtures as "the per-child ladder in the reap eval (D2)"
+ * above: that describe pins what makes `_ws_reap_eval` REFUSE, one rung at a
+ * time; this one pins what the audit REPORTS about children the eval's own
+ * descent never even reached, because it stopped at the first bad one.
+ *
+ * `addChild` is re-declared locally again, matching every other describe in
+ * this file that needs it — separate closures, self-contained fixtures.
+ */
+describe('children on the audit wire (D4)', () => {
+  const addChild = (main: string, wt: string, leaf: string, branch: string): string => {
+    const dir = path.join(wt, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+
+  it('children[] carries path/branch/headOid/dirty/busy/stray — the facts the fingerprint hashes', () => {
+    // A registered DIRTY child plus a filesystem stray, the same fixture
+    // shape as "a stray repo beside a registered child still refuses
+    // nested-checkouts-present" above — except THAT describe never looks past
+    // `a.verdict`. The eval's own D2 refuses on the stray via the
+    // set-difference rung, BEFORE its per-child loop ever runs, so it never
+    // measures the child's dirtiness at all; this test is about the fact
+    // that the audit's own independent walk does, on the identical fixture.
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-a', 'ca');
+    fs.writeFileSync(path.join(child, 'scratch.txt'), 'uncommitted\n');
+    const stray = path.join(wt, '.claude', 'worktrees', 'stray-x');
+    fs.mkdirSync(stray, { recursive: true });
+    execFileSync('git', ['init', '-q', stray]);
+
+    const a = refusal(wt);
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(Array.isArray(a.children),
+      'the enumeration ran independently of the verdict that refused').toBe(true);
+    expect(a.children).toHaveLength(2);
+
+    const reg = a.children.find((c: any) => c.path.includes('agent-a'));
+    expect(reg, 'the registered child the eval never got around to inspecting').toBeDefined();
+    expect(reg.branch).toBe('ca');
+    expect(reg.headOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(reg.dirty, 'measured even though non-zero — the audit reports, it does not refuse').toBe(1);
+    expect(reg.busy).toBeNull();
+    expect(reg.stray).toBe(false);
+
+    const st = a.children.find((c: any) => c.path.includes('stray-x'));
+    expect(st, 'the unregistered checkout is listed too').toBeDefined();
+    expect(st.branch).toBeNull();
+    expect(st.headOid).toBeNull();
+    expect(st.dirty).toBeNull();
+    expect(st.busy).toBeNull();
+    expect(st.stray).toBe(true);
+
+    expect(fs.existsSync(child), 'a read-only audit removes nothing').toBe(true);
+    expect(fs.existsSync(stray), 'a read-only audit removes nothing').toBe(true);
+  }, 30000);
+
+  it('children is NULL, not [], when Phase A refused before enumerating', () => {
+    // The detached-head refusal fixture from 'the fields a refusal never
+    // measured' above, stripped to just the HEAD state: Phase A's
+    // rung-2 refusal fires before `REAP_WTHEAD` is ever set, which is the
+    // exact signal `_ws_child_manifest`'s own gate reads — so the
+    // independent walk never runs at all, and there is nothing to report.
+    const { wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q --detach`);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('detached-head');
+    expect(a.children, 'the enumeration never ran — Phase A refused before reaching it').toBeNull();
+    // ABSENT-vs-ZERO, the same discrimination the sibling test in "the
+    // fields a refusal never measured" pins for its own five fields.
+    expect(Object.prototype.hasOwnProperty.call(a, 'children'),
+      'the field is present and null, not dropped').toBe(true);
+    expect(JSON.stringify(a), 'no zero may appear for a read nobody took')
+      .not.toMatch(/"(ignoredCount|ignoredBytes|sensitiveFiltered|stashes|children)":0/);
+  }, 30000);
+
+  it('children is [] — a measurement — on a childless reapable workspace', () => {
+    const { wt } = squashMovedBase();
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.children, '[] means the walk ran and found nothing, not that nothing ran').toEqual([]);
+    expect(fs.existsSync(wt)).toBe(true);
+  }, 30000);
+});
