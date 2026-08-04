@@ -55,8 +55,8 @@ Run the server against a fixture home: `CCRC_HOME=<tree> npm run dev` in `server
 ## Deploy
 
 ```bash
-bash infra/ccrc/deploy/deploy.sh                # server: rsync → box npm ci + build → restart unit → health check
-bash infra/ccrc/deploy/deploy.sh agent <host>   # ccrc-agent: rsync → host npm ci + build → restart unit
+bash deploy/deploy.sh                # server: build PWA here (freshness-gated) → rsync → box npm ci + build → restart unit → health check
+bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) → host npm ci + build → restart unit
 ```
 
 `CCRC_BOX` overrides the server's default target (`you@203.0.113.7`);
@@ -66,10 +66,14 @@ practice the fleet host is a different box (see "Remote fleet mode" below).
 (default `http://203.0.113.7:7788/health`).
 
 Both targets ship a local, gitignored env file to `~/.ccrc/` on the box first
-if one exists (`infra/ccrc/deploy/ccrc.env` / `ccrc-agent.env` — copy from
+if one exists (`deploy/ccrc.env` / `ccrc-agent.env` — copy from
 the committed `*.env.example` templates and fill in real tokens; the real
 files are never committed). The service units use `/usr/bin/env node` (box
-node is in `/usr/local/bin`).
+node is in `/usr/local/bin`). Every run stamps its backups (previous ccd,
+notify.sh, served dist trees) into `~/ccrc-backups/<timestamp>/` on the
+target before overwriting anything. The agent deploy installs `ccd` BEFORE
+restarting the agent — the agent caches `ccd caps` at boot, so the reverse
+order pins a stale verb set.
 
 ## Remote fleet mode
 
@@ -96,7 +100,7 @@ copy-paste templates.
 
 ### Agent security model
 
-`ccrc-agent` (`infra/ccrc/agent/`) is deliberately narrow — it is not a
+`ccrc-agent` (`agent/`) is deliberately narrow — it is not a
 general remote-shell:
 
 - **Network**: binds a single interface (tailnet-only by convention; default
