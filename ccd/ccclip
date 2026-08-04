@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# ccclip — push the Mac clipboard image into the server-box session you're attached to.
+# Grabs the clipboard PNG, ships it to the box, and `ccd clip` injects its path into the
+# currently-attached session's input box (you then add your question and hit Enter).
+# Normally fired by a global hotkey (Hammerspoon); can also be run directly.
+# Optional arg: an explicit session id (e.g. claude2-expoAI-assistant) to override auto-detect.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"  # hotkey launchers have a minimal PATH
+
+BOX="you@198.51.100.7"
+SSH_KEY="$HOME/.ssh/your-key-a"
+CCD="/home/you/.local/bin/ccd"
+
+command -v pngpaste >/dev/null 2>&1 || { echo "ccclip: pngpaste missing (brew install pngpaste)" >&2; exit 1; }
+
+# THE ID IS INTERPOLATED INTO A REMOTE SHELL COMMAND, so it is validated HERE,
+# on this side, before anything is sent. `ssh host "cmd '$1'"` is one string the
+# far side re-parses with sh, and a single quote in $1 closes the quoting and
+# everything after it runs on the box as the operator. ccd's own
+# `[[ $id =~ ^[A-Za-z0-9._-]+$ ]]` is the same rule, but it runs INSIDE the verb
+# — i.e. after the shell that would already have executed the injection. Same
+# regex, deliberately, so an id ccd would accept is an id this sends.
+if [[ -n "${1:-}" && ! "$1" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "ccclip: bad session id: $1" >&2; exit 1
+fi
+
+tmp="$(mktemp -t ccclip).png"
+if ! pngpaste "$tmp" >/dev/null 2>&1; then
+  echo "ccclip: no image on the clipboard" >&2; rm -f "$tmp"; exit 1
+fi
+
+# `$$-$RANDOM`, not `$$` alone: pids are recycled, and two runs that collide on
+# a name would have one overwrite the other's image mid-flight.
+remote="/tmp/ccclip-incoming-$$-${RANDOM}.png"
+if ! scp -q -i "$SSH_KEY" -o ConnectTimeout=10 "$tmp" "$BOX:$remote"; then
+  echo "ccclip: scp to box failed" >&2; rm -f "$tmp"; exit 1
+fi
+rm -f "$tmp"
+
+# ccd clip moves the image into the session's clip dir and types the path into the prompt.
+#
+# THE REMOTE FILE IS THIS SCRIPT'S TO CLEAN UP — final-round gates
+# "cannot-verify 5". `ccd clip` only ever *moves* it, and it `die`s before the
+# move for three ordinary reasons: no image at that path, no attached cc
+# session, and the session not being alive. Each of those left
+# /tmp/ccclip-incoming-*.png on the box for ever, on a production path, with no
+# owner and no sweep — and the host hit 95% disk today. So the `rm -f` travels
+# with the command rather than living in `ccd clip`'s exit paths: it runs after
+# a success (where the file has already been moved and the rm is a no-op),
+# after every `die`, and after a non-zero exit of any other kind. The verb's
+# own status is preserved and re-raised, so a failed clip is still a failed
+# clip here.
+ssh -i "$SSH_KEY" -o ConnectTimeout=10 "$BOX" \
+  "$CCD clip '$remote'${1:+ '$1'}; rc=\$?; rm -f '$remote'; exit \$rc"
