@@ -37,6 +37,14 @@ export const SENTENCES: Record<string, string> = {
   'sensitive-ignored': 'There are secret-shaped files here that are in no commit and cannot be recovered. Move them out, then try again — there is no override.',
   'nested-checkouts-present':
     'Checkouts of their own live under this workspace — they are not build output. Remove or finish them first; ccd deletes no repository it did not create.',
+  // D2: the four rungs of the per-child ladder in `_ws_reap_eval`, which
+  // narrows `nested-checkouts-present` above to STRAY checkouts only — a
+  // checkout `ccd` itself registered as a worktree of this project gets one of
+  // these four instead.
+  'child-dirty': 'A checkout nested under this workspace has uncommitted work of its own.',
+  'child-busy': 'A checkout nested under this workspace is mid-operation — finish or abort it there first.',
+  'child-unpushed': 'A checkout nested under this workspace carries commits that exist nowhere else.',
+  'child-branch-elsewhere': 'A nested checkout’s branch is also checked out somewhere else — removing it here would strand that other checkout.',
   'stashes-present': 'This branch has stashed changes, which are in no commit.',
   // A stash read that FAILED, and it gets its own sentence for the same reason
   // `tree-unreadable` does: `git stash list` answers rc 0 with empty output for

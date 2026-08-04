@@ -2101,6 +2101,31 @@ _ws_children() {   # main parentdir -> "resolvedpath\tbranch\theadoid" per child
   printf '%s' "$out" | LC_ALL=C sort
 }
 
+# The plumbing probe D2's descent asks of every registered child before it asks
+# `git status`: is this checkout mid-operation. Reimplemented from git's own
+# on-disk facts rather than Conductor's script, so the answer is ours to reason
+# about — a rebase, a merge, a cherry-pick or a revert each leave a marker file
+# or directory under the child's OWN gitdir (`--git-path` resolves the linked
+# worktree's private `rebase-merge`/`rebase-apply`/`MERGE_HEAD`/etc., not the
+# common one `$main` shares with every other worktree), and a conflicted merge
+# with no marker of its own still leaves unmerged stages in the index, which
+# `ls-files -u` sees. `rc 1` on ANY git read here means "could not tell", not
+# "idle" — the caller must refuse `tree-unreadable` rather than wave a child
+# through it never actually looked at.
+_ws_child_op() {   # childdir -> op name on stdout ('' = idle), rc 1 = unprobeable
+  local d="$1" g p op=""
+  for p in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge \
+           CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert; do
+    g=$(git -C "$d" rev-parse --git-path "${p%%:*}" 2>/dev/null) || return 1
+    [[ -e "$d/$g" || -e "$g" ]] && { op="${p##*:}"; break; }
+  done
+  if [[ -z "$op" ]]; then
+    local conf; conf=$(git -C "$d" ls-files -u 2>/dev/null | head -1) || return 1
+    [[ -n "$conf" ]] && op="conflicted-merge"
+  fi
+  printf '%s' "$op"
+}
+
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
@@ -2514,6 +2539,7 @@ _ws_reap_reset() {
   REAP_PRNUM=""; REAP_PRURL=""; REAP_FETCHED=""
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_SENSITIVE_FILTERED=0; _WS_INSIDE_HITS=()
   REAP_IGNSCANNED=0
+  REAP_CHILDLINES=""
 }
 
 # MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
@@ -2527,6 +2553,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
+  local children strays
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -2744,10 +2771,95 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # DO share run in the same relative order there, and the audit's verdict
     # must read the same ladder or the sheet and the CLI would refuse two
     # different workspaces for the same `nested`.
+    #
+    # D2 — CHILD-AWARE DESCENT. A nested checkout is no longer an automatic
+    # refusal: one git registered under `$main` (`_ws_children`, ccd:2084-2102)
+    # is a session ccrc itself may have spawned under this workspace, and it
+    # gets its own per-child ladder below rather than the blanket
+    # `nested-checkouts-present`. An UNREGISTERED one — a stray `git init`, a
+    # clone someone dropped in by hand — is still exactly what that token
+    # means: `$main` has no record of it, so nothing about it can be reasoned
+    # about here, and the ladder below never runs over it. `strays` is the
+    # set difference, computed on the same RESOLVED paths both enumerations
+    # already produce (`_ws_nested_checkouts` resolves the walk's operand,
+    # `_ws_children` resolves both the parent and every `worktree` line), so a
+    # symlinked ancestor cannot make a registered child misread as a stray or
+    # the reverse.
     nested=$(_ws_nested_checkouts "$workdir") \
       || { _reap_refuse tree-unreadable "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
-    [[ -z "$nested" ]] \
-      || { _reap_refuse nested-checkouts-present "$(printf '%s\n' "$nested" | grep -c .) nested checkout(s) live under this workspace: ${nested//$'\n'/, }"; return 1; }
+    children=$(_ws_children "$main" "$workdir") \
+      || { _reap_refuse tree-unreadable "could not enumerate registered worktrees"; return 1; }
+    strays=$(comm -23 <(printf '%s\n' "$nested" | grep . | LC_ALL=C sort) \
+                       <(printf '%s\n' "$children" | cut -f1 | LC_ALL=C sort))
+    [[ -z "$strays" ]] \
+      || { _reap_refuse nested-checkouts-present "$(printf '%s\n' "$strays" | grep -c .) unregistered checkout(s): ${strays//$'\n'/, }"; return 1; }
+    # The per-child ladder itself, outermost-cheapest first and in the same
+    # relative order Phase B above uses for the parent: an in-progress
+    # operation (a rebase/merge/cherry-pick/revert marker, or a conflicted
+    # merge with none — `_ws_child_op`, ccd:2104-2126) BEFORE the detached-HEAD
+    # check, which in turn runs before a `git status`.
+    #
+    # That op-before-detached order is not cosmetic. Measured on git 2.43: a
+    # worktree stopped mid-rebase on a conflict is ITSELF on a detached HEAD —
+    # `git rebase` replays each commit with the worktree checked out at the
+    # commit being replayed, and a conflict leaves it there, branch ref
+    # unmoved. Checking `cbr` first would read every mid-rebase child as
+    # merely `child-busy "detached HEAD at …"`, which is TRUE but not the
+    # question this rung exists to answer, and the fixture that pins the
+    # DETAIL text ("… refuses child-busy with the op in the detail") would
+    # read "detached HEAD" instead of "rebase". Probing for the operation
+    # first gives the more specific diagnosis; only a child that is detached
+    # AND idle — no marker, no unmerged stage — falls through to the plain
+    # detached-HEAD refusal below.
+    #
+    # After that: dirty; then unpushed, proved against the PARENT project's
+    # `origin/HEAD` exactly as ccd proves the parent's own branch, because a
+    # child's commits are only as safe as the remote the parent itself
+    # trusts; then whether the child's branch is ALSO checked out somewhere
+    # else, which is not this child's business to answer about itself and so
+    # runs last.
+    REAP_CHILDLINES=""
+    local childline cpath cbr chead crest
+    # `IFS= read -r childline` plus manual `%%`/`#` splitting, NOT
+    # `IFS=$'\t' read -r cpath cbr chead`. Measured: tab is unconditionally
+    # "IFS whitespace" in bash — true even when it is the ONLY character in
+    # IFS — so consecutive delimiters collapse and leading/trailing ones are
+    # stripped exactly as they are for the default space-separated case.
+    # `_ws_children` prints a detached child as `path<TAB><TAB>headoid` (an
+    # EMPTY branch field between two tabs), and `IFS=$'\t' read -r cpath cbr
+    # chead` against that line silently shifts every field left — `cbr`
+    # receives the head oid and `chead` comes back empty — so the very next
+    # rung (`[[ -n "$cbr" ]]`) reads a detached child as a branch NAMED after
+    # its own commit sha and never refuses `child-busy` at all. Parameter
+    # expansion has no such whitespace carve-out: a run of consecutive tabs
+    # produces the empty fields between them, which is what an empty branch
+    # column actually means.
+    while IFS= read -r childline; do
+      [[ -n "$childline" ]] || continue
+      cpath="${childline%%$'\t'*}"
+      crest="${childline#*$'\t'}"
+      cbr="${crest%%$'\t'*}"
+      chead="${crest#*$'\t'}"
+      local cop; cop=$(_ws_child_op "$cpath") \
+        || { _reap_refuse tree-unreadable "could not probe $cpath for an in-progress operation"; return 1; }
+      [[ -z "$cop" ]] || { _reap_refuse child-busy "$cop in progress at $cpath"; return 1; }
+      [[ -n "$cbr" ]] || { _reap_refuse child-busy "detached HEAD at $cpath"; return 1; }
+      errf=$(mktemp) || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
+      dirt=$(git -C "$cpath" status --porcelain 2>"$errf"); rc=$?
+      err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+      { (( rc == 0 )) && [[ -z "$err" ]]; } \
+        || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
+      local cdirty; cdirty=$(printf '%s' "$dirt" | grep -c . || true)
+      (( cdirty == 0 )) || { _reap_refuse child-dirty "$cdirty uncommitted file(s) in $cpath"; return 1; }
+      local cbase; cbase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
+        || { _reap_refuse child-unpushed "no origin/HEAD to prove $cpath against"; return 1; }
+      local cahead; cahead=$(git -C "$cpath" rev-list --count "$cbase..HEAD" 2>/dev/null) \
+        || { _reap_refuse child-unpushed "could not compare $cpath against $cbase"; return 1; }
+      (( cahead == 0 )) || { _reap_refuse child-unpushed "$cahead commit(s) in $cpath unreachable from $cbase"; return 1; }
+      local holders; holders=$(git -C "$main" worktree list --porcelain 2>/dev/null | grep -c "^branch refs/heads/$cbr\$" || true)
+      (( holders == 1 )) || { _reap_refuse child-branch-elsewhere "branch $cbr is checked out in $holders worktrees"; return 1; }
+      REAP_CHILDLINES+="$cpath"$'\t'"$cbr"$'\t'"$chead"$'\t'"$cdirty"$'\n'
+    done <<< "$children"$'\n'
   fi
 
   # THE STASH READ THAT CANNOT FAIL SILENTLY — corroborated here rather than

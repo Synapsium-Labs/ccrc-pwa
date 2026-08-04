@@ -2119,3 +2119,111 @@ describe('registered-child enumeration (D2)', () => {
     expect(rows[0]![1]).toBe('');
   }, 30000);
 });
+
+/**
+ * The per-child ladder in `_ws_reap_eval` (D2), which narrows Task 3's blanket
+ * `nested-checkouts-present` rung to STRAY checkouts only — a checkout `$main`
+ * itself has a worktree record for now walks the four rungs below instead.
+ *
+ * Every fixture here builds on `squashMovedBase(['.claude/'])`: the parent
+ * must stay clean+reapable around a child living at
+ * `<wt>/.claude/worktrees/<leaf>`, and `squashMovedBase`'s own `ignore`
+ * parameter is what `ready(['.claude/'])` uses for exactly this in
+ * `ccd-ws-reap.test.ts` — writing `.gitignore` into both the branch's commits
+ * and main's squash of them, so the parent's `git status` never sees
+ * `.claude/` and the patch-id proof still matches. No separate
+ * `.git/info/exclude` write is needed; the fixture's existing mechanism
+ * already covers it.
+ *
+ * `addChild` is re-declared locally rather than imported from the
+ * `registered-child enumeration (D2)` describe above — the two are separate
+ * closures and this keeps this suite's fixtures self-contained.
+ */
+describe('the per-child ladder in the reap eval (D2)', () => {
+  const addChild = (main: string, wt: string, leaf: string, branch: string): string => {
+    const dir = path.join(wt, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+
+  it('a DIRTY child refuses the parent, naming the child', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-a', 'ca');
+    fs.writeFileSync(path.join(child, 'scratch.txt'), 'uncommitted\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-dirty');
+    expect(a.detail).toContain('agent-a');
+    expect(fs.existsSync(child), 'the dirty child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a child mid-rebase refuses child-busy with the op in the detail', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-r', 'cr');
+    // A second worktree, OUTSIDE the parent (so it is not itself scanned as a
+    // nested checkout), that also touches f1.txt from the same base — the
+    // rebase target the child's own commit will conflict against.
+    const other = path.join(h.home, 'other-base-wt');
+    h.git(main, 'worktree', 'add', other, '-b', 'other-base');
+    fs.writeFileSync(path.join(other, 'f1.txt'), 'other change\n');
+    h.git(other, 'add', 'f1.txt'); h.git(other, 'commit', '-m', 'other change');
+    fs.writeFileSync(path.join(child, 'f1.txt'), 'child change\n');
+    h.git(child, 'add', 'f1.txt'); h.git(child, 'commit', '-m', 'child change');
+    // Expected to stop on a conflict — the point of the fixture — so the
+    // throw from a non-zero exit is swallowed rather than propagated.
+    try { h.git(child, 'rebase', 'other-base'); } catch { /* stopped mid-rebase, as intended */ }
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-busy');
+    expect(a.detail).toMatch(/rebase/);
+    expect(fs.existsSync(child), 'the mid-rebase child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a child with commits unreachable from origin/HEAD refuses child-unpushed', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-u', 'cu');
+    fs.writeFileSync(path.join(child, 'extra.txt'), 'extra\n');
+    h.git(child, 'add', 'extra.txt'); h.git(child, 'commit', '-m', 'unpushed work');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-unpushed');
+    expect(a.detail).toContain('agent-u');
+    expect(fs.existsSync(child), 'the unpushed child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a detached child refuses child-busy with "detached HEAD" in the detail', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-d');
+    fs.mkdirSync(path.dirname(child), { recursive: true });
+    h.git(main, 'worktree', 'add', '--detach', child);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-busy');
+    expect(a.detail).toMatch(/detached HEAD/);
+    expect(fs.existsSync(child), 'the detached child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a clean, merged, attached child PASSES — the parent stays reapable', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    // Zero commits ahead of origin/HEAD is what the unpushed rung actually
+    // asks — a fresh branch cut from the parent's own current (already
+    // pushed) tip and never committed to satisfies it without a second
+    // squash-merge dance for the child.
+    const child = addChild(main, wt, 'agent-p', 'cp');
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.existsSync(wt), 'the parent worktree survives a read-only audit').toBe(true);
+    expect(fs.existsSync(child), 'the clean child survives a read-only audit').toBe(true);
+  }, 30000);
+
+  it('a stray repo beside a registered child still refuses nested-checkouts-present', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-ok', 'cok');
+    const stray = path.join(wt, '.claude', 'worktrees', 'stray-x');
+    fs.mkdirSync(stray, { recursive: true });
+    execFileSync('git', ['init', '-q', stray]);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(a.detail).toContain('stray-x');
+    expect(fs.existsSync(child), 'the registered child survives').toBe(true);
+    expect(fs.existsSync(stray), 'the stray survives a read-only audit').toBe(true);
+  }, 30000);
+});
