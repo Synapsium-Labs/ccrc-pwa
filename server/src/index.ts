@@ -7,6 +7,7 @@ import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { connectFleet } from './remote/client.js';
+import { makeRefreshCaps } from './refreshcaps.js';
 import { PushService } from './push.js';
 import path from 'node:path';
 
@@ -30,7 +31,11 @@ if (cfg.fleetMode === 'remote') {
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
-  deps = { cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io, spawnPty: fleet.spawnPty, fleetState: fleet.state, push };
+  deps = {
+    cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push,
+    refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
+  };
 } else {
   deps = { cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty, push };
 }

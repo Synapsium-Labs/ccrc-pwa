@@ -15,6 +15,7 @@ export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: strin
 export interface ReadB64Req { t: 'req'; id: number; op: 'readB64'; path: string }
 export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string }
 export interface StatReq   { t: 'req'; id: number; op: 'stat'; path: string }
+export interface CapsReq   { t: 'req'; id: number; op: 'caps' }
 export interface WriteB64Req { t: 'req'; id: number; op: 'writeB64'; path: string; dataB64: string }
 export interface TailOpenReq { t: 'req'; id: number; op: 'tailOpen'; path: string; offset: number }
 export interface TailCloseReq{ t: 'req'; id: number; op: 'tailClose'; tailId: number }
@@ -22,12 +23,12 @@ export interface PtyOpenReq  { t: 'req'; id: number; op: 'ptyOpen'; sessionId: s
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 export interface ResErr { t: 'res'; id: number; ok: false; err: string }
 // exec → {code, stdout, stderr}; read → {data: string|null}; readFrom → {data: string, size: number}|{data: null};
 // readB64 → {dataB64: string|null}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true};
-// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}
+// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
 export interface TailData  { t: 'tail'; tailId: number; dataB64: string }       // appended bytes
 export interface TailReset { t: 'tail'; tailId: number; reset: true; size: number } // file truncated/rotated
 export interface PtyData   { t: 'pty'; ptyId: number; ev: 'data'; dataB64: string }
