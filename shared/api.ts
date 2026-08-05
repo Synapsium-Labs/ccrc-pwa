@@ -1027,6 +1027,16 @@ export type SessionStreamMsg =
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer
   | { type: 'dialog_cleared' }
+  /** The hook-sourced envelope: `~/.cc-sessions/<id>.hookstate.json`'s `ask`,
+   *  reported by `session-hook.sh` rather than scraped off the pane. It
+   *  streams BESIDE `dialog` above, never in place of it — the two are read
+   *  by independent clocks (a pane capture vs. a hook write) and can
+   *  legitimately disagree mid-transition, so the server never guesses which
+   *  one is right and sends both exactly as read. The CLIENT is where the
+   *  preference lives: it prefers this envelope over the scraped `dialog`
+   *  when both are present. */
+  | { type: 'ask'; ask: HookAsk }
+  | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
   | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
   | { type: 'notice'; message: string };

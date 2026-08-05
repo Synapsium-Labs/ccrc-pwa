@@ -157,6 +157,8 @@ const streamWith = async (opts: {
   paneSequence?: readonly string[];
   transcript?: string | null;
   transcriptSequence?: readonly (string | null)[];
+  hookstate?: unknown | null;
+  hookstateSequence?: readonly (unknown | null)[];
 }): Promise<{ frames: any[]; askReads: number }> => {
   const home = mkTmp('ccrc-ask-');
   seed(home);
@@ -168,6 +170,11 @@ const streamWith = async (opts: {
     if (t === null) { rmSync(file, { force: true }); return; }
     if (existsSync(file) && readFileSync(file, 'utf8') === t) return;
     writeFileSync(file, t);
+  };
+  const hookFile = path.join(home, '.cc-sessions', `${ID}.hookstate.json`);
+  const putHook = (v: unknown | null): void => {
+    if (v === null || v === undefined) { rmSync(hookFile, { force: true }); return; }
+    writeFileSync(hookFile, JSON.stringify(v));
   };
   const panes = opts.paneSequence ?? [opts.pane ?? ''];
   let step = 0; // which poll we are on: 0 is start(), then one per tick
@@ -191,14 +198,17 @@ const streamWith = async (opts: {
   const cfg = loadConfig({ CCRC_HOME: home });
   const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io };
   const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
+  const hookSeq = opts.hookstateSequence ?? [opts.hookstate ?? null];
   put(at(seq, 0));
+  putHook(at(hookSeq, 0));
   const frames: any[] = [];
   const offset = existsSync(file) ? statSync(file).size : 0;
   const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset });
   try {
     await stream.start();
-    for (step = 1; step < Math.max(seq.length, panes.length); step += 1) {
+    for (step = 1; step < Math.max(seq.length, panes.length, hookSeq.length); step += 1) {
       put(at(seq, step));
+      putHook(at(hookSeq, step));
       await pollOnce(stream);
     }
   } finally {
@@ -207,6 +217,71 @@ const streamWith = async (opts: {
   }
   return { frames, askReads };
 };
+
+/** A complete, valid hookstate body — `session-hook.sh`'s own shape, same
+ *  fields as `hookstate.test.ts`'s `base()`. `sessionId` defaults to `UUID_A`
+ *  so it passes `readHookState`'s identity gate against the registry's uuid,
+ *  and `updatedAt` defaults to "now" so it passes the freshness gate. */
+const hookBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  v: 1, state: 'waiting', event: 'Notification', sessionId: UUID_A, pid: PID,
+  updatedAt: Date.now(), ask: null, subagents: [],
+  ...over,
+});
+
+const HOOK_ASK_1 = { questions: [{ question: 'Deploy now?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+const HOOK_ASK_2 = { questions: [{ question: 'Deploy now?', options: [{ label: 'Yes' }, { label: 'Cancel' }] }] };
+
+describe('hook ask envelope frames', () => {
+  it('delivers an already-waiting ask envelope on connect', async () => {
+    const { frames } = await streamWith({ hookstate: hookBody({ ask: HOOK_ASK_1 }) });
+    const ask = frames.find((f) => f.type === 'ask');
+    expect(ask).toBeDefined();
+    expect(ask.ask).toEqual(HOOK_ASK_1);
+  });
+
+  it('sends a fresh ask frame when the hookstate file\'s ask changes', async () => {
+    const { frames } = await streamWith({
+      hookstateSequence: [hookBody({ ask: HOOK_ASK_1 }), hookBody({ ask: HOOK_ASK_2 })],
+    });
+    const asks = frames.filter((f) => f.type === 'ask');
+    expect(asks).toHaveLength(2);
+    expect(asks[0]!.ask).toEqual(HOOK_ASK_1);
+    expect(asks[1]!.ask).toEqual(HOOK_ASK_2);
+  });
+
+  it('does not resend when the hookstate file is rewritten with an unchanged ask', async () => {
+    const same = hookBody({ ask: HOOK_ASK_1 });
+    const { frames } = await streamWith({ hookstateSequence: [same, hookBody({ ask: HOOK_ASK_1 }), same] });
+    expect(frames.filter((f) => f.type === 'ask')).toHaveLength(1);
+  });
+
+  it('nulling the ask sends ask_cleared, once', async () => {
+    const { frames } = await streamWith({
+      hookstateSequence: [hookBody({ ask: HOOK_ASK_1 }), hookBody({ ask: null }), hookBody({ ask: null })],
+    });
+    expect(frames.filter((f) => f.type === 'ask')).toHaveLength(1);
+    expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
+  });
+
+  it('a hookstate file going stale/missing where the last read was non-null also clears', async () => {
+    const { frames } = await streamWith({ hookstateSequence: [hookBody({ ask: HOOK_ASK_1 }), null] });
+    expect(frames.filter((f) => f.type === 'ask')).toHaveLength(1);
+    expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
+  });
+
+  it('a scraped dialog and a hook ask both flow — neither suppresses the other', async () => {
+    const { frames } = await streamWith({
+      pane: fixture('ask-2col-chat-about.txt'),
+      transcript: fixture('transcript-ask-2col.jsonl'),
+      hookstate: hookBody({ ask: HOOK_ASK_1 }),
+    });
+    const dialog = frames.find((f) => f.type === 'dialog');
+    const ask = frames.find((f) => f.type === 'ask');
+    expect(dialog).toBeDefined();
+    expect(ask).toBeDefined();
+    expect(ask.ask).toEqual(HOOK_ASK_1);
+  });
+});
 
 describe('dialog enrichment', () => {
   it('carries the structured ask when the pane and transcript agree', async () => {
