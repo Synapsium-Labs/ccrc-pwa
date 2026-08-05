@@ -356,7 +356,11 @@ describe('hook state on the wire', () => {
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
       undefined, undefined, undefined, undefined, hookStates,
     );
-    expect(fleet.find((x) => x.id === 'claude-demo')!.dialogPending).toBe(true);
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.dialogPending).toBe(true);
+    // The tmux stub always fails `has-session`, so this session is dead —
+    // `waiting` earning dialogPending must not also earn it a status.
+    expect(s.status).toBe('dead');
   });
 
   it('dialogPending is false when NEITHER source says so — a working hook is not a pending dialog', async () => {
@@ -390,14 +394,27 @@ describe('hook state on the wire', () => {
     const withHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, hookStates,
     );
+    // `waiting` is the state most likely to tempt a status-derivation bug
+    // specifically — it is also the value dialogPending's OR-rule reads, so a
+    // fix or refactor near that line reaching one line too far (promoting an
+    // idle status to busy, or demoting this already-busy one) is the exact
+    // regression this fixture exists to catch. `done` above cannot pin that:
+    // it shares no vocabulary with anything status-adjacent.
+    const waitingHookStates = new Map<string, HookState>([['claude2-MekWarLive', mkHookState({ state: 'waiting' })]]);
+    const withWaitingHook = await assembleFleet(
+      localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
+    );
 
     const before = withoutHook.find((x) => x.id === 'claude2-MekWarLive')!;
     const after = withHook.find((x) => x.id === 'claude2-MekWarLive')!;
+    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude2-MekWarLive')!;
     expect(before.status).toBe('busy');
     expect(after.status).toBe(before.status);
+    expect(afterWaiting.status).toBe(before.status);
     // The mutant this pins: only the hook-derived fields may differ.
     expect(before.hookState).toBeNull();
     expect(after.hookState).toBe('done');
+    expect(afterWaiting.hookState).toBe('waiting');
   });
 });
 
@@ -436,9 +453,27 @@ describe('hookAskSummary', () => {
     expect(hookAskSummary(hs)).toBe('Which branch should this land on?');
   });
 
+  it('falls back to the question text when the header is empty or whitespace-only — a real shape, since header is optional on the tool call itself', () => {
+    const empty = mkHookState({
+      state: 'waiting',
+      ask: { questions: [{ question: 'Which branch should this land on?', header: '', options: [] }] },
+    });
+    expect(hookAskSummary(empty)).toBe('Which branch should this land on?');
+    const whitespace = mkHookState({
+      state: 'waiting',
+      ask: { questions: [{ question: 'Which branch should this land on?', header: '   ', options: [] }] },
+    });
+    expect(hookAskSummary(whitespace)).toBe('Which branch should this land on?');
+  });
+
   it('formats an approval as "tool: summary"', () => {
     const hs = mkHookState({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'rm -rf node_modules' } } });
     expect(hookAskSummary(hs)).toBe('Bash: rm -rf node_modules');
+  });
+
+  it('is null when an approval has neither a tool nor a summary — never the bare ": "', () => {
+    const hs = mkHookState({ state: 'waiting', ask: { approval: { tool: '', summary: '' } } });
+    expect(hookAskSummary(hs)).toBeNull();
   });
 
   it('clips a question summary to 80 characters', () => {

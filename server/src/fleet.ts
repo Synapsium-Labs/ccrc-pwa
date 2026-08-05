@@ -20,18 +20,31 @@ const ASK_SUMMARY_MAX_LEN = 80;
  * (two separate writes, no lock between them), and that gap must read as
  * "nothing to summarize yet", never as an empty or fabricated line.
  *
- * Questions: the FIRST question's `header ?? question` — the header is the
- * short form a human wrote for exactly this kind of glance; falling back to
- * the full question keeps every AskUserQuestion summarizable, header or not.
- * Approval: `` `${tool}: ${summary}` `` — the one pending tool call and its
- * own one-line description. Both clipped to `ASK_SUMMARY_MAX_LEN`.
+ * Questions: the FIRST question's `header?.trim() || question` — the header
+ * is the short form a human wrote for exactly this kind of glance, but an
+ * EMPTY or whitespace-only header (a real shape: `session-hook.sh` copies
+ * `tool_input.questions` verbatim, and a header is optional on the tool call
+ * itself) must fall through to the question exactly like an absent one does
+ * — `??` alone does not do that, since `''` is neither `null` nor
+ * `undefined`. Approval: `` `${tool}: ${summary}` `` — the one pending tool
+ * call and its own one-line description, unless BOTH are empty, which is
+ * treated as no summary rather than emitting `": "`. Both clipped to
+ * `ASK_SUMMARY_MAX_LEN`, and the whole thing is null rather than `''` on the
+ * off chance every fallback above is itself empty — this line renders
+ * unconditionally on a waiting card, so "no line" must never become a blank
+ * one.
  */
 export function hookAskSummary(hs: HookState | null): string | null {
   if (hs === null || hs.state !== 'waiting' || hs.ask === null) return null;
-  const text = 'questions' in hs.ask
-    ? (hs.ask.questions[0]?.header ?? hs.ask.questions[0]?.question ?? null)
-    : `${hs.ask.approval.tool}: ${hs.ask.approval.summary}`;
-  return text === null ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
+  let text: string | null;
+  if ('questions' in hs.ask) {
+    const q = hs.ask.questions[0];
+    text = q ? (q.header?.trim() || q.question) : null;
+  } else {
+    const { tool, summary } = hs.ask.approval;
+    text = tool === '' && summary === '' ? null : `${tool}: ${summary}`;
+  }
+  return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
 }
 
 export function idHomeWrapper(id: string): string {

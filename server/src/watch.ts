@@ -150,8 +150,15 @@ export class FleetWatcher {
   }
 
   async tick(): Promise<void> {
-    const pending = await this.detectDialogs(this.primed);
-    await this.sweepHookStates();
+    // Read once, share with the two lanes that would otherwise each read it
+    // again on EVERY tick (detectDialogs, sweepHookStates) — in remote mode
+    // every readRegistry() field is its own agent-WS round trip, so this is
+    // the difference between one registry read and two, every 2s, forever.
+    // sweepTasks/sweepPr below are NOT included: both throttle to their own
+    // slower clock and skip the read entirely on most ticks already.
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const pending = await this.detectDialogs(this.primed, records);
+    await this.sweepHookStates(records);
     await this.sweepTasks();
     // NEVER awaited: it shells out over the network and `gh` has no
     // --timeout, so awaiting it would stall the dialog detector and the
@@ -192,15 +199,20 @@ export class FleetWatcher {
    * own, unlike sweepTasks/sweepPr below: `readHookState` is one local JSON
    * read per session and already gates its own freshness and identity, so
    * there is nothing to amortize by sampling it less often. The map is
-   * rebuilt from the registry each tick, same discipline as sweepTasks, so a
-   * de-registered session's state can't linger.
+   * rebuilt each tick, same discipline as sweepTasks, so a de-registered
+   * session's state can't linger.
+   *
+   * `records` is `tick()`'s own registry read, passed in rather than fetched
+   * again here — see the comment in `tick()`. Optional (defaulting to its own
+   * read) so this stays independently callable, same shape as
+   * `detectDialogs` below.
    */
-  private async sweepHookStates(): Promise<void> {
+  private async sweepHookStates(records?: SessionRecord[]): Promise<void> {
     const now = Date.now();
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     const next = new Map<string, HookState>();
     await Promise.all(
-      records.map(async (r) => {
+      recs.map(async (r) => {
         const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid, now);
         if (hs) next.set(r.id, hs);
       }),
@@ -392,11 +404,15 @@ export class FleetWatcher {
    * dialogPending flag — the open session's own stream owns the frame the client
    * renders, and drops these (`sessionws.ts` onSessionMsg). Enrich the parse here
    * and this gate needs the same upgrade path.
+   *
+   * `records` is `tick()`'s own registry read, passed in rather than fetched
+   * again here (optional, defaulting to its own read, so this stays
+   * independently callable) — same sharing as `sweepHookStates` above.
    */
-  private async detectDialogs(notify: boolean): Promise<Set<string>> {
+  private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
-    for (const r of records) {
+    const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
+    for (const r of recs) {
       const pane = await this.deps.tmux.capture(r.id);
       // Same capture feeds the statusline read — no extra tmux call. A tick
       // whose pane has no statusline (a dialog/permission overlay covers it, or

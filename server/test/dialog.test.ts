@@ -224,3 +224,48 @@ describe('FleetWatcher dialog detection', () => {
     expect(fleets.at(-1)![0]!.dialogPending).toBe(false);
   });
 });
+
+describe('FleetWatcher hookstate wiring', () => {
+  // The only test that exercises tick()'s production plumbing end to end:
+  // registry -> sweepHookStates() -> readHookState(..., r.uuid, ...) ->
+  // assembleFleet's hookStates map -> the emitted 'fleet' frame. Every other
+  // hookstate test either calls assembleFleet directly (fleet.test.ts) or
+  // readHookState directly (hookstate.test.ts) — neither one proves the
+  // watcher actually wires the uuid argument or reads registryDir/the id it
+  // holds correctly, which is exactly the kind of wiring bug unit tests on
+  // either side, alone, cannot see.
+  it('a tick reads a fresh hookstate.json and the emitted fleet frame carries hookState/askSummary/dialogPending', async () => {
+    const home = mkTmp('ccrc-');
+    const uuid = '1'.repeat(36);
+    seedSession(home, 'claude2-MekWarLive', 'claude2'); // writes this same uuid
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      // A plain prompt, never a menu — dialogPending below is earned SOLELY
+      // by the hookstate file, not by the pane detector.
+      if (args[0] === 'capture-pane') return { code: 0, stdout: 'done\n❯ \n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    writeFileSync(path.join(cfg.registryDir, 'claude2-MekWarLive.hookstate.json'), JSON.stringify({
+      v: 1, state: 'waiting', event: 'Notification', sessionId: uuid, pid: 40613,
+      updatedAt: Date.now(), // fresh relative to sweepHookStates' own Date.now()
+      ask: { questions: [{ question: 'Full text nobody should see on a card', header: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }] },
+      subagents: [{ name: 'reviewer', startedAt: Date.now() - 5000 }],
+    }));
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO };
+    const bus = new Bus();
+    const fleets: FleetSession[][] = [];
+    bus.on('fleet', (s) => fleets.push(s));
+    const watcher = new FleetWatcher(deps, bus);
+
+    await watcher.tick();
+
+    const s = fleets.at(-1)!.find((x) => x.id === 'claude2-MekWarLive')!;
+    expect(s.hookState).toBe('waiting');
+    expect(s.askSummary).toBe('Pick one');
+    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: expect.any(Number) }]);
+    // Earned purely by the hook — the pane above never painted a menu.
+    expect(s.dialogPending).toBe(true);
+  }, 30000);
+});
