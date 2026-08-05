@@ -8,7 +8,7 @@
 // "Remove anyway". Move the files, or use a terminal.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ReapResult, WsAudit } from '../../../shared/api';
+import type { FleetSession, ReapResult, WsAudit, WsAuditChild } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
@@ -90,6 +90,21 @@ const clipsSizeText = (clips: { bytes: number | null | undefined }[]): string =>
   if (measured.length === 0) return 'size unknown';
   const total = humanBytes(measured.reduce((n, b) => n + b, 0));
   return unmeasured === 0 ? total : `${total} + ${unmeasured} unmeasured`;
+};
+
+/** One line per nested checkout (D4): a `stray` earns no claim about its
+ *  state beyond existing at `path` — `WsAuditChild`'s own docstring is why
+ *  (an unregistered checkout ccd did not create). A registered child gets
+ *  its real reading: the branch it is on, how many paths are uncommitted
+ *  THERE, and the git operation in progress there, if any. `dirty === null`
+ *  is defensive rather than reachable today — the type admits it, and this
+ *  row refuses to print "null uncommitted" the same way every other row on
+ *  this sheet refuses an unmeasured figure. */
+const childLine = (c: WsAuditChild): string => {
+  if (c.stray) return `${c.path} — not registered with git, contents unknown`;
+  const dirty = c.dirty === null ? NOT_SCANNED : `${c.dirty} uncommitted`;
+  const mid = c.busy !== null ? `, mid-${c.busy}` : '';
+  return `${c.path} — ${c.branch ?? 'detached'}, ${dirty}${mid}`;
 };
 
 export function ReapSheet({
@@ -327,8 +342,21 @@ export function ReapSheet({
                     in no commit and cannot be recovered" under a row that just
                     said `not scanned` reads as a statement about a set the
                     screen has, and it has none. */}
+                {/* D4: scoped rather than dropped when nested checkouts sit
+                    inside this same total. `ignored` never includes a live
+                    checkout's own contents (ccd's collector stops at the
+                    child's root), so the two are never the same set — but the
+                    unqualified sentence, read beside a children block that
+                    just said those repositories are LIVE, would still claim
+                    NOTHING under this workdir survives. `shown.children` is
+                    `null` (unmeasured) or `[]` (measured, none) for the vast
+                    majority of audits, and neither earns the qualifier. */}
                 {shown.ignoredCount !== null && (
-                  <span className="reap-note">These are in no commit and cannot be recovered.</span>
+                  <span className="reap-note">
+                    {(shown.children?.length ?? 0) > 0
+                      ? 'These are in no commit and cannot be recovered — except the nested checkouts listed below, which are live repositories.'
+                      : 'These are in no commit and cannot be recovered.'}
+                  </span>
                 )}
                 {/* F3 refinement (pre-merge fix round): a secret-shaped name
                     ending in a source, compiled or template extension is
@@ -434,6 +462,20 @@ export function ReapSheet({
                     + ' pinned in the attic (ccd ws-attic)'}
               </dd>
             </dl>
+
+            {/* D4: the checkouts nested under this workspace, named — never
+                folded into the ignored total above (that row counts
+                not-in-git PATHS; these are git repositories of their own).
+                `null` is unmeasured (Phase A refused before the child walk
+                ran) and `[]` is measured-and-none, same discipline as every
+                other list on this sheet — both render nothing here, which is
+                the correct silence for "nobody looked" and for "looked, and
+                there is nothing to name". */}
+            {shown.children !== null && shown.children.length > 0 && (
+              <ul className="reap-children">
+                {shown.children.map((c) => <li key={c.path} className="reap-child">{childLine(c)}</li>)}
+              </ul>
+            )}
 
             {shown.verdict !== 'reapable' && (
               <>

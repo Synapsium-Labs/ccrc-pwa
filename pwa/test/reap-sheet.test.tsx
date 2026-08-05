@@ -349,6 +349,79 @@ describe('refusals', () => {
   });
 });
 
+// D4: nested checkouts the audit found under this workspace's own worktree.
+// `WsAudit.children` is `null` when Phase A refused before the independent
+// child walk ran, `[]` when the walk ran and found none, and populated
+// (registered children plus any filesystem strays) when it found something —
+// same null-vs-[] discipline as `dirty`/`ignored`/`clips` above, one rung
+// earlier. These are display-only pins: the refusal token
+// (`nested-checkouts-present`) and its sentence are server-side already
+// (`shown.sentence`), so what this sheet owns is naming each child on its own
+// line and scoping the "cannot be recovered" note so it does not lie about a
+// live nested repository.
+describe('nested children (D4)', () => {
+  it('renders children as named checkouts with branch and state, never inside the ignored total', async () => {
+    auditBody = audit({
+      verdict: 'nested-checkouts-present', token: undefined,
+      sentence: 'Checkouts of their own live under this worktree. Move or remove them first — there is no override.',
+      children: [
+        { path: '/w/.claude/worktrees/agent-a', branch: 'ca', headOid: 'a'.repeat(40), dirty: 2, busy: null, stray: false },
+        { path: '/w/.claude/worktrees/rogue', branch: null, headOid: null, dirty: null, busy: null, stray: true },
+      ],
+    });
+    open();
+    expect(await screen.findByText(/agent-a/)).toBeInTheDocument();
+    expect(screen.getByText(/2 uncommitted/)).toBeInTheDocument();
+    expect(screen.getByText(/not registered/)).toBeInTheDocument();
+    // Never folded into the ignored-total row — that figure is unrelated to
+    // nested checkouts, and this fixture's own ignored set is the default
+    // three-entry one from `audit()`.
+    expect(screen.getByText(/3 entries, 420 MB/)).toBeInTheDocument();
+  });
+
+  it('scopes the cannot-be-recovered sentence when live checkouts sit inside the total', async () => {
+    auditBody = audit({
+      children: [
+        { path: '/w/.claude/worktrees/agent-a', branch: 'ca', headOid: 'a'.repeat(40), dirty: 0, busy: null, stray: false },
+      ],
+    });
+    open();
+    expect(await screen.findByText(
+      /These are in no commit and cannot be recovered — except the nested checkouts listed below, which are live repositories\./,
+    )).toBeInTheDocument();
+    cleanup();
+
+    // Measured-and-empty: the original, unqualified sentence.
+    auditBody = audit({ children: [] });
+    open();
+    expect(await screen.findByText(/^These are in no commit and cannot be recovered\.$/)).toBeInTheDocument();
+    cleanup();
+
+    // Unmeasured: the original sentence too — a `null` children list is not a
+    // claim that anything is live, so it earns no qualifier either.
+    auditBody = audit({ children: null });
+    open();
+    expect(await screen.findByText(/^These are in no commit and cannot be recovered\.$/)).toBeInTheDocument();
+  });
+
+  it('renders no children row at all for children:null — "not scanned" stays at three', async () => {
+    auditBody = audit({
+      verdict: 'detached-head', sentence: 'git records this worktree on a detached HEAD.',
+      token: undefined,
+      dirty: null, ignored: null, ignoredCount: null, ignoredBytes: null,
+      sensitive: null, sensitiveFiltered: null, stashes: null,
+      merge: { proof: null, fetchedAt: null },
+      children: null,
+    });
+    open();
+    // Same count the pre-existing "not scanned" pin asserts (uncommitted,
+    // not-in-git, stashes) — a children block must not add or remove one.
+    expect(await screen.findAllByText('not scanned')).toHaveLength(3);
+    expect(screen.queryByText(/not registered with git/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/agent-a|rogue/)).not.toBeInTheDocument();
+  });
+});
+
 // Task 17 whole-diff mutation sweep: each test below pins a property the
 // brief's own tests above never exercised — a distinct value on one row, an
 // untaken branch, a button's actual argument, a state mid-flight. Named for

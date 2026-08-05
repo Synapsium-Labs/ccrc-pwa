@@ -272,6 +272,11 @@ button.metachip:active {
 .reap-sensitive { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
 .reap-size { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
 .reap-ignored { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+/* D4: nested checkouts, named — same look as `.reap-sensitive` (mono, xs,
+   no bullets) since both are a plain list of paths, but ink-secondary rather
+   than the danger color: a nested checkout is information, not a threat. */
+.reap-children { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
+.reap-child { word-break: break-word; }
 .reap-go { min-height: var(--tap-min); }
 
 /* Overflow menu — the session's lifecycle actions in one sheet. Rows echo
