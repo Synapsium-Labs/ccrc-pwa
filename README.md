@@ -56,7 +56,7 @@ Run the server against a fixture home: `CCRC_HOME=<tree> npm run dev` in `server
 
 ```bash
 bash deploy/deploy.sh                # server: build PWA here (freshness-gated) → rsync → box npm ci + build → restart unit → health check
-bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) → host npm ci + build → restart unit
+bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) + session-hook.sh (installs it) → host npm ci + build → restart unit
 ```
 
 `CCRC_BOX` overrides the server's default target (`you@203.0.113.7`);

@@ -166,6 +166,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     [[ "$suffix" == archived || "$suffix" == reaping ]] && continue
     rm -f "$f"
   done
+  # `hookstate.json` (session-hook.sh's `$REG/$id.hookstate.json`, the
+  # session-status file the Claude Code hooks write on every tool call) is an
+  # ordinary field with no ordering invariant of its own — it belongs here,
+  # with the fields above, not in the archived/reaping tail below. But its
+  # OWN name holds a dot, so the loop's `[[ "$suffix" == *.* ]]` skip (the
+  # nested-id guard the long note above measures) reads
+  # `$REG/$id.hookstate.json` as a two-dot stranger and leaves it standing
+  # rather than unlinking it — the same shape as `$id.x-y.uuid`, just
+  # produced by a field name instead of a project directory name. Removed
+  # explicitly here rather than exempted from the loop's filter, so the
+  # nested-id guard stays a single, simple rule.
+  rm -f "$REG/$id.hookstate.json"
   rm -f "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
   # that did not take the breadcrumb must not be followed by one that takes the

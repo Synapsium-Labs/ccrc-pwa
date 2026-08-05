@@ -56,6 +56,12 @@ if [ "$TARGET" = "agent" ]; then
   "${SCP[@]}" ccd/ccd "$BOX":.local/bin/ccd
   "${SCP[@]}" deploy/notify.sh "$BOX":.cc-sessions/notify.sh
   "${SSH[@]}" "$BOX" 'chmod +x ~/.local/bin/ccd ~/.cc-sessions/notify.sh'
+  # session-hook.sh + its installer ship every deploy too — the installer is
+  # idempotent (it backs up settings.json itself before touching it) and
+  # safe to re-run against homes it already converged.
+  "${SCP[@]}" ccd/session-hook.sh "$BOX":.cc-sessions/session-hook.sh
+  "${SCP[@]}" ccd/install-session-hooks.sh "$BOX":.cc-sessions/install-session-hooks.sh
+  "${SSH[@]}" "$BOX" 'chmod +x ~/.cc-sessions/session-hook.sh ~/.cc-sessions/install-session-hooks.sh && bash ~/.cc-sessions/install-session-hooks.sh'
   # The trailing `verify-service.sh` is the agent's equivalent of the server
   # path's `curl -fsS "$HEALTH_URL"` (final review round 2, gates finding 5).
   # `systemctl restart` returns success the moment systemd FORKS, so without it

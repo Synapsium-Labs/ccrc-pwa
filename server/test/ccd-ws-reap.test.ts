@@ -733,6 +733,20 @@ describe('destruction order', () => {
     expect(out.resumed).toBeNull();
   }, 30000);
 
+  it('removes the session hook\'s hookstate.json on a successful reap', () => {
+    // session-hook.sh (ccd/session-hook.sh) writes `$REG/<id>.hookstate.json`
+    // on the hot path of every tool call; `_reg_purge` must reclaim it like
+    // any other registry file once the session is gone, not leak it forever
+    // on the very sheet a reaped session is supposed to fall off of.
+    ready();
+    const hookstate = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
+    fs.writeFileSync(hookstate, '{"v":1,"state":"done"}\n');
+    const tok = tokenOf();
+    const out = JSON.parse(reap(tok).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(fs.existsSync(hookstate)).toBe(false);
+  }, 30000);
+
   it('journals before it destroys — a kill at (d) leaves a resumable workspace', () => {
     // THE ORDERING, executable. The attic (a) and the tombstone (b) are written
     // BEFORE the breadcrumb (c), and the breadcrumb before `_ws_unsupervise`
