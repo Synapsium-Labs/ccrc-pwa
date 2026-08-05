@@ -18,9 +18,31 @@
 // their scraped label — and so do rows the server sends as `null`, the
 // positions it matched loosely enough to accept the question but not loosely
 // enough to believe the copy.
+//
+// Task 8 (PR C): the session store ALSO carries a hook-sourced envelope
+// (`ask: HookAsk | null`, fed by the `ask`/`ask_cleared` stream frames —
+// shared/api.ts's SessionStreamMsg comment has the transport rationale). It is
+// a DIFFERENT thing from the `Dialog.ask` enrichment above: that one decorates
+// a scraped menu whose OPTIONS still come from the pane; this one is the
+// render content itself, on its own clock, and can exist with no scraped
+// `dialog` at all (or disagree with one transiently — the two are read
+// independently, see the type's own doc comment). Whenever it is present the
+// sheet renders it INSTEAD of the scraped dialog (`EnvelopeSheet` below),
+// tagged `data-source="hook"` for tests; `ask_cleared` empties it and the
+// sheet falls back to whatever scraped dialog is still pending, unchanged
+// from before this task. SEND still goes through the exact same functions the
+// scraped path already uses below: `answer()`'s answerDialog walk for
+// numbered options (envelope option N calls `answer(N + 1)`, so "Allow" is
+// `answer(1)` — Claude Code's own confirm dialogs put "Yes" first) and
+// `api.interrupt()`'s literal Escape for "Deny" — Claude Code's own hint for
+// declining a permission confirm, independent of how many options it has.
+// Those two are the only paths that can reach a live pane menu without typing
+// into it: `sendPrompt` refuses outright while one is up (send.ts's `hasMenu`
+// guard), so a permission confirm — which IS a menu — cannot be answered by
+// sending literal text the way a free-text reply is.
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog } from '../../../shared/api';
+import type { Dialog, HookAsk } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { api, ApiError, apiErrorText } from '../lib/api';
@@ -43,6 +65,7 @@ export interface DialogSheetProps {
 export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const dialog = useStore((s) => s.dialog);
+  const hookAsk = useStore((s) => s.ask);
 
   // The option index whose answer is in flight (null = none).
   const [answering, setAnswering] = useState<number | null>(null);
@@ -135,6 +158,20 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
       setAnswering(null);
     }
   };
+
+  // The hook envelope wins DISPLAY the moment it exists — see the file
+  // header. It can be non-null while `shown` is still null (the envelope
+  // arrived first), so this has to come before the `shown === null` bailout.
+  if (hookAsk !== null) {
+    return (
+      <EnvelopeSheet
+        id={id}
+        ask={hookAsk}
+        answering={answering}
+        onSelectOption={(optionIndex) => void answer(optionIndex)}
+      />
+    );
+  }
 
   if (shown === null) return null;
 
@@ -288,6 +325,134 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
       {details && <pre className="well dlg-raw">{shown.raw}</pre>}
 
       <p className="sheet-foot">tap an option, or answer in your own words</p>
+    </Sheet>
+  );
+}
+
+/**
+ * The hook-sourced envelope's own content — see the file header for why this
+ * exists alongside the scraped rendering above instead of replacing it.
+ * `onSelectOption` IS `answer()` from the scraped flow (passed down verbatim,
+ * so a tap here walks the live pane exactly as a scraped option tap does);
+ * Deny has no scraped counterpart to reuse — Escape has no option index to
+ * walk to — so it calls `api.interrupt` directly, the same call
+ * SessionScreen's stop button makes.
+ */
+function EnvelopeSheet({
+  id,
+  ask,
+  answering,
+  onSelectOption,
+}: {
+  id: string;
+  ask: HookAsk;
+  /** The scraped flow's in-flight option index — shared so a numbered-option
+   *  tap here disables the same way a scraped one does. */
+  answering: number | null;
+  onSelectOption: (optionIndex: number) => void;
+}): ReactNode {
+  // Deny's own busy flag: interrupt is not "answering an option" (there is no
+  // optionIndex for Escape), so it can't reuse `answering` — but it disables
+  // the same buttons `answering` would, and vice versa, so neither send can
+  // race the other.
+  const [denying, setDenying] = useState(false);
+  const busy = answering !== null || denying;
+
+  const deny = async (): Promise<void> => {
+    if (busy) return;
+    setDenying(true);
+    try {
+      await api.interrupt(id);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        toast("That request already resolved — nothing to stop");
+      } else {
+        toast(`Couldn't decline — ${apiErrorText(err)}`, 'error');
+      }
+    } finally {
+      setDenying(false);
+    }
+  };
+
+  if ('approval' in ask) {
+    const { tool, summary } = ask.approval;
+    return (
+      <Sheet open onClose={() => {}} eyebrow="claude is asking" title={tool}>
+        <div data-source="hook" className="ask-envelope">
+          <p className="dlg-copy">{summary}</p>
+          <div className="dlg-actions">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy}
+              onClick={() => onSelectOption(1)}
+            >
+              Allow
+            </button>
+            <button type="button" className="dlg-later" disabled={busy} onClick={() => void deny()}>
+              Deny
+            </button>
+          </div>
+        </div>
+      </Sheet>
+    );
+  }
+
+  // First question's header/text ride the sheet's own eyebrow/title, exactly
+  // like the scraped path's `ask.header`/`ask.question` above — saying it
+  // twice (once there, once in the scrolling body) is the same mistake that
+  // comment already documents for the scraped case. Any FURTHER questions in
+  // the envelope (AskUserQuestion can ask more than one at once) have no such
+  // slot, so those get their header/text inline.
+  const questions = ask.questions;
+  const first = questions[0];
+  const eyebrow = first?.header ? (
+    <>
+      claude is asking <span className="dlg-header-chip">{first.header}</span>
+    </>
+  ) : (
+    'claude is asking'
+  );
+  return (
+    <Sheet open onClose={() => {}} eyebrow={eyebrow} title={first?.question ?? ''}>
+      <div data-source="hook" className="ask-envelope">
+        {questions.map((q, qi) => (
+          <Fragment key={qi}>
+            {qi > 0 && q.header && <p className="dlg-header-chip">{q.header}</p>}
+            {qi > 0 && <p className="dlg-copy">{q.question}</p>}
+            {/* v1: a multiSelect question renders the exact same plain rows as
+                a single-select one — the send path is one digit either way
+                (answerDialog walks to a single option index and confirms;
+                there is no wire capacity to submit more than one). The
+                scraped path has no multi-select rendering of its own to
+                diverge from either: a multi-select pane comes back
+                { parsed: false } there (see MULTISELECT_RE in
+                server/src/pane/dialog.ts) and falls to the raw-pane view
+                instead, so "match the scraped behavior" here means "there is
+                none to match" — plain rows are the only rendering either path
+                has for this case. */}
+            <div className="opts">
+              {q.options.map((o, oi) => (
+                <button
+                  key={oi}
+                  type="button"
+                  className="opt"
+                  disabled={answering !== null}
+                  onClick={() => onSelectOption(oi + 1)}
+                >
+                  <span className="opt-idx" aria-hidden="true">
+                    {oi + 1}
+                  </span>
+                  <span className="opt-body">
+                    <span className="opt-label">{o.label}</span>
+                    {o.description && <span className="opt-desc">{o.description}</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Fragment>
+        ))}
+      </div>
     </Sheet>
   );
 }

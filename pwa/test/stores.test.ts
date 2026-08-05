@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
+import type { ChatEvent, Dialog, FleetSession, HookAsk } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
@@ -49,9 +49,14 @@ const emptySnap = (): SessionSnapshot => ({
   status: null,
   statusUpdatedAt: null,
   dialog: null,
+  ask: null,
   tasks: [],
   missingFile: null,
 });
+
+const askFixture: HookAsk = {
+  questions: [{ question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }],
+};
 
 /** Minimal scripted WebSocket stand-in for store connect() tests. */
 class FakeSocket {
@@ -182,6 +187,24 @@ describe('applySessionMsg', () => {
     expect(s.dialog).toBeNull();
   });
 
+  it('ask sets and ask_cleared clears', () => {
+    let s = applySessionMsg(emptySnap(), { type: 'ask', ask: askFixture });
+    expect(s.ask).toEqual(askFixture);
+
+    s = applySessionMsg(s, { type: 'ask_cleared' });
+    expect(s.ask).toBeNull();
+  });
+
+  it('rotated does not clear a pending ask or dialog — a transcript switch is not a menu clearing', () => {
+    let s = applySessionMsg(emptySnap(), { type: 'ask', ask: askFixture });
+    s = applySessionMsg(s, { type: 'dialog', dialog: dialogFixture });
+
+    s = applySessionMsg(s, { type: 'rotated', uuid: 'u2' });
+
+    expect(s.ask).toEqual(askFixture);
+    expect(s.dialog).toEqual(dialogFixture);
+  });
+
   it('status updates status fields only', () => {
     const s = applySessionMsg(emptySnap(), { type: 'status', status: 'busy', statusUpdatedAt: 1_752_900_000_000 });
     expect(s.status).toBe('busy');
@@ -201,6 +224,12 @@ describe('applySessionMsg', () => {
 // — session store: optimistic sends —
 
 describe('session store optimistic send', () => {
+  it('a fresh store starts with no dialog and no hook ask', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    expect(store.getState().dialog).toBeNull();
+    expect(store.getState().ask).toBeNull();
+  });
+
   it('send() pushes a sending pending and clears it when the matching user event arrives', async () => {
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore('s1', { api: { prompt } });

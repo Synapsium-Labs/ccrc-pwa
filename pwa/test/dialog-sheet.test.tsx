@@ -5,7 +5,7 @@
 // keeps signalling) and is refused while an answer is in flight.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Dialog } from '../../shared/api';
+import type { Dialog, HookAsk } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { api, ApiError } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
@@ -515,5 +515,145 @@ describe('DialogSheet free-text reply', () => {
     expect(await screen.findByText(/no free-text option/i)).toBeInTheDocument();
     expect(answer).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
+  });
+});
+
+// — the hook envelope (Task 8) —
+//
+// `session-hook.sh` reports the same waiting state on its own clock, beside
+// the pane scrape. When the store's `ask` is non-null the sheet renders it
+// INSTEAD of the scraped dialog (data-source="hook" pins that), falling back
+// to the scraped view the moment `ask_cleared` empties it. SEND still goes
+// through the exact functions the scraped path already uses — `answerDialog`
+// for numbered options (so both fixtures below carry a matching scraped
+// `dialog` too: the envelope has no pane state of its own to answer against)
+// and `api.interrupt` (literal Escape) for an approval's Deny.
+describe('DialogSheet (hook envelope)', () => {
+  const QUESTION_ASK: HookAsk = {
+    questions: [
+      {
+        question: 'Which rollout strategy?',
+        header: 'Rollout',
+        options: [
+          { label: 'Canary first', description: 'Ship to 5% for an hour.' },
+          { label: 'Big bang', description: 'Ship to everyone at once.' },
+        ],
+      },
+    ],
+  };
+
+  const APPROVAL_ASK: HookAsk = {
+    approval: { tool: 'Bash', summary: 'rm -rf build/' },
+  };
+
+  const renderWithAsk = (ask: HookAsk, dialog: Dialog | null = parsedDialog()) => {
+    const store = makeStore();
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      store.getState().apply({ type: 'ask', ask });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} />
+        <ToastHost />
+      </>,
+    );
+    return { store };
+  };
+
+  it('renders the envelope question, and tapping option N answers with digit N via answerDialog', () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderWithAsk(QUESTION_ASK);
+
+    expect(screen.getByText('Which rollout strategy?')).toBeInTheDocument();
+    expect(screen.getByText('Rollout')).toBeInTheDocument();
+    expect(screen.getByText('Ship to 5% for an hour.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Big bang/ }));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 2);
+  });
+
+  it('carries data-source="hook" while the envelope is showing', () => {
+    renderWithAsk(QUESTION_ASK);
+    expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
+  });
+
+  it('renders a multiSelect question\'s options as plain rows too — v1 has no multi-select UI, the send path is one digit either way', () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderWithAsk({
+      questions: [
+        {
+          question: 'Pick languages',
+          multiSelect: true,
+          options: [{ label: 'TS' }, { label: 'Go' }],
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 2);
+  });
+
+  it('renders an approval envelope (tool + summary); Allow answers digit 1 via answerDialog', () => {
+    const answerSpy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderWithAsk(APPROVAL_ASK);
+
+    expect(screen.getByText('Bash')).toBeInTheDocument();
+    expect(screen.getByText('rm -rf build/')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
+    expect(answerSpy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 1);
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
+  });
+
+  it('Deny sends Escape via api.interrupt', () => {
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const interruptSpy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
+    renderWithAsk(APPROVAL_ASK);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('toasts rather than failing silently when Deny 409s (the request already resolved)', async () => {
+    vi.spyOn(api, 'interrupt').mockRejectedValue(new ApiError(409, { ok: false, error: 'not-busy' }));
+    renderWithAsk(APPROVAL_ASK);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(await screen.findByText(/nothing to stop/i)).toBeInTheDocument();
+  });
+
+  it('prefers the envelope over a simultaneously pending scraped dialog', () => {
+    renderWithAsk(QUESTION_ASK, parsedDialog());
+
+    expect(screen.getByText('Which rollout strategy?')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Which migration strategy for the legacy orders table?'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('regression: renders exactly the scraped dialog, with no data-source marker, when there is no envelope', () => {
+    renderWithDialog(parsedDialog());
+
+    expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Which migration strategy for the legacy orders table?'),
+    ).toBeInTheDocument();
+    const first = screen.getByRole('button', { name: 'Expand–contract' });
+    expect(first).toHaveClass('opt--selected');
+  });
+
+  it('ask_cleared empties the envelope and falls back to the still-pending scraped dialog', () => {
+    const { store } = renderWithAsk(QUESTION_ASK, parsedDialog());
+    expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
+
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+    });
+
+    expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Which migration strategy for the legacy orders table?'),
+    ).toBeInTheDocument();
   });
 });
