@@ -134,6 +134,79 @@ informative in both directions.
   handlers suspending healthy sessions, invisible connection phases) with the
   timeout constants they landed on. Read it before any ccrc mobile rework.
 
+## UI/UX — where Orca is ahead, and the match/leapfrog moves
+
+Honest scoring of the surfaces themselves, not the plumbing. Orca's UX edge
+is concentrated in four places; each has a match move and most have a
+leapfrog that exploits assets Orca structurally lacks (merge truth, consent
+ceremony, push, instant deploy — no store-review lag).
+
+1. **Attention triage: the four-bucket kanban.** Their dashboard buckets
+   every agent `attention | working | done | idle`, cards carry `askSummary`,
+   last user/agent message, review state, subagent rows, and the `unseen`
+   flag; sidebar counts come from the same builder "so the numbers always
+   agree." ccrc's fleet list groups live/archived and leans on the attention
+   feed. **Match:** once hook-based status lands, bucket the fleet screen by
+   the same four states, counts derived from one snapshot builder.
+   **Leapfrog:** add the bucket Orca cannot build — "ready to clean up",
+   driven by the real merge-gated audit (their merge detection is decorative;
+   ours gates automation). A card that says *merged #157, 1.2 GB reclaimable,
+   audit clean* is triage they can't ship.
+2. **The conversation surface.** Their native chat renders the transcript
+   (rank-3 source) as structured turns with tappable approve/deny cards,
+   agent-authored numbered options, and ask cards that clear when the tool
+   result lands; the mobile permission heuristic double-gates on a
+   hook-reported paused state and refuses to offer "always allow" unless the
+   agent's own text offered it. ccrc renders the pane and a scraped dialog
+   sheet. **Match:** transcript-first conversation rendering — the agent's
+   read whitelist already covers `~/.claude*`, so the JSONL transcripts are
+   reachable today; keep the pane as the degraded source (their explicit
+   priority: transcript > hook > scrape). **Leapfrog:** make the ask card
+   *push-actionable* — answer an AskUserQuestion or approve a permission from
+   the notification itself. Orca cannot follow: they have no push at all.
+3. **Terminal fidelity under multiple viewers.** Their preview renders at the
+   PTY's REAL cols/rows and scales down ("serialized ANSI replayed into
+   different dimensions rewraps into garbage"), with grid-claim arbitration
+   (claims keyed by target dims, never re-sent unchanged) so phone and
+   desktop don't fight over resize. ccrc streams pane captures and will hit
+   the tug-of-war the day two clients watch one session. **Match:** adopt
+   both rules verbatim when the terminal drawer grows a second viewer;
+   they're renderer-side patterns, no server change.
+4. **State vocabulary and ambient signals.** Two glyphs per card — one for
+   *who* (agent), one for *what state* — "scannable instead of fused";
+   `done` gets a check so it can't be confused with grey `idle`; dialogs are
+   hosted by the board, not the card, because answering flips the bucket and
+   would unmount a card-owned dialog (ccrc's screen-hosted sheets already
+   obey this — pin it as a rule). Notification copy is disciplined: repo
+   context only when multiple repos are active, stale pane-reuse snapshots
+   suppressed, nothing fires for a focused visible pane. **Match:** adopt
+   the two-glyph rule and the title discipline in the PWA's cards and push
+   copy. (Their desktop pet that animates off live agent state is silly and
+   charming; noted, not proposed.)
+5. **Accounts and limits on the remote surface.** Their phone shows per-
+   provider session + weekly usage bars with reset countdowns, multi-account
+   switching, and an idempotent "reset credits" where the phone owns the
+   attempt key so a lost response can't spend twice. ccrc shows a limit note
+   at 75% on the card. **Match:** a small accounts screen in the PWA fed
+   from `~/.cc-limits/*.json` (ccd already parses them for `_ws_least_loaded`)
+   — cheap, and this fleet is swap-heavy so it pays immediately. The
+   idempotency-key-owned-by-the-client pattern transfers to any retryable
+   PWA mutation.
+6. **Subagent visibility.** Indented child rows with their own
+   working/blocked/waiting state (capped, no PTY of their own). Falls out
+   nearly free once Claude's `SubagentStart/Stop` hooks feed the agent —
+   worth carrying as an explicit line in the hooks import.
+7. **Review-notes on diffs** (annotate the AI's diff, send annotations back
+   as the next prompt). ccrc has PR lifecycle but no annotate-to-prompt
+   loop. Real feature, bigger lift — tier-2, after the hooks work.
+
+Where ccrc's UX already leads, for the record: the reap consent ceremony
+(named children, bytes, clips, sentences — their delete dialog is a checkbox
+with "don't ask again"); the degraded-mode banner + offline snapshot; and
+the PWA itself — they built a protocol kill-switch and block screen because
+store review lags their desktop by 24–48h, while ccrc deploys both halves in
+one push with no third party in the loop.
+
 ## Design lessons (process, not features)
 
 - **`// Why:` as the comment convention** and comments treated as the design
