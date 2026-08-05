@@ -2191,6 +2191,22 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
     crest="${cline#*$'\t'}"
     cbr="${crest%%$'\t'*}"
     chead="${crest#*$'\t'}"
+    # I4 (whole-branch review): a registered child whose directory is simply
+    # gone used to fall through to the `else` arm below and report
+    # `"stray":true` — false, and the opposite of what `stray` means
+    # elsewhere on this sheet (`WsAuditChild`'s own docstring: "an
+    # unregistered checkout ccd did not create"). `$main` DOES still record
+    # this one; there is only nothing left at `$cpath` to read ownership
+    # from, so `_ws_common_dir`/`--show-toplevel` never get a chance to run.
+    # Reported registered (`stray:false`) with the branch/head the porcelain
+    # record itself already gave above, and null for the two measurements
+    # this producer genuinely could not take.
+    if [[ ! -d "$cpath" ]]; then
+      entry="{\"path\":$(_json_str "$cpath"),\"branch\":$( [[ -n "$cbr" ]] && _json_str "$cbr" || echo null),\"headOid\":$( [[ -n "$chead" ]] && _json_str "$chead" || echo null),\"dirty\":null,\"busy\":null,\"stray\":false}"
+      (( first )) || out+=","; first=0
+      out+="$entry"
+      continue
+    fi
     ccommon=$(_ws_common_dir "$cpath") || ccommon=""
     ctop=$(git -C "$cpath" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || ctop=""
     if [[ -n "$ccommon" && "$ccommon" == "$mainreal" && -n "$ctop" && "$ctop" == "$cpath" ]]; then
@@ -2992,11 +3008,24 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       crest="${childline#*$'\t'}"
       cbr="${crest%%$'\t'*}"
       chead="${crest#*$'\t'}"
-      # OWNERSHIP, reproven live — the FIRST rung inside this loop, before
-      # anything else touches `$cpath`, exactly the position Phase B's own
-      # foreign-worktree rung holds for `$workdir` (ccd:2661-2664). `_ws_children`
-      # enumerated this path once, from a `worktree list` snapshot; a lot can
-      # happen to the filesystem between that read and this line.
+      # I4 (whole-branch review): a directory that is simply gone answers the
+      # ownership pair below the SAME "" a foreign clone dropped at this path
+      # or a `.git`-less child would answer — but it is a different fact.
+      # `git worktree list` (the read `$children` came from) still names this
+      # path; nothing has told git the checkout itself is gone. Checked
+      # first, before either read below even has a directory to open, so the
+      # refusal names what actually happened — a stale registration, prune
+      # it — instead of the blanket "not $main's worktree any more" the
+      # ownership pair would otherwise report for a fact it cannot see.
+      [[ -d "$cpath" ]] \
+        || { _reap_refuse child-record-stale "git still records a worktree at $cpath but nothing is there — run: git -C $main worktree prune, then re-audit"; return 1; }
+      # OWNERSHIP, reproven live — right after the `-d` check above, before
+      # anything else touches `$cpath`, exactly the position `_ws_reap_eval`'s
+      # own foreign-worktree rung (Phase B's `$workdir`/`$main` common-dir
+      # comparison, above this per-child descent) holds for `$workdir`.
+      # `_ws_children` enumerated this path once, from a `worktree list`
+      # snapshot; a lot can happen to the filesystem between that read and
+      # this line.
       #
       # TWO checks, AND-combined, because fix round 1 measured that neither
       # alone proves ownership. `_ws_common_dir "$cpath" == $mainreal` catches
@@ -3037,7 +3066,12 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       local cahead; cahead=$(git -C "$cpath" rev-list --count "$cbase..HEAD" 2>/dev/null) \
         || { _reap_refuse child-unpushed "could not compare $cpath against $cbase"; return 1; }
       (( cahead == 0 )) || { _reap_refuse child-unpushed "$cahead commit(s) in $cpath unreachable from $cbase"; return 1; }
-      local holders; holders=$(git -C "$main" worktree list --porcelain 2>/dev/null | grep -c "^branch refs/heads/$cbr\$" || true)
+      # `-cxF`, not a `^…\$`-anchored BRE — `$cbr` is a branch name interpolated
+      # straight into the pattern, and a BRE gives `.`, `*`, `[`, `\` inside it
+      # special meaning; the fixed-string idiom already at `_ws_reap_tail`'s own
+      # "STILL REGISTERED?" rung (`grep -qxF "worktree $ccpath"`) is what closes
+      # that for a path, and the same fix applies here for a branch.
+      local holders; holders=$(git -C "$main" worktree list --porcelain 2>/dev/null | grep -cxF "branch refs/heads/$cbr" || true)
       (( holders == 1 )) || { _reap_refuse child-branch-elsewhere "branch $cbr is checked out in $holders worktrees"; return 1; }
       REAP_CHILDLINES+="$cpath"$'\t'"$cbr"$'\t'"$chead"$'\t'"$cdirty"$'\n'
     done <<< "$children"$'\n'
@@ -4779,8 +4813,14 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       local cbrexists=0
       if git -C "$main" rev-parse --verify --quiet "refs/heads/$ccbr" >/dev/null 2>&1; then
         cbrexists=1
+        # I6 (whole-branch review): this PROBES, it does not act — `git
+        # worktree remove` is not called on this branch, so a refusal here
+        # reusing `worktree-remove-failed`'s wire token (whose sentence says
+        # "git refused to remove the worktree") would be describing a
+        # command that never ran. `child-branch-unmerged-locally` is its own
+        # token; the detail text is unchanged.
         if ! git -C "$main" merge-base --is-ancestor "$cchead" HEAD 2>/dev/null; then
-          printf '{"refused":"worktree-remove-failed","detail":%s,"paths":[]}\n' \
+          printf '{"refused":"child-branch-unmerged-locally","detail":%s,"paths":[]}\n' \
             "$(_json_str "$ccpath ($ccbr, $cchead) is not reachable from $main's current HEAD — origin has moved ahead of $main locally; pull $main (git -C $main pull) and retry")"
           return 0
         fi

@@ -274,8 +274,12 @@ button.metachip:active {
 .reap-ignored { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
 /* D4: nested checkouts, named — same look as `.reap-sensitive` (mono, xs,
    no bullets) since both are a plain list of paths, but ink-secondary rather
-   than the danger color: a nested checkout is information, not a threat. */
-.reap-children { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
+   than the danger color: a nested checkout is information, not a threat.
+   `.reap-children` is the wrapper (I1: an intro line sits above the list,
+   naming what happens to these checkouts), `.reap-children-list` carries the
+   look the plain `<ul>` used to carry alone. */
+.reap-children { display: grid; gap: var(--sp-1); }
+.reap-children-list { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
 .reap-child { word-break: break-word; }
 .reap-go { min-height: var(--tap-min); }
 

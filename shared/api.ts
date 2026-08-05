@@ -488,7 +488,21 @@ export interface WsTombstone {
    *  on the resume path, would strand a workspace half-deleted rather than
    *  finish it with a truthful record. */
   clips: { name: string; bytes: number | null }[] | null;
-  transcript: string; attic: string[]; reflog: string; reapedAt: number;
+  transcript: string; attic: string[]; reflog: string;
+  /** The children consented to at reap time (D2's per-child ladder), one RAW
+   *  line per entry — `path<TAB>branch<TAB>head<TAB>dirty`, exactly the text
+   *  `_ws_reap_eval` built into `REAP_CHILDLINES` and the teardown loop tears
+   *  down in that same innermost-first order. `[]` is a MEASUREMENT (a
+   *  workspace with no registered children), never absent or `null`: this
+   *  document is written only on the fresh reap path, after Phase A/D2 has
+   *  already run, so there is no unmeasured case to represent here — same
+   *  discipline as `ignored`/`attic` two fields up, one rung earlier than
+   *  `clips`'s own nullability. `_ws_tomb_children` (ccd) is the one reader,
+   *  on a resume: it splits each line back into its four fields to rebuild
+   *  the teardown loop's own consented set from disk rather than trust
+   *  `REAP_CHILDLINES`, which a killed process never leaves behind. */
+  children: string[];
+  reapedAt: number;
 }
 
 /* ---------------------------------------------------------------------------

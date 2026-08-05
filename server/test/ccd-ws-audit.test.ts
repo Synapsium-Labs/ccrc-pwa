@@ -2302,6 +2302,38 @@ describe('the per-child ladder in the reap eval (D2)', () => {
     expect(fs.existsSync(child), 'the .git-less child directory itself survives the refusal').toBe(true);
   }, 30000);
 
+  it('a registered child whose directory is entirely gone refuses child-record-stale, and the manifest still names it registered', () => {
+    // I4 (whole-branch review): the sibling of "a registered child whose
+    // .git was deleted" above, one rung earlier. THAT fixture leaves a
+    // directory behind for the ownership pair to read (and misread, without
+    // `--show-toplevel`); this one leaves nothing at `$cpath` at all, so
+    // `_ws_common_dir`/`--show-toplevel` never get a chance to answer
+    // anything. `git worktree list` still names the path — nothing has told
+    // git the checkout is gone — so this is a stale REGISTRATION, not a live
+    // checkout ccd does not own, and it earns its own token and remedy
+    // rather than borrowing `nested-checkouts-present`'s "move or finish
+    // them" (there is nothing left to move or finish).
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-vanished', 'cv');
+    fs.rmSync(child, { recursive: true, force: true });
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-record-stale');
+    expect(a.detail).toContain('agent-vanished');
+    expect(a.detail).toMatch(/worktree prune/);
+
+    // `_ws_child_manifest`'s own independent walk (D4) reports the SAME
+    // entry as REGISTERED — `stray:false` — because `main` really does
+    // still record it; only the two measurements it could not take (there
+    // is nothing left to read `dirty`/`busy` from) are null.
+    const reg = a.children.find((c: any) => c.path.includes('agent-vanished'));
+    expect(reg, 'the stale registration is named, not dropped').toBeDefined();
+    expect(reg.branch).toBe('cv');
+    expect(reg.headOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(reg.dirty).toBeNull();
+    expect(reg.busy).toBeNull();
+    expect(reg.stray).toBe(false);
+  }, 30000);
+
   it('a child whose branch is ALSO checked out elsewhere refuses child-branch-elsewhere', () => {
     const { wt, main } = squashMovedBase(['.claude/']);
     const child = addChild(main, wt, 'agent-b2', 'ca');

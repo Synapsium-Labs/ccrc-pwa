@@ -379,6 +379,42 @@ describe('nested children (D4)', () => {
     expect(screen.getByText(/3 entries, 420 MB/)).toBeInTheDocument();
   });
 
+  // `childLine`'s `busy !== null` branch — every other fixture in this file
+  // leaves `busy: null`, so nothing had ever rendered the "mid-<op>" half of
+  // a registered child's line before this closed it.
+  it('renders "mid-<op>" for a child stopped mid-operation', async () => {
+    auditBody = audit({
+      children: [
+        { path: '/w/.claude/worktrees/agent-r', branch: 'cr', headOid: 'a'.repeat(40), dirty: 0, busy: 'rebase', stray: false },
+      ],
+    });
+    open();
+    expect(await screen.findByText(/mid-rebase/)).toBeInTheDocument();
+  });
+
+  // I1 (whole-branch review): the children block used to render with no
+  // label at all, so a reapable workspace never said these checkouts are
+  // going too. Both arms of the intro line, pinned against the SAME child.
+  it('names what happens to the children — removed with the workspace on reapable, informational otherwise', async () => {
+    const oneChild = [
+      { path: '/w/.claude/worktrees/agent-a', branch: 'ca', headOid: 'a'.repeat(40), dirty: 0, busy: null, stray: false },
+    ];
+    auditBody = audit({ children: oneChild });
+    open();
+    expect(await screen.findByText(
+      'These checkouts are removed with the workspace — each branch is deleted with plain -d:',
+    )).toBeInTheDocument();
+    cleanup();
+
+    auditBody = audit({
+      verdict: 'nested-checkouts-present', token: undefined,
+      sentence: 'Checkouts of their own live under this worktree. Move or remove them first — there is no override.',
+      children: oneChild,
+    });
+    open();
+    expect(await screen.findByText('Checkouts of their own live under this workspace:')).toBeInTheDocument();
+  });
+
   it('scopes the cannot-be-recovered sentence when live checkouts sit inside the total', async () => {
     auditBody = audit({
       children: [
@@ -387,7 +423,7 @@ describe('nested children (D4)', () => {
     });
     open();
     expect(await screen.findByText(
-      /These are in no commit and cannot be recovered — except the nested checkouts listed below, which are live repositories\./,
+      /These are in no commit and cannot be recovered — the total includes the nested checkouts listed below, which are live repositories, not disposable output\./,
     )).toBeInTheDocument();
     cleanup();
 

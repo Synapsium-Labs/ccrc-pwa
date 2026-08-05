@@ -43,8 +43,24 @@ export const SENTENCES: Record<string, string> = {
   // these four instead.
   'child-dirty': 'A checkout nested under this workspace has uncommitted work of its own.',
   'child-busy': 'A checkout nested under this workspace is mid-operation — finish or abort it there first.',
-  'child-unpushed': 'A checkout nested under this workspace carries commits that exist nowhere else.',
+  // Whole-branch review, finding I3: the old sentence ("carries commits that
+  // exist nowhere else") is false for the case this rung exists to catch —
+  // the workspace's own squash-merge, where the child's commits are very
+  // much reachable from origin, just not from `$cbase..HEAD` inside the
+  // child itself. The remedy is IN THE SENTENCE, the same rule every other
+  // permanent refusal on this map states for itself: `ReapSheet` renders
+  // `audit.sentence` and never `audit.detail`.
+  'child-unpushed': 'A checkout nested under this workspace carries commits not reachable from origin — often the workspace’s own squash-merged history. Push or finish the child, or remove it: `git -C <project main> worktree remove <child path>`.',
   'child-branch-elsewhere': 'A nested checkout’s branch is also checked out somewhere else — removing it here would strand that other checkout.',
+  // Whole-branch review, finding I4: distinct from the four rungs above.
+  // `_ws_reap_eval`'s ownership pair (`_ws_common_dir` + `--show-toplevel`)
+  // cannot even run when the child's directory is simply gone — `git
+  // worktree list` still names the path, nothing has told git otherwise, so
+  // this is a stale REGISTRATION rather than a live checkout ccd does not
+  // own. `nested-checkouts-present`'s sentence ("Checkouts of their own
+  // live…") would be actively wrong here: there is no checkout to move or
+  // finish, only a record to prune.
+  'child-record-stale': 'git still records a nested worktree whose directory is gone. Run `git worktree prune` in the project checkout, then re-check.',
   'stashes-present': 'This branch has stashed changes, which are in no commit.',
   // A stash read that FAILED, and it gets its own sentence for the same reason
   // `tree-unreadable` does: `git stash list` answers rc 0 with empty output for
@@ -81,6 +97,17 @@ export const SENTENCES: Record<string, string> = {
   'state-changed': 'This workspace changed since the list you were shown — nothing was removed.',
   'in-progress': 'Another cleanup of this workspace is already running.',
   'worktree-remove-failed': 'git refused to remove the worktree. The session is stopped and nothing further was deleted.',
+  // Whole-branch review, finding I6: the teardown loop's merge-base
+  // pre-probe (`git -C $main merge-base --is-ancestor`) never calls
+  // `worktree remove` at all — it is checking, ahead of time, whether
+  // `branch -d` would even succeed, because a child's `cahead==0` at CONSENT
+  // time (proved against `origin/HEAD`) is not the predicate `branch -d`
+  // itself applies (`$main`'s current LOCAL HEAD). Reusing
+  // `worktree-remove-failed`'s sentence here claimed git refused a command
+  // it was never asked to run. The usual cause is the workspace's own
+  // squash-merge landing at origin before `$main`'s local checkout fetched
+  // it, so the remedy is a pull, not a retry.
+  'child-branch-unmerged-locally': 'A nested checkout’s branch is merged at origin but not in the local project checkout — run `git pull` in the project checkout, then re-check.',
   'branch-moved': 'The branch moved while cleaning up — nothing was deleted after the worktree.',
   // Added by Task 7, executing the Task 6 gate's required hardening: a resume
   // whose `reaping` breadcrumb holds a phase ccd never wrote (not one of
