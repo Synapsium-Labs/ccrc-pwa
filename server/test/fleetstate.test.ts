@@ -15,6 +15,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null,
 });
 
 describe('fleetstate', () => {
@@ -55,6 +56,19 @@ describe('fleetstate', () => {
     const snap = await loadSnapshot(cachePath);
     expect(snap?.sessions).toEqual([session('claude-Two')]);
   });
+
+  it('round-trips a populated hookState/askSummary/subagents', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    const populated: FleetSession = {
+      ...session('claude-quiet-basin'),
+      hookState: 'waiting',
+      askSummary: 'Which approach?',
+      subagents: [{ name: 'reviewer', startedAt: 5 }],
+    };
+    await saveSnapshot([populated], cachePath);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s).toEqual(populated);
+  });
 });
 
 /**
@@ -88,7 +102,15 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.archivedAt).toBeNull();
     expect(s?.pr).toBeNull();
     expect(s?.tasks).toBeNull();
-    expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(['pr', 'archivedAt', 'tasks']));
+    // Task 5's own additions: an older-build snapshot predates all three, so
+    // they must degrade to null exactly like pr/archivedAt/tasks above —
+    // never `undefined`, which `Object.keys` would silently omit.
+    expect(s?.hookState).toBeNull();
+    expect(s?.askSummary).toBeNull();
+    expect(s?.subagents).toBeNull();
+    expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(
+      ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents'],
+    ));
     // Not a discard: what the old build did know is still here.
     expect(s?.id).toBe('claude-quiet-basin');
     expect(s?.status).toBe('busy');
@@ -114,6 +136,23 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), pr: { phase: 'teleported', ahead: 2 } }]);
     expect((await loadSnapshot(cachePath))?.sessions[0]?.pr?.phase).toBe('unchecked');
+  });
+
+  it('rejects a hookState token this build does not recognise — no synonym for "unknown" to degrade to', async () => {
+    // Unlike pr.phase, hookState is already nullable, and null already means
+    // something specific ("no fresh hook data"). Landing an unrecognised
+    // token there would claim NOTHING was recorded about a file that in fact
+    // recorded something this build cannot parse — so the whole snapshot is
+    // rejected instead, the same stance revivePr takes for `checks`.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), hookState: 'sleeping' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('rejects a malformed subagents entry rather than laundering it', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), subagents: [{ name: 'reviewer' }] }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
   });
 
   it('returns null for a malformed session rather than laundering it', async () => {

@@ -35,6 +35,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null,
 });
 
 describe('GET /api/fleet/health', () => {
@@ -105,7 +106,14 @@ describe('GET /api/fleet — degraded mode', () => {
     const deps = remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
-    expect(res.json()).toEqual({
+    const body = res.json() as { sessions: FleetSession[]; stale: boolean; downSince: number };
+    // Task 5's own additions predate this cache too — same degrade-to-null as
+    // pr/archivedAt/tasks, and `session('claude-Cached')` below already
+    // expects them null, so this is the explicit form of that same claim.
+    expect(body.sessions[0]?.hookState).toBeNull();
+    expect(body.sessions[0]?.askSummary).toBeNull();
+    expect(body.sessions[0]?.subagents).toBeNull();
+    expect(body).toEqual({
       sessions: [session('claude-Cached')],
       stale: true,
       downSince: 1700000000000,

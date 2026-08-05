@@ -9,6 +9,7 @@ import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
+import { readHookState, type HookState } from './hookstate.js';
 import type { SessionRecord } from './registry.js';
 import type { PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
@@ -70,6 +71,11 @@ export class FleetWatcher {
   private lastTaskSweep = 0;
   /** Last-swept PR state per SESSION id. */
   private prStates = new Map<string, PrState>();
+  /** Last-read hook state per session id (the fifth lane) — rebuilt every
+   *  tick, same cadence as dialog detection: `readHookState` is a single
+   *  local JSON read per session, cheap enough not to need its own slower
+   *  clock the way task/PR sweeps do. */
+  private hookStates = new Map<string, HookState>();
   /** Per-PROJECT backoff after a failed read: one repo failing must not slow
    *  or silence the other seven. */
   private prBackoff = new Map<string, { until: number; step: number }>();
@@ -136,8 +142,16 @@ export class FleetWatcher {
     return new Map(this.prStates);
   }
 
+  /** Last-read hook state — passed into a one-shot fleet assembly (REST +
+   *  initial /ws/fleet push) so an already-waiting hook state shows
+   *  immediately. Same reasoning as currentPending(). */
+  currentHookStates(): Map<string, HookState> {
+    return new Map(this.hookStates);
+  }
+
   async tick(): Promise<void> {
     const pending = await this.detectDialogs(this.primed);
+    await this.sweepHookStates();
     await this.sweepTasks();
     // NEVER awaited: it shells out over the network and `gh` has no
     // --timeout, so awaiting it would stall the dialog detector and the
@@ -152,7 +166,7 @@ export class FleetWatcher {
       // unhandled rejection via start()'s `void this.tick()`.
       void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
     }
-    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates);
+    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
     // Push on a busy→idle finish (a session completed a turn). Skip the priming
     // tick — otherwise a restart notifies for every currently-idle session.
     if (this.primed && this.deps.push) {
@@ -171,6 +185,27 @@ export class FleetWatcher {
     if (json === this.lastJson) return;
     this.lastJson = json;
     this.bus.emit('fleet', sessions);
+  }
+
+  /**
+   * Refresh every session's hook state, every tick — no slower clock of its
+   * own, unlike sweepTasks/sweepPr below: `readHookState` is one local JSON
+   * read per session and already gates its own freshness and identity, so
+   * there is nothing to amortize by sampling it less often. The map is
+   * rebuilt from the registry each tick, same discipline as sweepTasks, so a
+   * de-registered session's state can't linger.
+   */
+  private async sweepHookStates(): Promise<void> {
+    const now = Date.now();
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const next = new Map<string, HookState>();
+    await Promise.all(
+      records.map(async (r) => {
+        const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid, now);
+        if (hs) next.set(r.id, hs);
+      }),
+    );
+    this.hookStates = next;
   }
 
   /**

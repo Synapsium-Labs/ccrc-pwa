@@ -18,7 +18,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workspace: 'quiet-basin', name: null, status: 'dead', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: 1785300123,
-  archivedBytes: 1_200_000_000, ...over,
+  archivedBytes: 1_200_000_000, hookState: null, askSummary: null, subagents: null, ...over,
 });
 
 afterEach(() => {

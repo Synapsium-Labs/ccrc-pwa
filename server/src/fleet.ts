@@ -6,7 +6,33 @@ import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
+import type { HookState } from './hookstate.js';
 import type { FleetSession, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+
+/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
+const ASK_SUMMARY_MAX_LEN = 80;
+
+/**
+ * The fleet card's one-line summary of a `waiting` hook state.
+ *
+ * `null` for anything that isn't an actively-waiting hook state WITH an ask
+ * envelope: a hook can report `waiting` a beat before the ask write lands
+ * (two separate writes, no lock between them), and that gap must read as
+ * "nothing to summarize yet", never as an empty or fabricated line.
+ *
+ * Questions: the FIRST question's `header ?? question` — the header is the
+ * short form a human wrote for exactly this kind of glance; falling back to
+ * the full question keeps every AskUserQuestion summarizable, header or not.
+ * Approval: `` `${tool}: ${summary}` `` — the one pending tool call and its
+ * own one-line description. Both clipped to `ASK_SUMMARY_MAX_LEN`.
+ */
+export function hookAskSummary(hs: HookState | null): string | null {
+  if (hs === null || hs.state !== 'waiting' || hs.ask === null) return null;
+  const text = 'questions' in hs.ask
+    ? (hs.ask.questions[0]?.header ?? hs.ask.questions[0]?.question ?? null)
+    : `${hs.ask.approval.tool}: ${hs.ask.approval.summary}`;
+  return text === null ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
+}
 
 export function idHomeWrapper(id: string): string {
   for (const w of ['claude-corp', 'claude2', 'claude', 'gpt']) if (id.startsWith(`${w}-`)) return w;
@@ -58,6 +84,10 @@ export async function assembleFleet(
    *  a cold start and in every existing test — which is exactly why the
    *  registry fallback below exists. */
   prStates?: Map<string, PrState>,
+  /** Fresh per-session hook state (FleetWatcher's fifth lane), same pattern
+   *  as `pendingDialogs`: absent on a cold start and in every existing test,
+   *  which is exactly why every hook-derived field below defaults to null. */
+  hookStates?: Map<string, HookState>,
 ): Promise<FleetSession[]> {
   const [records, limits] = await Promise.all([readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(records.map(async (r): Promise<FleetSession> => {
@@ -89,11 +119,20 @@ export async function assembleFleet(
     // A running Workflow leaves the orchestrator reporting idle while it waits
     // on subagents — surface it as busy so it doesn't read as finished.
     if (sl?.workflowActive && status === 'idle') status = 'busy';
+    // STATUS IS FROZEN above this line: `hs` informs dialogPending and the
+    // three hook-derived fields below, and MUST NOT feed back into `status` —
+    // that derivation is done the moment this line runs.
+    const hs = hookStates?.get(r.id) ?? null;
     return {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
-      dialogPending: pendingDialogs?.has(r.id) ?? false, version,
+      // Either source can raise the flag: the pane detector sees an
+      // AskUserQuestion/permission menu the hook never gets a write for
+      // (older Claude Code, a hook that failed to install), and the hook sees
+      // a waiting state before any menu ever paints (headless, or between the
+      // hook write and the next pane capture).
+      dialogPending: (pendingDialogs?.has(r.id) ?? false) || hs?.state === 'waiting', version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,
       // The statusline wins: it is a live pane capture and knows about a manual
       // checkout. The registry fills the gap before the first capture lands.
@@ -102,6 +141,9 @@ export async function assembleFleet(
       pr: prStates?.get(r.id) ?? persistedPr(r),
       archivedAt: r.archivedAt,
       archivedBytes: r.archivedBytes,
+      hookState: hs?.state ?? null,
+      askSummary: hookAskSummary(hs),
+      subagents: hs?.subagents ?? null,
     };
   }));
 }

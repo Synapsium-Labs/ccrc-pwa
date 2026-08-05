@@ -31,6 +31,21 @@ export interface FleetSession {
    *  manifest is absent or half-written — never 0, which would argue
    *  against a cleanup that would free gigabytes. */
   archivedBytes: number | null;
+  /** Hook-reported attention state, straight from `~/.cc-sessions/<id>.hookstate.json`
+   *  (see `hookstate.ts`'s `readHookState`). Null means NO FRESH HOOK DATA —
+   *  a hookless session, a stale file the freshness gate rejected, or a
+   *  restarted session whose uuid moved on — never a fourth state. */
+  hookState: 'working' | 'waiting' | 'done' | null;
+  /** One line for the fleet card, derived from a `waiting` hook state's `ask`
+   *  envelope (`fleet.ts`'s `hookAskSummary`). Null unless `hookState` is
+   *  `'waiting'` AND an ask envelope actually landed — a hook can report
+   *  waiting before the ask write completes. */
+  askSummary: string | null;
+  /** Subagents the hook last reported running. Null mirrors `hookState`: no
+   *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
+   *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
+   *  array fields above. */
+  subagents: { name: string; startedAt: number }[] | null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -587,6 +602,13 @@ const reqBool = (o: RawObj, k: string): boolean => {
 // asserts the very thing the check is asking. Cast the CONSTANT, never the input.
 const STATUSES: readonly string[] = ['busy', 'idle', 'dead'];
 const CHECKS: readonly string[] = ['pass', 'fail', 'pending'];
+// Same shape as CHECKS, not PR_PHASES: `hookState` is already nullable and
+// null already has a specific meaning ("no fresh hook data"), so an
+// unrecognised token has nowhere honest to degrade to — landing it on null
+// would claim "nothing was recorded" about a file that in fact recorded
+// something this build cannot parse. Reject the whole snapshot instead, the
+// same stance `checks` takes for the identical reason.
+const HOOK_STATES: readonly string[] = ['working', 'waiting', 'done'];
 // The reason list is NOT restated here (integration finding 7). It was the
 // second of four copies; it is now `isPrReason`, over `PR_REASONS`, which is
 // derived from the union. The comment above about casting the constant rather
@@ -634,6 +656,21 @@ function revivePr(raw: unknown): PrState {
   };
 }
 
+type SubagentEntry = { name: string; startedAt: number };
+const reviveSubagentEntry = (raw: unknown, at: string): SubagentEntry => {
+  const o = asObj(raw, at);
+  return { name: reqStr(o, 'name'), startedAt: reqNum(o, 'startedAt') };
+};
+/** `FleetSession.subagents` — `null` is NO HOOK DATA (same reason `hookState`
+ *  is null), `[]` is MEASURED NONE. Same array-of-objects discipline as
+ *  `optChildArray`/`optClipArray` above. */
+const optSubagents = (o: RawObj, k: string): SubagentEntry[] | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v)) throw new MalformedSnapshot(k);
+  return (v as unknown[]).map((item, i) => reviveSubagentEntry(item, `${k}[${i}]`));
+};
+
 /** One persisted session in today's shape, or null if it cannot be one. */
 export function reviveFleetSession(raw: unknown): FleetSession | null {
   try {
@@ -663,6 +700,15 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
     const prRaw = o['pr'];
     const pr = prRaw === undefined || prRaw === null ? null : revivePr(prRaw);
 
+    // Same shape as `checks` above: absent/null → null (no fresh hook data,
+    // the overwhelmingly common case — most snapshots predate this field
+    // entirely); a recognised token → itself; anything else rejects the
+    // whole snapshot rather than launder an unparseable value into "no data".
+    const hookStateRaw = optStr(o, 'hookState');
+    if (hookStateRaw !== null && !HOOK_STATES.includes(hookStateRaw)) {
+      throw new MalformedSnapshot('hookState');
+    }
+
     return {
       id: reqStr(o, 'id'),
       wrapper: reqStr(o, 'wrapper'),
@@ -684,6 +730,9 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       pr,
       archivedAt: optNum(o, 'archivedAt'),
       archivedBytes: optNum(o, 'archivedBytes'),
+      hookState: hookStateRaw as FleetSession['hookState'],
+      askSummary: optStr(o, 'askSummary'),
+      subagents: optSubagents(o, 'subagents'),
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;
