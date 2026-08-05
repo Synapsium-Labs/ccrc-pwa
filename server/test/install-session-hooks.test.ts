@@ -75,10 +75,13 @@ describe('install-session-hooks', () => {
     expect(stops).toHaveLength(1);
     expect(stops[0].hooks[0].command).not.toContain('/old/place/');
   });
-  it('refuses a home whose settings.json is broken JSON, touching nothing', () => {
+  it('refuses a home whose settings.json is broken JSON, touching nothing — but still processes the other home in the same run', () => {
     fs.writeFileSync(cfg('.claude-personal'), '{broken');
     expect(() => run()).toThrow();
     expect(fs.readFileSync(cfg('.claude-personal'), 'utf8')).toBe('{broken');
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    expect(s.hooks.Stop.some((e: any) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))))
+      .toBe(true);
   });
   it('a home with NO settings.json gets one with only the managed hooks', () => {
     fs.rmSync(cfg('.claude-personal'));
