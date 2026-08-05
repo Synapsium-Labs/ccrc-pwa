@@ -1,4 +1,4 @@
-import type { ReapResult, WsAudit } from '../../shared/api.js';
+import { reviveWsAudit, type ReapResult, type WsAudit } from '../../shared/api.js';
 
 /**
  * Refusal token → the sentence a person reads. ccd's tokens are stable
@@ -113,12 +113,23 @@ export function refusalSentence(token: string): string {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
-/** `ccd ws-audit` stdout → WsAudit, or null when it was not one object. */
+/** `ccd ws-audit` stdout → WsAudit, or null when it was not one object — or
+ *  when it WAS one object but `reviveWsAudit` could not make a `WsAudit` out
+ *  of it (a missing required field, a wrong type, an out-of-vocabulary
+ *  `merge.proof`). Either way the route's existing 502 path is what runs;
+ *  `reviveWsAudit` itself throws rather than returning null so it can share
+ *  `reviveFleetSession`'s literal-return discipline without a second
+ *  null-collapsing convention living inside `shared/api.ts` too. */
 export function parseAudit(stdout: string): WsAudit | null {
   try {
     const v: unknown = JSON.parse(stdout.trim());
     if (!isRecord(v) || typeof v.verdict !== 'string') return null;
-    return { ...(v as unknown as WsAudit), sentence: v.verdict === 'reapable' ? '' : refusalSentence(v.verdict) };
+    const sentence = v.verdict === 'reapable' ? '' : refusalSentence(v.verdict);
+    try {
+      return reviveWsAudit(v, sentence);
+    } catch {
+      return null;
+    }
   } catch {
     return null;
   }

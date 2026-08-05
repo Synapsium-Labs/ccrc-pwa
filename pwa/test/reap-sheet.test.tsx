@@ -19,7 +19,7 @@ const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   worktreeBytes: 1_200_000_000, commitsAheadOfBase: 3,
   pr: { number: 42, url: 'u', mergeCommit: '7a68ca0', headRefOid: 'deadbee' },
   merge: { proof: 'patch-id', fetchedAt: Math.floor(Date.now() / 1000) - 6 * 86_400 },
-  transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'a'.repeat(64), sentence: '', ...over,
+  transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'a'.repeat(64), sentence: '', ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
