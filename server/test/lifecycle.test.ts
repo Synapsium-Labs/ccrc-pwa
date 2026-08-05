@@ -235,6 +235,17 @@ describe('listProjects', () => {
     writeFileSync(path.join(linkedRegistryWorkdir, '.git'), 'gitdir: /elsewhere/.git/worktrees/other\n');
 
     const { app, cfg, home } = await makeApp({ projectsRoot: root });
+    // `makeApp` -> `seedDefault` seeds `ID` at the box's REAL
+    // `/data/projects/MekWarLive`, which every other test can ignore because it
+    // never readdirs that path. This test's whole point is that the union loop
+    // NOW readdirs every registry workdir, so a real path outside the sandbox
+    // would make the result depend on whatever this box's disk happens to hold
+    // at that path rather than on the fixture — repointed at a plain fixture
+    // directory (ordinary, `.git`-less, like case (b)) under the test's own
+    // tmp root instead, via the same `seedSession` shape `seedDefault` uses,
+    // so the expectation holds identically on every box and in CI.
+    const defaultWorkdir = mkTmp('ccrc-mekwarlive-');
+    seedSession(home, ID, { workdir: defaultWorkdir });
     seedSession(home, 'claude-linked', {
       wrapper: 'claude', project: 'linked-registry', workdir: linkedRegistryWorkdir,
       uuid: '4'.repeat(36), started: '1',
@@ -248,7 +259,7 @@ describe('listProjects', () => {
 
     const out = await listProjects(localIO, cfg);
     expect(out.projects).toEqual([
-      { name: 'MekWarLive', workdir: '/data/projects/MekWarLive' },  // default seeded registry session
+      { name: 'MekWarLive', workdir: defaultWorkdir },                // default seeded registry session — fixture, not the box's real path
       { name: 'gone', workdir: path.join(root, 'does-not-exist') },  // missing workdir — stays listed
       { name: 'plain', workdir: path.join(root, 'plain') },
     ]);

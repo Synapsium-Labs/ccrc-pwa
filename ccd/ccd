@@ -1347,9 +1347,9 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
 
   # Truthful in three values, not always "merged": a workspace can be archived
-  # with nothing beyond base to judge at all (`empty`), with real commits
-  # nobody has proven merged (`manual`), or with a PR the gh-verified prphase
-  # machinery has confirmed merged, PR number and all (`merged:#N`).
+  # with a PR the gh-verified prphase machinery has confirmed merged, PR
+  # number and all (`merged:#N`), with nothing beyond base to judge at all
+  # (`empty`), or with real commits nobody has proven merged (`manual`).
   #
   # DEVIATION FROM THE SPEC'S LETTER, KEPT TO ITS GOAL: the spec named
   # `_ws_gc_merged` (an ancestor check) as the decider. Ancestor checks cannot
@@ -1358,27 +1358,41 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # `_ws_gc_merged` would read `manual` for the common case: a new lie
   # replacing the old one. `prphase`, written by `cmd_pr_state` off a real
   # `gh` read, is what actually answers "was this merged", so it decides
-  # instead — the spec's goal (truth) over its letter. A branch with no bound
-  # PR, or a PR whose phase is anything but merged, also lands manual — the
-  # vocabulary is closed at three values.
-  local project; project=$(_reg_get "$id" project)
-  local main="$PROJECTS_ROOT/$project"
+  # instead — the spec's goal (truth) over its letter. `merged:#N` outranks
+  # `empty`: a bound PR whose phase reads merged implies commits existed to
+  # merge, even when a squash or an ancestor-swallowing rebase leaves this
+  # branch's own ahead-count at 0 — losing the PR number there would be a
+  # truth this ladder already had, thrown away. A branch with no bound PR, a
+  # PR whose phase is anything but merged, or a base this run could not
+  # measure ahead against at all, also lands manual — the vocabulary is
+  # closed at three values.
   local pr phase reason ahead base
   pr=$(_reg_get "$id" prnumber)
   phase=$(_reg_get "$id" prphase)
-  _reg_set "$id" archived "$(date +%s)"
-  base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || base=""
+  # Matches _pr_state_one / _ws_reap_eval's own idiom (ccd:2554): the
+  # registry's recorded base, falling back to the symbolic `origin/HEAD` —
+  # not a live `symbolic-ref` read off $main, which asks git a question the
+  # registry has already answered and can disagree with it if $main's remote
+  # HEAD moved after this workspace was created.
+  base=$(_reg_get "$id" base); [[ -n "$base" ]] || base="origin/HEAD"
   ahead=""
   [[ -n "$base" ]] && ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""
-  if [[ "$ahead" == 0 ]]; then reason="empty"
-  elif [[ "$phase" == merged && "$pr" =~ ^[0-9]+$ ]]; then reason="merged:#$pr"
+  # Reason and its git reads are both settled BEFORE the `archived` marker
+  # goes down: a mid-window kill between the two used to leave the marker
+  # written with no reason ever recorded, and the `already archived` early
+  # return above would hand that workspace back forever without repairing
+  # it. Marker and reason are written adjacently, right after, so nothing
+  # else can land between them either.
+  if [[ "$phase" == merged && "$pr" =~ ^[0-9]+$ ]]; then reason="merged:#$pr"
+  elif [[ "$ahead" == 0 ]]; then reason="empty"
   else reason="manual"; fi
+  _reg_set "$id" archived "$(date +%s)"
   _reg_set "$id" archivedreason "$reason"
 
   local note=""
   case "$reason" in
-    empty)    note=" (no commits beyond base)" ;;
     merged:*) note=" (merged in #$pr)" ;;
+    empty)    note=" (no commits beyond base)" ;;
   esac
   echo "archived $id$note — worktree kept at $workdir, nothing deleted"
 }

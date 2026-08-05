@@ -568,16 +568,22 @@ describe('ws-archive', () => {
     expect(shFail(`${BUSY} cmd_ws_archive --session demo-quiet-basin`).stderr).toMatch(/session-busy/);
   });
 
-  it('names the PR in archivedreason AND in what it prints', () => {
+  it('names the PR in archivedreason AND in what it prints — merged outranks empty even with nothing ahead', () => {
     // Naming the PR now requires the gh-verified prphase to say `merged`,
     // not just a bound number — `cmd_pr_state` is what writes prphase off a
     // real `gh` read, and this fixture sets the registry fields it would
-    // have left exactly as that command leaves them. A real commit is still
-    // required: with none, the empty-branch check ahead of this one would
-    // claim the row first.
-    const wt = workspace('demo', 'quiet-basin');
-    fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
-    h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
+    // have left exactly as that command leaves them.
+    //
+    // NO commit here, deliberately — pinning the ladder's new precedence
+    // rather than working around it. Before the reorder this fixture had to
+    // commit real work first or the empty-branch check ahead of the
+    // merged/prphase check would claim the row; now `merged:#N` outranks
+    // `empty` (a bound PR whose phase reads merged implies commits existed to
+    // merge, even when this branch's own ahead-count reads 0 — exactly what a
+    // squash or an ancestor-swallowing rebase looks like from here), so an
+    // untouched workspace with a merged, bound PR still reads `merged:#42`,
+    // not `empty`.
+    workspace('demo', 'quiet-basin');
     h.sh('_reg_set demo-quiet-basin prnumber 42; _reg_set demo-quiet-basin prphase merged');
     const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('merged:#42');
@@ -601,11 +607,12 @@ describe('ws-archive', () => {
   });
 
   it('records empty for a workspace with no commits beyond base', () => {
-    // The precedence that matters: an untouched workspace never had anything
-    // to judge as merged or manual, so `empty` wins before the PR/prphase
-    // check is even consulted — pinned separately from the two cases above,
-    // which both require a real commit to reach their own branch of the
-    // ladder.
+    // The merged/prphase check runs FIRST in the ladder now (see the reorder
+    // above), but an untouched workspace with no bound, merged PR never
+    // matches it, so `empty` is still what an ordinary unmerged, unbound
+    // workspace records — distinct from the precedence pin two tests up
+    // (merged outranking empty when BOTH would otherwise apply), which this
+    // fixture does not exercise: nothing here is bound to a PR at all.
     workspace('demo', 'quiet-basin');
     const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('empty');
@@ -641,22 +648,52 @@ describe('ws-archive', () => {
     expect(out).not.toContain('merged in #');
   });
 
+  /** A REAL squash merge, not merely a same-lineage one with a bound PR number
+   *  slapped on top: main gains an unrelated commit after the branch is cut,
+   *  then the branch's commit lands on main as ONE squashed commit sharing no
+   *  lineage with the branch it replaces — the shape an ancestor check can
+   *  never prove and the whole reason `prphase` decides `merged:#N` instead of
+   *  `_ws_gc_merged`. Copied from `squashMovedBase` (ccd-ws-audit.test.ts:40)
+   *  / `ready` (ccd-ws-reap.test.ts:16-42), trimmed to this file's plain
+   *  `workspace()` fixture rather than PrHarness's gh-shaped repo: neither
+   *  `_ws_gc_merged` nor `_ws_archive_manifest` ever calls `gh`, so no gh stub
+   *  is needed here — only a real second push, the part the old fixture never
+   *  built at all. */
+  function squashMerged(): string {
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
+    h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
+    // main moves underneath, THEN the squash lands on top of that.
+    fs.writeFileSync(path.join(main, 'other.txt'), 'someone else\n');
+    h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'unrelated');
+    fs.writeFileSync(path.join(main, 'work.txt'), 'the work\n');
+    h.git(main, 'add', 'work.txt'); h.git(main, 'commit', '-m', 'squash of the work (#42)');
+    h.git(main, 'push', 'origin', 'main');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    return wt;
+  }
+
   it('re-pins merged:#N for a genuine squash merge — the case _ws_gc_merged cannot see', () => {
     // The whole reason for the deviation from the spec: a squash merge's
     // commit on main shares no lineage with the branch it replaces, so an
-    // ancestor check can never prove it — asserted directly below, against
-    // this exact fixture, with the SAME `_ws_gc_merged` the spec originally
-    // named. prphase, written from a real `gh` read, is what still gets
-    // this right.
-    const wt = workspace('demo', 'quiet-basin');
-    fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
-    h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
-    expect(shFail(`_ws_gc_merged "$HOME/projects/demo" ws/quiet-basin`).code,
-      'a same-lineage merge would defeat the point of this fixture').not.toBe(0);
+    // ancestor check can never prove it — asserted directly below, against a
+    // REAL squash (built by `squashMerged` above; the old form of this test
+    // built no squash at all, only a bound PR number over an unmerged
+    // branch), with the SAME `_ws_gc_merged` the spec originally named. The
+    // exit code alone cannot prove the point: `_ws_gc_merged` returns the
+    // same nonzero code whether it proved "not an ancestor" or merely found no
+    // `origin/HEAD` to compare against, so only `$GC_MERGED_STATE` tells a
+    // real squash apart from an accidentally-unprovable fixture — pinned as
+    // `unmerged`, not `unprovable`. prphase, written from a real `gh` read, is
+    // what still gets `merged:#N` right underneath it.
+    squashMerged();
+    expect(h.sh(`_ws_gc_merged "$HOME/projects/demo" ws/quiet-basin; echo $GC_MERGED_STATE`))
+      .toBe('unmerged');
     h.sh('_reg_set demo-quiet-basin prnumber 42; _reg_set demo-quiet-basin prphase merged');
     h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('merged:#42');
-  });
+  }, 30000);
 
   it('refuses when the registry has no workdir to describe', () => {
     // Distinct diagnosis, and the only rung that can give it: with the field
