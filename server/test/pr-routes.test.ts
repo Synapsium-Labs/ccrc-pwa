@@ -302,7 +302,7 @@ describe('audit and reap', () => {
     ignoredCount: 1, ignoredBytes: 412000000, sensitive: [], sensitiveFiltered: 0, clips: [], stashes: 0,
     worktreeBytes: 1200000000, commitsAheadOfBase: 3,
     pr: { number: 42, url: 'u', mergeCommit: '7a68ca0', headRefOid: 'deadbee' },
-    merge: { proof: 'patch-id', fetchedAt: 1785300000 }, transcript: '/t.jsonl',
+    merge: { proof: 'patch-id', fetchedAt: 1785300000 }, transcript: '/t.jsonl', children: [],
     verdict: 'reapable', detail: '', token: 'a'.repeat(64),
   });
 

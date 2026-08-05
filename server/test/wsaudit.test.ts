@@ -129,20 +129,72 @@ describe('refusalSentence', () => {
 });
 
 describe('parseAudit', () => {
+  // ONE canonical full-shape fixture, reused by every test below that needs a
+  // valid audit. `reviveWsAudit` is a strict revive now (Task 10): a minimal
+  // `{verdict:'x'}`-shaped object, which the pre-revive tests here used to
+  // feed, is malformed by the full-shape contract and now returns null —
+  // exactly the behaviour these tests exist to pin, not a regression to
+  // paper over with a looser fixture.
+  const FULL_AUDIT_INPUT = {
+    id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w',
+    project: 'demo', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+    dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
+    clips: [], stashes: 0, worktreeBytes: 1200000000, commitsAheadOfBase: 3,
+    pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
+    merge: { proof: null, fetchedAt: null },
+    transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'a'.repeat(64),
+  };
+
   it('returns null for stdout that is not one JSON object (die\'s bare stderr, truncation, …)', () => {
     expect(parseAudit('ccd: bad session id')).toBeNull();
     expect(parseAudit('')).toBeNull();
     expect(parseAudit('[1,2,3]')).toBeNull();
   });
 
+  it('returns null for a JSON object that has a verdict but is otherwise malformed — a minimal {verdict} is not a WsAudit', () => {
+    // Pre-revive, `parseAudit` blindly spread this through and the missing
+    // fields simply read as `undefined` on the wire. Post-revive, `id`,
+    // `branch`, `pr`, `merge`, etc. are all required, so this is exactly the
+    // "one bad session rejects the whole thing" rule `reviveFleetSession`
+    // already applies, now applied here too.
+    expect(parseAudit(JSON.stringify({ verdict: 'reapable', detail: '', token: 'a'.repeat(64) }))).toBeNull();
+  });
+
   it('gives the reapable verdict an EMPTY sentence — it is not a refusal', () => {
-    const audit = parseAudit(JSON.stringify({ verdict: 'reapable', detail: '', token: 'a'.repeat(64) }));
+    const audit = parseAudit(JSON.stringify(FULL_AUDIT_INPUT));
     expect(audit?.sentence).toBe('');
   });
 
   it('gives every non-reapable verdict a sentence, reap-interrupted included', () => {
-    const audit = parseAudit(JSON.stringify({ verdict: 'reap-interrupted', detail: 'x' }));
+    const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, verdict: 'reap-interrupted', detail: 'x' }));
     expect(audit?.sentence).toMatch(/stopped part-way/i);
+  });
+
+  it('malformed children (a string, not an array or null) makes the whole audit unrevivable → null', () => {
+    const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, children: 'nope' }));
+    expect(audit).toBeNull();
+  });
+
+  it('children round-trips — a registered entry and a stray entry with all-null fields preserved', () => {
+    const children = [
+      { path: '/w/.claude/worktrees/agent-a', branch: 'ca', headOid: 'a'.repeat(40), dirty: 1, busy: null, stray: false },
+      { path: '/w/.claude/worktrees/stray-x', branch: null, headOid: null, dirty: null, busy: null, stray: true },
+    ];
+    const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, children }));
+    expect(audit?.children).toEqual(children);
+  });
+
+  it('an unknown field ccd might emit is DROPPED from the result — revive discipline, not a passthrough', () => {
+    const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, futureField: 'a surprise from a newer ccd' }));
+    expect(audit).not.toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(audit as object, 'futureField')).toBe(false);
+  });
+
+  it('children: null and children: [] both survive revive distinctly', () => {
+    const withNull = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, children: null }));
+    const withEmpty = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, children: [] }));
+    expect(withNull?.children).toBeNull();
+    expect(withEmpty?.children).toEqual([]);
   });
 });
 

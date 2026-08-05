@@ -259,7 +259,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
           merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },
-          transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
+          transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
         }), { status: 200, headers: { 'content-type': 'application/json' } });
       }
       return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -312,7 +312,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
           merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },
-          transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
+          transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
         }), { status: 200, headers: { 'content-type': 'application/json' } });
       }
       if (String(url).includes('/workspace/reap')) {

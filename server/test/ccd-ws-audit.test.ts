@@ -1833,7 +1833,7 @@ describe('the dispatcher', () => {
 });
 
 describe('the manifest', () => {
-  it('fingerprints thirteen DISTINCT facts, and nothing else', () => {
+  it('fingerprints fourteen DISTINCT facts, and nothing else', () => {
     // The token is what `ws-reap --expect` re-proves against at the instant of
     // deletion, so every field has to be in it and no two fields may be
     // interchangeable. Moving one fact at a time through the helper is the only
@@ -1842,13 +1842,16 @@ describe('the manifest', () => {
     //
     // The thirteenth is `clipsDigest`: `~/.cc-clips/<id>` is `rm -rf`'d by the
     // reap, so a clip pasted between the sheet and the tap is deleted — and
-    // until it was fingerprinted the token did not move when one was.
+    // until it was fingerprinted the token did not move when one was. The
+    // fourteenth is `childrenDigest` (D3): a registered child spawned after
+    // the sheet rendered is a set the human never saw, and until it was
+    // fingerprinted the token did not move when one was added either.
     const facts = ['id', 'branch', 'tip', 'head', 'merge', 'proof',
-      '0', 'igndigest', 'sensdigest', '0', 'wthead', 'baseoid', 'clipsdigest'];
+      '0', 'igndigest', 'sensdigest', '0', 'wthead', 'baseoid', 'clipsdigest', 'childdigest'];
     const call = (a: string[]): string => h.sh(`_ws_fingerprint ${a.map((x) => `'${x}'`).join(' ')}`);
     const first = call(facts);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
-    expect(call(facts), 'same thirteen facts, same token').toBe(first);
+    expect(call(facts), 'same fourteen facts, same token').toBe(first);
     const seen = new Map<string, number>([[first, -1]]);
     facts.forEach((_v, i) => {
       const moved = [...facts];
@@ -1863,8 +1866,8 @@ describe('the manifest', () => {
   it('the token IS the fingerprint of the facts it reports', () => {
     // `changes the token when ANY fingerprinted fact moves` can only move the
     // ONE fact a fixture can move without changing the verdict, and
-    // `fingerprints twelve DISTINCT facts` exercises the helper in isolation.
-    // Neither says the verb feeds it the right twelve. Measured as five
+    // `fingerprints fourteen DISTINCT facts` exercises the helper in isolation.
+    // Neither says the verb feeds it the right fourteen. Measured as five
     // mutation survivors: the proof argument, `baseOid`, the sensitive digest
     // and its `sort`, and `headRefOid` — every one of them could be replaced
     // by a constant with the whole file still green, because nothing ever
@@ -1890,14 +1893,69 @@ describe('the manifest', () => {
     // reaches a token, because a non-empty set is `sensitive-ignored` and
     // refuses — which is why its `sort` cannot be pinned behaviourally.
     const sensdigest = h.sh(`printf '%s\\n' "" | sort | sha256sum | cut -d' ' -f1`);
+    // No registered children under `<wt>/.claude/worktrees/` for this fixture,
+    // so `REAP_CHILDLINES` never accumulates a line and the digest is the
+    // digest of the empty string exactly as ccd computes it
+    // (`printf '%s' "$REAP_CHILDLINES"` with `REAP_CHILDLINES` empty stays
+    // empty — no trailing newline to strip, unlike `clipsdigest` above).
+    const childdigest = h.sh(`printf '%s' "" | sha256sum | cut -d' ' -f1`);
     const args = ['demo-quiet-basin', 'ws/quiet-basin', tip, tip, merge, 'patch-id',
-      '0', igndigest, sensdigest, '0', 'ws/quiet-basin', baseOid, clipsdigest];
+      '0', igndigest, sensdigest, '0', 'ws/quiet-basin', baseOid, clipsdigest, childdigest];
     expect(a.token).toBe(h.sh(`_ws_fingerprint ${args.map((x) => `'${x}'`).join(' ')}`));
     // and the wire says the same things the token was built from.
     expect(a.pr.headRefOid).toBe(tip);
     expect(a.pr.mergeCommit).toBe(merge);
     expect(a.merge.proof).toBe('patch-id');
   });
+
+  it('the token moves when the child set changes after the sheet rendered (D3 TOCTOU)', () => {
+    // squashMovedBase-style reapable parent with `.claude/` ignored — exactly
+    // the `the per-child ladder in the reap eval (D2)` describe's fixture.
+    //
+    // The child is created ONCE, before EITHER audit, and deliberately not
+    // between them. Measured directly (raw git, before writing this fixture):
+    // spawning a brand-new child under a gitignored directory ALSO moves
+    // `ignoredDigest` (fact 8) — `git worktree add` grows `du -sb` on that
+    // directory's bytes, whether by making a previously-absent `.claude/`
+    // newly appear as an ignored entry or by growing an existing one — so a
+    // before/after pair straddling the ADD would not isolate what actually
+    // moved the token; it would pass even without `childrenDigest` wired in,
+    // for a reason this test does not claim to be about.
+    //
+    // What moves ONLY `REAP_CHILDLINES` — and so only `childrenDigest` — is
+    // renaming the child's branch AT THE SAME COMMIT. `git branch -m` on a
+    // linked worktree's checked-out branch updates the ref (which lives in
+    // `$main`'s `.git`, not under `.claude/`) without touching a single
+    // checked-out byte, so `du -sb .claude` and `git status
+    // --ignored=matching`'s single `!! .claude/` line are unchanged — verified
+    // directly (67 bytes, identical entry, before and after the rename) before
+    // this fixture was written this way.
+    const { wt: parentWt, main } = squashMovedBase(['.claude/']);
+    fs.mkdirSync(path.join(parentWt, '.claude', 'worktrees'), { recursive: true });
+    const childDir = path.join(parentWt, '.claude', 'worktrees', 'agent-x');
+    h.git(main, 'worktree', 'add', childDir, '-b', 'cx');
+    const before = audit();
+    expect(before.verdict).toBe('reapable');
+    h.git(childDir, 'branch', '-m', 'cx', 'cx2');
+    const after = audit();
+    // The renamed branch is still 0 commits ahead of `origin/HEAD`, clean and
+    // attached — nothing else in the ladder has a reason to refuse it. A
+    // verdict that flipped to a refusal here would be testing the wrong
+    // thing: D3 exists for the healthy case, the one no other rung catches.
+    expect(after.verdict, 'the point is a passing child, not a refusing one').toBe('reapable');
+    expect(after.token, 'consent must move when the child set changes, even though nothing else did')
+      .not.toBe(before.token);
+    // Reap with the OLD token: the sheet it was read from no longer describes
+    // the world, and D2's `state-changed` check is what refuses rather than
+    // deleting the parent out from under the renamed child.
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${before.token} --session demo-quiet-basin`);
+    expect(r.code, `a refusal is an ANSWER — exit 0 with JSON on stdout. stderr: ${r.stderr}`).toBe(0);
+    const o = JSON.parse(r.stdout);
+    expect(o.refused).toBe('state-changed');
+    expect(o.reaped, 'a refusal must never also report a reap').toBeUndefined();
+    expect(fs.existsSync(parentWt), 'a refusal must never remove the parent worktree').toBe(true);
+    expect(fs.existsSync(childDir), 'the renamed child survives the refused reap').toBe(true);
+  }, 30000);
 
   it('carries the transcript path, the stash count and the worktree size', () => {
     squashMovedBase();
@@ -2061,5 +2119,325 @@ describe('the nested-checkout walk (D1)', () => {
     const r = h.run(`_ws_nested_checkouts "${missing}" || { echo "WHY=$_WS_NESTED_WHY"; exit 3; }`);
     expect(r.code).toBe(3);
     expect(r.stdout).toMatch(/WHY=.+/);
+  }, 30000);
+});
+
+describe('registered-child enumeration (D2)', () => {
+  const addChild = (main: string, wt: string, leaf: string, branch: string): string => {
+    const dir = path.join(wt, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+
+  it('lists only worktrees strictly inside the parent, tab-separated, sorted', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    addChild(main, wt, 'agent-a', 'ca');
+    const out = h.sh(`_ws_children "${main}" "${wt}"`);
+    const rows = out.split('\n').map((l) => l.split('\t'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]![0]).toContain('agent-a');
+    expect(rows[0]![1]).toBe('ca');
+    expect(rows[0]![2]).toMatch(/^[0-9a-f]{40}$/);
+  }, 30000);
+
+  it('containment is computed on RESOLVED paths — a symlinked parent still owns its children', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    addChild(main, wt, 'agent-s', 'cs');
+    const link = path.join(h.home, 'link-to-wt');
+    fs.symlinkSync(wt, link);
+    expect(h.sh(`_ws_children "${main}" "${link}"`)).toContain('agent-s');
+  }, 30000);
+
+  it('a sibling worktree outside the parent is NOT a child', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    h.git(main, 'worktree', 'add', path.join(h.home, 'elsewhere'), '-b', 'sib');
+    expect(h.sh(`_ws_children "${main}" "${wt}" | grep -c . || true`)).toBe('0');
+  }, 30000);
+
+  it('a sibling sharing the parent\'s string prefix without the slash is NOT a child', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    h.git(main, 'worktree', 'add', `${wt}-two`, '-b', 'prefix-collision');
+    expect(h.sh(`_ws_children "${main}" "${wt}" | grep -c . || true`)).toBe('0');
+  }, 30000);
+
+  it('a detached child is listed with an empty branch field', () => {
+    const { wt } = squashMovedBase();
+    const main = path.join(h.home, 'projects', 'demo');
+    const dir = path.join(wt, '.claude', 'worktrees', 'agent-d');
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', '--detach', dir);
+    const out = h.sh(`_ws_children "${main}" "${wt}"`);
+    const rows = out.split('\n').map((l) => l.split('\t'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]![1]).toBe('');
+  }, 30000);
+});
+
+/**
+ * The per-child ladder in `_ws_reap_eval` (D2), which narrows Task 3's blanket
+ * `nested-checkouts-present` rung to STRAY checkouts only — a checkout `$main`
+ * itself has a worktree record for now walks the four rungs below instead.
+ *
+ * Every fixture here builds on `squashMovedBase(['.claude/'])`: the parent
+ * must stay clean+reapable around a child living at
+ * `<wt>/.claude/worktrees/<leaf>`, and `squashMovedBase`'s own `ignore`
+ * parameter is what `ready(['.claude/'])` uses for exactly this in
+ * `ccd-ws-reap.test.ts` — writing `.gitignore` into both the branch's commits
+ * and main's squash of them, so the parent's `git status` never sees
+ * `.claude/` and the patch-id proof still matches. No separate
+ * `.git/info/exclude` write is needed; the fixture's existing mechanism
+ * already covers it.
+ *
+ * `addChild` is re-declared locally rather than imported from the
+ * `registered-child enumeration (D2)` describe above — the two are separate
+ * closures and this keeps this suite's fixtures self-contained.
+ */
+describe('the per-child ladder in the reap eval (D2)', () => {
+  const addChild = (main: string, wt: string, leaf: string, branch: string): string => {
+    const dir = path.join(wt, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+
+  it('a DIRTY child refuses the parent, naming the child', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-a', 'ca');
+    fs.writeFileSync(path.join(child, 'scratch.txt'), 'uncommitted\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-dirty');
+    expect(a.detail).toContain('agent-a');
+    expect(fs.existsSync(child), 'the dirty child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a child mid-rebase refuses child-busy with the op in the detail', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-r', 'cr');
+    // A second worktree, OUTSIDE the parent (so it is not itself scanned as a
+    // nested checkout), that also touches f1.txt from the same base — the
+    // rebase target the child's own commit will conflict against.
+    const other = path.join(h.home, 'other-base-wt');
+    h.git(main, 'worktree', 'add', other, '-b', 'other-base');
+    fs.writeFileSync(path.join(other, 'f1.txt'), 'other change\n');
+    h.git(other, 'add', 'f1.txt'); h.git(other, 'commit', '-m', 'other change');
+    fs.writeFileSync(path.join(child, 'f1.txt'), 'child change\n');
+    h.git(child, 'add', 'f1.txt'); h.git(child, 'commit', '-m', 'child change');
+    // Expected to stop on a conflict — the point of the fixture — so the
+    // throw from a non-zero exit is swallowed rather than propagated.
+    try { h.git(child, 'rebase', 'other-base'); } catch { /* stopped mid-rebase, as intended */ }
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-busy');
+    expect(a.detail).toMatch(/rebase/);
+    expect(fs.existsSync(child), 'the mid-rebase child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a child with commits unreachable from origin/HEAD refuses child-unpushed', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-u', 'cu');
+    fs.writeFileSync(path.join(child, 'extra.txt'), 'extra\n');
+    h.git(child, 'add', 'extra.txt'); h.git(child, 'commit', '-m', 'unpushed work');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-unpushed');
+    expect(a.detail).toContain('agent-u');
+    expect(fs.existsSync(child), 'the unpushed child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a detached child refuses child-busy with "detached HEAD" in the detail', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = path.join(wt, '.claude', 'worktrees', 'agent-d');
+    fs.mkdirSync(path.dirname(child), { recursive: true });
+    h.git(main, 'worktree', 'add', '--detach', child);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-busy');
+    expect(a.detail).toMatch(/detached HEAD/);
+    expect(fs.existsSync(child), 'the detached child survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a clean, merged, attached child PASSES — the parent stays reapable', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    // Zero commits ahead of origin/HEAD is what the unpushed rung actually
+    // asks — a fresh branch cut from the parent's own current (already
+    // pushed) tip and never committed to satisfies it without a second
+    // squash-merge dance for the child.
+    const child = addChild(main, wt, 'agent-p', 'cp');
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.existsSync(wt), 'the parent worktree survives a read-only audit').toBe(true);
+    expect(fs.existsSync(child), 'the clean child survives a read-only audit').toBe(true);
+  }, 30000);
+
+  it('a stray repo beside a registered child still refuses nested-checkouts-present', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-ok', 'cok');
+    const stray = path.join(wt, '.claude', 'worktrees', 'stray-x');
+    fs.mkdirSync(stray, { recursive: true });
+    execFileSync('git', ['init', '-q', stray]);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(a.detail).toContain('stray-x');
+    expect(fs.existsSync(child), 'the registered child survives').toBe(true);
+    expect(fs.existsSync(stray), 'the stray survives a read-only audit').toBe(true);
+  }, 30000);
+
+  it('a registered child whose .git was deleted refuses nested-checkouts-present, never reapable', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-gone', 'cg');
+    // Fix round 1, finding 1: with `$cpath/.git` gone, git's upward discovery
+    // from `$cpath` walks past the empty spot and finds `$wt`'s OWN `.git`
+    // (a child always lives nested inside its parent's working tree), so a
+    // common-dir-only ownership check would misread this as healthy — both
+    // `$cpath` and `$wt` answer the SAME common dir, $mainreal. Only
+    // `--show-toplevel` tells them apart (an intact child answers itself;
+    // this answers `$wt`), which is why the ownership rung checks both.
+    fs.rmSync(path.join(child, '.git'), { recursive: true, force: true });
+    const a = refusal(wt);
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(a.detail).toContain('agent-gone');
+    expect(fs.existsSync(child), 'the .git-less child directory itself survives the refusal').toBe(true);
+  }, 30000);
+
+  it('a registered child whose directory is entirely gone refuses child-record-stale, and the manifest still names it registered', () => {
+    // I4 (whole-branch review): the sibling of "a registered child whose
+    // .git was deleted" above, one rung earlier. THAT fixture leaves a
+    // directory behind for the ownership pair to read (and misread, without
+    // `--show-toplevel`); this one leaves nothing at `$cpath` at all, so
+    // `_ws_common_dir`/`--show-toplevel` never get a chance to answer
+    // anything. `git worktree list` still names the path — nothing has told
+    // git the checkout is gone — so this is a stale REGISTRATION, not a live
+    // checkout ccd does not own, and it earns its own token and remedy
+    // rather than borrowing `nested-checkouts-present`'s "move or finish
+    // them" (there is nothing left to move or finish).
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-vanished', 'cv');
+    fs.rmSync(child, { recursive: true, force: true });
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-record-stale');
+    expect(a.detail).toContain('agent-vanished');
+    expect(a.detail).toMatch(/worktree prune/);
+
+    // `_ws_child_manifest`'s own independent walk (D4) reports the SAME
+    // entry as REGISTERED — `stray:false` — because `main` really does
+    // still record it; only the two measurements it could not take (there
+    // is nothing left to read `dirty`/`busy` from) are null.
+    const reg = a.children.find((c: any) => c.path.includes('agent-vanished'));
+    expect(reg, 'the stale registration is named, not dropped').toBeDefined();
+    expect(reg.branch).toBe('cv');
+    expect(reg.headOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(reg.dirty).toBeNull();
+    expect(reg.busy).toBeNull();
+    expect(reg.stray).toBe(false);
+  }, 30000);
+
+  it('a child whose branch is ALSO checked out elsewhere refuses child-branch-elsewhere', () => {
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-b2', 'ca');
+    // `git worktree add <path> ca` on a SECOND worktree refuses outright
+    // ("'ca' is already used by worktree at ...") — that exclusivity check
+    // lives in `worktree add`/`checkout`/`switch`, not in the ref itself. A
+    // second, genuinely detached worktree (OUTSIDE the parent, so it is not
+    // itself scanned as a nested checkout) followed by `symbolic-ref HEAD`
+    // directly — plumbing, no exclusivity check — reproduces the real
+    // two-holder state `git worktree list --porcelain` reports live.
+    const sibling = path.join(h.home, 'sibling-holder');
+    h.git(main, 'worktree', 'add', '--detach', sibling);
+    h.git(sibling, 'symbolic-ref', 'HEAD', 'refs/heads/ca');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('child-branch-elsewhere');
+    expect(a.detail).toContain('ca');
+    expect(a.detail).toMatch(/2 worktrees/);
+    expect(fs.existsSync(child), 'the child survives the refusal').toBe(true);
+  }, 30000);
+});
+
+/**
+ * D4 — `children[]` on the audit wire, `_ws_child_manifest`. Deliberately
+ * NOT the same fixtures as "the per-child ladder in the reap eval (D2)"
+ * above: that describe pins what makes `_ws_reap_eval` REFUSE, one rung at a
+ * time; this one pins what the audit REPORTS about children the eval's own
+ * descent never even reached, because it stopped at the first bad one.
+ *
+ * `addChild` is re-declared locally again, matching every other describe in
+ * this file that needs it — separate closures, self-contained fixtures.
+ */
+describe('children on the audit wire (D4)', () => {
+  const addChild = (main: string, wt: string, leaf: string, branch: string): string => {
+    const dir = path.join(wt, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+
+  it('children[] carries path/branch/headOid/dirty/busy/stray — the facts the fingerprint hashes', () => {
+    // A registered DIRTY child plus a filesystem stray, the same fixture
+    // shape as "a stray repo beside a registered child still refuses
+    // nested-checkouts-present" above — except THAT describe never looks past
+    // `a.verdict`. The eval's own D2 refuses on the stray via the
+    // set-difference rung, BEFORE its per-child loop ever runs, so it never
+    // measures the child's dirtiness at all; this test is about the fact
+    // that the audit's own independent walk does, on the identical fixture.
+    const { wt, main } = squashMovedBase(['.claude/']);
+    const child = addChild(main, wt, 'agent-a', 'ca');
+    fs.writeFileSync(path.join(child, 'scratch.txt'), 'uncommitted\n');
+    const stray = path.join(wt, '.claude', 'worktrees', 'stray-x');
+    fs.mkdirSync(stray, { recursive: true });
+    execFileSync('git', ['init', '-q', stray]);
+
+    const a = refusal(wt);
+    expect(a.verdict).toBe('nested-checkouts-present');
+    expect(Array.isArray(a.children),
+      'the enumeration ran independently of the verdict that refused').toBe(true);
+    expect(a.children).toHaveLength(2);
+
+    const reg = a.children.find((c: any) => c.path.includes('agent-a'));
+    expect(reg, 'the registered child the eval never got around to inspecting').toBeDefined();
+    expect(reg.branch).toBe('ca');
+    expect(reg.headOid).toMatch(/^[0-9a-f]{40}$/);
+    expect(reg.dirty, 'measured even though non-zero — the audit reports, it does not refuse').toBe(1);
+    expect(reg.busy).toBeNull();
+    expect(reg.stray).toBe(false);
+
+    const st = a.children.find((c: any) => c.path.includes('stray-x'));
+    expect(st, 'the unregistered checkout is listed too').toBeDefined();
+    expect(st.branch).toBeNull();
+    expect(st.headOid).toBeNull();
+    expect(st.dirty).toBeNull();
+    expect(st.busy).toBeNull();
+    expect(st.stray).toBe(true);
+
+    expect(fs.existsSync(child), 'a read-only audit removes nothing').toBe(true);
+    expect(fs.existsSync(stray), 'a read-only audit removes nothing').toBe(true);
+  }, 30000);
+
+  it('children is NULL, not [], when Phase A refused before enumerating', () => {
+    // The detached-head refusal fixture from 'the fields a refusal never
+    // measured' above, stripped to just the HEAD state: Phase A's
+    // rung-2 refusal fires before `REAP_WTHEAD` is ever set, which is the
+    // exact signal `_ws_child_manifest`'s own gate reads — so the
+    // independent walk never runs at all, and there is nothing to report.
+    const { wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q --detach`);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('detached-head');
+    expect(a.children, 'the enumeration never ran — Phase A refused before reaching it').toBeNull();
+    // ABSENT-vs-ZERO, the same discrimination the sibling test in "the
+    // fields a refusal never measured" pins for its own five fields.
+    expect(Object.prototype.hasOwnProperty.call(a, 'children'),
+      'the field is present and null, not dropped').toBe(true);
+    expect(JSON.stringify(a), 'no zero may appear for a read nobody took')
+      .not.toMatch(/"(ignoredCount|ignoredBytes|sensitiveFiltered|stashes|children)":0/);
+  }, 30000);
+
+  it('children is [] — a measurement — on a childless reapable workspace', () => {
+    const { wt } = squashMovedBase();
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.children, '[] means the walk ran and found nothing, not that nothing ran').toEqual([]);
+    expect(fs.existsSync(wt)).toBe(true);
   }, 30000);
 });

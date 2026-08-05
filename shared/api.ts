@@ -283,6 +283,28 @@ export interface PrView {
   } | null;
 }
 
+/** One checkout nested under a workspace's worktree, as `_ws_child_manifest`
+ *  reports it on the audit wire — a REGISTERED child (`git worktree add`
+ *  ccd itself ran, found via `_ws_children`) or a filesystem `stray` it
+ *  merely found sitting there. These are exactly the fields `_ws_fingerprint`
+ *  hashes into `childrenDigest`, so what changes here is what invalidates a
+ *  reap token.
+ *
+ *  `stray: true` carries `branch`, `headOid`, `dirty` and `busy` all `null` —
+ *  an unregistered checkout ccd did not create earns no claim about its
+ *  state, only the fact that something is there at `path`. A registered
+ *  child gets the real reading: `dirty` is a count of uncommitted paths in
+ *  ITS worktree (`0` is a real measurement, "clean"), `busy` is the git
+ *  operation in progress there or `null`, and `headOid` is its resolved HEAD. */
+export interface WsAuditChild {
+  path: string;
+  branch: string | null;
+  headOid: string | null;
+  dirty: number | null;
+  busy: string | null;
+  stray: boolean;
+}
+
 /** `ccd ws-audit --session <id>`, with a server-added `sentence`. `token` is
  *  present ONLY when `verdict === 'reapable'`; the client sends it back as
  *  `expect`, and ccd re-proves the world state matches it. */
@@ -392,6 +414,20 @@ export interface WsAudit {
    *  state since deviation 10. */
   merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number | null };
   transcript: string;
+  /** The checkouts nested under this workspace's worktree — registered
+   *  children ccd created plus any filesystem strays found beside them
+   *  (`_ws_child_manifest`), populated INDEPENDENTLY of `verdict`: the
+   *  per-child ladder in `_ws_reap_eval` stops descending at the first
+   *  refusal, but this array is the audit's own walk, so a workspace refused
+   *  on its very first stray still reports every child behind it.
+   *
+   *  Same rule as `dirty`/`ignored`/`clips` above, one rung earlier: `null`
+   *  is NOBODY LOOKED — Phase A refused before the worktree HEAD was even
+   *  read, which is the exact signal the walk itself gates on, so it never
+   *  ran. `[]` is a MEASUREMENT — the walk ran and this workspace has no
+   *  children, registered or stray. Never conflate the two: a refusal that
+   *  never reached the walk is not the same claim as a childless workspace. */
+  children: WsAuditChild[] | null;
   verdict: string; detail: string; token?: string;
   sentence: string;
 }
@@ -452,7 +488,21 @@ export interface WsTombstone {
    *  on the resume path, would strand a workspace half-deleted rather than
    *  finish it with a truthful record. */
   clips: { name: string; bytes: number | null }[] | null;
-  transcript: string; attic: string[]; reflog: string; reapedAt: number;
+  transcript: string; attic: string[]; reflog: string;
+  /** The children consented to at reap time (D2's per-child ladder), one RAW
+   *  line per entry — `path<TAB>branch<TAB>head<TAB>dirty`, exactly the text
+   *  `_ws_reap_eval` built into `REAP_CHILDLINES` and the teardown loop tears
+   *  down in that same innermost-first order. `[]` is a MEASUREMENT (a
+   *  workspace with no registered children), never absent or `null`: this
+   *  document is written only on the fresh reap path, after Phase A/D2 has
+   *  already run, so there is no unmeasured case to represent here — same
+   *  discipline as `ignored`/`attic` two fields up, one rung earlier than
+   *  `clips`'s own nullability. `_ws_tomb_children` (ccd) is the one reader,
+   *  on a resume: it splits each line back into its four fields to rebuild
+   *  the teardown loop's own consented set from disk rather than trust
+   *  `REAP_CHILDLINES`, which a killed process never leaves behind. */
+  children: string[];
+  reapedAt: number;
 }
 
 /* ---------------------------------------------------------------------------
@@ -652,6 +702,163 @@ export function reviveFleetSessions(raw: unknown): FleetSession[] | null {
     out.push(session);
   }
   return out;
+}
+
+/*
+ * `reviveWsAudit` — same discipline as `reviveFleetSession` above, over
+ * `ccd ws-audit`'s stdout rather than a persisted snapshot. The skew here is
+ * not across time but across TRUST: `ccd` is a shell script a fleet host runs
+ * an older or newer build of, so its JSON is exactly as untrusted as a
+ * localStorage snapshot from a prior release — a field it forgot to print
+ * must not read as `undefined` where the type promises `null`, and a field it
+ * prints that this build's `WsAudit` no longer has must not survive a blind
+ * `...(v as WsAudit)` spread (`server/src/wsaudit.ts`'s old `parseAudit` did
+ * exactly that passthrough). `reviveWsAudit` returns a `WsAudit` LITERAL, so a
+ * field added to the interface and forgotten here is a compile error, the
+ * same guarantee `reviveFleetSession` gives `FleetSession`.
+ *
+ * Unlike `reviveFleetSession`, this function does NOT catch `MalformedSnapshot`
+ * itself — it lets the throw travel. `parseAudit` is the one boundary that
+ * turns "could not revive" into its existing null-return contract (which the
+ * audit route already reads as a 502), so catching twice would just be two
+ * places agreeing to do the same thing.
+ */
+
+/** `string[] | null` — absent/null → null; present must be an array of
+ *  strings. Same shape as `pr.checkNames` above, used here for `WsAudit`'s
+ *  `dirty` and `sensitive`: both are unmeasured-as-null, never unmeasured-as-
+ *  `[]` (see `WsAudit`'s own docstring on the class). */
+const optStrArray = (o: RawObj, k: string): string[] | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v) || (v as unknown[]).some((x) => typeof x !== 'string')) {
+    throw new MalformedSnapshot(k);
+  }
+  return v as string[];
+};
+
+type IgnoredEntry = { path: string; bytes: number; sensitive: boolean };
+const reviveIgnoredEntry = (raw: unknown, at: string): IgnoredEntry => {
+  const o = asObj(raw, at);
+  return { path: reqStr(o, 'path'), bytes: reqNum(o, 'bytes'), sensitive: reqBool(o, 'sensitive') };
+};
+/** `WsAudit.ignored` — `null` is unmeasured, `[]` is measured-and-empty,
+ *  identical rule to `optStrArray` above, one rung richer (an array of
+ *  objects rather than of strings). */
+const optIgnoredArray = (o: RawObj, k: string): IgnoredEntry[] | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v)) throw new MalformedSnapshot(k);
+  return (v as unknown[]).map((item, i) => reviveIgnoredEntry(item, `${k}[${i}]`));
+};
+
+type ClipEntry = { name: string; bytes: number | null };
+const reviveClipEntry = (raw: unknown, at: string): ClipEntry => {
+  const o = asObj(raw, at);
+  return { name: reqStr(o, 'name'), bytes: optNum(o, 'bytes') };
+};
+/** `WsAudit.clips` — the array itself is `| null` (unmeasured vs. measured
+ *  empty), and each entry's `bytes` is separately `| null` (an unreadable
+ *  clip within a directory that WAS enumerated). Two independent nulls,
+ *  two independent reasons — see the field's own docstring on `WsAudit`. */
+const optClipArray = (o: RawObj, k: string): ClipEntry[] | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v)) throw new MalformedSnapshot(k);
+  return (v as unknown[]).map((item, i) => reviveClipEntry(item, `${k}[${i}]`));
+};
+
+/** `WsAuditChild` — a registered child's `dirty`/`branch`/`headOid`/`busy`
+ *  are all independently nullable per-field (a stray carries all four null),
+ *  while `path` and `stray` are always present. */
+const reviveChild = (raw: unknown, at: string): WsAuditChild => {
+  const o = asObj(raw, at);
+  return {
+    path: reqStr(o, 'path'),
+    branch: optStr(o, 'branch'),
+    headOid: optStr(o, 'headOid'),
+    dirty: optNum(o, 'dirty'),
+    busy: optStr(o, 'busy'),
+    stray: reqBool(o, 'stray'),
+  };
+};
+/** `WsAudit.children` — `null` is Phase A refusing before the independent
+ *  child walk ever ran, `[]` is the walk running and finding nothing. Same
+ *  class as `optIgnoredArray`/`optClipArray` above; see the field's own
+ *  docstring on `WsAudit` for why the two must never be conflated. */
+const optChildArray = (o: RawObj, k: string): WsAuditChild[] | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v)) throw new MalformedSnapshot(k);
+  return (v as unknown[]).map((item, i) => reviveChild(item, `${k}[${i}]`));
+};
+
+type AuditPr = { number: number | null; url: string; mergeCommit: string; headRefOid: string };
+/** `WsAudit.pr` — unlike `PrState` (the fleet-header PR summary), this object
+ *  is REQUIRED: `cmd_ws_audit` always prints it, with `url`/`mergeCommit`/
+ *  `headRefOid` as empty strings when there is no bound PR, never as an
+ *  absent key or a null object. */
+const reviveAuditPr = (raw: unknown): AuditPr => {
+  const o = asObj(raw, 'pr');
+  return {
+    number: optNum(o, 'number'),
+    url: reqStr(o, 'url'),
+    mergeCommit: reqStr(o, 'mergeCommit'),
+    headRefOid: reqStr(o, 'headRefOid'),
+  };
+};
+
+const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry'];
+type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number | null };
+/** `WsAudit.merge` — `proof` is a closed vocabulary (the four ways
+ *  `_pr_state_one` can corroborate a merge), validated the same way
+ *  `isPrPhase`/`isPrReason` validate theirs: cast the CONSTANT, never the
+ *  input. `fetchedAt` is `null` until Phase C actually fetched — the field's
+ *  own docstring on `WsAudit` is why `0` cannot stand in for that. */
+const reviveMerge = (raw: unknown): AuditMerge => {
+  const o = asObj(raw, 'merge');
+  const proofRaw = optStr(o, 'proof');
+  if (proofRaw !== null && !PROOFS.includes(proofRaw)) throw new MalformedSnapshot('merge.proof');
+  return { proof: proofRaw as AuditMerge['proof'], fetchedAt: optNum(o, 'fetchedAt') };
+};
+
+/** `ccd ws-audit --session <id>`'s stdout, already `JSON.parse`d, plus the
+ *  server-computed `sentence` — to a `WsAudit` literal, or throws
+ *  `MalformedSnapshot`. See the block comment above for why this does not
+ *  catch its own throw. */
+export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
+  const o = asObj(v, 'audit');
+  const token = optStr(o, 'token');
+
+  return {
+    id: reqStr(o, 'id'),
+    branch: reqStr(o, 'branch'),
+    base: reqStr(o, 'base'),
+    workdir: reqStr(o, 'workdir'),
+    project: reqStr(o, 'project'),
+    repo: reqStr(o, 'repo'),
+    exists: reqBool(o, 'exists'),
+    headMatchesRegistry: reqBool(o, 'headMatchesRegistry'),
+    reaping: optStr(o, 'reaping'),
+    dirty: optStrArray(o, 'dirty'),
+    ignored: optIgnoredArray(o, 'ignored'),
+    ignoredCount: optNum(o, 'ignoredCount'),
+    ignoredBytes: optNum(o, 'ignoredBytes'),
+    sensitive: optStrArray(o, 'sensitive'),
+    sensitiveFiltered: optNum(o, 'sensitiveFiltered'),
+    clips: optClipArray(o, 'clips'),
+    stashes: optNum(o, 'stashes'),
+    worktreeBytes: optNum(o, 'worktreeBytes'),
+    commitsAheadOfBase: optNum(o, 'commitsAheadOfBase'),
+    pr: reviveAuditPr(o['pr']),
+    merge: reviveMerge(o['merge']),
+    transcript: reqStr(o, 'transcript'),
+    children: optChildArray(o, 'children'),
+    verdict: reqStr(o, 'verdict'),
+    detail: reqStr(o, 'detail'),
+    ...(token !== null ? { token } : {}),
+    sentence,
+  };
 }
 
 /** `/api/fleet/health` — degraded-mode signal for the remote fleet host.

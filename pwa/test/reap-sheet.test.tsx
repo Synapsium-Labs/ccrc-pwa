@@ -19,7 +19,7 @@ const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   worktreeBytes: 1_200_000_000, commitsAheadOfBase: 3,
   pr: { number: 42, url: 'u', mergeCommit: '7a68ca0', headRefOid: 'deadbee' },
   merge: { proof: 'patch-id', fetchedAt: Math.floor(Date.now() / 1000) - 6 * 86_400 },
-  transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'a'.repeat(64), sentence: '', ...over,
+  transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'a'.repeat(64), sentence: '', ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
@@ -346,6 +346,115 @@ describe('refusals', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove quiet-basin · 1.2 GB' }));
     await screen.findByText(/lost contact while cleaning up/);
     expect(onReaped).not.toHaveBeenCalled();
+  });
+});
+
+// D4: nested checkouts the audit found under this workspace's own worktree.
+// `WsAudit.children` is `null` when Phase A refused before the independent
+// child walk ran, `[]` when the walk ran and found none, and populated
+// (registered children plus any filesystem strays) when it found something —
+// same null-vs-[] discipline as `dirty`/`ignored`/`clips` above, one rung
+// earlier. These are display-only pins: the refusal token
+// (`nested-checkouts-present`) and its sentence are server-side already
+// (`shown.sentence`), so what this sheet owns is naming each child on its own
+// line and scoping the "cannot be recovered" note so it does not lie about a
+// live nested repository.
+describe('nested children (D4)', () => {
+  it('renders children as named checkouts with branch and state, never inside the ignored total', async () => {
+    auditBody = audit({
+      verdict: 'nested-checkouts-present', token: undefined,
+      sentence: 'Checkouts of their own live under this worktree. Move or remove them first — there is no override.',
+      children: [
+        { path: '/w/.claude/worktrees/agent-a', branch: 'ca', headOid: 'a'.repeat(40), dirty: 2, busy: null, stray: false },
+        { path: '/w/.claude/worktrees/rogue', branch: null, headOid: null, dirty: null, busy: null, stray: true },
+      ],
+    });
+    open();
+    expect(await screen.findByText(/agent-a/)).toBeInTheDocument();
+    expect(screen.getByText(/2 uncommitted/)).toBeInTheDocument();
+    expect(screen.getByText(/not registered/)).toBeInTheDocument();
+    // Never folded into the ignored-total row — that figure is unrelated to
+    // nested checkouts, and this fixture's own ignored set is the default
+    // three-entry one from `audit()`.
+    expect(screen.getByText(/3 entries, 420 MB/)).toBeInTheDocument();
+  });
+
+  // `childLine`'s `busy !== null` branch — every other fixture in this file
+  // leaves `busy: null`, so nothing had ever rendered the "mid-<op>" half of
+  // a registered child's line before this closed it.
+  it('renders "mid-<op>" for a child stopped mid-operation', async () => {
+    auditBody = audit({
+      children: [
+        { path: '/w/.claude/worktrees/agent-r', branch: 'cr', headOid: 'a'.repeat(40), dirty: 0, busy: 'rebase', stray: false },
+      ],
+    });
+    open();
+    expect(await screen.findByText(/mid-rebase/)).toBeInTheDocument();
+  });
+
+  // I1 (whole-branch review): the children block used to render with no
+  // label at all, so a reapable workspace never said these checkouts are
+  // going too. Both arms of the intro line, pinned against the SAME child.
+  it('names what happens to the children — removed with the workspace on reapable, informational otherwise', async () => {
+    const oneChild = [
+      { path: '/w/.claude/worktrees/agent-a', branch: 'ca', headOid: 'a'.repeat(40), dirty: 0, busy: null, stray: false },
+    ];
+    auditBody = audit({ children: oneChild });
+    open();
+    expect(await screen.findByText(
+      'These checkouts are removed with the workspace — each branch is deleted with plain -d:',
+    )).toBeInTheDocument();
+    cleanup();
+
+    auditBody = audit({
+      verdict: 'nested-checkouts-present', token: undefined,
+      sentence: 'Checkouts of their own live under this worktree. Move or remove them first — there is no override.',
+      children: oneChild,
+    });
+    open();
+    expect(await screen.findByText('Checkouts of their own live under this workspace:')).toBeInTheDocument();
+  });
+
+  it('scopes the cannot-be-recovered sentence when live checkouts sit inside the total', async () => {
+    auditBody = audit({
+      children: [
+        { path: '/w/.claude/worktrees/agent-a', branch: 'ca', headOid: 'a'.repeat(40), dirty: 0, busy: null, stray: false },
+      ],
+    });
+    open();
+    expect(await screen.findByText(
+      /These are in no commit and cannot be recovered — the total includes the nested checkouts listed below, which are live repositories, not disposable output\./,
+    )).toBeInTheDocument();
+    cleanup();
+
+    // Measured-and-empty: the original, unqualified sentence.
+    auditBody = audit({ children: [] });
+    open();
+    expect(await screen.findByText(/^These are in no commit and cannot be recovered\.$/)).toBeInTheDocument();
+    cleanup();
+
+    // Unmeasured: the original sentence too — a `null` children list is not a
+    // claim that anything is live, so it earns no qualifier either.
+    auditBody = audit({ children: null });
+    open();
+    expect(await screen.findByText(/^These are in no commit and cannot be recovered\.$/)).toBeInTheDocument();
+  });
+
+  it('renders no children row at all for children:null — "not scanned" stays at three', async () => {
+    auditBody = audit({
+      verdict: 'detached-head', sentence: 'git records this worktree on a detached HEAD.',
+      token: undefined,
+      dirty: null, ignored: null, ignoredCount: null, ignoredBytes: null,
+      sensitive: null, sensitiveFiltered: null, stashes: null,
+      merge: { proof: null, fetchedAt: null },
+      children: null,
+    });
+    open();
+    // Same count the pre-existing "not scanned" pin asserts (uncommitted,
+    // not-in-git, stashes) — a children block must not add or remove one.
+    expect(await screen.findAllByText('not scanned')).toHaveLength(3);
+    expect(screen.queryByText(/not registered with git/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/agent-a|rogue/)).not.toBeInTheDocument();
   });
 });
 

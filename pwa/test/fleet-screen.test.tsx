@@ -395,7 +395,7 @@ describe('FleetScreen', () => {
       clips: [], stashes: 0, worktreeBytes: 900_000_000, commitsAheadOfBase: 1,
       pr: { number: 9, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
       merge: { proof: 'ancestor', fetchedAt: Math.floor(Date.now() / 1000) },
-      transcript: '/t.jsonl', verdict: 'reapable', detail: '', token: 'z'.repeat(64), sentence: '',
+      transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'z'.repeat(64), sentence: '',
     };
 
     it("the fleet line's Clean up workspace… opens the REAL ReapSheet for THAT session", async () => {
