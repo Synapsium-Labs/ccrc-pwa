@@ -569,19 +569,17 @@ describe('ws-archive', () => {
   });
 
   it('names the PR in archivedreason AND in what it prints', () => {
-    // Naming the PR now also requires PROOF the branch merged, not just a
-    // bound number — `_ws_gc_merged` is the gate, and its ancestor check
-    // cannot see a GitHub squash merge (the squashed commit shares no
-    // lineage with the branch it replaces), which is why this stubs the
-    // proof rather than trying to construct one from real history. A real
-    // commit is still required: with none, the empty-branch check ahead of
-    // this one would claim the row first.
+    // Naming the PR now requires the gh-verified prphase to say `merged`,
+    // not just a bound number — `cmd_pr_state` is what writes prphase off a
+    // real `gh` read, and this fixture sets the registry fields it would
+    // have left exactly as that command leaves them. A real commit is still
+    // required: with none, the empty-branch check ahead of this one would
+    // claim the row first.
     const wt = workspace('demo', 'quiet-basin');
     fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
     h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
-    h.sh('_reg_set demo-quiet-basin prnumber 42');
-    const MERGED = `${ARCH} _ws_gc_merged() { GC_MERGED_STATE=merged; return 0; };`;
-    const out = h.sh(`${MERGED} cmd_ws_archive --session demo-quiet-basin`);
+    h.sh('_reg_set demo-quiet-basin prnumber 42; _reg_set demo-quiet-basin prphase merged');
+    const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('merged:#42');
     // The line a person reads, not only the field: the sweep's push notification
     // says "PR #n merged", and this is the box's own account of the same fact.
@@ -604,20 +602,21 @@ describe('ws-archive', () => {
 
   it('records empty for a workspace with no commits beyond base', () => {
     // The precedence that matters: an untouched workspace never had anything
-    // to judge as merged or manual, so `empty` wins before the PR/merge check
-    // is even consulted — pinned separately from the two cases above, which
-    // both require a real commit to reach their own branch of the ladder.
+    // to judge as merged or manual, so `empty` wins before the PR/prphase
+    // check is even consulted — pinned separately from the two cases above,
+    // which both require a real commit to reach their own branch of the
+    // ladder.
     workspace('demo', 'quiet-basin');
     const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('empty');
     expect(out).toContain('(no commits beyond base)');
   });
 
-  it('records manual for an unmerged branch even with a PR bound — the bug this fixes', () => {
+  it('records manual for a bound PR whose prphase was never checked — the old bug\'s shape', () => {
     // The pre-fix write was `[[ "$pr" =~ ^[0-9]+$ ]] then merged:#$pr` — a
-    // bound PR number ALONE, no proof the branch ever merged. A real commit
-    // origin/HEAD does not contain, a bound PR number, and the REAL
-    // (unstubbed) `_ws_gc_merged` is exactly the shape that used to lie.
+    // bound PR number ALONE, no verification the branch ever merged. A
+    // bound number with prphase left unset (nobody ran `cmd_pr_state` yet)
+    // is exactly the shape that used to lie.
     const wt = workspace('demo', 'quiet-basin');
     fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
     h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
@@ -627,17 +626,35 @@ describe('ws-archive', () => {
     expect(out).not.toContain('merged in #');
   });
 
-  it('re-pins merged:#N for a branch a bound PR and a proven merge together produce', () => {
-    // The third value of the closed three-value vocabulary, pinned on its
-    // own beside the two tests above that share its exact fixture shape but
-    // land on `manual` — the only difference is whether `_ws_gc_merged`
-    // proves the merge.
+  it('records manual for a bound PR whose prphase is open, not merged — the exact case the rider exists for', () => {
+    // Distinct from the test above: here `cmd_pr_state` HAS run and gh HAS
+    // answered — the PR is real, bound, and simply not merged yet. A number
+    // being bound was ALL the pre-fix code checked, so this is the case that
+    // used to be filed as `merged:#42` for a PR that had not merged: the old
+    // lie, pinned dead.
     const wt = workspace('demo', 'quiet-basin');
     fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
     h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
-    h.sh('_reg_set demo-quiet-basin prnumber 42');
-    const MERGED = `${ARCH} _ws_gc_merged() { GC_MERGED_STATE=merged; return 0; };`;
-    h.sh(`${MERGED} cmd_ws_archive --session demo-quiet-basin`);
+    h.sh('_reg_set demo-quiet-basin prnumber 42; _reg_set demo-quiet-basin prphase open');
+    const out = h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('manual');
+    expect(out).not.toContain('merged in #');
+  });
+
+  it('re-pins merged:#N for a genuine squash merge — the case _ws_gc_merged cannot see', () => {
+    // The whole reason for the deviation from the spec: a squash merge's
+    // commit on main shares no lineage with the branch it replaces, so an
+    // ancestor check can never prove it — asserted directly below, against
+    // this exact fixture, with the SAME `_ws_gc_merged` the spec originally
+    // named. prphase, written from a real `gh` read, is what still gets
+    // this right.
+    const wt = workspace('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'work.txt'), 'the work\n');
+    h.git(wt, 'add', 'work.txt'); h.git(wt, 'commit', '-m', 'the work');
+    expect(shFail(`_ws_gc_merged "$HOME/projects/demo" ws/quiet-basin`).code,
+      'a same-lineage merge would defeat the point of this fixture').not.toBe(0);
+    h.sh('_reg_set demo-quiet-basin prnumber 42; _reg_set demo-quiet-basin prphase merged');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(h.reg('demo-quiet-basin', 'archivedreason')).toBe('merged:#42');
   });
 

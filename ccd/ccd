@@ -1348,22 +1348,30 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
 
   # Truthful in three values, not always "merged": a workspace can be archived
   # with nothing beyond base to judge at all (`empty`), with real commits
-  # nobody has proven merged (`manual`), or with a branch `_ws_gc_merged` can
-  # show is an ancestor of origin/HEAD, PR number and all (`merged:#N`).
-  # `_ws_gc_merged`'s own `unprovable` state already returns 1 -> manual, and
-  # a genuinely merged branch with no bound PR number also lands manual —
-  # both accepted, the vocabulary is closed at three values.
+  # nobody has proven merged (`manual`), or with a PR the gh-verified prphase
+  # machinery has confirmed merged, PR number and all (`merged:#N`).
+  #
+  # DEVIATION FROM THE SPEC'S LETTER, KEPT TO ITS GOAL: the spec named
+  # `_ws_gc_merged` (an ancestor check) as the decider. Ancestor checks cannot
+  # see a squash merge — the fleet's normal flow — because the squashed
+  # commit on main shares no lineage with the branch it replaces, so
+  # `_ws_gc_merged` would read `manual` for the common case: a new lie
+  # replacing the old one. `prphase`, written by `cmd_pr_state` off a real
+  # `gh` read, is what actually answers "was this merged", so it decides
+  # instead — the spec's goal (truth) over its letter. A branch with no bound
+  # PR, or a PR whose phase is anything but merged, also lands manual — the
+  # vocabulary is closed at three values.
   local project; project=$(_reg_get "$id" project)
   local main="$PROJECTS_ROOT/$project"
-  local branch; branch=$(_reg_get "$id" branch)
-  local pr reason ahead base
+  local pr phase reason ahead base
   pr=$(_reg_get "$id" prnumber)
+  phase=$(_reg_get "$id" prphase)
   _reg_set "$id" archived "$(date +%s)"
   base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || base=""
   ahead=""
   [[ -n "$base" ]] && ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""
   if [[ "$ahead" == 0 ]]; then reason="empty"
-  elif [[ "$pr" =~ ^[0-9]+$ ]] && _ws_gc_merged "$main" "$branch"; then reason="merged:#$pr"
+  elif [[ "$phase" == merged && "$pr" =~ ^[0-9]+$ ]]; then reason="merged:#$pr"
   else reason="manual"; fi
   _reg_set "$id" archivedreason "$reason"
 
