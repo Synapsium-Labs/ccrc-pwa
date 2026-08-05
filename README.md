@@ -56,7 +56,7 @@ Run the server against a fixture home: `CCRC_HOME=<tree> npm run dev` in `server
 
 ```bash
 bash deploy/deploy.sh                # server: build PWA here (freshness-gated) → rsync → box npm ci + build → restart unit → health check
-bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) → host npm ci + build → restart unit
+bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) + session-hook.sh (installs it) → host npm ci + build → restart unit
 ```
 
 `CCRC_BOX` overrides the server's default target (`you@203.0.113.7`);
@@ -82,6 +82,7 @@ caches `ccd caps` at boot, so the reverse order pins a stale verb set.
 # fleet host (agent target)
 cp -a ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 cp -a ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
+cp -a ~/ccrc-backups/<ts>/session-hook.sh ~/.cc-sessions/session-hook.sh
 cp -a ~/ccrc-backups/<ts>/agent-dist/. ~/ccrc/agent/dist/
 systemctl --user restart ccrc-agent.service
 # server box
