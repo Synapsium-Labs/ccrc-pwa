@@ -40,10 +40,25 @@ case "$event" in
     fi ;;
   PermissionRequest)
     state="waiting"
-    ask_json=$(jq -c '{approval: {tool: (.tool_name // "unknown"),
-      summary: ((.tool_input.command // .tool_input.file_path // .tool_input.path
-                 // .tool_input.url // .tool_input.pattern // "") | tostring | .[0:200])}}' \
-      <<<"$payload" 2>/dev/null) || ask_json="null" ;;
+    tool=$(jq -r '.tool_name // empty' <<<"$payload" 2>/dev/null) || exit 0
+    if [[ "$tool" == AskUserQuestion ]]; then
+      # MEASURED 2026-08-05, live fleet probe against Claude Code 2.1.222:
+      # this harness version delivers AskUserQuestion as PermissionRequest,
+      # NOT PreToolUse — the PreToolUse arm above is Orca's mapping, written
+      # against a different harness version, and is kept rather than
+      # replaced because which arm actually fires is a harness detail this
+      # script cannot control or predict for the next upgrade. Without this
+      # check the branch below wrote {approval:{tool:"AskUserQuestion",
+      # summary:""}} — an empty, useless envelope — silently losing the real
+      # questions/options while the pane showed an actual 3-option menu. Both
+      # paths must keep producing the same {questions:…} envelope shape.
+      ask_json=$(jq -c '{questions: (.tool_input.questions // [])}' <<<"$payload" 2>/dev/null) || ask_json="null"
+    else
+      ask_json=$(jq -c '{approval: {tool: (.tool_name // "unknown"),
+        summary: ((.tool_input.command // .tool_input.file_path // .tool_input.path
+                   // .tool_input.url // .tool_input.pattern // "") | tostring | .[0:200])}}' \
+        <<<"$payload" 2>/dev/null) || ask_json="null"
+    fi ;;
   Stop)
     state="done"
     [[ $(jq -r '.is_interrupt // false' <<<"$payload" 2>/dev/null) == true ]] && interrupted="true" ;;

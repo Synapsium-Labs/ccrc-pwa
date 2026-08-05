@@ -60,6 +60,33 @@ describe('event → state mapping', () => {
     expect(s.ask.approval.tool).toBe('Bash');
     expect(s.ask.approval.summary).toHaveLength(200);
   });
+  // MEASURED 2026-08-05, live fleet probe against Claude Code 2.1.222:
+  // AskUserQuestion arrives as PermissionRequest on THIS harness version, not
+  // PreToolUse — superseding the spec's mapping, which came from Orca's
+  // normalizer against a different harness version. Before this fix the
+  // PermissionRequest arm (above) wrote {approval:{tool:"AskUserQuestion",
+  // summary:""}}: state correctly flipped to waiting, but the summary was
+  // always empty and the real questions/options were gone — a menu the pane
+  // genuinely showed, reported as an envelope with nothing useful in it. Both
+  // event names now have to keep producing the exact same {questions:…}
+  // shape, since which one actually fires is a harness detail this script
+  // does not control and the next upgrade could flip again.
+  it('PermissionRequest of AskUserQuestion is waiting with the QUESTIONS envelope, not approval', () => {
+    const questions = [{ question: 'Which?', header: 'Pick', multiSelect: false,
+      options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }] }];
+    run({ hook_event_name: 'PermissionRequest', tool_name: 'AskUserQuestion', tool_input: { questions } });
+    const s = readState();
+    expect(s.state).toBe('waiting');
+    expect(s.ask).toEqual({ questions });
+    expect(s.ask.approval).toBeUndefined();
+  });
+  it('PermissionRequest of an ordinary tool still writes the approval envelope — unaffected by the AskUserQuestion branch above', () => {
+    run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls -la' } });
+    const s = readState();
+    expect(s.state).toBe('waiting');
+    expect(s.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la' } });
+    expect(s.ask.questions).toBeUndefined();
+  });
   it('Stop is done and clears ask; interrupted survives when the payload says so', () => {
     run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
     run({ hook_event_name: 'Stop', is_interrupt: true });
