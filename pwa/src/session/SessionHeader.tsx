@@ -91,7 +91,12 @@ export function SessionHeader({
   // Live stream status wins; the fleet snapshot fills in before it connects.
   const st: SessionStatus | null = status ?? session?.status ?? null;
   const at = statusUpdatedAt ?? session?.statusUpdatedAt ?? null;
-  const attention = session?.dialogPending === true && st !== 'dead';
+  // Defensive OR, mirroring SessionLine: the server already ORs a fresh
+  // hookState === 'waiting' into dialogPending (fleet.ts), so this only
+  // fires if that rule was ever missed. No new visuals — same 'attention'
+  // treatment either signal already drives.
+  const attention =
+    (session?.dialogPending === true || session?.hookState === 'waiting') && st !== 'dead';
   const busy = st === 'busy';
   const now = useNow(busy ? 1_000 : 30_000);
 

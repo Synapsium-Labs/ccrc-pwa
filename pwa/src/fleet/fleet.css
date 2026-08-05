@@ -627,9 +627,11 @@
 .sess-line--active .sess-meta,
 .sess-line--active .sess-state,
 .sess-line--active .sess-tally,
+.sess-line--active .sess-subagents,
 .sess-line--active .sess-warn,
 .sess-line--active .sess-acct,
 .sess-line--active .sess-acct-away,
+.sess-line--active .sess-ask,
 .sess-line--active .sess-meta > *:not(:first-child)::before {
   color: var(--edge-strong);
 }
@@ -774,6 +776,14 @@
   flex: none;
 }
 
+/* The hook's last-reported subagent count — same quiet register as .sess-tally,
+   no colour of its own (inherits .sess-meta's ink-secondary). */
+.sess-subagents {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
 .sess-warn { color: var(--status-dead-text); flex: none; }
 
 .sess-acct {
@@ -785,6 +795,19 @@
 /* The arrow, not a colour change: the chip's colour already encodes WHICH
    account, and overloading it with "and it is the wrong one" would lose that. */
 .sess-acct-away { margin-left: 2px; color: var(--status-attention-text); }
+
+/* The hook's ask summary — a third line, muted one step past .sess-meta's own
+   ink-secondary (the .proj-dir convention: ink-tertiary, clipped to one line).
+   Only rendered while hookState is 'waiting' and a summary has actually
+   landed; see SessionLine.tsx. */
+.sess-ask {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
 
 /* .sess-actions and .proj-card-add (below, project card head) are a
    matched pair of icon buttons — each session's ··· stacked directly
