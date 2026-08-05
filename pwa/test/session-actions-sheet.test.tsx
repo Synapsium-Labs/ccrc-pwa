@@ -144,3 +144,42 @@ describe('cleanup, guarded', () => {
     expect(screen.queryByText(/clean up workspace/i)).not.toBeInTheDocument();
   });
 });
+
+describe('archive and restore (D5 rider 1)', () => {
+  it('Archive shows only for an unarchived workspace session, and POSTs /archive', async () => {
+    render(<SessionActionsSheet session={s()} open onClose={() => {}} onReap={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /archive workspace/i }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
+      (c) => String(c[0]).endsWith('/demo-quiet-mesa/archive'))).toBe(true));
+  });
+
+  it('Restore shows only on the complement, and POSTs /restore', async () => {
+    render(<SessionActionsSheet session={s({ archivedAt: null })} open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByText(/restore workspace/i)).not.toBeInTheDocument();
+    cleanup();
+    render(<SessionActionsSheet session={s({ archivedAt: 1785300000 })} open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByText(/archive workspace/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /restore workspace/i }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
+      (c) => String(c[0]).endsWith('/demo-quiet-mesa/restore'))).toBe(true));
+  });
+
+  it('no workspace → neither appears', () => {
+    render(<SessionActionsSheet session={s({ workspace: null, archivedAt: 1785300000 })}
+                                open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByText(/archive workspace/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/restore workspace/i)).not.toBeInTheDocument();
+  });
+
+  it("failure toasts Couldn't archive — with ccd's own words", async () => {
+    stubFetch({ ok: false, stderr: 'not merged' });
+    render(
+      <>
+        <SessionActionsSheet session={s()} open onClose={() => {}} onReap={() => {}} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /archive workspace/i }));
+    expect(await screen.findByText(/Couldn't archive — not merged/)).toBeInTheDocument();
+  });
+});

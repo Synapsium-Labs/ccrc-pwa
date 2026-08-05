@@ -46,6 +46,7 @@ export function SessionActionsSheet({
   // the sheet closes, and a conditional hook would throw on that render.
   const [swapOpen, setSwapOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [archBusy, setArchBusy] = useState(false);
 
   // A closed sheet forgets Swap (mirrors NewSessionSheet's own reset-on-close
   // effect). FleetScreen now keeps this component mounted across a close
@@ -75,6 +76,32 @@ export function SessionActionsSheet({
     }
   };
 
+  const archiveNow = async (): Promise<void> => {
+    if (archBusy) return;
+    setArchBusy(true);
+    try {
+      await api.archive(session.id);
+      onClose();
+    } catch (err) {
+      toast(`Couldn't archive — ${apiErrorText(err)}`, 'error');
+    } finally {
+      setArchBusy(false);
+    }
+  };
+
+  const restoreNow = async (): Promise<void> => {
+    if (archBusy) return;
+    setArchBusy(true);
+    try {
+      await api.restore(session.id);
+      onClose();
+    } catch (err) {
+      toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
+    } finally {
+      setArchBusy(false);
+    }
+  };
+
   const five = session.limits?.five ?? null;
   const seven = session.limits?.seven ?? null;
   const critical =
@@ -96,6 +123,19 @@ export function SessionActionsSheet({
           <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}>
             Swap account
           </button>
+
+          {session.workspace !== null && session.archivedAt === null && (
+            <button type="button" className="btn-ghost" disabled={archBusy}
+                    onClick={() => void archiveNow()}>
+              {archBusy ? 'Archiving…' : 'Archive workspace'}
+            </button>
+          )}
+          {session.workspace !== null && session.archivedAt !== null && (
+            <button type="button" className="btn-ghost" disabled={archBusy}
+                    onClick={() => void restoreNow()}>
+              {archBusy ? 'Restoring…' : 'Restore workspace'}
+            </button>
+          )}
 
           {/* The guarded replacement for the one-tap delete this sheet used to
               carry. Archived only: archive is the staging step, and the audit

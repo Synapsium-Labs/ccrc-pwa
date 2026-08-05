@@ -217,6 +217,55 @@ describe('listProjects', () => {
     expect(out.projects).toEqual([{ name: 'MekWarLive', workdir: '/data/projects/MekWarLive' }]);
     await app.close();
   });
+
+  it('a linked worktree cannot masquerade as a project — either door', async () => {
+    const root = mkTmp('ccrc-projects-');
+    // (a) a dir under the root whose `.git` is a FILE, not a directory — a
+    // linked worktree (or submodule) pointer. Must be skipped.
+    const linkedInRoot = path.join(root, 'linked');
+    mkdirSync(linkedInRoot);
+    writeFileSync(path.join(linkedInRoot, '.git'), 'gitdir: /elsewhere/.git/worktrees/linked\n');
+    // (b) a plain dir with NO .git at all — a legitimate non-git project.
+    // Must stay listed, not be swept up by the new probe.
+    mkdirSync(path.join(root, 'plain'));
+
+    // (c) a registry record whose workdir readdir-probes as a linked
+    // worktree. Must be skipped by the union loop too.
+    const linkedRegistryWorkdir = mkTmp('ccrc-linked-');
+    writeFileSync(path.join(linkedRegistryWorkdir, '.git'), 'gitdir: /elsewhere/.git/worktrees/other\n');
+
+    const { app, cfg, home } = await makeApp({ projectsRoot: root });
+    // `makeApp` -> `seedDefault` seeds `ID` at the box's REAL
+    // `/data/projects/MekWarLive`, which every other test can ignore because it
+    // never readdirs that path. This test's whole point is that the union loop
+    // NOW readdirs every registry workdir, so a real path outside the sandbox
+    // would make the result depend on whatever this box's disk happens to hold
+    // at that path rather than on the fixture — repointed at a plain fixture
+    // directory (ordinary, `.git`-less, like case (b)) under the test's own
+    // tmp root instead, via the same `seedSession` shape `seedDefault` uses,
+    // so the expectation holds identically on every box and in CI.
+    const defaultWorkdir = mkTmp('ccrc-mekwarlive-');
+    seedSession(home, ID, { workdir: defaultWorkdir });
+    seedSession(home, 'claude-linked', {
+      wrapper: 'claude', project: 'linked-registry', workdir: linkedRegistryWorkdir,
+      uuid: '4'.repeat(36), started: '1',
+    });
+    // (d) a registry record whose workdir does not exist at all. readdir-null
+    // is fail-open — it stays listed, same as before this probe existed.
+    seedSession(home, 'claude-gone', {
+      wrapper: 'claude', project: 'gone', workdir: path.join(root, 'does-not-exist'),
+      uuid: '5'.repeat(36), started: '1',
+    });
+
+    const out = await listProjects(localIO, cfg);
+    expect(out.projects).toEqual([
+      { name: 'MekWarLive', workdir: defaultWorkdir },                // default seeded registry session — fixture, not the box's real path
+      { name: 'gone', workdir: path.join(root, 'does-not-exist') },  // missing workdir — stays listed
+      { name: 'plain', workdir: path.join(root, 'plain') },
+    ]);
+
+    await app.close();
+  });
 });
 
 // The composition-root factory task 13S introduced: it is the ONLY thing that

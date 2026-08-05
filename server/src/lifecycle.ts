@@ -25,12 +25,34 @@ export type CcdRunner = (argv: CcdArgv) => Promise<CcdResult>;
 export const ccdRunner = (run: Runner, cfg: CcrcConfig): CcdRunner =>
   (argv) => ccd(run, cfg, argv);
 
+/** A linked worktree (or submodule) masquerading as a project: `.git` exists
+ *  but is a FILE. readdir-null is the only file-vs-dir probe FleetIO affords —
+ *  it succeeds for a directory and answers null for a plain file. A dir with
+ *  NO .git at all is a legitimate non-git project (four exist on the fleet)
+ *  and must never be skipped; an UNREADABLE workdir stays listed, same as
+ *  today — this probe only ever removes what it positively identified.
+ *  `names`, when given, is a `readdir(workdir)` result the caller already
+ *  holds (the root loop's directory-ness probe) — reused here so that door
+ *  doesn't readdir the same directory twice; the union loop has no such
+ *  listing yet and omits the argument, so this reads workdir itself. */
+const isLinkedWorktree = async (
+  io: FleetIO,
+  workdir: string,
+  names?: string[] | null,
+): Promise<boolean> => {
+  const entries = names === undefined ? await io.readdir(workdir) : names;
+  if (entries === null || !entries.includes('.git')) return false;
+  return (await io.readdir(path.join(workdir, '.git'))) === null;
+};
+
 /**
  * Directories under cfg.projectsRoot (dotfiles skipped) unioned with registry
  * workdirs, deduped by workdir. Sorted by name (byte order) for determinism.
  * Directory-ness is probed via a second `readdir` (FleetIO carries no file-type
  * info) — it succeeds (possibly empty) for a directory, returns null for a
- * plain file or anything unreadable.
+ * plain file or anything unreadable. A linked worktree cannot masquerade as a
+ * project through either door: `isLinkedWorktree` skips it whether it turned
+ * up under the projects root or only in the registry.
  */
 export async function listProjects(
   io: FleetIO,
@@ -42,12 +64,16 @@ export async function listProjects(
     for (const name of names) {
       if (name.startsWith('.')) continue;
       const workdir = path.join(cfg.projectsRoot, name);
-      if ((await io.readdir(workdir)) === null) continue; // not a directory — skip
+      const entries = await io.readdir(workdir);
+      if (entries === null) continue; // not a directory — skip
+      if (await isLinkedWorktree(io, workdir, entries)) continue;
       byWorkdir.set(workdir, { name, workdir });
     }
   }
   for (const rec of await readRegistry(io, cfg)) {
-    if (!byWorkdir.has(rec.workdir)) byWorkdir.set(rec.workdir, { name: rec.project, workdir: rec.workdir });
+    if (!byWorkdir.has(rec.workdir) && !(await isLinkedWorktree(io, rec.workdir))) {
+      byWorkdir.set(rec.workdir, { name: rec.project, workdir: rec.workdir });
+    }
   }
   const projects = [...byWorkdir.values()].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : a.workdir < b.workdir ? -1 : 1,
