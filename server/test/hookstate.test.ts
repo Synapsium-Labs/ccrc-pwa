@@ -63,6 +63,39 @@ describe('readHookState', () => {
     expect(out?.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la' } });
   });
 
+  it('a real Claude questions shape — extra fields on both the option and the question — still round-trips', async () => {
+    // Pins tolerance: `session-hook.sh` copies `tool_input.questions` VERBATIM
+    // off the AskUserQuestion tool call (see server/test/fixtures/
+    // transcript-ask-2col.jsonl for the real shape), which carries fields
+    // `HookAskQuestion` does not declare — `preview` on the option here, plus
+    // an unrecognised top-level key on the question itself. Neither may null
+    // the read: only known fields are picked, unknown ones are dropped, and
+    // a future strict-schema refactor that started rejecting them instead
+    // would silently null every real hookstate file. Extra top-level keys on
+    // the record are never spread into the revived object regardless.
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({
+      state: 'waiting',
+      ask: {
+        questions: [{
+          question: 'Which approach?', header: 'Pick', multiSelect: false,
+          futureField: 'something a newer Claude Code build might add',
+          options: [
+            { label: 'A', description: 'first', preview: 'a preview blob\nwith lines\nof its own' },
+            { label: 'B' },
+          ],
+        }],
+      },
+    }));
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out?.ask).toEqual({
+      questions: [{
+        question: 'Which approach?', header: 'Pick', multiSelect: false,
+        options: [{ label: 'A', description: 'first' }, { label: 'B' }],
+      }],
+    });
+  });
+
   it('subagents absent (e.g. a file from before the field existed) defaults to []', async () => {
     const reg = mkTmp('ccrc-hookstate-');
     const body = base();

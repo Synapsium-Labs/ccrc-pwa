@@ -127,8 +127,12 @@ export async function readHookState(
   if (content === null) return null;
   // Defense-in-depth against the writer's own cap: check length BEFORE
   // parsing, so a file that somehow grew past it (a skewed writer, a
-  // hand-edit) can never reach JSON.parse at all.
-  if (content.length > HOOKSTATE_MAX_BYTES) return null;
+  // hand-edit) can never reach JSON.parse at all. Measured in actual UTF-8
+  // bytes, not `content.length` (UTF-16 code units) — the writer's own bash
+  // `${#out}` cap shares that same char-vs-byte imprecision on its side, but
+  // this reader is the layer where the constant's name (`_BYTES`) has to
+  // tell the truth.
+  if (Buffer.byteLength(content, 'utf8') > HOOKSTATE_MAX_BYTES) return null;
 
   let raw: unknown;
   try {
