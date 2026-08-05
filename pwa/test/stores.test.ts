@@ -230,6 +230,29 @@ describe('session store optimistic send', () => {
     expect(store.getState().ask).toBeNull();
   });
 
+  // Fix round 1 (I1): a stale hook ask must not survive an explicit
+  // disconnect/reconnect cycle (session screen closed and reopened, a
+  // swap/compact cycle) — ReconnectingSocket's own AUTOMATIC reconnects never
+  // call this function, which is exactly why the server-side sentinel fix in
+  // sessionws.ts's checkHookAsk (server/test/sessionws.test.ts) covers the
+  // other half of this same bug; this pins the client's own half.
+  it('disconnect() clears a pending hook ask (reconnect-with-stale-client-ask)', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'ask', ask: askFixture });
+    expect(store.getState().ask).toEqual(askFixture);
+
+    store.getState().disconnect();
+    expect(store.getState().ask).toBeNull();
+  });
+
+  it('disconnect() leaves the scraped dialog untouched — that channel is re-scraped fresh every poll', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+
+    store.getState().disconnect();
+    expect(store.getState().dialog).toEqual(dialogFixture);
+  });
+
   it('send() pushes a sending pending and clears it when the matching user event arrives', async () => {
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore('s1', { api: { prompt } });

@@ -311,6 +311,18 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         window.removeEventListener('online', nudge);
         socket?.stop();
         socket = null;
+        // Fix round 1 (I1): a dropped connection must not leave a stale hook
+        // ask sitting in the store forever. The server's own per-connection
+        // sentinel (sessionws.ts's checkHookAsk) now guarantees an explicit
+        // ask_cleared on every fresh connect when nothing is really pending,
+        // but `ReconnectingSocket`'s automatic reconnects never call this
+        // function — only an explicit teardown (leaving the session screen,
+        // a swap/compact cycle) does. This is the belt to that fix's braces:
+        // whatever the next connect delivers is authoritative, never a
+        // leftover from before the drop. `dialog` is untouched — the scraped
+        // channel has no analogous "was this fleet host still writing while
+        // we were gone" gap, since the pane is re-scraped fresh every poll.
+        set({ ask: null });
       },
 
       async send(text, opts = {}) {

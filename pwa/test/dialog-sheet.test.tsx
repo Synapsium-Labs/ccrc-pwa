@@ -615,12 +615,14 @@ describe('DialogSheet (hook envelope)', () => {
     expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID);
   });
 
-  it('toasts rather than failing silently when Deny 409s (the request already resolved)', async () => {
+  it('toasts an honest, ambiguity-acknowledging message when Deny 409s (fix round 1: not-busy could mean either idle or already-resolved)', async () => {
     vi.spyOn(api, 'interrupt').mockRejectedValue(new ApiError(409, { ok: false, error: 'not-busy' }));
     renderWithAsk(APPROVAL_ASK);
 
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
-    expect(await screen.findByText(/nothing to stop/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/couldn't stop.*session may be idle or the request already resolved/i),
+    ).toBeInTheDocument();
   });
 
   it('prefers the envelope over a simultaneously pending scraped dialog', () => {
@@ -655,5 +657,208 @@ describe('DialogSheet (hook envelope)', () => {
     expect(
       screen.getByText('Which migration strategy for the legacy orders table?'),
     ).toBeInTheDocument();
+  });
+
+  // — fix round 1, (Critical) #1: dismissal parity with the scraped sheet —
+  describe('dismissal', () => {
+    it('a scrim tap hides the envelope without touching the store\'s ask (hide, not clear)', () => {
+      const { store } = renderWithAsk(QUESTION_ASK);
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+
+      expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+      expect(store.getState().ask).toEqual(QUESTION_ASK);
+    });
+
+    it('reopens for a DIFFERENT envelope after being dismissed', () => {
+      const { store } = renderWithAsk(QUESTION_ASK);
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+
+      const other: HookAsk = { approval: { tool: 'Write', summary: 'notes.md' } };
+      act(() => {
+        store.getState().apply({ type: 'ask', ask: other });
+      });
+
+      expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
+      expect(screen.getByText('Write')).toBeInTheDocument();
+    });
+
+    it('refuses to dismiss while a numbered-option answer is in flight', () => {
+      const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      renderWithAsk(QUESTION_ASK);
+
+      fireEvent.click(screen.getByRole('button', { name: /Big bang/ }));
+      expect(spy).toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
+    });
+
+    it('refuses to dismiss while Allow is in flight', () => {
+      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      renderWithAsk(APPROVAL_ASK);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
+    });
+
+    it('refuses to dismiss while Deny is in flight', () => {
+      vi.spyOn(api, 'interrupt').mockReturnValue(new Promise(() => {}));
+      renderWithAsk(APPROVAL_ASK);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
+    });
+  });
+
+  // — fix round 1, (Critical) #2: fail visibly, never a silent no-op —
+  describe('no scraped dialog to answer against', () => {
+    it('question options render disabled, plus the "Open terminal to answer" / "Not now" CTA', () => {
+      const onOpenTerminal = vi.fn();
+      const store = makeStore();
+      act(() => {
+        store.getState().apply({ type: 'ask', ask: QUESTION_ASK });
+      });
+      render(
+        <>
+          <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
+          <ToastHost />
+        </>,
+      );
+
+      for (const label of [/Canary first/, /Big bang/]) {
+        expect(screen.getByRole('button', { name: label })).toBeDisabled();
+      }
+      const cta = screen.getByRole('button', { name: 'Open terminal to answer' });
+      const notNow = screen.getByRole('button', { name: 'Not now' });
+
+      fireEvent.click(cta);
+      expect(onOpenTerminal).toHaveBeenCalledOnce();
+      expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+
+      // Reopen it to prove "Not now" hides too, independent of the CTA tap.
+      act(() => {
+        store.getState().apply({ type: 'ask_cleared' });
+        store.getState().apply({ type: 'ask', ask: QUESTION_ASK });
+      });
+      fireEvent.click(notNow);
+      expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+    });
+
+    it('an approval\'s Allow renders disabled with the same CTA; Deny stays enabled (interrupt needs no dialog)', () => {
+      const interruptSpy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
+      const store = makeStore();
+      act(() => {
+        store.getState().apply({ type: 'ask', ask: APPROVAL_ASK });
+      });
+      render(
+        <>
+          <DialogSheet id={SESSION_ID} store={store} />
+          <ToastHost />
+        </>,
+      );
+
+      expect(screen.getByRole('button', { name: 'Allow' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+      expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID);
+    });
+
+    it('once a scraped dialog appears, the same envelope\'s rows become tappable', () => {
+      const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const store = makeStore();
+      act(() => {
+        store.getState().apply({ type: 'ask', ask: QUESTION_ASK });
+      });
+      render(<DialogSheet id={SESSION_ID} store={store} />);
+      expect(screen.getByRole('button', { name: /Big bang/ })).toBeDisabled();
+
+      act(() => {
+        store.getState().apply({ type: 'dialog', dialog: parsedDialog() });
+      });
+      expect(screen.getByRole('button', { name: /Big bang/ })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: /Big bang/ }));
+      expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 2);
+    });
+  });
+
+  // — fix round 1, (I2): only questions[0] is tappable —
+  it('with more than one question, only the first is tappable — the rest render read-only', () => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const twoQuestions: HookAsk = {
+      questions: [
+        { question: 'First: which env?', options: [{ label: 'Staging' }, { label: 'Prod' }] },
+        { question: 'Second: which region?', options: [{ label: 'EU' }, { label: 'US' }] },
+      ],
+    };
+    renderWithAsk(twoQuestions);
+
+    // The second question's copy is on screen…
+    expect(screen.getByText('Second: which region?')).toBeInTheDocument();
+    expect(screen.getByText('EU')).toBeInTheDocument();
+    // …but not as a button: no accidental "digit 1 answers the wrong question".
+    expect(screen.queryByRole('button', { name: 'EU' })).not.toBeInTheDocument();
+    expect(screen.getByText('EU').closest('button')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Prod' }));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 2);
+  });
+
+  // — fix round 1, (I4): a blank/empty envelope is treated as absent —
+  describe('blank envelope guard', () => {
+    it('an empty questions array falls through to the scraped dialog entirely', () => {
+      renderWithAsk({ questions: [] }, parsedDialog());
+
+      expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Which migration strategy for the legacy orders table?'),
+      ).toBeInTheDocument();
+    });
+
+    it('a blank first question falls through to the scraped dialog entirely', () => {
+      renderWithAsk(
+        { questions: [{ question: '   ', options: [{ label: 'Yes' }] }] },
+        parsedDialog(),
+      );
+
+      expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Which migration strategy for the legacy orders table?'),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // — fix round 1, (I5): a11y parity with the scraped rows —
+  describe('aria-busy', () => {
+    it('a question row carries aria-busy and "answering…" while its answer is in flight', () => {
+      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      renderWithAsk(QUESTION_ASK);
+
+      const row = screen.getByRole('button', { name: /Big bang/ });
+      fireEvent.click(row);
+      expect(row).toHaveAttribute('aria-busy', 'true');
+      expect(screen.getByText('answering…')).toBeInTheDocument();
+    });
+
+    it('Allow carries aria-busy while in flight; Deny carries it independently', () => {
+      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      renderWithAsk(APPROVAL_ASK);
+
+      const allow = screen.getByRole('button', { name: /Allow/ });
+      fireEvent.click(allow);
+      expect(allow).toHaveAttribute('aria-busy', 'true');
+    });
+
+    it('Deny carries aria-busy while its own interrupt call is in flight', () => {
+      vi.spyOn(api, 'interrupt').mockReturnValue(new Promise(() => {}));
+      renderWithAsk(APPROVAL_ASK);
+
+      const deny = screen.getByRole('button', { name: /Deny/ });
+      fireEvent.click(deny);
+      expect(deny).toHaveAttribute('aria-busy', 'true');
+    });
   });
 });

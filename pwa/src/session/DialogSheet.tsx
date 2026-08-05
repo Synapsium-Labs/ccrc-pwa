@@ -40,6 +40,27 @@
 // into it: `sendPrompt` refuses outright while one is up (send.ts's `hasMenu`
 // guard), so a permission confirm — which IS a menu — cannot be answered by
 // sending literal text the way a free-text reply is.
+//
+// Fix round 1 (review of the above): the envelope was failing CLOSED in
+// exactly the scrape-failure mode it exists to cover. Four corrections, all
+// PWA-side:
+//  - Dismissal parity: the envelope now shares the SAME dismissedKey/open/
+//    hide machinery as the scraped sheet below (a hash of the envelope's own
+//    JSON stands in for the id HookAsk doesn't carry) — scrim/Esc/swipe hide
+//    it exactly as they hide a scraped dialog, refused while a send is in
+//    flight, and the header badge/fleet card keep signalling regardless
+//    (nothing here ever touches the store).
+//  - Fail-visible, not fail-silent: `answer()` needs a live scraped `dialog`
+//    to target (it re-parses the pane), so whenever `dialog` is null the
+//    envelope's rows/Allow render VISIBLY DISABLED with the same "Open
+//    terminal to answer"/"Not now" CTA the unparsed-scraped branch already
+//    uses, instead of a tap that quietly does nothing.
+//  - Only the FIRST question in a multi-question envelope is tappable — the
+//    digit space answerDialog walks is one live menu's worth at a time,
+//    matching what's actually on screen; later questions render read-only.
+//  - A blank/empty envelope (no questions, or a blank first question) has
+//    nothing accessible of its own to show, so it is treated as absent and
+//    the sheet falls through to the scraped dialog entirely.
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
@@ -53,6 +74,23 @@ import './chat.css';
 const CHAT_ABOUT_RE = /chat about this/i;
 const CLEAR_POLL_MS = 400;
 const CLEAR_TRIES = 20; // ~8 s — the stream polls the pane every 2 s
+
+/**
+ * I4: is there anything accessible to actually show? Mirrors the scraped
+ * path's own blank-question fallback further down (`ask?.question.trim() ??
+ * ''`), but that path still has the PANE's own title/options to fall back
+ * to when the transcript's copy is blank — a hook envelope has no such
+ * second source of its own, so "blank" here means "treat as absent" rather
+ * than "render with an empty title", which would leave the sheet with no
+ * accessible name at all (the same failure mode that comment documents).
+ * A type guard so the call site gets `hookAsk` narrowed to `HookAsk` for
+ * free, rather than a boolean the compiler can't connect back to it.
+ */
+function isUsableAsk(a: HookAsk | null): a is HookAsk {
+  if (a === null) return false;
+  if ('approval' in a) return true;
+  return a.questions.length > 0 && a.questions[0]!.question.trim() !== '';
+}
 
 export interface DialogSheetProps {
   id: string;
@@ -69,8 +107,14 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
 
   // The option index whose answer is in flight (null = none).
   const [answering, setAnswering] = useState<number | null>(null);
-  // Dialog id the user waved away — it stays hidden until a new question.
-  const [dismissedId, setDismissedId] = useState<string | null>(null);
+  // The identity of whichever content — a scraped dialog's id, or a
+  // stringified hook envelope (HookAsk carries no id of its own; see
+  // `askKey` below) — the user waved away with a scrim tap, Esc, or swipe.
+  // It stays hidden until something with a DIFFERENT identity arrives. One
+  // slot serves both sheets below: only one is ever open at a time (the
+  // envelope preference), and sharing it means a dismissal survives the
+  // moment display hands off from one to the other.
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   // Free-form reply (answer in your own words) + the raw "full question" view.
   const [reply, setReply] = useState('');
   const [details, setDetails] = useState(false);
@@ -87,10 +131,10 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
     setAnswering(null);
   }, [dialogId]);
 
-  const open = dialog !== null && dialog.id !== dismissedId;
+  const open = dialog !== null && dialog.id !== dismissedKey;
 
   const hide = (): void => {
-    if (lastRef.current !== null) setDismissedId(lastRef.current.id);
+    if (lastRef.current !== null) setDismissedKey(lastRef.current.id);
   };
 
   const close = (): void => {
@@ -159,16 +203,29 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
     }
   };
 
-  // The hook envelope wins DISPLAY the moment it exists — see the file
-  // header. It can be non-null while `shown` is still null (the envelope
-  // arrived first), so this has to come before the `shown === null` bailout.
-  if (hookAsk !== null) {
+  // The hook envelope wins DISPLAY the moment it is USABLE — see the file
+  // header (fix round 1's I4). It can be non-null while `shown` is still null
+  // (the envelope arrived first), so this has to come before the
+  // `shown === null` bailout.
+  if (isUsableAsk(hookAsk)) {
+    // A hash of the envelope's JSON stands in for an identity HookAsk
+    // doesn't carry. Content equality is exactly what should reopen or stay
+    // dismissed here: session-hook.sh rewrites the whole file on every
+    // relevant transition, so two reads that serialize the same string ARE
+    // the same question/approval as far as this sheet cares, and a
+    // genuinely new one always serializes differently (a new question
+    // string, a new tool/summary pair, an added/removed option, …).
+    const askKey = JSON.stringify(hookAsk);
     return (
       <EnvelopeSheet
         id={id}
         ask={hookAsk}
+        dialog={dialog}
         answering={answering}
+        open={askKey !== dismissedKey}
+        onHide={() => setDismissedKey(askKey)}
         onSelectOption={(optionIndex) => void answer(optionIndex)}
+        onOpenTerminal={onOpenTerminal}
       />
     );
   }
@@ -331,32 +388,65 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
 
 /**
  * The hook-sourced envelope's own content — see the file header for why this
- * exists alongside the scraped rendering above instead of replacing it.
- * `onSelectOption` IS `answer()` from the scraped flow (passed down verbatim,
- * so a tap here walks the live pane exactly as a scraped option tap does);
- * Deny has no scraped counterpart to reuse — Escape has no option index to
- * walk to — so it calls `api.interrupt` directly, the same call
- * SessionScreen's stop button makes.
+ * exists alongside the scraped rendering above instead of replacing it, and
+ * for the fix-round-1 summary of what changed here.
+ *
+ * Dismissal: `open`/`onHide` are wired from the PARENT exactly like the
+ * scraped sheet's own `open`/`hide` (same `dismissedKey` slot, see there) —
+ * a scrim tap, Esc, or swipe only hides this sheet, refused while a send
+ * here (`answering` OR `denying`) is in flight, and never touches the store:
+ * the header badge and fleet card keep signalling regardless.
+ *
+ * Fail-visible: `onSelectOption` IS `answer()` from the scraped flow (passed
+ * down verbatim, so a tap here walks the live pane exactly as a scraped
+ * option tap does) — and that walk needs `dialog` (re-parses the PANE, which
+ * the envelope has none of its own). So numbered options and Allow (the same
+ * call at index 1) are tappable only when `dialog` is non-null; otherwise
+ * they render visibly disabled behind the same "Open terminal to
+ * answer"/"Not now" CTA the unparsed-scraped branch above already uses. Deny
+ * has no scraped counterpart to reuse and no such dependency either — Escape
+ * has no option index to walk to, so it calls `api.interrupt` directly (the
+ * same call SessionScreen's stop button makes) and stays enabled regardless
+ * of `dialog`.
  */
 function EnvelopeSheet({
   id,
   ask,
+  dialog,
   answering,
+  open,
+  onHide,
   onSelectOption,
+  onOpenTerminal,
 }: {
   id: string;
   ask: HookAsk;
+  /** The scraped dialog `answer()` needs to have anything to send against.
+   *  null means the envelope showed up with no matching live pane menu yet
+   *  (or it moved on) — read-only until one appears. */
+  dialog: Dialog | null;
   /** The scraped flow's in-flight option index — shared so a numbered-option
    *  tap here disables the same way a scraped one does. */
   answering: number | null;
+  open: boolean;
+  onHide: () => void;
   onSelectOption: (optionIndex: number) => void;
+  onOpenTerminal?: () => void;
 }): ReactNode {
   // Deny's own busy flag: interrupt is not "answering an option" (there is no
   // optionIndex for Escape), so it can't reuse `answering` — but it disables
   // the same buttons `answering` would, and vice versa, so neither send can
-  // race the other.
+  // race the other, and BOTH gate dismissal below (the open sheet is the only
+  // honest record that a tap is still landing — same rule the scraped sheet's
+  // `close` follows for `answering` alone).
   const [denying, setDenying] = useState(false);
   const busy = answering !== null || denying;
+  const canAnswer = dialog !== null;
+
+  const close = (): void => {
+    if (busy) return;
+    onHide();
+  };
 
   const deny = async (): Promise<void> => {
     if (busy) return;
@@ -365,7 +455,10 @@ function EnvelopeSheet({
       await api.interrupt(id);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        toast("That request already resolved — nothing to stop");
+        // interrupt's `not-busy` can mean EITHER "the agent already finished
+        // on its own" or "someone else already answered this same request" —
+        // the response can't tell them apart, so the copy doesn't pretend to.
+        toast("Couldn't stop — the session may be idle or the request already resolved");
       } else {
         toast(`Couldn't decline — ${apiErrorText(err)}`, 'error');
       }
@@ -374,84 +467,160 @@ function EnvelopeSheet({
     }
   };
 
+  // The fail-visible CTA (I-critical #2): identical markup to the unparsed
+  // scraped branch above, so a dialog-less envelope reads as "the same kind
+  // of dead end", not a new one. Both buttons route through `close` (not a
+  // raw `onHide`) — stricter than that branch needs to be (nothing there can
+  // ever be `answering`), but Deny here CAN be in flight with `dialog` still
+  // null, and hopping to the terminal mid-Deny would be a second action
+  // landing on top of an unresolved first one.
+  const terminalCta = !canAnswer && (
+    <div className="dlg-actions">
+      <button
+        type="button"
+        className="btn-primary"
+        onClick={() => {
+          close();
+          onOpenTerminal?.();
+        }}
+      >
+        Open terminal to answer
+      </button>
+      <button type="button" className="dlg-later" onClick={close}>
+        Not now
+      </button>
+    </div>
+  );
+
   if ('approval' in ask) {
     const { tool, summary } = ask.approval;
+    const allowing = answering === 1;
     return (
-      <Sheet open onClose={() => {}} eyebrow="claude is asking" title={tool}>
+      <Sheet open={open} onClose={close} eyebrow="claude is asking" title={tool}>
         <div data-source="hook" className="ask-envelope">
           <p className="dlg-copy">{summary}</p>
+          {!canAnswer && (
+            <p className="dlg-copy">
+              This hasn't shown up in the terminal pane yet — Allow can't be sent until it does.
+            </p>
+          )}
           <div className="dlg-actions">
             <button
               type="button"
               className="btn-primary"
-              disabled={busy}
+              disabled={!canAnswer || busy}
+              aria-busy={allowing || undefined}
               onClick={() => onSelectOption(1)}
             >
               Allow
+              {allowing && <span className="opt-wait"> answering…</span>}
             </button>
-            <button type="button" className="dlg-later" disabled={busy} onClick={() => void deny()}>
+            <button
+              type="button"
+              className="dlg-later"
+              disabled={busy}
+              aria-busy={denying || undefined}
+              onClick={() => void deny()}
+            >
               Deny
+              {denying && <span className="opt-wait"> answering…</span>}
             </button>
           </div>
+          {terminalCta}
         </div>
       </Sheet>
     );
   }
 
-  // First question's header/text ride the sheet's own eyebrow/title, exactly
-  // like the scraped path's `ask.header`/`ask.question` above — saying it
-  // twice (once there, once in the scrolling body) is the same mistake that
-  // comment already documents for the scraped case. Any FURTHER questions in
-  // the envelope (AskUserQuestion can ask more than one at once) have no such
-  // slot, so those get their header/text inline.
-  const questions = ask.questions;
-  const first = questions[0];
-  const eyebrow = first?.header ? (
+  // I3: only the FIRST question is tappable. The digit space `answerDialog`
+  // walks is one live menu's worth of options at a time (it re-parses the
+  // pane, which shows one question at a time) — a global digit across
+  // MULTIPLE questions would answer the wrong one, since tapping question 2's
+  // first option would still send digit 1, which IS question 1's own first
+  // option. Further questions in the envelope (AskUserQuestion can ask more
+  // than one at once) render below, read-only — shown, never silently
+  // dropped, just not wired to a send this sheet has no way to route safely.
+  const first = ask.questions[0]!; // isUsableAsk (the caller's guard) proves this
+  const rest = ask.questions.slice(1);
+  const eyebrow = first.header ? (
     <>
       claude is asking <span className="dlg-header-chip">{first.header}</span>
     </>
   ) : (
     'claude is asking'
   );
+
   return (
-    <Sheet open onClose={() => {}} eyebrow={eyebrow} title={first?.question ?? ''}>
+    <Sheet open={open} onClose={close} eyebrow={eyebrow} title={first.question}>
       <div data-source="hook" className="ask-envelope">
-        {questions.map((q, qi) => (
-          <Fragment key={qi}>
-            {qi > 0 && q.header && <p className="dlg-header-chip">{q.header}</p>}
-            {qi > 0 && <p className="dlg-copy">{q.question}</p>}
-            {/* v1: a multiSelect question renders the exact same plain rows as
-                a single-select one — the send path is one digit either way
-                (answerDialog walks to a single option index and confirms;
-                there is no wire capacity to submit more than one). The
-                scraped path has no multi-select rendering of its own to
-                diverge from either: a multi-select pane comes back
-                { parsed: false } there (see MULTISELECT_RE in
-                server/src/pane/dialog.ts) and falls to the raw-pane view
-                instead, so "match the scraped behavior" here means "there is
-                none to match" — plain rows are the only rendering either path
-                has for this case. */}
-            <div className="opts">
-              {q.options.map((o, oi) => (
-                <button
-                  key={oi}
-                  type="button"
-                  className="opt"
-                  disabled={answering !== null}
-                  onClick={() => onSelectOption(oi + 1)}
-                >
-                  <span className="opt-idx" aria-hidden="true">
-                    {oi + 1}
-                  </span>
-                  <span className="opt-body">
-                    <span className="opt-label">{o.label}</span>
-                    {o.description && <span className="opt-desc">{o.description}</span>}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </Fragment>
-        ))}
+        {!canAnswer && (
+          <p className="dlg-copy">
+            This hasn't shown up in the terminal pane yet — answer it there, or wait for it to
+            catch up.
+          </p>
+        )}
+        {/* v1: a multiSelect question renders the exact same plain rows as a
+            single-select one — the send path is one digit either way
+            (answerDialog walks to a single option index and confirms; there
+            is no wire capacity to submit more than one). The scraped path has
+            no multi-select rendering of its own to diverge from either: a
+            multi-select pane comes back { parsed: false } there (see
+            MULTISELECT_RE in server/src/pane/dialog.ts) and falls to the
+            raw-pane view instead, so "match the scraped behavior" here means
+            "there is none to match" — plain rows are the only rendering
+            either path has for this case. */}
+        <div className="opts">
+          {first.options.map((o, oi) => {
+            const idx = oi + 1;
+            const waiting = answering === idx;
+            return (
+              <button
+                key={oi}
+                type="button"
+                className="opt"
+                disabled={!canAnswer || answering !== null}
+                aria-busy={waiting || undefined}
+                onClick={() => onSelectOption(idx)}
+              >
+                <span className="opt-idx" aria-hidden="true">
+                  {idx}
+                </span>
+                <span className="opt-body">
+                  <span className="opt-label">{o.label}</span>
+                  {o.description && <span className="opt-desc">{o.description}</span>}
+                </span>
+                {waiting && <span className="opt-wait">answering…</span>}
+              </button>
+            );
+          })}
+        </div>
+        {terminalCta}
+        {rest.length > 0 && (
+          // Read-only: see the comment above `first` for why only the first
+          // question ever sends. Plain divs, not buttons — nothing here
+          // should read as tappable to a screen reader either.
+          <div className="ask-envelope-more">
+            {rest.map((q, qi) => (
+              <Fragment key={qi}>
+                {q.header && <p className="dlg-header-chip">{q.header}</p>}
+                <p className="dlg-copy">{q.question}</p>
+                <div className="opts">
+                  {q.options.map((o, oi) => (
+                    <div key={oi} className="opt" aria-disabled="true">
+                      <span className="opt-idx" aria-hidden="true">
+                        {oi + 1}
+                      </span>
+                      <span className="opt-body">
+                        <span className="opt-label">{o.label}</span>
+                        {o.description && <span className="opt-desc">{o.description}</span>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Fragment>
+            ))}
+          </div>
+        )}
       </div>
     </Sheet>
   );

@@ -69,6 +69,23 @@ const collect = (ws: WebSocket) => {
     });
 };
 
+/**
+ * `next()` that skips the hook-ask channel — fix round 1 (I1): every fresh
+ * connect now sends an explicit `ask_cleared` the moment checkHookAsk first
+ * runs (its sentinel starts `undefined`, not `null`, precisely so a
+ * possibly-stale client gets told there is truly nothing pending — see that
+ * field's own comment in sessionws.ts). These fixtures never seed a
+ * hookstate file, so that frame always lands somewhere in the early message
+ * sequence; the tests below are about the transcript/backlog channel and
+ * would otherwise race it non-deterministically.
+ */
+const nextIgnoringAsk = async (next: ReturnType<typeof collect>, timeoutMs?: number): Promise<any> => {
+  for (;;) {
+    const m = await next(timeoutMs);
+    if (m.type !== 'ask' && m.type !== 'ask_cleared') return m;
+  }
+};
+
 const opened = (ws: WebSocket): Promise<void> =>
   new Promise((resolve, reject) => {
     ws.on('open', () => resolve());
@@ -299,6 +316,26 @@ describe('hook ask envelope frames', () => {
     expect(ask).toBeDefined();
     expect(ask.ask).toEqual(HOOK_ASK_1);
   });
+
+  // Fix round 1 (I1): reconnect-with-stale-client-ask. A brand-new connection
+  // (every reconnect, automatic or explicit, is a brand-new SessionStream —
+  // see start()) whose hookstate is ALREADY absent must still tell the client
+  // explicitly that nothing is pending — a possibly-stale client-side `ask`
+  // (left over from before the drop; the PWA's own disconnect() now nulls it
+  // on an EXPLICIT teardown, but ReconnectingSocket's automatic reconnects
+  // never call that) would otherwise never be corrected, since the OLD
+  // sentinel (`null`) already "agreed" with a hookstate read of null on the
+  // very first check and sent nothing at all.
+  it('a brand-new connection with nothing pending still sends an explicit ask_cleared on first check', async () => {
+    const { frames } = await streamWith({}); // no hookstate seeded at any step
+    expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
+    expect(frames.filter((f) => f.type === 'ask')).toHaveLength(0);
+  });
+
+  it('does not resend ask_cleared on later ticks once the first check already sent it', async () => {
+    const { frames } = await streamWith({ hookstateSequence: [null, null, null] });
+    expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
+  });
 });
 
 describe('dialog enrichment', () => {
@@ -395,7 +432,14 @@ describe('dialog enrichment', () => {
       paneSequence: [ask, fixture('busy.txt'), ask, ask],
       transcriptSequence: [t],
     });
-    expect(frames.map((f) => f.type)).toEqual(['dialog', 'dialog_cleared', 'dialog']);
+    // Fix round 1 (I1): a no-hookstate fixture like this one now also emits a
+    // single explicit `ask_cleared` on the first check (checkHookAsk's
+    // sentinel starts `undefined`, not `null` — see its own comment). This
+    // test is about the DIALOG channel; filter the unrelated hook-ask noise
+    // out before pinning its sequence.
+    expect(frames.filter((f) => f.type !== 'ask' && f.type !== 'ask_cleared').map((f) => f.type)).toEqual([
+      'dialog', 'dialog_cleared', 'dialog',
+    ]);
     const dialogs = frames.filter((f) => f.type === 'dialog');
     expect(dialogs[1]!.dialog.ask?.options).toHaveLength(3);
     // Two appearances, two reads — and the fourth poll re-latches, not re-reads.
@@ -483,7 +527,7 @@ describe('session WS', () => {
     expect(backlog.offset).toBe(statSync(fileA).size);
 
     appendFileSync(fileA, userLine('u3', 'three'));
-    const ev = await next(6000);
+    const ev = await nextIgnoringAsk(next, 6000);
     expect(ev.type).toBe('events');
     expect(ev.uuid).toBe(UUID_A);
     expect(ev.events).toHaveLength(1);
@@ -512,7 +556,7 @@ describe('session WS', () => {
     await opened(ws);
 
     appendFileSync(fileA, userLine('u9', 'after resume'));
-    const first = await next(6000);
+    const first = await nextIgnoringAsk(next, 6000);
     expect(first.type).toBe('events'); // no backlog on a matching `since` resume
     expect(first.uuid).toBe(UUID_A);
     expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u9']);
@@ -572,7 +616,7 @@ describe('session WS', () => {
     expect(backlog.offset).toBe(0);
 
     writeFileSync(fileA, userLine('u1', 'file appeared'));
-    const ev = await next(6000);
+    const ev = await nextIgnoringAsk(next, 6000);
     expect(ev.type).toBe('events');
     expect(ev.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1']);
 
