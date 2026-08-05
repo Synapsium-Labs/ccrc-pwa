@@ -6,7 +6,8 @@ const s = (over: Partial<FleetSession>): FleetSession => ({
   id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
   workspace: null, name: null, status: 'idle', statusUpdatedAt: 0, limits: null,
   dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, ...over,
+  ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, ...over,
 });
 
 describe('groupFleet', () => {

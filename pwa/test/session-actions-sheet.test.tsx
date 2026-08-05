@@ -11,7 +11,8 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  tasks: null, pr: null, archivedAt: null, archivedBytes: null, ...over,
+  tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, ...over,
 });
 
 /** The REAL server failure shape: runCcd routes answer 502 with `stderr` and

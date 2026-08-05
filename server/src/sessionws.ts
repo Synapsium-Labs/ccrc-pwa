@@ -7,6 +7,7 @@ import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
+import { readHookState } from './hookstate.js';
 import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
 const POLL_MS = 2000;
@@ -40,6 +41,9 @@ export class SessionStream {
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
+  /** Serialized last-sent hook ask envelope — the change gate for `ask` /
+   *  `ask_cleared`. See `checkHookAsk`. */
+  private lastAskJson: string | null = null;
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
   // This stream detects dialogs itself (start + every tick), so it always
@@ -47,6 +51,15 @@ export class SessionStream {
   // global watcher only emits on the appear/clear transition, which a
   // late-joining client would miss. Ignore the watcher's dialog bus events here
   // to avoid double-delivery; still forward its notices.
+  //
+  // A second channel runs the same way, alongside it: `checkHookAsk` reads
+  // `~/.cc-sessions/<id>.hookstate.json` itself, on connect and every tick,
+  // and sends `ask` / `ask_cleared` on its own change gate (`lastAskJson`) —
+  // the hook-sourced envelope, entirely independent of the pane scrape above.
+  // The two channels can disagree (a hook fires before the pane redraws, or
+  // reports an ask the pane never shows) and NEITHER suppresses the other:
+  // both are sent exactly as read. The client prefers the envelope when both
+  // are present; the server never guesses which one is right.
   private readonly onSessionMsg = (m: SessionStreamMsg): void => {
     if (m.type === 'dialog' || m.type === 'dialog_cleared') return;
     this.send(m);
@@ -80,6 +93,8 @@ export class SessionStream {
     await this.checkDialog(r?.file ?? null); // deliver an already-pending dialog on connect
     if (this.stopped) return;
     if (r) await this.checkTasks(r.cfgDir, r.uuid); // and the plan as it stands
+    if (this.stopped) return;
+    if (r) await this.checkHookAsk(r.uuid); // and any hook ask already waiting
     if (this.stopped) return;
     this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
     this.poll.unref();
@@ -179,6 +194,23 @@ export class SessionStream {
     this.send({ type: 'tasks', tasks });
   }
 
+  /** Read this session's hookstate and send `ask` / `ask_cleared` when the
+   *  hook-sourced envelope appears, changes (JSON-compare), or goes away —
+   *  null, stale, or the file itself missing all read the same here: nothing
+   *  fresh to report. `readHookState` already gates freshness and identity
+   *  (uuid match against the registry), so a null return covers all three
+   *  uniformly — this frame just tracks the transition, not the reason. */
+  private async checkHookAsk(uuid: string): Promise<void> {
+    if (this.stopped) return;
+    const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, this.id, uuid, Date.now());
+    if (this.stopped) return;
+    const ask = hs?.ask ?? null;
+    const json = ask === null ? null : JSON.stringify(ask);
+    if (json === this.lastAskJson) return;
+    this.lastAskJson = json;
+    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask });
+  }
+
   stop(): void {
     this.stopped = true;
     this.bus.off('notice', this.onNotice);
@@ -271,6 +303,8 @@ export class SessionStream {
       await this.checkDialog(r.file);
       if (this.stopped) return;
       await this.checkTasks(r.cfgDir, r.uuid);
+      if (this.stopped) return;
+      await this.checkHookAsk(r.uuid);
     } finally {
       this.ticking = false;
     }

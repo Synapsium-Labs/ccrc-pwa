@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { assembleFleet, idHomeWrapper } from '../src/fleet.js';
+import { assembleFleet, hookAskSummary, idHomeWrapper } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
+import type { HookState } from '../src/hookstate.js';
 import type { PrState } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -15,6 +16,9 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
   const fields = { wrapper, project: id, workdir: `/data/projects/${id}`, uuid: '1'.repeat(36), started: '1', ...extra };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
+
+const mkHookState = (over: Partial<HookState> = {}): HookState =>
+  ({ state: 'working', updatedAt: 1784600000000, ask: null, subagents: [], interrupted: false, ...over });
 
 describe('idHomeWrapper', () => {
   it('longest prefix wins', () => {
@@ -296,5 +300,192 @@ describe('archived size on the wire', () => {
       '{"branch":"ws/far-shore","worktreeBytes":1e400}');
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((s) => s.id === 'demo-far-shore')!.archivedBytes).toBeNull();
+  });
+});
+
+describe('hook state on the wire', () => {
+  it('a fresh hookstate carries hookState, askSummary and subagents onto the session', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([
+      ['claude-demo', mkHookState({
+        state: 'waiting',
+        ask: { questions: [{ question: 'Pick one', header: 'Choose', options: [{ label: 'A' }, { label: 'B' }] }] },
+        subagents: [{ name: 'reviewer', startedAt: 1000 }],
+      })],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.hookState).toBe('waiting');
+    expect(s.askSummary).toBe('Choose');
+    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: 1000 }]);
+  });
+
+  it('a hookless session carries all three fields as null', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude-demo', 'claude');
+    // No `hookStates` map at all — the shape every existing caller had before
+    // this task, and still the shape a cold `/api/fleet` REST call can be.
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.hookState).toBeNull();
+    expect(s.askSummary).toBeNull();
+    expect(s.subagents).toBeNull();
+  });
+
+  it('dialogPending is true when only the pane detector says so', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude-demo', 'claude');
+    const pending = new Set(['claude-demo']);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000, pending,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.dialogPending).toBe(true);
+  });
+
+  it('dialogPending is true when only the hook reports waiting — the pane never painted a menu', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'waiting' })]]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.dialogPending).toBe(true);
+    // The tmux stub always fails `has-session`, so this session is dead —
+    // `waiting` earning dialogPending must not also earn it a status.
+    expect(s.status).toBe('dead');
+  });
+
+  it('dialogPending is false when NEITHER source says so — a working hook is not a pending dialog', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'working' })]]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.dialogPending).toBe(false);
+  });
+
+  it('status is IDENTICAL with and without a hookstate for the same fixture — status is frozen against hook data', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude2-MekWarLive', 'claude2');
+    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
+      name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes('cc-claude2-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+
+    const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
+    const hookStates = new Map<string, HookState>([['claude2-MekWarLive', mkHookState({ state: 'done' })]]);
+    const withHook = await assembleFleet(
+      localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, hookStates,
+    );
+    // `waiting` is the state most likely to tempt a status-derivation bug
+    // specifically — it is also the value dialogPending's OR-rule reads, so a
+    // fix or refactor near that line reaching one line too far (promoting an
+    // idle status to busy, or demoting this already-busy one) is the exact
+    // regression this fixture exists to catch. `done` above cannot pin that:
+    // it shares no vocabulary with anything status-adjacent.
+    const waitingHookStates = new Map<string, HookState>([['claude2-MekWarLive', mkHookState({ state: 'waiting' })]]);
+    const withWaitingHook = await assembleFleet(
+      localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
+    );
+
+    const before = withoutHook.find((x) => x.id === 'claude2-MekWarLive')!;
+    const after = withHook.find((x) => x.id === 'claude2-MekWarLive')!;
+    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude2-MekWarLive')!;
+    expect(before.status).toBe('busy');
+    expect(after.status).toBe(before.status);
+    expect(afterWaiting.status).toBe(before.status);
+    // The mutant this pins: only the hook-derived fields may differ.
+    expect(before.hookState).toBeNull();
+    expect(after.hookState).toBe('done');
+    expect(afterWaiting.hookState).toBe('waiting');
+  });
+});
+
+describe('hookAskSummary', () => {
+  it('is null when there is no hook state at all', () => {
+    expect(hookAskSummary(null)).toBeNull();
+  });
+
+  it('is null when the hook state is not waiting', () => {
+    expect(hookAskSummary(mkHookState({ state: 'working' }))).toBeNull();
+    expect(hookAskSummary(mkHookState({ state: 'done' }))).toBeNull();
+  });
+
+  it('is null for a waiting state with no ask envelope yet — the hook can report waiting a beat before the ask write lands', () => {
+    expect(hookAskSummary(mkHookState({ state: 'waiting', ask: null }))).toBeNull();
+  });
+
+  it("uses the first question's header when present", () => {
+    const hs = mkHookState({
+      state: 'waiting',
+      ask: {
+        questions: [
+          { question: 'Full question text nobody should read on a card', header: 'Pick a database', options: [] },
+          { question: 'A second question, never consulted', options: [] },
+        ],
+      },
+    });
+    expect(hookAskSummary(hs)).toBe('Pick a database');
+  });
+
+  it('falls back to the question text when there is no header', () => {
+    const hs = mkHookState({
+      state: 'waiting',
+      ask: { questions: [{ question: 'Which branch should this land on?', options: [] }] },
+    });
+    expect(hookAskSummary(hs)).toBe('Which branch should this land on?');
+  });
+
+  it('falls back to the question text when the header is empty or whitespace-only — a real shape, since header is optional on the tool call itself', () => {
+    const empty = mkHookState({
+      state: 'waiting',
+      ask: { questions: [{ question: 'Which branch should this land on?', header: '', options: [] }] },
+    });
+    expect(hookAskSummary(empty)).toBe('Which branch should this land on?');
+    const whitespace = mkHookState({
+      state: 'waiting',
+      ask: { questions: [{ question: 'Which branch should this land on?', header: '   ', options: [] }] },
+    });
+    expect(hookAskSummary(whitespace)).toBe('Which branch should this land on?');
+  });
+
+  it('formats an approval as "tool: summary"', () => {
+    const hs = mkHookState({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'rm -rf node_modules' } } });
+    expect(hookAskSummary(hs)).toBe('Bash: rm -rf node_modules');
+  });
+
+  it('is null when an approval has neither a tool nor a summary — never the bare ": "', () => {
+    const hs = mkHookState({ state: 'waiting', ask: { approval: { tool: '', summary: '' } } });
+    expect(hookAskSummary(hs)).toBeNull();
+  });
+
+  it('clips a question summary to 80 characters', () => {
+    const long = 'x'.repeat(120);
+    const hs = mkHookState({ state: 'waiting', ask: { questions: [{ question: long, options: [] }] } });
+    const out = hookAskSummary(hs);
+    expect(out).toHaveLength(80);
+    expect(out).toBe(long.slice(0, 80));
+  });
+
+  it('clips an approval summary to 80 characters', () => {
+    const hs = mkHookState({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'y'.repeat(120) } } });
+    expect(hookAskSummary(hs)).toHaveLength(80);
   });
 });

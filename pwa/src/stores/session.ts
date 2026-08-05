@@ -128,6 +128,13 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       return { ...s, dialog: null };
     case 'tasks':
       return { ...s, tasks: msg.tasks };
+    // Stub, pending the PWA hook-ux work: `SessionSnapshot` has no field to
+    // hold the hook-sourced envelope in yet, so these two are a harmless
+    // pass-through for now — kept as explicit cases (not a `default`) so a
+    // future SessionStreamMsg member still fails this switch at compile time.
+    case 'ask':
+    case 'ask_cleared':
+      return s;
     case 'rotated':
       return {
         ...s,
