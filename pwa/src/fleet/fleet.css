@@ -710,7 +710,31 @@
    .sess-open's stack uses (plus the 2px gap already hardcoded on
    .sess-open, not a new magic number) — not a guessed offset, so it tracks
    any future type-scale or line-height change instead of silently
-   drifting off again. */
+   drifting off again.
+
+   THE THIRD LINE (.sess-ask, hookState 'waiting' + askSummary) breaks the
+   premise this formula relies on: label + gap + meta + gap + ask measures
+   51.5px today (18.75 + 2 + 15 + 2 + 13.75) against the 44px --tap-min
+   floor, so .sess-open's auto height now tracks its CONTENT instead of the
+   floor and .sess-open's justify-content:center has zero slack left to
+   distribute — the label sits flush at the box's top, offset 0, not the
+   two-line formula's 4.125px. The base formula, left alone, still adds
+   that 4.125px and the dot reads ~4px low whenever a third line is present
+   (Task 7 fix round 1, review-found). The variant below is the SAME
+   formula with the third line's height (--text-2xs at --leading-tight)
+   and its own 2px gap folded in, wrapped in max(0px, …) rather than left
+   to go negative (-3.75px today) — negative would push the dot ABOVE the
+   label's line instead of just removing the non-existent slack, and the
+   clamp is what keeps this tracking token changes correctly in EITHER
+   direction: if a future type-scale shrinks the three-line stack back
+   under 44px, max() recovers the real positive slack instead of silently
+   drifting.
+
+   NO TEST GUARDS THIS: jsdom performs no layout and Vitest's `test.css`
+   defaults to false (styles are stubbed, never applied) — see
+   vite.config.ts's `test` block — so a regression here has no automated
+   signal. This comment is the only place the invariant is recorded; read
+   it before touching either rule. */
 .sess-lamp {
   grid-column: 1;
   align-self: start;
@@ -720,6 +744,12 @@
   margin-top: calc(
     (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
   );
+}
+.sess-line:has(.sess-ask) .sess-lamp {
+  margin-top: max(0px, calc(
+    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))
+      - 2px - (var(--text-2xs) * var(--leading-tight))) / 2
+  ));
 }
 
 .sess-open {
