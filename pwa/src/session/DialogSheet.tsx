@@ -69,6 +69,30 @@
 // jump to the terminal. `EnvelopeSheet`'s `openTerminal` now gates the whole
 // handler on `busy` once, not just the hide half of it.
 //
+// Fix round 3 (review of fix round 2 — Critical): `canAnswer` was `dialog !==
+// null` and nothing else — it let a live pane menu answer a DIFFERENT
+// question than the one on screen. A multi-question AskUserQuestion paints
+// one question at a time, but the hook writes ALL questions at once and
+// clears only on working/done, so while the pane shows question 2 the sheet
+// could still show question 1's rows enabled; a tap then walked question 2's
+// menu to question 1's index. Wrong answer, sent silently. `canAnswer` is now
+// a real correspondence check, not a null check:
+//  - Questions: `questionCorresponds` (below `isUsableAsk`) requires `dialog`
+//    to be non-null, PARSED, and to have an option at every position the
+//    envelope's first question does, each one a normalized prefix-match
+//    (case/whitespace-insensitive, either side may be the truncated one —
+//    the same rule server/src/transcript/ask.ts's `pairMatches` uses to
+//    identify a question in the first place, reimplemented here rather than
+//    imported since the pwa doesn't depend on server code).
+//  - Approval: Allow requires `dialog.parsed` and its first option to read
+//    like "Yes" — turning this file's own longstanding comment ("Claude
+//    Code's own confirm dialogs put Yes first") from an assumption into an
+//    assertion, since that's exactly what `answer(1)` bets on.
+// Either way a non-match renders the same as `dialog === null` always did:
+// rows/Allow disabled behind the "Open terminal to answer"/"Not now" CTA —
+// fail-visible, not fail-silent, same principle as fix round 1's #2, just
+// closing the gap that check left open.
+//
 // Known limitation, named rather than fixed (cross-channel, cheap to know
 // about, not cheap to restructure): `dismissedKey` is ONE slot shared by two
 // different identity spaces — a scraped `dialog`'s id, and a hash of the
@@ -82,7 +106,7 @@
 // whichever one is currently being displayed.
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog, HookAsk } from '../../../shared/api';
+import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { api, ApiError, apiErrorText } from '../lib/api';
@@ -172,8 +196,17 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
     } catch (err) {
       setAnswering(null);
       if (err instanceof ApiError && err.status === 409) {
-        // The on-screen menu moved on; the store's dialog re-renders shortly.
-        toast('That question changed — showing the latest');
+        // The on-screen menu moved on. The scraped sheet renders straight
+        // from `dialog`, so it re-renders with the new one right after this
+        // and "showing the latest" is literally true there — but the
+        // envelope sheet renders `hookAsk`, not `dialog`, and a 409 here
+        // changes nothing on screen: N1, that copy would read as a lie on
+        // this branch, so say what actually happened instead.
+        toast(
+          isUsableAsk(hookAsk)
+            ? "That question moved on in the terminal — this answer didn't land"
+            : 'That question changed — showing the latest',
+        );
       } else {
         toast(
           `Couldn't answer — ${err instanceof Error ? err.message : String(err)}`,
@@ -405,6 +438,37 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
   );
 }
 
+/** Mirrors server/src/transcript/ask.ts's `pairMatches`/`norm`: normalize by
+ *  trim + lowercase + collapsed whitespace, then compare as prefixes, since
+ *  either side may be the truncated one (leftCol cuts a scraped label at a
+ *  run of two spaces or the two-column gutter). Reimplemented here — not
+ *  imported — because the pwa doesn't depend on server code; keep this
+ *  identical to ask.ts's rule or the two layers' notion of "the same
+ *  question" drifts apart. */
+const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
+const prefixMatches = (a: string, b: string): boolean => {
+  const [x, y] = [norm(a), norm(b)];
+  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
+};
+
+/** C1: does the envelope's first question describe the same live menu
+ *  `dialog` is showing? `answer()` types `dialog`'s pane by INDEX, so this
+ *  has to be sure the envelope's copy and the pane's rows are the same
+ *  question before a tap is allowed to walk it — every one of the envelope's
+ *  options must line up with the pane's option at that same position (no
+ *  forgiveness the way ask.ts's `alignAsk` allows when merely deciding which
+ *  question is on screen: here the index is about to be TYPED). I1: an
+ *  unparsed `dialog` never corresponds — it has no reliable per-position
+ *  labels to compare (multi-select menus always parse this way; so does a
+ *  capture taken mid-redraw), so treating it as a match would answer a tap
+ *  by sending a stray arrow-key walk into a pane that isn't the numbered
+ *  menu it looks like. */
+function questionCorresponds(q: HookAskQuestion, dialog: Dialog | null): boolean {
+  if (dialog === null || !dialog.parsed) return false;
+  if (dialog.options.length < q.options.length) return false;
+  return q.options.every((o, i) => prefixMatches(dialog.options[i]!.label, o.label));
+}
+
 /**
  * The hook-sourced envelope's own content — see the file header for why this
  * exists alongside the scraped rendering above instead of replacing it, and
@@ -419,14 +483,19 @@ export function DialogSheet({ id, store, onOpenTerminal }: DialogSheetProps): Re
  * Fail-visible: `onSelectOption` IS `answer()` from the scraped flow (passed
  * down verbatim, so a tap here walks the live pane exactly as a scraped
  * option tap does) — and that walk needs `dialog` (re-parses the PANE, which
- * the envelope has none of its own). So numbered options and Allow (the same
- * call at index 1) are tappable only when `dialog` is non-null; otherwise
- * they render visibly disabled behind the same "Open terminal to
- * answer"/"Not now" CTA the unparsed-scraped branch above already uses. Deny
- * has no scraped counterpart to reuse and no such dependency either — Escape
- * has no option index to walk to, so it calls `api.interrupt` directly (the
- * same call SessionScreen's stop button makes) and stays enabled regardless
- * of `dialog`.
+ * the envelope has none of its own). Fix round 3 (Critical): needing `dialog`
+ * turned out not to be enough — `dialog` can be non-null and still describe
+ * a DIFFERENT question than the envelope (see the file header), so
+ * `canAnswer` below is a real correspondence check (`questionCorresponds`
+ * for questions, a Yes-first check for approval), not a bare null check. So
+ * numbered options and Allow (the same call at index 1) are tappable only
+ * when `dialog` is non-null, parsed, AND describes the same thing the
+ * envelope does; otherwise they render visibly disabled behind the same
+ * "Open terminal to answer"/"Not now" CTA the unparsed-scraped branch above
+ * already uses. Deny has no scraped counterpart to reuse and no such
+ * dependency either — Escape has no option index to walk to, so it calls
+ * `api.interrupt` directly (the same call SessionScreen's stop button makes)
+ * and stays enabled regardless of `dialog`.
  */
 function EnvelopeSheet({
   id,
@@ -460,7 +529,17 @@ function EnvelopeSheet({
   // `close` follows for `answering` alone).
   const [denying, setDenying] = useState(false);
   const busy = answering !== null || denying;
-  const canAnswer = dialog !== null;
+  // C1: a real correspondence check, not a null check — see fix round 3 in
+  // the file header and `questionCorresponds` above. Approval and questions
+  // use different rules because they answer differently: Allow always types
+  // index 1, so the one thing that has to be true is that index 1 on the
+  // pane reads like "Yes" (the file's longstanding assumption, now asserted
+  // rather than trusted); a question can have any number of options, so
+  // every one of them has to line up by position.
+  const canAnswer =
+    'approval' in ask
+      ? dialog !== null && dialog.parsed && /^yes/i.test(dialog.options[0]?.label ?? '')
+      : questionCorresponds(ask.questions[0]!, dialog);
 
   const close = (): void => {
     if (busy) return;
@@ -528,7 +607,8 @@ function EnvelopeSheet({
           <p className="dlg-copy">{summary}</p>
           {!canAnswer && (
             <p className="dlg-copy">
-              This hasn't shown up in the terminal pane yet — Allow can't be sent until it does.
+              This can't be matched to what's on the terminal pane yet — Allow can't be sent
+              until it does.
             </p>
           )}
           <div className="dlg-actions">
@@ -582,20 +662,24 @@ function EnvelopeSheet({
       <div data-source="hook" className="ask-envelope">
         {!canAnswer && (
           <p className="dlg-copy">
-            This hasn't shown up in the terminal pane yet — answer it there, or wait for it to
-            catch up.
+            This can't be matched to what's on the terminal pane yet — answer it there, or wait
+            for it to catch up.
           </p>
         )}
         {/* v1: a multiSelect question renders the exact same plain rows as a
             single-select one — the send path is one digit either way
             (answerDialog walks to a single option index and confirms; there
-            is no wire capacity to submit more than one). The scraped path has
-            no multi-select rendering of its own to diverge from either: a
-            multi-select pane comes back { parsed: false } there (see
-            MULTISELECT_RE in server/src/pane/dialog.ts) and falls to the
-            raw-pane view instead, so "match the scraped behavior" here means
-            "there is none to match" — plain rows are the only rendering
-            either path has for this case. */}
+            is no wire capacity to submit more than one). I1 (fix round 3):
+            this comment used to say the scraped path "falls to the raw-pane
+            view instead, so there is none to match" — true, but incomplete.
+            A multi-select pane ALWAYS comes back { parsed: false } (see
+            MULTISELECT_RE in server/src/pane/dialog.ts), and `dialog.parsed`
+            is now part of `canAnswer` (via `questionCorresponds`), so these
+            rows render but can never actually become tappable: the
+            correspondence gate keeps them behind the terminal CTA every
+            time, same as any other unparsed pane. Not a special case for
+            multiSelect — it falls out of the same gate everything else
+            unparsed does. */}
         <div className="opts">
           {first.options.map((o, oi) => {
             const idx = oi + 1;
@@ -625,8 +709,12 @@ function EnvelopeSheet({
         {rest.length > 0 && (
           // Read-only: see the comment above `first` for why only the first
           // question ever sends. Plain divs, not buttons — nothing here
-          // should read as tappable to a screen reader either.
+          // should read as tappable to a screen reader either. I3: a muted
+          // colour alone (`.opt[aria-disabled='true']` in chat.css) was easy
+          // to miss at a glance — the heading below and `.ask-envelope-more`'s
+          // separator rule say in words what the colour only implies.
           <div className="ask-envelope-more">
+            <p className="ask-envelope-more-heading">answer these in the terminal</p>
             {rest.map((q, qi) => (
               <Fragment key={qi}>
                 {q.header && <p className="dlg-header-chip">{q.header}</p>}
