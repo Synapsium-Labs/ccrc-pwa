@@ -72,6 +72,14 @@ describe('event → state mapping', () => {
     run({ hook_event_name: 'PostCompact', trigger: 'manual' });
     expect(readState().state).toBe('done');
   });
+  it('PreCompact is working', () => {
+    run({ hook_event_name: 'PreCompact' });
+    expect(readState().state).toBe('working');
+  });
+  it('PostToolUse is working', () => {
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    expect(readState().state).toBe('working');
+  });
   it('an unrecognized event writes nothing', () => {
     run({ hook_event_name: 'SessionEnd' });
     expect(fs.existsSync(stateFile())).toBe(false);
@@ -90,6 +98,24 @@ describe('subagents', () => {
     expect(readState().subagents).toHaveLength(0);
     for (let i = 0; i < 40; i++) run({ hook_event_name: 'SubagentStart', agent_name: `a${i}` });
     expect(readState().subagents.length).toBeLessThanOrEqual(32);
+  });
+  it('the cap keeps the newest arrivals, not the oldest', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    for (let i = 0; i < 40; i++) run({ hook_event_name: 'SubagentStart', agent_name: `a${i}` });
+    const names = readState().subagents.map((s: any) => s.name);
+    expect(names).toContain('a39');
+    expect(names).not.toContain('a0');
+  });
+  it('ask survives subagent events while waiting, and clears once the turn ends', () => {
+    const questions = [{ question: 'Which?', header: 'Pick', multiSelect: false, options: [] }];
+    run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions } });
+    expect(readState().state).toBe('waiting');
+    run({ hook_event_name: 'SubagentStart', agent_name: 'reviewer' });
+    let s = readState();
+    expect(s.state).toBe('waiting');
+    expect(s.ask).toEqual({ questions });
+    run({ hook_event_name: 'Stop' });
+    expect(readState().ask).toBeNull();
   });
 });
 

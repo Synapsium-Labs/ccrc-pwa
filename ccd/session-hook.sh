@@ -8,6 +8,7 @@
 # the agent (whitelist: .cc-sessions is readable; nothing here needs a
 # grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
+[[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
 payload=$(cat 2>/dev/null) || exit 0
@@ -60,7 +61,7 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   now=$(date +%s%3N)
   if [[ "$event" == SubagentStart ]]; then
     subs=$(jq -c --arg n "$name" --argjson t "$now" \
-      '(. + [{name:$n, startedAt:$t}]) | .[0:32]' <<<"$subs" 2>/dev/null) || subs="[]"
+      '(. + [{name:$n, startedAt:$t}]) | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
   else
     subs=$(jq -c --arg n "$name" 'del(.[ (map(.name) | index($n)) // empty ])' <<<"$subs" 2>/dev/null) || subs="[]"
   fi
@@ -92,7 +93,7 @@ if (( ${#out} > 65536 )); then
   (( ${#out} <= 65536 )) || exit 0
 fi
 
-tmp="$REG/.$id.hookstate.tmp"
+tmp="$REG/.$id.$$.hookstate.tmp"
 printf '%s\n' "$out" > "$tmp" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
 exit 0
