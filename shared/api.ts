@@ -950,6 +950,28 @@ export interface Dialog {
   ask?: DialogAsk;
 }
 
+/** One AskUserQuestion question, as `session-hook.sh` copies it VERBATIM from
+ *  the hook payload's `tool_input.questions` — the tool call's own JSON,
+ *  never inferred from terminal text the way `AskQuestion` above is. That
+ *  distinction is why the two types stay separate rather than sharing one:
+ *  `multiSelect` is optional here because a hook payload that omitted it must
+ *  not read as `false` (the pane-scraper always knows), and there is no
+ *  `preview` — nothing here was OCR'd off a rendered pane. */
+export interface HookAskQuestion {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: { label: string; description?: string }[];
+}
+
+/** `~/.cc-sessions/<id>.hookstate.json`'s `ask` field: either an
+ *  AskUserQuestion envelope (one or more questions awaiting an answer) or a
+ *  PermissionRequest envelope (one tool call awaiting Allow/Deny) — never
+ *  both, since `session-hook.sh` writes exactly one shape per waiting state. */
+export type HookAsk =
+  | { questions: HookAskQuestion[] }
+  | { approval: { tool: string; summary: string } };
+
 export type SessionStreamMsg =
   | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean }  // missing=true → transcript file not found at `file`; UI shows a diagnostic banner
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
