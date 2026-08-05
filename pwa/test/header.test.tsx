@@ -113,6 +113,15 @@ describe('SessionHeader', () => {
     expect(screen.getByText(/working/)).toBeInTheDocument();
   });
 
+  // The server already ORs a fresh hookState === 'waiting' into dialogPending
+  // (fleet.ts), so this pins the DEFENSIVE client-side OR: hookState alone,
+  // with dialogPending false, still drives the existing attention treatment
+  // — no new visual, same 'waiting on you' word/dot dialogPending already renders.
+  it('shows the attention word from hookState alone, even when dialogPending is false', () => {
+    renderHeader({ session: fleetSession({ dialogPending: false, hookState: 'waiting' }) });
+    expect(screen.getByText('waiting on you')).toBeInTheDocument();
+  });
+
   it('shows the clean project name, ignoring the auto-derived session name', () => {
     // Even when Claude Code supplies a derived name like "openclawhetzner-8f",
     // the header shows the project ("OpenClawHetzner"), not the noisy name.

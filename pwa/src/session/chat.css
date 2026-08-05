@@ -1519,16 +1519,28 @@ button.metachip:active {
 .opt:active:not(:disabled) {
   transform: scale(0.97);
 }
-.opt:disabled {
+.opt:disabled,
+.opt[aria-disabled='true'] {
   cursor: default;
 }
-/* While one row answers, its siblings recede; the answering row keeps ink. */
-.opt:disabled:not([aria-busy='true']) {
+/* While one row answers, its siblings recede; the answering row keeps ink.
+   I3: `.opt[aria-disabled='true']` covers the hook envelope's read-only
+   "rest" questions (DialogSheet.tsx's `.ask-envelope-more`) — plain divs,
+   so `:disabled` (a pseudo-class only a real form control can match) never
+   fires for them, and without this they painted identically to the live
+   rows above them. There's no aria-busy equivalent for a div that never
+   sends anything, so that half doesn't need a `:not([aria-busy='true'])`
+   qualifier the way the button rule does. */
+.opt:disabled:not([aria-busy='true']),
+.opt[aria-disabled='true'] {
   color: var(--ink-disabled);
 }
 .opt:disabled:not([aria-busy='true']) .opt-glyph,
 .opt:disabled:not([aria-busy='true']) .opt-idx,
-.opt:disabled:not([aria-busy='true']) .opt-enter {
+.opt:disabled:not([aria-busy='true']) .opt-enter,
+.opt[aria-disabled='true'] .opt-glyph,
+.opt[aria-disabled='true'] .opt-idx,
+.opt[aria-disabled='true'] .opt-enter {
   color: var(--ink-disabled);
 }
 .opt--selected {
@@ -1718,6 +1730,31 @@ button.metachip:active {
 }
 .dlg-later:active {
   color: var(--ink-primary);
+}
+
+/* The hook envelope (EnvelopeSheet in DialogSheet.tsx) — I3: carried no
+   rules of its own before this. Its children (.dlg-copy/.opts/.dlg-actions
+   above) already set their own spacing, so this exists as a stable
+   selector, not a source of new layout. */
+.ask-envelope {
+  display: block;
+}
+/* Further questions in a multi-question envelope: read-only (only the first
+   question is ever tappable — see DialogSheet's file header). I3: before
+   this they were visually identical to the live rows above them — muted by
+   .opt[aria-disabled='true'] now, but a colour change alone is easy to
+   miss, so the section also gets its own separator and label. */
+.ask-envelope-more {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--edge-subtle);
+}
+.ask-envelope-more-heading {
+  margin: 0 0 var(--sp-2);
+  color: var(--ink-tertiary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
 }
 
 /* ------------------------------------------------------------------ *

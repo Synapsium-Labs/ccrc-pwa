@@ -61,6 +61,16 @@ describe('state', () => {
     expect(screen.queryByText('working')).not.toBeInTheDocument();
   });
 
+  // The server already ORs a fresh hookState === 'waiting' into dialogPending
+  // (fleet.ts), so this pins the DEFENSIVE client-side OR: hookState alone,
+  // with dialogPending false, still renders the attention treatment.
+  it('reads waiting from hookState alone, even when dialogPending is false', () => {
+    render(<SessionLine session={s({ status: 'busy', dialogPending: false, hookState: 'waiting' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+    expect(screen.queryByText('working')).not.toBeInTheDocument();
+  });
+
   it('shows the task tally, and hides it on a dead session', () => {
     const tasks = { done: 4, total: 7, running: 0, active: null };
     const { rerender } = render(
@@ -208,5 +218,57 @@ describe('away from home', () => {
       <SessionLine session={s({ wrapper: 'claude2', home: 'claude', status: 'dead' })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.sess-acct')).not.toHaveAttribute('data-away');
+  });
+});
+
+describe('subagent chip', () => {
+  it('renders a chip with the count and a singular aria-label for one', () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const chip = screen.getByLabelText('1 subagent');
+    expect(chip).toHaveTextContent('⑂ 1');
+  });
+
+  it('pluralizes the aria-label for more than one', () => {
+    render(<SessionLine session={s({
+      subagents: [{ name: 'a', startedAt: 1 }, { name: 'b', startedAt: 2 }],
+    })} onOpen={() => {}} onActions={() => {}} />);
+    const chip = screen.getByLabelText('2 subagents');
+    expect(chip).toHaveTextContent('⑂ 2');
+  });
+
+  it('renders nothing when subagents is null', () => {
+    const { container } = render(
+      <SessionLine session={s({ subagents: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-subagents')).not.toBeInTheDocument();
+  });
+
+  it('renders nothing when subagents is empty', () => {
+    const { container } = render(
+      <SessionLine session={s({ subagents: [] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-subagents')).not.toBeInTheDocument();
+  });
+});
+
+describe('ask summary', () => {
+  it('shows the muted ask line when waiting and a summary is present', () => {
+    render(<SessionLine session={s({ hookState: 'waiting', askSummary: 'Deploy now?' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const line = screen.getByText('Deploy now?');
+    expect(line).toHaveClass('sess-ask');
+  });
+
+  it('is absent when waiting but no summary has landed yet', () => {
+    const { container } = render(
+      <SessionLine session={s({ hookState: 'waiting', askSummary: null })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-ask')).not.toBeInTheDocument();
+  });
+
+  it('is absent when a summary exists but the hook is not waiting', () => {
+    const { container } = render(
+      <SessionLine session={s({ hookState: 'working', askSummary: 'Deploy now?' })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-ask')).not.toBeInTheDocument();
   });
 });

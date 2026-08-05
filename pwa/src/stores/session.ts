@@ -7,6 +7,7 @@ import {
   composePrompt,
   type ChatEvent,
   type Dialog,
+  type HookAsk,
   type SessionStatus,
   type SessionStreamMsg,
   type TaskItem,
@@ -43,6 +44,11 @@ export interface SessionState {
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
   dialog: Dialog | null;
+  /** The hook-sourced envelope (`session-hook.sh` via the `ask`/`ask_cleared`
+   *  stream frames) — see DialogSheet's header comment for the full
+   *  rationale and how it relates to (and takes display priority over)
+   *  `dialog` above. */
+  ask: HookAsk | null;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   missingFile: string | null; // backlog missing:true → the attempted transcript path
   pending: PendingSend[]; // optimistic sends
@@ -60,7 +66,7 @@ export interface SessionState {
 
 export type SessionSnapshot = Pick<
   SessionState,
-  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'tasks'
+  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks'
 > & { missingFile: string | null };
 
 // Locally minted system dividers (rotation markers, notices) — uuid-prefixed so
@@ -128,13 +134,15 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       return { ...s, dialog: null };
     case 'tasks':
       return { ...s, tasks: msg.tasks };
-    // Stub, pending the PWA hook-ux work: `SessionSnapshot` has no field to
-    // hold the hook-sourced envelope in yet, so these two are a harmless
-    // pass-through for now — kept as explicit cases (not a `default`) so a
-    // future SessionStreamMsg member still fails this switch at compile time.
+    // The hook-sourced envelope (Task 8, PR C). It resets the exact same way
+    // `dialog` does above: only its own `_cleared` message (and the store's
+    // initial state) null it out — `rotated` below touches events/uuid/offset
+    // only, because a transcript switch does not itself mean a live menu (or
+    // the hook's envelope for one) went away.
     case 'ask':
+      return { ...s, ask: msg.ask };
     case 'ask_cleared':
-      return s;
+      return { ...s, ask: null };
     case 'rotated':
       return {
         ...s,
@@ -154,6 +162,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   status: s.status,
   statusUpdatedAt: s.statusUpdatedAt,
   dialog: s.dialog,
+  ask: s.ask,
   tasks: s.tasks,
   missingFile: s.missingFile,
 });
@@ -265,6 +274,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       status: null,
       statusUpdatedAt: null,
       dialog: null,
+      ask: null,
       tasks: [],
       missingFile: null,
       pending: [],
@@ -301,6 +311,18 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         window.removeEventListener('online', nudge);
         socket?.stop();
         socket = null;
+        // Fix round 1 (I1): a dropped connection must not leave a stale hook
+        // ask sitting in the store forever. The server's own per-connection
+        // sentinel (sessionws.ts's checkHookAsk) now guarantees an explicit
+        // ask_cleared on every fresh connect when nothing is really pending,
+        // but `ReconnectingSocket`'s automatic reconnects never call this
+        // function — only an explicit teardown (leaving the session screen,
+        // a swap/compact cycle) does. This is the belt to that fix's braces:
+        // whatever the next connect delivers is authoritative, never a
+        // leftover from before the drop. `dialog` is untouched — the scraped
+        // channel has no analogous "was this fleet host still writing while
+        // we were gone" gap, since the pane is re-scraped fresh every poll.
+        set({ ask: null });
       },
 
       async send(text, opts = {}) {

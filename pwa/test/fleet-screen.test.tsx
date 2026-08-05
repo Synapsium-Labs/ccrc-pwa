@@ -138,6 +138,42 @@ describe('FleetScreen', () => {
     expect(screen.getAllByRole('img', { name: 'waiting on you' })).toHaveLength(2);
   });
 
+  // The server already ORs a fresh hookState === 'waiting' into dialogPending
+  // (fleet.ts) — this pins the DEFENSIVE client-side OR in SessionLine.tsx,
+  // scoped to the line itself. groupFleet's project-level attention badge
+  // (proj-card-attn) still keys off dialogPending alone — out of scope here —
+  // so only the line's own dot fires, not the project header's second one.
+  it('shows the waiting treatment from hookState alone, even when dialogPending is false', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ dialogPending: false, hookState: 'waiting' })] });
+
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'waiting on you' })).toHaveLength(1);
+  });
+
+  it('renders the subagent chip on the line when the hook reports subagents running', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ subagents: [{ name: 'reviewer', startedAt: 1 }] })],
+    });
+
+    expect(screen.getByLabelText('1 subagent')).toHaveTextContent('⑂ 1');
+  });
+
+  it('shows the muted ask summary line under a waiting session', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ hookState: 'waiting', askSummary: 'Deploy now?' })],
+    });
+
+    expect(screen.getByText('Deploy now?')).toBeInTheDocument();
+  });
+
   it("shows a persistent offline banner when conn is 'down', keeping last-known cards", () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);

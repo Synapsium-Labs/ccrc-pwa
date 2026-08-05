@@ -42,8 +42,18 @@ export class SessionStream {
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
   /** Serialized last-sent hook ask envelope — the change gate for `ask` /
-   *  `ask_cleared`. See `checkHookAsk`. */
-  private lastAskJson: string | null = null;
+   *  `ask_cleared`. See `checkHookAsk`. `undefined` (not `null`) until the
+   *  first read: this instance is per CONNECTION, and a client can arrive
+   *  already holding a stale `ask` from before the drop (an automatic
+   *  ReconnectingSocket reconnect never runs the PWA's own disconnect(),
+   *  which nulls it there — see pwa/src/stores/session.ts). If this started
+   *  at `null`, a brand-new connection whose hookstate is ALREADY absent
+   *  would compare null === null on its very first check and send nothing —
+   *  the exact silent-agreement-with-a-stale-client bug fix round 1 closed.
+   *  `undefined` guarantees the first check always sends something explicit
+   *  (fixing round 1, I1): `ask_cleared` at minimum, confirming to a
+   *  possibly-stale client that there is truly nothing pending. */
+  private lastAskJson: string | null | undefined = undefined;
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
   // This stream detects dialogs itself (start + every tick), so it always

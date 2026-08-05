@@ -45,7 +45,10 @@ export function SessionLine({
   onActions: (session: FleetSession) => void;
 }): ReactNode {
   const dead = session.status === 'dead';
-  const attention = !dead && session.dialogPending;
+  // The server already ORs a fresh hookState === 'waiting' into dialogPending
+  // (see fleet.ts), so this OR is defensive — a server that ever missed that
+  // rule still renders the amber dot from the hook signal alone.
+  const attention = !dead && (session.dialogPending || session.hookState === 'waiting');
   const busy = !attention && session.status === 'busy';
   const dotStatus: SessionStatus | 'dialog' = dead ? 'dead' : attention ? 'dialog' : session.status;
   const state = dead ? 'exited' : attention ? 'waiting' : busy ? 'working' : 'idle';
@@ -119,6 +122,19 @@ export function SessionLine({
             </span>
           )}
 
+          {/* Subagents the hook last reported running. `null` is no fresh hook
+              data (same discipline as `hookState`); `[]` is a measurement —
+              fresh data, nothing running — so both render nothing here. */}
+          {!dead && session.subagents !== null && session.subagents.length > 0 && (
+            <span
+              className="sess-subagents"
+              role="img"
+              aria-label={`${session.subagents.length} subagent${session.subagents.length === 1 ? '' : 's'}`}
+            >
+              ⑂ {session.subagents.length}
+            </span>
+          )}
+
           {critical && (
             <span className="sess-warn" role="img" aria-label="account limit near">
               ⚠
@@ -143,6 +159,15 @@ export function SessionLine({
             )}
           </span>
         </span>
+
+        {/* A third line, only while the hook is actually waiting on an answer
+            AND a summary has landed for it (a hook can report waiting before
+            the ask write completes — askSummary stays null until then). Clipped
+            to one line like .sess-label; muted like .sess-acct's secondary
+            role, one step further (.proj-dir's ink-tertiary convention). */}
+        {!dead && session.hookState === 'waiting' && session.askSummary !== null && session.askSummary !== '' && (
+          <span className="sess-ask">{session.askSummary}</span>
+        )}
       </button>
 
       <button
