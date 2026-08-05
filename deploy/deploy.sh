@@ -38,14 +38,16 @@ ship_env() {
 
 if [ "$TARGET" = "agent" ]; then
   # Back up what the previous deploy left before rsync --delete rewrites it,
-  # and before ccd/notify.sh are overwritten. cp -a keeps modes and mtimes.
+  # and before ccd/notify.sh/session-hook.sh are overwritten. cp -a keeps
+  # modes and mtimes.
   # `[ ! -e X ] || cp` and NOT `[ -e X ] && cp || true`: absent-source is the
   # only skippable case — a cp that FAILS must abort the deploy before
   # --delete destroys the very state it failed to save.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS ~/.local/bin ~/.cc-sessions \
     && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
-    && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; }"
+    && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
+    && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; }"
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     agent shared deploy "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env

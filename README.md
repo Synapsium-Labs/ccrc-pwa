@@ -82,6 +82,7 @@ caches `ccd caps` at boot, so the reverse order pins a stale verb set.
 # fleet host (agent target)
 cp -a ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 cp -a ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
+cp -a ~/ccrc-backups/<ts>/session-hook.sh ~/.cc-sessions/session-hook.sh
 cp -a ~/ccrc-backups/<ts>/agent-dist/. ~/ccrc/agent/dist/
 systemctl --user restart ccrc-agent.service
 # server box
