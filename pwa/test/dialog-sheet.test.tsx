@@ -767,6 +767,27 @@ describe('DialogSheet (hook envelope)', () => {
       expect(interruptSpy).toHaveBeenCalledWith(SESSION_ID);
     });
 
+    // Fix round 2 (Important): the CTA's own handler must gate on `busy` as
+    // a whole, not just the hide half of it — a bug in fix round 1 let
+    // `onOpenTerminal` fire unconditionally even when `close()` refused to
+    // hide, exactly the "second action on top of an unresolved first one"
+    // the code's own comment claimed was prevented.
+    it('the CTA is refused while Deny is in flight: onOpenTerminal is not called, the sheet stays open', () => {
+      vi.spyOn(api, 'interrupt').mockReturnValue(new Promise(() => {}));
+      const onOpenTerminal = vi.fn();
+      const store = makeStore();
+      act(() => {
+        store.getState().apply({ type: 'ask', ask: APPROVAL_ASK });
+      });
+      render(<DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open terminal to answer' }));
+
+      expect(onOpenTerminal).not.toHaveBeenCalled();
+      expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
+    });
+
     it('once a scraped dialog appears, the same envelope\'s rows become tappable', () => {
       const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
       const store = makeStore();

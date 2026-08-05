@@ -61,6 +61,25 @@
 //  - A blank/empty envelope (no questions, or a blank first question) has
 //    nothing accessible of its own to show, so it is treated as absent and
 //    the sheet falls through to the scraped dialog entirely.
+//
+// Fix round 2 (review of fix round 1): the "Open terminal to answer" CTA's
+// handler was calling `close(); onOpenTerminal?.();` — `close()` refuses to
+// HIDE while busy, but nothing stopped the navigation running right after it
+// regardless, so a busy Deny (reachable with `dialog` still null) could still
+// jump to the terminal. `EnvelopeSheet`'s `openTerminal` now gates the whole
+// handler on `busy` once, not just the hide half of it.
+//
+// Known limitation, named rather than fixed (cross-channel, cheap to know
+// about, not cheap to restructure): `dismissedKey` is ONE slot shared by two
+// different identity spaces — a scraped `dialog`'s id, and a hash of the
+// envelope's JSON (see `askKey`). Dismissing the envelope sets `dismissedKey`
+// to the envelope's hash; if the SAME underlying question is also scraped
+// (its `dialog.id` is a different string, hashed from pane text, not JSON),
+// that scraped dialog is NOT suppressed by the same dismissal and can pop
+// back open on its own poll cycle (~2 s) once `ask_cleared` (or a content
+// change) drops the envelope out of the way. One dismissal does not
+// necessarily mean "hidden" across both channels at once — only within
+// whichever one is currently being displayed.
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
@@ -474,16 +493,24 @@ function EnvelopeSheet({
   // ever be `answering`), but Deny here CAN be in flight with `dialog` still
   // null, and hopping to the terminal mid-Deny would be a second action
   // landing on top of an unresolved first one.
+  //
+  // Fix round 2: `close()` alone only refuses to HIDE while busy — it does
+  // not, and must not, stop `onOpenTerminal?.()` from firing right after it,
+  // since `onClick={() => { close(); onOpenTerminal?.(); }}` runs the second
+  // statement UNCONDITIONALLY regardless of what `close()` decided. That
+  // let a busy Deny (dialog can be null while Deny is still in flight — see
+  // above) navigate to the terminal anyway, exactly the "second action
+  // landing on top of an unresolved first one" this comment already claimed
+  // was prevented. `openTerminal` below gates the WHOLE handler on `busy`
+  // itself, once, so both the hide and the navigation are refused together.
+  const openTerminal = (): void => {
+    if (busy) return;
+    close();
+    onOpenTerminal?.();
+  };
   const terminalCta = !canAnswer && (
     <div className="dlg-actions">
-      <button
-        type="button"
-        className="btn-primary"
-        onClick={() => {
-          close();
-          onOpenTerminal?.();
-        }}
-      >
+      <button type="button" className="btn-primary" onClick={openTerminal}>
         Open terminal to answer
       </button>
       <button type="button" className="dlg-later" onClick={close}>
