@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { nextDialogFrame, SessionStream, type DialogSeen } from '../src/sessionws.js';
+import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -268,6 +269,23 @@ describe('hook ask envelope frames', () => {
     expect(frames.filter((f) => f.type === 'ask')).toHaveLength(1);
     expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
   });
+
+  // The stale-but-PRESENT path, distinct from the test above: the file never
+  // disappears, but its `updatedAt` ages past readHookState's freshness gate
+  // (HOOKSTATE_FRESH_MS) while the client stays connected — e.g. a wedged or
+  // killed hook process that never wrote again. readHookState reads this the
+  // same as a missing file (null), so the transition is the same ask_cleared.
+  // Optional rider carried from Task 6's review.
+  it('a hookstate file that stays PRESENT but ages past freshness also clears', async () => {
+    const { frames } = await streamWith({
+      hookstateSequence: [
+        hookBody({ ask: HOOK_ASK_1 }),
+        hookBody({ ask: HOOK_ASK_1, updatedAt: Date.now() - HOOKSTATE_FRESH_MS - 1000 }),
+      ],
+    });
+    expect(frames.filter((f) => f.type === 'ask')).toHaveLength(1);
+    expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
+  }, 30000);
 
   it('a scraped dialog and a hook ask both flow — neither suppresses the other', async () => {
     const { frames } = await streamWith({
