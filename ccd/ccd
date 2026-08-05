@@ -1346,12 +1346,32 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   _ws_unsupervise "$id"                                   # clears Restart=always
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
 
-  local pr; pr=$(_reg_get "$id" prnumber)
+  # Truthful in three values, not always "merged": a workspace can be archived
+  # with nothing beyond base to judge at all (`empty`), with real commits
+  # nobody has proven merged (`manual`), or with a branch `_ws_gc_merged` can
+  # show is an ancestor of origin/HEAD, PR number and all (`merged:#N`).
+  # `_ws_gc_merged`'s own `unprovable` state already returns 1 -> manual, and
+  # a genuinely merged branch with no bound PR number also lands manual —
+  # both accepted, the vocabulary is closed at three values.
+  local project; project=$(_reg_get "$id" project)
+  local main="$PROJECTS_ROOT/$project"
+  local branch; branch=$(_reg_get "$id" branch)
+  local pr reason ahead base
+  pr=$(_reg_get "$id" prnumber)
   _reg_set "$id" archived "$(date +%s)"
-  if [[ "$pr" =~ ^[0-9]+$ ]]; then _reg_set "$id" archivedreason "merged:#$pr"
-  else                             _reg_set "$id" archivedreason "merged"; fi
+  base=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || base=""
+  ahead=""
+  [[ -n "$base" ]] && ahead=$(git -C "$workdir" rev-list --count "$base..HEAD" 2>/dev/null) || ahead=""
+  if [[ "$ahead" == 0 ]]; then reason="empty"
+  elif [[ "$pr" =~ ^[0-9]+$ ]] && _ws_gc_merged "$main" "$branch"; then reason="merged:#$pr"
+  else reason="manual"; fi
+  _reg_set "$id" archivedreason "$reason"
 
-  local note=""; [[ "$pr" =~ ^[0-9]+$ ]] && note=" (merged in #$pr)"
+  local note=""
+  case "$reason" in
+    empty)    note=" (no commits beyond base)" ;;
+    merged:*) note=" (merged in #$pr)" ;;
+  esac
   echo "archived $id$note — worktree kept at $workdir, nothing deleted"
 }
 
