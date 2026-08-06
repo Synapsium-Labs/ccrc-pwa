@@ -14,6 +14,7 @@ import { accountColorVar } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
+import { ack } from '../lib/seen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
@@ -73,6 +74,15 @@ export function SessionScreen({
     useStore.getState().connect();
     return () => useStore.getState().disconnect();
   }, [useStore]);
+
+  // Opening a session IS the ack — the honest signal that a human looked.
+  // Keyed on `id`, not fired only once: navigating from one session straight
+  // to another (no intervening fleet-screen visit) mounts this component
+  // fresh with a new `id`, and that session is exactly as "seen" as one
+  // reached via the fleet list.
+  useEffect(() => {
+    ack(id, Date.now());
+  }, [id]);
 
   // Published on :root, not on .chat — ToastHost is not inside this subtree, and
   // custom properties only inherit downward. Cleared on unmount so the fleet

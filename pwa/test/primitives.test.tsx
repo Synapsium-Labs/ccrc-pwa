@@ -20,22 +20,60 @@ afterEach(() => {
 // — StatusDot —
 
 describe('StatusDot', () => {
-  it('maps each status to its dot class and label', () => {
-    const { rerender } = render(<StatusDot status="busy" />);
-    expect(screen.getByRole('img', { name: 'working' })).toHaveClass('dot--busy');
+  // Keyed by SessionBucket now (Task 6), not by SessionStatus | 'dialog' —
+  // 'busy' became 'working' and 'dialog' became 'attention', the same
+  // seven-member vocabulary sortFleet/groupFleet/SessionLine all read.
+  it('maps each bucket to its dot class, label and glyph', () => {
+    const { rerender } = render(<StatusDot status="working" />);
+    const working = screen.getByRole('img', { name: 'working' });
+    expect(working).toHaveClass('dot--busy');
+    expect(working).toHaveTextContent('◐');
 
     rerender(<StatusDot status="idle" />);
-    expect(screen.getByRole('img', { name: 'idle' })).toHaveClass('dot--idle');
+    const idle = screen.getByRole('img', { name: 'idle' });
+    expect(idle).toHaveClass('dot--idle');
+    expect(idle).toHaveTextContent('○');
 
     rerender(<StatusDot status="dead" />);
-    expect(screen.getByRole('img', { name: 'not running' })).toHaveClass('dot--dead');
+    const dead = screen.getByRole('img', { name: 'not running' });
+    expect(dead).toHaveClass('dot--dead');
+    expect(dead).toHaveTextContent('✕');
   });
 
   it('renders a pending dialog as the pulsing attention dot', () => {
-    render(<StatusDot status="dialog" />);
+    render(<StatusDot status="attention" />);
     const dot = screen.getByRole('img', { name: 'waiting on you' });
     expect(dot).toHaveClass('dot--attention');
     expect(dot).not.toHaveClass('dot--busy');
+    expect(dot).toHaveTextContent('●');
+  });
+
+  // The two-glyph rule's own reason to exist: `done` and `idle` used to be
+  // visually identical (both "not amber, not busy"). Now a check tells them
+  // apart even with colour removed from the picture.
+  it('renders a check for done, distinct from idle', () => {
+    render(<StatusDot status="done" />);
+    const dot = screen.getByRole('img', { name: 'finished' });
+    expect(dot).toHaveClass('dot--done');
+    expect(dot).not.toHaveClass('dot--idle');
+    expect(dot).toHaveTextContent('✓');
+  });
+
+  it('renders the cleanup bucket distinctly from both idle and dead', () => {
+    render(<StatusDot status="cleanup" />);
+    const dot = screen.getByRole('img', { name: 'merged, ready to clean up' });
+    expect(dot).toHaveClass('dot--cleanup');
+    expect(dot).toHaveTextContent('♻');
+  });
+
+  it('renders archived with the idle class but its own label', () => {
+    // Reuses --status-idle's already-verified contrast (both are matte,
+    // non-living), but the aria-label still says WHICH one — colour alone
+    // never carries a distinction this screen makes elsewhere by word.
+    render(<StatusDot status="archived" />);
+    const dot = screen.getByRole('img', { name: 'archived' });
+    expect(dot).toHaveClass('dot--idle');
+    expect(dot).toHaveTextContent('○');
   });
 });
 

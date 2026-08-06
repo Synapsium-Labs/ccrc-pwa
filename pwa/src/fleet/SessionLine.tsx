@@ -19,14 +19,25 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { useRef } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { FleetSession, SessionStatus } from '../../../shared/api';
+import type { FleetSession, SessionBucket } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
+import { humanBytes } from '../screens/ArchiveScreen';
 import { sessionLabel } from './sessionLabel';
 import './fleet.css';
 
 /** Routing policy calls a window critical above this. */
 const CRITICAL = 75;
+
+/** The state word for every bucket — the ONLY place this vocabulary is
+ *  spelled out. `StatusDot` has its own glyph/label table (the two-glyph
+ *  rule's other half); this is the mono word beside the dot. Exported so
+ *  `FleetScreen`'s bucket-section headers use the identical words rather
+ *  than inventing a second vocabulary for the same seven buckets. */
+export const WORD: Record<SessionBucket, string> = {
+  attention: 'waiting', working: 'working', done: 'done', idle: 'idle',
+  cleanup: 'merged', archived: 'archived', dead: 'exited',
+};
 
 // Only ONE element may carry a given view-transition-name — a second aborts
 // the transition entirely. The stamp is never cleared on navigation and these
@@ -45,13 +56,22 @@ export function SessionLine({
   onActions: (session: FleetSession) => void;
 }): ReactNode {
   const dead = session.status === 'dead';
-  // The server already ORs a fresh hookState === 'waiting' into dialogPending
-  // (see fleet.ts), so this OR is defensive — a server that ever missed that
-  // rule still renders the amber dot from the hook signal alone.
-  const attention = !dead && (session.dialogPending || session.hookState === 'waiting');
-  const busy = !attention && session.status === 'busy';
-  const dotStatus: SessionStatus | 'dialog' = dead ? 'dead' : attention ? 'dialog' : session.status;
-  const state = dead ? 'exited' : attention ? 'waiting' : busy ? 'working' : 'idle';
+  // THE authority: no local re-derivation of attention/busy/state survives
+  // here (nor in sortFleet.ts or groupFleet.ts) — the server decided which of
+  // the seven buckets this session is in, and shipped it as `session.bucket`.
+  const state = WORD[session.bucket];
+
+  // The cleanup bucket's own facts — the merged PR number and the size
+  // ws-archive measured, both already on the wire (`pr.number`,
+  // `archivedBytes`). No destructive control lives here or ever will: the
+  // actions sheet keeps the reap flow, with its audit, exactly as today.
+  const cleanupFacts =
+    session.bucket === 'cleanup'
+      ? [
+          session.pr?.number != null ? `#${session.pr.number}` : null,
+          session.archivedBytes !== null ? humanBytes(session.archivedBytes) : null,
+        ].filter((x): x is string => x !== null)
+      : [];
 
   const label = sessionLabel(session);
 
@@ -93,8 +113,8 @@ export function SessionLine({
 
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
-      <span className="sess-lamp" data-status={dotStatus}>
-        <StatusDot status={dotStatus} />
+      <span className="sess-lamp" data-status={session.bucket}>
+        <StatusDot status={session.bucket} />
       </span>
 
       {/* Selection reached nothing but a className before this: there is no
@@ -115,6 +135,15 @@ export function SessionLine({
             requirement, and this is no longer a grid). */}
         <span className="sess-meta">
           <span className={`sess-state sess-state--${state}`}>{state}</span>
+
+          {/* The cleanup bucket's merge facts — see `cleanupFacts` above.
+              Two cells, not one: the shared `.sess-meta > *:not(:first-child)
+              ::before` rule already punctuates siblings with `·`, so a merged
+              PR's number and its reclaimable size read as their own cells,
+              same as `.sess-tally`/`.sess-warn` below. */}
+          {cleanupFacts.map((fact, i) => (
+            <span key={`${session.id}-cleanup-${i}`} className="sess-cleanup-fact">{fact}</span>
+          ))}
 
           {!dead && session.tasks !== null && (
             <span className="sess-tally">

@@ -14,15 +14,27 @@ import { NotificationBell } from '../fleet/NotificationBell';
 import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
+import { BUCKET_ORDER } from '../fleet/sortFleet';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { ackAll, isUnseen, loadAcks, prune, type Acks } from '../lib/seen';
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
+
+/** Section-header noun for each bucket — a heading register, not the row's
+ *  own state-word adjective (`WORD`, SessionLine.tsx). Deliberately a
+ *  SEPARATE small vocabulary: this is presentational only (it names buckets,
+ *  it does not decide which bucket a session is in), so it carries none of
+ *  the "one writer" risk `WORD`/`bucket` do. */
+const SECTION_LABEL: Record<(typeof BUCKET_ORDER)[number], string> = {
+  attention: 'Attention', working: 'Working', done: 'Done', idle: 'Idle',
+  cleanup: 'Cleanup', archived: 'Archived', dead: 'Dead',
+};
 
 export function FleetScreen({
   store = useFleetStore,
@@ -48,6 +60,15 @@ export function FleetScreen({
     // the socket deliberately survives navigation, so no disconnect here.
     store.getState().connect();
   }, [store]);
+
+  // The unseen watermark (pwa/src/lib/seen.ts) — per-device, in localStorage.
+  // Read once at mount for the first paint, then pruned against every fresh
+  // snapshot: `prune` only ever REMOVES entries for ids the fleet no longer
+  // has, so a session acked a moment ago and still live survives untouched.
+  const [acks, setAcks] = useState<Acks>(() => loadAcks());
+  useEffect(() => {
+    setAcks(prune(new Set(sessions.map((s) => s.id))));
+  }, [sessions]);
 
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const [newOpen, setNewOpen] = useState(false);
@@ -200,8 +221,42 @@ export function FleetScreen({
       ) : (
         <>
           {showAccounts && <AccountsStrip />}
+
+          {/* Bucket sections — above the project cards, one chip per
+              non-empty bucket, in the same RANK order the list itself sorts
+              by. Counts come from THIS render's own `sessions` array, the
+              identical one the cards below iterate — there is no second
+              count to disagree with the rows. */}
+          <div className="bucket-bar">
+            {BUCKET_ORDER.map((bucket) => {
+              const inBucket = sessions.filter((s) => s.bucket === bucket);
+              if (inBucket.length === 0) return null;
+              const unseenCount = inBucket.filter((s) => isUnseen(s, acks)).length;
+              return (
+                <section key={bucket} className="bucket-head" aria-label={SECTION_LABEL[bucket]}>
+                  <span className="bucket-head-label">{SECTION_LABEL[bucket]}</span>
+                  <span className="bucket-head-count">{inBucket.length}</span>
+                  {unseenCount > 0 && (
+                    <>
+                      <span className="bucket-head-unseen" aria-label={`${unseenCount} unseen`}>
+                        {unseenCount}
+                      </span>
+                      <button
+                        type="button"
+                        className="bucket-head-seen"
+                        onClick={() => setAcks(ackAll(inBucket, Date.now()))}
+                      >
+                        Mark all seen
+                      </button>
+                    </>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+
           <div className="fleet-list">
-            {groupFleet(sessions).map((g) => (
+            {groupFleet(sessions, acks).map((g) => (
               <ProjectCard
                 key={g.project}
                 group={g}

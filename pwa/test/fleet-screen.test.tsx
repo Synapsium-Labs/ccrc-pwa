@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
+import { loadAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
@@ -99,6 +100,7 @@ describe('FleetScreen', () => {
         session({
           id: 'claude:OpenClawHetzner',
           status: 'busy',
+          bucket: 'working',
           statusUpdatedAt: Date.now() - 4 * MIN,
         }),
         session({
@@ -128,7 +130,7 @@ describe('FleetScreen', () => {
   it('shows the attention badge when a dialog is pending', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);
-    seed(store, { conn: 'open', sessions: [session({ dialogPending: true })] });
+    seed(store, { conn: 'open', sessions: [session({ dialogPending: true, bucket: 'attention' })] });
 
     // The attention SENTENCE is gone from the line (SessionLine.tsx) — it
     // becomes the dot plus the bare word "waiting". The badge now lives twice:
@@ -138,18 +140,22 @@ describe('FleetScreen', () => {
     expect(screen.getAllByRole('img', { name: 'waiting on you' })).toHaveLength(2);
   });
 
-  // The server already ORs a fresh hookState === 'waiting' into dialogPending
-  // (fleet.ts) — this pins the DEFENSIVE client-side OR in SessionLine.tsx,
-  // scoped to the line itself. groupFleet's project-level attention badge
-  // (proj-card-attn) still keys off dialogPending alone — out of scope here —
-  // so only the line's own dot fires, not the project header's second one.
-  it('shows the waiting treatment from hookState alone, even when dialogPending is false', () => {
+  // Task 6 deleted SessionLine's defensive client-side OR of
+  // `hookState === 'waiting'` into dialogPending — the server already folds
+  // that into `bucket` (shared/api.ts's `sessionBucket`), and the client no
+  // longer re-derives it. A session the default fixture calls `idle` reads
+  // `idle`, even with a hook actively reporting `waiting`.
+  it('does not render the waiting treatment from hookState alone — only the server bucket decides', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);
-    seed(store, { conn: 'open', sessions: [session({ dialogPending: false, hookState: 'waiting' })] });
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ dialogPending: false, hookState: 'waiting', bucket: 'idle' })],
+    });
 
-    expect(screen.getByText('waiting')).toBeInTheDocument();
-    expect(screen.getAllByRole('img', { name: 'waiting on you' })).toHaveLength(1);
+    expect(screen.queryByText('waiting')).not.toBeInTheDocument();
+    expect(screen.getByText('idle')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'waiting on you' })).not.toBeInTheDocument();
   });
 
   it('renders the subagent chip on the line when the hook reports subagents running', () => {
@@ -576,6 +582,146 @@ describe('FleetScreen', () => {
       expect(await screen.findByText('/w/BRAVO')).toBeInTheDocument();
       expect(await screen.findByRole('button', { name: 'Remove bravo · 500 MB' })).toBeInTheDocument();
     });
+  });
+});
+
+// — bucket sections (Task 6) —
+//
+// "Above the project cards" — a chip per non-empty bucket, counts read from
+// the SAME `sessions` array the project cards below iterate, so the head can
+// never disagree with its own rows.
+describe('bucket sections', () => {
+  it('renders one section per non-empty bucket, in RANK order, and none for an empty one', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'attention' }),
+        session({ id: 'b', project: 'beta', bucket: 'working' }),
+        session({ id: 'c', project: 'gamma', bucket: 'idle' }),
+      ],
+    });
+
+    const heads = screen.getAllByText(/^(Attention|Working|Done|Idle|Cleanup|Archived|Dead)$/);
+    expect(heads.map((h) => h.textContent)).toEqual(['Attention', 'Idle', 'Working']);
+    // No section rendered for a bucket with zero members.
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cleanup')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dead')).not.toBeInTheDocument();
+  });
+
+  it('counts from the same array the rows render, not a second tally', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'working' }),
+        session({ id: 'b', project: 'beta', bucket: 'working' }),
+        session({ id: 'c', project: 'gamma', bucket: 'working' }),
+      ],
+    });
+
+    const head = screen.getByText('Working').closest('section')!;
+    expect(within(head).getByText('3')).toBeInTheDocument();
+  });
+
+  it('shows no unseen badge or Mark-all-seen control when nothing is unseen', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', bucket: 'idle' })],
+    });
+
+    const head = screen.getByText('Idle').closest('section')!;
+    expect(within(head).queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+  });
+
+  it('badges an unseen session in a badged bucket, with a Mark all seen control', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
+    });
+
+    const head = screen.getByText('Attention').closest('section')!;
+    expect(within(head).getByLabelText('1 unseen')).toBeInTheDocument();
+    expect(within(head).getByRole('button', { name: /mark all seen/i })).toBeInTheDocument();
+  });
+
+  // `working`/`idle` are never badged, even with a fresh bucketSince — only
+  // attention/done/cleanup ask for a human (pwa/src/lib/seen.ts's `BADGED`).
+  it('never badges a working or idle session, however fresh', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', bucket: 'working', bucketSince: Date.now() })],
+    });
+
+    const head = screen.getByText('Working').closest('section')!;
+    expect(within(head).queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+  });
+
+  it('clicking Mark all seen acks every session in THAT bucket, and only that bucket', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() }),
+        session({ id: 'b', project: 'beta', bucket: 'done', bucketSince: Date.now() }),
+      ],
+    });
+
+    const attnHead = screen.getByText('Attention').closest('section')!;
+    fireEvent.click(within(attnHead).getByRole('button', { name: /mark all seen/i }));
+
+    // The acked bucket's badge is gone…
+    expect(within(attnHead).queryByLabelText(/unseen/)).not.toBeInTheDocument();
+    // …the untouched bucket's is not.
+    const doneHead = screen.getByText('Done').closest('section')!;
+    expect(within(doneHead).getByLabelText('1 unseen')).toBeInTheDocument();
+  });
+
+  it('the ack survives a remount — it is written through to localStorage, not held only in state', () => {
+    const bucketSince = Date.now() - 60_000; // fixed instant, strictly before the click below
+    const store = makeStore();
+    const first = render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: /mark all seen/i }));
+    first.unmount();
+
+    // Same session, same bucketSince — a stale in-memory `acks` (never
+    // reloaded from localStorage on this fresh mount) would still show the
+    // control, since nothing else in this render path re-acks it.
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
+    });
+    expect(screen.queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+  });
+
+  it('prunes an acked session that has since left the fleet — the map does not grow unbounded', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'gone', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: /mark all seen/i }));
+    expect(loadAcks()).toHaveProperty('gone');
+
+    // A fresh snapshot that no longer includes 'gone' — the effect prunes it.
+    seed(store, { sessions: [session({ id: 'still-here', project: 'beta', bucket: 'idle' })] });
+    expect(loadAcks()).not.toHaveProperty('gone');
   });
 });
 

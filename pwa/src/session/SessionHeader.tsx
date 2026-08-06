@@ -10,7 +10,7 @@
 // never fires while focus is in a text field.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, SessionStatus } from '../../../shared/api';
+import type { FleetSession, SessionBucket, SessionStatus } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
@@ -121,7 +121,12 @@ export function SessionHeader({
     return () => window.removeEventListener('keydown', onKey);
   }, [finePointer, busy, onInterrupt]);
 
-  const dot: SessionStatus | 'dialog' | null = attention ? 'dialog' : st;
+  // StatusDot is keyed by SessionBucket now (Task 6), not by SessionStatus —
+  // this header keeps its OWN attention/busy read (the live stream + fleet
+  // snapshot blend above, out of Task 6's scope), only translated into that
+  // vocabulary at the one call site that needs it: 'busy' -> 'working', and
+  // everything else (idle/dead/null) already spells the same word in both.
+  const dot: SessionBucket | null = attention ? 'attention' : st === 'busy' ? 'working' : st;
   const rel = relShort(now, at);
   const word = attention
     ? 'waiting on you'

@@ -1,4 +1,5 @@
 import type { FleetSession } from '../../../shared/api';
+import { isUnseen, type Acks } from '../lib/seen';
 import { sortFleet } from './sortFleet';
 
 export interface FleetGroup {
@@ -7,13 +8,30 @@ export interface FleetGroup {
   /** Any member is waiting on you. A collapsed header wears this, so folding a
    *  project away can never hide the one thing this screen exists to surface. */
   attention: boolean;
-  /** How many members a row would render the word `working` for. Not "how many
-   *  hold status: 'busy'" — SessionLine ranks attention first
-   *  (`busy = !attention && status === 'busy'`), so a busy session with a
-   *  pending dialog reads `waiting`. This count is rendered as a WORD on a
-   *  folded card, so it is a claim about what the hidden rows say; counting a
-   *  waiting session here makes the head contradict them. */
+  /** How many members a row would render the word `working` for — a straight
+   *  read of `s.bucket === 'working'`. This count is rendered as a WORD on a
+   *  folded card, so it is a claim about what the hidden rows say.
+   *
+   *  Before the server shipped one `bucket` per session (Task 1), this counted
+   *  `status === 'busy' && !dialogPending` — a client-side re-derivation of
+   *  SessionLine's own attention-first arbitration, kept in agreement with it
+   *  by a comment ("KEEP the `&& !m.dialogPending` clause") rather than by
+   *  anything the compiler could enforce. That clause, and the arbitration it
+   *  was copying, are BOTH gone: `bucket` is the one field both this count and
+   *  the row's own word read, so a `working`-bucket session cannot also be the
+   *  one the fold's attention mark is about, and there is nothing left here to
+   *  keep in agreement by hand. A reader who reintroduces a `!dialogPending`
+   *  (or `!== 'attention'`) clause here is restoring a bug this field exists
+   *  to end — the two facts cannot drift apart because there is only one of
+   *  them now. */
   busy: number;
+  /** How many LIVE members this device has not yet acknowledged —
+   *  `isUnseen` (pwa/src/lib/seen.ts) run over `sessions`, the identical
+   *  function every other unseen surface (a row's own badge, the bell) reads.
+   *  Scoped to `live` for the same reason `attention`/`busy` are: an archived
+   *  member (including a `cleanup`-bucket one) is folded into `archived`
+   *  below, not counted here. */
+  unseen: number;
   /** The account every session in this project calls home, or null when they
    *  disagree. Pinning is per session (`ccd prefer <id> <wrapper>`), so a
    *  project-level pin only exists where its sessions happen to share one.
@@ -24,17 +42,19 @@ export interface FleetGroup {
   /** Archived members — folded out of the live list, never dropped. `/s/<id>`
    *  still resolves and the transcript still renders, so a card that omitted
    *  them entirely would leave the workspace reachable only by a URL nobody
-   *  has. They take no part in `attention`, `busy` or `pin`: an archived
-   *  session is stopped, so any status it still carries is stale. */
+   *  has. They take no part in `attention`, `busy`, `unseen` or `pin`: an
+   *  archived session is stopped, so any status it still carries is stale. */
   archived: FleetSession[];
 }
 
 /**
  * Group the fleet by project, preserving the flat list's urgency ordering:
  * groups sort by their most urgent member, members sort by the fleet rule.
- * Pure — returns new arrays.
+ * `acks` defaults to `{}` (nothing acknowledged) so callers that don't care
+ * about the unseen count — most existing ones — don't have to pass it. Pure —
+ * returns new arrays.
  */
-export function groupFleet(sessions: FleetSession[]): FleetGroup[] {
+export function groupFleet(sessions: FleetSession[], acks: Acks = {}): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
   for (const s of sortFleet(sessions)) {
     const list = byProject.get(s.project);
@@ -59,14 +79,9 @@ export function groupFleet(sessions: FleetSession[]): FleetGroup[] {
       project,
       sessions: live,
       archived,
-      attention: live.some((m) => m.status !== 'dead' && m.dialogPending),
-      // Same predicate SessionLine renders, attention-first — see the field's
-      // doc. Dead sessions need no clause: `dead` and `busy` are exclusive
-      // statuses, which is also why `attention` needs its explicit one.
-      // KEEP the `&& !m.dialogPending` clause: it is main's fix (4b5bb67) and
-      // two tests in groupFleet.test.ts pin it. `busy` is a claim about what
-      // the hidden rows SAY, and a row with a pending dialog says `waiting`.
-      busy: live.filter((m) => m.status === 'busy' && !m.dialogPending).length,
+      attention: live.some((m) => m.bucket === 'attention'),
+      busy: live.filter((m) => m.bucket === 'working').length,
+      unseen: live.filter((m) => isUnseen(m, acks)).length,
       pin,
     });
   }

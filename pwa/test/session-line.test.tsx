@@ -51,25 +51,44 @@ describe('label', () => {
 
 describe('state', () => {
   it('reads exited when dead', () => {
-    render(<SessionLine session={s({ status: 'dead' })} onOpen={() => {}} onActions={() => {}} />);
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead' })}
+                        onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('exited')).toBeInTheDocument();
   });
 
-  it('reads waiting on a pending dialog, and outranks busy', () => {
-    render(<SessionLine session={s({ status: 'busy', dialogPending: true })}
+  it('reads waiting from the server bucket, not from status or dialogPending', () => {
+    render(<SessionLine session={s({ status: 'busy', dialogPending: true, bucket: 'attention' })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('waiting')).toBeInTheDocument();
     expect(screen.queryByText('working')).not.toBeInTheDocument();
   });
 
-  // The server already ORs a fresh hookState === 'waiting' into dialogPending
-  // (fleet.ts), so this pins the DEFENSIVE client-side OR: hookState alone,
-  // with dialogPending false, still renders the attention treatment.
-  it('reads waiting from hookState alone, even when dialogPending is false', () => {
-    render(<SessionLine session={s({ status: 'busy', dialogPending: false, hookState: 'waiting' })}
+  // Task 6: the defensive client-side OR of `hookState === 'waiting'` into
+  // dialogPending is DELETED, not merely unused — SessionLine reads
+  // `session.bucket` and nothing else. A session the server still calls
+  // `idle` renders `idle`, even with a hook actively reporting `waiting`,
+  // because the client no longer re-derives the bucket it was given.
+  it('does not re-derive attention from hookState — only session.bucket decides', () => {
+    render(<SessionLine session={s({ status: 'busy', dialogPending: false, hookState: 'waiting', bucket: 'idle' })}
                         onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('waiting')).toBeInTheDocument();
-    expect(screen.queryByText('working')).not.toBeInTheDocument();
+    expect(screen.queryByText('waiting')).not.toBeInTheDocument();
+    expect(screen.getByText('idle')).toBeInTheDocument();
+  });
+
+  it('renders a check for done, distinct from idle', () => {
+    render(<SessionLine session={s({ bucket: 'done' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('done')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'finished' })).toBeTruthy();
+  });
+
+  it('renders the cleanup bucket with its merge facts and no destructive control', () => {
+    render(<SessionLine session={s({
+      bucket: 'cleanup', archivedBytes: 1_200_000_000,
+      pr: { phase: 'merged', number: 157 } as never,
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText(/#157/)).toBeTruthy();
+    expect(screen.getByText(/1\.2 GB/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /remove|delete/i })).toBeNull();
   });
 
   it('shows the task tally, and hides it on a dead session', () => {

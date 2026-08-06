@@ -65,6 +65,57 @@
   cursor: default;
 }
 
+/* — Build 2, attention UX: bucket sections. One chip per non-empty bucket
+   (attention/working/done/idle/cleanup/archived/dead), above the project
+   cards — the SAME `sessions` array the cards render, filtered by
+   `s.bucket`, so this row can never disagree with what is below it. Every
+   chip is self-grounded (background + color on the ONE rule) so the count,
+   the unseen badge and "Mark all seen" are all measured by design/audit.mjs's
+   own descendant-of-a-self-grounded-ancestor pass — nothing hand-registered
+   in contrast-check.mjs for these three, unlike the raw dot hues. */
+.bucket-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.bucket-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+  border-radius: var(--r-md);
+  padding: var(--sp-1) var(--sp-3);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-ui);
+}
+.bucket-head .bucket-head-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+/* Same tokens as the "waiting on you" badge elsewhere on this screen
+   (--status-attention-text on --status-attention-tint) — reused, not
+   reinvented, and already in contrast-check.mjs's standing pairs. */
+.bucket-head-unseen {
+  background: var(--status-attention-tint);
+  color: var(--status-attention-text);
+  border-radius: var(--r-full);
+  padding: 0 6px;
+  font: var(--weight-semibold) var(--text-2xs) / 1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.bucket-head .bucket-head-seen {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-ui);
+  padding: var(--sp-1) 0;
+  cursor: pointer;
+}
+.bucket-head .bucket-head-seen:active {
+  transform: scale(0.96);
+}
+
 .fleet-list {
   display: grid;
   gap: var(--sp-3);
@@ -801,6 +852,15 @@
 .sess-state--exited  { color: var(--ink-secondary); }
 
 .sess-tally {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* The cleanup bucket's merge facts (`#<pr>`, the reclaimable size) — same
+   quiet register as .sess-tally, no colour of its own (inherits .sess-meta's
+   ink-secondary), so it needs no new contrast pair. */
+.sess-cleanup-fact {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;

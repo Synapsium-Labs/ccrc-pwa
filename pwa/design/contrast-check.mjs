@@ -44,6 +44,8 @@ const palette = (theme) => {
     busy: of('--status-busy'), busyText: of('--status-busy-text'), idle: of('--status-idle'),
     att: of('--status-attention'), attText: of('--status-attention-text'), attTint: of('--status-attention-tint'),
     dead: of('--status-dead'), deadText: of('--status-dead-text'), deadTintSolid: of('--status-dead-tint-solid'),
+    done: of('--status-done'), doneText: of('--status-done-text'),
+    cleanup: of('--status-cleanup'), cleanupText: of('--status-cleanup-text'),
     claude: of('--acct-claude'), claudeT: of('--acct-claude-tint'),
     claude2: of('--acct-claude2'), claude2T: of('--acct-claude2-tint'),
     corp: of('--acct-corp'), corpT: of('--acct-corp-tint'),
@@ -93,6 +95,20 @@ const pairs = (T, name) => [
   [`${name} busy dot / lamp well (UI 3:1)`, T.busy, T.well, 3],
   [`${name} idle dot / surface (UI 3:1)`, T.idle, T.surface, 3],
   [`${name} idle dot / lamp well (UI 3:1)`, T.idle, T.well, 3],
+  // `done` and `cleanup` (Build 2) — the two-glyph rule's new buckets. Both
+  // dots sit on --bg-surface (a project card) and --bg-well (.sess-lamp),
+  // exactly like busy/attention/idle/dead above; the state word (a row's
+  // `.sess-state--*`, currently unstyled and inheriting ink-secondary) has no
+  // pair of its own for the same reason `.sess-state--exited` doesn't — it
+  // never overrides colour. `-text` is measured anyway, as a defensive floor
+  // for the day something DOES paint with it directly (the class every other
+  // status token in this list already keeps).
+  [`${name} done dot / surface (UI 3:1)`, T.done, T.surface, 3],
+  [`${name} done dot / lamp well (UI 3:1)`, T.done, T.well, 3],
+  [`${name} done-text / surface`, T.doneText, T.surface, 4.5],
+  [`${name} cleanup dot / surface (UI 3:1)`, T.cleanup, T.surface, 3],
+  [`${name} cleanup dot / lamp well (UI 3:1)`, T.cleanup, T.well, 3],
+  [`${name} cleanup-text / surface`, T.cleanupText, T.surface, 4.5],
   [`${name} attention-text / att-tint`, T.attText, T.attTint, 4.5],
   // Three readouts share this ground now: the chat header's
   // .status-line--attention, the fleet row's .sess-state--waiting, and the

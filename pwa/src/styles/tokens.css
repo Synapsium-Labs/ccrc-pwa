@@ -95,6 +95,27 @@
   --pr-merged: var(--acct-claude2);   /* violet, filled — merged: DARK 8.06:1, LIGHT 5.93:1 vs --bg-raised */
   --pr-dim:    var(--ink-tertiary);   /* the "nothing to say" dot */
 
+  /* Two more buckets (Build 2, attention UX): `done` and `cleanup`. Neither is
+     a LIVING state — nothing is running — so neither glows: matte, same
+     family as --status-idle above. The two-glyph rule (StatusDot: ✓ done,
+     ♻ cleanup, ○ idle/archived) is what tells them apart now; colour
+     deliberately does not, which is exactly the "done and idle are both
+     not-amber-not-busy" fusion that rule exists to end.
+     `cleanup` was tried as --pr-merged (the SAME violet the PR keycap already
+     uses for "merged") and MEASURED unsafe: --acct-claude2's light value is
+     tuned for --bg-raised only (5.93:1 there) and reads 2.60:1 on the
+     light-theme lamp well, under the dots' shared 3:1 floor — this dot,
+     unlike the keycap's, sits on --bg-well in .sess-lamp. Reusing violet would
+     also have put a STATUS token on an ACCOUNT hue, the exact collision
+     tokens.css's own governing rule reserves the cool half of the wheel
+     against. Aliased to --status-idle instead: already proven on both
+     --bg-surface and --bg-well in both themes, and retuning either bucket
+     later is a one-line change here, not a new palette entry. */
+  --status-done:           var(--status-idle);
+  --status-done-text:      var(--ink-secondary);
+  --status-cleanup:        var(--status-idle);
+  --status-cleanup-text:   var(--ink-secondary);
+
   /* Account accents — chip text on chip tint. Cool half of the wheel only
      (hues ~190/222/265/330), 40°+ apart, so no account hue collides with
      status green/amber/red. Chips always carry the account name in mono;

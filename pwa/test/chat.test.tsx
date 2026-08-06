@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { ChatListInner } from '../src/session/ChatList';
 import { Composer } from '../src/session/Composer';
+import { loadAcks } from '../src/lib/seen';
 import { SessionScreen } from '../src/screens/SessionScreen';
 
 // Virtuoso needs a real viewport to measure; jsdom has none. Screen-level
@@ -565,6 +566,16 @@ describe('Composer autofocus', () => {
 // — SessionScreen —
 
 describe('SessionScreen', () => {
+  // Opening a session IS the ack (Task 6, pwa/src/lib/seen.ts) — the honest
+  // signal that a human looked, so the fleet screen's unseen badge for THIS
+  // session clears without a separate "mark as read" step.
+  it('acks the session on mount, written through to localStorage', () => {
+    window.localStorage.clear();
+    const store = makeStore();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    expect(loadAcks()).toHaveProperty('claude:OpenClawHetzner');
+  });
+
   it('renders skeleton bubbles until the backlog arrives', () => {
     const store = makeStore();
     render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
