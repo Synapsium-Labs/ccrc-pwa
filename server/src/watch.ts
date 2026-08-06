@@ -430,9 +430,13 @@ export class FleetWatcher {
       // `this.activeProjects` — this sweep has no fleet list of its own in
       // scope (see the field's own comment) and must not block on `gh` to get
       // one.
+      // `›`, not `·`: `pushOne` appends the project with `·` when more than
+      // one is active, and reusing that separator here would render
+      // "✓ merged · wt-foo · ccrc-pwa" with no way to tell workspace from
+      // project. The old copy used `›` for exactly this reason.
       this.pushOne({
         kind: 'merged', sessionId: r.id, project: r.project,
-        title: `✓ merged · ${r.workspace}`,
+        title: `✓ merged › ${r.workspace}`,
         body: `PR #${pr.number ?? '?'} merged; workspace archived, nothing deleted.`,
       }, this.activeProjects);
     }

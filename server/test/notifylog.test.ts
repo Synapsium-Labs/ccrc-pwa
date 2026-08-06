@@ -68,4 +68,33 @@ describe('NotifyLog', () => {
     const log = new NotifyLog(path.join(await dir(), 'n.json')); await log.load();
     expect(log.catchUp(null, 0)).toMatchObject({ resync: true });
   });
+
+  it('demands a resync when the client seq is AHEAD of the server, under a matching epoch', async () => {
+    // Reachable via a swallowed write (or, pre-serialization, a torn flush)
+    // that lands the store on an older seq than a client already holds. A
+    // confident `resync: false, events: []` here would be a wrong "nothing
+    // happened", and every event the server records afterward at or below
+    // that watermark would be silently dropped forever — the exact failure
+    // the epoch exists to prevent.
+    const log = new NotifyLog(path.join(await dir(), 'n.json')); await log.load();
+    log.record({ kind: 'ask', sessionId: 'cc-a', title: '1', body: '' });
+    expect(log.catchUp(log.epoch, 5)).toMatchObject({ resync: true, events: [] });
+  });
+
+  it('serializes concurrent flushes: the persisted file always matches the LAST call, never a torn or stale-but-valid one', async () => {
+    const p = path.join(await dir(), 'n.json');
+    const log = new NotifyLog(p); await log.load();
+    // `pushOne` fires flush() void-dispatched, once per event, so several can
+    // be in flight against the SAME tmp path in one tick — this is what that
+    // looks like from the outside.
+    const flushes: Promise<void>[] = [];
+    for (let i = 0; i < 5; i++) {
+      log.record({ kind: 'done', sessionId: 'cc-a', title: String(i), body: '' });
+      flushes.push(log.flush());
+    }
+    await Promise.all(flushes);
+    const raw = JSON.parse(await readFile(p, 'utf8')) as { epoch: string; seq: number };
+    expect(raw.seq).toBe(5);
+    expect(raw.epoch).toBe(log.epoch);
+  });
 });

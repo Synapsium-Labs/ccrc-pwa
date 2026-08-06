@@ -95,8 +95,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Presence is cheap and needs no config, unlike `push` — a caller that
   // didn't wire one into Deps (an older test, a one-off script) still gets
-  // working suppression rather than a silently-inert route.
-  const presence = deps.presence ?? new Presence();
+  // working suppression. Written BACK onto `deps`, not just held locally:
+  // `FleetWatcher.pushOne` reads `this.deps.presence` on every push, and a
+  // presence instance only this route can see would be write-only — the
+  // route marks visibility nobody ever reads, so nothing is actually
+  // suppressed. `deps` is a shared reference (the same object `FleetWatcher`
+  // was constructed with, or will be), so this makes both sides see the
+  // SAME instance regardless of construction order.
+  deps.presence ??= new Presence();
+  const presence = deps.presence;
 
   app.get('/health', async () => ({ ok: true }));
 
