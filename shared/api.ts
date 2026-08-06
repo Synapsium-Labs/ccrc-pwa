@@ -621,11 +621,30 @@ const CHECKS: readonly string[] = ['pass', 'fail', 'pending'];
 // something this build cannot parse. Reject the whole snapshot instead, the
 // same stance `checks` takes for the identical reason.
 const HOOK_STATES: readonly string[] = ['working', 'waiting', 'done'];
-// Same shape as STATUSES: `bucket` is non-nullable and drives the fleet
-// screen's sections directly, so there is no honest "we don't know" member to
-// degrade an unrecognised token into — an older or newer build's stray value
-// rejects the whole snapshot rather than sort a session into a section it
-// never claimed to be in.
+// `bucket` splits from every sibling above it, on purpose (final review):
+// ABSENT and UNRECOGNISED are not the same claim, so they get different
+// answers, both enforced at the call site below.
+//
+// ABSENT degrades to `idle`. Every snapshot on disk the moment this field
+// ships is missing it — that is not a corrupt file, it is just version skew,
+// and rejecting it outright would discard the only degraded-mode data at
+// exactly the moment it is needed (`server.ts` serves this snapshot during a
+// fleet-host outage; `offline.ts` exists specifically to avoid an empty cold
+// start). `idle` is already `sessionBucket`'s own no-evidence rung, so this
+// is the same move `revivePr` makes landing an absent `phase` on
+// `'unchecked'` — except `bucket` has no member NAMED "unknown", so the
+// degrade target is chosen rather than declared; see `bucketSince` at the
+// call site, which is forced to `null` alongside it rather than carrying a
+// timestamp for a bucket the session was never recorded in.
+//
+// UNRECOGNISED — a token PRESENT but not in this list, e.g. a future build's
+// retired or renamed bucket — rejects the whole snapshot instead, same stance
+// `checks`/`hookState` take two lines up and for the identical reason: unlike
+// an absent field, a stray-but-present token is not an admission of ignorance
+// the way `'unchecked'` or a null `hookState` is. `idle` is an AFFIRMATIVE
+// claim that nothing is pending, and landing an unrecognised token there
+// would silently empty the attention section — the one thing this field
+// exists to keep honest.
 const BUCKETS: readonly string[] = ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead'];
 // The reason list is NOT restated here (integration finding 7). It was the
 // second of four copies; it is now `isPrReason`, over `PR_REASONS`, which is
@@ -727,18 +746,22 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       throw new MalformedSnapshot('hookState');
     }
 
-    // `bucket` is non-nullable but, like `PrState.phase` above, has its own
-    // designated "we do not know" member: `idle` is already `sessionBucket`'s
-    // OWN final rung — the answer for a session with no evidence of anything
-    // under way. A snapshot predating this field (every snapshot on disk the
-    // moment this ships) or a token a future build retires both degrade to it
-    // rather than rejecting the whole snapshot, the same stance `revivePr`
-    // takes for `phase`. Unlike `hookState` two lines up, there is no separate
-    // "no data" state to protect from being overwritten — `idle` on this field
-    // never claims a measurement, only "nothing pending".
+    // See `BUCKETS`' own comment for the full reasoning — absent degrades,
+    // unrecognised rejects. `bucketSince` degrades WITH `bucket`, on the same
+    // branch: a leftover or absent timestamp must never survive paired with a
+    // bucket the session was never recorded as entering.
     const bucketRaw = optStr(o, 'bucket');
-    const bucket: SessionBucket = bucketRaw !== null && BUCKETS.includes(bucketRaw)
-      ? (bucketRaw as SessionBucket) : 'idle';
+    let bucket: SessionBucket;
+    let bucketSince: number | null;
+    if (bucketRaw === null) {
+      bucket = 'idle';
+      bucketSince = null;
+    } else if (BUCKETS.includes(bucketRaw)) {
+      bucket = bucketRaw as SessionBucket;
+      bucketSince = optNum(o, 'bucketSince');
+    } else {
+      throw new MalformedSnapshot('bucket');
+    }
 
     return {
       id: reqStr(o, 'id'),
@@ -765,7 +788,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
       bucket,
-      bucketSince: optNum(o, 'bucketSince'),
+      bucketSince,
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;

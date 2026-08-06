@@ -138,6 +138,31 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect((await loadSnapshot(cachePath))?.sessions[0]?.pr?.phase).toBe('unchecked');
   });
 
+  it('degrades an absent bucket to idle, forcing bucketSince to null even if the file carries one', async () => {
+    // `bucket` splits from `hookState`/`pr.phase` below: ABSENT degrades
+    // (every snapshot on disk before this field shipped, v1Session included),
+    // but a stray `bucketSince` alongside the missing `bucket` must not
+    // survive as a timestamp for a bucket this session was never recorded
+    // entering — final review, Important 2.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), bucketSince: 1785300123000 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.bucket).toBe('idle');
+    expect(s?.bucketSince).toBeNull();
+  });
+
+  it('rejects a bucket token this build does not recognise — unlike absence, idle is an affirmative claim', async () => {
+    // The opposite stance from the absent case above (final review, Important
+    // 3): a PRESENT-but-unrecognised bucket (a future build's retired or
+    // renamed value) is not an admission of ignorance the way an absent field
+    // is — landing it on 'idle' would claim nothing is pending, silently
+    // emptying the attention section. Reject the whole snapshot instead, the
+    // same stance the hookState test right below takes.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), bucket: 'blocked', bucketSince: 100 }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
   it('rejects a hookState token this build does not recognise — no synonym for "unknown" to degrade to', async () => {
     // Unlike pr.phase, hookState is already nullable, and null already means
     // something specific ("no fresh hook data"). Landing an unrecognised
