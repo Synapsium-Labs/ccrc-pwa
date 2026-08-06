@@ -9,6 +9,12 @@ export interface ReconnectingSocketOpts {
   url: () => string; // recomputed each (re)connect — carries fresh ?since=
   onMessage: (msg: unknown) => void; // parsed JSON
   onState: (s: SocketState) => void;
+  /** Fired on EVERY successful open, including the automatic reconnects
+   *  `onState` also reports. Anything the client told the server about this
+   *  connection has to be told again here: the server keys per-connection
+   *  state (presence, notably) by the socket itself, so a reconnect starts
+   *  with a blank slate and a claim made once would silently lapse. */
+  onOpen?: () => void;
   makeSocket?: (url: string) => WebSocket; // injectable for tests
   baseDelayMs?: number; // default 500, doubles to max 10s, ±30% jitter
 }
@@ -56,6 +62,27 @@ export class ReconnectingSocket {
     }
   }
 
+  /**
+   * Send one JSON frame, if a socket is open right now. Returns whether it
+   * went.
+   *
+   * Deliberately NOT queued. Everything sent over these streams is a statement
+   * about the present ("this session is on screen"), and a queued statement
+   * delivered after a reconnect would describe a moment that has passed. The
+   * caller re-states it on `onOpen` instead, which is both simpler and always
+   * current.
+   */
+  send(data: unknown): boolean {
+    const ws = this.ws;
+    if (ws === null || ws.readyState !== 1 /* OPEN */) return false;
+    try {
+      ws.send(JSON.stringify(data));
+      return true;
+    } catch {
+      return false; // a socket that died between the check and the send
+    }
+  }
+
   /** Immediate reconnect if down (skips any pending backoff wait). */
   nudge(): void {
     if (this.stopped || this.ws) return; // inert unless started and down
@@ -80,6 +107,7 @@ export class ReconnectingSocket {
       if (this.ws !== ws) return;
       this.attempt = 0;
       this.setState('open');
+      this.opts.onOpen?.();
     };
     ws.onmessage = (ev: MessageEvent) => {
       if (this.ws !== ws) return;

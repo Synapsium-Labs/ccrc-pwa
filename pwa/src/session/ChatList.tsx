@@ -9,7 +9,8 @@ import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
-import { clipUrl } from '../lib/api';
+import { api, ApiError, clipUrl, submitErrorText } from '../lib/api';
+import { toast } from '../components/Toast';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
@@ -130,6 +131,48 @@ function PendingClipThumbs({ id, attachments }: { id: string; attachments: Pendi
   );
 }
 
+/**
+ * The rescue for `enter-ignored`: the server proved our text reached the input
+ * box and then watched two Enters get swallowed, so it left the text there
+ * rather than risk a misplaced keystroke. One more Enter is the whole fix, and
+ * before this button the only way to press it was to open a terminal.
+ *
+ * On success the pending is DISCARDED, not retried: the message is now in
+ * flight for real and the transcript will carry it, so leaving a red bubble
+ * behind would show the operator a failure that has since succeeded.
+ */
+function SendItButton({
+  id,
+  sendKey,
+  onSent,
+}: {
+  id: string;
+  sendKey: string;
+  onSent?: (key: string) => void;
+}): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const press = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await api.submit(id);
+      onSent?.(sendKey);
+    } catch (e) {
+      // Two of these refusals are good news (`nothing-to-submit` means it went
+      // through after all), so they are said plainly rather than as an error.
+      const code = e instanceof ApiError ? e.message : '';
+      toast(submitErrorText(code), code === 'nothing-to-submit' ? undefined : 'error');
+      if (code === 'nothing-to-submit') onSent?.(sendKey);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className="pending-send-it" disabled={busy} onClick={() => void press()}>
+      Send it
+    </button>
+  );
+}
+
 /** Optimistic send bubble: sending `◌` → (confirmed events replace it) →
  *  failed red `!` with the error and Retry/Discard. */
 function PendingBubble({
@@ -170,6 +213,12 @@ function PendingBubble({
         <p className="pending-error">{send.error}</p>
       )}
       <div className="pending-actions">
+        {/* Only for `enter-ignored`, and that narrowness is the point: it is
+            the one refusal where the server has PROVEN the text is sitting in
+            the box and both of `sendPrompt`'s Enters were swallowed. Retry
+            would re-type a message that is already there; Send it presses one
+            more Enter. Every other failure leaves nothing to submit. */}
+        {send.code === 'enter-ignored' && <SendItButton id={id} sendKey={send.key} onSent={onDiscard} />}
         <button type="button" className="pending-retry" onClick={() => onRetry?.(send.key)}>
           Retry
         </button>

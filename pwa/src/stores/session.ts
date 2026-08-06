@@ -27,7 +27,11 @@ export interface PendingSend {
   key: string;
   text: string;
   state: 'sending' | 'failed';
+  /** The sentence shown under the failed bubble. */
   error?: string;
+  /** The server's own refusal token behind `error`. The bubble branches on
+   *  this, never on the sentence. */
+  code?: string;
   /** Captured server-side draft on a 409 draft-present failure (Composer sheet). */
   draft?: string;
   /** Remembered so retry() repeats the original call. */
@@ -198,16 +202,21 @@ function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingS
   return next;
 }
 
-const failureOf = (e: unknown): { error: string; draft?: string } => {
+const failureOf = (e: unknown): { error: string; code?: string; draft?: string } => {
   if (e instanceof ApiError) {
     const body = e.body;
     if (typeof body === 'object' && body !== null) {
       const b = body as { error?: unknown; draft?: unknown };
       if (b.error === 'draft-present') {
-        return { error: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
+        return { error: 'draft-present', code: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
       }
     }
-    return { error: sendErrorText(e.message) };
+    // `error` is the SENTENCE and `code` the server's token. They are kept
+    // separate because the bubble now branches on the token (only
+    // `enter-ignored` earns a Send it button) while still rendering the
+    // sentence — reading the branch off the humanised text would break the
+    // moment someone rewords it.
+    return { error: sendErrorText(e.message), code: e.message };
   }
   return { error: e instanceof Error ? e.message : 'send failed' };
 };
@@ -253,18 +262,34 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         await apiImpl.prompt(id, text, opts);
         timers.set(key, setTimeout(() => expireConfirmed(key), confirmTimeoutMs));
       } catch (e) {
-        const { error, draft } = failureOf(e);
+        const { error, code, draft } = failureOf(e);
         set((s) => ({
           pending: s.pending.map((p) =>
-            p.key === key ? { ...p, state: 'failed' as const, error, draft } : p,
+            p.key === key ? { ...p, state: 'failed' as const, error, code, draft } : p,
           ),
         }));
       }
     };
 
     const nudge = (): void => socket?.nudge();
+
+    /**
+     * Tell the server whether this session is on the operator's screen, so it
+     * can suppress notifications for it (`server/src/presence.ts`, read by the
+     * watcher's `pushOne`). A notification for the pane you are looking at
+     * teaches you to dismiss notifications.
+     *
+     * Best-effort by design: a frame that cannot be sent right now is dropped
+     * rather than queued, because it is a claim about the present moment.
+     * `onOpen` re-states the current truth on every connect.
+     */
+    const reportVisible = (visible = document.visibilityState === 'visible'): void => {
+      socket?.send({ type: 'visible', visible });
+    };
+
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') nudge();
+      reportVisible();
     };
 
     return {
@@ -299,6 +324,11 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           },
           onMessage: (m) => get().apply(m as SessionStreamMsg),
           onState: (conn) => set({ conn }),
+          // Re-stated on EVERY open, automatic reconnects included: the
+          // server's presence registry is keyed per connection, so a reconnect
+          // starts with no claim at all and a session the operator is still
+          // looking at would quietly start pushing notifications again.
+          onOpen: () => reportVisible(),
           makeSocket: deps.makeSocket,
         });
         socket.start();
@@ -309,6 +339,11 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       disconnect() {
         document.removeEventListener('visibilitychange', onVisible);
         window.removeEventListener('online', nudge);
+        // Say so before the socket goes: leaving the session screen means the
+        // operator is no longer looking at it, and a close alone would let the
+        // server infer that only from the disconnect — true here, but not for
+        // the automatic reconnects that share this code path's socket.
+        reportVisible(false);
         socket?.stop();
         socket = null;
         // Fix round 1 (I1): a dropped connection must not leave a stale hook
@@ -343,7 +378,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // field added after it too.
         set((s) => ({
           pending: s.pending.map((x) =>
-            x.key === key ? { ...x, state: 'sending' as const, error: undefined, draft: undefined } : x),
+            x.key === key ? { ...x, state: 'sending' as const, error: undefined, code: undefined, draft: undefined } : x),
         }));
         void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
       },
@@ -357,7 +392,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         set((s) => ({
           pending: s.pending.map((x) =>
             x.key === key
-              ? { ...x, text, state: 'sending' as const, error: undefined, draft: undefined,
+              ? { ...x, text, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
                   replaceDraft: opts.replaceDraft }
               : x),
         }));

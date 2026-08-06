@@ -1,8 +1,10 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, NotifyEvent } from '../../../shared/api';
+import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
+import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
 export interface FleetNotice {
@@ -14,9 +16,14 @@ export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
   notices: FleetNotice[];
+  /** Notifications the server fired while this device was away, learned on
+   *  reconnect. Empty after a resync — see `lib/notifymark.ts` for why nothing
+   *  is ever surfaced retroactively in that case. */
+  missed: NotifyEvent[];
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
+  clearMissed(): void;
 }
 
 // Wire shape of the fleet stream (server.ts /ws/fleet) — local to this store;
@@ -39,6 +46,8 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
 
 export interface FleetStoreDeps {
   makeSocket?: (url: string) => WebSocket;
+  /** Injectable so a test can drive the catch-up without a server. */
+  catchUp?: (epoch: string | null, seq: number) => Promise<import('../../../shared/api').CatchUp>;
 }
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
@@ -61,9 +70,25 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       sessions: loadFleetSnapshot()?.sessions ?? [],
       conn: 'connecting',
       notices: [],
+      missed: [],
 
       connect() {
         if (socket) return;
+        // What did this device miss? Asked once per connect, including
+        // automatic reconnects — a phone that slept through a question is
+        // exactly the case this exists for. Never awaited and never allowed to
+        // reject: the fleet stream is the thing that matters, and a catch-up
+        // that fails simply leaves `missed` empty, which is the honest answer.
+        const askCatchUp = (): void => {
+          const mark = loadMark();
+          const fetchCatchUp = deps.catchUp ?? ((e, s) => api.catchUp(e, s));
+          void fetchCatchUp(mark?.epoch ?? null, mark?.seq ?? 0)
+            .then((r) => {
+              const events = applyCatchUp(r);
+              if (events.length > 0) set((s) => ({ missed: [...s.missed, ...events] }));
+            })
+            .catch(() => { /* offline, or an older server with no such route */ });
+        };
         socket = new ReconnectingSocket({
           url: () => wsUrl('/ws/fleet'),
           onMessage: (m) => {
@@ -79,6 +104,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             }
           },
           onState: (conn) => set({ conn }),
+          onOpen: askCatchUp,
           makeSocket: deps.makeSocket,
         });
         socket.start();
@@ -95,6 +121,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       dismissNotice(id) {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
+      },
+
+      clearMissed() {
+        set({ missed: [] });
       },
     };
   });
