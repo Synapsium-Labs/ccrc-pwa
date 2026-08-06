@@ -104,7 +104,7 @@ describe('SessionHeader', () => {
   it('enables the stop keycap while busy and fires onInterrupt', () => {
     const props = renderHeader({
       status: 'busy',
-      session: fleetSession({ status: 'busy' }),
+      session: fleetSession({ status: 'busy', bucket: 'working' }),
     });
     const stop = screen.getByRole('button', { name: 'Stop' });
     expect(stop).toBeEnabled();
@@ -113,13 +113,105 @@ describe('SessionHeader', () => {
     expect(screen.getByText(/working/)).toBeInTheDocument();
   });
 
-  // The server already ORs a fresh hookState === 'waiting' into dialogPending
-  // (fleet.ts), so this pins the DEFENSIVE client-side OR: hookState alone,
-  // with dialogPending false, still drives the existing attention treatment
-  // — no new visual, same 'waiting on you' word/dot dialogPending already renders.
-  it('shows the attention word from hookState alone, even when dialogPending is false', () => {
-    renderHeader({ session: fleetSession({ dialogPending: false, hookState: 'waiting' }) });
+  // This header reads the SERVER's bucket, like every fleet surface. It used
+  // to OR dialogPending/hookState into an `attention` of its own — a second
+  // writer for a fact the wire carries, and the reason one snapshot could say
+  // two different things about one session on two screens.
+  it('shows the attention word when the server buckets it attention', () => {
+    // NEITHER raw signal is set. With `hookState: 'waiting'` in the fixture
+    // this passed under the very OR it was written to prove gone — the
+    // deleted code would have manufactured the same word from the hook.
+    renderHeader({
+      session: fleetSession({ dialogPending: false, hookState: null, bucket: 'attention' }),
+    });
     expect(screen.getByText('waiting on you')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'waiting on you' })).toBeInTheDocument();
+  });
+
+  // The one direction the live stream still outranks the snapshot. Making
+  // this header snapshot-first dropped the override entirely, so a session
+  // its OWN socket has already reported dead kept pulsing amber "waiting on
+  // you" — the header contradicting the stream it is attached to, over the
+  // state that asks the reader to act on a process that is gone.
+  it('says the session is not running once its own stream reports it dead', () => {
+    renderHeader({
+      status: 'dead',
+      session: fleetSession({ status: 'busy', dialogPending: true, bucket: 'attention' }),
+    });
+    expect(screen.getByText('not running')).toBeInTheDocument();
+    expect(screen.queryByText('waiting on you')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
+  });
+
+  it('never lets a dead stream bury an archived workspace\'s own bucket', () => {
+    // `ws-archive` STOPS the session, so `dead` is true of every archived
+    // row by construction — the override must not fire there, or `cleanup`
+    // loses the merge facts the leapfrog bucket exists for.
+    renderHeader({
+      status: 'dead',
+      session: fleetSession({
+        status: 'dead', archivedAt: 1785300000, bucket: 'cleanup',
+        pr: { phase: 'merged', number: 157, url: null, title: null, checks: null,
+              checkNames: null, ahead: 0, reason: null, checkedAt: null,
+              mergedAt: 1785300000_000, retryAt: null },
+      }),
+    });
+    expect(screen.getByText('merged, ready to clean up')).toBeInTheDocument();
+    expect(screen.queryByText('not running')).not.toBeInTheDocument();
+  });
+
+  it('does not manufacture the attention treatment from hookState or dialogPending', () => {
+    // The mirror of fleet-screen.test.tsx's own "only the server bucket
+    // decides": both raw signals set, the bucket says idle, so the header
+    // says idle — the server had those same fields and a ladder of evidence
+    // this component does not (shared/api.ts's sessionBucket).
+    renderHeader({
+      session: fleetSession({ dialogPending: true, hookState: 'waiting', bucket: 'idle' }),
+    });
+    expect(screen.queryByText('waiting on you')).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'waiting on you' })).not.toBeInTheDocument();
+  });
+
+  it('says finished for a done session, where the fleet row says done', () => {
+    // status 'idle' + a finished hook is the `done` bucket (shared/api.ts).
+    // Before this read the bucket, the row said `done` under a ✓ labelled
+    // `finished` while this header said `idle` under a ○ — same session, same
+    // snapshot, same instant.
+    renderHeader({
+      status: 'idle',
+      session: fleetSession({
+        status: 'idle', hookState: 'done', bucket: 'done',
+        statusUpdatedAt: Date.now() - 3 * 60_000,
+      }),
+    });
+    expect(screen.getByRole('img', { name: 'finished' })).toBeInTheDocument();
+    expect(screen.getByText('done · 3m ago')).toBeInTheDocument();
+  });
+
+  it('says merged-and-ready for a cleanup session, not "not running"', () => {
+    // A merged, archived workspace is `cleanup` — the row wears ♻. The header
+    // used to read the raw status and call the same session dead.
+    renderHeader({
+      status: 'dead',
+      session: fleetSession({ status: 'dead', archivedAt: 1, bucket: 'cleanup' }),
+    });
+    expect(screen.getByRole('img', { name: 'merged, ready to clean up' })).toBeInTheDocument();
+    expect(screen.getByText('merged, ready to clean up')).toBeInTheDocument();
+    expect(screen.queryByText('not running')).not.toBeInTheDocument();
+  });
+
+  it('still says not running for a dead session', () => {
+    renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
+    expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
+    expect(screen.getByText('not running')).toBeInTheDocument();
+  });
+
+  it('paints from the live status alone before the fleet snapshot lands', () => {
+    // Deep link, no session record yet: there IS no bucket, so the stream's
+    // status is translated into the same vocabulary rather than guessed at.
+    renderHeader({ session: null, status: 'busy', statusUpdatedAt: Date.now() - 1000,
+      fallback: { title: 'OpenClawHetzner', wrapper: 'claude' } });
+    expect(screen.getByRole('img', { name: 'working' })).toBeInTheDocument();
   });
 
   it('shows the clean project name, ignoring the auto-derived session name', () => {

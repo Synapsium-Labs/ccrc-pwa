@@ -4,30 +4,50 @@
 
 /* ------------------------------------------------------------------ *
  *  StatusDot — glow means life: busy breathes phosphor, a pending     *
- *  dialog pulses amber at double tempo, idle/dead are matte.          *
+ *  dialog pulses amber at double tempo, idle/dead are matte. The two-  *
+ *  glyph rule (Build 2): the element now carries a GLYPH as its text   *
+ *  content, coloured by the same per-bucket token this used to paint   *
+ *  as a plain filled circle — `color`, not `background`, which is why  *
+ *  every measured pair below is unchanged: WCAG contrast is symmetric  *
+ *  in foreground/background, so swapping which property carries the   *
+ *  hue re-uses the identical, already-verified ratios.                *
  * ------------------------------------------------------------------ */
 .dot {
-  display: inline-block;
-  width: var(--sp-2);
-  height: var(--sp-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--sp-2);
+  min-height: var(--sp-2);
   border-radius: var(--r-full);
   flex: none;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
 }
 .dot--busy {
-  background: var(--status-busy);
+  color: var(--status-busy);
   box-shadow: var(--glow-dot-busy);
   animation: dot-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
 }
 .dot--attention {
-  background: var(--status-attention);
+  color: var(--status-attention);
   box-shadow: var(--glow-dot-attention);
   animation: dot-breathe var(--pulse-period) var(--ease-breathe) infinite alternate;
 }
 .dot--idle {
-  background: var(--status-idle);
+  color: var(--status-idle);
 }
 .dot--dead {
-  background: var(--status-dead);
+  color: var(--status-dead);
+}
+/* `done` and `cleanup` are not LIVING states — nothing is running — so
+   neither glows, same as idle/dead above; see tokens.css for why each is
+   aliased to an already-verified value rather than a new hue. */
+.dot--done {
+  color: var(--status-done);
+}
+.dot--cleanup {
+  color: var(--status-cleanup);
 }
 @keyframes dot-breathe {
   from { opacity: 0.55; }

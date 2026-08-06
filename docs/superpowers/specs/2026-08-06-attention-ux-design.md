@@ -46,7 +46,7 @@ Order matters; first match wins.
 
 | # | Bucket | Condition | `bucketSince` |
 |---|---|---|---|
-| 1 | `cleanup` | `archivedAt !== null && pr?.phase === 'merged'` | `archivedAt * 1000` |
+| 1 | `cleanup` | `archivedAt !== null && pr?.phase === 'merged'` | `max(archivedAt * 1000, pr.mergedAt)` |
 | 2 | `archived` | `archivedAt !== null` | `archivedAt * 1000` |
 | 3 | `dead` | `status === 'dead'` | `statusUpdatedAt` |
 | 4 | `attention` | `dialogPending \|\| hookState === 'waiting'` | hook `updatedAt` when the hook is the reason, else `statusUpdatedAt` |
@@ -80,6 +80,17 @@ gives us no proof a turn *finished* rather than never started; it lands in
 `idle`, which is the truth. This also gives `done` a natural decay: Build 1's
 30-minute freshness gate nulls `hookState`, so an unacknowledged `done` falls
 back to `idle` instead of accumulating forever.
+
+**Why `cleanup` takes the LATER of its two timestamps** (amended by PR E's
+whole-branch review). Its condition is a conjunction, so the session enters the
+bucket when the second conjunct lands. On the auto-archive path that is the
+archive (sweepPr flips the phase, `archiveMerged` archives seconds later), and
+`archivedAt` alone reads correctly. On the MANUAL path it inverts: archive at
+T0 with the PR still open, open the session at T1 (which acks it), let the PR
+merge at T2 — the session enters `cleanup` at T2 while `archivedAt` still says
+T0, so `bucketSince > acks[id]` is `T0 > T1`, false, and the leapfrog bucket's
+badge is dead in exactly the flow it exists for. `pr.mergedAt` is already on the
+wire, and `max()` is still memory-free.
 
 **`cleanup` is the leapfrog bucket** — the one the analysis says Orca
 structurally cannot build, because their merge detection is decorative while
@@ -322,12 +333,20 @@ no PTY, capped at the hook's own 32.
 ## 7. Carried from Build 1
 
 - **I2 — free-text / preview restoration in `DialogSheet`.** Decision: the
-  envelope render shows each option's `description` under its label (the
-  preview Orca has and our scrape never had — it is in the envelope already and
-  we were dropping it). A question with **no** options is free-text: the sheet
-  renders the question, no rows, and the "Open terminal to answer" CTA, which
-  is the honest affordance — typing free text blind is the send-race with worse
-  consequences.
+  envelope render shows each option's `description` under its label, and a
+  question with **no** options is free-text — the sheet renders the question, no
+  rows, and the "Open terminal to answer" CTA, which is the honest affordance:
+  typing free text blind is the send-race with worse consequences.
+
+  **Corrected 2026-08-06, after the build.** This item originally said the
+  descriptions were "in the envelope already and we were dropping it". That was
+  wrong: `EnvelopeSheet` already rendered `o.description` before this build
+  started (verified at `e1a6b0b`), so **the preview half of I2 needed no work
+  and none was written** — only a test was added for it. The free-text half was
+  the real gap and is the only production change this item produced. Recorded
+  rather than quietly edited, because a spec that claims credit for behaviour it
+  did not build is the same class of defect as a comment that asserts more than
+  its code proves — which this build's reviews caught six times.
 - **The blind-digit route** is §4.1 above; multi-select is its acceptance test.
 
 ---

@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { atBlock, declValue, ruleIn, selectorsOf } from './cssRule';
+import { atBlock, declValue, norm, normSel, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const css = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -27,25 +27,41 @@ describe('fleet density and alignment', () => {
   it('stacks the two lines and centres them vertically in the 44px box', () => {
     // The original defect (a single line wobbling 10.8px above .sess-line's
     // centre because baseline alignment does not centre inside a min-height
-    // box) is now moot: .sess-open holds two full lines, stacked, so it is a
+    // box) is now moot: .sess-body holds two full lines, stacked, so it is a
     // COLUMN flex — justify-content, not align-items, does the vertical
     // centring on that axis. align-items: baseline would only mean anything
     // on a single-line ROW flex, so its presence here would be a regression
     // back to that layout.
-    const rule = ruleFor('.sess-open');
+    const rule = ruleFor('.sess-body');
     expect(rule).toContain('flex-direction: column');
     expect(rule).toContain('justify-content: center');
     expect(rule).not.toContain('align-items: baseline');
   });
 
-  it('keeps the 44px thumb target on the row and its label button', () => {
-    // The fix is centring, NOT shrinking: these are tap surfaces.
+  it('keeps the 44px thumb target on the row and on the block that is tapped', () => {
+    // The fix is centring, NOT shrinking: these are tap surfaces. The floor
+    // lives on .sess-body, the block the row's click forwarder is on — NOT on
+    // .sess-open, which is only the label line inside it now that the
+    // subagent toggle had to become a real, un-nested <button>.
     expect(ruleFor('.sess-line')).toContain('min-height: 44px');
-    expect(ruleFor('.sess-open')).toContain('min-height: 44px');
+    expect(ruleFor('.sess-body')).toContain('min-height: 44px');
+  });
+
+  // Task 7 fix round 2. The row's controls must all be siblings, never
+  // ancestor/descendant: `button` is children-presentational, so a control
+  // nested in .sess-open is one AT-invisible element on iOS. The stylesheet's
+  // half of that contract is that the tap floor and the column centring live
+  // on the plain block, not on a button — .sess-open regaining either would
+  // mean it had gone back to wrapping the row's content.
+  it('leaves the label button as a label line, not the block it used to wrap', () => {
+    const rule = ruleFor('.sess-open');
+    expect(rule).not.toContain('min-height');
+    expect(rule).not.toContain('flex-direction: column');
+    expect(rule).not.toContain('grid-column');
   });
 
   it('gives the row three tracks — lamp, a two-line label block, actions', () => {
-    // state/tally/warn/account moved inside .sess-open's second line
+    // state/tally/warn/account moved inside .sess-body's second line
     // (.sess-meta, a flex row) so they no longer need a grid track each.
     const cols = /grid-template-columns:([^;]+);/.exec(ruleFor('.sess-line'))?.[1] ?? '';
     expect(cols.trim().split(/\s+(?![^(]*\))/)).toHaveLength(3);
@@ -64,14 +80,13 @@ describe('fleet density and alignment', () => {
   });
 
   it('pins every .sess-line child to an explicit grid-column', () => {
-    // .sess-line now has only THREE grid children (lamp, the label block,
-    // actions) — state/tally/warn/account moved into .sess-meta, a flex row
-    // inside the label button, so they can never be grid-compacted by a
-    // hidden sibling. The three that remain are still pinned explicitly, on
+    // .sess-line now has only THREE grid children (lamp, .sess-body, actions)
+    // — state/tally/warn/account moved into .sess-meta, a flex row inside
+    // that block, so they can never be grid-compacted by a hidden sibling. The three that remain are still pinned explicitly, on
     // the same reasoning as before: a test that only checked a selector's
     // presence somewhere would pass against a wrong-order regression too, so
     // this checks each child's own column number.
-    const order = ['.sess-lamp', '.sess-open', '.sess-actions'];
+    const order = ['.sess-lamp', '.sess-body', '.sess-actions'];
     order.forEach((sel, i) => {
       expect(ruleFor(sel)).toContain(`grid-column: ${i + 1}`);
     });
@@ -113,6 +128,30 @@ describe('fleet density and alignment', () => {
     expect(rule).toContain('var(--text-xs)');
   });
 
+  it('compensates the lamp for EVERY line that can push the stack past the floor', () => {
+    // The MEASUREMENT cannot be tested (jsdom lays nothing out — fleet.css
+    // says so in the rule's own comment). The SELECTOR GROUP can, and it is
+    // what shipped wrong in Task 7 round 1: .sess-ask was compensated and
+    // .sess-subagent-list — an equally line-adding sibling in the same flex
+    // column, one row of which already exceeds the 44px floor on its own —
+    // was not, so opening the disclosure on a row with no ask summary put the
+    // status dot ~4px below the workspace name again, the exact defect the
+    // preceding fix round removed.
+    const group = selectorsOf(css, '.sess-line:has(.sess-ask) .sess-lamp');
+    for (const line of ['.sess-ask', '.sess-subagent-list']) {
+      // `normSel` on both sides: `selectorsOf` returns the group already
+      // normalised, and that normalisation eats the descendant space after a
+      // `)`, so a raw literal never matches one of these.
+      expect(group).toContain(normSel(`.sess-line:has(${line}) .sess-lamp`));
+    }
+    // And it is the CLAMPED three-line variant they share, not the base
+    // formula: max(0px, …) is what makes one rule correct for a list of N
+    // rows and for a row carrying both extra lines.
+    const rule = ruleFor('.sess-line:has(.sess-subagent-list) .sess-lamp');
+    expect(rule).toContain('max(0px');
+    expect(rule).toContain('var(--text-2xs)');
+  });
+
   it('gives .proj-card-add and .sess-actions the same real-button treatment', () => {
     // The two read as a matched pair stacked down the card's right edge:
     // identical 32×32 (--sp-8) box, bg-raised fill, edge-subtle hairline,
@@ -138,6 +177,64 @@ describe('fleet density and alignment', () => {
       expect(rule).toContain('var(--tap-min)');
       expect(rule).toContain('var(--sp-8)');
     }
+  });
+
+  // Whole-branch review, finding 7. The subagent disclosure — the branch's
+  // headline new interaction — shipped as a ~22×15px box with `padding: 0`,
+  // the first row-level button in this file to skip the --tap-min pattern
+  // entirely, inside a 44px surface whose click forwarder NAVIGATES. A thumb
+  // landing a few px low did not miss quietly; it opened the session.
+  describe('the subagent disclosure is a real target', () => {
+    it('grows its hit area with an overlay instead of its visible box', () => {
+      // The visible box must not grow: .sess-meta is a flex row, so padding
+      // there raises the whole line and throws .sess-lamp's centring formula
+      // out on every row in the fleet.
+      const rule = ruleFor('.sess-subagents');
+      expect(rule).toContain('position: relative');
+      expect(rule).toContain('padding: 0');
+
+      const overlay = ruleFor('.sess-subagents::before');
+      expect(overlay).toContain('position: absolute');
+      // --tap-min WIDE — the axis with room. Vertically --sp-6 (WCAG 2.2 SC
+      // 2.5.8's 24px floor): a 44px-tall overlay would reach 14.5px up over
+      // .sess-open's whole line box, so taps on the workspace name would
+      // toggle the disclosure — a WRONG control, worse than the near-miss.
+      expect(overlay).toContain('var(--tap-min)');
+      expect(overlay).toContain('var(--sp-6)');
+      expect(norm(stripComments(overlay))).not.toContain('44px');
+    });
+
+    it('lets the label win the strip they overlap', () => {
+      // Both are positioned, and the overlay comes later in tree order, so
+      // `position: relative` alone would still lose. The explicit z-index is
+      // what keeps a tap on the name opening the session.
+      const rule = ruleFor('.sess-open');
+      expect(rule).toContain('position: relative');
+      expect(declValue(rule, 'z-index')).toBe('1');
+    });
+
+    it('stops .sess-meta clipping the overlay and the focus ring away', () => {
+      // `overflow: hidden` clips POINTER EVENTS as well as paint, so the
+      // overlay would have been clipped back to the 15px line and bought
+      // nothing — and base.css's :focus-visible, drawn 2px wide at 2px
+      // offset, lost its top and bottom edges on this same rule.
+      const rule = ruleFor('.sess-meta');
+      expect(rule).toContain('overflow: clip');
+      expect(rule).not.toContain('overflow: hidden');
+      expect(declValue(rule, 'overflow-clip-margin')).toBe('12px');
+    });
+  });
+
+  // The ack control's own floor. `padding: var(--sp-1) 0` around an 11px line
+  // measured ~19px — under WCAG 2.2's 24px — on a control whose action cannot
+  // be undone.
+  it('gives "Mark all seen" a real 24px box rather than an overhanging overlay', () => {
+    const rule = ruleFor('.bucket-head .bucket-head-seen');
+    expect(declValue(rule, 'min-height')).toBe('var(--sp-6)');
+    // Deliberately NOT the ::before overlay pattern: every neighbour in the
+    // chip is inert, so an overhang would turn a near-miss that does nothing
+    // into an irreversible ack.
+    expect(() => ruleFor('.bucket-head-seen::before')).toThrow();
   });
 
   it('right-aligns .sess-actions in its column so it shares an edge with .proj-card-add', () => {

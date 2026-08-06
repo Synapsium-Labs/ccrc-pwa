@@ -649,6 +649,40 @@ describe('token pairs the gate must keep measuring', () => {
     expect(min).toBe(3);
     expect(r).toBeGreaterThanOrEqual(3);
   });
+
+  // Build 2, attention UX: the two-glyph rule's new `done` and `cleanup`
+  // buckets (StatusDot's ✓ and ♻). Both dots are non-text graphical objects
+  // on the same two grounds every other status dot is measured on — a
+  // project card (--bg-surface) and the terminal lamp floor (--bg-well,
+  // .sess-lamp) — so 3:1, not the 4.5 body floor.
+  it.each([
+    ['DARK  done dot / surface', 3],
+    ['LIGHT done dot / surface', 3],
+    ['DARK  done dot / lamp well', 3],
+    ['LIGHT done dot / lamp well', 3],
+    ['DARK  cleanup dot / surface', 3],
+    ['LIGHT cleanup dot / surface', 3],
+    ['DARK  cleanup dot / lamp well', 3],
+    ['LIGHT cleanup dot / lamp well', 3],
+  ])('measures %s at the %s UI threshold', (label, floor) => {
+    const { ratio: r, min } = measured(label);
+    expect(min).toBe(floor);
+    expect(r).toBeGreaterThanOrEqual(floor);
+  });
+
+  // The `-text` half of each — a defensive floor at the 4.5 body threshold,
+  // the same shape `attention-text` and `dead-text` already keep above, for
+  // the day something paints a word rather than a dot with either token.
+  it.each([
+    ['DARK  done-text / surface', 4.5],
+    ['LIGHT done-text / surface', 4.5],
+    ['DARK  cleanup-text / surface', 4.5],
+    ['LIGHT cleanup-text / surface', 4.5],
+  ])('measures %s at the %s body threshold', (label, floor) => {
+    const { ratio: r, min } = measured(label);
+    expect(min).toBe(floor);
+    expect(r).toBeGreaterThanOrEqual(floor);
+  });
 });
 
 // ── the arithmetic ──────────────────────────────────────────────────────────

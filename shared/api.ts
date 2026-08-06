@@ -610,10 +610,25 @@ export function sessionBucket(
   // `archivedAt` is epoch SECONDS (ccd writes `$REG/<id>.archived` as an epoch);
   // every other timestamp on this record is epoch ms.
   if (s.archivedAt !== null) {
-    return {
-      bucket: s.pr?.phase === 'merged' ? 'cleanup' : 'archived',
-      bucketSince: s.archivedAt * 1000,
-    };
+    const archivedMs = s.archivedAt * 1000;
+    if (s.pr?.phase === 'merged') {
+      // `cleanup` needs BOTH conjuncts, so it is entered at the LATER of the
+      // two events — not at whichever one this branch happens to read first.
+      // The auto-archive path makes them nearly coincide (sweepPr flips the
+      // phase, archiveMerged archives seconds later), which is why plain
+      // `archivedAt` looked correct: there, archiving IS the later event.
+      // The MANUAL path inverts it. Archive a workspace whose PR is still
+      // open at T0, open it at T1 (which acks it at T1), let the PR merge at
+      // T2: the session enters `cleanup` at T2 while `archivedAt` still says
+      // T0, so `isUnseen` compares T0 > T1 and the leapfrog bucket's badge
+      // never fires in the exact flow it exists for. `pr.mergedAt` is already
+      // on the wire (prstate.ts parses gh's own `mergedAt`), so the honest
+      // stamp costs nothing. Null when the registry fallback supplied the
+      // phase without a timestamp (`persistedPr`), which degrades to exactly
+      // the old answer rather than to zero.
+      return { bucket: 'cleanup', bucketSince: Math.max(archivedMs, s.pr.mergedAt ?? 0) };
+    }
+    return { bucket: 'archived', bucketSince: archivedMs };
   }
   if (s.status === 'dead') return { bucket: 'dead', bucketSince: s.statusUpdatedAt };
   if (s.dialogPending || s.hookState === 'waiting') {

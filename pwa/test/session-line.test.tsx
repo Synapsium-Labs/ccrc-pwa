@@ -1,5 +1,7 @@
 // The compact row that replaces SessionCard in the fleet list.
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
@@ -51,25 +53,44 @@ describe('label', () => {
 
 describe('state', () => {
   it('reads exited when dead', () => {
-    render(<SessionLine session={s({ status: 'dead' })} onOpen={() => {}} onActions={() => {}} />);
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead' })}
+                        onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('exited')).toBeInTheDocument();
   });
 
-  it('reads waiting on a pending dialog, and outranks busy', () => {
-    render(<SessionLine session={s({ status: 'busy', dialogPending: true })}
+  it('reads waiting from the server bucket, not from status or dialogPending', () => {
+    render(<SessionLine session={s({ status: 'busy', dialogPending: true, bucket: 'attention' })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('waiting')).toBeInTheDocument();
     expect(screen.queryByText('working')).not.toBeInTheDocument();
   });
 
-  // The server already ORs a fresh hookState === 'waiting' into dialogPending
-  // (fleet.ts), so this pins the DEFENSIVE client-side OR: hookState alone,
-  // with dialogPending false, still renders the attention treatment.
-  it('reads waiting from hookState alone, even when dialogPending is false', () => {
-    render(<SessionLine session={s({ status: 'busy', dialogPending: false, hookState: 'waiting' })}
+  // Task 6: the defensive client-side OR of `hookState === 'waiting'` into
+  // dialogPending is DELETED, not merely unused — SessionLine reads
+  // `session.bucket` and nothing else. A session the server still calls
+  // `idle` renders `idle`, even with a hook actively reporting `waiting`,
+  // because the client no longer re-derives the bucket it was given.
+  it('does not re-derive attention from hookState — only session.bucket decides', () => {
+    render(<SessionLine session={s({ status: 'busy', dialogPending: false, hookState: 'waiting', bucket: 'idle' })}
                         onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('waiting')).toBeInTheDocument();
-    expect(screen.queryByText('working')).not.toBeInTheDocument();
+    expect(screen.queryByText('waiting')).not.toBeInTheDocument();
+    expect(screen.getByText('idle')).toBeInTheDocument();
+  });
+
+  it('renders a check for done, distinct from idle', () => {
+    render(<SessionLine session={s({ bucket: 'done' })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('done')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'finished' })).toBeTruthy();
+  });
+
+  it('renders the cleanup bucket with its merge facts and no destructive control', () => {
+    render(<SessionLine session={s({
+      bucket: 'cleanup', archivedBytes: 1_200_000_000,
+      pr: { phase: 'merged', number: 157 } as never,
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText(/#157/)).toBeTruthy();
+    expect(screen.getByText(/1\.2 GB/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /remove|delete/i })).toBeNull();
   });
 
   it('shows the task tally, and hides it on a dead session', () => {
@@ -222,32 +243,262 @@ describe('away from home', () => {
   });
 });
 
-describe('subagent chip', () => {
-  it('renders a chip with the count and a singular aria-label for one', () => {
+// Task 7: the passive `⑂ N` glyph became a disclosure — tap it to see WHICH
+// subagents and for how long, rather than only how many.
+describe('subagent disclosure', () => {
+  it('renders a collapsed toggle with the count and a singular aria-label for one', () => {
     render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
                         onOpen={() => {}} onActions={() => {}} />);
-    const chip = screen.getByLabelText('1 subagent');
-    expect(chip).toHaveTextContent('⑂ 1');
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    expect(toggle).toHaveTextContent('⑂ 1');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('pluralizes the aria-label for more than one', () => {
     render(<SessionLine session={s({
       subagents: [{ name: 'a', startedAt: 1 }, { name: 'b', startedAt: 2 }],
     })} onOpen={() => {}} onActions={() => {}} />);
-    const chip = screen.getByLabelText('2 subagents');
-    expect(chip).toHaveTextContent('⑂ 2');
+    expect(screen.getByRole('button', { name: '2 subagents' })).toHaveTextContent('⑂ 2');
   });
 
-  it('renders nothing when subagents is null', () => {
-    const { container } = render(
-      <SessionLine session={s({ subagents: null })} onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-subagents')).not.toBeInTheDocument();
+  it('renders no disclosure when subagents is null — no fresh hook data', () => {
+    render(<SessionLine session={s({ subagents: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
 
-  it('renders nothing when subagents is empty', () => {
+  // `[]` is a MEASUREMENT — fresh hook data, nothing running — and `null` is
+  // no hook data. Both render nothing; neither is an error.
+  it('shows no subagent disclosure when the hook reported an empty set', () => {
+    render(<SessionLine session={s({ subagents: [] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
+  });
+
+  it('expands the subagent tally into named rows with elapsed time', async () => {
+    const now = Date.now();
+    render(<SessionLine session={s({ bucket: 'working',
+      subagents: [{ name: 'code-reviewer', startedAt: now - 65_000 }] })}
+      onOpen={() => {}} onActions={() => {}} />);
+
+    expect(screen.queryByText('code-reviewer')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(screen.getByText('code-reviewer')).toBeTruthy();
+    // EXACT, not /1m/: that regex also matches the '<1m' fallback, so it
+    // cannot tell correct output from the off-by-one it exists to catch
+    // (`m < 1` -> `m < 2` renders '<1m' here and passes a /1m/ match).
+    expect(screen.getByText('1m')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /1 subagent/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  // The toggle is a REAL <button>: fix round 1 shipped a `role="button"` span
+  // with tabIndex nested inside `.sess-open`, which is invalid (a <button>'s
+  // content model forbids any descendant carrying tabindex) and, worse,
+  // flattened away by the button role's children-presentational rule — under
+  // VoiceOver the whole row is one element and the disclosure is unreachable.
+  // getByRole cannot see that, so these assert the DOM shape directly.
+  it('is a real <button>, not a control nested inside another control', () => {
     const { container } = render(
-      <SessionLine session={s({ subagents: [] })} onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-subagents')).not.toBeInTheDocument();
+      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    expect(toggle.tagName).toBe('BUTTON');
+    expect(toggle).not.toHaveAttribute('tabindex');
+    // No ancestor of ANY control on this row is itself a control.
+    for (const btn of container.querySelectorAll('button')) {
+      expect(btn.parentElement?.closest('button')).toBeNull();
+    }
+  });
+
+  // aria-expanded has to be about something a screen reader can be taken to —
+  // the repo's own OptionPreview (DialogSheet.tsx) pairs useId + aria-controls
+  // for exactly this. Round 1 had neither, and the list was not even a DOM
+  // sibling of the toggle.
+  it('points aria-controls at the list it opens', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    await userEvent.click(toggle);
+    const id = toggle.getAttribute('aria-controls');
+    expect(id).toBeTruthy();
+    const list = document.getElementById(id!);
+    expect(list).not.toBeNull();
+    expect(list).toHaveClass('sess-subagent-list');
+    expect(list!.contains(screen.getByText('reviewer'))).toBe(true);
+  });
+
+  // …and NOT while it is closed. The <ul> is conditionally rendered, so a
+  // constant `aria-controls` was an IDREF resolving to nothing in exactly the
+  // state a user would follow it from — the collapsed row. `aria-expanded`
+  // carries the whole contract there.
+  it('carries no aria-controls while the list it would name does not exist', () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveAttribute('aria-controls');
+    expect(document.querySelector('.sess-subagent-list')).toBeNull();
+  });
+
+  // Keyboard activation was the one part of round 1 with zero coverage, and
+  // it was hand-rolled (`e.key !== 'Enter' && e.key !== ' '`) precisely
+  // because the element was not a button. It is a button now, so activation
+  // is native — and the click it dispatches bubbles into `.sess-body`'s
+  // forwarder exactly as a tap does, which is what this also pins: pressing
+  // Enter must toggle the disclosure and NOT navigate to the session.
+  it('toggles on Enter and on Space, without opening the session', async () => {
+    const onOpen = vi.fn();
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                        onOpen={onOpen} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    toggle.focus();
+
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByText('reviewer')).toBeInTheDocument();
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    await userEvent.keyboard(' ');
+    expect(screen.queryByText('reviewer')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('lists every subagent, not just the first', async () => {
+    const now = Date.now();
+    render(<SessionLine session={s({
+      subagents: [
+        { name: 'code-reviewer', startedAt: now - 65_000 },
+        { name: 'test-runner', startedAt: now - 5_000 },
+      ],
+    })} onOpen={() => {}} onActions={() => {}} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /2 subagents/ }));
+    expect(screen.getByText('code-reviewer')).toBeInTheDocument();
+    expect(screen.getByText('test-runner')).toBeInTheDocument();
+  });
+
+  // No invented state: Claude's SubagentStart/Stop hooks give a name and a
+  // start time and nothing else, so an Orca-style working/blocked glyph
+  // would be a claim this row cannot source — a row is exactly two children,
+  // the name and the elapsed time, never a third.
+  it('shows no invented state — a name and an elapsed time, nothing else', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    const row = screen.getByText('reviewer').closest('.sess-subagent-row')!;
+    expect(row.children).toHaveLength(2);
+  });
+
+  // `.sess-body` (the block the row's tap surface now lives on) forwards a
+  // click to `open()` only when no real control was hit — drop its
+  // `closest('button')` guard and tapping the toggle navigates away instead
+  // of expanding.
+  it('does not open the session when the toggle is tapped', async () => {
+    const onOpen = vi.fn();
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+                        onOpen={onOpen} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  // The other half of that guard: the dead space between meta cells still
+  // opens the session, so the row did not lose its full-block tap surface
+  // when the wrapping <button> became a <div>.
+  it('still opens the session from the dead space around the meta cells', async () => {
+    const onOpen = vi.fn();
+    const { container } = render(
+      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                   onOpen={onOpen} onActions={() => {}} />);
+    await userEvent.click(container.querySelector('.sess-meta')!);
+    expect(onOpen).toHaveBeenCalledWith('demo-quiet-mesa');
+  });
+
+  // …and the list itself is not dead space. It renders INSIDE .sess-body, so
+  // the forwarder used to navigate for any tap on it: the operator opened the
+  // disclosure, reached for a name, and lost the fleet screen. A truncated
+  // name also had no way to be read — you could not even select it.
+  it('does not open the session when a subagent row is tapped', async () => {
+    const onOpen = vi.fn();
+    render(<SessionLine session={s({ subagents: [{ name: 'code-reviewer', startedAt: Date.now() }] })}
+                        onOpen={onOpen} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    onOpen.mockClear();
+
+    await userEvent.click(screen.getByText('code-reviewer'));
+    await userEvent.click(document.querySelector('.sess-subagent-row')!);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('carries the full name in a title, since the row ellipsises it', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'a-very-long-subagent-name', startedAt: 1 }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(screen.getByText('a-very-long-subagent-name'))
+      .toHaveAttribute('title', 'a-very-long-subagent-name');
+  });
+
+  it('collapses again on a second tap', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: /1 subagent/ });
+    await userEvent.click(toggle);
+    expect(screen.getByText('reviewer')).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(screen.queryByText('reviewer')).toBeNull();
+  });
+
+  it('never shows the disclosure on a dead session, even with stale hook data', () => {
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead',
+      subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
+  });
+});
+
+// The elapsed cell is the row's only COMPUTED value, and the brief's own
+// assertion for it (`getByText(/1m/)`) matches the '<1m' fallback as well as
+// '1m' — it could not fail on the off-by-one it existed to catch. Every
+// branch of `subagentElapsed` gets an exact expected string here instead.
+describe('subagent elapsed time', () => {
+  /** Render one subagent started `ageMs` ago, expand, return its elapsed cell. */
+  const elapsedFor = async (startedAt: number): Promise<string> => {
+    cleanup();
+    render(<SessionLine session={s({ subagents: [{ name: 'sub', startedAt }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    return document.querySelector('.sess-subagent-elapsed')!.textContent!;
+  };
+  const agedMs = (ms: number): Promise<string> => elapsedFor(Date.now() - ms);
+
+  it('reads <1m below a minute, and never rounds up into it', async () => {
+    expect(await agedMs(5_000)).toBe('<1m');
+    // 59s, not 59_999ms: `agedMs` reads the clock, the component reads it
+    // again a few ms later, so a boundary-exact age is a flaky one.
+    expect(await agedMs(59_000)).toBe('<1m');
+  });
+
+  it('reads whole minutes from exactly one minute up', async () => {
+    expect(await agedMs(60_000)).toBe('1m');
+    expect(await agedMs(65_000)).toBe('1m');
+    expect(await agedMs(59 * 60_000)).toBe('59m');
+  });
+
+  it('switches to hours at 60 minutes', async () => {
+    expect(await agedMs(60 * 60_000)).toBe('1h');
+    expect(await agedMs(90 * 60_000)).toBe('1h');
+    expect(await agedMs(23 * 60 * 60_000)).toBe('23h');
+  });
+
+  it('switches to days at 24 hours', async () => {
+    expect(await agedMs(24 * 60 * 60_000)).toBe('1d');
+    expect(await agedMs(49 * 60 * 60_000)).toBe('2d');
+  });
+
+  // `startedAt: 1` is the placeholder four other tests in this file pass and
+  // none of them assert. It is 1ms after the epoch, so the only correct
+  // rendering is a four-figure number of DAYS — an 'h' or 'm' here would mean
+  // the unit ladder stopped climbing.
+  it('renders the epoch placeholder the other tests pass as days', async () => {
+    expect(await elapsedFor(1)).toMatch(/^\d{4,}d$/);
   });
 });
 
@@ -271,5 +522,47 @@ describe('ask summary', () => {
       <SessionLine session={s({ hookState: 'working', askSummary: 'Deploy now?' })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.sess-ask')).not.toBeInTheDocument();
+  });
+});
+
+// `WORD` was exported "so FleetScreen's bucket-section headers use the
+// identical words" — FleetScreen imports nothing from this file and renders
+// its own SECTION_LABEL ('Attention'/'Cleanup'/'Dead'), so the export had zero
+// importers and the comment pointed a maintainer retitling a HEADING at the
+// table that spells every ROW's word. Checked by reading, the way
+// seen.test.ts checks its own rationale block.
+describe('the row\'s state vocabulary', () => {
+  const srcDir = path.join(import.meta.dirname, '..', 'src');
+  const src = readFileSync(path.join(srcDir, 'fleet', 'SessionLine.tsx'), 'utf8');
+  const doc = /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*(?:export )?const WORD/
+    .exec(src)![1]!
+    .replace(/^[ \t]*\*[ \t]?/gm, '')
+    .replace(/\s+/g, ' ');
+
+  /** Every .ts/.tsx under src that imports the name WORD from this module. */
+  const importers = (function walk(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) return walk(full);
+      if (!/\.tsx?$/.test(e.name)) return [];
+      const text = readFileSync(full, 'utf8');
+      return /import\s*\{[^}]*\bWORD\b[^}]*\}\s*from\s*['"][^'"]*SessionLine['"]/.test(text)
+        ? [path.relative(srcDir, full)]
+        : [];
+    });
+  })(srcDir);
+
+  it('is private, because nothing outside this file reads it', () => {
+    expect(importers).toEqual([]);
+    expect(src).not.toMatch(/export\s+const\s+WORD\b/);
+  });
+
+  it('does not name the fleet screen\'s section headings as its consumer', () => {
+    // They are a different vocabulary on purpose — 'Cleanup' the heading vs
+    // `merged` the row word — and FleetScreen does not import this file.
+    expect(doc).not.toMatch(/identical words/i);
+    expect(doc).not.toMatch(/bucket-section headers/i);
+    expect(readFileSync(path.join(srcDir, 'screens', 'FleetScreen.tsx'), 'utf8'))
+      .not.toMatch(/from '\.\.\/fleet\/SessionLine'/);
   });
 });

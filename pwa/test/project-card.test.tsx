@@ -20,7 +20,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, pin: 'claude', archived: [], ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: 'claude', archived: [], ...over,
 });
 
 describe('uniform shape', () => {
@@ -159,7 +159,7 @@ describe('status owns the perimeter only for attention', () => {
     // glow + breathe, and the word `working` — and green on a frame was being
     // read as "this is the project I have selected".
     const { container } = render(
-      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy' })] })}
+      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy', bucket: 'working' })] })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-card')).not.toHaveClass('proj-card--busy');
   });
@@ -169,7 +169,7 @@ describe('status owns the perimeter only for attention', () => {
     // the reader to ACT, and with green gone it is the only coloured
     // perimeter left, so it reads as an exception rather than as wallpaper.
     const { container } = render(
-      <ProjectCard group={grp({ attention: true, sessions: [sess({ dialogPending: true })] })}
+      <ProjectCard group={grp({ attention: true, sessions: [sess({ dialogPending: true, bucket: 'attention' })] })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-card')).toHaveClass('proj-card--attention');
   });
@@ -181,8 +181,8 @@ describe('status owns the perimeter only for attention', () => {
     render(
       <ProjectCard collapsed
                    group={grp({ busy: 2, sessions: [
-                     sess({ status: 'busy' }),
-                     sess({ id: 'demo-still-cove', workspace: 'still-cove', status: 'busy' }),
+                     sess({ status: 'busy', bucket: 'working' }),
+                     sess({ id: 'demo-still-cove', workspace: 'still-cove', status: 'busy', bucket: 'working' }),
                    ] })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('2 working')).toBeInTheDocument();
@@ -191,17 +191,20 @@ describe('status owns the perimeter only for attention', () => {
   });
 
   // These two build the group with the REAL groupFleet rather than the `grp`
-  // literal: the defect lives in the predicate, so a hand-written `busy: 1`
-  // would pin the bug instead of the rule. Folded and expanded are asserted in
-  // one `it` each, because the defect IS the disagreement between them.
+  // literal, over sessions whose `bucket` the fixture sets directly (as the
+  // server would). Folded and expanded are asserted in one `it` each, because
+  // the invariant IS agreement between them.
   it('does not say working over a single row that says waiting', () => {
-    // Found in review. `group.busy` counted `status === 'busy'`, while
-    // SessionLine ranks attention first (`busy = !attention && status ===
-    // 'busy'`). One busy session with a pending dialog therefore rendered
-    // `▸ demo … ● working` folded and `waiting` expanded — the amber "act now"
-    // mark and the word "working" describing the SAME session, which reads as
-    // two sessions in opposite states.
-    const [g] = groupFleet([sess({ status: 'busy', dialogPending: true })]);
+    // Before Task 6, `group.busy` counted `status === 'busy'` while
+    // SessionLine ranked attention first (`busy = !attention && status ===
+    // 'busy'`) — TWO derivations of the same fact, kept in sync by a comment.
+    // One busy session with a pending dialog could render `▸ demo … ●
+    // working` folded and `waiting` expanded: the amber "act now" mark and
+    // the word "working" describing the SAME session. Both derivations are
+    // gone now — `bucket` is the one field both `group.busy` and the row's
+    // own word read — so this is structurally impossible rather than merely
+    // untested; the assertions below are the same ones that caught it.
+    const [g] = groupFleet([sess({ bucket: 'attention' })]);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('working')).toBeNull();
@@ -211,11 +214,11 @@ describe('status owns the perimeter only for attention', () => {
 
   it('counts only the rows that will say working, not every busy status', () => {
     // The border never carried a count (a boolean over a count); the word does,
-    // so the number is a claim. Two busy sessions, one of them waiting on the
-    // reader, used to fold to `2 working` over rows reading `waiting | working`.
+    // so the number is a claim. Two sessions, one of them waiting on the
+    // reader, must fold to `working` (one row), never `2 working`.
     const [g] = groupFleet([
-      sess({ status: 'busy', dialogPending: true }),
-      sess({ id: 'demo-still-cove', workspace: 'still-cove', status: 'busy' }),
+      sess({ bucket: 'attention' }),
+      sess({ id: 'demo-still-cove', workspace: 'still-cove', bucket: 'working' }),
     ]);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
@@ -230,7 +233,7 @@ describe('status owns the perimeter only for attention', () => {
     // "improving" the word into an always-on header rollup, re-creating the
     // exact duplication the green border was deleted for.
     render(
-      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy' })] })}
+      <ProjectCard group={grp({ busy: 1, sessions: [sess({ status: 'busy', bucket: 'working' })] })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getAllByText('working')).toHaveLength(1);
   });

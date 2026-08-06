@@ -10,7 +10,7 @@
 // never fires while focus is in a text field.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, SessionStatus } from '../../../shared/api';
+import type { FleetSession, SessionBucket, SessionStatus } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
@@ -91,14 +91,43 @@ export function SessionHeader({
   // Live stream status wins; the fleet snapshot fills in before it connects.
   const st: SessionStatus | null = status ?? session?.status ?? null;
   const at = statusUpdatedAt ?? session?.statusUpdatedAt ?? null;
-  // Defensive OR, mirroring SessionLine: the server already ORs a fresh
-  // hookState === 'waiting' into dialogPending (fleet.ts), so this only
-  // fires if that rule was ever missed. No new visuals — same 'attention'
-  // treatment either signal already drives.
-  const attention =
-    (session?.dialogPending === true || session?.hookState === 'waiting') && st !== 'dead';
+
+  // THE bucket — the server's, never this header's. It used to OR
+  // `dialogPending`/`hookState` into an `attention` of its own, which is the
+  // second writer §1 of the spec forbids and which made the two screens
+  // contradict each other from ONE snapshot: a `done` session read `finished`
+  // on its fleet row and `idle` here; a `cleanup` one read "merged, ready to
+  // clean up" there and "not running" here.
+  //
+  // The fallback is not a re-derivation: on a deep link, before /ws/fleet
+  // lands, there IS no bucket — only the live stream's status — so it is
+  // translated into the same vocabulary ('busy' -> 'working'; idle and dead
+  // spell the same word in both) purely so the strip can paint something.
+  //
+  // And neither is the `dead` override. This screen holds a LIVE stream for
+  // one session; the fleet snapshot is up to a tick behind it. Making the
+  // header snapshot-first (Task 6) dropped the override entirely, so a
+  // session whose own stream has already reported it dead kept pulsing amber
+  // "waiting on you" — the header contradicting the socket it is attached to,
+  // over the one state that asks the reader to act on a process that is gone.
+  // It only ever DEMOTES: `dead` is never manufactured into attention, and
+  // the bucket the server chose is what paints in every other case. Archived
+  // rows are exempt because `ws-archive` stops the session by construction —
+  // `dead` is true of every one of them, and saying "not running" there would
+  // bury `cleanup`'s merge facts under a liveness fact nobody is waiting on.
+  const snapshotBucket = session?.bucket ?? null;
+  const bucket: SessionBucket | null =
+    st === 'dead' && session != null && session.archivedAt == null
+      ? 'dead'
+      : snapshotBucket ?? (st === null ? null : st === 'busy' ? 'working' : st);
+
+  // `working` drives the visible clock's tempo; `busy` (the LIVE status, not
+  // the snapshot's bucket) stays the gate on interrupting, because stopping a
+  // turn is a fact about the process right now, not about how the fleet last
+  // filed it.
+  const working = bucket === 'working';
   const busy = st === 'busy';
-  const now = useNow(busy ? 1_000 : 30_000);
+  const now = useNow(working ? 1_000 : 30_000);
 
   // The keycap exists because phone keyboards have no Escape key. Where one
   // exists, the key is the better control and the cap is clutter — but the
@@ -121,22 +150,39 @@ export function SessionHeader({
     return () => window.removeEventListener('keydown', onKey);
   }, [finePointer, busy, onInterrupt]);
 
-  const dot: SessionStatus | 'dialog' | null = attention ? 'dialog' : st;
+  // Dot, word and tint all read the one bucket, so this strip cannot
+  // contradict itself either. The word is the bucket's, with the two facts
+  // only this screen has — the live elapsed clock and the relative age —
+  // spliced in; StatusDot supplies the glyph and the spoken label.
   const rel = relShort(now, at);
-  const word = attention
-    ? 'waiting on you'
-    : busy
-      ? at !== null
-        ? `working · ${clock(now - at)}`
-        : 'working…'
-      : st === 'idle'
-        ? rel
-          ? `idle · ${rel} ago`
-          : 'idle'
-        : st === 'dead'
-          ? 'not running'
-          : '';
-  const variant = attention ? 'attention' : busy ? 'busy' : st === 'dead' ? 'dead' : 'idle';
+  const word =
+    bucket === 'attention'
+      ? 'waiting on you'
+      : bucket === 'working'
+        ? at !== null
+          ? `working · ${clock(now - at)}`
+          : 'working…'
+        : bucket === 'done'
+          ? rel
+            ? `done · ${rel} ago`
+            : 'done'
+          : bucket === 'idle'
+            ? rel
+              ? `idle · ${rel} ago`
+              : 'idle'
+            : bucket === 'cleanup'
+              ? 'merged, ready to clean up'
+              : bucket === 'archived'
+                ? 'archived'
+                : bucket === 'dead'
+                  ? 'not running'
+                  : '';
+  // Four tints for seven buckets, on purpose: `status-line--*` is the existing,
+  // contrast-verified set (chat.css) and the glyph already carries the
+  // distinction colour must not carry alone. done/cleanup/archived take idle's
+  // matte ink, exactly as their dots do (StatusDot's table).
+  const variant =
+    bucket === 'attention' ? 'attention' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
   // The project is the ground; the second crumb is this particular workspace.
   // Without it, two workspaces of one project produce two identical headers.
@@ -177,9 +223,9 @@ export function SessionHeader({
           )}
         </h1>
         <div className="chat-meta">
-          {dot !== null && (
+          {bucket !== null && (
             <>
-              <StatusDot status={dot} />
+              <StatusDot status={bucket} />
               <span className={`status-line status-line--${variant}`}>{word}</span>
             </>
           )}

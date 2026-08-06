@@ -14,6 +14,7 @@ import { accountColorVar } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
+import { ack } from '../lib/seen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
@@ -73,6 +74,25 @@ export function SessionScreen({
     useStore.getState().connect();
     return () => useStore.getState().disconnect();
   }, [useStore]);
+
+  // Opening a session IS the ack — the honest signal that a human looked.
+  // Keyed on `id`, not fired only once: navigating from one session straight
+  // to another (no intervening fleet-screen visit) mounts this component
+  // fresh with a new `id`, and that session is exactly as "seen" as one
+  // reached via the fleet list.
+  //
+  // `bucketSince` rides along and is in the deps for two reasons. It floors
+  // the stamp against the FLEET HOST's clock (seen.ts's `stampFor`: a device
+  // running behind writes an ack older than the episode it just read, and the
+  // badge never clears). And on a deep link the fleet snapshot has not landed
+  // at mount, so the first fire has no episode to floor to — this re-fires
+  // once it arrives. It is not a per-tick write: the dep is the timestamp
+  // itself, so it fires only when the session actually enters a new episode,
+  // which is exactly the episode this open screen is showing its human.
+  const bucketSince = live?.bucketSince ?? null;
+  useEffect(() => {
+    ack(id, Date.now(), bucketSince);
+  }, [id, bucketSince]);
 
   // Published on :root, not on .chat — ToastHost is not inside this subtree, and
   // custom properties only inherit downward. Cleared on unmount so the fleet
