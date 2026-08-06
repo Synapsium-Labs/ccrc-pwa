@@ -530,9 +530,18 @@ export class FleetWatcher {
             title: '❓ Question', body: dialog.title || 'Claude has a question',
             ...(actions ? { actions } : {}),
           }, this.activeProjects);
-          // Latched only when a push actually went out (`notify`), and cleared
-          // the moment one goes out WITH actions, so the amendment below can
-          // fire at most once per question.
+          // Latched whenever this raise had no actions, cleared the moment one
+          // has them — so the amendment below fires at most once per question.
+          //
+          // `notify` gates the CALL, not delivery: `pushOne` returns before
+          // `push.notify` whenever presence says the operator is looking at
+          // this session. So the latch can be set for a question whose push was
+          // suppressed, and the amendment can then "replace" a notification
+          // that was never shown. Harmless in both directions — a suppressed
+          // amendment is suppressed too (same presence check), and a claim that
+          // lapses in between produces one answerable notification, which is
+          // the outcome we wanted anyway. What it must NOT be called is proof
+          // that a push went out.
           if (actions) this.actionlessAsks.delete(r.id);
           else this.actionlessAsks.set(r.id, dialog.id);
         };
