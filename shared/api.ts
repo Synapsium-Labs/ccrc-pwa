@@ -1195,8 +1195,31 @@ export type SessionStreamMsg =
 
 /** PWA → server, on the per-session socket. `visible` is the operator's own
  *  report that this session is on screen and focused; the server suppresses
- *  pushes for it while any client says so. */
+ *  pushes for it while any client says so — for as long as the claim stays
+ *  fresh (see the two constants below). */
 export type SessionClientMsg = { type: 'visible'; visible: boolean };
+
+/**
+ * The presence heartbeat, defined ONCE for both halves because they are one
+ * mechanism: the client re-states "this session is on screen" every
+ * `PRESENCE_REFRESH_MS`, and the server stops believing a claim it has not
+ * heard for `PRESENCE_TTL_MS`.
+ *
+ * A close frame is not guaranteed. A phone that loses signal in a lift or a
+ * tunnel sends no FIN, the socket's 'close' never fires, and a claim held for
+ * the socket's lifetime would suppress every notification for that session
+ * until the OS gave up retransmitting — which, on a stream with nothing to
+ * send, is never. So the claim expires instead, and expiry means NOTIFY: a
+ * notification for a session someone is looking at is noise, but a suppressed
+ * one for a viewer who is gone is a question nobody ever sees.
+ *
+ * Three refreshes of slack, the same 15 s / 2-miss shape `remote/client.ts`
+ * already runs its agent heartbeat on. Two devices, one screen-lock and one
+ * backgrounded tab all resolve to the same rule: keep saying it, or stop
+ * counting.
+ */
+export const PRESENCE_REFRESH_MS = 15_000;
+export const PRESENCE_TTL_MS = 45_000;
 
 /** One notification the server DECIDED to raise: recorded after the presence
  *  gate ("nothing fires for a session the operator is looking at"), before any

@@ -705,6 +705,21 @@ button.metachip:active {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--edge-strong));
   color: var(--accent);
 }
+/* `Send it` outranks Retry, and only appears beside it — so it is the FILLED
+ * one, reusing .btn-primary's accent-on-accent pair rather than a third
+ * treatment. The hierarchy is the message: on an `enter-ignored` the text is
+ * already in the box, so retyping it is the wrong move and pressing one more
+ * Enter is the right one. Inherits min-height from `.pending-actions button`,
+ * so the tap target is the shared token. */
+.pending-actions .pending-send-it {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+.pending-actions .pending-send-it:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 
 /* ------------------------------------------------------------------ *
  *  Assistant turns — output: flush markdown prose, wells for code.    *

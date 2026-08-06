@@ -10,6 +10,7 @@ import { CCD_ARGV, verbSupported } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
+import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type { NotifyEvent, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
@@ -63,6 +64,20 @@ export class FleetWatcher {
   private lastJson: string | null = null;
   /** Last-reported dialog id per session id. */
   private dialogIds = new Map<string, string>();
+  /**
+   * Session id → the dialog id of an ask push that went out with NO actions,
+   * still pending an envelope.
+   *
+   * The ask push is edge-triggered on the dialog id, and `parseDialog`'s id is
+   * a hash of the menu's labels and title — it does not change as the cursor
+   * moves — so without this latch a question whose hookstate landed a beat
+   * after its pane (see the ordering note in `tick()`) could NEVER become
+   * answerable from the phone: the appear-edge is spent, and nothing else
+   * produces `kind:'ask'`. With it, the first tick that can prove the envelope
+   * re-raises the same notification, in the same tag, now carrying its
+   * options.
+   */
+  private actionlessAsks = new Map<string, string>();
   /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
   private statuslines = new Map<string, Statusline>();
   /** Prior status per session — drives the busy→idle push. */
@@ -171,8 +186,24 @@ export class FleetWatcher {
     // sweepTasks/sweepPr below are NOT included: both throttle to their own
     // slower clock and skip the read entirely on most ticks already.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
-    const pending = await this.detectDialogs(this.primed, records);
+    // hook states FIRST, dialogs second — the order is load-bearing and there
+    // is a test on it. `detectDialogs` composes the ask push, and the actions
+    // it attaches come from `this.hookStates`; with the old ordering that map
+    // was always one tick behind, so whether a question arrived answerable
+    // from the notification depended on how the 2-second poll happened to
+    // straddle the hook's write. Sweeping first costs nothing (both lanes
+    // share the one `records` read below).
+    //
+    // It NARROWS that window; it does not close it. The sweep reads a
+    // session's hookstate at time s and `detectDialogs` captures its pane at
+    // time c, sequentially, each capture an agent round trip in remote mode —
+    // so for the last session of eight, c-s is a couple of hundred ms of a
+    // 2000 ms tick. A `session-hook.sh` write landing inside (s, c) still
+    // yields a menu with no envelope, and therefore an action-less ask push.
+    // What covers the residue is `actionlessAsks` in `detectDialogs` below:
+    // the latch remembers that push and amends it when the envelope turns up.
     await this.sweepHookStates(records);
+    const pending = await this.detectDialogs(this.primed, records);
     await this.sweepTasks();
     // NEVER awaited: it shells out over the network and `gh` has no
     // --timeout, so awaiting it would stall the dialog detector and the
@@ -481,22 +512,56 @@ export class FleetWatcher {
       const last = this.dialogIds.get(r.id);
       if (dialog) {
         pending.add(r.id);
+        // The pane is what raises this push (`kind: 'ask'` has exactly one
+        // producer, and it is this scrape), but the ANSWERABLE part comes from
+        // the hook envelope: only it carries the option labels and the content
+        // key `answerAsk` gates on. `askActions` returns null wherever that
+        // route would refuse, so a notification never offers a button the
+        // server has already decided it will not honour. `this.hookStates` is
+        // this tick's — see the ordering note in `tick()`.
+        const actions = askActions(this.hookStates.get(r.id) ?? null);
+        const raise = (): void => {
+          // `this.activeProjects` — this sweep runs BEFORE this tick's own
+          // `assembleFleet` (see `tick()`), so the current fleet's project
+          // set isn't computed yet; it reads last tick's, same reasoning as
+          // `archiveMerged` above.
+          this.pushOne({
+            kind: 'ask', sessionId: r.id, project: r.project,
+            title: '❓ Question', body: dialog.title || 'Claude has a question',
+            ...(actions ? { actions } : {}),
+          }, this.activeProjects);
+          // Latched whenever this raise had no actions, cleared the moment one
+          // has them — so the amendment below fires at most once per question.
+          //
+          // `notify` gates the CALL, not delivery: `pushOne` returns before
+          // `push.notify` whenever presence says the operator is looking at
+          // this session. So the latch can be set for a question whose push was
+          // suppressed, and the amendment can then "replace" a notification
+          // that was never shown. Harmless in both directions — a suppressed
+          // amendment is suppressed too (same presence check), and a claim that
+          // lapses in between produces one answerable notification, which is
+          // the outcome we wanted anyway. What it must NOT be called is proof
+          // that a push went out.
+          if (actions) this.actionlessAsks.delete(r.id);
+          else this.actionlessAsks.set(r.id, dialog.id);
+        };
         if (last !== dialog.id) {
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
-          if (notify) {
-            // `this.activeProjects` — this sweep runs BEFORE this tick's own
-            // `assembleFleet` (see `tick()`), so the current fleet's project
-            // set isn't computed yet; it reads last tick's, same reasoning as
-            // `archiveMerged` above.
-            this.pushOne({
-              kind: 'ask', sessionId: r.id, project: r.project,
-              title: '❓ Question', body: dialog.title || 'Claude has a question',
-            }, this.activeProjects);
-          }
+          if (notify) raise();
+        } else if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
+          // The amendment. Same question, same tag — `push-sw.js` sets
+          // `renotify` from the tag, so this REPLACES the un-answerable
+          // notification in its slot rather than stacking a second one under
+          // it. It is a second raise, so `pushOne` records a second event in
+          // the catch-up ring: the ring is a record of what was raised, and
+          // two really were, which is the honest cost of not leaving the
+          // question un-answerable.
+          raise();
         }
       } else if (last !== undefined) {
         this.dialogIds.delete(r.id);
+        this.actionlessAsks.delete(r.id);
         this.bus.emit(`session:${r.id}`, { type: 'dialog_cleared' });
       }
     }

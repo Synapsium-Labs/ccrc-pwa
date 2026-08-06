@@ -448,7 +448,7 @@ function hasContentBelowMarker(ansiPane: string): boolean {
 }
 
 /**
- * Press Enter once on a box that already holds text.
+ * Press Enter once on a box that already holds `expect`.
  *
  * The rescue for `sendPrompt`'s `enter-ignored`: the text is verified present
  * and the operator's only remedy today is the sentence "open the terminal to
@@ -458,11 +458,31 @@ function hasContentBelowMarker(ansiPane: string): boolean {
  * ONE Enter, verified. `sendPrompt` already spent two on this box; a third
  * fired in a loop would carry no information the first two didn't. A human tap
  * does: they looked at the pane first.
+ *
+ * `expect` is the CORRESPONDENCE GATE, and it is not optional. Enter submits
+ * whatever the box holds, which is not necessarily what the caller thinks it
+ * holds: between the failed send and the tap, a second send can clear the box
+ * and type its own message (`sendPrompt`'s `replaceDraft` fires `C-u` and
+ * retypes), or a second `enter-ignored` can leave a DIFFERENT message sitting
+ * there. Pressing Enter then sends someone else's text while the caller
+ * attributes the outcome — success included — to the message it was rescuing.
+ * So the caller must state what it believes is in the box (the `draft` the
+ * 409 handed it, which is this same `draftOf` reading), and this refuses with
+ * its own name unless the box still reads exactly that. It is the same stance
+ * `answerAsk` takes with `askKey` and its menu-identity gate: answer the thing
+ * you were shown, or answer nothing.
+ *
+ * The comparison is the box's MARKER ROW, trimmed, both sides — that row is
+ * all `draftOf` can see and all the 409 could have carried, so equality of it
+ * is exactly as much correspondence as exists to prove. A longer message that
+ * differs only below its first row is therefore not distinguished; what IS
+ * distinguished is the case that actually happens (a cleared or replaced box).
  */
 export function submitEnter(
   d: SendDeps,
   id: string,
-): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'dialog-open' | 'nothing-to-submit' | 'blank-first-row' | 'enter-ignored' }> {
+  expect: string,
+): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'dialog-open' | 'nothing-to-submit' | 'blank-first-row' | 'box-mismatch' | 'enter-ignored' }> {
   const sleep = d.sleep ?? defaultSleep;
   return d.queue.run(id, async () => {
     const pane = await d.tmux.captureAnsi(id);
@@ -477,10 +497,15 @@ export function submitEnter(
       // `hasContentBelowMarker` — a message whose first line is itself blank
       // renders identically on THIS row. Naming that case honestly beats
       // claiming there is nothing to send when there might be.
+      //
+      // NEITHER token says anything about the caller's message. An empty box
+      // is not proof that it went through: `clearBox` empties one too.
       return hasContentBelowMarker(pane)
         ? { ok: false, error: 'blank-first-row' as const }
         : { ok: false, error: 'nothing-to-submit' as const };
     }
+    // A box holding something, but not what the caller was shown.
+    if (draft !== expect.trim()) return { ok: false, error: 'box-mismatch' as const };
 
     await d.tmux.sendKey(id, 'Enter');
     // The same proof sendPrompt uses: OUR TEXT left the box, not "the box is

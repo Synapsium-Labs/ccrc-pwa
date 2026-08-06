@@ -5,6 +5,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
+  PRESENCE_REFRESH_MS,
   type ChatEvent,
   type Dialog,
   type HookAsk,
@@ -27,8 +28,18 @@ export interface PendingSend {
   key: string;
   text: string;
   state: 'sending' | 'failed';
+  /** The sentence shown under the failed bubble. */
   error?: string;
-  /** Captured server-side draft on a 409 draft-present failure (Composer sheet). */
+  /** The server's own refusal token behind `error`. The bubble branches on
+   *  this, never on the sentence. */
+  code?: string;
+  /** The box row the server READ, whenever a 409 carried one. Two failures
+   *  carry it and they mean opposite things: on `draft-present` it is the
+   *  OTHER text, already in the box, that this send refused to clobber (the
+   *  Composer sheet shows it); on `enter-ignored` it is OUR OWN text, proven
+   *  sitting in the box after both Enters were swallowed — which is what `Send
+   *  it` sends back as its correspondence claim, so the rescue can only ever
+   *  submit the message this bubble is showing. */
   draft?: string;
   /** Remembered so retry() repeats the original call. */
   replaceDraft?: boolean;
@@ -198,16 +209,29 @@ function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingS
   return next;
 }
 
-const failureOf = (e: unknown): { error: string; draft?: string } => {
+const failureOf = (e: unknown): { error: string; code?: string; draft?: string } => {
   if (e instanceof ApiError) {
     const body = e.body;
-    if (typeof body === 'object' && body !== null) {
-      const b = body as { error?: unknown; draft?: unknown };
-      if (b.error === 'draft-present') {
-        return { error: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
-      }
+    const b = typeof body === 'object' && body !== null
+      ? (body as { error?: unknown; draft?: unknown })
+      : {};
+    if (b.error === 'draft-present') {
+      return { error: 'draft-present', code: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
     }
-    return { error: sendErrorText(e.message) };
+    // `error` is the SENTENCE and `code` the server's token. They are kept
+    // separate because the bubble now branches on the token (only
+    // `enter-ignored` earns a Send it button) while still rendering the
+    // sentence — reading the branch off the humanised text would break the
+    // moment someone rewords it.
+    //
+    // The `draft` rides along whenever the refusal carried one. `enter-ignored`
+    // does, and it is not decoration: it is the box row `Send it` must hand
+    // back for the server's correspondence gate, and a bubble without it gets
+    // no button at all rather than a button that submits an unproven box.
+    return {
+      error: sendErrorText(e.message), code: e.message,
+      ...(typeof b.draft === 'string' ? { draft: b.draft } : {}),
+    };
   }
   return { error: e instanceof Error ? e.message : 'send failed' };
 };
@@ -225,6 +249,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   const apiImpl = deps.api ?? api;
   const confirmTimeoutMs = deps.confirmTimeoutMs ?? 5_000;
   let socket: ReconnectingSocket | null = null;
+  /** The presence heartbeat's timer — see `beat` below. */
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -253,18 +279,51 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         await apiImpl.prompt(id, text, opts);
         timers.set(key, setTimeout(() => expireConfirmed(key), confirmTimeoutMs));
       } catch (e) {
-        const { error, draft } = failureOf(e);
+        const { error, code, draft } = failureOf(e);
         set((s) => ({
           pending: s.pending.map((p) =>
-            p.key === key ? { ...p, state: 'failed' as const, error, draft } : p,
+            p.key === key ? { ...p, state: 'failed' as const, error, code, draft } : p,
           ),
         }));
       }
     };
 
     const nudge = (): void => socket?.nudge();
+
+    /**
+     * Tell the server whether this session is on the operator's screen, so it
+     * can suppress notifications for it (`server/src/presence.ts`, read by the
+     * watcher's `pushOne`). A notification for the pane you are looking at
+     * teaches you to dismiss notifications.
+     *
+     * Best-effort by design: a frame that cannot be sent right now is dropped
+     * rather than queued, because it is a claim about the present moment.
+     * `onOpen` re-states the current truth on every connect.
+     */
+    const reportVisible = (visible = document.visibilityState === 'visible'): void => {
+      socket?.send({ type: 'visible', visible });
+    };
+
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') nudge();
+      reportVisible();
+    };
+
+    /**
+     * The heartbeat behind that claim, and the reason the server can believe
+     * it. A claim held for the socket's lifetime survives the socket's DEATH
+     * whenever no close frame arrives — a phone in a lift or a tunnel sends no
+     * FIN — and every notification for this session would then be suppressed
+     * for a viewer who is long gone, indefinitely. So the server expires a
+     * claim it has not heard for `PRESENCE_TTL_MS` and this re-states it every
+     * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
+     * in `shared/api.ts`).
+     *
+     * Only while visible: a hidden tab's claim is a DELETE on the server, and
+     * a deletion does not need repeating.
+     */
+    const beat = (): void => {
+      if (document.visibilityState === 'visible') reportVisible(true);
     };
 
     return {
@@ -299,16 +358,28 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           },
           onMessage: (m) => get().apply(m as SessionStreamMsg),
           onState: (conn) => set({ conn }),
+          // Re-stated on EVERY open, automatic reconnects included: the
+          // server's presence registry is keyed per connection, so a reconnect
+          // starts with no claim at all and a session the operator is still
+          // looking at would quietly start pushing notifications again.
+          onOpen: () => reportVisible(),
           makeSocket: deps.makeSocket,
         });
         socket.start();
         document.addEventListener('visibilitychange', onVisible);
         window.addEventListener('online', nudge);
+        heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
       },
 
       disconnect() {
         document.removeEventListener('visibilitychange', onVisible);
         window.removeEventListener('online', nudge);
+        if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
+        // Say so before the socket goes: leaving the session screen means the
+        // operator is no longer looking at it, and a close alone would let the
+        // server infer that only from the disconnect — true here, but not for
+        // the automatic reconnects that share this code path's socket.
+        reportVisible(false);
         socket?.stop();
         socket = null;
         // Fix round 1 (I1): a dropped connection must not leave a stale hook
@@ -343,7 +414,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // field added after it too.
         set((s) => ({
           pending: s.pending.map((x) =>
-            x.key === key ? { ...x, state: 'sending' as const, error: undefined, draft: undefined } : x),
+            x.key === key ? { ...x, state: 'sending' as const, error: undefined, code: undefined, draft: undefined } : x),
         }));
         void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
       },
@@ -357,7 +428,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         set((s) => ({
           pending: s.pending.map((x) =>
             x.key === key
-              ? { ...x, text, state: 'sending' as const, error: undefined, draft: undefined,
+              ? { ...x, text, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
                   replaceDraft: opts.replaceDraft }
               : x),
         }));

@@ -172,7 +172,7 @@ describe('POST /api/sessions/:id/submit', () => {
     // Two panes: the box holding a draft, then the emptied box that proves
     // Enter submitted (see submitEnter's `submitted` check).
     const { app, calls } = await makeApp(['scrollback\n❯ half-typed\n', 'scrollback\n❯ \n']);
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
@@ -181,7 +181,7 @@ describe('POST /api/sessions/:id/submit', () => {
 
   it('refuses an empty box with 409 nothing-to-submit, and presses nothing', async () => {
     const { app, calls } = await makeApp([EMPTY_BOX]);
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
     expect(sendKeysCalls(calls)).toEqual([]);
@@ -190,7 +190,7 @@ describe('POST /api/sessions/:id/submit', () => {
 
   it('refuses while a menu owns the keyboard with 409 dialog-open, and presses nothing', async () => {
     const { app, calls } = await makeApp([menuPane(1)]);
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'dialog-open' });
     expect(sendKeysCalls(calls)).toEqual([]);
@@ -206,7 +206,7 @@ describe('POST /api/sessions/:id/submit', () => {
   // left", not by "the box is empty".
   it('happy path proves submission via the needle leaving the box, not merely turning empty', async () => {
     const { app, calls } = await makeApp(['scrollback\n❯ half-typed\n', 'scrollback\n❯ Press up to edit queued messages\n']);
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
@@ -220,7 +220,7 @@ describe('POST /api/sessions/:id/submit', () => {
   // override), so this one costs the full SUBMIT_TRIES*SUBMIT_POLL_MS wait.
   it('refuses a genuinely stuck box with 409 enter-ignored, after exactly one Enter', async () => {
     const { app, calls } = await makeApp(['scrollback\n❯ stuck words\n']);   // every capture identical
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'stuck words' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'enter-ignored' });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
@@ -234,9 +234,37 @@ describe('POST /api/sessions/:id/submit', () => {
   // unit under it.
   it('refuses a blank first row hiding real content below with 409 blank-first-row, and presses nothing', async () => {
     const { app, calls } = await makeApp(['❯ \n  actual text\n']);
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'actual text' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'blank-first-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // PR F whole-branch review, Critical — the HTTP half of the correspondence
+  // gate. The box holds a message the caller was never shown (a second send
+  // replaced it, or a second enter-ignored left its own), so Enter here would
+  // submit someone else's text under this caller's name.
+  it('refuses a box holding something else with 409 box-mismatch, and presses nothing', async () => {
+    const { app, calls } = await makeApp(['scrollback\n❯ check the logs\n']);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'run the tests' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'box-mismatch' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // A caller that states nothing gates on nothing. 400 BEFORE any capture, so
+  // an old client cannot fall back to the un-gated behaviour by omission.
+  it('refuses a request with no expectation at all — 400, and presses nothing', async () => {
+    const { app, calls } = await makeApp(['scrollback\n❯ half-typed\n', EMPTY_BOX]);
+    for (const payload of [{}, { expect: '   ' }, { expect: 7 }]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
     expect(sendKeysCalls(calls)).toEqual([]);
     await app.close();
   });
