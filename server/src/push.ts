@@ -17,6 +17,10 @@ export interface PushPayload {
   body: string;
   sessionId?: string; // deep-link target; the SW opens /s/<id>
   tag?: string; // collapse key so repeats of the same event replace, not stack
+  /** Up to TWO — the platform ceiling on Android, and the reason the ask push
+   *  sends the first two option labels and deep-links for the rest. Ignored by
+   *  an older service worker, which simply shows the notification. */
+  actions?: { action: string; title: string }[];
 }
 
 export class PushService {

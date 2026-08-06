@@ -11,8 +11,9 @@ import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
 import type { SessionRecord } from './registry.js';
-import type { PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { NotifyEvent, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
+import type { PushPayload } from './push.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -91,6 +92,19 @@ export class FleetWatcher {
    *  restart doesn't notify for every already-pending dialog / idle session. */
   private primed = false;
   private readonly cachePath: string;
+  /** The set of projects with at least one non-dead session, as of the last
+   *  completed `tick()` — feeds `pushOne`'s "name the project only when more
+   *  than one is active" rule. `detectDialogs` and `sweepPr`/`archiveMerged`
+   *  run on their own clocks (the pane sweep runs before this tick's own
+   *  `assembleFleet`; the PR sweep is a `void`-dispatched lane that can still
+   *  be in flight ticks later) and neither has the current tick's session list
+   *  in scope, so both read this cached, at-most-one-tick-stale set rather
+   *  than recomputing the fleet — which `sweepPr` deliberately never does,
+   *  since it must not block on `gh`. A push firing with last tick's project
+   *  count is the honest cheap answer; the alternative (a fresh fleet read
+   *  inside a lane that promises never to block) is not on offer.
+   */
+  private activeProjects = new Set<string>();
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -174,16 +188,21 @@ export class FleetWatcher {
       void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
     }
     const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
+    // The whole fleet is in scope right here, which is exactly what
+    // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
+    // have on their own clocks — see `activeProjects`'s own comment.
+    const projects = new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.project));
     // Push on a busy→idle finish (a session completed a turn). Skip the priming
     // tick — otherwise a restart notifies for every currently-idle session.
-    if (this.primed && this.deps.push) {
+    if (this.primed) {
       for (const s of sessions) {
         if (this.prevStatus.get(s.id) === 'busy' && s.status === 'idle') {
-          void this.deps.push.notify({ title: `✓ ${s.project}`, body: 'Finished — back to idle', sessionId: s.id, tag: `idle-${s.id}` });
+          this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
         }
       }
     }
     for (const s of sessions) this.prevStatus.set(s.id, s.status);
+    this.activeProjects = projects;
     this.primed = true;
     if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
       try { await saveSnapshot(sessions, this.cachePath); } catch { /* best-effort cache — never blocks the poll */ }
@@ -192,6 +211,30 @@ export class FleetWatcher {
     if (json === this.lastJson) return;
     this.lastJson = json;
     this.bus.emit('fleet', sessions);
+  }
+
+  /**
+   * Every push goes through here, so the copy rules are stated once.
+   *
+   *  - Project context ONLY when more than one project is active. The server
+   *    knows the whole fleet at push time, so it can tell — and "✓ ccrc-pwa"
+   *    on a fleet running one project is noise dressed as information.
+   *  - NOTHING fires for a session the operator is looking at right now. A
+   *    notification for the pane on your screen trains you to dismiss
+   *    notifications.
+   *  - The log records what was actually SENT, after both gates, so a
+   *    reconnecting client's catch-up can never claim more than push did.
+   *
+   *  `notifyLog` and `push` are independently optional: the catch-up log is
+   *  useful even on a box with no VAPID keys configured, so it is never
+   *  gated on `push` being present.
+   */
+  private pushOne(e: { kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] }, projects: Set<string>): void {
+    if (this.deps.presence?.isVisible(e.sessionId)) return;
+    const title = projects.size > 1 ? `${e.title} · ${e.project}` : e.title;
+    this.deps.notifyLog?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
+    void this.deps.notifyLog?.flush();
+    void this.deps.push?.notify({ title, body: e.body, sessionId: e.sessionId, tag: `${e.kind}-${e.sessionId}`, ...(e.actions ? { actions: e.actions } : {}) });
   }
 
   /**
@@ -382,13 +425,16 @@ export class FleetWatcher {
       const res = await this.deps.runCcd(argv);
       if (!res.ok) continue;
       if (res.stdout.startsWith('already archived')) continue;   // idempotent re-fire: no second push
-      // AFTER the fact, and it promises only navigation: PushPayload is
-      // {title, body, sessionId?} and push-sw.js passes no actions[].
-      void this.deps.push?.notify({
-        title: `✓ merged · ${r.project} › ${r.workspace}`,
+      // AFTER the fact, and it promises only navigation: no `actions` here,
+      // so an older service worker renders it exactly like every other push.
+      // `this.activeProjects` — this sweep has no fleet list of its own in
+      // scope (see the field's own comment) and must not block on `gh` to get
+      // one.
+      this.pushOne({
+        kind: 'merged', sessionId: r.id, project: r.project,
+        title: `✓ merged · ${r.workspace}`,
         body: `PR #${pr.number ?? '?'} merged; workspace archived, nothing deleted.`,
-        sessionId: r.id, tag: `merged-${r.id}`,
-      });
+      }, this.activeProjects);
     }
   }
 
@@ -430,11 +476,15 @@ export class FleetWatcher {
         if (last !== dialog.id) {
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
-          if (notify && this.deps.push) {
-            void this.deps.push.notify({
-              title: `❓ ${r.project}`, body: dialog.title || 'Claude has a question',
-              sessionId: r.id, tag: `dialog-${r.id}`,
-            });
+          if (notify) {
+            // `this.activeProjects` — this sweep runs BEFORE this tick's own
+            // `assembleFleet` (see `tick()`), so the current fleet's project
+            // set isn't computed yet; it reads last tick's, same reasoning as
+            // `archiveMerged` above.
+            this.pushOne({
+              kind: 'ask', sessionId: r.id, project: r.project,
+              title: '❓ Question', body: dialog.title || 'Claude has a question',
+            }, this.activeProjects);
           }
         }
       } else if (last !== undefined) {

@@ -28,6 +28,8 @@ import { sessionCommands } from './commands.js';
 import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
+import type { NotifyLog } from './notifylog.js';
+import { Presence } from './presence.js';
 import type { AccountUsage, FleetSession, SessionStreamMsg, TaskItem } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
@@ -61,6 +63,13 @@ export interface Deps {
   stateCachePath?: string;
   /** Web Push — present only when VAPID keys are configured. */
   push?: PushService;
+  /** The seq+epoch record of what was actually pushed, so a reconnecting
+   *  client can catch up on what it missed. Independent of `push`: it is
+   *  useful even on a box with no VAPID keys configured. */
+  notifyLog?: NotifyLog;
+  /** Which sessions a human is currently looking at, so `FleetWatcher` can
+   *  suppress a push for the pane already on screen. */
+  presence?: Presence;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -83,6 +92,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+
+  // Presence is cheap and needs no config, unlike `push` — a caller that
+  // didn't wire one into Deps (an older test, a one-off script) still gets
+  // working suppression rather than a silently-inert route.
+  const presence = deps.presence ?? new Presence();
 
   app.get('/health', async () => ({ ok: true }));
 
@@ -148,6 +162,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true };
   });
 
+  // A phone that was offline (asleep, backgrounded past the SW's leash, or
+  // simply off) has no way to learn what it missed — this is the pull side of
+  // that gap. `resync: true` when the epoch moved or the client's seq predates
+  // the retained ring: the honest answer is "I cannot prove you saw
+  // everything", and the client's job is to drop its watermark and trust the
+  // fresh fleet snapshot rather than fabricate badges for events it cannot
+  // enumerate. 501 when no log is wired (same shape as the push routes above).
+  app.get('/api/notifications/catchup', async (req, reply) => {
+    if (!deps.notifyLog) return reply.code(501).send({ error: 'not-configured' });
+    const q = req.query as { epoch?: string; seq?: string };
+    const seq = Number(q.seq);
+    return deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0);
+  });
+
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
   // respawns, and swaps. Ordered claude / claude2 / claude-corp / gpt.
@@ -201,7 +229,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const since = parseSince((req.query as { since?: string }).since);
     const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
     void stream.start();
-    socket.on('close', () => stream.stop());
+    // A per-connection token, not the session id: a socket that dies without a
+    // close frame takes only its OWN claim with it (Presence's own doc), so a
+    // second tab watching the same session doesn't get un-notified by the
+    // first one's disconnect.
+    const token = Symbol('viewer');
+    socket.on('message', (raw) => {
+      try {
+        const m = JSON.parse(String(raw)) as { type?: unknown; visible?: unknown };
+        if (m.type === 'visible' && typeof m.visible === 'boolean') {
+          presence.setVisible(token, m.visible ? id : null);
+        }
+      } catch { /* a client that sends garbage simply isn't reporting presence */ }
+    });
+    socket.on('close', () => {
+      presence.drop(token);
+      stream.stop();
+    });
   });
 
   // Terminal drawer: attach a pty to the session's tmux window. Lazy-import the

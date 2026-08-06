@@ -1097,6 +1097,25 @@ export type SessionStreamMsg =
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
   | { type: 'notice'; message: string };
 
+/** PWA → server, on the per-session socket. `visible` is the operator's own
+ *  report that this session is on screen and focused; the server suppresses
+ *  pushes for it while any client says so. */
+export type SessionClientMsg = { type: 'visible'; visible: boolean };
+
+/** One notification the server actually fired. The log is a record of what was
+ *  PUSHED, so it can never claim more than push did. */
+export interface NotifyEvent {
+  seq: number; at: number;
+  kind: 'ask' | 'done' | 'merged';
+  sessionId: string; title: string; body: string;
+}
+
+/** `resync: true` means "I cannot prove you saw everything" — the epoch moved,
+ *  or the client's seq predates what is still retained. The client's answer is
+ *  to drop its watermark and trust the fleet snapshot, never to fabricate
+ *  badges for events it cannot enumerate. */
+export interface CatchUp { epoch: string; seq: number; resync: boolean; events: NotifyEvent[] }
+
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */
 export interface StagedClip { path: string; name: string; bytes: number }

@@ -9,6 +9,8 @@ import { FleetWatcher } from './watch.js';
 import { connectFleet } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { PushService } from './push.js';
+import { NotifyLog } from './notifylog.js';
+import { Presence } from './presence.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -20,6 +22,12 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
       path.join(cfg.home, '.ccrc', 'push-subs.json'),
     )
   : undefined;
+
+// Unlike `push`, these need no configuration — the catch-up log and presence
+// suppression are useful even on a box with no VAPID keys, so both are always
+// wired. Same directory as the push subscription store.
+const notifyLog = new NotifyLog(path.join(cfg.home, '.ccrc', 'notify-log.json'));
+const presence = new Presence();
 
 let deps: Deps;
 if (cfg.fleetMode === 'remote') {
@@ -33,12 +41,21 @@ if (cfg.fleetMode === 'remote') {
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
     cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
-    spawnPty: fleet.spawnPty, fleetState: fleet.state, push,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
-  deps = { cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO, spawnPty: attachPty, push };
+  deps = {
+    cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
+    spawnPty: attachPty, push, notifyLog, presence,
+  };
 }
+
+// Loaded before anything that could touch it (the watcher's first tick can
+// fire a push the instant it starts) — a load racing a record would let a
+// freshly-minted epoch silently supersede the one events were just recorded
+// under.
+await notifyLog.load();
 
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
