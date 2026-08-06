@@ -31,6 +31,10 @@ Add to home screen in Android Chrome / iOS Safari for the standalone app.
 - `shared/` — `agent-protocol.ts` (server↔agent WS message types) and
   `api.ts` (server↔PWA REST/WS types), imported by both `server/` and
   `agent/`.
+- `ccd/` — the pieces that live on the **fleet host**: `ccd` itself, plus
+  `session-hook.sh` (the Claude Code hook that reports each session's state)
+  and `install-session-hooks.sh` (the idempotent installer that registers it
+  in every wrapper home). See "How a session's state is known" below.
 - `deploy/` — `ccrc.service` / `ccrc-agent.service` (systemd user units),
   `ccrc.env.example` / `ccrc-agent.env.example` (env templates — copy to
   `ccrc.env` / `ccrc-agent.env`, gitignored, to supply real tokens),
@@ -41,6 +45,92 @@ for the service worker + WebAPK install). 443 root is the claude-docserver
 (project docs at `/<project>/…`) with mech-fleet-preview at `/fleet`; ccrc can't
 take 443 root without its SPA fallback swallowing every doc path, so it stays on
 its own port.
+
+## How a session's state is known
+
+**Hooks first, the pane as a ranked fallback.** Claude Code fires hooks on its
+own lifecycle, so ccrc no longer has to infer what a session is doing from
+terminal text.
+
+`ccd/session-hook.sh` runs on the hot path of every tool call in every fleet
+session and writes `~/.cc-sessions/<id>.hookstate.json` atomically. Its contract
+is absolute: **exit 0 on every path**, write atomically or not at all, no
+network, no locks, no waiting — a hook that can slow or break a session is worse
+than no hook. It self-identifies from tmux (`cc-<id>`), so a non-fleet session
+exits silently. `install-session-hooks.sh` registers it in all four wrapper
+homes (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`),
+sweeping its own managed entries and leaving anything else in `settings.json`
+untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
+
+The file carries one of three states — `working`, `waiting`, `done` — plus a
+structured **ask envelope** for a waiting session: either
+`{questions: [...]}` (an `AskUserQuestion`, copied verbatim from the tool call's
+own JSON) or `{approval: {tool, summary}}` (a permission prompt), and the
+subagents the hooks have seen start and stop.
+
+`server/src/hookstate.ts` reads it and **fails to null** on anything it cannot
+vouch for: a missing file, over 64 KB, malformed JSON, an unrecognised state, a
+`sessionId` that no longer matches the registry's uuid for that session (so a
+restarted session cannot inherit its predecessor's state), or a write older than
+30 minutes. `null` therefore means *no fresh hook data* — never a fourth state.
+
+The pane scraper still runs, and still raises a dialog the hook never got a
+write for (an older Claude Code, a hook that failed to install). Neither source
+suppresses the other; the PWA prefers the envelope and falls back to the scrape.
+
+### The attention bucket
+
+Every session on the fleet wire carries `bucket` and `bucketSince`, computed
+once, server-side, in `server/src/bucket.ts`. The fleet screen's sections, its
+counts and each row's own state word all read that one field, so they cannot
+disagree — before this there were three independent re-derivations that drifted.
+
+The ladder tests, in order: `archivedAt` (→ `cleanup` when the PR is merged,
+else `archived`), then `dead`, then `attention` (a pending dialog or a waiting
+hook), then `working`, then `done` (which requires hook evidence — a hookless
+busy→idle transition never proves a turn *finished*), then `idle`. **The
+archived rows come first deliberately**: `ws-archive` stops the session, so
+every cleanup candidate is also `dead`, and a dead-first ladder would leave the
+cleanup bucket permanently empty.
+
+`bucketSince` is *derived* from evidence already on the record — never
+remembered by the watcher, which would reset on every deploy and paint the whole
+fleet as freshly-unseen several times a day.
+
+`status` itself stays frozen and hook-blind; a test asserts it is identical with
+and without hook state present.
+
+## Attention, notifications and answering
+
+- **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
+  entered a human-wanting bucket (`attention`, `done`, `cleanup`) after this
+  device last acknowledged it. Per-device in `localStorage` on purpose — ccrc
+  has no user accounts, so "seen" belongs to the person holding the phone.
+- **Push copy discipline** (`server/src/watch.ts`): project context appears in a
+  title only when more than one project is active, and nothing fires for a
+  session a client reports on screen. The PWA states that claim on every socket
+  open and refreshes it every 15 s; the server expires a claim it has not heard
+  for 45 s, so a phone that loses signal without a close frame goes back to
+  being notified rather than silently muted.
+- **Answering from the notification**: an ask push carries the question's first
+  two option labels as notification actions, and `pwa/public/push-sw.js` POSTs
+  the answer without opening the app. A button is offered *only* where the
+  answer route would accept it — an action that can only be refused costs a tap
+  and a wait to learn what the server already knew.
+- **Catch-up watermark**: `{epoch, seq}` as one atomic JSON value on both sides
+  (`server/src/notifylog.ts`, `pwa/src/lib/notifymark.ts`). A seq is meaningless
+  without the lifetime of the counter that produced it — written separately, a
+  death between the two writes forges a valid-looking pair and silently drops
+  real notifications. When the server cannot *prove* the client saw everything
+  it says `resync`, and the client then surfaces nothing retroactively.
+
+Three routes can act on a session, each with its own named refusals:
+
+| Route | What it does | Gate |
+| --- | --- | --- |
+| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed |
+| `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
+| `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 
 ## Develop
 
@@ -75,6 +165,12 @@ target before overwriting anything — and a backup copy that *fails* aborts
 the deploy before `rsync --delete` can destroy the state it failed to save.
 The agent deploy installs `ccd` BEFORE restarting the agent — the agent
 caches `ccd caps` at boot, so the reverse order pins a stale verb set.
+
+**Ordering between the two targets.** A change that touches `ccd/` — the hook
+script in particular — must ship to the fleet host *before or with* the server,
+because the server reads what the hook writes. Shipping a server that expects a
+newer envelope shape to a fleet still running the old hook is how you get a
+confident UI over stale data. A server+PWA-only change has no such constraint.
 
 **Restore** (manual, from the target box — pick the `<ts>` to roll back to):
 
@@ -185,11 +281,22 @@ Reset cctest between runs: stop `claude-session@{claude2,claude}-cctest` and
 
 ## Pane-format fragility (re-capture after Claude Code upgrades)
 
-ccrc scrapes the tmux pane for dialogs and the input-box draft, and these
-strings drift between Claude Code versions. After any upgrade, re-capture the
-fixtures under `server/test/fixtures/panes/` (e.g.
+Hooks now carry a session's *state* (above), which removed the worst of this —
+but the pane is still scraped, and two jobs genuinely need it: reading the
+input-box draft, and proving that the menu on screen is the one an answer is
+about. Both drift between Claude Code versions. After any upgrade, re-capture
+the fixtures under `server/test/fixtures/panes/` (e.g.
 `tmux capture-pane -t cc-<id> -p`) and re-run `test/dialog.test.ts` /
-`test/send.test.ts`. Known real-format subtleties already encoded:
+`test/send.test.ts` / `test/ask-route.test.ts`.
+
+Hook *delivery* drifts too, and silently: Claude Code 2.1.222 delivers
+`AskUserQuestion` as a `PermissionRequest`, not the `PreToolUse` the mapping was
+originally written against. Both arms are kept and both are pinned by tests,
+because which one fires is a harness detail this repo cannot predict across
+upgrades. After an upgrade, check that a real question still writes
+`ask.questions` and not an empty `ask.approval`.
+
+Known real-format subtleties already encoded:
 
 - The **input box** is the LAST `❯` line (history turns render `❯ ` above it),
   and the empty box uses `❯` + a **U+00A0 non-breaking space**, not a plain one.
