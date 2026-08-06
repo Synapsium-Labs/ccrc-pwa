@@ -96,8 +96,15 @@ export async function readPendingAsk(io: FleetIO, file: string): Promise<AskQues
 
 const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
 /** Either side may be the truncated one: `leftCol` cuts a scraped label at a run
- *  of two spaces or at the two-column gutter, so compare as prefixes. */
-const pairMatches = (a: string, b: string): boolean => {
+ *  of two spaces or at the two-column gutter, so compare as prefixes.
+ *
+ *  THE rule for "this scraped row and this structured option are the same
+ *  option", exported because `inject/ask.ts`'s menu-identity gate must decide
+ *  the same question a keystroke earlier, and `DialogSheet.tsx` mirrors it
+ *  client-side (it cannot import server code; see its `prefixMatches`). Three
+ *  layers, one rule — a second definition here would let them disagree about
+ *  which menu is on screen while each stayed internally consistent. */
+export const pairMatches = (a: string, b: string): boolean => {
   const [x, y] = [norm(a), norm(b)];
   return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
 };

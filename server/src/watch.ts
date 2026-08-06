@@ -222,12 +222,16 @@ export class FleetWatcher {
    *  - NOTHING fires for a session the operator is looking at right now. A
    *    notification for the pane on your screen trains you to dismiss
    *    notifications.
-   *  - The log records what was actually SENT, after both gates, so a
-   *    reconnecting client's catch-up can never claim more than push did.
+   *  - The log records what this method DECIDED to raise — after the presence
+   *    gate, before delivery, and never corrected by delivery's outcome. It is
+   *    not a record of what was sent: recording is unconditional while `push`
+   *    is optional, so a reconnecting client's catch-up can and will list
+   *    events no device ever received. `NotifyEvent`'s own docstring is the
+   *    wire contract for that; keep the two saying the same thing.
    *
-   *  `notifyLog` and `push` are independently optional: the catch-up log is
-   *  useful even on a box with no VAPID keys configured, so it is never
-   *  gated on `push` being present.
+   *  `notifyLog` and `push` are independently optional, which is the reason
+   *  above: the catch-up log is useful even on a box with no VAPID keys
+   *  configured, so it is never gated on `push` being present.
    */
   private pushOne(e: { kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] }, projects: Set<string>): void {
     if (this.deps.presence?.isVisible(e.sessionId)) return;

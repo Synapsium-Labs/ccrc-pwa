@@ -1,7 +1,8 @@
 import type { SendDeps } from './send.js';
-import type { HookAsk } from '../../../shared/api.js';
+import type { HookAsk, HookAskQuestion } from '../../../shared/api.js';
 import { askKey } from '../askkey.js';
-import { hasMenu } from '../pane/dialog.js';
+import { hasMenu, paneOptionRows } from '../pane/dialog.js';
+import { pairMatches } from '../transcript/ask.js';
 
 export interface AskDeps extends SendDeps {
   /** The session's CURRENT hook state, re-read at answer time — never the copy
@@ -15,7 +16,7 @@ export type AskResult =
       ok: false;
       error:
         | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
-        | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu';
+        | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch';
     };
 
 /**
@@ -36,13 +37,6 @@ export async function answerAsk(
   indexes: readonly number[],
 ): Promise<AskResult> {
   return d.queue.run(id, async (): Promise<AskResult> => {
-    // Captured ONCE and reused below for the menu-freshness check (`no-menu`)
-    // rather than a second capture right before the keypress — see that
-    // check's own comment for why the single snapshot is what a SERIALIZED
-    // repeat call needs, not what a closer-to-the-keypress capture would buy.
-    const pane = await d.tmux.capture(id);
-    if (pane === null) return { ok: false, error: 'not-alive' };
-
     const hs = await d.readAsk(id);
     if (hs === null) return { ok: false, error: 'stale-ask' };
     if (hs.state !== 'waiting') return { ok: false, error: 'not-waiting' };
@@ -67,7 +61,7 @@ export async function answerAsk(
     // was built to avoid needing) — so refuse outright, the same stance
     // `DialogSheet.tsx` already takes client-side (`questionCorresponds` /
     // "wire the first question only") for the identical reason.
-    const questions = (hs.ask as { questions: { multiSelect?: boolean; options: unknown[] }[] }).questions;
+    const questions = (hs.ask as { questions: HookAskQuestion[] }).questions;
     if (questions.length > 1) return { ok: false, error: 'multi-question' };
     const q = questions[0]!;
 
@@ -85,25 +79,56 @@ export async function answerAsk(
     // a selection the client never asked for.
     if (new Set(indexes).size !== indexes.length) return { ok: false, error: 'duplicate-index' };
 
-    // The LAST gate before a keystroke, and deliberately last: everything
-    // above is about whether this ANSWER still makes sense; this is about
-    // whether there is still a MENU to send it into. `answerAsk` calls are
-    // serialized per-session through `d.queue.run`, so a repeat POST (a
-    // retried request, a double-tap) that arrives after an earlier call
-    // already pressed a digit and closed the menu runs its OWN fresh
-    // `capture` above, at THIS call's entry — by the time execution reaches
-    // here, that capture already reflects whatever the earlier press left
-    // on screen (the input box, or the NEXT permission menu, where digits
-    // also select). Without this check that repeat sails through every gate
-    // above unchanged (same key, same in-range indexes) and presses into
-    // whatever now owns the keyboard. `answerDialog` gets the same property
-    // from its own stale-dialog re-check; this is this route's version of it.
+    // The LAST gates before a keystroke, and deliberately last: everything
+    // above is about whether this ANSWER still makes sense; these are about
+    // whether the thing on screen is the MENU it was written for. The pane is
+    // captured HERE, not at entry, so nothing this function does afterwards
+    // can age it — `readAsk` alone is a registry read plus a hookstate read,
+    // two agent round trips in remote mode, and the earlier capture spent
+    // that whole window going stale.
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+
+    // `no-menu`: nothing is asking anything. `answerAsk` calls are serialized
+    // per-session through `d.queue.run`, so a repeat POST (a retried request,
+    // a double-tap) arriving after an earlier call already pressed a digit
+    // and closed the menu sees the input box here and stops, instead of
+    // sailing through every gate above unchanged (same key, same in-range
+    // indexes) and pressing into whatever now owns the keyboard.
     if (!hasMenu(pane)) return { ok: false, error: 'no-menu' };
 
+    // `menu-mismatch`: a menu IS up, but not this one. Presence alone is not
+    // the safety property this route needs — `hasMenu` says only "some menu",
+    // and a Claude Code Bash permission prompt IS one. The window is real: the
+    // human can answer in the terminal and the next tool call can paint its
+    // permission prompt before `session-hook.sh` has rewritten the hookstate
+    // to `working`, which leaves `waiting` + a still-matching key + a menu
+    // that is not ours — and digit `2` there is "Yes, and don't ask again".
+    // No capture placement closes that; only reading the rows does.
+    //
+    // Identity, then, not presence: the pane's numbered rows must BE this
+    // question's options, in order, by the same rule `alignAsk` uses to decide
+    // which question a menu is showing and `DialogSheet.tsx` mirrors before it
+    // lets a tap through (`pairMatches` — imported, not restated). Extra
+    // TRAILING rows are tolerated because the TUI appends its own ("Chat about
+    // this", "Type something else") below the real options and they carry no
+    // marker; the head-anchored prefix is what the client's gate proves too,
+    // and what makes it hold on real captures.
+    const rows = paneOptionRows(pane);
+    const matches =
+      rows.length >= q.options.length &&
+      q.options.every((o, i) => pairMatches(rows[i]!.label, o.label));
+    if (!matches) return { ok: false, error: 'menu-mismatch' };
+
     for (const i of indexes) await d.tmux.sendKey(id, String(i + 1));
-    // Single-select needs NO Enter — the digit already confirmed. Pressing one
-    // would land on whatever the TUI showed next.
-    if (indexes.length > 1) await d.tmux.sendKey(id, 'Enter');
+    // Gated on the QUESTION's kind, never on how many options were picked. On
+    // a multi-select menu a digit only TOGGLES a box; Enter is what commits,
+    // so a one-option multi-select answer needs it exactly as much as a
+    // three-option one — without it the session stays `waiting` with a box
+    // ticked while this returns ok:true, and the retry toggles it back off.
+    // Single-select is the opposite and must NOT get one: the digit already
+    // confirmed, so an Enter would submit whatever the TUI painted next.
+    if (q.multiSelect === true) await d.tmux.sendKey(id, 'Enter');
     return { ok: true };
   });
 }

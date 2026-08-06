@@ -40,23 +40,38 @@ import { answerAsk } from '../src/inject/ask.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 
 // A single-select AskUserQuestion menu, shaped enough to trip `hasMenu`
-// (`Enter to select` alone is sufficient — see pane/dialog.ts's MENU_RE).
-// Used as the default `capture` so every test below exercises the SAME
-// pane-freshness gate `answerAsk` now runs; tests that want "no menu is up"
-// override it explicitly rather than relying on an accidentally-menu-less
-// default (review Important 1's fix, and its own coverage).
+// (`Enter to select` alone is sufficient — see pane/dialog.ts's MENU_RE) AND
+// to satisfy the menu-IDENTITY gate: its rows are `ask('Which colour?', …)`'s
+// own options, in order. Used as the default `capture` so every test below
+// exercises the same gates `answerAsk` runs; tests that want a different pane
+// pass one explicitly rather than relying on a default that happens to fit.
 const MENU_PANE = '❯ 1. Red\n  2. Blue\nEnter to select\n';
 const NOT_A_MENU_PANE = 'done\n❯ \n';
+// A multi-select menu as Claude Code actually paints one — checkbox chrome on
+// every row and a "Space to select · Enter to confirm" footer (fixture:
+// server/test/fixtures/panes/multiselect.txt). The `[ ]` is the row's STATE,
+// never part of its label, which is why the row reader strips it before the
+// identity gate compares against the hook's verbatim labels.
+const MULTI_PANE = '◍ Pick some\n\n❯ 1. [ ] A\n  2. [ ] B\n  3. [ ] C\n\nSpace to select · Enter to confirm\n';
+// A Bash permission prompt: a REAL menu, where digit 2 is "Yes, and don't ask
+// again". This is what `hasMenu` alone cannot tell apart from the question.
+const PERMISSION_PANE =
+  'Bash command\n\n  rm -rf /tmp/x\n\n  Do you want to proceed?\n' +
+  "❯ 1. Yes\n  2. Yes, and don't ask again for rm commands\n  3. No, and tell Claude what to do differently\n\n" +
+  'Enter to confirm\n';
 
-function deps(overrides: Partial<Parameters<typeof answerAsk>[0]> = {}) {
+function deps(
+  overrides: Partial<Parameters<typeof answerAsk>[0]> = {},
+  pane: string = MENU_PANE,
+) {
   const keys: string[] = [];
   return {
     keys,
     d: {
       queue: new KeyedQueue(),
       tmux: {
-        capture: async () => MENU_PANE,
-        captureAnsi: async () => MENU_PANE,
+        capture: async () => pane,
+        captureAnsi: async () => pane,
         sendKey: async (_id: string, k: string) => { keys.push(k); },
         sendLiteral: async (_id: string, t: string) => { keys.push(`lit:${t}`); },
       } as never,
@@ -102,7 +117,7 @@ describe('answerAsk', () => {
   it('sends every digit then Enter for a multiSelect answer', async () => {
     const multi = { questions: [{ question: 'Pick some', multiSelect: true,
       options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
-    const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) });
+    const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) }, MULTI_PANE);
     const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [0, 2]);
     expect(r).toEqual({ ok: true });
     expect(keys).toEqual(['1', '3', 'Enter']);
@@ -232,7 +247,9 @@ describe('answerAsk', () => {
     });
 
     it('the ninth option itself (index 8, digit 9) is answerable', async () => {
-      const { keys, d } = deps({ readAsk: async () => ({ ask: tenOptions, state: 'waiting' as const }) });
+      const tenPane = `${Array.from({ length: 10 }, (_, i) => `${i === 0 ? '❯ ' : '  '}${i + 1}. Opt ${i}`)
+        .join('\n')}\nEnter to select\n`;
+      const { keys, d } = deps({ readAsk: async () => ({ ask: tenOptions, state: 'waiting' as const }) }, tenPane);
       const r = await answerAsk(d as never, 'cc-x', askKey(tenOptions)!, [8]);
       expect(r).toEqual({ ok: true });
       expect(keys).toEqual(['9']);
@@ -245,9 +262,113 @@ describe('answerAsk', () => {
       options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
 
     it('refuses [0,0] rather than toggling the same option twice and committing an empty selection', async () => {
-      const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) });
+      const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) }, MULTI_PANE);
       const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [0, 0]);
       expect(r).toEqual({ ok: false, error: 'duplicate-index' });
+      expect(keys).toEqual([]);
+    });
+  });
+
+  // — whole-branch review, CRITICAL 1 — the commit is the QUESTION's property —
+  //
+  // The Enter was gated on `indexes.length > 1`, so a multiSelect answered
+  // with ONE option pressed a digit — which on a multi-select menu only
+  // TOGGLES — sent no Enter, and returned ok:true. The session stays `waiting`
+  // with a box ticked while the client is told it answered, and the retry
+  // presses the same digit and toggles it back OFF, ok:true again. Same class
+  // as the `duplicate-index` refusal above (a WRONG ANSWER sent with ok:true,
+  // not a refusal-shaped failure) through a different door — and uncovered
+  // because the only multiSelect success test above uses TWO indexes.
+  //
+  // `DialogSheet.tsx` is what makes it reachable: it renders every multiSelect
+  // option as a plain single-tap row, so the moment a later PR wires that UI
+  // to /ask, a tap sends `optionIndexes: [k]`.
+  describe('a one-option multiSelect answer still commits (CRITICAL 1)', () => {
+    const multi = { questions: [{ question: 'Pick some', multiSelect: true,
+      options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
+
+    it('sends the digit AND Enter for a single-index multiSelect answer', async () => {
+      const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) }, MULTI_PANE);
+      const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [1]);
+      expect(r).toEqual({ ok: true });
+      expect(keys).toEqual(['2', 'Enter']);   // toggle, then commit
+    });
+
+    it("tolerates the TUI's own trailing row on the pane and still commits", async () => {
+      // One-column layouts number the TUI's extra rows on after the real
+      // options (`4. …`), so the pane legitimately carries MORE rows than the
+      // envelope has options. The identity gate is head-anchored for exactly
+      // this reason — the same tolerance `DialogSheet.tsx`'s client-side gate
+      // has, and why it holds on real captures.
+      const withExtra = MULTI_PANE.replace(
+        '  3. [ ] C\n', '  3. [ ] C\n  4. [ ] Chat about this\n',
+      );
+      const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) }, withExtra);
+      expect(await answerAsk(d as never, 'cc-x', askKey(multi)!, [0])).toEqual({ ok: true });
+      expect(keys).toEqual(['1', 'Enter']);
+    });
+
+    // The single-select half of the same rule — no Enter, ever — is pinned by
+    // "sends the digit alone for a single-select answer" at the top of this file.
+  });
+
+  // — whole-branch review, IMPORTANT 2 — presence is not identity —
+  //
+  // `hasMenu` answers "is SOME menu up", and a Claude Code permission prompt
+  // IS one. So `waiting` + a matching key + a menu that isn't ours put digit
+  // `2` on "Yes, and don't ask again". The gate now reads the pane's numbered
+  // rows and requires them to BE this question's options, in order.
+  describe('menu identity (menu-mismatch)', () => {
+    const key = askKey(ask('Which colour?', ['Red', 'Blue']))!;
+
+    it('refuses a permission prompt standing where the question was', async () => {
+      const { keys, d } = deps({}, PERMISSION_PANE);
+      expect(await answerAsk(d as never, 'cc-x', key, [1]))
+        .toEqual({ ok: false, error: 'menu-mismatch' });
+      expect(keys).toEqual([]);   // NOT "Yes, and don't ask again"
+    });
+
+    it('refuses a different question whose menu happens to be up', async () => {
+      const otherPane = '❯ 1. EU\n  2. US\nEnter to select\n';
+      const { keys, d } = deps({}, otherPane);
+      expect(await answerAsk(d as never, 'cc-x', key, [0]))
+        .toEqual({ ok: false, error: 'menu-mismatch' });
+      expect(keys).toEqual([]);
+    });
+
+    it('refuses a menu whose rows are OUR options reordered — position is the answer', async () => {
+      const swapped = '❯ 1. Blue\n  2. Red\nEnter to select\n';
+      const { keys, d } = deps({}, swapped);
+      expect(await answerAsk(d as never, 'cc-x', key, [0]))
+        .toEqual({ ok: false, error: 'menu-mismatch' });
+      expect(keys).toEqual([]);
+    });
+
+    it('captures the pane AFTER readAsk, so the hookstate read cannot age it', async () => {
+      // The window the finding names: `readAsk` is a registry read plus a
+      // hookstate read — two agent round trips in remote mode — and the human
+      // can answer in the terminal inside it, with Claude Code painting the
+      // next permission prompt before `session-hook.sh` rewrites the state to
+      // `working`. An entry-time capture sees the question and the digit lands
+      // on the prompt. Modelled directly: the pane changes DURING readAsk.
+      let pane = MENU_PANE;
+      const keys: string[] = [];
+      const d = {
+        queue: new KeyedQueue(),
+        tmux: {
+          capture: async () => pane,
+          captureAnsi: async () => pane,
+          sendKey: async (_id: string, k: string) => { keys.push(k); },
+          sendLiteral: async () => {},
+        } as never,
+        readAsk: async () => {
+          pane = PERMISSION_PANE;
+          return { ask: ask('Which colour?', ['Red', 'Blue']), state: 'waiting' as const };
+        },
+        sleep: async () => {},
+      };
+      expect(await answerAsk(d as never, 'cc-x', key, [1]))
+        .toEqual({ ok: false, error: 'menu-mismatch' });
       expect(keys).toEqual([]);
     });
   });

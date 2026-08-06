@@ -8,7 +8,9 @@ import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
-import { sessionBucket } from './bucket.js';
+// The ladder lives in `shared/` because `reviveFleetSession` is its second
+// producer and the two must not be able to disagree — see its own docstring.
+import { sessionBucket } from '../../shared/api.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;

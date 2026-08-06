@@ -30,9 +30,30 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
-import type { AccountUsage, FleetSession, SessionStreamMsg, TaskItem } from '../../shared/api.js';
+import type {
+  AccountUsage, FleetSession, SessionClientMsg, SessionStreamMsg, TaskItem,
+} from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
+
+/**
+ * A client frame off the per-session socket, or null if it isn't one.
+ *
+ * VALIDATED against `SessionClientMsg` rather than cast to it: `JSON.parse`
+ * hands back `any` from a browser we do not control, and `as SessionClientMsg`
+ * would assert the very thing this is asked to check — the same rule
+ * `shared/api.ts`'s revivers are built on. Restating the frame's shape inline
+ * here was a second copy of a contract in the one file whose whole discipline
+ * is not having one (whole-branch review, Minor 5): the type is the contract,
+ * so a member added to it lands here as a compile error rather than as a frame
+ * silently ignored.
+ */
+function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
+  return { type: 'visible', visible: o['visible'] };
+}
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -243,10 +264,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const token = Symbol('viewer');
     socket.on('message', (raw) => {
       try {
-        const m = JSON.parse(String(raw)) as { type?: unknown; visible?: unknown };
-        if (m.type === 'visible' && typeof m.visible === 'boolean') {
-          presence.setVisible(token, m.visible ? id : null);
-        }
+        const m = asSessionClientMsg(JSON.parse(String(raw)));
+        if (m !== null) presence.setVisible(token, m.visible ? id : null);
       } catch { /* a client that sends garbage simply isn't reporting presence */ }
     });
     socket.on('close', () => {

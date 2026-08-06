@@ -4,7 +4,9 @@ export type SessionStatus = 'busy' | 'idle' | 'dead';
 
 /** Which attention bucket a session belongs to. THE authority: the fleet
  *  screen's sections, its counts and the row's own state word all read this one
- *  field, so they cannot disagree. Computed server-side in `bucket.ts`. */
+ *  field, so they cannot disagree. Computed by `sessionBucket` below — which
+ *  the server runs on every assembled session, and which `reviveFleetSession`
+ *  runs on a cached snapshot that predates the field. */
 export type SessionBucket =
   | 'attention' | 'working' | 'done' | 'idle' | 'cleanup' | 'archived' | 'dead';
 
@@ -567,6 +569,71 @@ export interface WsTombstone {
  * interface and forgotten here is a compile error rather than a fourth outage.
  * ------------------------------------------------------------------------- */
 
+/** The record fields the bucket ladder reads. A `Pick`, so `sessionBucket`
+ *  accepts an assembled `FleetSession`, a revived one, or a test literal
+ *  without any of them needing to be the whole shape. */
+export type BucketInput = Pick<
+  FleetSession,
+  'status' | 'statusUpdatedAt' | 'dialogPending' | 'hookState' | 'archivedAt' | 'pr'
+>;
+
+/**
+ * One session → one bucket, plus when it entered.
+ *
+ * Lives in `shared/` rather than server-side because there are TWO producers of
+ * the `bucket` field and they must not be able to disagree: `fleet.ts` computes
+ * it for the live wire, and `reviveFleetSession` below computes it for a cached
+ * snapshot written before the field existed. `shared/` cannot import from
+ * `server/`, so the only alternatives were a second copy of this ladder and a
+ * test to shame it, or this — one definition both sides reach. It is not an
+ * invitation for the PWA to bucket sessions itself: the live fleet's `bucket`
+ * arrives on the wire already computed, and the client reads it.
+ *
+ * Pure, and deliberately memory-free: every branch below reads a timestamp that
+ * is ALREADY on the record and already means "when this began", so the function
+ * survives a server restart with identical answers. A `Map<id, since>` held by
+ * the watcher would reset on every deploy — and ccrc deploys several times a
+ * day — training the operator to ignore the unseen badge within a week.
+ *
+ * Order is load-bearing. The archived rows come first because `ws-archive`
+ * stops the session: every cleanup candidate is ALSO `status: 'dead'`, so a
+ * dead-first ladder would leave the cleanup bucket permanently empty.
+ *
+ * `hookUpdatedAt` is read ONLY by `bucketSince`; no branch's BUCKET depends on
+ * it. That is what lets `reviveFleetSession` call this with `null` and keep the
+ * bucket while discarding the timestamp.
+ */
+export function sessionBucket(
+  s: BucketInput,
+  hookUpdatedAt: number | null,
+): { bucket: SessionBucket; bucketSince: number | null } {
+  // `archivedAt` is epoch SECONDS (ccd writes `$REG/<id>.archived` as an epoch);
+  // every other timestamp on this record is epoch ms.
+  if (s.archivedAt !== null) {
+    return {
+      bucket: s.pr?.phase === 'merged' ? 'cleanup' : 'archived',
+      bucketSince: s.archivedAt * 1000,
+    };
+  }
+  if (s.status === 'dead') return { bucket: 'dead', bucketSince: s.statusUpdatedAt };
+  if (s.dialogPending || s.hookState === 'waiting') {
+    // The hook's timestamp is the honest episode start ONLY when the hook is
+    // why we are here; a pane-scraped dialog has no hook write behind it.
+    const since = s.hookState === 'waiting' ? hookUpdatedAt ?? s.statusUpdatedAt : s.statusUpdatedAt;
+    return { bucket: 'attention', bucketSince: since };
+  }
+  // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
+  // PostToolUse, so a busy session would report a continuously-refreshed
+  // "since" — permanently new, and permanently badged.
+  if (s.status === 'busy') return { bucket: 'working', bucketSince: s.statusUpdatedAt };
+  // `done` requires hook EVIDENCE: a hookless busy→idle transition never proves
+  // a turn finished rather than never starting. It also decays for free —
+  // hookstate.ts's 30-minute freshness gate nulls `hookState`, so an
+  // unacknowledged `done` falls back to `idle` instead of accumulating.
+  if (s.hookState === 'done') return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
+  return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
+}
+
 type RawObj = Record<string, unknown>;
 
 /** Thrown internally, caught at the boundary of `reviveFleetSession`, where it
@@ -625,17 +692,30 @@ const HOOK_STATES: readonly string[] = ['working', 'waiting', 'done'];
 // ABSENT and UNRECOGNISED are not the same claim, so they get different
 // answers, both enforced at the call site below.
 //
-// ABSENT degrades to `idle`. Every snapshot on disk the moment this field
-// ships is missing it — that is not a corrupt file, it is just version skew,
-// and rejecting it outright would discard the only degraded-mode data at
-// exactly the moment it is needed (`server.ts` serves this snapshot during a
+// ABSENT is DERIVED, by running `sessionBucket` over the record that was
+// revived alongside it. Every snapshot on disk the moment this field ships is
+// missing it — that is not a corrupt file, it is just version skew, and
+// rejecting it outright would discard the only degraded-mode data at exactly
+// the moment it is needed (`server.ts` serves this snapshot during a
 // fleet-host outage; `offline.ts` exists specifically to avoid an empty cold
-// start). `idle` is already `sessionBucket`'s own no-evidence rung, so this
-// is the same move `revivePr` makes landing an absent `phase` on
-// `'unchecked'` — except `bucket` has no member NAMED "unknown", so the
-// degrade target is chosen rather than declared; see `bucketSince` at the
-// call site, which is forced to `null` alongside it rather than carrying a
-// timestamp for a bucket the session was never recorded in.
+// start).
+//
+// It used to land flat on `idle`, and that contradicted the record it sat on
+// (whole-branch review, Important 3): a snapshot with `archivedAt` set and
+// `pr.phase === 'merged'` is a cleanup row by every other surface's reckoning,
+// and `ArchiveScreen` keys off `archivedAt` directly — so in exactly the
+// degraded mode this cache exists for, the archive screen would list rows the
+// bucket called `idle`, while attention and cleanup read empty. `bucket` is
+// THE authority for sections, counts and the row's state word (spec §1); an
+// authority that disagrees with its own record is worse than no field.
+// Deriving costs nothing: the archived / cleanup / dead / attention / working
+// rungs read `archivedAt`, `pr.phase`, `status`, `dialogPending` and
+// `hookState`, all of which the revived literal already holds.
+//
+// `bucketSince` still degrades to `null`, and that asymmetry is the honest
+// one: it is the single thing the ladder needs `hookUpdatedAt` for, and a
+// snapshot never carried it. A timestamp for an episode we cannot date is a
+// claim; the bucket is a reading of fields we have.
 //
 // UNRECOGNISED — a token PRESENT but not in this list, e.g. a future build's
 // retired or renamed bucket — rejects the whole snapshot instead, same stance
@@ -746,24 +826,17 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       throw new MalformedSnapshot('hookState');
     }
 
-    // See `BUCKETS`' own comment for the full reasoning — absent degrades,
-    // unrecognised rejects. `bucketSince` degrades WITH `bucket`, on the same
-    // branch: a leftover or absent timestamp must never survive paired with a
-    // bucket the session was never recorded as entering.
+    // See `BUCKETS`' own comment for the full reasoning — absent derives from
+    // the rest of this record, unrecognised rejects. Validated HERE, before the
+    // record is built, so an unrecognised token still rejects without the
+    // ladder ever running on it.
     const bucketRaw = optStr(o, 'bucket');
-    let bucket: SessionBucket;
-    let bucketSince: number | null;
-    if (bucketRaw === null) {
-      bucket = 'idle';
-      bucketSince = null;
-    } else if (BUCKETS.includes(bucketRaw)) {
-      bucket = bucketRaw as SessionBucket;
-      bucketSince = optNum(o, 'bucketSince');
-    } else {
-      throw new MalformedSnapshot('bucket');
-    }
+    if (bucketRaw !== null && !BUCKETS.includes(bucketRaw)) throw new MalformedSnapshot('bucket');
 
-    return {
+    // Everything except `bucket`/`bucketSince`, so the ladder can read the
+    // fields it needs off the SAME literal that ships — never off a second
+    // reading of `o`, which is how the two could drift apart.
+    const revived = {
       id: reqStr(o, 'id'),
       wrapper: reqStr(o, 'wrapper'),
       home: reqStr(o, 'home'),
@@ -787,8 +860,16 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
-      bucket,
-      bucketSince,
+    };
+
+    // A recorded bucket is taken as recorded, timestamp and all — the server
+    // that wrote it had `hookUpdatedAt` and we do not. An absent one is derived
+    // and dated `null`: the ladder's bucket needs nothing this record lacks,
+    // its `bucketSince` does.
+    return {
+      ...revived,
+      bucket: bucketRaw === null ? sessionBucket(revived, null).bucket : (bucketRaw as SessionBucket),
+      bucketSince: bucketRaw === null ? null : optNum(o, 'bucketSince'),
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;
@@ -1102,8 +1183,17 @@ export type SessionStreamMsg =
  *  pushes for it while any client says so. */
 export type SessionClientMsg = { type: 'visible'; visible: boolean };
 
-/** One notification the server actually fired. The log is a record of what was
- *  PUSHED, so it can never claim more than push did. */
+/** One notification the server DECIDED to raise: recorded after the presence
+ *  gate ("nothing fires for a session the operator is looking at"), before any
+ *  delivery is attempted, and never revised by what delivery did.
+ *
+ *  NOT a delivery receipt, and the difference is the point. `pushOne` records
+ *  unconditionally: `deps.push` is undefined whenever VAPID is unconfigured —
+ *  the gate that used to suppress recording in that case was removed
+ *  deliberately, because a catch-up log is exactly what a box with no push keys
+ *  needs — and even with push wired, `notify()` can fail or find no
+ *  subscriptions. A catch-up client must therefore read this as "what you would
+ *  have been told about while you were away", never as "what reached a device". */
 export interface NotifyEvent {
   seq: number; at: number;
   kind: 'ask' | 'done' | 'merged';

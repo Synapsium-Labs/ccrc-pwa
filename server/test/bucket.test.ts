@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { sessionBucket, type BucketInput } from '../src/bucket.js';
+// The ladder lives in `shared/` because `reviveFleetSession` is its second
+// producer — see its docstring, and fleetstate.test.ts's derivation suite.
+import { sessionBucket, type BucketInput } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
