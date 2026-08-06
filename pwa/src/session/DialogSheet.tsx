@@ -536,10 +536,22 @@ function EnvelopeSheet({
   // pane reads like "Yes" (the file's longstanding assumption, now asserted
   // rather than trusted); a question can have any number of options, so
   // every one of them has to line up by position.
+  // Task 7: a free-text question (`options: []`, the TUI's own "chat about
+  // this" shape at the envelope level) has nothing to correspond BY —
+  // `questionCorresponds`'s `every` over an empty array is vacuously true,
+  // which would read as "answerable" the moment ANY parsed dialog happened
+  // to be live, even one describing a wholly different question. There is
+  // nothing to tap either way (`first.options.map` below renders zero rows
+  // for it — no text input is added here; see the file header on why typing
+  // blind into a live menu is refused everywhere else too), so the only
+  // honest state is the same fail-visible terminal CTA an unmatched dialog
+  // already renders below. This guards the CALL SITE, not
+  // `questionCorresponds` itself — that function's own contract (every
+  // OPTION lines up by position) is unchanged.
   const canAnswer =
     'approval' in ask
       ? dialog !== null && dialog.parsed && /^yes/i.test(dialog.options[0]?.label ?? '')
-      : questionCorresponds(ask.questions[0]!, dialog);
+      : ask.questions[0]!.options.length > 0 && questionCorresponds(ask.questions[0]!, dialog);
 
   const close = (): void => {
     if (busy) return;

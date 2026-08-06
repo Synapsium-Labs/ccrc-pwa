@@ -243,32 +243,102 @@ describe('away from home', () => {
   });
 });
 
-describe('subagent chip', () => {
-  it('renders a chip with the count and a singular aria-label for one', () => {
+// Task 7: the passive `⑂ N` glyph became a disclosure — tap it to see WHICH
+// subagents and for how long, rather than only how many.
+describe('subagent disclosure', () => {
+  it('renders a collapsed toggle with the count and a singular aria-label for one', () => {
     render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
                         onOpen={() => {}} onActions={() => {}} />);
-    const chip = screen.getByLabelText('1 subagent');
-    expect(chip).toHaveTextContent('⑂ 1');
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    expect(toggle).toHaveTextContent('⑂ 1');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('pluralizes the aria-label for more than one', () => {
     render(<SessionLine session={s({
       subagents: [{ name: 'a', startedAt: 1 }, { name: 'b', startedAt: 2 }],
     })} onOpen={() => {}} onActions={() => {}} />);
-    const chip = screen.getByLabelText('2 subagents');
-    expect(chip).toHaveTextContent('⑂ 2');
+    expect(screen.getByRole('button', { name: '2 subagents' })).toHaveTextContent('⑂ 2');
   });
 
-  it('renders nothing when subagents is null', () => {
-    const { container } = render(
-      <SessionLine session={s({ subagents: null })} onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-subagents')).not.toBeInTheDocument();
+  it('renders no disclosure when subagents is null — no fresh hook data', () => {
+    render(<SessionLine session={s({ subagents: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
 
-  it('renders nothing when subagents is empty', () => {
-    const { container } = render(
-      <SessionLine session={s({ subagents: [] })} onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.sess-subagents')).not.toBeInTheDocument();
+  // `[]` is a MEASUREMENT — fresh hook data, nothing running — and `null` is
+  // no hook data. Both render nothing; neither is an error.
+  it('shows no subagent disclosure when the hook reported an empty set', () => {
+    render(<SessionLine session={s({ subagents: [] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
+  });
+
+  it('expands the subagent tally into named rows with elapsed time', async () => {
+    const now = Date.now();
+    render(<SessionLine session={s({ bucket: 'working',
+      subagents: [{ name: 'code-reviewer', startedAt: now - 65_000 }] })}
+      onOpen={() => {}} onActions={() => {}} />);
+
+    expect(screen.queryByText('code-reviewer')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(screen.getByText('code-reviewer')).toBeTruthy();
+    expect(screen.getByText(/1m/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /1 subagent/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('lists every subagent, not just the first', async () => {
+    const now = Date.now();
+    render(<SessionLine session={s({
+      subagents: [
+        { name: 'code-reviewer', startedAt: now - 65_000 },
+        { name: 'test-runner', startedAt: now - 5_000 },
+      ],
+    })} onOpen={() => {}} onActions={() => {}} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /2 subagents/ }));
+    expect(screen.getByText('code-reviewer')).toBeInTheDocument();
+    expect(screen.getByText('test-runner')).toBeInTheDocument();
+  });
+
+  // No invented state: Claude's SubagentStart/Stop hooks give a name and a
+  // start time and nothing else, so an Orca-style working/blocked glyph
+  // would be a claim this row cannot source — a row is exactly two children,
+  // the name and the elapsed time, never a third.
+  it('shows no invented state — a name and an elapsed time, nothing else', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    const row = screen.getByText('reviewer').closest('.sess-subagent-row')!;
+    expect(row.children).toHaveLength(2);
+  });
+
+  // The toggle is nested inside `.sess-open` (this row's own tap target) as
+  // a `role="button"` span, not a real `<button>` — a `<button>` cannot
+  // contain another one. Without `stopPropagation` a tap here would bubble
+  // into `.sess-open`'s own `onClick` and navigate to the session too.
+  it('does not open the session when the toggle is tapped', async () => {
+    const onOpen = vi.fn();
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+                        onOpen={onOpen} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('collapses again on a second tap', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: /1 subagent/ });
+    await userEvent.click(toggle);
+    expect(screen.getByText('reviewer')).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(screen.queryByText('reviewer')).toBeNull();
+  });
+
+  it('never shows the disclosure on a dead session, even with stale hook data', () => {
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead',
+      subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
 });
 

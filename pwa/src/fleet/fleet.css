@@ -683,6 +683,7 @@
 .sess-line--active .sess-acct,
 .sess-line--active .sess-acct-away,
 .sess-line--active .sess-ask,
+.sess-line--active .sess-subagent-row,
 .sess-line--active .sess-meta > *:not(:first-child)::before {
   color: var(--edge-strong);
 }
@@ -867,8 +868,47 @@
 }
 
 /* The hook's last-reported subagent count — same quiet register as .sess-tally,
-   no colour of its own (inherits .sess-meta's ink-secondary). */
+   no colour of its own (inherits .sess-meta's ink-secondary). Task 7: a real
+   toggle now (SessionLine.tsx's own comment explains the role="button" span
+   instead of a nested <button>), so it needs a pointer cursor and its own
+   focus ring — the latter comes free from base.css's blanket
+   `:focus-visible`, since that selector has no element qualifier. */
 .sess-subagents {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+  cursor: pointer;
+}
+
+/* The disclosure's own rows — SessionLine.tsx's own comment above the toggle
+   explains why this has to be a sibling LINE inside .sess-open's flex
+   column rather than living inside .sess-meta the tally used to sit in.
+   Unlike .sess-tally/.sess-cleanup-fact/.sess-subagents above, THIS rule
+   sets its own colour rather than inheriting .sess-meta's (it is no longer
+   a descendant of it) — same shape as .sess-ask below, and it needs the
+   matching .sess-line--active override for the same reason that one does. */
+.sess-subagent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+.sess-subagent-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-left: var(--sp-4);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+.sess-subagent-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sess-subagent-elapsed {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;

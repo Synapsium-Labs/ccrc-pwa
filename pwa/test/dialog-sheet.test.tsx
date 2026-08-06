@@ -628,6 +628,52 @@ describe('DialogSheet (hook envelope)', () => {
     expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
   });
 
+  // Task 7 (the "preview" half of I2): each option's description has been in
+  // the envelope since Build 1 — this pins that it actually reaches the
+  // screen, under its own label, for every option (not just the one under
+  // test above).
+  it('renders each option description under its label', () => {
+    renderWithAsk(QUESTION_ASK, matchingDialog());
+
+    const canary = screen.getByRole('button', { name: /Canary first/ });
+    expect(canary.querySelector('.opt-desc')).toHaveTextContent('Ship to 5% for an hour.');
+    const bigBang = screen.getByRole('button', { name: /Big bang/ });
+    expect(bigBang.querySelector('.opt-desc')).toHaveTextContent('Ship to everyone at once.');
+  });
+
+  // Task 7: a question whose `options` array is empty is free text (the
+  // envelope's own shape for the TUI's "chat about this" escape hatch) — no
+  // rows to tap, and no text input either (typing blind into a live menu is
+  // the send-race with worse consequences; the terminal is the only honest
+  // way to answer one). This also pins the fix to `canAnswer`: without the
+  // `options.length > 0` guard, `questionCorresponds`'s `every` over an
+  // empty array is vacuously true whenever ANY parsed dialog is live, which
+  // would hide the CTA with nothing tappable underneath it — a dead end
+  // indistinguishable from "answered".
+  it('offers no rows for a free-text question, only the terminal CTA', () => {
+    const FREE_TEXT_ASK: HookAsk = {
+      questions: [{ question: 'Anything else to add?', options: [] }],
+    };
+    const onOpenTerminal = vi.fn();
+    const store = makeStore();
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog: matchingDialog() });
+      store.getState().apply({ type: 'ask', ask: FREE_TEXT_ASK, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />
+        <ToastHost />
+      </>,
+    );
+
+    expect(screen.getByText('Anything else to add?')).toBeInTheDocument();
+    expect(document.querySelectorAll('.opts > .opt')).toHaveLength(0);
+    const cta = screen.getByRole('button', { name: 'Open terminal to answer' });
+    fireEvent.click(cta);
+    expect(onOpenTerminal).toHaveBeenCalledOnce();
+  });
+
   it('renders a multiSelect question\'s options as plain rows too — v1 has no multi-select UI, the send path is one digit either way', () => {
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderWithAsk(

@@ -17,7 +17,7 @@
 //
 // There is no `inGroup` prop. A line is always inside a project card now, so
 // the conditional that made SessionCard mean two different things is gone.
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { FleetSession, SessionBucket } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -45,6 +45,19 @@ const WORD: Record<SessionBucket, string> = {
 // the transition entirely. The stamp is never cleared on navigation and these
 // nodes are key-stable, so the previous holder has to be released here.
 let stamped: HTMLElement | null = null;
+
+/** '<1m' | '5m' | '3h' | '2d' since a subagent's hook-reported `startedAt`.
+ *  Same shape as PrKeycap's `rel()` (a PR's age) — reimplemented locally for
+ *  the same reason that file gives: there is no shared time-formatting
+ *  module yet to import from. Unlike `rel()`, this never returns null: a
+ *  subagent row always shows SOME elapsed time, even a fresh one. */
+function subagentElapsed(startedAt: number): string {
+  const m = Math.floor(Math.max(0, Date.now() - startedAt) / 60_000);
+  if (m < 1) return '<1m';
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
 
 export function SessionLine({
   session,
@@ -81,6 +94,17 @@ export function SessionLine({
   const five = session.limits?.five ?? null;
   const seven = session.limits?.seven ?? null;
   const critical = !dead && ((five !== null && five > CRITICAL) || (seven !== null && seven > CRITICAL));
+
+  // Dead sessions stay silent about subagents too, same reasoning as limits
+  // above: nothing is running, so a hook-reported roster from before the
+  // exit would describe work that no longer exists. `null` is no fresh hook
+  // data (same discipline as `hookState`); `[]` is a measurement — fresh
+  // data, nothing running — so both leave nothing to disclose below. Left as
+  // `FleetSession['subagents'] | null` rather than hoisted into a plain
+  // boolean so every read of it stays a real `!== null` narrowing TS can
+  // verify, not a second, disconnected flag that could drift from it.
+  const subagentList = dead ? null : session.subagents;
+  const [subagentsOpen, setSubagentsOpen] = useState(false);
 
   // The tapped label is the shared element of the line->chat view transition:
   // stamping the name here (only on the line being opened) pairs it with the
@@ -153,16 +177,39 @@ export function SessionLine({
             </span>
           )}
 
-          {/* Subagents the hook last reported running. `null` is no fresh hook
-              data (same discipline as `hookState`); `[]` is a measurement —
-              fresh data, nothing running — so both render nothing here. */}
-          {!dead && session.subagents !== null && session.subagents.length > 0 && (
+          {/* The subagent tally, now a disclosure — see `subagentList` above
+              for the null-vs-empty-array discipline. Tapping it opens
+              `.sess-subagent-list` below with each one's name and elapsed
+              time; nothing more, because that's all Claude's own
+              SubagentStart/Stop hooks ever hand the server (no
+              working/blocked signal to source an Orca-style glyph from —
+              StatusDot's dot vocabulary has no counterpart for a subagent
+              row). This has to stay a `role="button"` SPAN, not a real
+              `<button>`: `.sess-open` (this whole row's own tap target) is
+              already a `<button>`, and a `<button>` cannot contain another
+              one — `.sess-subagent-list` below is this constraint's other
+              half. `stopPropagation` on both handlers is load-bearing:
+              without it, a tap here would also bubble into `.sess-open`'s
+              `onClick` and navigate to the session underneath it. */}
+          {subagentList !== null && subagentList.length > 0 && (
             <span
               className="sess-subagents"
-              role="img"
-              aria-label={`${session.subagents.length} subagent${session.subagents.length === 1 ? '' : 's'}`}
+              role="button"
+              tabIndex={0}
+              aria-expanded={subagentsOpen}
+              aria-label={`${subagentList.length} subagent${subagentList.length === 1 ? '' : 's'}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSubagentsOpen((o) => !o);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                e.stopPropagation();
+                setSubagentsOpen((o) => !o);
+              }}
             >
-              ⑂ {session.subagents.length}
+              ⑂ {subagentList.length}
             </span>
           )}
 
@@ -198,6 +245,25 @@ export function SessionLine({
             role, one step further (.proj-dir's ink-tertiary convention). */}
         {!dead && session.hookState === 'waiting' && session.askSummary !== null && session.askSummary !== '' && (
           <span className="sess-ask">{session.askSummary}</span>
+        )}
+
+        {/* The disclosure's own content, open only once the toggle above has
+            been tapped. Name + elapsed time, nothing else — see the toggle's
+            own comment for why there is no third field to add. Plain
+            `role="list"` spans, not `<ul>/<li>`: those are flow content, and
+            a `<button>` (`.sess-open`, still the ancestor here) permits only
+            phrasing content — the same constraint the toggle documents for
+            interactive content, one category over. The hook itself caps the
+            set at 32; nothing here re-caps it. */}
+        {subagentsOpen && subagentList !== null && subagentList.length > 0 && (
+          <span className="sess-subagent-list" role="list">
+            {subagentList.map((sa) => (
+              <span key={`${sa.name}-${sa.startedAt}`} className="sess-subagent-row" role="listitem">
+                <span className="sess-subagent-name">{sa.name}</span>
+                <span className="sess-subagent-elapsed">{subagentElapsed(sa.startedAt)}</span>
+              </span>
+            ))}
+          </span>
         )}
       </button>
 
