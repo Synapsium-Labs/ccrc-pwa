@@ -10,6 +10,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { Presence } from '../src/presence.js';
+import { askKey } from '../src/askkey.js';
 import type { PushPayload } from '../src/push.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
@@ -55,7 +56,7 @@ function seedSessions(home: string, specs: string[]): Map<string, Seeded> {
  *  pid (parsed off the `cc-<id>` target tmux itself builds), `capture-pane`
  *  a plain prompt — never a menu, so dialog detection stays inert and only
  *  the busy→idle edge under test can fire a push. */
-function runnerFor(info: Map<string, Seeded>): Runner {
+function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
   return async (_cmd, args) => {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') {
@@ -64,10 +65,31 @@ function runnerFor(info: Map<string, Seeded>): Runner {
       const pid = info.get(id)?.pid;
       return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: 'ready\n❯ \n', stderr: '' };
+    if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
 }
+
+/** A pane `paneState` reads as a live menu, so `detectDialogs` raises an ask
+ *  push. The default above is a bare prompt precisely so the busy→idle tests
+ *  can't have an ask fire underneath them. */
+const MENU_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\n  3. Green\nEnter to select\n';
+
+/**
+ * Write one `<id>.hookstate.json` the way `session-hook.sh` does, with the
+ * `sessionId` `seedSessions` gave the registry entry — `readHookState`'s
+ * identity gate compares the two, so a mismatch here reads as "a different
+ * session wrote this" and the envelope is correctly ignored.
+ */
+function writeHookState(home: string, id: string, ask: unknown, state = 'waiting'): void {
+  writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+    v: 1, state, sessionId: `u-${id}`, pid: 1, updatedAt: Date.now(), ask, subagents: [],
+  }));
+}
+
+const oneQuestion = (options: { label: string }[]) => ({
+  questions: [{ question: 'Which colour?', header: 'Colour', multiSelect: false, options }],
+});
 
 /**
  * A `FleetWatcher` over a throwaway fixture home carrying one session per
@@ -80,17 +102,19 @@ function watcher(opts: {
   presence?: Presence;
   notifyLog?: NotifyLog;
   sessions: string[];
-}): { tick: () => Promise<void>; markIdle: (id: string) => void } {
+  pane?: string;
+}): { tick: () => Promise<void>; markIdle: (id: string) => void; home: string } {
   const home = mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
   const deps = {
-    ...testDeps(home, runnerFor(info)),
+    ...testDeps(home, runnerFor(info, opts.pane)),
     push: opts.push as never,
     presence: opts.presence,
     notifyLog: opts.notifyLog,
   };
   const w = new FleetWatcher(deps, new Bus(), 10_000);
   return {
+    home,
     tick: () => w.tick(),
     markIdle: (id: string) => {
       const s = info.get(id);
@@ -166,5 +190,95 @@ describe('push copy discipline — project context, presence suppression, log fi
     // Suppressed by presence, so the catch-up must not claim it happened.
     expect(sent).toEqual([]);
     expect(log.seq).toBe(0);
+  });
+});
+
+describe('ask notifications carry actions only where the route would accept them', () => {
+  /** Raise a genuine ask push: prime on a bare prompt (so `dialogIds` is
+   *  empty), then tick with the menu up, which is the appear-edge. */
+  async function raiseAsk(ask: unknown, opts: { state?: string } = {}): Promise<PushPayload[]> {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    let pane = 'ready\n❯ \n';
+    const home = mkTmp('ccrc-');
+    const info = seedSessions(home, ['ccrc-pwa/cc-a']);
+    const runner: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${info.get('cc-a')!.pid}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const w = new FleetWatcher({ ...testDeps(home, runner), push: push as never }, new Bus(), 10_000);
+    await w.tick();                                  // priming: no menu, notify=false
+    if (ask !== undefined) writeHookState(home, 'cc-a', ask, opts.state);
+    pane = MENU_PANE;
+    await w.tick();                                  // the menu appears → one ask push
+    return sent;
+  }
+
+  it('attaches the first two option labels as actions, each carrying the key', async () => {
+    const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }, { label: 'Green' }]);
+    const sent = await raiseAsk(ask);
+    expect(sent).toHaveLength(1);
+    const key = askKey(ask as never)!;
+    expect(sent[0]!.actions).toEqual([
+      { action: `ask:${key}:0`, title: 'Red' },
+      { action: `ask:${key}:1`, title: 'Blue' },   // exactly two — the Android ceiling
+    ]);
+  });
+
+  it('attaches NO actions to a multi-question envelope — the route refuses those', async () => {
+    const sent = await raiseAsk({
+      questions: [
+        { question: 'First?', options: [{ label: 'A' }] },
+        { question: 'Second?', options: [{ label: 'B' }] },
+      ],
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.actions).toBeUndefined();
+  });
+
+  it('attaches NO actions to an approval envelope — it has no key at all', async () => {
+    const sent = await raiseAsk({ approval: { tool: 'Bash', summary: 'rm -rf /tmp/x' } });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.actions).toBeUndefined();
+  });
+
+  it('attaches NO actions when the ask came from the pane alone, with no hook envelope', async () => {
+    const sent = await raiseAsk(undefined);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.actions).toBeUndefined();
+  });
+
+  it('attaches NO actions when the hook is not waiting', async () => {
+    const sent = await raiseAsk(oneQuestion([{ label: 'Red' }]), { state: 'working' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.actions).toBeUndefined();
+  });
+
+  it('attaches NO actions to a free-text ask — there is no index to send', async () => {
+    const sent = await raiseAsk(oneQuestion([]));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.actions).toBeUndefined();
+  });
+
+  it('drops a blank label rather than shipping an unreadable button', async () => {
+    const ask = oneQuestion([{ label: '   ' }, { label: 'Blue' }]);
+    const sent = await raiseAsk(ask);
+    const key = askKey(ask as never)!;
+    // Index 1 keeps its own index — positions never renumber, because the index
+    // travels inside the action id.
+    expect(sent[0]!.actions).toEqual([{ action: `ask:${key}:1`, title: 'Blue' }]);
+  });
+
+  it('reads THIS tick\'s hook state, not last tick\'s', async () => {
+    // The ordering pin. `sweepHookStates` runs before `detectDialogs` in
+    // `tick()`; reverse them and the envelope written in the same tick as the
+    // menu is invisible, so this push would arrive with no actions and whether
+    // a question was answerable from the phone would depend on how the 2-second
+    // poll happened to straddle the hook's write.
+    const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
+    const sent = await raiseAsk(ask);
+    expect(sent[0]!.actions).toHaveLength(2);
   });
 });

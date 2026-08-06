@@ -10,6 +10,7 @@ import { CCD_ARGV, verbSupported } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
+import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type { NotifyEvent, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
@@ -171,8 +172,15 @@ export class FleetWatcher {
     // sweepTasks/sweepPr below are NOT included: both throttle to their own
     // slower clock and skip the read entirely on most ticks already.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
-    const pending = await this.detectDialogs(this.primed, records);
+    // hook states FIRST, dialogs second — the order is load-bearing and there
+    // is a test on it. `detectDialogs` composes the ask push, and the actions
+    // it attaches come from `this.hookStates`; with the old ordering that map
+    // was always one tick behind, so whether a question arrived answerable
+    // from the notification depended on how the 2-second poll happened to
+    // straddle the hook's write. Sweeping first costs nothing (both lanes
+    // share the one `records` read below) and makes it deterministic.
     await this.sweepHookStates(records);
+    const pending = await this.detectDialogs(this.primed, records);
     await this.sweepTasks();
     // NEVER awaited: it shells out over the network and `gh` has no
     // --timeout, so awaiting it would stall the dialog detector and the
@@ -489,9 +497,19 @@ export class FleetWatcher {
             // `assembleFleet` (see `tick()`), so the current fleet's project
             // set isn't computed yet; it reads last tick's, same reasoning as
             // `archiveMerged` above.
+            // The pane is what raises this push (`kind: 'ask'` has exactly one
+            // producer, and it is this scrape), but the ANSWERABLE part comes
+            // from the hook envelope: only it carries the option labels and the
+            // content key `answerAsk` gates on. `askActions` returns null
+            // wherever that route would refuse, so a notification never offers
+            // a button the server has already decided it will not honour.
+            // `this.hookStates` is this tick's — see the ordering note in
+            // `tick()`.
+            const actions = askActions(this.hookStates.get(r.id) ?? null);
             this.pushOne({
               kind: 'ask', sessionId: r.id, project: r.project,
               title: '❓ Question', body: dialog.title || 'Claude has a question',
+              ...(actions ? { actions } : {}),
             }, this.activeProjects);
           }
         }
