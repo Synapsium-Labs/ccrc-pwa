@@ -333,12 +333,20 @@ no PTY, capped at the hook's own 32.
 ## 7. Carried from Build 1
 
 - **I2 — free-text / preview restoration in `DialogSheet`.** Decision: the
-  envelope render shows each option's `description` under its label (the
-  preview Orca has and our scrape never had — it is in the envelope already and
-  we were dropping it). A question with **no** options is free-text: the sheet
-  renders the question, no rows, and the "Open terminal to answer" CTA, which
-  is the honest affordance — typing free text blind is the send-race with worse
-  consequences.
+  envelope render shows each option's `description` under its label, and a
+  question with **no** options is free-text — the sheet renders the question, no
+  rows, and the "Open terminal to answer" CTA, which is the honest affordance:
+  typing free text blind is the send-race with worse consequences.
+
+  **Corrected 2026-08-06, after the build.** This item originally said the
+  descriptions were "in the envelope already and we were dropping it". That was
+  wrong: `EnvelopeSheet` already rendered `o.description` before this build
+  started (verified at `e1a6b0b`), so **the preview half of I2 needed no work
+  and none was written** — only a test was added for it. The free-text half was
+  the real gap and is the only production change this item produced. Recorded
+  rather than quietly edited, because a spec that claims credit for behaviour it
+  did not build is the same class of defect as a comment that asserts more than
+  its code proves — which this build's reviews caught six times.
 - **The blind-digit route** is §4.1 above; multi-select is its acceptance test.
 
 ---
