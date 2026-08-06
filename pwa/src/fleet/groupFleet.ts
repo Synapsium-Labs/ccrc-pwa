@@ -25,9 +25,17 @@ export interface FleetGroup {
    *  to end — the two facts cannot drift apart because there is only one of
    *  them now. */
   busy: number;
-  /** How many LIVE members this device has not yet acknowledged —
-   *  `isUnseen` (pwa/src/lib/seen.ts) run over `sessions`, the identical
-   *  function every other unseen surface (a row's own badge, the bell) reads.
+  /** How many LIVE members this device has not yet acknowledged — `isUnseen`
+   *  (pwa/src/lib/seen.ts) run over `sessions`.
+   *
+   *  NOTHING RENDERS THIS YET. It is part of the group shape so a per-project
+   *  badge has a count to read, and it is pinned by group-fleet.test.ts, but
+   *  the only unseen surface that ships today is the fleet screen's bucket
+   *  bar — and that one cannot use this field, because a bucket spans projects
+   *  while a group is one project. What it does buy is the rule: when a row
+   *  badge or a bell counter arrives, it counts with `isUnseen` like this
+   *  does, rather than re-implementing the comparison (spec §2, "one writer").
+   *
    *  Scoped to `live` for the same reason `attention`/`busy` are: an archived
    *  member (including a `cleanup`-bucket one) is folded into `archived`
    *  below, not counted here. */

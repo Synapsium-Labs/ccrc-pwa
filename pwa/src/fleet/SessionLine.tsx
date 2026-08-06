@@ -29,12 +29,14 @@ import './fleet.css';
 /** Routing policy calls a window critical above this. */
 const CRITICAL = 75;
 
-/** The state word for every bucket — the ONLY place this vocabulary is
- *  spelled out. `StatusDot` has its own glyph/label table (the two-glyph
- *  rule's other half); this is the mono word beside the dot. Exported so
- *  `FleetScreen`'s bucket-section headers use the identical words rather
- *  than inventing a second vocabulary for the same seven buckets. */
-export const WORD: Record<SessionBucket, string> = {
+/** The ROW's state word for every bucket — the mono word beside the dot, and
+ *  the only place this particular vocabulary is spelled out. Deliberately not
+ *  exported: it has no reader outside this file, and an exported table invites
+ *  a caller to retitle a surface it does not actually feed. `StatusDot` has
+ *  its own glyph/label table (the two-glyph rule's other half) and
+ *  `FleetScreen` its own section nouns — three vocabularies over one field,
+ *  none of them deciding which bucket a session is in. */
+const WORD: Record<SessionBucket, string> = {
   attention: 'waiting', working: 'working', done: 'done', idle: 'idle',
   cleanup: 'merged', archived: 'archived', dead: 'exited',
 };

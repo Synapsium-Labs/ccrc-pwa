@@ -42,14 +42,70 @@ export function loadAcks(): Acks {
   }
 }
 
-function save(acks: Acks): Acks {
-  try { localStorage.setItem(KEY, JSON.stringify(acks)); } catch { /* private mode / quota */ }
-  return acks;
+// — the map as a subscribable value —
+//
+// localStorage is a write-through log, not a change feed: writing it notifies
+// nobody. Every ack therefore has to be PUBLISHED, or a surface that read the
+// map once keeps drawing the map it read. That is not hypothetical — it is the
+// shipped path: `SessionScreen` acks on mount (`/s/<id>`), while `FleetScreen`
+// stays mounted for the whole app lifetime (app.tsx renders it as the desktop
+// sidebar) and the server suppresses a fleet broadcast when nothing changed
+// (watch.ts's `lastJson` guard). Without this, opening a merged-and-archived
+// session — whose wire record will never change again — left its own unseen
+// badge and "Mark all seen" on screen until an unrelated session moved or the
+// page reloaded.
+//
+// One snapshot object, swapped only when the map's CONTENTS change, so
+// `useSyncExternalStore` can compare identities: re-publishing an equal map
+// (every `prune` that drops nothing, i.e. most of them) must not re-render.
+let snapshot: Acks | null = null;
+const listeners = new Set<() => void>();
+
+function same(a: Acks, b: Acks): boolean {
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => a[k] === b[k]);
 }
 
-/** THE comparison. Every surface — bucket header counts, row badge, the bell —
- *  calls this one function; a second implementation is the drift it exists to
- *  end. */
+/** Adopt `next` as the current map and wake every subscriber — unless it says
+ *  exactly what the current one already does, in which case the existing
+ *  object identity survives untouched. Never writes storage; `save` does. */
+function publish(next: Acks): Acks {
+  if (snapshot !== null && same(snapshot, next)) return snapshot;
+  snapshot = next;
+  // Copied first: a listener that unsubscribes while being notified (a
+  // component unmounting on the render this ack causes) must not shorten the
+  // set mid-iteration.
+  for (const fn of [...listeners]) fn();
+  return snapshot;
+}
+
+/** THE map every rendering surface reads, with a stable identity between
+ *  changes — pair it with `subscribeAcks` in `useSyncExternalStore`. Reads
+ *  storage exactly once, on first use; after that this module is the only
+ *  writer in the document, so the snapshot cannot go stale behind it. */
+export function acksSnapshot(): Acks {
+  if (snapshot === null) snapshot = loadAcks();
+  return snapshot;
+}
+
+/** Subscribe to ack changes. Returns the unsubscribe. */
+export function subscribeAcks(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+function save(acks: Acks): Acks {
+  try { localStorage.setItem(KEY, JSON.stringify(acks)); } catch { /* private mode / quota */ }
+  return publish(acks);
+}
+
+/** THE comparison. Every surface that badges unseen calls this one function —
+ *  today that is the fleet screen's bucket-bar counts and `groupFleet`'s
+ *  per-project `unseen`; a row badge or a bell counter, when either arrives,
+ *  calls it too. A second implementation is the drift it exists to end. */
 export function isUnseen(s: FleetSession, acks: Acks): boolean {
   if (!BADGED.has(s.bucket)) return false;
   if (s.bucketSince === null) return false;
@@ -89,8 +145,12 @@ export function ackAll(sessions: readonly FleetSession[], at: number): Acks {
  */
 export function prune(live: ReadonlySet<string>): Acks {
   const acks = loadAcks();
-  if (live.size === 0) return acks;
+  if (live.size === 0) return publish(acks);
   let changed = false;
   for (const id of Object.keys(acks)) if (!live.has(id)) { delete acks[id]; changed = true; }
-  return changed ? save(acks) : acks;
+  // `publish`, not a bare return, on the unchanged path too: this runs on every
+  // fleet snapshot, so it is also the moment a map written by another tab is
+  // adopted. It costs nothing when the map is unchanged — `publish` keeps the
+  // existing identity — and it never persists on this path.
+  return changed ? save(acks) : publish(acks);
 }

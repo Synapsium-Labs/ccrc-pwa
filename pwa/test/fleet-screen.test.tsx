@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
-import { loadAcks } from '../src/lib/seen';
+import { ack, loadAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
@@ -850,5 +850,75 @@ describe('AccountsStrip', () => {
     // reset countdown rendered ("2h" for the 5h window)
     expect(screen.getByText(/↻\s*2h/)).toBeInTheDocument();
     vi.restoreAllMocks();
+  });
+});
+
+// — the head count, and acks arriving from another screen —
+//
+// Both are the same bug in two places: a second answer to a question the wire
+// already answers, and a first answer that never reaches the screen.
+describe('the head count', () => {
+  it('reads "waiting" from the bucket, so it cannot contradict the chip below it', () => {
+    // A hook wrote `waiting`, then the tmux session was killed: fleet.ts still
+    // ORs the stale hook state into `dialogPending`, while the server's bucket
+    // ladder checks `status === 'dead'` first. Three surfaces on one screen —
+    // this head, the bucket chip, the row — must give ONE answer.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true, bucket: 'dead' })],
+    });
+
+    expect(screen.getByText('1 session')).toBeInTheDocument(); // not '1 session · 1 waiting'
+    expect(screen.getByText('Dead')).toBeInTheDocument();
+    expect(screen.getByText('exited')).toBeInTheDocument();
+    expect(screen.queryByText(/waiting/)).not.toBeInTheDocument();
+  });
+
+  it('still says how many are waiting when the server says any are', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'attention' }),
+        session({ id: 'b', project: 'beta', bucket: 'idle' }),
+      ],
+    });
+    expect(screen.getByText('2 sessions · 1 waiting')).toBeInTheDocument();
+  });
+});
+
+describe('an ack written by another screen', () => {
+  it('clears this screen\'s badge with no new fleet snapshot', () => {
+    // THE shipped path: SessionScreen acks on mount (`/s/<id>`), this screen is
+    // never unmounted (app.tsx keeps it as the desktop sidebar), and a fleet
+    // that has not changed emits no snapshot (watch.ts's lastJson guard) — so
+    // nothing here re-reads localStorage. A merged-and-archived session's wire
+    // record never changes again, so its badge used to survive until a reload.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({
+        id: 'a', project: 'alpha', bucket: 'cleanup',
+        bucketSince: Date.now() - MIN, archivedAt: Date.now() - MIN,
+      })],
+    });
+
+    const head = (): HTMLElement => screen.getByText('Cleanup').closest('section')!;
+    expect(within(head()).getByLabelText('1 unseen')).toBeInTheDocument();
+
+    // Exactly what SessionScreen's mount effect calls — same module, other screen.
+    act(() => {
+      ack('a', Date.now());
+    });
+
+    expect(within(head()).queryByLabelText(/unseen/)).not.toBeInTheDocument();
+    expect(within(head()).queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+    // The section itself stays: the session is still in the cleanup bucket,
+    // it is only no longer NEW.
+    expect(within(head()).getByText('1')).toBeInTheDocument();
   });
 });

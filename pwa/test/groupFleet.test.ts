@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { groupFleet } from '../src/fleet/groupFleet';
 import type { FleetSession } from '../../shared/api';
 
@@ -119,16 +121,33 @@ describe('groupFleet', () => {
     // Server-side, `sessionBucket` (shared/api.ts) checks `status === 'dead'`
     // before it ever looks at `dialogPending`, so a dead session's bucket can
     // never be `attention` — pinned there (server/test/bucket.test.ts), not
-    // here. `dialogPending: true` is left on this fixture on purpose, as the
-    // thing a stale or buggy PRODUCER might still send: groupFleet must not
-    // independently notice it and override the bucket the server sent.
-    // A group whose only dialogPending member is dead must report attention: false,
-    // so the screen does not highlight an already-closed session.
+    // here. A group whose only dialogPending member is dead must report
+    // attention: false, so the screen does not highlight an already-closed
+    // session.
+    //
+    // This fixture proves only THAT, and says so: being dead, it also scores
+    // false under a GUARDED re-derivation (`status !== 'dead' && dialogPending`),
+    // so it cannot see a second writer coming back. The live fixture below is
+    // the one that can.
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true }),
     ]);
     expect(g).toHaveLength(1);
     expect(g[0]!.attention).toBe(false);
+  });
+
+  it('does not re-derive attention from a LIVE member\'s dialogPending', () => {
+    // The shape a restored client-side derivation would light up, and the one
+    // no other fixture in this repo had: not dead, not archived, dialogPending
+    // true — and filed `working` by the server, which had the same field in
+    // hand and a whole ladder of evidence this function does not (shared/
+    // api.ts's `sessionBucket`). `busy` counts it for the same reason: the
+    // bucket is the entire answer, so a session cannot be both.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', status: 'busy', dialogPending: true, bucket: 'working' }),
+    ])[0]!;
+    expect(g.attention).toBe(false);
+    expect(g.busy).toBe(1);
   });
 });
 
@@ -174,7 +193,15 @@ describe('archived rows', () => {
     // computed over the whole membership (archived included), the mismatch
     // would read as disagreement (pin: null). Excluding the archived row
     // leaves demo-a as the pin's only voter.
-    const busyArchived = { ...at('demo-b', 1785300000), status: 'busy' as const, dialogPending: true, home: 'claude2' };
+    //
+    // The archived row carries `bucket: 'attention'` (with the dialogPending
+    // that would have produced it), not the fixture's default `idle`: an idle
+    // row is excluded from `attention` by its bucket alone, whatever the
+    // scoping, so it could not tell a `live` filter from a `members` one.
+    const busyArchived = {
+      ...at('demo-b', 1785300000), status: 'busy' as const, dialogPending: true,
+      bucket: 'attention' as const, home: 'claude2',
+    };
     const [g] = groupFleet([{ ...at('demo-a', null), home: 'claude' }, busyArchived]);
     expect(g!.busy).toBe(0);
     expect(g!.attention).toBe(false);
@@ -190,14 +217,51 @@ describe('archived rows', () => {
     expect(g!.pin).toBe('claude-corp');
   });
 
-  it('excludes a NOT-waiting busy archived row from the busy count', () => {
-    // The test above uses an archived row with dialogPending: true, which
-    // the `!m.dialogPending` clause excludes from `busy` regardless of
-    // whether it is scoped to `live` or the whole membership — it cannot by
-    // itself prove `busy` is scoped to `live`. This row is busy and NOT
-    // dialogPending, so a `members.filter` regression would count it.
-    const busyArchived = { ...at('demo-b', 1785300000), status: 'busy' as const };
+  it('excludes a working-bucket archived row from the busy count', () => {
+    // The test above uses an archived row the server filed `attention`, which
+    // is excluded from `busy` by its bucket regardless of whether the filter
+    // is scoped to `live` or to the whole membership — it cannot by itself
+    // prove `busy` is scoped to `live`. This row's bucket IS `working`, so a
+    // `members.filter` regression would count it.
+    const busyArchived = {
+      ...at('demo-b', 1785300000), status: 'busy' as const, bucket: 'working' as const,
+    };
     const [g] = groupFleet([at('demo-a', null), busyArchived]);
     expect(g!.busy).toBe(0);
+  });
+});
+
+// The `unseen` doc named two readers of `isUnseen` that do not exist — a row
+// badge (SessionLine has never imported seen.ts) and the bell (NotificationBell
+// is a Web-Push on/off toggle with no watermark notion at all). A reader
+// adding the row badge later would have believed it was already shipped. Same
+// check style as seen.test.ts's rationale block: a comment cannot be verified
+// by rendering, so it is verified by reading.
+describe('the unseen field\'s doc', () => {
+  const srcDir = path.join(import.meta.dirname, '..', 'src');
+  const src = readFileSync(path.join(srcDir, 'fleet', 'groupFleet.ts'), 'utf8');
+  // The doc block immediately above `unseen: number`, gutters stripped and
+  // whitespace collapsed, so a claim cannot hide by being re-wrapped.
+  const doc = /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*unseen: number;/
+    .exec(src)![1]!
+    .replace(/^[ \t]*\*[ \t]?/gm, '')
+    .replace(/\s+/g, ' ');
+
+  /** Surfaces the doc might claim, and the file each one would live in. */
+  const SURFACES = [
+    { claim: /row'?s own badge/, file: path.join('fleet', 'SessionLine.tsx') },
+    { claim: /the bell/, file: path.join('fleet', 'NotificationBell.tsx') },
+  ];
+
+  it('names only surfaces that actually read isUnseen', () => {
+    for (const { claim, file } of SURFACES) {
+      if (!claim.test(doc)) continue;
+      // Claimed — then it had better be true. This passes the day the row
+      // badge really lands and its file starts calling isUnseen.
+      expect(readFileSync(path.join(srcDir, file), 'utf8')).toMatch(/isUnseen/);
+    }
+    // …and it cannot pass vacuously by naming nothing at all: the one surface
+    // that DOES exist has to be named.
+    expect(doc).toMatch(/bucket bar/i);
   });
 });

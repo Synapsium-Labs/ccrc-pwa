@@ -1,5 +1,7 @@
 // The compact row that replaces SessionCard in the fleet list.
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
@@ -290,5 +292,47 @@ describe('ask summary', () => {
       <SessionLine session={s({ hookState: 'working', askSummary: 'Deploy now?' })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.sess-ask')).not.toBeInTheDocument();
+  });
+});
+
+// `WORD` was exported "so FleetScreen's bucket-section headers use the
+// identical words" — FleetScreen imports nothing from this file and renders
+// its own SECTION_LABEL ('Attention'/'Cleanup'/'Dead'), so the export had zero
+// importers and the comment pointed a maintainer retitling a HEADING at the
+// table that spells every ROW's word. Checked by reading, the way
+// seen.test.ts checks its own rationale block.
+describe('the row\'s state vocabulary', () => {
+  const srcDir = path.join(import.meta.dirname, '..', 'src');
+  const src = readFileSync(path.join(srcDir, 'fleet', 'SessionLine.tsx'), 'utf8');
+  const doc = /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*(?:export )?const WORD/
+    .exec(src)![1]!
+    .replace(/^[ \t]*\*[ \t]?/gm, '')
+    .replace(/\s+/g, ' ');
+
+  /** Every .ts/.tsx under src that imports the name WORD from this module. */
+  const importers = (function walk(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) return walk(full);
+      if (!/\.tsx?$/.test(e.name)) return [];
+      const text = readFileSync(full, 'utf8');
+      return /import\s*\{[^}]*\bWORD\b[^}]*\}\s*from\s*['"][^'"]*SessionLine['"]/.test(text)
+        ? [path.relative(srcDir, full)]
+        : [];
+    });
+  })(srcDir);
+
+  it('is private, because nothing outside this file reads it', () => {
+    expect(importers).toEqual([]);
+    expect(src).not.toMatch(/export\s+const\s+WORD\b/);
+  });
+
+  it('does not name the fleet screen\'s section headings as its consumer', () => {
+    // They are a different vocabulary on purpose — 'Cleanup' the heading vs
+    // `merged` the row word — and FleetScreen does not import this file.
+    expect(doc).not.toMatch(/identical words/i);
+    expect(doc).not.toMatch(/bucket-section headers/i);
+    expect(readFileSync(path.join(srcDir, 'screens', 'FleetScreen.tsx'), 'utf8'))
+      .not.toMatch(/from '\.\.\/fleet\/SessionLine'/);
   });
 });

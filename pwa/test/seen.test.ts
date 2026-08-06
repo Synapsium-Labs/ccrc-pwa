@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { loadAcks, isUnseen, ack, prune, ackAll } from '../src/lib/seen';
+import { loadAcks, isUnseen, ack, prune, ackAll, acksSnapshot, subscribeAcks } from '../src/lib/seen';
 import type { FleetSession } from '../../shared/api';
 
 const s = (over: Partial<FleetSession>): FleetSession =>
@@ -104,5 +104,47 @@ describe('the per-device rationale', () => {
   it('names presence.ts and says what that other viewer notion actually decides', () => {
     expect(doc).toMatch(/presence\.ts/);
     expect(doc).toMatch(/push/i);
+  });
+});
+
+// localStorage is a write-through log, not a change feed: writing it notifies
+// nobody. The fleet screen is mounted for the whole app lifetime while the
+// OTHER writer is a different screen (SessionScreen acks on mount), so without
+// a publish the fleet keeps drawing the map it read at boot.
+describe('the map as a subscribable value', () => {
+  it('wakes subscribers on every write, and stops on unsubscribe', () => {
+    const seen: Array<Record<string, number>> = [];
+    const off = subscribeAcks(() => seen.push({ ...acksSnapshot() }));
+
+    ack('cc-a', 7);
+    expect(seen).toEqual([{ 'cc-a': 7 }]);
+
+    ackAll([s({ id: 'cc-b' })], 9);
+    expect(seen.at(-1)).toEqual({ 'cc-a': 7, 'cc-b': 9 });
+
+    off();
+    ack('cc-c', 11);
+    expect(seen).toHaveLength(2);
+  });
+
+  it('keeps ONE object identity while the map says the same thing', () => {
+    // useSyncExternalStore compares identities. `prune` runs on every fleet
+    // snapshot and usually drops nothing; re-publishing an equal map there
+    // would re-render the whole fleet several times a second.
+    ack('cc-a', 1);
+    const before = acksSnapshot();
+    let woken = 0;
+    const off = subscribeAcks(() => { woken += 1; });
+    expect(prune(new Set(['cc-a']))).toEqual({ 'cc-a': 1 });
+    expect(acksSnapshot()).toBe(before);
+    expect(woken).toBe(0);
+    off();
+  });
+
+  it('reflects the acked value, not just a changed identity', () => {
+    ack('cc-a', 1);
+    expect(isUnseen(s({ bucketSince: 5 }), acksSnapshot())).toBe(true);
+    ack('cc-a', 10);
+    expect(isUnseen(s({ bucketSince: 5 }), acksSnapshot())).toBe(false);
   });
 });
