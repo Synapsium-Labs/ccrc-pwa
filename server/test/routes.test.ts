@@ -196,6 +196,50 @@ describe('POST /api/sessions/:id/submit', () => {
     expect(sendKeysCalls(calls)).toEqual([]);
     await app.close();
   });
+
+  // Review Important 1: the happy path above proves submission by the box
+  // turning EMPTY — a regression to the emptiness-only check `submitted()`
+  // was written to retire (see send.ts) would leave it green. Here the
+  // post-Enter row is non-empty and different from the draft, the shape a
+  // busy Claude Code session actually renders (it swaps the row for a hint
+  // rather than emptying it), so success can only be proved by "our text
+  // left", not by "the box is empty".
+  it('happy path proves submission via the needle leaving the box, not merely turning empty', async () => {
+    const { app, calls } = await makeApp(['scrollback\n❯ half-typed\n', 'scrollback\n❯ Press up to edit queued messages\n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    await app.close();
+  });
+
+  // "fold in" per review: enter-ignored was covered at unit level only
+  // (submit-route.test.ts) — Task 9's toast switches on this token, so the
+  // route itself needs to prove it surfaces as 409, not just that `submitEnter`
+  // returns it. Real timers here (routes.test.ts's sendDeps takes no `sleep`
+  // override), so this one costs the full SUBMIT_TRIES*SUBMIT_POLL_MS wait.
+  it('refuses a genuinely stuck box with 409 enter-ignored, after exactly one Enter', async () => {
+    const { app, calls } = await makeApp(['scrollback\n❯ stuck words\n']);   // every capture identical
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'enter-ignored' });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    await app.close();
+  }, 10_000);
+
+  // Review Important 2: a blank marker row with real text one row down (the
+  // shape sendPrompt's own M-Enter leaves for a message beginning with a
+  // blank line) must not be reported as 409 nothing-to-submit — that's a
+  // false claim. Proves the new token reaches the HTTP layer, not just the
+  // unit under it.
+  it('refuses a blank first row hiding real content below with 409 blank-first-row, and presses nothing', async () => {
+    const { app, calls } = await makeApp(['❯ \n  actual text\n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'blank-first-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
 });
 
 // Task 2 review, Important 3: the route and its `readAsk` closure
