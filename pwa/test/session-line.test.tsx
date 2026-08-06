@@ -282,8 +282,71 @@ describe('subagent disclosure', () => {
     expect(screen.queryByText('code-reviewer')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     expect(screen.getByText('code-reviewer')).toBeTruthy();
-    expect(screen.getByText(/1m/)).toBeTruthy();
+    // EXACT, not /1m/: that regex also matches the '<1m' fallback, so it
+    // cannot tell correct output from the off-by-one it exists to catch
+    // (`m < 1` -> `m < 2` renders '<1m' here and passes a /1m/ match).
+    expect(screen.getByText('1m')).toBeTruthy();
     expect(screen.getByRole('button', { name: /1 subagent/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  // The toggle is a REAL <button>: fix round 1 shipped a `role="button"` span
+  // with tabIndex nested inside `.sess-open`, which is invalid (a <button>'s
+  // content model forbids any descendant carrying tabindex) and, worse,
+  // flattened away by the button role's children-presentational rule — under
+  // VoiceOver the whole row is one element and the disclosure is unreachable.
+  // getByRole cannot see that, so these assert the DOM shape directly.
+  it('is a real <button>, not a control nested inside another control', () => {
+    const { container } = render(
+      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    expect(toggle.tagName).toBe('BUTTON');
+    expect(toggle).not.toHaveAttribute('tabindex');
+    // No ancestor of ANY control on this row is itself a control.
+    for (const btn of container.querySelectorAll('button')) {
+      expect(btn.parentElement?.closest('button')).toBeNull();
+    }
+  });
+
+  // aria-expanded has to be about something a screen reader can be taken to —
+  // the repo's own OptionPreview (DialogSheet.tsx) pairs useId + aria-controls
+  // for exactly this. Round 1 had neither, and the list was not even a DOM
+  // sibling of the toggle.
+  it('points aria-controls at the list it opens', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    const id = toggle.getAttribute('aria-controls');
+    expect(id).toBeTruthy();
+    await userEvent.click(toggle);
+    const list = document.getElementById(id!);
+    expect(list).not.toBeNull();
+    expect(list).toHaveClass('sess-subagent-list');
+    expect(list!.contains(screen.getByText('reviewer'))).toBe(true);
+  });
+
+  // Keyboard activation was the one part of round 1 with zero coverage, and
+  // it was hand-rolled (`e.key !== 'Enter' && e.key !== ' '`) precisely
+  // because the element was not a button. It is a button now, so activation
+  // is native — and the click it dispatches bubbles into `.sess-body`'s
+  // forwarder exactly as a tap does, which is what this also pins: pressing
+  // Enter must toggle the disclosure and NOT navigate to the session.
+  it('toggles on Enter and on Space, without opening the session', async () => {
+    const onOpen = vi.fn();
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                        onOpen={onOpen} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    toggle.focus();
+
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByText('reviewer')).toBeInTheDocument();
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    await userEvent.keyboard(' ');
+    expect(screen.queryByText('reviewer')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it('lists every subagent, not just the first', async () => {
@@ -312,16 +375,28 @@ describe('subagent disclosure', () => {
     expect(row.children).toHaveLength(2);
   });
 
-  // The toggle is nested inside `.sess-open` (this row's own tap target) as
-  // a `role="button"` span, not a real `<button>` — a `<button>` cannot
-  // contain another one. Without `stopPropagation` a tap here would bubble
-  // into `.sess-open`'s own `onClick` and navigate to the session too.
+  // `.sess-body` (the block the row's tap surface now lives on) forwards a
+  // click to `open()` only when no real control was hit — drop its
+  // `closest('button')` guard and tapping the toggle navigates away instead
+  // of expanding.
   it('does not open the session when the toggle is tapped', async () => {
     const onOpen = vi.fn();
     render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
                         onOpen={onOpen} onActions={() => {}} />);
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  // The other half of that guard: the dead space between meta cells still
+  // opens the session, so the row did not lose its full-block tap surface
+  // when the wrapping <button> became a <div>.
+  it('still opens the session from the dead space around the meta cells', async () => {
+    const onOpen = vi.fn();
+    const { container } = render(
+      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                   onOpen={onOpen} onActions={() => {}} />);
+    await userEvent.click(container.querySelector('.sess-meta')!);
+    expect(onOpen).toHaveBeenCalledWith('demo-quiet-mesa');
   });
 
   it('collapses again on a second tap', async () => {
@@ -339,6 +414,54 @@ describe('subagent disclosure', () => {
       subagents: [{ name: 'reviewer', startedAt: 1 }] })}
       onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
+  });
+});
+
+// The elapsed cell is the row's only COMPUTED value, and the brief's own
+// assertion for it (`getByText(/1m/)`) matches the '<1m' fallback as well as
+// '1m' — it could not fail on the off-by-one it existed to catch. Every
+// branch of `subagentElapsed` gets an exact expected string here instead.
+describe('subagent elapsed time', () => {
+  /** Render one subagent started `ageMs` ago, expand, return its elapsed cell. */
+  const elapsedFor = async (startedAt: number): Promise<string> => {
+    cleanup();
+    render(<SessionLine session={s({ subagents: [{ name: 'sub', startedAt }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    return document.querySelector('.sess-subagent-elapsed')!.textContent!;
+  };
+  const agedMs = (ms: number): Promise<string> => elapsedFor(Date.now() - ms);
+
+  it('reads <1m below a minute, and never rounds up into it', async () => {
+    expect(await agedMs(5_000)).toBe('<1m');
+    // 59s, not 59_999ms: `agedMs` reads the clock, the component reads it
+    // again a few ms later, so a boundary-exact age is a flaky one.
+    expect(await agedMs(59_000)).toBe('<1m');
+  });
+
+  it('reads whole minutes from exactly one minute up', async () => {
+    expect(await agedMs(60_000)).toBe('1m');
+    expect(await agedMs(65_000)).toBe('1m');
+    expect(await agedMs(59 * 60_000)).toBe('59m');
+  });
+
+  it('switches to hours at 60 minutes', async () => {
+    expect(await agedMs(60 * 60_000)).toBe('1h');
+    expect(await agedMs(90 * 60_000)).toBe('1h');
+    expect(await agedMs(23 * 60 * 60_000)).toBe('23h');
+  });
+
+  it('switches to days at 24 hours', async () => {
+    expect(await agedMs(24 * 60 * 60_000)).toBe('1d');
+    expect(await agedMs(49 * 60 * 60_000)).toBe('2d');
+  });
+
+  // `startedAt: 1` is the placeholder four other tests in this file pass and
+  // none of them assert. It is 1ms after the epoch, so the only correct
+  // rendering is a four-figure number of DAYS — an 'h' or 'm' here would mean
+  // the unit ladder stopped climbing.
+  it('renders the epoch placeholder the other tests pass as days', async () => {
+    expect(await elapsedFor(1)).toMatch(/^\d{4,}d$/);
   });
 });
 

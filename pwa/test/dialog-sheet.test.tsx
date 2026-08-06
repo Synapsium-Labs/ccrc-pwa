@@ -674,6 +674,44 @@ describe('DialogSheet (hook envelope)', () => {
     expect(onOpenTerminal).toHaveBeenCalledOnce();
   });
 
+  // The copy under an ungated sheet has to match the REASON it is ungated.
+  // `matchingDialog()` is live and corresponds perfectly here — the sheet is
+  // ungated purely because `options: []` gives it nothing to tap — so the
+  // unmatched-dialog sentence ("wait for it to catch up") would be false
+  // twice over: there is nothing unmatched, and `options` is fixed for the
+  // life of the envelope, so no amount of waiting could ever make this
+  // answerable. A user who followed it would wait forever.
+  it('does not tell a free-text question to wait for the pane to catch up', () => {
+    const FREE_TEXT_ASK: HookAsk = {
+      questions: [{ question: 'Anything else to add?', options: [] }],
+    };
+    const store = makeStore();
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog: matchingDialog() });
+      store.getState().apply({ type: 'ask', ask: FREE_TEXT_ASK, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} />
+        <ToastHost />
+      </>,
+    );
+
+    const copy = document.querySelector('.ask-envelope .dlg-copy')!;
+    expect(copy).not.toBeNull();
+    expect(copy.textContent).not.toMatch(/catch up|can't be matched/i);
+    expect(copy.textContent).toMatch(/nothing to tap/i);
+    expect(copy.textContent).toMatch(/terminal pane/i);
+  });
+
+  // The other side of the same fork: a question WITH options that the pane
+  // does not correspond to is genuinely transient, so that sentence stays.
+  it('still says the pane may catch up when a real option list is unmatched', () => {
+    renderWithAsk(QUESTION_ASK, matchingDialog({ parsed: false }));
+    const copy = document.querySelector('.ask-envelope .dlg-copy')!;
+    expect(copy.textContent).toMatch(/wait\s+for it to catch up/i);
+  });
+
   it('renders a multiSelect question\'s options as plain rows too — v1 has no multi-select UI, the send path is one digit either way', () => {
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderWithAsk(

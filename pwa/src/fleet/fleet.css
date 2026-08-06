@@ -630,8 +630,8 @@
    rows: a ragged right edge is what makes a list of rows read as noise. */
 .sess-line {
   display: grid;
-  /* lamp · label-block(flex, 2 lines) · actions — THREE cells. State/tally/
-     warn/account live inside .sess-open's second line (.sess-meta), which is
+  /* lamp · .sess-body(flex, 2+ lines) · actions — THREE cells. State/tally/
+     warn/account live inside .sess-body's second line (.sess-meta), which is
      a flex row, not a grid track — a missing sibling there just isn't
      there; it cannot compact anything, so there is no display:none
      grid-compaction hazard left to guard against. */
@@ -753,40 +753,49 @@
    label is only the TOP line — measured 8.5-9.25px apart live, reading as
    low. Pin the lamp to the row's start (like .sess-actions below) and give
    it a box exactly as tall as the label's own line box (--text-base at
-   --leading-tight, .sess-open's line-height), then centre the dot inside
+   --leading-tight, .sess-body's line-height), then centre the dot inside
    that box — measured this alone still lands 4.125px high, because
-   .sess-open centres its whole two-line content block (label + its 2px
+   .sess-body centres its whole two-line content block (label + its 2px
    gap + .sess-meta's own line) inside the --tap-min tap target, which
    pushes the label down by half of whatever slack is left over. The
    margin-top below is that exact slack, computed from the same tokens
-   .sess-open's stack uses (plus the 2px gap already hardcoded on
-   .sess-open, not a new magic number) — not a guessed offset, so it tracks
+   .sess-body's stack uses (plus the 2px gap already hardcoded on
+   .sess-body, not a new magic number) — not a guessed offset, so it tracks
    any future type-scale or line-height change instead of silently
    drifting off again.
 
-   THE THIRD LINE (.sess-ask, hookState 'waiting' + askSummary) breaks the
-   premise this formula relies on: label + gap + meta + gap + ask measures
-   51.5px today (18.75 + 2 + 15 + 2 + 13.75) against the 44px --tap-min
-   floor, so .sess-open's auto height now tracks its CONTENT instead of the
-   floor and .sess-open's justify-content:center has zero slack left to
-   distribute — the label sits flush at the box's top, offset 0, not the
+   A THIRD LINE breaks the premise this formula relies on, and there are
+   TWO of them, independently: .sess-ask (hookState 'waiting' + askSummary)
+   and .sess-subagent-list (the disclosure, once its toggle is tapped).
+   Either one puts the stack past the floor — label + gap + meta + gap +
+   third line measures 51.5px today (18.75 + 2 + 15 + 2 + 13.75) against
+   44px --tap-min — so .sess-body's auto height tracks its CONTENT instead
+   of the floor and its justify-content:center has zero slack left to
+   distribute: the label sits flush at the box's top, offset 0, not the
    two-line formula's 4.125px. The base formula, left alone, still adds
-   that 4.125px and the dot reads ~4px low whenever a third line is present
-   (Task 7 fix round 1, review-found). The variant below is the SAME
-   formula with the third line's height (--text-2xs at --leading-tight)
-   and its own 2px gap folded in, wrapped in max(0px, …) rather than left
-   to go negative (-3.75px today) — negative would push the dot ABOVE the
-   label's line instead of just removing the non-existent slack, and the
-   clamp is what keeps this tracking token changes correctly in EITHER
-   direction: if a future type-scale shrinks the three-line stack back
-   under 44px, max() recovers the real positive slack instead of silently
-   drifting.
+   that 4.125px and the dot reads ~4px low.
 
-   NO TEST GUARDS THIS: jsdom performs no layout and Vitest's `test.css`
-   defaults to false (styles are stubbed, never applied) — see
-   vite.config.ts's `test` block — so a regression here has no automated
-   signal. This comment is the only place the invariant is recorded; read
-   it before touching either rule. */
+   Both selectors therefore share ONE variant below: the same formula with
+   a third line's height (--text-2xs at --leading-tight) and its own 2px
+   gap folded in, wrapped in max(0px, …) rather than left to go negative
+   (-3.75px today) — negative would push the dot ABOVE the label's line
+   instead of just removing the non-existent slack, and the clamp is what
+   keeps this tracking token changes correctly in EITHER direction: if a
+   future type-scale shrinks the three-line stack back under 44px, max()
+   recovers the real positive slack instead of silently drifting. The clamp
+   is also what makes ONE rule correct for a list of N rows and for a row
+   carrying BOTH extra lines: those stacks are taller still, so the formula
+   understates them, and an understated value below zero is exactly what
+   max(0px, …) already returns.
+
+   NO TEST GUARDS THE MEASUREMENT: jsdom performs no layout and Vitest's
+   `test.css` defaults to false (styles are stubbed, never applied) — see
+   vite.config.ts's `test` block. What IS guarded, by fleet-css.test.ts
+   reading this file as text, is that the variant's selector group covers
+   EVERY line-adding element — the miss that shipped in fix round 1, when
+   .sess-subagent-list arrived and only .sess-ask was listed here. Read
+   this comment before touching either rule, and add the selector here
+   whenever a fourth line joins. */
 .sess-lamp {
   grid-column: 1;
   align-self: start;
@@ -797,31 +806,52 @@
     (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
   );
 }
-.sess-line:has(.sess-ask) .sess-lamp {
+.sess-line:has(.sess-ask) .sess-lamp,
+.sess-line:has(.sess-subagent-list) .sess-lamp {
   margin-top: max(0px, calc(
     (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))
       - 2px - (var(--text-2xs) * var(--leading-tight))) / 2
   ));
 }
 
-.sess-open {
+/* The two-line block. This is the row's TAP SURFACE and its middle grid
+   track; .sess-open below is only the label line inside it. The split is
+   forced by the subagent disclosure: that has to be a real <button> (see
+   SessionLine.tsx), and a <button> inside a <button> is invalid and, worse,
+   flattened away by the button role's children-presentational rule. So the
+   block that everything sits in is a plain div with a click forwarder, and
+   every control on the row is a real, separately reachable button.
+   min-height and the column centring moved here with that role — the tap
+   floor belongs to the surface that gets tapped. */
+.sess-body {
   grid-column: 2;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 2px;
   min-width: 0;
-  min-height: 44px;   /* thumb target: the button is what gets tapped */
+  min-height: 44px;   /* thumb target: this block is what gets tapped */
+  cursor: pointer;
+  line-height: var(--leading-tight);
+}
+
+.sess-open {
+  display: block;
+  min-width: 0;
   padding: 0;
   background: none;
   border: 0;
   text-align: left;
   cursor: pointer;
   color: inherit;
-  line-height: var(--leading-tight);
+  font-size: inherit;
+  line-height: inherit;
 }
 
+/* display: block, because .sess-open is no longer a flex container blockifying
+   it — an inline span cannot ellipsis. */
 .sess-label {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -869,29 +899,46 @@
 
 /* The hook's last-reported subagent count — same quiet register as .sess-tally,
    no colour of its own (inherits .sess-meta's ink-secondary). Task 7: a real
-   toggle now (SessionLine.tsx's own comment explains the role="button" span
-   instead of a nested <button>), so it needs a pointer cursor and its own
-   focus ring — the latter comes free from base.css's blanket
-   `:focus-visible`, since that selector has no element qualifier. */
+   <button> now, so the declarations below are the button reset that keeps it
+   reading as one more meta cell (Tailwind preflight already zeroes the
+   margin/padding and inherits the font, but this file states its own resets
+   on .sess-open/.sess-actions too, and a cell that silently depended on
+   preflight would be the odd one out).
+   Its focus ring is base.css's blanket `:focus-visible` — no element
+   qualifier there, so it applies — but the ring is drawn at outline-offset
+   2px on a child of `.sess-meta { overflow: hidden }`, whose content box is
+   exactly the 15px meta line, so the ring's top and bottom edges are clipped.
+   Open, recorded, not fixed here (fixing it means giving this cell real
+   padding, which is the same change the 44px tap-target gap wants). */
 .sess-subagents {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
   cursor: pointer;
 }
 
-/* The disclosure's own rows — SessionLine.tsx's own comment above the toggle
-   explains why this has to be a sibling LINE inside .sess-open's flex
-   column rather than living inside .sess-meta the tally used to sit in.
-   Unlike .sess-tally/.sess-cleanup-fact/.sess-subagents above, THIS rule
-   sets its own colour rather than inheriting .sess-meta's (it is no longer
-   a descendant of it) — same shape as .sess-ask below, and it needs the
-   matching .sess-line--active override for the same reason that one does. */
+/* The disclosure's own rows — a sibling LINE in .sess-body's flex column
+   rather than a cell inside the .sess-meta the tally sits in. Unlike
+   .sess-tally/.sess-cleanup-fact/.sess-subagents above, .sess-subagent-row
+   below sets its own colour rather than inheriting .sess-meta's (it is not a
+   descendant of it) — same shape as .sess-ask further down, and it needs the
+   matching .sess-line--active override for the same reason that one does.
+   A real <ul> now that a <div>, not a <button>, is the ancestor: list-style
+   and the list's own margin/padding are zeroed here rather than trusted to
+   preflight, same reasoning as .sess-subagents above. */
 .sess-subagent-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 2px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
 }
 .sess-subagent-row {
   display: flex;

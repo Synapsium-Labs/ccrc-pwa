@@ -529,6 +529,12 @@ function EnvelopeSheet({
   // `close` follows for `answering` alone).
   const [denying, setDenying] = useState(false);
   const busy = answering !== null || denying;
+  // A FREE-TEXT question: `options: []`. Hoisted out of `canAnswer` because
+  // two things read it and they must not drift — the gate below, and the copy
+  // that explains an ungated sheet. It is a property of the ENVELOPE and fixed
+  // for that envelope's whole life: no pane update, no reparse, nothing the
+  // user can wait for will ever add options to it.
+  const freeText = !('approval' in ask) && ask.questions[0]!.options.length === 0;
   // C1: a real correspondence check, not a null check — see fix round 3 in
   // the file header and `questionCorresponds` above. Approval and questions
   // use different rules because they answer differently: Allow always types
@@ -551,7 +557,7 @@ function EnvelopeSheet({
   const canAnswer =
     'approval' in ask
       ? dialog !== null && dialog.parsed && /^yes/i.test(dialog.options[0]?.label ?? '')
-      : ask.questions[0]!.options.length > 0 && questionCorresponds(ask.questions[0]!, dialog);
+      : !freeText && questionCorresponds(ask.questions[0]!, dialog);
 
   const close = (): void => {
     if (busy) return;
@@ -672,10 +678,18 @@ function EnvelopeSheet({
   return (
     <Sheet open={open} onClose={close} eyebrow={eyebrow} title={first.question}>
       <div data-source="hook" className="ask-envelope">
+        {/* Two different dead ends, and the copy must not confuse them. An
+            unmatched question is TRANSIENT — the pane can catch up, and then
+            the rows below become tappable — so "wait" is honest advice. A
+            free-text question is not: `options: []` is fixed for the life of
+            the envelope, there are no rows to become tappable, and nothing
+            the user waits for can change that. Telling them to wait would be
+            a claim the state cannot support (and an unbounded wait). */}
         {!canAnswer && (
           <p className="dlg-copy">
-            This can't be matched to what's on the terminal pane yet — answer it there, or wait
-            for it to catch up.
+            {freeText
+              ? 'This one wants an answer in your own words, so there is nothing to tap here — type it on the terminal pane.'
+              : "This can't be matched to what's on the terminal pane yet — answer it there, or wait for it to catch up."}
           </p>
         )}
         {/* v1: a multiSelect question renders the exact same plain rows as a
