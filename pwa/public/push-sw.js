@@ -123,9 +123,16 @@ self.addEventListener('notificationclick', (event) => {
         body: JSON.stringify({ askKey: m[1], optionIndexes: [Number(m[2])] }),
       });
     } catch {
-      // NEVER silently dropped. The tap did nothing, the question is still
-      // waiting, and the operator is told so with a way back to it.
-      await replace('Still unanswered', 'No connection — tap to open the session.', sid, notification.tag);
+      // NEVER silently dropped — and never overclaimed either. A rejected
+      // `fetch` proves only that the RESPONSE did not arrive: the POST may have
+      // reached the server, passed every gate and pressed the digit, with the
+      // connection dying (tunnel, handover, Tailscale re-key) before the reply
+      // came back. "Still unanswered" would state the one thing nothing here
+      // establishes, and an operator told the question is still waiting goes
+      // looking for a menu that may be long gone — or, worse, believes one is
+      // still up. Only the response can tell "never sent" from "sent and
+      // applied", so say exactly that and leave the way back open.
+      await replace("Couldn't confirm", 'No connection — tap to open the session.', sid, notification.tag);
       return;
     }
 
@@ -146,9 +153,14 @@ self.addEventListener('notificationclick', (event) => {
     } catch {
       /* a refusal with no readable body still gets the generic sentence */
     }
+    // The fallback names NO cause. "The session moved on" was a guess dressed
+    // as a fact: this branch also catches a 502 from a proxy, a 500, an
+    // unreadable body — cases where the session moved nowhere at all. The
+    // status is the one thing the response really did say, so it is what gets
+    // shown, and the tap that reaches the session is what answers the rest.
     await replace(
       "Couldn't answer",
-      REFUSAL[token] || 'The session moved on — tap to open it.',
+      REFUSAL[token] || `No reason given (HTTP ${res.status}) — tap to open the session.`,
       sid,
       notification.tag,
     );

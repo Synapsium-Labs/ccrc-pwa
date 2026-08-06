@@ -9,7 +9,7 @@ import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
-import { api, ApiError, clipUrl, submitErrorText } from '../lib/api';
+import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
@@ -137,31 +137,46 @@ function PendingClipThumbs({ id, attachments }: { id: string; attachments: Pendi
  * rather than risk a misplaced keystroke. One more Enter is the whole fix, and
  * before this button the only way to press it was to open a terminal.
  *
- * On success the pending is DISCARDED, not retried: the message is now in
- * flight for real and the transcript will carry it, so leaving a red bubble
- * behind would show the operator a failure that has since succeeded.
+ * `expect` is what makes the outcome attributable to THIS bubble. `POST
+ * /submit` presses Enter on whatever the box holds, and the box is shared
+ * mutable state: a second send that resolved the draft conflict with "Replace
+ * draft" clears this text and types its own over it, and a second
+ * `enter-ignored` leaves a DIFFERENT message sitting there — in both cases
+ * this bubble is still on screen still offering its button. So the row the
+ * server read at failure time is sent back with the tap, and the server
+ * refuses `box-mismatch` unless the box still reads exactly that. The button
+ * is not rendered at all when there is no such row to send.
+ *
+ * On success the pending is DISCARDED, not retried: the server proved OUR text
+ * was in the box and then proved it left, so the message is in flight for real
+ * and the transcript will carry it. Every refusal keeps the bubble — none of
+ * them proves this message was sent, `nothing-to-submit` least of all (a box
+ * emptied by someone else's `C-u` looks identical).
  */
 function SendItButton({
   id,
   sendKey,
+  expect,
   onSent,
 }: {
   id: string;
   sendKey: string;
+  /** The box row the failed send left behind — the correspondence claim. */
+  expect: string;
   onSent?: (key: string) => void;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const press = async (): Promise<void> => {
     setBusy(true);
     try {
-      await api.submit(id);
+      await api.submit(id, expect);
       onSent?.(sendKey);
     } catch (e) {
-      // Two of these refusals are good news (`nothing-to-submit` means it went
-      // through after all), so they are said plainly rather than as an error.
-      const code = e instanceof ApiError ? e.message : '';
-      toast(submitErrorText(code), code === 'nothing-to-submit' ? undefined : 'error');
-      if (code === 'nothing-to-submit') onSent?.(sendKey);
+      // A coded refusal gets its own sentence; anything else (the network, a
+      // restarting server) gets `apiErrorText`'s floor — `submitErrorText('')`
+      // is the empty string, which ToastHost renders as a wordless red box
+      // that leaves the tap's outcome entirely unstated.
+      toast(e instanceof ApiError ? submitErrorText(e.message) : apiErrorText(e), 'error');
     } finally {
       setBusy(false);
     }
@@ -217,8 +232,18 @@ function PendingBubble({
             the one refusal where the server has PROVEN the text is sitting in
             the box and both of `sendPrompt`'s Enters were swallowed. Retry
             would re-type a message that is already there; Send it presses one
-            more Enter. Every other failure leaves nothing to submit. */}
-        {send.code === 'enter-ignored' && <SendItButton id={id} sendKey={send.key} onSent={onDiscard} />}
+            more Enter. Every other failure leaves nothing to submit.
+
+            AND only when that refusal carried the box row it read. Without it
+            there is nothing to prove the box still holds this message rather
+            than a later one, and a button that submits an unproven box is the
+            hazard this whole route is gated against — so the operator gets the
+            sentence and the terminal, not a tap that might send someone else's
+            text. (The row is blank exactly when the message's own first line
+            was blank; `blank-first-row` is the server's name for that pane.) */}
+        {send.code === 'enter-ignored' && send.draft !== undefined && send.draft.trim() !== '' && (
+          <SendItButton id={id} sendKey={send.key} expect={send.draft} onSent={onDiscard} />
+        )}
         <button type="button" className="pending-retry" onClick={() => onRetry?.(send.key)}>
           Retry
         </button>

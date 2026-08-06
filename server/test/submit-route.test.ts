@@ -27,31 +27,31 @@ function deps(frames: string[]) {
 describe('submitEnter', () => {
   it('presses Enter once and reports ok when the text leaves the box', async () => {
     const { keys, d } = deps([BOX('hello there'), EMPTY_BOX]);
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: true });
+    expect(await submitEnter(d as never, 'cc-x', 'hello there')).toEqual({ ok: true });
     expect(keys).toEqual(['Enter']);
   });
 
   it('refuses an empty box — there is nothing to send', async () => {
     const { keys, d } = deps([EMPTY_BOX]);
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(await submitEnter(d as never, 'cc-x', 'hello there')).toEqual({ ok: false, error: 'nothing-to-submit' });
     expect(keys).toEqual([]);
   });
 
   it('refuses while a menu owns the keyboard', async () => {
     const { keys, d } = deps([MENU]);
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: false, error: 'dialog-open' });
+    expect(await submitEnter(d as never, 'cc-x', 'hello there')).toEqual({ ok: false, error: 'dialog-open' });
     expect(keys).toEqual([]);
   });
 
   it('refuses a dead pane', async () => {
     const d = { queue: new KeyedQueue(), sleep: async () => {},
       tmux: { captureAnsi: async () => null, sendKey: async () => {} } as never };
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: false, error: 'not-alive' });
+    expect(await submitEnter(d as never, 'cc-x', 'hello there')).toEqual({ ok: false, error: 'not-alive' });
   });
 
   it('reports enter-ignored when the text is still there, and does NOT press again', async () => {
     const { keys, d } = deps([BOX('hello there')]);   // every frame identical
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: false, error: 'enter-ignored' });
+    expect(await submitEnter(d as never, 'cc-x', 'hello there')).toEqual({ ok: false, error: 'enter-ignored' });
     expect(keys).toEqual(['Enter']);   // exactly one — no blind retry loop
   });
 
@@ -66,7 +66,7 @@ describe('submitEnter', () => {
   // success can only be proved by "our text left", not by "the box is empty".
   it('proves submission via the needle leaving the box, not via emptiness — a busy-session shape', async () => {
     const { keys, d } = deps([BOX('hello there'), 'some scrollback\n❯ Press up to edit queued messages\n']);
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: true });
+    expect(await submitEnter(d as never, 'cc-x', 'hello there')).toEqual({ ok: true });
     expect(keys).toEqual(['Enter']);
   });
 
@@ -79,7 +79,7 @@ describe('submitEnter', () => {
   // with the honest, distinct token instead, and still press nothing.
   it('refuses a blank first row that hides real content one row down — honestly, not as "nothing to submit"', async () => {
     const { keys, d } = deps(['❯ \n  actual text\n']);
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: false, error: 'blank-first-row' });
+    expect(await submitEnter(d as never, 'cc-x', 'actual text')).toEqual({ ok: false, error: 'blank-first-row' });
     expect(keys).toEqual([]);
   });
 
@@ -91,7 +91,31 @@ describe('submitEnter', () => {
   // indent and would otherwise look just like a continuation row).
   it('still refuses nothing-to-submit when the blank row is closed by the box\'s own rule, chrome and all', async () => {
     const { keys, d } = deps(['❯ \n──────────\n  👤 team·max │ chrome status bar\n']);
-    expect(await submitEnter(d as never, 'cc-x')).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(await submitEnter(d as never, 'cc-x', 'anything')).toEqual({ ok: false, error: 'nothing-to-submit' });
     expect(keys).toEqual([]);
+  });
+
+  // PR F whole-branch review, Critical: this route presses Enter on WHATEVER
+  // the box holds, and the box is shared mutable state. The live sequence:
+  // "run the tests" is left in the box by enter-ignored; the operator sends
+  // "check the logs", hits the draft-conflict sheet, taps Replace draft, which
+  // C-u's the box and types the new message; the first bubble is still on
+  // screen still offering Send it. Without a correspondence gate that tap
+  // submits "check the logs" and reports success for "run the tests", whose
+  // text then exists nowhere at all.
+  it('refuses to press Enter on a box that no longer holds what the caller was shown', async () => {
+    const { keys, d } = deps([BOX('check the logs')]);
+    expect(await submitEnter(d as never, 'cc-x', 'run the tests'))
+      .toEqual({ ok: false, error: 'box-mismatch' });
+    expect(keys).toEqual([]);
+  });
+
+  // The other half of the same gate: a box holding exactly what was proven to
+  // be there still submits. (Trimmed on both sides — `draftOf` trims the row
+  // it reads, so the claim it handed out is trimmed too.)
+  it('presses Enter when the box still reads exactly what the caller was shown', async () => {
+    const { keys, d } = deps([BOX('run the tests'), EMPTY_BOX]);
+    expect(await submitEnter(d as never, 'cc-x', '  run the tests  ')).toEqual({ ok: true });
+    expect(keys).toEqual(['Enter']);
   });
 });

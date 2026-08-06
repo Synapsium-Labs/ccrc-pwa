@@ -46,11 +46,31 @@ export const MAX_ASK_ACTIONS = 2;
  *    call returns, while the pane advances Q1→Q2, so nothing in the envelope
  *    can say which question is currently painted.
  *  - no options (a free-text ask) → there is no index to send.
+ *  - a MULTI-SELECT question → the route would accept a one-index tap and
+ *    commit it with Enter (`inject/ask.ts`'s "gated on the QUESTION's kind"
+ *    branch), which narrows a question that takes several answers down to one
+ *    and submits it irrevocably. That is not a refusal this function is
+ *    dodging — it is an ANSWER the operator never chose to send, and a
+ *    notification button has no room to say "this submits and ends the
+ *    question". Multi-select is answered in the app, where the boxes are
+ *    visible.
+ *  - a BLANK option label ANYWHERE in the envelope → see below.
  *
- * A blank label is dropped rather than shipped: a notification button with no
- * text is a button the operator cannot read before pressing. Indices travel
- * inside the action id, never as a position, so dropping one cannot shift the
- * others onto the wrong option.
+ * A blank label poisons the WHOLE envelope, so the answer is `null`, not "ship
+ * the readable siblings". `answerAsk`'s menu-identity gate matches EVERY option
+ * against the pane's rows through `pairMatches`, which refuses whenever either
+ * side normalises to '' — and a whitespace-only label always does. So one blank
+ * label at any index means every index is refused with `menu-mismatch`, for the
+ * life of the question, whichever way tmux renders the row (keep the spaces and
+ * `leftCol` trims the scraped label to ''; strip them, as tmux does by default,
+ * and the row fails `OPTION_RE` so no rows are scraped at all). Shipping the
+ * siblings would hand the operator exactly what the rule above forbids: a
+ * button that costs a tap, a wait and a refusal sentence — and a false one at
+ * that ("The terminal is showing something else now" about the very menu on
+ * screen). The blankness is provable here, from the envelope alone.
+ *
+ * Indices travel inside the action id, never as a position, so the `slice`
+ * below cannot shift an action onto the wrong option.
  */
 export function askActions(hs: HookState | null): PushPayload['actions'] | null {
   if (hs === null || hs.state !== 'waiting') return null;
@@ -60,9 +80,12 @@ export function askActions(hs: HookState | null): PushPayload['actions'] | null 
   const q = ask.questions[0];
   const key = askKey(ask);
   if (q === undefined || key === null) return null;
-  const actions = q.options
+  if (q.multiSelect === true) return null;
+  if (q.options.length === 0) return null;
+  // The whole envelope, not just the two labels that would ship: an unreadable
+  // label at index 5 refuses index 0 exactly as hard.
+  if (q.options.some((o) => o.label.trim() === '')) return null;
+  return q.options
     .slice(0, MAX_ASK_ACTIONS)
-    .map((o, i) => ({ action: `ask:${key}:${i}`, title: o.label }))
-    .filter((a) => a.title.trim() !== '');
-  return actions.length > 0 ? actions : null;
+    .map((o, i) => ({ action: `ask:${key}:${i}`, title: o.label }));
 }

@@ -53,6 +53,16 @@ export function saveMark(mark: Mark): void {
  * snapshot arriving on the same connection already shows every session that
  * currently wants the operator — which is the only claim about the present that
  * anything here can honestly make.
+ *
+ * THE ADVANCE IS ONE-WAY AND HAPPENS HERE, at the moment of receipt. The mark
+ * is durable (localStorage); the returned events are not — they go into
+ * volatile store state and die with the tab. So the same events can never be
+ * asked for again, and a caller that stores them without rendering them has
+ * silently dropped them. Deliberate: a mark advanced only once something
+ * confirmed it had DISPLAYED the events would need a second durable value and
+ * an acknowledgement path, and nothing renders them yet to acknowledge
+ * anything. Whoever renders them first should read this paragraph before
+ * deciding it can defer them.
  */
 export function applyCatchUp(r: CatchUp): CatchUp['events'] {
   saveMark({ epoch: r.epoch, seq: r.seq });

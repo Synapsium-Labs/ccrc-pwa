@@ -41,10 +41,19 @@ export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? 
 
 /** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
  *  answer a different question — not "why didn't my message send" but "why
- *  didn't the rescue work" — and two of them are good news. */
+ *  didn't the rescue work".
+ *
+ *  Not one of them is good news, and `nothing-to-submit` used to be written as
+ *  if it were ("it went through after all"). An empty box is not proof that
+ *  this message was sent: the draft-conflict sheet's "Replace draft" empties
+ *  the box with `C-u` and types a different message over it, so the operator
+ *  could be told their text went through at the exact moment it was destroyed.
+ *  The server proves the box is empty; only the transcript can say what left
+ *  it. */
 const SUBMIT_ERROR_TEXT: Record<string, string> = {
-  'nothing-to-submit': 'The box is empty — it went through after all.',
+  'nothing-to-submit': 'The box is empty — nothing was sent from here. Check the transcript before sending again.',
   'blank-first-row': "The box's first line is blank, so what would be sent can't be proven — open the terminal.",
+  'box-mismatch': 'The box holds something else now — open the session and look before sending.',
   'dialog-open': 'A question is up — answer that first.',
   'not-alive': 'That session is not running.',
   'enter-ignored': "Still not taking it — open the terminal.",
@@ -200,8 +209,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     answerAsk: (id: string, askKey: string, optionIndexes: number[]) =>
       post(`${sid(id)}/ask`, { askKey, optionIndexes }),
     /** One verified Enter on a box that already holds text — the rescue for a
-     *  send whose Enter the pane swallowed twice. */
-    submit: (id: string) => post(`${sid(id)}/submit`),
+     *  send whose Enter the pane swallowed twice.
+     *
+     *  `expect` is the box row the failed send left behind (the server's own
+     *  `draft`, carried back verbatim). The server re-reads the box and refuses
+     *  `box-mismatch` unless it still reads exactly that, so this can only ever
+     *  submit the message the bubble is showing — the same correspondence rule
+     *  `answerAsk` applies with `askKey`. */
+    submit: (id: string, expect: string) => post(`${sid(id)}/submit`, { expect }),
     catchUp: (epoch: string | null, seq: number) =>
       getJson<CatchUp>(`/api/notifications/catchup?epoch=${encodeURIComponent(epoch ?? '')}&seq=${seq}`),
     interrupt: (id: string) => post(`${sid(id)}/interrupt`),

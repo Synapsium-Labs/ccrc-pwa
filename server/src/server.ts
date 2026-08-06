@@ -257,10 +257,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const since = parseSince((req.query as { since?: string }).since);
     const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
     void stream.start();
-    // A per-connection token, not the session id: a socket that dies without a
-    // close frame takes only its OWN claim with it (Presence's own doc), so a
-    // second tab watching the same session doesn't get un-notified by the
-    // first one's disconnect.
+    // A per-connection token, not the session id: one socket's close drops
+    // only its OWN claim, so a second tab watching the same session doesn't
+    // get un-notified by the first one's disconnect. It is the TTL, not this
+    // key, that handles a socket dying WITHOUT a close frame — every frame
+    // below re-stamps the claim, and the client sends one every
+    // PRESENCE_REFRESH_MS for exactly that reason (see Presence's own doc).
     const token = Symbol('viewer');
     socket.on('message', (raw) => {
       try {
@@ -395,7 +397,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/submit', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const res = await submitEnter(sendDeps, id);
+    // `expect` is REQUIRED and must say something: this route presses Enter on
+    // whatever the box holds, so a caller that cannot state what it believes is
+    // there has no business submitting it (see `submitEnter`'s own doc). A
+    // blank claim would gate on nothing — `draftOf` never returns a blank
+    // non-empty row — so it is refused here rather than silently accepted.
+    const body = (req.body ?? {}) as { expect?: unknown };
+    if (typeof body.expect !== 'string' || body.expect.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await submitEnter(sendDeps, id, body.expect);
     return res.ok ? res : reply.code(409).send(res);
   });
 

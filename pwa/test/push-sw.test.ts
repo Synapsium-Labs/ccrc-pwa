@@ -154,7 +154,7 @@ describe('push-sw: answering from the notification', () => {
   });
 
   it("shows the refusal's own sentence on a 409, and keeps the way back", async () => {
-    fetchImpl = async () => ({ ok: false, json: async () => ({ error: 'ask-mismatch' }) });
+    fetchImpl = async () => ({ ok: false, status: 409, json: async () => ({ error: 'ask-mismatch' }) });
     const self = load();
     await click(self, 'ask:abc123:0', { sessionId: 'cc-a' });
     expect(shown.at(-1)!.title).toBe("Couldn't answer");
@@ -171,37 +171,56 @@ describe('push-sw: answering from the notification', () => {
     ];
     for (const token of TOKENS) {
       shown = [];
-      fetchImpl = async () => ({ ok: false, json: async () => ({ error: token }) });
+      fetchImpl = async () => ({ ok: false, status: 409, json: async () => ({ error: token }) });
       const self = load();
       await click(self, 'ask:k:0', { sessionId: 'cc-a' });
       const body = shown.at(-1)!.opts.body as string;
-      expect(body, `no sentence for "${token}"`).not.toBe('The session moved on — tap to open it.');
+      expect(body, `no sentence for "${token}"`)
+        .not.toBe('No reason given (HTTP 409) — tap to open the session.');
       expect(body.length).toBeGreaterThan(0);
     }
   });
 
-  it('falls back to a generic sentence for a token it does not know', async () => {
-    fetchImpl = async () => ({ ok: false, json: async () => ({ error: 'something-new' }) });
+  // The fallback names no cause. "The session moved on" was a guess dressed as
+  // a fact — this branch also catches a 502 from a proxy in front, a 500, an
+  // unreadable body, none of which say anything about the session — so it
+  // reports the one thing the response really did state.
+  it('falls back to a sentence that names no cause, only the status, for a token it does not know', async () => {
+    fetchImpl = async () => ({ ok: false, status: 409, json: async () => ({ error: 'something-new' }) });
     const self = load();
     await click(self, 'ask:k:0', { sessionId: 'cc-a' });
-    expect(shown.at(-1)!.opts.body).toBe('The session moved on — tap to open it.');
+    expect(shown.at(-1)!.opts.body).toBe('No reason given (HTTP 409) — tap to open the session.');
   });
 
   it('still says something when the refusal body cannot be read', async () => {
-    fetchImpl = async () => ({ ok: false, json: async () => { throw new Error('empty'); } });
+    fetchImpl = async () => ({ ok: false, status: 502, json: async () => { throw new Error('empty'); } });
     const self = load();
     await click(self, 'ask:k:0', { sessionId: 'cc-a' });
     expect(shown.at(-1)!.title).toBe("Couldn't answer");
-    expect(shown.at(-1)!.opts.body).toBe('The session moved on — tap to open it.');
+    // A gateway that never reached ccrc-server at all: the old copy told the
+    // operator the session had moved on, which it had not.
+    expect(shown.at(-1)!.opts.body).toBe('No reason given (HTTP 502) — tap to open the session.');
   });
 
-  it('never silently drops on a network failure', async () => {
+  // PR F whole-branch review, Important 1. A rejected fetch proves only that
+  // the RESPONSE never arrived: the POST may have reached the server, passed
+  // every gate and pressed the digit, with the connection dying before the
+  // reply came back. "Still unanswered / The tap did nothing" states the one
+  // thing nothing in scope establishes, and sends the operator looking for a
+  // menu that may be long gone.
+  it('never silently drops on a network failure — and claims nothing about the outcome', async () => {
     fetchImpl = async () => { throw new Error('offline'); };
     const self = load();
     await click(self, 'ask:abc123:0', { sessionId: 'cc-a' });
-    expect(shown.at(-1)!.title).toBe('Still unanswered');
+    expect(shown.at(-1)!.title).toBe("Couldn't confirm");
     expect(shown.at(-1)!.opts.body).toBe('No connection — tap to open the session.');
     expect((shown.at(-1)!.opts.data as { sessionId: string }).sessionId).toBe('cc-a');
+    // Says nothing about whether the question is still waiting, in either the
+    // title or the body — only the response could tell "never sent" from
+    // "sent and applied".
+    const said = `${shown.at(-1)!.title} ${shown.at(-1)!.opts.body as string}`.toLowerCase();
+    expect(said).not.toContain('unanswered');
+    expect(said).not.toContain('still waiting');
   });
 
   it('keeps the reply in the same slot as the notification it replaces', async () => {

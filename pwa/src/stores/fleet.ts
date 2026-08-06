@@ -16,9 +16,26 @@ export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
   notices: FleetNotice[];
-  /** Notifications the server fired while this device was away, learned on
-   *  reconnect. Empty after a resync — see `lib/notifymark.ts` for why nothing
-   *  is ever surfaced retroactively in that case. */
+  /**
+   * Notifications the server RECORDED since this device last asked — i.e.
+   * since the previous fleet-socket open, because that is the only moment the
+   * watermark advances.
+   *
+   * Not "while this device was away", which is what this said and what nothing
+   * here can prove: a phone connected, awake and pushed the whole time gets
+   * exactly the same list, since the mark only moves on connect. Not "what
+   * this device failed to receive" either — the log records what the server
+   * DECIDED to raise, before delivery (`watch.ts`'s `pushOne`), so it can
+   * legitimately name events that were delivered and read.
+   *
+   * Nothing renders this today. Whatever eventually does must not call it
+   * missed, and must render it on receipt: `applyCatchUp` advances the durable
+   * mark the moment the response lands, one-way, so these events are volatile
+   * and can never be asked for again.
+   *
+   * Empty after a resync — see `lib/notifymark.ts` for why nothing is ever
+   * surfaced retroactively in that case.
+   */
   missed: NotifyEvent[];
   connect(): void;
   disconnect(): void;
@@ -74,21 +91,34 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       connect() {
         if (socket) return;
-        // What did this device miss? Asked once per connect, including
-        // automatic reconnects — a phone that slept through a question is
-        // exactly the case this exists for. Never awaited and never allowed to
-        // reject: the fleet stream is the thing that matters, and a catch-up
-        // that fails simply leaves `missed` empty, which is the honest answer.
-        const askCatchUp = (): void => {
+        // What has the server recorded since we last asked? Asked once per
+        // connect, including automatic reconnects — a phone that slept through
+        // a question is exactly the case this exists for. Never awaited and
+        // never allowed to reject: the fleet stream is the thing that matters,
+        // and a catch-up that fails simply leaves `missed` empty, which is the
+        // honest answer.
+        //
+        // SERIALISED, because the mark is one value with one owner. A
+        // reconnect storm (backoff of 500 ms against a request that has not
+        // answered yet) opens the socket again while the first catch-up is
+        // still in flight; unchained, the second reads the same STALE mark,
+        // asks for the same range, and whichever response lands last is what
+        // gets persisted — so the mark can go BACKWARDS and `missed` can gain
+        // duplicates. Chaining makes the second request read the mark the
+        // first one wrote, which is both correct and what it would have asked
+        // for anyway. `run` never rejects, so the chain cannot break.
+        let chain: Promise<void> = Promise.resolve();
+        const run = (): Promise<void> => {
           const mark = loadMark();
           const fetchCatchUp = deps.catchUp ?? ((e, s) => api.catchUp(e, s));
-          void fetchCatchUp(mark?.epoch ?? null, mark?.seq ?? 0)
+          return fetchCatchUp(mark?.epoch ?? null, mark?.seq ?? 0)
             .then((r) => {
               const events = applyCatchUp(r);
               if (events.length > 0) set((s) => ({ missed: [...s.missed, ...events] }));
             })
             .catch(() => { /* offline, or an older server with no such route */ });
         };
+        const askCatchUp = (): void => { chain = chain.then(run); };
         socket = new ReconnectingSocket({
           url: () => wsUrl('/ws/fleet'),
           onMessage: (m) => {

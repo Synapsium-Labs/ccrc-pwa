@@ -5,6 +5,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
+  PRESENCE_REFRESH_MS,
   type ChatEvent,
   type Dialog,
   type HookAsk,
@@ -32,7 +33,13 @@ export interface PendingSend {
   /** The server's own refusal token behind `error`. The bubble branches on
    *  this, never on the sentence. */
   code?: string;
-  /** Captured server-side draft on a 409 draft-present failure (Composer sheet). */
+  /** The box row the server READ, whenever a 409 carried one. Two failures
+   *  carry it and they mean opposite things: on `draft-present` it is the
+   *  OTHER text, already in the box, that this send refused to clobber (the
+   *  Composer sheet shows it); on `enter-ignored` it is OUR OWN text, proven
+   *  sitting in the box after both Enters were swallowed — which is what `Send
+   *  it` sends back as its correspondence claim, so the rescue can only ever
+   *  submit the message this bubble is showing. */
   draft?: string;
   /** Remembered so retry() repeats the original call. */
   replaceDraft?: boolean;
@@ -205,18 +212,26 @@ function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingS
 const failureOf = (e: unknown): { error: string; code?: string; draft?: string } => {
   if (e instanceof ApiError) {
     const body = e.body;
-    if (typeof body === 'object' && body !== null) {
-      const b = body as { error?: unknown; draft?: unknown };
-      if (b.error === 'draft-present') {
-        return { error: 'draft-present', code: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
-      }
+    const b = typeof body === 'object' && body !== null
+      ? (body as { error?: unknown; draft?: unknown })
+      : {};
+    if (b.error === 'draft-present') {
+      return { error: 'draft-present', code: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
     }
     // `error` is the SENTENCE and `code` the server's token. They are kept
     // separate because the bubble now branches on the token (only
     // `enter-ignored` earns a Send it button) while still rendering the
     // sentence — reading the branch off the humanised text would break the
     // moment someone rewords it.
-    return { error: sendErrorText(e.message), code: e.message };
+    //
+    // The `draft` rides along whenever the refusal carried one. `enter-ignored`
+    // does, and it is not decoration: it is the box row `Send it` must hand
+    // back for the server's correspondence gate, and a bubble without it gets
+    // no button at all rather than a button that submits an unproven box.
+    return {
+      error: sendErrorText(e.message), code: e.message,
+      ...(typeof b.draft === 'string' ? { draft: b.draft } : {}),
+    };
   }
   return { error: e instanceof Error ? e.message : 'send failed' };
 };
@@ -234,6 +249,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   const apiImpl = deps.api ?? api;
   const confirmTimeoutMs = deps.confirmTimeoutMs ?? 5_000;
   let socket: ReconnectingSocket | null = null;
+  /** The presence heartbeat's timer — see `beat` below. */
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -292,6 +309,23 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       reportVisible();
     };
 
+    /**
+     * The heartbeat behind that claim, and the reason the server can believe
+     * it. A claim held for the socket's lifetime survives the socket's DEATH
+     * whenever no close frame arrives — a phone in a lift or a tunnel sends no
+     * FIN — and every notification for this session would then be suppressed
+     * for a viewer who is long gone, indefinitely. So the server expires a
+     * claim it has not heard for `PRESENCE_TTL_MS` and this re-states it every
+     * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
+     * in `shared/api.ts`).
+     *
+     * Only while visible: a hidden tab's claim is a DELETE on the server, and
+     * a deletion does not need repeating.
+     */
+    const beat = (): void => {
+      if (document.visibilityState === 'visible') reportVisible(true);
+    };
+
     return {
       events: [],
       offset: 0,
@@ -334,11 +368,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         socket.start();
         document.addEventListener('visibilitychange', onVisible);
         window.addEventListener('online', nudge);
+        heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
       },
 
       disconnect() {
         document.removeEventListener('visibilitychange', onVisible);
         window.removeEventListener('online', nudge);
+        if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
         // Say so before the socket goes: leaving the session screen means the
         // operator is no longer looking at it, and a close alone would let the
         // server infer that only from the disconnect — true here, but not for
