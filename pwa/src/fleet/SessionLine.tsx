@@ -163,16 +163,28 @@ export function SessionLine({
 
           The row keeps its full-block tap surface anyway. This div's onClick
           is a CONVENIENCE forwarder for the dead space between cells (the
-          meta line's gaps, the ask line) and it stands down whenever a real
-          control was hit: `closest('button')` is the whole guard. One place,
-          it covers every control this row ever grows, and it covers keyboard
-          activation for free — Enter/Space on a <button> dispatches a click
-          that bubbles here exactly as a tap does, so the toggle needs no
-          `stopPropagation` and no hand-rolled key handler of its own. */}
+          meta line's gaps, the ask line) and it stands down for two things:
+          any real control that was hit (`closest('button')` — one place, it
+          covers every control this row ever grows, and it covers keyboard
+          activation for free, since Enter/Space on a <button> dispatches a
+          click that bubbles here exactly as a tap does, so the toggle needs
+          no `stopPropagation` and no hand-rolled key handler of its own), and
+          the expanded subagent list, which is content rather than dead space.
+          See the handler for why the second one is not optional. */}
       <div
         className="sess-body"
         onClick={(e) => {
-          if ((e.target as HTMLElement).closest('button') !== null) return;
+          const el = e.target as HTMLElement;
+          // Two stand-downs. Any real control on the row (`closest('button')`
+          // covers every one this row ever grows, keyboard activation
+          // included — Enter/Space on a <button> dispatches a click that
+          // bubbles here). And the expanded subagent list, which is CONTENT,
+          // not dead space: it renders inside this block, so a tap on a
+          // subagent's name used to navigate away from the disclosure the
+          // operator had just opened, and a truncated name could not even be
+          // selected to read.
+          if (el.closest('button') !== null) return;
+          if (el.closest('.sess-subagent-list') !== null) return;
           open();
         }}
       >
@@ -230,7 +242,13 @@ export function SessionLine({
               type="button"
               className="sess-subagents"
               aria-expanded={subagentsOpen}
-              aria-controls={subagentsId}
+              /* Only while the list it names actually exists. `aria-controls`
+                 is an IDREF, and the <ul> below is conditionally rendered —
+                 so on the collapsed row, which is the state a user would
+                 follow the reference FROM, it pointed at nothing. Dropping it
+                 there is the honest shape: `aria-expanded` already carries
+                 the disclosure's whole contract. */
+              aria-controls={subagentsOpen ? subagentsId : undefined}
               aria-label={`${subagentList.length} subagent${subagentList.length === 1 ? '' : 's'}`}
               onClick={() => setSubagentsOpen((o) => !o)}
             >
@@ -284,7 +302,10 @@ export function SessionLine({
           <ul id={subagentsId} className="sess-subagent-list">
             {subagentList.map((sa) => (
               <li key={`${sa.name}-${sa.startedAt}`} className="sess-subagent-row">
-                <span className="sess-subagent-name">{sa.name}</span>
+                {/* `title`, because .sess-subagent-name ellipsises: a long
+                    agent name is otherwise unreadable on this row and the
+                    row is not a link to anywhere that would show it. */}
+                <span className="sess-subagent-name" title={sa.name}>{sa.name}</span>
                 <span className="sess-subagent-elapsed">{subagentElapsed(sa.startedAt)}</span>
               </li>
             ))}

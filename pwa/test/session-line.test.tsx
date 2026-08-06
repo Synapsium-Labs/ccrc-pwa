@@ -316,13 +316,26 @@ describe('subagent disclosure', () => {
     render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     const toggle = screen.getByRole('button', { name: '1 subagent' });
+    await userEvent.click(toggle);
     const id = toggle.getAttribute('aria-controls');
     expect(id).toBeTruthy();
-    await userEvent.click(toggle);
     const list = document.getElementById(id!);
     expect(list).not.toBeNull();
     expect(list).toHaveClass('sess-subagent-list');
     expect(list!.contains(screen.getByText('reviewer'))).toBe(true);
+  });
+
+  // …and NOT while it is closed. The <ul> is conditionally rendered, so a
+  // constant `aria-controls` was an IDREF resolving to nothing in exactly the
+  // state a user would follow it from — the collapsed row. `aria-expanded`
+  // carries the whole contract there.
+  it('carries no aria-controls while the list it would name does not exist', () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: '1 subagent' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveAttribute('aria-controls');
+    expect(document.querySelector('.sess-subagent-list')).toBeNull();
   });
 
   // Keyboard activation was the one part of round 1 with zero coverage, and
@@ -397,6 +410,30 @@ describe('subagent disclosure', () => {
                    onOpen={onOpen} onActions={() => {}} />);
     await userEvent.click(container.querySelector('.sess-meta')!);
     expect(onOpen).toHaveBeenCalledWith('demo-quiet-mesa');
+  });
+
+  // …and the list itself is not dead space. It renders INSIDE .sess-body, so
+  // the forwarder used to navigate for any tap on it: the operator opened the
+  // disclosure, reached for a name, and lost the fleet screen. A truncated
+  // name also had no way to be read — you could not even select it.
+  it('does not open the session when a subagent row is tapped', async () => {
+    const onOpen = vi.fn();
+    render(<SessionLine session={s({ subagents: [{ name: 'code-reviewer', startedAt: Date.now() }] })}
+                        onOpen={onOpen} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    onOpen.mockClear();
+
+    await userEvent.click(screen.getByText('code-reviewer'));
+    await userEvent.click(document.querySelector('.sess-subagent-row')!);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('carries the full name in a title, since the row ellipsises it', async () => {
+    render(<SessionLine session={s({ subagents: [{ name: 'a-very-long-subagent-name', startedAt: 1 }] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(screen.getByText('a-very-long-subagent-name'))
+      .toHaveAttribute('title', 'a-very-long-subagent-name');
   });
 
   it('collapses again on a second tap', async () => {

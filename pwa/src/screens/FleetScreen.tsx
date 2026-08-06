@@ -3,7 +3,7 @@
 // offline/notice banners, skeletons while the first snapshot is in flight, a
 // friendly first-run block, and a floating "+" within thumb reach that opens
 // the NewSessionSheet.
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -74,10 +74,37 @@ export function FleetScreen({
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   // Pruned against every fresh snapshot: `prune` only ever REMOVES entries for
   // ids the fleet no longer has, so a session acked a moment ago and still
-  // live survives untouched. It publishes, so no setState is needed here.
+  // live survives untouched — it starts from seen.ts's own published map, not
+  // from a re-read of storage, which is what used to let an ack storage
+  // refused be rolled back by the very next tick. It publishes, so no setState
+  // is needed here.
   useEffect(() => {
     prune(new Set(sessions.map((s) => s.id)));
   }, [sessions]);
+
+  // "Mark all seen" unmounts itself. Both halves of the repair live here.
+  //
+  // FOCUS: the button is inside `{unseenCount > 0 && …}`, so activating it
+  // removes the focused element, and the browser's fallback for that is
+  // `document.body` — the next Tab restarts at the wordmark, past the bell,
+  // the banners and every preceding chip. Focus moves to the chip's own
+  // label, which is where the operator was.
+  //
+  // ANNOUNCEMENT: a screen-reader user otherwise gets nothing at all — the
+  // control they were on ceased to exist and a pill silently vanished, which
+  // is indistinguishable from a no-op. The message names the bucket and the
+  // count, because "done" would be the same sentence for every chip.
+  const labelRefs = useRef<Partial<Record<(typeof BUCKET_ORDER)[number], HTMLElement | null>>>({});
+  const [ackNote, setAckNote] = useState('');
+  const markSeen = (
+    bucket: (typeof BUCKET_ORDER)[number],
+    inBucket: readonly FleetSession[],
+    unseenCount: number,
+  ): void => {
+    ackAll(inBucket, Date.now());
+    setAckNote(`${SECTION_LABEL[bucket]}: ${unseenCount} marked seen`);
+    labelRefs.current[bucket]?.focus();
+  };
 
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const [newOpen, setNewOpen] = useState(false);
@@ -238,19 +265,44 @@ export function FleetScreen({
         <>
           {showAccounts && <AccountsStrip />}
 
-          {/* Bucket sections — above the project cards, one chip per
-              non-empty bucket, in the same RANK order the list itself sorts
-              by. Counts come from THIS render's own `sessions` array, the
-              identical one the cards below iterate — there is no second
-              count to disagree with the rows. */}
+          {/* Bucket chips — above the project cards, one per non-empty
+              bucket, in the same RANK order the list itself sorts by. Counts
+              come from THIS render's own `sessions` array, the identical one
+              the cards below iterate, so a chip's number is always the number
+              of ROWS the cards hold for that bucket. `groupFleet` splits its
+              per-project fold on `bucket === 'archived'` for exactly this
+              reason: on the `archivedAt` split, a merged workspace counted
+              under `Cleanup` here and rendered inside a fold labelled
+              `Archived (n)`, so this row named a bucket whose rows, glyph and
+              merge facts were nowhere on the screen.
+
+              Only the `Archived` chip's rows sit behind a fold, and that fold
+              states the identical count. The footer below is the wider DISK
+              set (everything with an `archivedAt`, merged ones included) and
+              says so in its own words rather than repeating the noun.
+
+              A `<div role="group">`, NOT a `<section aria-label>`: a labelled
+              section is a `region` LANDMARK, and seven of them named after
+              buckets — none containing any of that bucket's sessions — turns
+              the landmark rotor, whose whole job is to move a screen-reader
+              user to the region they named, into seven dead ends. */}
           <div className="bucket-bar">
             {BUCKET_ORDER.map((bucket) => {
               const inBucket = sessions.filter((s) => s.bucket === bucket);
               if (inBucket.length === 0) return null;
               const unseenCount = inBucket.filter((s) => isUnseen(s, acks)).length;
               return (
-                <section key={bucket} className="bucket-head" aria-label={SECTION_LABEL[bucket]}>
-                  <span className="bucket-head-label">{SECTION_LABEL[bucket]}</span>
+                <div key={bucket} role="group" className="bucket-head" aria-label={SECTION_LABEL[bucket]}>
+                  <span
+                    className="bucket-head-label"
+                    /* The focus target after an ack — see `markSeen`. -1, so
+                       it is reachable programmatically and never a Tab stop
+                       of its own. */
+                    tabIndex={-1}
+                    ref={(el) => { labelRefs.current[bucket] = el; }}
+                  >
+                    {SECTION_LABEL[bucket]}
+                  </span>
                   <span className="bucket-head-count">{inBucket.length}</span>
                   {unseenCount > 0 && (
                     <>
@@ -260,16 +312,34 @@ export function FleetScreen({
                       <button
                         type="button"
                         className="bucket-head-seen"
-                        onClick={() => ackAll(inBucket, Date.now())}
+                        /* The bucket is IN the accessible name. Every one of
+                           these used to be the bare string "Mark all seen",
+                           and NVDA's Elements List, JAWS's button list and
+                           the VoiceOver rotor all list controls by name
+                           alone, outside their containing group — so three
+                           unseen buckets produced three identical entries and
+                           picking the wrong one silently cleared the badge on
+                           the session Claude is still blocked on, with no way
+                           to restore it. */
+                        aria-label={`Mark all ${SECTION_LABEL[bucket]} seen`}
+                        onClick={() => markSeen(bucket, inBucket, unseenCount)}
                       >
                         Mark all seen
                       </button>
                     </>
                   )}
-                </section>
+                </div>
               );
             })}
           </div>
+          {/* The ack's only evidence. Activating "Mark all seen" DESTROYS the
+              control that was activated (both it and the badge live inside
+              `unseenCount > 0`), so there is nothing left to announce a state
+              change on and — without the focus transfer in `markSeen` — the
+              browser drops focus to <body>, restarting the next Tab at the
+              top of the document. Outside the chip so it is not unmounted by
+              the very update it reports. */}
+          <div className="sr-only" role="status">{ackNote}</div>
 
           <div className="fleet-list">
             {groupFleet(sessions, acks).map((g) => (
@@ -301,9 +371,18 @@ export function FleetScreen({
                screen's own total (fix round 3, P3): a fleet whose archives
                were never measured used to read "Archived · 3 · 0 B" — a
                stated total for three workspaces nobody sized — and a
-               half-measured fleet stated its measured part as the whole. */
+               half-measured fleet stated its measured part as the whole.
+
+               "on disk", because this is the ONLY count on the screen that is
+               not a bucket. `archivedSummary` keys on `archivedAt`, so it
+               covers the merged workspaces the `Cleanup` chip files
+               separately — which is right for a disk figure and is why the
+               reclaimable bytes are honest — but as the bare word "Archived"
+               it put a third number under a noun the chip and the per-project
+               fold were already using for a strictly smaller set. Same set as
+               `/archive`, which is where this goes. */
             <button type="button" className="fleet-archived-row" onClick={() => navigate('/archive')}>
-              {`Archived · ${archived.count} · ${archivedSizeText(archived)}`}
+              {`Archived on disk · ${archived.count} · ${archivedSizeText(archived)}`}
             </button>
           )}
         </>

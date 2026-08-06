@@ -80,9 +80,19 @@ export function SessionScreen({
   // to another (no intervening fleet-screen visit) mounts this component
   // fresh with a new `id`, and that session is exactly as "seen" as one
   // reached via the fleet list.
+  //
+  // `bucketSince` rides along and is in the deps for two reasons. It floors
+  // the stamp against the FLEET HOST's clock (seen.ts's `stampFor`: a device
+  // running behind writes an ack older than the episode it just read, and the
+  // badge never clears). And on a deep link the fleet snapshot has not landed
+  // at mount, so the first fire has no episode to floor to — this re-fires
+  // once it arrives. It is not a per-tick write: the dep is the timestamp
+  // itself, so it fires only when the session actually enters a new episode,
+  // which is exactly the episode this open screen is showing its human.
+  const bucketSince = live?.bucketSince ?? null;
   useEffect(() => {
-    ack(id, Date.now());
-  }, [id]);
+    ack(id, Date.now(), bucketSince);
+  }, [id, bucketSince]);
 
   // Published on :root, not on .chat — ToastHost is not inside this subtree, and
   // custom properties only inherit downward. Cleared on unmount so the fleet

@@ -529,12 +529,20 @@ function EnvelopeSheet({
   // `close` follows for `answering` alone).
   const [denying, setDenying] = useState(false);
   const busy = answering !== null || denying;
-  // A FREE-TEXT question: `options: []`. Hoisted out of `canAnswer` because
-  // two things read it and they must not drift — the gate below, and the copy
-  // that explains an ungated sheet. It is a property of the ENVELOPE and fixed
-  // for that envelope's whole life: no pane update, no reparse, nothing the
-  // user can wait for will ever add options to it.
-  const freeText = !('approval' in ask) && ask.questions[0]!.options.length === 0;
+  // A question the envelope carries NO OPTIONS for: `options: []`. Hoisted out
+  // of `canAnswer` because two things read it and they must not drift — the
+  // gate below, and the copy that explains an ungated sheet. It is a property
+  // of the ENVELOPE and fixed for that envelope's whole life: no pane update,
+  // no reparse, nothing the user can wait for will ever add options to it.
+  //
+  // What it is NOT is proof that the TUI is asking for prose. This used to be
+  // named and commented as "free text — the TUI's own 'chat about this' shape
+  // at the envelope level", and this same file disproves that: `CHAT_ABOUT_RE`
+  // exists precisely because "chat about this" arrives as an OPTION LABEL in a
+  // populated list. `options: []` says only that this envelope lists nothing
+  // to tap; the user-facing copy below therefore states that, and stops short
+  // of telling the operator what the terminal wants from them.
+  const noOptions = !('approval' in ask) && ask.questions[0]!.options.length === 0;
   // C1: a real correspondence check, not a null check — see fix round 3 in
   // the file header and `questionCorresponds` above. Approval and questions
   // use different rules because they answer differently: Allow always types
@@ -542,8 +550,8 @@ function EnvelopeSheet({
   // pane reads like "Yes" (the file's longstanding assumption, now asserted
   // rather than trusted); a question can have any number of options, so
   // every one of them has to line up by position.
-  // Task 7: a free-text question (`options: []`, the TUI's own "chat about
-  // this" shape at the envelope level) has nothing to correspond BY —
+  // Task 7: a question the envelope gives no options for (`options: []`) has
+  // nothing to correspond BY —
   // `questionCorresponds`'s `every` over an empty array is vacuously true,
   // which would read as "answerable" the moment ANY parsed dialog happened
   // to be live, even one describing a wholly different question. There is
@@ -557,7 +565,7 @@ function EnvelopeSheet({
   const canAnswer =
     'approval' in ask
       ? dialog !== null && dialog.parsed && /^yes/i.test(dialog.options[0]?.label ?? '')
-      : !freeText && questionCorresponds(ask.questions[0]!, dialog);
+      : !noOptions && questionCorresponds(ask.questions[0]!, dialog);
 
   const close = (): void => {
     if (busy) return;
@@ -680,15 +688,24 @@ function EnvelopeSheet({
       <div data-source="hook" className="ask-envelope">
         {/* Two different dead ends, and the copy must not confuse them. An
             unmatched question is TRANSIENT — the pane can catch up, and then
-            the rows below become tappable — so "wait" is honest advice. A
-            free-text question is not: `options: []` is fixed for the life of
-            the envelope, there are no rows to become tappable, and nothing
+            the rows below become tappable — so "wait" is honest advice. An
+            option-less envelope is not: `options: []` is fixed for the life
+            of the envelope, there are no rows to become tappable, and nothing
             the user waits for can change that. Telling them to wait would be
-            a claim the state cannot support (and an unbounded wait). */}
+            a claim the state cannot support (and an unbounded wait).
+
+            What the option-less sentence must NOT do is guess what the
+            terminal wants instead. It used to say "this one wants an answer
+            in your own words" — an inference from `options: []` that this
+            file itself disproves (`CHAT_ABOUT_RE`: the TUI's free-text
+            escape hatch arrives as an option LABEL, in a populated list), and
+            one that would send the operator to type prose at a menu. It now
+            says only what is known: this envelope lists nothing to tap, and
+            the pane is where the answer goes. */}
         {!canAnswer && (
           <p className="dlg-copy">
-            {freeText
-              ? 'This one wants an answer in your own words, so there is nothing to tap here — type it on the terminal pane.'
+            {noOptions
+              ? 'This envelope carries no options, so there is nothing to tap here — answer it on the terminal pane.'
               : "This can't be matched to what's on the terminal pane yet — answer it there, or wait for it to catch up."}
           </p>
         )}

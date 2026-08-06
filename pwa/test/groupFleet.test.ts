@@ -171,38 +171,59 @@ describe('pin', () => {
   });
 });
 
-describe('archived rows', () => {
-  const at = (id: string, archivedAt: number | null): FleetSession =>
-    ({ ...s({ id, project: 'demo' }), archivedAt });
+describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () => {
+  /** An archived-bucket row: the server's ladder files `archivedAt !== null`
+   *  with no merged PR exactly here (shared/api.ts's `sessionBucket`). */
+  const arch = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+    s({ id, project: 'demo', archivedAt: 1785300000, bucket: 'archived', ...over });
+  /** The same workspace once its PR merged — `cleanup`, the leapfrog bucket.
+   *  `archivedAt` is set on BOTH, which is the whole point below. */
+  const clean = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+    s({ id, project: 'demo', archivedAt: 1785300000, bucket: 'cleanup', ...over });
 
   it('splits archived sessions out of the live list without dropping them', () => {
-    const [g] = groupFleet([at('demo-a', null), at('demo-b', 1785300000)]);
+    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), arch('demo-b')]);
     expect(g!.sessions.map((x) => x.id)).toEqual(['demo-a']);
     expect(g!.archived.map((x) => x.id)).toEqual(['demo-b']);
   });
 
+  // THE fix. Both predicates are true of a cleanup row, and the `archivedAt`
+  // one swept it into a fold named after a DIFFERENT bucket: the bucket bar
+  // counted `Cleanup 1` and offered "Mark all seen" for a row that rendered
+  // nowhere on the screen, under a fold that read `Archived (2)`.
+  it('leaves a cleanup row in the live list, where its own chip counts it', () => {
+    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), clean('demo-merged')]);
+    expect(g!.sessions.map((x) => x.id)).toContain('demo-merged');
+    expect(g!.archived.map((x) => x.id)).toEqual([]);
+  });
+
+  // And the counts the two surfaces render therefore agree: the fold's own
+  // `Archived (n)` is exactly the `Archived` chip's members, never the union.
+  it('makes the fold the same set the Archived chip counts', () => {
+    const fleet = [arch('demo-b'), clean('demo-merged'), s({ id: 'demo-a', project: 'demo' })];
+    const [g] = groupFleet(fleet);
+    expect(g!.archived).toHaveLength(fleet.filter((x) => x.bucket === 'archived').length);
+  });
+
   it('keeps a project whose sessions are ALL archived', () => {
     // Dropping it would make the workspace reachable only by a URL nobody has.
-    const [g] = groupFleet([at('demo-b', 1785300000)]);
+    const [g] = groupFleet([arch('demo-b')]);
     expect(g!.sessions).toEqual([]);
     expect(g!.archived).toHaveLength(1);
   });
 
-  it('excludes archived rows from attention, busy and the pin', () => {
-    // demo-a and busyArchived deliberately disagree on home: if pin were
+  it('excludes archived rows from the pin', () => {
+    // demo-a and the archived row deliberately disagree on home: if pin were
     // computed over the whole membership (archived included), the mismatch
     // would read as disagreement (pin: null). Excluding the archived row
-    // leaves demo-a as the pin's only voter.
-    //
-    // The archived row carries `bucket: 'attention'` (with the dialogPending
-    // that would have produced it), not the fixture's default `idle`: an idle
-    // row is excluded from `attention` by its bucket alone, whatever the
-    // scoping, so it could not tell a `live` filter from a `members` one.
-    const busyArchived = {
-      ...at('demo-b', 1785300000), status: 'busy' as const, dialogPending: true,
-      bucket: 'attention' as const, home: 'claude2',
-    };
-    const [g] = groupFleet([{ ...at('demo-a', null), home: 'claude' }, busyArchived]);
+    // leaves demo-a as the pin's only voter. `attention`/`busy` cannot be
+    // discriminated this way any more and the fixture no longer pretends to:
+    // the split is now the bucket itself, so an archived-bucket row is
+    // excluded from both by the bucket test alone, whatever the scoping.
+    const [g] = groupFleet([
+      s({ id: 'demo-a', project: 'demo', home: 'claude' }),
+      arch('demo-b', { home: 'claude2' }),
+    ]);
     expect(g!.busy).toBe(0);
     expect(g!.attention).toBe(false);
     expect(g!.pin).toBe('claude');
@@ -213,21 +234,19 @@ describe('archived rows', () => {
     // groupFleet.ts) exists so this branch never indexes an empty array —
     // dropping the `: members` half leaves `forPin` empty here, which is
     // exactly what the "ALL archived" test above does not check.
-    const [g] = groupFleet([{ ...at('demo-b', 1785300000), home: 'claude-corp' }]);
+    const [g] = groupFleet([arch('demo-b', { home: 'claude-corp' })]);
     expect(g!.pin).toBe('claude-corp');
   });
 
-  it('excludes a working-bucket archived row from the busy count', () => {
-    // The test above uses an archived row the server filed `attention`, which
-    // is excluded from `busy` by its bucket regardless of whether the filter
-    // is scoped to `live` or to the whole membership — it cannot by itself
-    // prove `busy` is scoped to `live`. This row's bucket IS `working`, so a
-    // `members.filter` regression would count it.
-    const busyArchived = {
-      ...at('demo-b', 1785300000), status: 'busy' as const, bucket: 'working' as const,
-    };
-    const [g] = groupFleet([at('demo-a', null), busyArchived]);
-    expect(g!.busy).toBe(0);
+  it('counts an unseen cleanup member in `unseen`, since it is a live row now', () => {
+    // `cleanup` is a BADGED bucket (seen.ts). A per-project badge that
+    // skipped it would undercount against the bucket bar's Cleanup chip —
+    // the two would be describing the same rows and disagreeing.
+    const [g] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], {});
+    expect(g!.unseen).toBe(1);
+    const [seenGroup] = groupFleet([clean('demo-merged', { bucketSince: 5000 })],
+      { 'demo-merged': 6000 });
+    expect(seenGroup!.unseen).toBe(0);
   });
 });
 
@@ -247,21 +266,42 @@ describe('the unseen field\'s doc', () => {
     .replace(/^[ \t]*\*[ \t]?/gm, '')
     .replace(/\s+/g, ' ');
 
-  /** Surfaces the doc might claim, and the file each one would live in. */
+  /** Surfaces the doc might claim, and the file each one would live in. The
+   *  FIRST entry is the one that ships today — it is in the list precisely so
+   *  the loop below has a live body. Without it both claims were tuned to a
+   *  wording the doc no longer uses, `continue` fired twice, and the only
+   *  assertion left standing was "the doc contains the phrase bucket bar". */
   const SURFACES = [
-    { claim: /row'?s own badge/, file: path.join('fleet', 'SessionLine.tsx') },
-    { claim: /the bell/, file: path.join('fleet', 'NotificationBell.tsx') },
+    { claim: /bucket bar/i, file: path.join('screens', 'FleetScreen.tsx'), ships: true },
+    { claim: /row'?s own badge/, file: path.join('fleet', 'SessionLine.tsx'), ships: false },
+    { claim: /the bell/, file: path.join('fleet', 'NotificationBell.tsx'), ships: false },
   ];
 
   it('names only surfaces that actually read isUnseen', () => {
+    let checked = 0;
     for (const { claim, file } of SURFACES) {
       if (!claim.test(doc)) continue;
       // Claimed — then it had better be true. This passes the day the row
       // badge really lands and its file starts calling isUnseen.
       expect(readFileSync(path.join(srcDir, file), 'utf8')).toMatch(/isUnseen/);
+      checked += 1;
     }
-    // …and it cannot pass vacuously by naming nothing at all: the one surface
-    // that DOES exist has to be named.
-    expect(doc).toMatch(/bucket bar/i);
+    // The loop is not allowed to be vacuous. The shipping surface must be
+    // named AND must have been checked — which is what fails if either the
+    // doc stops naming the bucket bar or FleetScreen stops calling isUnseen.
+    expect(doc).toMatch(SURFACES[0]!.claim);
+    expect(checked).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keeps the not-yet-shipped surfaces in the future tense', () => {
+    // The two below do NOT read isUnseen, so the doc may only name them as
+    // work to come. A rewrite to the present tense — "the row badge reads
+    // isUnseen" — would be the claim this block exists to catch, and the
+    // loop above would then demand the file back it up.
+    for (const { file, ships } of SURFACES) {
+      if (ships) continue;
+      expect(readFileSync(path.join(srcDir, file), 'utf8')).not.toMatch(/isUnseen/);
+    }
+    expect(doc).toMatch(/when a row badge or a bell counter arrives/i);
   });
 });

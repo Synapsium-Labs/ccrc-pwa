@@ -103,8 +103,23 @@ export function SessionHeader({
   // lands, there IS no bucket — only the live stream's status — so it is
   // translated into the same vocabulary ('busy' -> 'working'; idle and dead
   // spell the same word in both) purely so the strip can paint something.
+  //
+  // And neither is the `dead` override. This screen holds a LIVE stream for
+  // one session; the fleet snapshot is up to a tick behind it. Making the
+  // header snapshot-first (Task 6) dropped the override entirely, so a
+  // session whose own stream has already reported it dead kept pulsing amber
+  // "waiting on you" — the header contradicting the socket it is attached to,
+  // over the one state that asks the reader to act on a process that is gone.
+  // It only ever DEMOTES: `dead` is never manufactured into attention, and
+  // the bucket the server chose is what paints in every other case. Archived
+  // rows are exempt because `ws-archive` stops the session by construction —
+  // `dead` is true of every one of them, and saying "not running" there would
+  // bury `cleanup`'s merge facts under a liveness fact nobody is waiting on.
+  const snapshotBucket = session?.bucket ?? null;
   const bucket: SessionBucket | null =
-    session?.bucket ?? (st === null ? null : st === 'busy' ? 'working' : st);
+    st === 'dead' && session != null && session.archivedAt == null
+      ? 'dead'
+      : snapshotBucket ?? (st === null ? null : st === 'busy' ? 'working' : st);
 
   // `working` drives the visible clock's tempo; `busy` (the LIVE status, not
   // the snapshot's bucket) stays the gate on interrupting, because stopping a

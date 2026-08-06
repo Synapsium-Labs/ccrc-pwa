@@ -702,6 +702,14 @@ describe('DialogSheet (hook envelope)', () => {
     expect(copy.textContent).not.toMatch(/catch up|can't be matched/i);
     expect(copy.textContent).toMatch(/nothing to tap/i);
     expect(copy.textContent).toMatch(/terminal pane/i);
+    // …and it does not guess what the terminal wants instead. `options: []`
+    // says only that this envelope lists nothing to tap; it is NOT evidence
+    // that Claude is asking for prose — this same file's `CHAT_ABOUT_RE`
+    // exists because the TUI's free-text escape hatch arrives as an option
+    // LABEL in a populated list. "Answer in your own words" told the operator
+    // to type prose at what may well be a menu.
+    expect(copy.textContent).not.toMatch(/your own words/i);
+    expect(copy.textContent).not.toMatch(/type it/i);
   });
 
   // The other side of the same fork: a question WITH options that the pane

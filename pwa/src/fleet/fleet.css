@@ -65,14 +65,20 @@
   cursor: default;
 }
 
-/* — Build 2, attention UX: bucket sections. One chip per non-empty bucket
+/* — Build 2, attention UX: bucket chips. One per non-empty bucket
    (attention/working/done/idle/cleanup/archived/dead), above the project
    cards — the SAME `sessions` array the cards render, filtered by
-   `s.bucket`, so this row can never disagree with what is below it. Every
-   chip is self-grounded (background + color on the ONE rule) so the count,
-   the unseen badge and "Mark all seen" are all measured by design/audit.mjs's
-   own descendant-of-a-self-grounded-ancestor pass — nothing hand-registered
-   in contrast-check.mjs for these three, unlike the raw dot hues. */
+   `s.bucket`, so a chip's number is always the number of ROWS the cards hold
+   for that bucket. That is a property of `groupFleet` splitting its
+   per-project fold on the BUCKET, not on `archivedAt`; see FleetScreen.tsx
+   and groupFleet.ts for the shape it used to have, where `Cleanup` counted
+   rows that rendered nowhere on this screen. The one chip whose rows sit
+   behind a fold is `Archived`, and that fold states the identical count.
+   Every chip is self-grounded (background + color on the ONE rule) so the
+   count, the unseen badge and "Mark all seen" are all measured by
+   design/audit.mjs's own descendant-of-a-self-grounded-ancestor pass —
+   nothing hand-registered in contrast-check.mjs for these three, unlike the
+   raw dot hues. */
 .bucket-bar {
   display: flex;
   flex-wrap: wrap;
@@ -104,12 +110,33 @@
   font: var(--weight-semibold) var(--text-2xs) / 1.6 var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+/* The chip's label doubles as the focus target after an ack (FleetScreen's
+   `markSeen`) — tabIndex -1, so it takes focus programmatically and is never
+   a Tab stop. No focus ring: it is a destination, not a control, and the
+   browser draws :focus-visible only for keyboard-INITIATED focus anyway. */
+.bucket-head-label:focus {
+  outline: none;
+}
+/* An 11px line box inside `padding: var(--sp-1) 0` measured ~19px tall — well
+   under WCAG 2.2 SC 2.5.8's 24px floor — on a control whose action cannot be
+   undone (there is no un-ack; `bucketSince` will not advance again until the
+   bucket changes). A real 24px box, and deliberately NOT the invisible
+   ::before overlay `.sess-actions` and `.proj-card-add` use to reach
+   --tap-min: an overlay overhangs its neighbours, and every neighbour here —
+   the label, the count, the unseen pill — is inert, so an overhang would
+   convert a near-miss that does nothing today into an irreversible
+   activation. Growing the visible box is the only direction that is safe for
+   this particular button. */
 .bucket-head .bucket-head-seen {
   border: 0;
   background: none;
   color: var(--accent);
   font: var(--weight-medium) var(--text-2xs) / 1 var(--font-ui);
-  padding: var(--sp-1) 0;
+  display: inline-grid;
+  place-items: center;
+  min-height: var(--sp-6);
+  padding: 0 var(--sp-2);
+  margin-right: calc(-1 * var(--sp-2)); /* the chip's own right padding is the gutter */
   cursor: pointer;
 }
 .bucket-head .bucket-head-seen:active {
@@ -835,8 +862,17 @@
   line-height: var(--leading-tight);
 }
 
+/* Positioned WITH a z-index, for hit-testing rather than layout:
+   .sess-subagents' tap overlay below is absolutely positioned and reaches
+   ~4.5px up into this element's line box, and it would otherwise take those
+   taps — turning a tap on the bottom of the workspace name into a disclosure
+   toggle. `position: relative` alone is not enough: the overlay is also
+   positioned and comes LATER in tree order, so among z-index:auto siblings it
+   still wins. An explicit 1 is what puts the label back on top. */
 .sess-open {
   display: block;
+  position: relative;
+  z-index: 1;
   min-width: 0;
   padding: 0;
   background: none;
@@ -862,12 +898,28 @@
    above carries the row's identity, this carries its status. A flex row,
    not a grid: a missing child (no tally, no warning) just isn't rendered,
    instead of needing an empty placeholder to hold a track open. */
+/* `overflow: clip` with a MARGIN, not `overflow: hidden`. The clip is a
+   horizontal backstop (`.sess-acct` ellipsises itself; this stops any future
+   cell from widening the row), but it also clipped everything the subagent
+   disclosure needs to live OUTSIDE this 15px line box: its ::before tap
+   overlay below, and base.css's blanket :focus-visible ring, drawn 2px wide
+   at 2px offset — 4px past a border box that IS the line, so a keyboard user
+   got the ring's two vertical edges and no top or bottom. A clipped region
+   does not receive pointer events either, so the overlay would have been
+   clipped back to 15px too and bought nothing.
+
+   12px is the larger of the two bleeds it has to admit: 11px horizontal
+   (a --tap-min-wide overlay on a ~22px cell) against 4.5px vertical. Where
+   `overflow-clip-margin` is unsupported the declaration is dropped and this
+   degrades to today's `overflow: clip` — the ring is clipped again, nothing
+   is worse. */
 .sess-meta {
   display: flex;
   align-items: center;
   font-size: var(--text-xs);
   color: var(--ink-secondary);
-  overflow: hidden;
+  overflow: clip;
+  overflow-clip-margin: 12px;
 }
 /* Middot between whichever cells actually render — :not(:first-child)
    tracks the real DOM, so it never assumes state/tally/warn are all
@@ -904,16 +956,32 @@
    margin/padding and inherits the font, but this file states its own resets
    on .sess-open/.sess-actions too, and a cell that silently depended on
    preflight would be the odd one out).
-   Its focus ring is base.css's blanket `:focus-visible` — no element
-   qualifier there, so it applies — but the ring is drawn at outline-offset
-   2px on a child of `.sess-meta { overflow: hidden }`, whose content box is
-   exactly the 15px meta line, so the ring's top and bottom edges are clipped.
-   Open, recorded, not fixed here (fixing it means giving this cell real
-   padding, which is the same change the 44px tap-target gap wants). */
+
+   THE HIT AREA, which the visible box cannot be. Inheriting --text-xs at
+   --leading-tight leaves a 15px-tall, ~22px-wide box for `⑂ 3` — the first
+   row-level button in this file to ship under --tap-min, and the worst place
+   for it: a thumb landing 3px low misses the button, hits .sess-body's click
+   forwarder (guarded only by `closest('button')`) and NAVIGATES, so the
+   operator who wanted to see which subagents are running loses the fleet
+   screen instead of getting nothing. Same invisible ::before overlay as
+   .sess-actions/.proj-card-add — but --tap-min WIDE and only --sp-6 (24px,
+   WCAG 2.2 SC 2.5.8's floor) TALL, and the asymmetry is the point: a 44px-
+   tall overlay reaches 14.5px up, over the whole of `.sess-open`'s own line
+   box, and taps on the bottom of the workspace name would toggle the
+   disclosure instead of opening the session. That is a WRONG control, which
+   is strictly worse than the near-miss it would be fixing. At 24px the
+   overlay reaches 4.5px — the 2px gap plus leading — and `.sess-open` is
+   given `position: relative` so it wins hit-testing over even that.
+
+   Growing the visible box instead is not available: .sess-meta is a flex row,
+   so real padding raises the whole line and puts .sess-lamp's centring
+   formula (see the block above .sess-lamp) ~4px out on every row in the
+   fleet, disclosure open or not. */
 .sess-subagents {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
+  position: relative;
   padding: 0;
   background: none;
   border: 0;
@@ -921,6 +989,19 @@
   font-size: inherit;
   line-height: inherit;
   cursor: pointer;
+}
+.sess-subagents::before {
+  content: '';
+  position: absolute;
+  /* Insets are NEGATIVE — the overlay grows out of a box smaller than the
+     target on both axes. Height off the cell's own line box (the same
+     --text-xs × --leading-tight .sess-lamp's formula uses), so it tracks a
+     type-scale change instead of drifting; width off the cell's real width,
+     which no token knows, hence `left`/`right` in terms of --tap-min. */
+  top: calc((var(--text-xs) * var(--leading-tight) - var(--sp-6)) / 2);
+  bottom: calc((var(--text-xs) * var(--leading-tight) - var(--sp-6)) / 2);
+  left: calc((100% - var(--tap-min)) / 2);
+  right: calc((100% - var(--tap-min)) / 2);
 }
 
 /* The disclosure's own rows — a sibling LINE in .sess-body's flex column

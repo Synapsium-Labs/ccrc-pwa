@@ -104,7 +104,7 @@ describe('.fleet-archived-row — the fleet footer route into the archive', () =
           archivedAt: 100, archivedBytes: 1_200_000_000 })],
       });
     });
-    const row = screen.getByRole('button', { name: /archived · 1 · 1\.2 gb/i });
+    const row = screen.getByRole('button', { name: /archived on disk · 1 · 1\.2 gb/i });
     expect(row).toHaveClass('fleet-archived-row');
   });
 });
@@ -182,7 +182,7 @@ describe('the two rules that were already scraped still reach a real element', (
       store.setState({
         conn: 'open',
         sessions: [
-          sess({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100 }),
+          sess({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, bucket: 'archived' }),
           sess({ id: 'b', project: 'alpha', workspace: 'live-one', archivedAt: null }),
         ],
       });

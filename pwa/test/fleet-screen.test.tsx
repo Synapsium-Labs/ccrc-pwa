@@ -4,16 +4,21 @@ import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
-import { ack, loadAcks } from '../src/lib/seen';
+import { ack, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '../src/components/Toast';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
-// never leak into the next's initial (expanded) expectation.
+// never leak into the next's initial (expanded) expectation. `resetAcks` for
+// the watermark's half: seen.ts holds its map for the document's lifetime and
+// never re-reads storage (that is what stops a refused write being rolled
+// back a tick later), so clearing the key alone leaves one test's acks
+// clearing the next test's badges.
 beforeEach(() => {
   window.localStorage.clear();
+  resetAcks();
 });
 
 afterEach(() => {
@@ -460,6 +465,10 @@ describe('FleetScreen', () => {
         conn: 'open',
         sessions: [session({
           id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 1785300000,
+          // The archived BUCKET, which is what puts it behind the sub-fold —
+          // groupFleet splits on `bucket`, not on `archivedAt` (a merged
+          // workspace has both and belongs on the live list under Cleanup).
+          bucket: 'archived',
         })],
       });
 
@@ -491,6 +500,10 @@ describe('FleetScreen', () => {
         conn: 'open',
         sessions: [session({
           id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 1785300000,
+          // The archived BUCKET, which is what puts it behind the sub-fold —
+          // groupFleet splits on `bucket`, not on `archivedAt` (a merged
+          // workspace has both and belongs on the live list under Cleanup).
+          bucket: 'archived',
         })],
       });
 
@@ -547,8 +560,8 @@ describe('FleetScreen', () => {
       seed(store, {
         conn: 'open',
         sessions: [
-          session({ id: 'alpha-id', project: 'omega', workspace: 'alpha', archivedAt: 1785300000 }),
-          session({ id: 'bravo-id', project: 'omega', workspace: 'bravo', archivedAt: 1785300000 }),
+          session({ id: 'alpha-id', project: 'omega', workspace: 'alpha', archivedAt: 1785300000, bucket: 'archived' }),
+          session({ id: 'bravo-id', project: 'omega', workspace: 'bravo', archivedAt: 1785300000, bucket: 'archived' }),
         ],
       });
 
@@ -623,7 +636,7 @@ describe('bucket sections', () => {
       ],
     });
 
-    const head = screen.getByText('Working').closest('section')!;
+    const head = screen.getByText('Working').closest('.bucket-head') as HTMLElement;
     expect(within(head).getByText('3')).toBeInTheDocument();
   });
 
@@ -635,8 +648,8 @@ describe('bucket sections', () => {
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'idle' })],
     });
 
-    const head = screen.getByText('Idle').closest('section')!;
-    expect(within(head).queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+    const head = screen.getByText('Idle').closest('.bucket-head') as HTMLElement;
+    expect(within(head).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
   });
 
   it('badges an unseen session in a badged bucket, with a Mark all seen control', () => {
@@ -647,9 +660,9 @@ describe('bucket sections', () => {
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
     });
 
-    const head = screen.getByText('Attention').closest('section')!;
+    const head = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
     expect(within(head).getByLabelText('1 unseen')).toBeInTheDocument();
-    expect(within(head).getByRole('button', { name: /mark all seen/i })).toBeInTheDocument();
+    expect(within(head).getByRole('button', { name: /^mark all .+ seen$/i })).toBeInTheDocument();
   });
 
   // `working`/`idle` are never badged, even with a fresh bucketSince — only
@@ -662,8 +675,8 @@ describe('bucket sections', () => {
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'working', bucketSince: Date.now() })],
     });
 
-    const head = screen.getByText('Working').closest('section')!;
-    expect(within(head).queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+    const head = screen.getByText('Working').closest('.bucket-head') as HTMLElement;
+    expect(within(head).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
   });
 
   it('clicking Mark all seen acks every session in THAT bucket, and only that bucket', () => {
@@ -677,13 +690,13 @@ describe('bucket sections', () => {
       ],
     });
 
-    const attnHead = screen.getByText('Attention').closest('section')!;
-    fireEvent.click(within(attnHead).getByRole('button', { name: /mark all seen/i }));
+    const attnHead = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
+    fireEvent.click(within(attnHead).getByRole('button', { name: /^mark all .+ seen$/i }));
 
     // The acked bucket's badge is gone…
     expect(within(attnHead).queryByLabelText(/unseen/)).not.toBeInTheDocument();
     // …the untouched bucket's is not.
-    const doneHead = screen.getByText('Done').closest('section')!;
+    const doneHead = screen.getByText('Done').closest('.bucket-head') as HTMLElement;
     expect(within(doneHead).getByLabelText('1 unseen')).toBeInTheDocument();
   });
 
@@ -695,7 +708,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
     });
-    fireEvent.click(screen.getByRole('button', { name: /mark all seen/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
     first.unmount();
 
     // Same session, same bucketSince — a stale in-memory `acks` (never
@@ -706,7 +719,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
     });
-    expect(screen.queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
   });
 
   it('prunes an acked session that has since left the fleet — the map does not grow unbounded', () => {
@@ -716,7 +729,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'gone', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
     });
-    fireEvent.click(screen.getByRole('button', { name: /mark all seen/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
     expect(loadAcks()).toHaveProperty('gone');
 
     // A fresh snapshot that no longer includes 'gone' — the effect prunes it.
@@ -737,7 +750,7 @@ describe('bucket sections', () => {
 describe('archived footer row', () => {
   afterEach(() => navigate('/'));
 
-  it('reads Archived · count · total bytes across every project, and routes to /archive on tap', () => {
+  it('reads Archived on disk · count · total bytes across every project, and routes to /archive on tap', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);
     seed(store, {
@@ -747,7 +760,7 @@ describe('archived footer row', () => {
         session({ id: 'b', project: 'beta', workspace: 'still-cove', archivedAt: 200, archivedBytes: 1_100_000_000 }),
       ],
     });
-    const row = screen.getByRole('button', { name: /archived · 2 · 2\.3 gb/i });
+    const row = screen.getByRole('button', { name: /archived on disk · 2 · 2\.3 gb/i });
     fireEvent.click(row);
     expect(location.pathname).toBe('/archive');
   });
@@ -773,7 +786,7 @@ describe('archived footer row', () => {
         session({ id: 'b', project: 'beta', workspace: 'still-cove', archivedAt: 200, archivedBytes: null }),
       ],
     });
-    expect(screen.getByRole('button', { name: /^archived · 2 · 1\.2 gb \+ 1 unmeasured$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^archived on disk · 2 · 1\.2 gb \+ 1 unmeasured$/i })).toBeInTheDocument();
   });
 
   it('states no size at all when every archived workspace went unmeasured — never a confident "0 B"', () => {
@@ -789,7 +802,7 @@ describe('archived footer row', () => {
         session({ id: 'c', project: 'beta', workspace: 'far-shore', archivedAt: 300, archivedBytes: null }),
       ],
     });
-    expect(screen.getByRole('button', { name: /^archived · 3 · size unknown$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^archived on disk · 3 · size unknown$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /0 B/ })).not.toBeInTheDocument();
   });
 
@@ -800,7 +813,7 @@ describe('archived footer row', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: null })],
     });
-    expect(screen.queryByRole('button', { name: /^archived ·/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^archived on disk ·/i })).not.toBeInTheDocument();
   });
 
   it('renders for exactly one archived workspace too — the guard is count > 0, not > 1', () => {
@@ -810,7 +823,7 @@ describe('archived footer row', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, archivedBytes: 1_200_000_000 })],
     });
-    expect(screen.getByRole('button', { name: /archived · 1 · 1\.2 gb/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /archived on disk · 1 · 1\.2 gb/i })).toBeInTheDocument();
   });
 });
 
@@ -907,7 +920,7 @@ describe('an ack written by another screen', () => {
       })],
     });
 
-    const head = (): HTMLElement => screen.getByText('Cleanup').closest('section')!;
+    const head = (): HTMLElement => screen.getByText('Cleanup').closest('.bucket-head') as HTMLElement;
     expect(within(head()).getByLabelText('1 unseen')).toBeInTheDocument();
 
     // Exactly what SessionScreen's mount effect calls — same module, other screen.
@@ -916,9 +929,166 @@ describe('an ack written by another screen', () => {
     });
 
     expect(within(head()).queryByLabelText(/unseen/)).not.toBeInTheDocument();
-    expect(within(head()).queryByRole('button', { name: /mark all seen/i })).not.toBeInTheDocument();
+    expect(within(head()).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
     // The section itself stays: the session is still in the cleanup bucket,
     // it is only no longer NEW.
     expect(within(head()).getByText('1')).toBeInTheDocument();
+  });
+});
+
+// — the bucket bar's three repairs (whole-branch review, findings 1, 5 and 6)
+//
+// One fixture, the review's own: a project holding a merged-and-archived
+// workspace (the `cleanup` bucket, with the merge facts the leapfrog bucket
+// exists to surface) and a plainly-archived one.
+describe('a chip never names rows that are not on the screen', () => {
+  const merged = (): FleetSession => session({
+    id: 'wt-merged', project: 'P', workspace: 'wt-merged',
+    status: 'dead', archivedAt: 1785300000, archivedBytes: 1_200_000_000,
+    pr: { phase: 'merged', number: 157, url: null, title: null, checks: null, checkNames: null,
+          ahead: 0, reason: null, checkedAt: null, mergedAt: 1785300000_000, retryAt: null },
+    bucket: 'cleanup', bucketSince: 1785300000_000,
+  });
+  const plain = (): FleetSession => session({
+    id: 'wt-plain', project: 'P', workspace: 'wt-plain',
+    status: 'dead', archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000,
+  });
+
+  const seedBoth = (): FleetStore => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [merged(), plain()] });
+    return store;
+  };
+
+  it('renders the Cleanup chip\'s row, with its merge facts, without expanding anything', () => {
+    // The defect: `groupFleet` split on `archivedAt`, which is true of a
+    // cleanup row too, so the chip counted `Cleanup 1` and offered "Mark all
+    // seen" for a row that rendered nowhere — its word, its PR number and its
+    // reclaimable size reachable only by opening a fold named after a
+    // DIFFERENT bucket.
+    seedBoth();
+    const cleanupChip = screen.getByText('Cleanup').closest('.bucket-head') as HTMLElement;
+    expect(cleanupChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
+
+    // No fold expanded, and yet:
+    expect(screen.getByText('merged')).toBeInTheDocument();
+    expect(screen.getByText('#157')).toBeInTheDocument();
+    expect(screen.getByText('1.2 GB')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'merged, ready to clean up' })).toBeInTheDocument();
+  });
+
+  it('leaves exactly the Archived chip\'s members behind the fold, at the same count', () => {
+    seedBoth();
+    const archivedChip = screen.getByText('Archived').closest('.bucket-head') as HTMLElement;
+    expect(archivedChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
+    // The fold used to read `Archived (2)` under a chip reading `Archived 1`.
+    expect(screen.getByRole('button', { name: /^archived \(1\)$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /archived \(2\)/i })).not.toBeInTheDocument();
+  });
+
+  it('does not put a third, larger count under the same noun', () => {
+    // The footer covers the DISK set — everything with an archivedAt, merged
+    // ones included, which is what makes its byte figure honest — so it is
+    // legitimately 2 while both bucket surfaces say 1. It must therefore not
+    // be spelled as the bare word the other two use.
+    seedBoth();
+    expect(screen.getByRole('button', { name: /^archived on disk · 2 · 1\.2 gb \+ 1 unmeasured$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^archived · 2/i })).not.toBeInTheDocument();
+  });
+
+  // Finding 5. Every ack control was the bare string "Mark all seen". NVDA's
+  // Elements List, JAWS's button list and the VoiceOver rotor all list
+  // controls by name alone, outside their containing group, so N unseen
+  // buckets produced N indistinguishable entries — and picking the wrong one
+  // silently clears the badge on the session Claude is still blocked on.
+  it('names each ack control by its bucket, so a control list can tell them apart', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    const now = Date.now();
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: now }),
+        session({ id: 'b', project: 'beta', bucket: 'done', bucketSince: now }),
+        session({ id: 'c', project: 'gamma', bucket: 'cleanup', bucketSince: now, archivedAt: 1 }),
+      ],
+    });
+
+    const names = screen.getAllByRole('button', { name: /mark all/i })
+      .map((b) => b.getAttribute('aria-label'));
+    expect(names).toHaveLength(3);
+    expect(new Set(names).size).toBe(3);
+    expect(names).toEqual(expect.arrayContaining([
+      'Mark all Attention seen', 'Mark all Done seen', 'Mark all Cleanup seen',
+    ]));
+  });
+
+  // The chips are a `role="group"`, not a labelled <section>. A labelled
+  // section is a `region` LANDMARK, and up to seven of them named after
+  // buckets — none containing any of that bucket's sessions — turns the
+  // landmark rotor into that many dead ends.
+  it('adds no landmark per bucket', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'attention' }),
+        session({ id: 'b', project: 'beta', bucket: 'idle' }),
+      ],
+    });
+    expect(screen.queryAllByRole('region')).toHaveLength(0);
+    expect(screen.getAllByRole('group').map((g) => g.getAttribute('aria-label')))
+      .toEqual(['Attention', 'Idle']);
+  });
+
+  // Finding 6. "Mark all seen" destroys the element that was activated — both
+  // it and the badge live inside `{unseenCount > 0 && …}` — so without a
+  // transfer the browser drops focus to <body> and the next Tab restarts at
+  // the top of the document, and a screen-reader user is told nothing at all.
+  it('moves focus to the chip and announces the ack, instead of dropping to body', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() }),
+        session({ id: 'b', project: 'beta', bucket: 'attention', bucketSince: Date.now() }),
+      ],
+    });
+
+    const chip = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
+    const btn = within(chip).getByRole('button', { name: /^mark all .+ seen$/i });
+    // fireEvent.click never establishes focus, which is why the suite never
+    // exercised this path — focus it the way a keyboard user's Tab would.
+    btn.focus();
+    expect(document.activeElement).toBe(btn);
+    fireEvent.click(btn);
+
+    expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(within(chip).getByText('Attention'));
+    expect(screen.getByRole('status')).toHaveTextContent('Attention: 2 marked seen');
+  });
+
+  // Finding 4's screen-level half: the ack stamp is floored against the
+  // episode's own start, so a device whose clock runs behind the fleet host
+  // can still clear a badge. Before that, the chip kept its count and the
+  // button kept sitting there doing visibly nothing.
+  it('clears the badge even when this device\'s clock is behind the fleet host', () => {
+    const serverNow = Date.now() + 90_000; // the host is 90s ahead of us
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: serverNow })],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
+
+    const chip = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
+    expect(within(chip).queryByLabelText(/unseen/)).not.toBeInTheDocument();
+    expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
   });
 });

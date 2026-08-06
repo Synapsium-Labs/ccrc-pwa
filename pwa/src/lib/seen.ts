@@ -81,12 +81,49 @@ function publish(next: Acks): Acks {
 }
 
 /** THE map every rendering surface reads, with a stable identity between
- *  changes — pair it with `subscribeAcks` in `useSyncExternalStore`. Reads
- *  storage exactly once, on first use; after that this module is the only
- *  writer in the document, so the snapshot cannot go stale behind it. */
+ *  changes — pair it with `subscribeAcks` in `useSyncExternalStore`.
+ *
+ *  Storage is read exactly ONCE per document, here, on first use. It is never
+ *  read again, and that is load-bearing rather than an optimisation: every
+ *  mutator below bases its next map on THIS snapshot, so a write storage
+ *  refuses cannot silently roll the map back.
+ *
+ *  The path that made it necessary: `save` catches its own `setItem` throw
+ *  (quota — `lib/offline.ts` writes the whole fleet snapshot to this same
+ *  origin on every broadcast and swallows its own quota errors — or Safari
+ *  private mode) and publishes anyway, so the badge clears on screen. When
+ *  the mutators re-read storage instead, the very next fleet snapshot ran
+ *  `prune`, read the UNCHANGED stored map back, and republished it: the badge
+ *  came back seconds later, and two acks in a row kept only the last one.
+ *
+ *  The cost, stated plainly: another TAB's acks are no longer adopted. They
+ *  never were adopted reliably — `prune` only ran on a fleet snapshot — and
+ *  the honest fix for that is a `storage` event listener, not a re-read that
+ *  outranks this document's own writes. */
 export function acksSnapshot(): Acks {
   if (snapshot === null) snapshot = loadAcks();
   return snapshot;
+}
+
+/** A fresh, mutable copy of the published map — the base every mutator starts
+ *  from. Never `loadAcks()`: see `acksSnapshot` above. */
+function base(): Acks {
+  return { ...acksSnapshot() };
+}
+
+/**
+ * Drop the in-memory map and take storage as ground truth again — the ONE
+ * supported way to make this module forget.
+ *
+ * It exists because the snapshot is document-lifetime by design (see
+ * `acksSnapshot`): once storage stops being re-read, clearing `localStorage`
+ * no longer clears this module, and a test suite that cleared the key between
+ * cases was silently carrying the previous case's acks forward. Publishing
+ * (rather than nulling `snapshot`) keeps every subscriber in step with the
+ * reset instead of leaving them rendering a map nothing else holds.
+ */
+export function resetAcks(): Acks {
+  return publish(loadAcks());
 }
 
 /** Subscribe to ack changes. Returns the unsubscribe. */
@@ -97,6 +134,11 @@ export function subscribeAcks(fn: () => void): () => void {
   };
 }
 
+/** Write through, then publish. The publish happens even when storage refused
+ *  (private mode, quota): the map this document is showing is the one in
+ *  memory, so an ack a phone cannot persist is still an ack until reload —
+ *  and, because every mutator bases off the published snapshot rather than
+ *  storage, nothing rolls it back before then. */
 function save(acks: Acks): Acks {
   try { localStorage.setItem(KEY, JSON.stringify(acks)); } catch { /* private mode / quota */ }
   return publish(acks);
@@ -112,15 +154,41 @@ export function isUnseen(s: FleetSession, acks: Acks): boolean {
   return s.bucketSince > (acks[s.id] ?? 0);
 }
 
-export function ack(id: string, at: number): Acks {
-  const acks = loadAcks();
-  acks[id] = at;
+/**
+ * THE ack stamp, and the reason acks are not simply `Date.now()`.
+ *
+ * `bucketSince` is minted on the FLEET HOST's clock (shared/api.ts's
+ * `sessionBucket`, off `statusUpdatedAt` / the hook's `updatedAt`); both
+ * writers of this map stamp the DEVICE's. A laptop just resumed from suspend,
+ * or a phone with no NTP, runs behind — and a device 90s behind writes
+ * `acks[id] = T - 90_000` for a session whose `bucketSince` is `T`, so
+ * `isUnseen` stays true, the chip keeps its count, and "Mark all seen" is a
+ * button that visibly does nothing for the whole duration of the skew.
+ *
+ * An ack means "this human has now seen this episode". The episode's own
+ * start is the one instant both clocks agree on, so the stamp is never
+ * allowed to land before it. Taking the max (rather than using `bucketSince`
+ * outright) keeps a FORWARD-running device honest too: acking at the device's
+ * own later `now` is what stops the NEXT episode, which will carry a
+ * `bucketSince` after this one, from arriving pre-acked.
+ */
+function stampFor(at: number, bucketSince: number | null): number {
+  return bucketSince === null ? at : Math.max(at, bucketSince);
+}
+
+/** Ack one session. Pass the session itself whenever the caller has it — the
+ *  `bucketSince` is what makes the stamp survive a clock behind the host's
+ *  (see `stampFor`). The id-only form is the deep-link case, where the fleet
+ *  snapshot has not landed yet and there is no episode start to floor to. */
+export function ack(id: string, at: number, bucketSince: number | null = null): Acks {
+  const acks = base();
+  acks[id] = stampFor(at, bucketSince);
   return save(acks);
 }
 
 export function ackAll(sessions: readonly FleetSession[], at: number): Acks {
-  const acks = loadAcks();
-  for (const s of sessions) acks[s.id] = at;
+  const acks = base();
+  for (const s of sessions) acks[s.id] = stampFor(at, s.bucketSince);
   return save(acks);
 }
 
@@ -144,13 +212,15 @@ export function ackAll(sessions: readonly FleetSession[], at: number): Acks {
  * largest fleet ever seen on this device and is a few dozen bytes.
  */
 export function prune(live: ReadonlySet<string>): Acks {
-  const acks = loadAcks();
+  // `base()`, never `loadAcks()`: this runs on EVERY fleet snapshot, so a
+  // re-read here is the fastest possible rollback of an ack storage refused —
+  // the badge cleared, then came back within one tick. See `acksSnapshot`.
+  const acks = base();
   if (live.size === 0) return publish(acks);
   let changed = false;
   for (const id of Object.keys(acks)) if (!live.has(id)) { delete acks[id]; changed = true; }
-  // `publish`, not a bare return, on the unchanged path too: this runs on every
-  // fleet snapshot, so it is also the moment a map written by another tab is
-  // adopted. It costs nothing when the map is unchanged — `publish` keeps the
-  // existing identity — and it never persists on this path.
+  // `publish`, not a bare return, on the unchanged path too: it costs nothing
+  // when the map is unchanged (`publish` keeps the existing identity) and it
+  // keeps one exit for both paths. It never persists on this path.
   return changed ? save(acks) : publish(acks);
 }

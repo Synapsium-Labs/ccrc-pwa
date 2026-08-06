@@ -118,11 +118,46 @@ describe('SessionHeader', () => {
   // writer for a fact the wire carries, and the reason one snapshot could say
   // two different things about one session on two screens.
   it('shows the attention word when the server buckets it attention', () => {
+    // NEITHER raw signal is set. With `hookState: 'waiting'` in the fixture
+    // this passed under the very OR it was written to prove gone — the
+    // deleted code would have manufactured the same word from the hook.
     renderHeader({
-      session: fleetSession({ dialogPending: false, hookState: 'waiting', bucket: 'attention' }),
+      session: fleetSession({ dialogPending: false, hookState: null, bucket: 'attention' }),
     });
     expect(screen.getByText('waiting on you')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'waiting on you' })).toBeInTheDocument();
+  });
+
+  // The one direction the live stream still outranks the snapshot. Making
+  // this header snapshot-first dropped the override entirely, so a session
+  // its OWN socket has already reported dead kept pulsing amber "waiting on
+  // you" — the header contradicting the stream it is attached to, over the
+  // state that asks the reader to act on a process that is gone.
+  it('says the session is not running once its own stream reports it dead', () => {
+    renderHeader({
+      status: 'dead',
+      session: fleetSession({ status: 'busy', dialogPending: true, bucket: 'attention' }),
+    });
+    expect(screen.getByText('not running')).toBeInTheDocument();
+    expect(screen.queryByText('waiting on you')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
+  });
+
+  it('never lets a dead stream bury an archived workspace\'s own bucket', () => {
+    // `ws-archive` STOPS the session, so `dead` is true of every archived
+    // row by construction — the override must not fire there, or `cleanup`
+    // loses the merge facts the leapfrog bucket exists for.
+    renderHeader({
+      status: 'dead',
+      session: fleetSession({
+        status: 'dead', archivedAt: 1785300000, bucket: 'cleanup',
+        pr: { phase: 'merged', number: 157, url: null, title: null, checks: null,
+              checkNames: null, ahead: 0, reason: null, checkedAt: null,
+              mergedAt: 1785300000_000, retryAt: null },
+      }),
+    });
+    expect(screen.getByText('merged, ready to clean up')).toBeInTheDocument();
+    expect(screen.queryByText('not running')).not.toBeInTheDocument();
   });
 
   it('does not manufacture the attention treatment from hookState or dialogPending', () => {

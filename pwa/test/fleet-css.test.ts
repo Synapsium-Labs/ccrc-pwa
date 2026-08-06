@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { atBlock, declValue, normSel, ruleIn, selectorsOf } from './cssRule';
+import { atBlock, declValue, norm, normSel, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const css = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -177,6 +177,64 @@ describe('fleet density and alignment', () => {
       expect(rule).toContain('var(--tap-min)');
       expect(rule).toContain('var(--sp-8)');
     }
+  });
+
+  // Whole-branch review, finding 7. The subagent disclosure — the branch's
+  // headline new interaction — shipped as a ~22×15px box with `padding: 0`,
+  // the first row-level button in this file to skip the --tap-min pattern
+  // entirely, inside a 44px surface whose click forwarder NAVIGATES. A thumb
+  // landing a few px low did not miss quietly; it opened the session.
+  describe('the subagent disclosure is a real target', () => {
+    it('grows its hit area with an overlay instead of its visible box', () => {
+      // The visible box must not grow: .sess-meta is a flex row, so padding
+      // there raises the whole line and throws .sess-lamp's centring formula
+      // out on every row in the fleet.
+      const rule = ruleFor('.sess-subagents');
+      expect(rule).toContain('position: relative');
+      expect(rule).toContain('padding: 0');
+
+      const overlay = ruleFor('.sess-subagents::before');
+      expect(overlay).toContain('position: absolute');
+      // --tap-min WIDE — the axis with room. Vertically --sp-6 (WCAG 2.2 SC
+      // 2.5.8's 24px floor): a 44px-tall overlay would reach 14.5px up over
+      // .sess-open's whole line box, so taps on the workspace name would
+      // toggle the disclosure — a WRONG control, worse than the near-miss.
+      expect(overlay).toContain('var(--tap-min)');
+      expect(overlay).toContain('var(--sp-6)');
+      expect(norm(stripComments(overlay))).not.toContain('44px');
+    });
+
+    it('lets the label win the strip they overlap', () => {
+      // Both are positioned, and the overlay comes later in tree order, so
+      // `position: relative` alone would still lose. The explicit z-index is
+      // what keeps a tap on the name opening the session.
+      const rule = ruleFor('.sess-open');
+      expect(rule).toContain('position: relative');
+      expect(declValue(rule, 'z-index')).toBe('1');
+    });
+
+    it('stops .sess-meta clipping the overlay and the focus ring away', () => {
+      // `overflow: hidden` clips POINTER EVENTS as well as paint, so the
+      // overlay would have been clipped back to the 15px line and bought
+      // nothing — and base.css's :focus-visible, drawn 2px wide at 2px
+      // offset, lost its top and bottom edges on this same rule.
+      const rule = ruleFor('.sess-meta');
+      expect(rule).toContain('overflow: clip');
+      expect(rule).not.toContain('overflow: hidden');
+      expect(declValue(rule, 'overflow-clip-margin')).toBe('12px');
+    });
+  });
+
+  // The ack control's own floor. `padding: var(--sp-1) 0` around an 11px line
+  // measured ~19px — under WCAG 2.2's 24px — on a control whose action cannot
+  // be undone.
+  it('gives "Mark all seen" a real 24px box rather than an overhanging overlay', () => {
+    const rule = ruleFor('.bucket-head .bucket-head-seen');
+    expect(declValue(rule, 'min-height')).toBe('var(--sp-6)');
+    // Deliberately NOT the ::before overlay pattern: every neighbour in the
+    // chip is inert, so an overhang would turn a near-miss that does nothing
+    // into an irreversible ack.
+    expect(() => ruleFor('.bucket-head-seen::before')).toThrow();
   });
 
   it('right-aligns .sess-actions in its column so it shares an edge with .proj-card-add', () => {

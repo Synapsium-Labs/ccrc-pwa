@@ -46,7 +46,7 @@ Order matters; first match wins.
 
 | # | Bucket | Condition | `bucketSince` |
 |---|---|---|---|
-| 1 | `cleanup` | `archivedAt !== null && pr?.phase === 'merged'` | `archivedAt * 1000` |
+| 1 | `cleanup` | `archivedAt !== null && pr?.phase === 'merged'` | `max(archivedAt * 1000, pr.mergedAt)` |
 | 2 | `archived` | `archivedAt !== null` | `archivedAt * 1000` |
 | 3 | `dead` | `status === 'dead'` | `statusUpdatedAt` |
 | 4 | `attention` | `dialogPending \|\| hookState === 'waiting'` | hook `updatedAt` when the hook is the reason, else `statusUpdatedAt` |
@@ -80,6 +80,17 @@ gives us no proof a turn *finished* rather than never started; it lands in
 `idle`, which is the truth. This also gives `done` a natural decay: Build 1's
 30-minute freshness gate nulls `hookState`, so an unacknowledged `done` falls
 back to `idle` instead of accumulating forever.
+
+**Why `cleanup` takes the LATER of its two timestamps** (amended by PR E's
+whole-branch review). Its condition is a conjunction, so the session enters the
+bucket when the second conjunct lands. On the auto-archive path that is the
+archive (sweepPr flips the phase, `archiveMerged` archives seconds later), and
+`archivedAt` alone reads correctly. On the MANUAL path it inverts: archive at
+T0 with the PR still open, open the session at T1 (which acks it), let the PR
+merge at T2 — the session enters `cleanup` at T2 while `archivedAt` still says
+T0, so `bucketSince > acks[id]` is `T0 > T1`, false, and the leapfrog bucket's
+badge is dead in exactly the flow it exists for. `pr.mergedAt` is already on the
+wire, and `max()` is still memory-free.
 
 **`cleanup` is the leapfrog bucket** — the one the analysis says Orca
 structurally cannot build, because their merge detection is decorative while

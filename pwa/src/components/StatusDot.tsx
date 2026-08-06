@@ -13,7 +13,14 @@ const DOT: Record<SessionBucket, { className: string; label: string; glyph: stri
   working: { className: 'dot dot--busy', label: 'working', glyph: '◐' },
   done: { className: 'dot dot--done', label: 'finished', glyph: '✓' },
   idle: { className: 'dot dot--idle', label: 'idle', glyph: '○' },
-  cleanup: { className: 'dot dot--cleanup', label: 'merged, ready to clean up', glyph: '♻' },
+  // U+FE0E (VARIATION SELECTOR-15) is load-bearing, not decoration. U+267B has
+  // an emoji presentation, and the --font-mono stack has no coverage for it on
+  // Apple platforms, so the bare glyph falls back to Apple Color Emoji: the
+  // lamp paints itself the emoji's own green, ignoring --status-cleanup and
+  // every ratio design/contrast-check.mjs measured for it — and reading as
+  // `working`, whose dot is green by design. VS15 asks for the text
+  // presentation, which is the one this file's colour is about.
+  cleanup: { className: 'dot dot--cleanup', label: 'merged, ready to clean up', glyph: '♻︎' },
   archived: { className: 'dot dot--idle', label: 'archived', glyph: '○' },
   dead: { className: 'dot dot--dead', label: 'not running', glyph: '✕' },
 };

@@ -29,16 +29,17 @@ export interface FleetGroup {
    *  (pwa/src/lib/seen.ts) run over `sessions`.
    *
    *  NOTHING RENDERS THIS YET. It is part of the group shape so a per-project
-   *  badge has a count to read, and it is pinned by group-fleet.test.ts, but
+   *  badge has a count to read, and it is pinned by groupFleet.test.ts, but
    *  the only unseen surface that ships today is the fleet screen's bucket
    *  bar — and that one cannot use this field, because a bucket spans projects
    *  while a group is one project. What it does buy is the rule: when a row
    *  badge or a bell counter arrives, it counts with `isUnseen` like this
    *  does, rather than re-implementing the comparison (spec §2, "one writer").
    *
-   *  Scoped to `live` for the same reason `attention`/`busy` are: an archived
-   *  member (including a `cleanup`-bucket one) is folded into `archived`
-   *  below, not counted here. */
+   *  Scoped to `sessions` for the same reason `attention`/`busy` are. A
+   *  `cleanup` member IS in that list and IS counted here — it is a badged
+   *  bucket (seen.ts's `BADGED`), so a per-project badge that skipped it
+   *  would undercount against the bucket bar's own Cleanup chip. */
   unseen: number;
   /** The account every session in this project calls home, or null when they
    *  disagree. Pinning is per session (`ccd prefer <id> <wrapper>`), so a
@@ -47,11 +48,28 @@ export interface FleetGroup {
    *  session and `home` is non-nullable on the wire, so there is always at
    *  least one value to compare. */
   pin: string | null;
-  /** Archived members — folded out of the live list, never dropped. `/s/<id>`
-   *  still resolves and the transcript still renders, so a card that omitted
-   *  them entirely would leave the workspace reachable only by a URL nobody
-   *  has. They take no part in `attention`, `busy`, `unseen` or `pin`: an
-   *  archived session is stopped, so any status it still carries is stale. */
+  /** Members in the `archived` BUCKET — folded out of the live list, never
+   *  dropped. `/s/<id>` still resolves and the transcript still renders, so a
+   *  card that omitted them entirely would leave the workspace reachable only
+   *  by a URL nobody has. They take no part in `attention`, `busy`, `unseen`
+   *  or `pin`: an archived session is stopped, so any status it still carries
+   *  is stale.
+   *
+   *  `s.bucket === 'archived'`, NOT `archivedAt !== null` — and the difference
+   *  is the whole point. Both predicates are true of a `cleanup` session, so
+   *  the `archivedAt` one swept every merged-and-archived workspace into a
+   *  collapsed fold NAMED AFTER A DIFFERENT BUCKET: the bucket bar counted
+   *  `Cleanup 1` and offered "Mark all seen" for a row that rendered nowhere
+   *  on the screen, while the fold above the footer read `Archived (2)`. Its
+   *  own facts — `merged`, `#157`, the reclaimable size — were unreachable
+   *  without expanding a fold that disclaims them. Splitting on the bucket
+   *  makes this list exactly the `Archived` chip's members and leaves
+   *  `cleanup` in `sessions`, where its chip's count and its rows agree.
+   *
+   *  The fleet footer (`FleetScreen`'s route into `/archive`) is a THIRD,
+   *  deliberately wider set — everything with an `archivedAt`, because that
+   *  is the disk fact — which is why it no longer says the bare word
+   *  "Archived". */
   archived: FleetSession[];
 }
 
@@ -77,8 +95,10 @@ export function groupFleet(sessions: FleetSession[], acks: Acks = {}): FleetGrou
   for (const [project, members] of byProject) {
     // members is never empty (a Map entry is only created alongside its first
     // push), so the non-null assertions are safe under noUncheckedIndexedAccess.
-    const live = members.filter((m) => m.archivedAt === null);
-    const archived = members.filter((m) => m.archivedAt !== null);
+    // See the `archived` field's doc: the split is on the BUCKET, so a
+    // `cleanup` member stays in the live list its own chip counts it in.
+    const live = members.filter((m) => m.bucket !== 'archived');
+    const archived = members.filter((m) => m.bucket === 'archived');
     // `live` can be empty (every workspace of a project archived), so the pin
     // falls back to the whole membership rather than indexing an empty array.
     const forPin = live.length > 0 ? live : members;

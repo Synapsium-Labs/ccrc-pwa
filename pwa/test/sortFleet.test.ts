@@ -43,13 +43,17 @@ describe('sortFleet', () => {
   });
 
   it('orders by the SERVER bucket, not by a local re-derivation', () => {
-    // A session the server calls `attention` sorts first even when its status
-    // says idle — the server is the authority and the client no longer guesses.
+    // The fixture has to DISAGREE with the deleted derivation, or it proves
+    // nothing. The old client rule read `dialogPending` first, then status:
+    // it would have called `a` attention (rank 0) and `b` idle (rank 2) and
+    // returned exactly the same order as a correct read of `bucket` — which
+    // is what the previous fixture (status busy vs idle, buckets agreeing)
+    // did. Here the two orders are opposites, so only one of them passes.
     const out = sortFleet([
-      s({ id: 'b', status: 'busy', bucket: 'working', bucketSince: 2 }),
-      s({ id: 'a', status: 'idle', bucket: 'attention', bucketSince: 1 }),
+      s({ id: 'a', status: 'busy', dialogPending: true, bucket: 'idle', bucketSince: 1 }),
+      s({ id: 'b', status: 'idle', dialogPending: false, bucket: 'attention', bucketSince: 2 }),
     ]);
-    expect(out.map((s) => s.id)).toEqual(['a', 'b']);
+    expect(out.map((s) => s.id)).toEqual(['b', 'a']);
   });
 
   it('does not mutate the input', () => {

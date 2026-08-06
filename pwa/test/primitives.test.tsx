@@ -66,6 +66,18 @@ describe('StatusDot', () => {
     expect(dot).toHaveTextContent('♻');
   });
 
+  it('pins the cleanup glyph to its TEXT presentation, so the lamp keeps its own colour', () => {
+    // U+267B has an emoji presentation and no coverage in the --font-mono
+    // stack on Apple platforms, so the bare glyph falls back to Apple Color
+    // Emoji — painting itself the emoji's green, ignoring --status-cleanup
+    // and every ratio design/contrast-check.mjs measured for it, and reading
+    // as `working`, whose dot is green by design. U+FE0E is what asks for the
+    // text presentation the colour rule is about.
+    render(<StatusDot status="cleanup" />);
+    expect(screen.getByRole('img', { name: 'merged, ready to clean up' }).textContent)
+      .toBe('♻︎');
+  });
+
   it('renders archived with the idle class but its own label', () => {
     // Reuses --status-idle's already-verified contrast (both are matte,
     // non-living), but the aria-label still says WHICH one — colour alone
