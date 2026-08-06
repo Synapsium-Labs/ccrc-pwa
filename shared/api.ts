@@ -2,6 +2,12 @@
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
+/** Which attention bucket a session belongs to. THE authority: the fleet
+ *  screen's sections, its counts and the row's own state word all read this one
+ *  field, so they cannot disagree. Computed server-side in `bucket.ts`. */
+export type SessionBucket =
+  | 'attention' | 'working' | 'done' | 'idle' | 'cleanup' | 'archived' | 'dead';
+
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
   /** The worktree slug when this session is a workspace; null for a project's
@@ -46,6 +52,12 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  bucket: SessionBucket;
+  /** Epoch ms this session ENTERED `bucket`, as evidenced by the underlying
+   *  record — never a watcher's memory of when it noticed, which would reset on
+   *  every restart and paint the whole fleet as freshly-unseen after a deploy.
+   *  Null when no evidence exists. Drives the PWA's unseen watermark. */
+  bucketSince: number | null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -609,6 +621,12 @@ const CHECKS: readonly string[] = ['pass', 'fail', 'pending'];
 // something this build cannot parse. Reject the whole snapshot instead, the
 // same stance `checks` takes for the identical reason.
 const HOOK_STATES: readonly string[] = ['working', 'waiting', 'done'];
+// Same shape as STATUSES: `bucket` is non-nullable and drives the fleet
+// screen's sections directly, so there is no honest "we don't know" member to
+// degrade an unrecognised token into — an older or newer build's stray value
+// rejects the whole snapshot rather than sort a session into a section it
+// never claimed to be in.
+const BUCKETS: readonly string[] = ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead'];
 // The reason list is NOT restated here (integration finding 7). It was the
 // second of four copies; it is now `isPrReason`, over `PR_REASONS`, which is
 // derived from the union. The comment above about casting the constant rather
@@ -709,6 +727,19 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       throw new MalformedSnapshot('hookState');
     }
 
+    // `bucket` is non-nullable but, like `PrState.phase` above, has its own
+    // designated "we do not know" member: `idle` is already `sessionBucket`'s
+    // OWN final rung — the answer for a session with no evidence of anything
+    // under way. A snapshot predating this field (every snapshot on disk the
+    // moment this ships) or a token a future build retires both degrade to it
+    // rather than rejecting the whole snapshot, the same stance `revivePr`
+    // takes for `phase`. Unlike `hookState` two lines up, there is no separate
+    // "no data" state to protect from being overwritten — `idle` on this field
+    // never claims a measurement, only "nothing pending".
+    const bucketRaw = optStr(o, 'bucket');
+    const bucket: SessionBucket = bucketRaw !== null && BUCKETS.includes(bucketRaw)
+      ? (bucketRaw as SessionBucket) : 'idle';
+
     return {
       id: reqStr(o, 'id'),
       wrapper: reqStr(o, 'wrapper'),
@@ -733,6 +764,8 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
+      bucket,
+      bucketSince: optNum(o, 'bucketSince'),
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;
