@@ -114,7 +114,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   #
   # Fixed by filtering on the SUFFIX rather than matching every known field
   # name — a field name never contains a dot (measured: `archived`,
-  # `archivedreason`, `archivemanifest`, `base`, `branch`, `home`,
+  # `archivedreason`, `archivemanifest`, `base`, `branch`, `hold`, `home`,
   # `lastcompact`, `lastswap`, `pool`, `prnumber`, `project`, `reaping`,
   # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper` — every
   # `_reg_set`/`_reg_get` field this file has today), so `$id.<field>` has
@@ -1296,12 +1296,52 @@ ws-archive
 ws-attic
 ws-audit
 ws-gc
+ws-hold
 ws-reap
+ws-release
 ws-rename
 ws-restore
 ws-rm
 ls
 EOF
+}
+
+cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
+  # workspace for an active program. The ONE input the merge-gated auto-archive
+  # was missing: an idle agent between waves is indistinguishable from a
+  # finished one, so the claim is DECLARED, never inferred. Non-destructive and
+  # idempotent: re-hold updates the reason. The reason string is the display
+  # everywhere — write it verbatim, parse it nowhere.
+  [[ $# -eq 4 && $1 == --session && $3 == --reason ]] \
+    || die "usage: ccd ws-hold --session <id> --reason <text>"
+  local id=$2 reason=$4
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  # An empty reason is an orphan hold by construction — nobody could ever say
+  # why it exists, and "visible on every surface, reason says why" is the whole
+  # deal that makes no-expiry acceptable.
+  [[ -n "$reason" ]] || die "empty reason — say which program holds this"
+  [[ -n "$(_reg_get "$id" workspace)" ]] \
+    || die "$id is not a workspace — nothing ever auto-archives a main checkout, so a hold there is a lie waiting to confuse someone"
+  [[ -f "$REG/$id.archived" ]] \
+    && die "$id is archived — restore first: a hold cannot protect a pane that is already gone"
+  _reg_set "$id" hold "$reason"
+  echo "held $id: $reason"
+}
+
+cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim.
+  # After this, the very next archiveMerged sweep may archive a merged
+  # workspace — the level re-arms itself, no edge to miss. Idempotent.
+  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
+  local id=$2
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  if [[ -e "$REG/$id.hold" ]]; then
+    rm -f -- "$REG/$id.hold"
+    echo "released $id"
+  else
+    echo "not held $id"
+  fi
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
@@ -6441,8 +6481,10 @@ case "${1:-}" in
   ws-attic)   shift; cmd_ws_attic "$@" ;;
   ws-audit)   shift; cmd_ws_audit "$@" ;;
   ws-reap)   shift; cmd_ws_reap "$@" ;;
+  ws-hold)    shift; cmd_ws_hold "$@" ;;
+  ws-release) shift; cmd_ws_release "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|pr-open|pr-state} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state} <args>" >&2; exit 1 ;;
 esac
 fi
