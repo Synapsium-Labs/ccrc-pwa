@@ -1325,7 +1325,18 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
     || die "$id is not a workspace — nothing ever auto-archives a main checkout, so a hold there is a lie waiting to confuse someone"
   [[ -f "$REG/$id.archived" ]] \
     && die "$id is archived — restore first: a hold cannot protect a pane that is already gone"
-  _reg_set "$id" hold "$reason"
+  # CHECKED, unlike every other `_reg_set` in this file, because this is the one
+  # field whose silent absence is destructive. `_reg_set` is `printf > file` and
+  # ccd runs `set -uo pipefail` with NO `-e`, so an unchecked write that failed
+  # falls straight through to the echo below. Measured on the unguarded version:
+  # `chmod 500 "$REG"` -> `Permission denied` on stderr, `held <id>: <reason>` on
+  # stdout, exit 0, no `.hold` file. The orchestrator protocol reads exit code +
+  # stdout, records the workspace as claimed, and dispatches the next wave; the
+  # archiveMerged sweep sees no hold and archives the merged workspace mid-run.
+  # So the ONE verb whose failure means UNPROTECTED refuses like every other
+  # doubt path in this function rather than announcing a success it did not have.
+  _reg_set "$id" hold "$reason" \
+    || die "could not record the hold for $id — it is NOT held"
   echo "held $id: $reason"
 }
 

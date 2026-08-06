@@ -13,11 +13,15 @@ let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-hold-'); });
 afterEach(() => { h.cleanup(); });
 
-const shFail = (snippet: string): { code: number; stderr: string } => {
-  try { h.sh(snippet); return { code: 0, stderr: '' }; }
+// `stdout` is captured beside `stderr` because one of these tests asserts what
+// the verb did NOT say: a refusal that still printed `held <id>: …` on stdout
+// is exactly the defect the write guard exists to stop, and a code+stderr-only
+// helper cannot see it.
+const shFail = (snippet: string): { code: number; stderr: string; stdout: string } => {
+  try { return { code: 0, stderr: '', stdout: h.sh(snippet) }; }
   catch (e) {
-    const err = e as { status?: number; stderr?: Buffer };
-    return { code: err.status ?? 1, stderr: String(err.stderr ?? '') };
+    const err = e as { status?: number; stderr?: Buffer; stdout?: Buffer };
+    return { code: err.status ?? 1, stderr: String(err.stderr ?? ''), stdout: String(err.stdout ?? '') };
   }
 };
 
@@ -76,6 +80,29 @@ describe('ccd ws-hold / ws-release', () => {
     const id = workspaceId();
     const r = shFail(`cmd_ws_hold --session ${id} --reason ""`);
     expect(r.code).not.toBe(0);
+    // The sentence, not just the polarity. `expect(code).not.toBe(0)` alone was
+    // green against the pre-task ccd (`cmd_ws_hold: command not found` exits
+    // 127) — the one test of this file that never went red, so it proved
+    // nothing. It also let a future edit fold this guard into the usage check
+    // and answer `usage: ccd ws-hold` instead, which the standing rule
+    // ("every refusal is named") forbids.
+    expect(r.stderr).toContain('empty reason');
+  });
+
+  it('a failed registry write REFUSES — never `held` on stdout with no hold on disk', () => {
+    const id = workspaceId();
+    // A directory at the target path makes `printf > "$REG/$id.hold"` fail with
+    // EISDIR for ANY uid, root included — the portable stand-in for the
+    // read-only-FS / ENOSPC / quota failure measured with `chmod 500 "$REG"`.
+    // Unguarded, `_reg_set` fails, ccd (`set -uo pipefail`, no `-e`) carries on,
+    // and the verb prints `held <id>: <reason>` at exit 0 while nothing is held:
+    // the orchestrator records the claim, the next archiveMerged sweep sees no
+    // hold and archives the workspace mid-program.
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', `${id}.hold`));
+    const r = shFail(`cmd_ws_hold --session ${id} --reason "program:evals wave:1/4"`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('NOT held');
+    expect(r.stdout).not.toContain(`held ${id}:`);
   });
 
   it('caps lists both verbs', () => {
