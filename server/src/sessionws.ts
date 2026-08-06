@@ -8,6 +8,7 @@ import { paneState, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { readHookState } from './hookstate.js';
+import { askKey } from './askkey.js';
 import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 
 const POLL_MS = 2000;
@@ -218,7 +219,7 @@ export class SessionStream {
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
-    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask });
+    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask, key: askKey(ask) });
   }
 
   stop(): void {

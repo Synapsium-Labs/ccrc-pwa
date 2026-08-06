@@ -397,6 +397,101 @@ export function sendPrompt(
   });
 }
 
+/** A box-horizontal rule row — the same convention `pane/dialog.ts`'s private
+ *  `isRule` matches for AskUserQuestion separators (a run of `─`), reused
+ *  here for the identical glyph Claude Code draws immediately below the
+ *  input box itself (see `LIVE_CU_FRAMES` in `test/send.test.ts`: the closing
+ *  rule sits right after the box's last row, with no gap, at every height
+ *  those live captures measured — 1 to 3 rows). */
+const isRuleRow = (line: string): boolean => {
+  const t = line.trim();
+  return t.length >= 8 && [...t].every((c) => c === '─' || c === ' ');
+};
+
+/**
+ * Is there box content strictly BELOW the marker row — a continuation row
+ * `draftOf` never reads, because its documented contract is the marker row
+ * only (see its own docstring)?
+ *
+ * Reachable end-to-end: `sendPrompt` writes a leading blank line with
+ * `M-Enter` whenever the composed prompt's first `\n`-split part is `''`
+ * (its own `parts` loop above), so an `enter-ignored` on a message that
+ * *starts* with a blank line leaves exactly this shape — a blank marker row
+ * with the real text one row down, invisible to `draftOf`. Reporting
+ * `nothing-to-submit` for that pane would be a lie: there is something to
+ * send, this function just cannot prove what.
+ *
+ * The real captures back exactly one claim, and this function is scoped to
+ * only that claim: a rule row closes the box immediately, so any non-blank
+ * row between the marker and the first rule row is box content, never
+ * chrome (chrome is only ever seen AFTER that rule — and shares the box's
+ * own two-space indent, which is why indentation alone cannot tell a
+ * continuation row from chrome: only the rule boundary can). This proves
+ * PRESENCE, not identity — a pasted separator line could itself look like a
+ * rule and cut the scan short (under-detecting, the safe direction) — so
+ * the result is never used to build a submit needle or to press Enter, only
+ * to decide whether claiming the box is empty would be false.
+ */
+function hasContentBelowMarker(ansiPane: string): boolean {
+  const lines = ansiPane.split('\n');
+  let markerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.replace(SGR, '').startsWith('❯')) markerIdx = i;   // last ❯ line, same as draftOf
+  }
+  if (markerIdx === -1) return false;
+  for (let i = markerIdx + 1; i < lines.length; i++) {
+    const stripped = lines[i]!.replace(DIM_SPAN, '').replace(SGR, '');
+    if (isRuleRow(stripped)) return false;
+    if (stripped.trim() !== '') return true;
+  }
+  return false;
+}
+
+/**
+ * Press Enter once on a box that already holds text.
+ *
+ * The rescue for `sendPrompt`'s `enter-ignored`: the text is verified present
+ * and the operator's only remedy today is the sentence "open the terminal to
+ * check". A message that tells the user to do something the UI could do is the
+ * same dead end as a hidden force-delete button.
+ *
+ * ONE Enter, verified. `sendPrompt` already spent two on this box; a third
+ * fired in a loop would carry no information the first two didn't. A human tap
+ * does: they looked at the pane first.
+ */
+export function submitEnter(
+  d: SendDeps,
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'dialog-open' | 'nothing-to-submit' | 'blank-first-row' | 'enter-ignored' }> {
+  const sleep = d.sleep ?? defaultSleep;
+  return d.queue.run(id, async () => {
+    const pane = await d.tmux.captureAnsi(id);
+    if (pane === null) return { ok: false, error: 'not-alive' as const };
+    // Same reasoning as sendPrompt's own guard: with a menu up the only `❯` on
+    // screen is the cursor on the selected OPTION, so draftOf would read a menu
+    // row as a draft and this would press Enter on somebody's question.
+    if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' as const };
+    const draft = draftOf(pane);
+    if (draft === '') {
+      // Blank marker row: usually a genuinely empty box, but see
+      // `hasContentBelowMarker` — a message whose first line is itself blank
+      // renders identically on THIS row. Naming that case honestly beats
+      // claiming there is nothing to send when there might be.
+      return hasContentBelowMarker(pane)
+        ? { ok: false, error: 'blank-first-row' as const }
+        : { ok: false, error: 'nothing-to-submit' as const };
+    }
+
+    await d.tmux.sendKey(id, 'Enter');
+    // The same proof sendPrompt uses: OUR TEXT left the box, not "the box is
+    // empty" — a busy session swaps the row for its queue hint instead.
+    const needle = draft.slice(0, ECHO_NEEDLE);
+    return (await submitted(d, id, sleep, needle))
+      ? { ok: true as const }
+      : { ok: false, error: 'enter-ignored' as const };
+  });
+}
+
 /**
  * Answer a pane menu dialog by walking the ❯ marker to `optionIndex` and
  * confirming. Refuses when the on-screen dialog no longer matches `dialogId`

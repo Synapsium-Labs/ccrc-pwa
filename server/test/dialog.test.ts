@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseDialog, paneState } from '../src/pane/dialog.js';
+import { parseDialog, paneOptionRows, paneState } from '../src/pane/dialog.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -160,6 +160,47 @@ describe('parseDialog', () => {
     expect(d).not.toBeNull();
     expect(d.parsed).toBe(false);
     expect(d.raw).toContain('Space to select');
+  });
+
+  // — whole-branch review, IMPORTANT 2 — the row reader the keystroke gate uses —
+  //
+  // `answerAsk` must verify the pane IS the question it is about to answer,
+  // and multi-select is the shape that most needs it (a digit there only
+  // toggles). `parseDialog` cannot serve that: it discards options entirely
+  // for a multi-select pane, which is right for RENDERING and useless for a
+  // gate. `paneOptionRows` is the shared row reader underneath both.
+  describe('paneOptionRows', () => {
+    it('reads the numbered rows of a MULTI-SELECT menu parseDialog throws away', () => {
+      const rows = paneOptionRows(fixture('multiselect.txt'));
+      // The `[ ]` is the row's STATE, never part of its label — leaving it on
+      // would make every scraped label disagree with the hook's verbatim copy
+      // and refuse every multi-select answer.
+      expect(rows.map((r) => r.label)).toEqual(['Bash', 'Edit', 'WebFetch']);
+      expect(rows.map((r) => r.index)).toEqual([1, 2, 3]);
+      expect(rows[0]!.selected).toBe(true);
+      expect(parseDialog(fixture('multiselect.txt'))!.options).toEqual([]);
+    });
+
+    it('strips the checkbox BEFORE the column cut, so a two-space-aligned menu still has labels', () => {
+      // Re-review of the fix wave: with the strip applied AFTER `leftCol`, a
+      // TUI that aligns its labels with two spaces has the row cut at the
+      // space run — `leftCol` yields "[ ]", the strip leaves "", `pairMatches`
+      // rejects empty on both sides, and EVERY multi-select answer comes back
+      // menu-mismatch. The one fixture in the repo uses a single space, which
+      // is exactly why nothing caught it.
+      const aligned = fixture('multiselect.txt').replace(/\. \[ \] /g, '. [ ]  ');
+      expect(aligned).toContain('[ ]  Bash');   // the widened spacing really is there
+      expect(paneOptionRows(aligned).map((r) => r.label)).toEqual(['Bash', 'Edit', 'WebFetch']);
+    });
+
+    it('agrees with parseDialog on a single-select menu, and says nothing about a plain pane', () => {
+      const rows = paneOptionRows(fixture('ask-user-question.txt'));
+      const d = parseDialog(fixture('ask-user-question.txt'))!;
+      expect(rows.map((r) => r.index)).toEqual(d.options.slice(0, rows.length).map((o) => o.index));
+      // Presence is `hasMenu`'s job, not this one's: a pane with no menu simply
+      // has no rows to report.
+      expect(paneOptionRows('some output\n❯ \n')).toEqual([]);
+    });
   });
 
   it('busy pane yields state busy and null dialog', () => {

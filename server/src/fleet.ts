@@ -8,6 +8,9 @@ import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+// The ladder lives in `shared/` because `reviveFleetSession` is its second
+// producer and the two must not be able to disagree — see its own docstring.
+import { sessionBucket } from '../../shared/api.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
@@ -136,7 +139,7 @@ export async function assembleFleet(
     // three hook-derived fields below, and MUST NOT feed back into `status` —
     // that derivation is done the moment this line runs.
     const hs = hookStates?.get(r.id) ?? null;
-    return {
+    const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
@@ -157,6 +160,12 @@ export async function assembleFleet(
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs),
       subagents: hs?.subagents ?? null,
+      bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
+    // Computed FROM the assembled session, never from a second copy of the
+    // same expressions: `dialogPending` in particular is an OR of two sources
+    // and must be read once. STATUS IS STILL FROZEN — `sessionBucket` reads
+    // `status`, it never writes it.
+    return { ...session, ...sessionBucket(session, hs?.updatedAt ?? null) };
   }));
 }

@@ -13,6 +13,7 @@ import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, testDeps } from './helpers.js';
+import { askKey } from '../src/askkey.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -147,16 +148,167 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('unknown session id returns 404 on all three routes', async () => {
+  it('unknown session id returns 404 on all five routes', async () => {
     const { app } = await makeApp(['❯ \n']);
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
       ['/api/sessions/nope/interrupt', {}],
+      ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
+      ['/api/sessions/nope/submit', {}],
     ] as const) {
       const res = await app.inject({ method: 'POST', url, payload });
       expect(res.statusCode).toBe(404);
     }
+    await app.close();
+  });
+});
+
+// Task 3: /submit — the one-tap rescue for sendPrompt's enter-ignored. Same
+// convention as the /interrupt suite above: 404 covered in the shared loop,
+// so this adds 409 (carrying the refusal token) and 200.
+describe('POST /api/sessions/:id/submit', () => {
+  it('happy path presses Enter once and returns 200 {ok:true}', async () => {
+    // Two panes: the box holding a draft, then the emptied box that proves
+    // Enter submitted (see submitEnter's `submitted` check).
+    const { app, calls } = await makeApp(['scrollback\n❯ half-typed\n', 'scrollback\n❯ \n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    await app.close();
+  });
+
+  it('refuses an empty box with 409 nothing-to-submit, and presses nothing', async () => {
+    const { app, calls } = await makeApp([EMPTY_BOX]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('refuses while a menu owns the keyboard with 409 dialog-open, and presses nothing', async () => {
+    const { app, calls } = await makeApp([menuPane(1)]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'dialog-open' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // Review Important 1: the happy path above proves submission by the box
+  // turning EMPTY — a regression to the emptiness-only check `submitted()`
+  // was written to retire (see send.ts) would leave it green. Here the
+  // post-Enter row is non-empty and different from the draft, the shape a
+  // busy Claude Code session actually renders (it swaps the row for a hint
+  // rather than emptying it), so success can only be proved by "our text
+  // left", not by "the box is empty".
+  it('happy path proves submission via the needle leaving the box, not merely turning empty', async () => {
+    const { app, calls } = await makeApp(['scrollback\n❯ half-typed\n', 'scrollback\n❯ Press up to edit queued messages\n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    await app.close();
+  });
+
+  // "fold in" per review: enter-ignored was covered at unit level only
+  // (submit-route.test.ts) — Task 9's toast switches on this token, so the
+  // route itself needs to prove it surfaces as 409, not just that `submitEnter`
+  // returns it. Real timers here (routes.test.ts's sendDeps takes no `sleep`
+  // override), so this one costs the full SUBMIT_TRIES*SUBMIT_POLL_MS wait.
+  it('refuses a genuinely stuck box with 409 enter-ignored, after exactly one Enter', async () => {
+    const { app, calls } = await makeApp(['scrollback\n❯ stuck words\n']);   // every capture identical
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'enter-ignored' });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    await app.close();
+  }, 10_000);
+
+  // Review Important 2: a blank marker row with real text one row down (the
+  // shape sendPrompt's own M-Enter leaves for a message beginning with a
+  // blank line) must not be reported as 409 nothing-to-submit — that's a
+  // false claim. Proves the new token reaches the HTTP layer, not just the
+  // unit under it.
+  it('refuses a blank first row hiding real content below with 409 blank-first-row, and presses nothing', async () => {
+    const { app, calls } = await makeApp(['❯ \n  actual text\n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'blank-first-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+});
+
+// Task 2 review, Important 3: the route and its `readAsk` closure
+// (registry lookup + `readHookState`) had zero tests — every gate inside
+// `answerAsk` was pinned in isolation (ask-route.test.ts) but nothing proved
+// `server.ts` actually wires them together: the registry lookup for the
+// session's uuid, `readHookState`'s freshness/identity gate, and the
+// askDeps/sendDeps shared queue. Same convention as the `/dialog` suite
+// above: 404 covered there, so this adds 400 / 409 / 200.
+describe('POST /api/sessions/:id/ask', () => {
+  const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
+  const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
+
+  /** Seeds the registry (uuid `'1'.repeat(36)`, matching `seedSession`) plus a
+   *  fresh, waiting hookstate file carrying `QUESTION` — the wiring `readAsk`
+   *  needs end to end, not stubbed. */
+  const seedAsk = (home: string, over: Record<string, unknown> = {}): void => {
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, `${ID}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'waiting', event: 'Notification', sessionId: '1'.repeat(36), pid: 4242,
+      updatedAt: Date.now(), ask: { questions: [QUESTION] }, subagents: [],
+      ...over,
+    }));
+  };
+
+  it('happy path presses the single digit and returns 200', async () => {
+    const { app, calls, home } = await makeApp([ASK_PANE]);
+    seedAsk(home);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/ask`,
+      payload: { askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    // Single-select: the digit alone, no Enter — see ask.ts's own comment.
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, '2']]);
+    await app.close();
+  });
+
+  it('a stale/mismatched askKey returns 409 ask-mismatch and presses nothing', async () => {
+    const { app, calls, home } = await makeApp([ASK_PANE]);
+    seedAsk(home);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/ask`,
+      payload: { askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('a malformed body is rejected 400 before touching the session', async () => {
+    const { app, calls, home } = await makeApp([ASK_PANE]);
+    seedAsk(home);
+    for (const payload of [
+      { optionIndexes: [0] },                          // askKey missing
+      { askKey: 123, optionIndexes: [0] },              // askKey not a string
+      { askKey: 'k', optionIndexes: 'nope' },           // optionIndexes not an array
+      { askKey: 'k', optionIndexes: [0, '1'] },         // one entry not a number
+      { askKey: 'k' },                                  // optionIndexes missing
+    ]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/ask`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(sendKeysCalls(calls)).toEqual([]);
     await app.close();
   });
 });

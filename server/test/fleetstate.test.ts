@@ -15,7 +15,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null,
+  hookState: null, askSummary: null, subagents: null, bucket: 'idle', bucketSince: null,
 });
 
 describe('fleetstate', () => {
@@ -136,6 +136,77 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), pr: { phase: 'teleported', ahead: 2 } }]);
     expect((await loadSnapshot(cachePath))?.sessions[0]?.pr?.phase).toBe('unchecked');
+  });
+
+  // — whole-branch review, Important 3: an absent bucket is DERIVED —
+  //
+  // It used to land flat on `idle`, which contradicted the very record it sat
+  // on: `bucket` is THE authority for the fleet's sections, counts and state
+  // words (spec §1), while `ArchiveScreen` keys off `archivedAt` — so a
+  // revived snapshot could list archived rows while the bucket called them
+  // idle and the attention and cleanup sections read empty, in exactly the
+  // degraded mode this cache exists for. The ladder's bucket needs nothing a
+  // revived record lacks; only `bucketSince` needed `hookUpdatedAt`, so only
+  // `bucketSince` still degrades.
+  describe('an absent bucket is derived from the record, not flattened to idle', () => {
+    const revive = async (over: Record<string, unknown>): Promise<FleetSession | undefined> => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...over }]);
+      return (await loadSnapshot(cachePath))?.sessions[0];
+    };
+
+    it('a merged, archived snapshot revives as cleanup — the row ArchiveScreen already shows', async () => {
+      const s = await revive({ archivedAt: 1700, pr: { phase: 'merged', ahead: 0 } });
+      // bucketSince stays null even though the archived rung HAS a datable
+      // timestamp: this record was never recorded as entering the bucket, and
+      // the branch that derives is the branch that refuses to date it.
+      expect(s?.bucket).toBe('cleanup');
+      expect(s?.bucketSince).toBeNull();
+    });
+
+    it('an archived snapshot with no merged PR revives as archived', async () => {
+      expect((await revive({ archivedAt: 1700 }))?.bucket).toBe('archived');
+    });
+
+    it('a waiting snapshot revives as attention — the section that must not read empty', async () => {
+      expect((await revive({ hookState: 'waiting' }))?.bucket).toBe('attention');
+    });
+
+    it('a dead snapshot revives as dead', async () => {
+      expect((await revive({ status: 'dead' }))?.bucket).toBe('dead');
+    });
+
+    it('a busy snapshot revives as working — v1Session IS busy, which is why idle was a lie', async () => {
+      expect((await revive({}))?.bucket).toBe('working');
+    });
+
+    it('forces bucketSince to null even when the file carries one', async () => {
+      // A stray `bucketSince` alongside a missing `bucket` must not survive as
+      // a timestamp for a bucket this session was never recorded entering
+      // (final review, Important 2) — unchanged by the derivation above.
+      expect((await revive({ bucketSince: 1785300123000 }))?.bucketSince).toBeNull();
+    });
+
+    it('a RECORDED bucket is taken as recorded, ladder not run', async () => {
+      // Derivation is the ABSENT case only. A snapshot that carries a bucket
+      // was written by a server that had the hook timestamps this one does
+      // not, so its answer — and its `bucketSince` — win outright.
+      const s = await revive({ bucket: 'idle', bucketSince: 1785300123000 });
+      expect(s?.bucket).toBe('idle');            // NOT 'working', though the ladder would say so
+      expect(s?.bucketSince).toBe(1785300123000);
+    });
+  });
+
+  it('rejects a bucket token this build does not recognise — unlike absence, idle is an affirmative claim', async () => {
+    // The opposite stance from the absent case above (final review, Important
+    // 3): a PRESENT-but-unrecognised bucket (a future build's retired or
+    // renamed value) is not an admission of ignorance the way an absent field
+    // is — landing it on 'idle' would claim nothing is pending, silently
+    // emptying the attention section. Reject the whole snapshot instead, the
+    // same stance the hookState test right below takes.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), bucket: 'blocked', bucketSince: 100 }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
   });
 
   it('rejects a hookState token this build does not recognise — no synonym for "unknown" to degrade to', async () => {

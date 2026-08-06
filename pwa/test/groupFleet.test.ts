@@ -7,7 +7,8 @@ const s = (over: Partial<FleetSession>): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: 0, limits: null,
   dialogPending: false, version: null, model: null, effort: null,
   ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, ...over,
+  hookState: null, askSummary: null, subagents: null,
+  bucket: 'idle', bucketSince: null, ...over,
 });
 
 describe('groupFleet', () => {

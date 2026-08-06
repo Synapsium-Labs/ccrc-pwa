@@ -57,31 +57,70 @@ const unparsed = (raw: string): Dialog => ({
 });
 
 /**
- * Parse a menu dialog out of a captured pane; null when no menu is present.
- * Multi-select menus and menus without ≥2 consecutive numbered options come
- * back as `{ parsed: false, raw }` — terminal-drawer territory in v1.
+ * A multi-select row's leading checkbox (`[ ] Bash`, `[x] Edit`) — the row's
+ * STATE, never part of its label. Single-select menus don't paint one.
+ *
+ * ASSUMPTION, and it is worth knowing where it came from: this pattern is
+ * matched against ONE 116-byte synthetic fixture
+ * (`test/fixtures/panes/multiselect.txt`), not a real capture — no multi-select
+ * pane has been recorded off a live session yet. A build whose marker this
+ * regex does not recognise (`(•)`, `☐`, a leading glyph instead of brackets)
+ * leaves the marker on every label, every label then disagrees with the hook's
+ * verbatim copy, and `inject/ask.ts`'s identity gate refuses EVERY multi-select
+ * answer with `menu-mismatch`.
+ *
+ * That failure is fail-shut and therefore safe, but from the outside it looks
+ * like a refusal storm on one question shape with nothing wrong on screen — so
+ * start here, not at the gate. Stripping happens BEFORE `leftCol` for the same
+ * class of reason: a TUI that aligns its labels with two spaces (`1. [ ]  Bash`)
+ * would otherwise have `leftCol` cut the row at the space run, leaving `"[ ]"`
+ * to be stripped down to the empty string that `pairMatches` rejects outright.
  */
-export function parseDialog(pane: string): Dialog | null {
-  if (paneState(pane) !== 'menu') return null;
-  if (MULTISELECT_RE.test(pane)) return unparsed(pane);
+const CHECKBOX_RE = /^\[[^\]]?\]\s*/;
 
-  // Collect every numbered-option line. Real AskUserQuestion menus put a
-  // description line under each option and split the list across a horizontal
-  // rule, so options are NOT adjacent — we can't require consecutive lines.
+/** One numbered row read off a pane menu: the digit it printed, its label
+ *  (left column only — see `leftCol`), whether the ❯ cursor rests on it, and
+ *  the line it came from. */
+export type OptionRow = { line: number; index: number; label: string; selected: boolean };
+
+/**
+ * The pane's numbered menu rows, in screen order — the longest run whose
+ * printed indices count 1,2,3,… .
+ *
+ * Split out of `parseDialog` so `inject/ask.ts` can compare the rows against
+ * the labels it is about to answer WITHOUT going through `parseDialog`, which
+ * discards options entirely for a multi-select pane (`MULTISELECT_RE` →
+ * `unparsed`). That discard is right for rendering and wrong for a keystroke
+ * gate: multi-select is exactly the shape `answerAsk` must still be able to
+ * verify before it presses a digit.
+ *
+ * Says nothing about whether a menu is on screen — a pane with stray numbered
+ * lines in scrollback yields rows too. Callers pair this with `hasMenu`.
+ */
+export function paneOptionRows(pane: string): OptionRow[] {
+  // Real AskUserQuestion menus put a description line under each option and
+  // split the list across a horizontal rule, so options are NOT adjacent —
+  // we can't require consecutive lines.
   const lines = pane.split('\n');
-  type Opt = { line: number; index: number; label: string; selected: boolean };
-  const found: Opt[] = [];
+  const found: OptionRow[] = [];
   for (let i = 0; i < lines.length; i++) {
     const m = OPTION_RE.exec(lines[i]!);
-    if (m) found.push({ line: i, index: parseInt(m[2]!, 10), label: leftCol(m[3]!), selected: !!m[1] });
+    if (m) {
+      found.push({
+        line: i, index: parseInt(m[2]!, 10),
+        // Checkbox first, THEN the column cut — see CHECKBOX_RE's own comment
+        // for what the other order costs on a two-space-aligned menu.
+        label: leftCol(m[3]!.replace(CHECKBOX_RE, '')), selected: !!m[1],
+      });
+    }
   }
 
   // Keep the longest run whose indices count 1,2,3,… — this rejects stray
   // numbered lines in scrollback and locks onto the actual menu (ties prefer the
   // later run, i.e. the one nearest the footer). Description/rule lines between
   // numbered options are simply absent from `found`, so they don't break the run.
-  let best: Opt[] = [];
-  let cur: Opt[] = [];
+  let best: OptionRow[] = [];
+  let cur: OptionRow[] = [];
   for (const o of found) {
     if (o.index === cur.length + 1) {
       cur.push(o);
@@ -91,6 +130,20 @@ export function parseDialog(pane: string): Dialog | null {
     }
   }
   if (cur.length >= best.length) best = cur;
+  return best;
+}
+
+/**
+ * Parse a menu dialog out of a captured pane; null when no menu is present.
+ * Multi-select menus and menus without ≥2 consecutive numbered options come
+ * back as `{ parsed: false, raw }` — terminal-drawer territory in v1.
+ */
+export function parseDialog(pane: string): Dialog | null {
+  if (paneState(pane) !== 'menu') return null;
+  if (MULTISELECT_RE.test(pane)) return unparsed(pane);
+
+  const lines = pane.split('\n');
+  const best = paneOptionRows(pane);
   if (best.length < 2) return unparsed(pane);
 
   const start = best[0]!.line;

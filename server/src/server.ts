@@ -19,16 +19,41 @@ import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
-import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
+import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
+import { answerAsk, type AskDeps } from './inject/ask.js';
 import { readRegistry } from './registry.js';
+import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
-import type { AccountUsage, FleetSession, SessionStreamMsg, TaskItem } from '../../shared/api.js';
+import type { NotifyLog } from './notifylog.js';
+import { Presence } from './presence.js';
+import type {
+  AccountUsage, FleetSession, SessionClientMsg, SessionStreamMsg, TaskItem,
+} from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
+
+/**
+ * A client frame off the per-session socket, or null if it isn't one.
+ *
+ * VALIDATED against `SessionClientMsg` rather than cast to it: `JSON.parse`
+ * hands back `any` from a browser we do not control, and `as SessionClientMsg`
+ * would assert the very thing this is asked to check — the same rule
+ * `shared/api.ts`'s revivers are built on. Restating the frame's shape inline
+ * here was a second copy of a contract in the one file whose whole discipline
+ * is not having one (whole-branch review, Minor 5): the type is the contract,
+ * so a member added to it lands here as a compile error rather than as a frame
+ * silently ignored.
+ */
+function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
+  return { type: 'visible', visible: o['visible'] };
+}
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -59,6 +84,13 @@ export interface Deps {
   stateCachePath?: string;
   /** Web Push — present only when VAPID keys are configured. */
   push?: PushService;
+  /** The seq+epoch record of what was actually pushed, so a reconnecting
+   *  client can catch up on what it missed. Independent of `push`: it is
+   *  useful even on a box with no VAPID keys configured. */
+  notifyLog?: NotifyLog;
+  /** Which sessions a human is currently looking at, so `FleetWatcher` can
+   *  suppress a push for the pane already on screen. */
+  presence?: Presence;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -81,6 +113,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+
+  // Presence is cheap and needs no config, unlike `push` — a caller that
+  // didn't wire one into Deps (an older test, a one-off script) still gets
+  // working suppression. Written BACK onto `deps`, not just held locally:
+  // `FleetWatcher.pushOne` reads `this.deps.presence` on every push, and a
+  // presence instance only this route can see would be write-only — the
+  // route marks visibility nobody ever reads, so nothing is actually
+  // suppressed. `deps` is a shared reference (the same object `FleetWatcher`
+  // was constructed with, or will be), so this makes both sides see the
+  // SAME instance regardless of construction order.
+  deps.presence ??= new Presence();
+  const presence = deps.presence;
 
   app.get('/health', async () => ({ ok: true }));
 
@@ -146,6 +190,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true };
   });
 
+  // A phone that was offline (asleep, backgrounded past the SW's leash, or
+  // simply off) has no way to learn what it missed — this is the pull side of
+  // that gap. `resync: true` when the epoch moved or the client's seq predates
+  // the retained ring: the honest answer is "I cannot prove you saw
+  // everything", and the client's job is to drop its watermark and trust the
+  // fresh fleet snapshot rather than fabricate badges for events it cannot
+  // enumerate. 501 when no log is wired (same shape as the push routes above).
+  app.get('/api/notifications/catchup', async (req, reply) => {
+    if (!deps.notifyLog) return reply.code(501).send({ error: 'not-configured' });
+    const q = req.query as { epoch?: string; seq?: string };
+    const seq = Number(q.seq);
+    return deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0);
+  });
+
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
   // respawns, and swaps. Ordered claude / claude2 / claude-corp / gpt.
@@ -199,7 +257,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const since = parseSince((req.query as { since?: string }).since);
     const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
     void stream.start();
-    socket.on('close', () => stream.stop());
+    // A per-connection token, not the session id: a socket that dies without a
+    // close frame takes only its OWN claim with it (Presence's own doc), so a
+    // second tab watching the same session doesn't get un-notified by the
+    // first one's disconnect.
+    const token = Symbol('viewer');
+    socket.on('message', (raw) => {
+      try {
+        const m = asSessionClientMsg(JSON.parse(String(raw)));
+        if (m !== null) presence.setVisible(token, m.visible ? id : null);
+      } catch { /* a client that sends garbage simply isn't reporting presence */ }
+    });
+    socket.on('close', () => {
+      presence.drop(token);
+      stream.stop();
+    });
   });
 
   // Terminal drawer: attach a pty to the session's tmux window. Lazy-import the
@@ -238,6 +310,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const sendDeps: SendDeps = { tmux: deps.tmux, queue: new KeyedQueue() };
   const knownId = async (id: string): Promise<boolean> =>
     (await readRegistry(deps.io, deps.cfg)).some((r) => r.id === id);
+
+  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
+  // serialize through the ONE per-session lock, not independent ones.
+  const askDeps: AskDeps = {
+    ...sendDeps,
+    readAsk: async (id: string) => {
+      const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id) ?? null;
+      if (rec === null) return null;
+      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, rec.uuid, Date.now());
+      return hs === null ? null : { ask: hs.ask, state: hs.state };
+    },
+  };
 
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -282,6 +366,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? res : reply.code(409).send(res);
   });
 
+  app.post('/api/sessions/:id/ask', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { askKey?: unknown; optionIndexes?: unknown };
+    if (typeof body.askKey !== 'string' ||
+        !Array.isArray(body.optionIndexes) ||
+        !body.optionIndexes.every((n) => typeof n === 'number')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerAsk(askDeps, id, body.askKey, body.optionIndexes);
+    return res.ok ? res : reply.code(409).send(res);
+  });
+
   app.get('/api/sessions/:id/commands', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -292,6 +389,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const res = await interrupt(sendDeps, id, async () => (await liveStatus(deps.io, deps.cfg, deps.tmux, id)) === 'busy');
+    return res.ok ? res : reply.code(409).send(res);
+  });
+
+  app.post('/api/sessions/:id/submit', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const res = await submitEnter(sendDeps, id);
     return res.ok ? res : reply.code(409).send(res);
   });
 
