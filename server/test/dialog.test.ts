@@ -181,6 +181,18 @@ describe('parseDialog', () => {
       expect(parseDialog(fixture('multiselect.txt'))!.options).toEqual([]);
     });
 
+    it('strips the checkbox BEFORE the column cut, so a two-space-aligned menu still has labels', () => {
+      // Re-review of the fix wave: with the strip applied AFTER `leftCol`, a
+      // TUI that aligns its labels with two spaces has the row cut at the
+      // space run — `leftCol` yields "[ ]", the strip leaves "", `pairMatches`
+      // rejects empty on both sides, and EVERY multi-select answer comes back
+      // menu-mismatch. The one fixture in the repo uses a single space, which
+      // is exactly why nothing caught it.
+      const aligned = fixture('multiselect.txt').replace(/\. \[ \] /g, '. [ ]  ');
+      expect(aligned).toContain('[ ]  Bash');   // the widened spacing really is there
+      expect(paneOptionRows(aligned).map((r) => r.label)).toEqual(['Bash', 'Edit', 'WebFetch']);
+    });
+
     it('agrees with parseDialog on a single-select menu, and says nothing about a plain pane', () => {
       const rows = paneOptionRows(fixture('ask-user-question.txt'));
       const d = parseDialog(fixture('ask-user-question.txt'))!;

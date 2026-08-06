@@ -56,8 +56,26 @@ const unparsed = (raw: string): Dialog => ({
   id: sha1(raw), title: '', options: [], selectedIndex: 1, parsed: false, raw,
 });
 
-/** A multi-select row's leading checkbox (`[ ] Bash`, `[x] Edit`) — the row's
- *  STATE, never part of its label. Single-select menus don't paint one. */
+/**
+ * A multi-select row's leading checkbox (`[ ] Bash`, `[x] Edit`) — the row's
+ * STATE, never part of its label. Single-select menus don't paint one.
+ *
+ * ASSUMPTION, and it is worth knowing where it came from: this pattern is
+ * matched against ONE 116-byte synthetic fixture
+ * (`test/fixtures/panes/multiselect.txt`), not a real capture — no multi-select
+ * pane has been recorded off a live session yet. A build whose marker this
+ * regex does not recognise (`(•)`, `☐`, a leading glyph instead of brackets)
+ * leaves the marker on every label, every label then disagrees with the hook's
+ * verbatim copy, and `inject/ask.ts`'s identity gate refuses EVERY multi-select
+ * answer with `menu-mismatch`.
+ *
+ * That failure is fail-shut and therefore safe, but from the outside it looks
+ * like a refusal storm on one question shape with nothing wrong on screen — so
+ * start here, not at the gate. Stripping happens BEFORE `leftCol` for the same
+ * class of reason: a TUI that aligns its labels with two spaces (`1. [ ]  Bash`)
+ * would otherwise have `leftCol` cut the row at the space run, leaving `"[ ]"`
+ * to be stripped down to the empty string that `pairMatches` rejects outright.
+ */
 const CHECKBOX_RE = /^\[[^\]]?\]\s*/;
 
 /** One numbered row read off a pane menu: the digit it printed, its label
@@ -90,7 +108,9 @@ export function paneOptionRows(pane: string): OptionRow[] {
     if (m) {
       found.push({
         line: i, index: parseInt(m[2]!, 10),
-        label: leftCol(m[3]!).replace(CHECKBOX_RE, ''), selected: !!m[1],
+        // Checkbox first, THEN the column cut — see CHECKBOX_RE's own comment
+        // for what the other order costs on a two-space-aligned menu.
+        label: leftCol(m[3]!.replace(CHECKBOX_RE, '')), selected: !!m[1],
       });
     }
   }

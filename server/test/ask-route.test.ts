@@ -1,5 +1,39 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { askKey } from '../src/askkey.js';
+
+const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const pane = (name: string): string => readFileSync(path.join(fixturesDir, 'panes', name), 'utf8');
+
+/**
+ * The AskUserQuestion envelope out of a transcript fixture, in the shape
+ * `session-hook.sh` would have written for it.
+ *
+ * READ, not retyped: the point of a real-capture test is that the pane and the
+ * labels came from the same moment, and a hand-copied label list would let them
+ * drift the instant either fixture is touched. Deliberately naive about the
+ * transcript's shape — `readPendingAsk`'s gates are not what is under test here,
+ * and pulling them in would need a `FleetIO`.
+ */
+function askFromTranscript(name: string): { questions: { question: string; multiSelect?: boolean; options: { label: string }[] }[] } {
+  for (const line of readFileSync(path.join(fixturesDir, name), 'utf8').split('\n')) {
+    if (line.trim() === '') continue;
+    const content = (JSON.parse(line) as { message?: { content?: unknown } }).message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const b of content as Array<Record<string, unknown>>) {
+      if (b?.['type'] !== 'tool_use' || b['name'] !== 'AskUserQuestion') continue;
+      const qs = (b['input'] as { questions: { question: string; multiSelect?: boolean; options: { label: string }[] }[] }).questions;
+      return { questions: qs.map((q) => ({
+        question: q.question,
+        ...(q.multiSelect === true ? { multiSelect: true } : {}),
+        options: q.options.map((o) => ({ label: o.label })),   // no description/preview: the hook copies neither
+      })) };
+    }
+  }
+  throw new Error(`no AskUserQuestion tool_use in ${name}`);
+}
 
 const ask = (question: string, labels: string[]) => ({
   questions: [{ question, options: labels.map((label) => ({ label })) }],
@@ -342,6 +376,68 @@ describe('answerAsk', () => {
       expect(await answerAsk(d as never, 'cc-x', key, [0]))
         .toEqual({ ok: false, error: 'menu-mismatch' });
       expect(keys).toEqual([]);
+    });
+
+    // — the gate's claim, against captures nobody typed by hand —
+    //
+    // Every other pane in this file is a synthetic string written to suit the
+    // assertion, so the comment on the identity gate ("what makes it hold on
+    // real captures") had nothing pinning it. These three use captures taken
+    // off live sessions, paired with the envelope that actually accompanied
+    // them, so a future edit to the normalisation rule breaks a test instead
+    // of the fleet.
+    describe('real captures', () => {
+      it('accepts a real one-column AskUserQuestion, TUI-appended rows and all', async () => {
+        // `ask-user-question-real.txt` is a v2.1.216 capture. Its own scrollback
+        // carries the prompt that produced it — "with exactly these options:
+        // Red, Green, Blue" — so the envelope below is not a guess. The pane
+        // numbers FIVE rows: the three real options, then the TUI's own
+        // "4. Type something." and "5. Chat about this", which is the
+        // extra-trailing-rows tolerance on a capture rather than a mock.
+        const colour = { questions: [{
+          question: 'Which colour do you prefer?',
+          options: [{ label: 'Red' }, { label: 'Green' }, { label: 'Blue' }],
+        }] };
+        const { keys, d } = deps(
+          { readAsk: async () => ({ ask: colour, state: 'waiting' as const }) },
+          pane('ask-user-question-real.txt'),
+        );
+        expect(await answerAsk(d as never, 'cc-x', askKey(colour)!, [1])).toEqual({ ok: true });
+        expect(keys).toEqual(['2']);   // Green, digit alone — single-select
+      });
+
+      it('accepts a real TWO-COLUMN capture whose rows are cut at the gutter', async () => {
+        // The hard direction for `pairMatches`: the two-column layout clips
+        // every visible label at the detail box ("Forward-fill per class"),
+        // while the envelope carries the full text ("…(Recommended) - carry the
+        // last seen rate per class"). The PANE is the truncated side here, the
+        // envelope in the one-column case above — which is the whole reason the
+        // rule compares prefixes in BOTH directions.
+        const askEnvelope = askFromTranscript('transcript-ask-2col.jsonl');
+        const { keys, d } = deps(
+          { readAsk: async () => ({ ask: askEnvelope, state: 'waiting' as const }) },
+          pane('ask-2col-chat-about.txt'),
+        );
+        expect(await answerAsk(d as never, 'cc-x', askKey(askEnvelope)!, [0])).toEqual({ ok: true });
+        expect(keys).toEqual(['1']);
+      });
+
+      it('refuses the same menu captured mid-redraw — the rows are not there to prove', async () => {
+        // `ask-2col-partial-redraw.txt` is the SAME menu, grabbed while it was
+        // being repainted: the footer is still up (so `hasMenu` says yes) but
+        // only one numbered row survived. `parseDialog` already calls this
+        // capture unparsed and `DialogSheet` already refuses to let a tap
+        // through it; this is the server refusing the same pane for the same
+        // reason, one keystroke later. Same stance at both layers.
+        const askEnvelope = askFromTranscript('transcript-ask-2col.jsonl');
+        const { keys, d } = deps(
+          { readAsk: async () => ({ ask: askEnvelope, state: 'waiting' as const }) },
+          pane('ask-2col-partial-redraw.txt'),
+        );
+        expect(await answerAsk(d as never, 'cc-x', askKey(askEnvelope)!, [0]))
+          .toEqual({ ok: false, error: 'menu-mismatch' });
+        expect(keys).toEqual([]);
+      });
     });
 
     it('captures the pane AFTER readAsk, so the hookstate read cannot age it', async () => {
