@@ -1032,6 +1032,17 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # The absence of a workspace field is what distinguishes a main checkout.
   [[ -n "$ws" ]] || die "$id is not a workspace — refusing to remove a main checkout"
   [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+
+  # A hold is a declaration that a program is mid-flight here. Destroying the
+  # workspace should take two deliberate acts — release, then remove — never
+  # one. The reason is echoed so the operator knows WHICH program refuses.
+  # `-e` not `-f`: present-but-unreadable still refuses — doubt reads as HELD.
+  # `die`, because this verb's caller is a terminal and every other refusal in
+  # it dies too; `cmd_ws_reap`'s copy of this rung answers in JSON on stdout
+  # instead, for the reason recorded there (the PWA reads tokens, not stderr).
+  if [[ -e "$REG/$id.hold" ]]; then
+    die "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+  fi
   local main="$PROJECTS_ROOT/$project"
 
   # Gather the evidence BEFORE anything is torn down, and gather it from git.
@@ -4242,6 +4253,37 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # trip over, and before `_ws_reap_eval`, so it costs no gh call and no fetch.
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the reap record safely"
+
+  # THE HOLD RUNG, the same declaration `cmd_ws_rm` refuses on: a program has
+  # said it is mid-flight in this workspace, so destroying it takes two
+  # deliberate acts — release, then reap — never one.
+  #
+  # ANSWERED IN THIS FUNCTION'S IDIOM, not `cmd_ws_rm`'s. `cmd_ws_rm` is the
+  # terminal path and `die`s; here a refusal prints JSON on stdout and exits 0
+  # (this function's own header says so, and the flock contest below does
+  # exactly this for `in-progress`, a state refusal `_ws_reap_eval` never
+  # evaluates either). The reason is mechanical: `parseReap`
+  # (server/src/wsaudit.ts) reads a `refused` TOKEN out of stdout and
+  # classifies everything else — a `die`'s stderr included — as its generic
+  # `error` refusal, whose sentence is the raw shell string: a bash command on
+  # a phone screen. So `held` is a named token, and it carries its sentence in
+  # that file's `SENTENCES` map, which `wsaudit.test.ts` holds exactly equal to
+  # the set of tokens this source can emit — a set it computes by grepping THIS
+  # FILE'S TEXT, comments included, so no comment here may spell a refusal
+  # object out in full (measured: an earlier draft of this one did, and
+  # invented a token called `error`).
+  #
+  # PLACED HERE, after the argv guards and before both the lock and
+  # `_ws_reap_eval`: after, because it reads `$id` and a caller whose argv this
+  # function would not accept must not receive a well-formed ANSWER; before,
+  # because learning a workspace is off-limits must not cost a gh call, a
+  # fetch, or a lock left behind. `-e` not `-f`: an unreadable-but-present hold
+  # still refuses — the fail-shut polarity is that doubt reads as HELD.
+  if [[ -e "$REG/$id.hold" ]]; then
+    printf '{"refused":"held","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id")"
+    return 0
+  fi
 
   # BEFORE either path, because ccd runs under `set -u` and `_ws_reap_tail`
   # reads REAP_PRNUM and REAP_PROOF unconditionally. On the resume path
