@@ -19,7 +19,7 @@ import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
-import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
+import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
 import { readRegistry } from './registry.js';
 import { readHookState } from './hookstate.js';
@@ -319,6 +319,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const res = await interrupt(sendDeps, id, async () => (await liveStatus(deps.io, deps.cfg, deps.tmux, id)) === 'busy');
+    return res.ok ? res : reply.code(409).send(res);
+  });
+
+  app.post('/api/sessions/:id/submit', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const res = await submitEnter(sendDeps, id);
     return res.ok ? res : reply.code(409).send(res);
   });
 

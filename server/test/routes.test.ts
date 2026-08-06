@@ -148,17 +148,52 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('unknown session id returns 404 on all four routes', async () => {
+  it('unknown session id returns 404 on all five routes', async () => {
     const { app } = await makeApp(['❯ \n']);
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
       ['/api/sessions/nope/interrupt', {}],
       ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
+      ['/api/sessions/nope/submit', {}],
     ] as const) {
       const res = await app.inject({ method: 'POST', url, payload });
       expect(res.statusCode).toBe(404);
     }
+    await app.close();
+  });
+});
+
+// Task 3: /submit — the one-tap rescue for sendPrompt's enter-ignored. Same
+// convention as the /interrupt suite above: 404 covered in the shared loop,
+// so this adds 409 (carrying the refusal token) and 200.
+describe('POST /api/sessions/:id/submit', () => {
+  it('happy path presses Enter once and returns 200 {ok:true}', async () => {
+    // Two panes: the box holding a draft, then the emptied box that proves
+    // Enter submitted (see submitEnter's `submitted` check).
+    const { app, calls } = await makeApp(['scrollback\n❯ half-typed\n', 'scrollback\n❯ \n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    await app.close();
+  });
+
+  it('refuses an empty box with 409 nothing-to-submit, and presses nothing', async () => {
+    const { app, calls } = await makeApp([EMPTY_BOX]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('refuses while a menu owns the keyboard with 409 dialog-open, and presses nothing', async () => {
+    const { app, calls } = await makeApp([menuPane(1)]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'dialog-open' });
+    expect(sendKeysCalls(calls)).toEqual([]);
     await app.close();
   });
 });

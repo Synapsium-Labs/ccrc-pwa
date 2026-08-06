@@ -398,6 +398,43 @@ export function sendPrompt(
 }
 
 /**
+ * Press Enter once on a box that already holds text.
+ *
+ * The rescue for `sendPrompt`'s `enter-ignored`: the text is verified present
+ * and the operator's only remedy today is the sentence "open the terminal to
+ * check". A message that tells the user to do something the UI could do is the
+ * same dead end as a hidden force-delete button.
+ *
+ * ONE Enter, verified. `sendPrompt` already spent two on this box; a third
+ * fired in a loop would carry no information the first two didn't. A human tap
+ * does: they looked at the pane first.
+ */
+export function submitEnter(
+  d: SendDeps,
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'dialog-open' | 'nothing-to-submit' | 'enter-ignored' }> {
+  const sleep = d.sleep ?? defaultSleep;
+  return d.queue.run(id, async () => {
+    const pane = await d.tmux.captureAnsi(id);
+    if (pane === null) return { ok: false, error: 'not-alive' as const };
+    // Same reasoning as sendPrompt's own guard: with a menu up the only `❯` on
+    // screen is the cursor on the selected OPTION, so draftOf would read a menu
+    // row as a draft and this would press Enter on somebody's question.
+    if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' as const };
+    const draft = draftOf(pane);
+    if (draft === '') return { ok: false, error: 'nothing-to-submit' as const };
+
+    await d.tmux.sendKey(id, 'Enter');
+    // The same proof sendPrompt uses: OUR TEXT left the box, not "the box is
+    // empty" — a busy session swaps the row for its queue hint instead.
+    const needle = draft.slice(0, ECHO_NEEDLE);
+    return (await submitted(d, id, sleep, needle))
+      ? { ok: true as const }
+      : { ok: false, error: 'enter-ignored' as const };
+  });
+}
+
+/**
  * Answer a pane menu dialog by walking the ❯ marker to `optionIndex` and
  * confirming. Refuses when the on-screen dialog no longer matches `dialogId`
  * (stale) and never presses Enter unless the re-captured pane proves the
