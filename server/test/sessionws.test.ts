@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { nextDialogFrame, SessionStream, type DialogSeen } from '../src/sessionws.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
+import { askKey } from '../src/askkey.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -255,6 +256,27 @@ describe('hook ask envelope frames', () => {
     const ask = frames.find((f) => f.type === 'ask');
     expect(ask).toBeDefined();
     expect(ask.ask).toEqual(HOOK_ASK_1);
+  });
+
+  // Important 4 (Task 2 review): the wire key was never asserted anywhere —
+  // `checkHookAsk` could compute it wrong, or forget it, and every existing
+  // frame-shape test above would still pass. Pin both directions: a
+  // questions envelope carries the SAME key `askKey` computes standalone
+  // (non-null, so `POST .../ask` has something to match against), and an
+  // approval envelope — answered through the pane path, never this route —
+  // carries `null`.
+  it('carries the wire key alongside a questions envelope, and null for an approval one', async () => {
+    const { frames: withQuestions } = await streamWith({ hookstate: hookBody({ ask: HOOK_ASK_1 }) });
+    const ask = withQuestions.find((f) => f.type === 'ask');
+    expect(ask).toBeDefined();
+    expect(ask.key).toBe(askKey(HOOK_ASK_1));
+    expect(ask.key).not.toBeNull();
+
+    const approval = { approval: { tool: 'Bash', summary: 'rm -rf build/' } };
+    const { frames: withApproval } = await streamWith({ hookstate: hookBody({ ask: approval }) });
+    const approvalAsk = withApproval.find((f) => f.type === 'ask');
+    expect(approvalAsk).toBeDefined();
+    expect(approvalAsk.key).toBeNull();
   });
 
   it('sends a fresh ask frame when the hookstate file\'s ask changes', async () => {

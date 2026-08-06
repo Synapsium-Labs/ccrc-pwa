@@ -13,6 +13,7 @@ import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, testDeps } from './helpers.js';
+import { askKey } from '../src/askkey.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -147,16 +148,88 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('unknown session id returns 404 on all three routes', async () => {
+  it('unknown session id returns 404 on all four routes', async () => {
     const { app } = await makeApp(['❯ \n']);
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
       ['/api/sessions/nope/interrupt', {}],
+      ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
     ] as const) {
       const res = await app.inject({ method: 'POST', url, payload });
       expect(res.statusCode).toBe(404);
     }
+    await app.close();
+  });
+});
+
+// Task 2 review, Important 3: the route and its `readAsk` closure
+// (registry lookup + `readHookState`) had zero tests — every gate inside
+// `answerAsk` was pinned in isolation (ask-route.test.ts) but nothing proved
+// `server.ts` actually wires them together: the registry lookup for the
+// session's uuid, `readHookState`'s freshness/identity gate, and the
+// askDeps/sendDeps shared queue. Same convention as the `/dialog` suite
+// above: 404 covered there, so this adds 400 / 409 / 200.
+describe('POST /api/sessions/:id/ask', () => {
+  const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
+  const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
+
+  /** Seeds the registry (uuid `'1'.repeat(36)`, matching `seedSession`) plus a
+   *  fresh, waiting hookstate file carrying `QUESTION` — the wiring `readAsk`
+   *  needs end to end, not stubbed. */
+  const seedAsk = (home: string, over: Record<string, unknown> = {}): void => {
+    const reg = path.join(home, '.cc-sessions');
+    writeFileSync(path.join(reg, `${ID}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'waiting', event: 'Notification', sessionId: '1'.repeat(36), pid: 4242,
+      updatedAt: Date.now(), ask: { questions: [QUESTION] }, subagents: [],
+      ...over,
+    }));
+  };
+
+  it('happy path presses the single digit and returns 200', async () => {
+    const { app, calls, home } = await makeApp([ASK_PANE]);
+    seedAsk(home);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/ask`,
+      payload: { askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    // Single-select: the digit alone, no Enter — see ask.ts's own comment.
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, '2']]);
+    await app.close();
+  });
+
+  it('a stale/mismatched askKey returns 409 ask-mismatch and presses nothing', async () => {
+    const { app, calls, home } = await makeApp([ASK_PANE]);
+    seedAsk(home);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/ask`,
+      payload: { askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('a malformed body is rejected 400 before touching the session', async () => {
+    const { app, calls, home } = await makeApp([ASK_PANE]);
+    seedAsk(home);
+    for (const payload of [
+      { optionIndexes: [0] },                          // askKey missing
+      { askKey: 123, optionIndexes: [0] },              // askKey not a string
+      { askKey: 'k', optionIndexes: 'nope' },           // optionIndexes not an array
+      { askKey: 'k', optionIndexes: [0, '1'] },         // one entry not a number
+      { askKey: 'k' },                                  // optionIndexes missing
+    ]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/ask`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(sendKeysCalls(calls)).toEqual([]);
     await app.close();
   });
 });
