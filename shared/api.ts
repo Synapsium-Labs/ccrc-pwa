@@ -1091,7 +1091,7 @@ export type SessionStreamMsg =
    *  one is right and sends both exactly as read. The CLIENT is where the
    *  preference lives: it prefers this envelope over the scraped `dialog`
    *  when both are present. */
-  | { type: 'ask'; ask: HookAsk }
+  | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
   | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches

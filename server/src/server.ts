@@ -20,7 +20,9 @@ import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, type SendDeps } from './inject/send.js';
+import { answerAsk, type AskDeps } from './inject/ask.js';
 import { readRegistry } from './registry.js';
+import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
@@ -239,6 +241,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const knownId = async (id: string): Promise<boolean> =>
     (await readRegistry(deps.io, deps.cfg)).some((r) => r.id === id);
 
+  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
+  // serialize through the ONE per-session lock, not independent ones.
+  const askDeps: AskDeps = {
+    ...sendDeps,
+    readAsk: async (id: string) => {
+      const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id) ?? null;
+      if (rec === null) return null;
+      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, rec.uuid, Date.now());
+      return hs === null ? null : { ask: hs.ask, state: hs.state };
+    },
+  };
+
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -279,6 +293,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
+    return res.ok ? res : reply.code(409).send(res);
+  });
+
+  app.post('/api/sessions/:id/ask', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { askKey?: unknown; optionIndexes?: unknown };
+    if (typeof body.askKey !== 'string' ||
+        !Array.isArray(body.optionIndexes) ||
+        !body.optionIndexes.every((n) => typeof n === 'number')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerAsk(askDeps, id, body.askKey, body.optionIndexes);
     return res.ok ? res : reply.code(409).send(res);
   });
 

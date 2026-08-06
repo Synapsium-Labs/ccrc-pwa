@@ -600,7 +600,7 @@ describe('DialogSheet (hook envelope)', () => {
     const store = makeStore();
     act(() => {
       if (dialog) store.getState().apply({ type: 'dialog', dialog });
-      store.getState().apply({ type: 'ask', ask });
+      store.getState().apply({ type: 'ask', ask, key: null });
     });
     render(
       <>
@@ -751,7 +751,7 @@ describe('DialogSheet (hook envelope)', () => {
 
       const other: HookAsk = { approval: { tool: 'Write', summary: 'notes.md' } };
       act(() => {
-        store.getState().apply({ type: 'ask', ask: other });
+        store.getState().apply({ type: 'ask', ask: other, key: null });
       });
 
       expect(document.querySelector('[data-source="hook"]')).toBeInTheDocument();
@@ -793,7 +793,7 @@ describe('DialogSheet (hook envelope)', () => {
       const onOpenTerminal = vi.fn();
       const store = makeStore();
       act(() => {
-        store.getState().apply({ type: 'ask', ask: QUESTION_ASK });
+        store.getState().apply({ type: 'ask', ask: QUESTION_ASK, key: null });
       });
       render(
         <>
@@ -815,7 +815,7 @@ describe('DialogSheet (hook envelope)', () => {
       // Reopen it to prove "Not now" hides too, independent of the CTA tap.
       act(() => {
         store.getState().apply({ type: 'ask_cleared' });
-        store.getState().apply({ type: 'ask', ask: QUESTION_ASK });
+        store.getState().apply({ type: 'ask', ask: QUESTION_ASK, key: null });
       });
       fireEvent.click(notNow);
       expect(document.querySelector('[data-source="hook"]')).not.toBeInTheDocument();
@@ -825,7 +825,7 @@ describe('DialogSheet (hook envelope)', () => {
       const interruptSpy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
       const store = makeStore();
       act(() => {
-        store.getState().apply({ type: 'ask', ask: APPROVAL_ASK });
+        store.getState().apply({ type: 'ask', ask: APPROVAL_ASK, key: null });
       });
       render(
         <>
@@ -852,7 +852,7 @@ describe('DialogSheet (hook envelope)', () => {
       const onOpenTerminal = vi.fn();
       const store = makeStore();
       act(() => {
-        store.getState().apply({ type: 'ask', ask: APPROVAL_ASK });
+        store.getState().apply({ type: 'ask', ask: APPROVAL_ASK, key: null });
       });
       render(<DialogSheet id={SESSION_ID} store={store} onOpenTerminal={onOpenTerminal} />);
 
@@ -867,7 +867,7 @@ describe('DialogSheet (hook envelope)', () => {
       const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
       const store = makeStore();
       act(() => {
-        store.getState().apply({ type: 'ask', ask: QUESTION_ASK });
+        store.getState().apply({ type: 'ask', ask: QUESTION_ASK, key: null });
       });
       render(<DialogSheet id={SESSION_ID} store={store} />);
       expect(screen.getByRole('button', { name: /Big bang/ })).toBeDisabled();

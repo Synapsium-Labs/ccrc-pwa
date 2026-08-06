@@ -188,7 +188,7 @@ describe('applySessionMsg', () => {
   });
 
   it('ask sets and ask_cleared clears', () => {
-    let s = applySessionMsg(emptySnap(), { type: 'ask', ask: askFixture });
+    let s = applySessionMsg(emptySnap(), { type: 'ask', ask: askFixture, key: 'k1' });
     expect(s.ask).toEqual(askFixture);
 
     s = applySessionMsg(s, { type: 'ask_cleared' });
@@ -196,7 +196,7 @@ describe('applySessionMsg', () => {
   });
 
   it('rotated does not clear a pending ask or dialog — a transcript switch is not a menu clearing', () => {
-    let s = applySessionMsg(emptySnap(), { type: 'ask', ask: askFixture });
+    let s = applySessionMsg(emptySnap(), { type: 'ask', ask: askFixture, key: 'k1' });
     s = applySessionMsg(s, { type: 'dialog', dialog: dialogFixture });
 
     s = applySessionMsg(s, { type: 'rotated', uuid: 'u2' });
@@ -238,7 +238,7 @@ describe('session store optimistic send', () => {
   // other half of this same bug; this pins the client's own half.
   it('disconnect() clears a pending hook ask (reconnect-with-stale-client-ask)', () => {
     const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
-    store.getState().apply({ type: 'ask', ask: askFixture });
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
     expect(store.getState().ask).toEqual(askFixture);
 
     store.getState().disconnect();
