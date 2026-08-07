@@ -163,7 +163,11 @@ export const SENTENCES: Record<string, string> = {
   // That is a real inconsistency, left as specified because nothing renders
   // these strings — aligning them later is cheap, and churning a written plan
   // and an approved table for a cosmetic gain is not worth it now.
-  'bad-args': 'ccrc built a rename call ccd could not read. This is a ccrc bug, not something about this workspace.',
+  // Rename-specific wording would be a lie the day any other verb reuses this
+  // token: the key is a bare string in a flat map shared across every ccd
+  // verb the linkage scan covers, not namespaced per-verb, so the copy stays
+  // neutral even though `ws-rename` is the only emitter today.
+  'bad-args': 'ccrc built a request ccd could not read. This is a ccrc bug, not something about this workspace.',
   'bad-branch': 'The name this would rename the branch to is not a valid git branch name.',
   'worktree-unregistered': 'git has no record of this directory as a worktree of this project, so there is no branch name to rename.',
   'detached': 'git has this worktree on a detached HEAD, so there is no branch to rename.',
