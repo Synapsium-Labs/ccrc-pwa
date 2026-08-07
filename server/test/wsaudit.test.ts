@@ -218,6 +218,35 @@ describe('parseReap', () => {
     expect(r.sentence).toContain('flock unavailable');
   });
 
+  it('a held workspace reaches the phone as a NAMED refusal, not as the shell string that caused it', () => {
+    // Build 2.5. FAILS without `SENTENCES['held']`: `refusalSentence` falls
+    // back to `ccrc declined: held.`, which is the generic frame this map
+    // exists to avoid — and the linkage test above fails outright, since the
+    // two sets are held exactly equal.
+    const r = parseReap(
+      '{"refused":"held","detail":"program:x wave:2/4 — release first: ccd ws-release --session demo-quiet-basin","paths":[]}',
+      0, '');
+    expect(r.refused).toBe('held');
+    expect(r.sentence).not.toBe('ccrc declined: held.');
+    expect(r.sentence).toMatch(/mid-flight/i);
+    // The reason string travels in `detail` and is NOT what the sheet renders
+    // (`ReapSheet` renders `sentence`), so the remedy has to be in the
+    // sentence — the rule `stash-unreadable` and `child-unpushed` state.
+    expect(r.sentence).toMatch(/release/i);
+    expect(r.detail).toContain('program:x wave:2/4');
+  });
+
+  it('the SAME refusal answered ccd-style with `die` would be an `error` — which is WHY the reap rung emits a token', () => {
+    // Not a regression pin on new code: the counterfactual, written down where
+    // the classifier lives. It passes before and after the ccd change, and it
+    // is what makes the ccd-side comment ("a `die` here puts a bash command on
+    // a phone screen") checkable rather than assertion.
+    const r = parseReap('', 1,
+      'ccd: held: program:x wave:2/4 — release first: ccd ws-release --session demo-quiet-basin');
+    expect(r.refused).toBe('error');
+    expect(r.sentence).toContain('ccd ws-release --session demo-quiet-basin');
+  });
+
   it('empty stdout, empty stderr, exit 0: not indeterminate either — indeterminate is specifically a NON-ZERO exit with nothing on stderr', () => {
     const r = parseReap('', 0, '');
     expect(r.indeterminate).toBeUndefined();

@@ -39,6 +39,20 @@ export interface FleetSession {
    *  manifest is absent or half-written — never 0, which would argue
    *  against a cleanup that would free gigabytes. */
   archivedBytes: number | null;
+  /** The workspace's program claim — the `.hold` file's reason string,
+   *  verbatim; null when unheld. THE REASON STRING IS THE DISPLAY: this is
+   *  what the fleet chip, the actions sheet's Release confirm and the
+   *  held-merged push all render, with no parsing anywhere on any surface.
+   *  `server/src/registry.ts`'s `SessionRecord.held` carries the fail-shut
+   *  reasoning server-side — a present-but-unreadable `.hold` file reads as
+   *  held THERE, never as this field's null.
+   *
+   *  `reviveFleetSession` below: absent → null (an older snapshot simply
+   *  predates holds — degrade, do not reject), any non-string → reject the
+   *  WHOLE session, the same split ruling `bucket` takes two fields up for
+   *  the identical reason — an affirmative-looking value this build cannot
+   *  parse must never be laundered into "unheld". */
+  held: string | null;
   /** Hook-reported attention state, straight from `~/.cc-sessions/<id>.hookstate.json`
    *  (see `hookstate.ts`'s `readHookState`). Null means NO FRESH HOOK DATA —
    *  a hookless session, a stale file the freshness gate rejected, or a
@@ -872,6 +886,13 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       pr,
       archivedAt: optNum(o, 'archivedAt'),
       archivedBytes: optNum(o, 'archivedBytes'),
+      // Absent → null (`optStr`'s own rule) is the degrade this field wants —
+      // an older snapshot predates holds entirely. Present-but-non-string
+      // throws inside `optStr`, which `reviveFleetSession`'s catch turns into
+      // "reject the whole session" — no custom parsing needed here, unlike
+      // `bucket`'s derive-vs-reject split, because `held` has no absent-derive
+      // case: nothing else on the record can tell you a workspace is claimed.
+      held: optStr(o, 'held'),
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),

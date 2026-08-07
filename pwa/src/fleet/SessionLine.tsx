@@ -211,6 +211,19 @@ export function SessionLine({
         <span className="sess-meta">
           <span className={`sess-state sess-state--${state}`}>{state}</span>
 
+          {/* The program's claim — a workspace-only meta cell, same idiom as
+              .sess-acct next door: reuses .sess-ask's ink-tertiary token, so
+              no new contrast pair. THE REASON STRING IS THE DISPLAY
+              (shared/api.ts's FleetSession.held) — rendered verbatim, never
+              parsed, never iconified beyond this cell's own presence. `title`
+              carries the full text past the cell's own ellipsis, same as
+              .sess-subagent-name's truncation. */}
+          {session.held !== null && (
+            <span className="sess-held" data-held="true" title={session.held}>
+              {session.held}
+            </span>
+          )}
+
           {/* The cleanup bucket's merge facts — see `cleanupFacts` above.
               Two cells, not one: the shared `.sess-meta > *:not(:first-child)
               ::before` rule already punctuates siblings with `·`, so a merged

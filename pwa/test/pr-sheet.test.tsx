@@ -16,7 +16,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null,
   ultracode: false, branch: 'ws/quiet-basin', tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null,
+  hookState: null, askSummary: null, subagents: null, held: null,
   bucket: 'idle', bucketSince: null, ...over,
 });
 
@@ -203,6 +203,41 @@ describe('merged', () => {
     expect(await screen.findByText(/Not archived yet \(session busy\)/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /archive now/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /clean up/i })).not.toBeInTheDocument();
+  });
+
+  // Fix round, finding 1. `archiveMerged` skips a held workspace on
+  // `r.held !== null` BEFORE `archiveSafety` runs, so for a held session the
+  // hold is the ONLY cause and the pane is usually idle — the sheet said
+  // "session busy" and pointed at a wait that can never end. The reason is
+  // rendered verbatim, and "Archive now" survives because `ccd ws-archive`
+  // has no held rung (only ws-rm/ws-reap do).
+  it('names the hold — not a busy session — when a merged workspace is held', async () => {
+    fetched = view({ pr: merged, draft: null });
+    open(sess({ pr: merged, archivedAt: null, held: 'program:agent-evals wave:2/4' }));
+    expect(await screen.findByText(/held: program:agent-evals wave:2\/4/)).toBeInTheDocument();
+    expect(screen.queryByText(/session busy/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /archive now/i })).toBeInTheDocument();
+  });
+
+  // FIX-WAVE FINDING 6. The fix round above corrected the MERGED branch and
+  // left the open/draft one saying "When it merges, ccrc archives this
+  // workspace automatically" — and that branch is the one an operator reads
+  // for the WHOLE of a wave, since a PR sits open for hours before it merges.
+  // For a held session the promise is simply false: `archiveMerged` hits the
+  // held rung before `archiveSafety` and skips for as long as the hold stands.
+  it('an OPEN PR on a held workspace does not promise an automatic archive', async () => {
+    const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
+    fetched = view({ pr: openPr, draft: null });
+    open(sess({ pr: openPr, held: 'program:agent-evals wave:1/4' }));
+    expect(await screen.findByText(/held — program:agent-evals wave:1\/4/)).toBeInTheDocument();
+    expect(screen.queryByText(/archives this workspace automatically/i)).not.toBeInTheDocument();
+  });
+
+  it('an OPEN PR on an UNHELD workspace still promises it — the sentence is not simply gone', async () => {
+    const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
+    fetched = view({ pr: openPr, draft: null });
+    open(sess({ pr: openPr }));
+    expect(await screen.findByText(/archives this workspace automatically/i)).toBeInTheDocument();
   });
 
   it('hands cleanup to the caller rather than deleting anything itself', async () => {

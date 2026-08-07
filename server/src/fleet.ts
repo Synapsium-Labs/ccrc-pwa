@@ -157,6 +157,7 @@ export async function assembleFleet(
       pr: prStates?.get(r.id) ?? persistedPr(r),
       archivedAt: r.archivedAt,
       archivedBytes: r.archivedBytes,
+      held: r.held,
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs),
       subagents: hs?.subagents ?? null,

@@ -556,6 +556,83 @@ describe('notify ingestion', () => {
   });
 });
 
+// POST /api/sessions/:id/hold and /release — same shape as /archive/restore
+// (pr-routes.test.ts): verbSupported-gated, 404/400/501/200.
+//
+// The 200 case runs through `helpers.ts`'s `testDeps`, i.e. through
+// `guardRunner` — LAYER 1 of the three against "route added, whitelist not
+// updated, all suites green, dead on the fleet" (`whitelist-subset.test.ts`'s
+// header). An earlier draft built its deps by hand here precisely to escape
+// that guard, because neither verb was granted yet; that made this the one
+// route test whose argv the guard never saw (review finding 1). The grants
+// landed, so the ordinary harness works and covers both new argvs for free.
+describe('POST /api/sessions/:id/hold and /release', () => {
+  it('404s an unknown session on both routes, before building any argv', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    for (const url of ['/api/sessions/nope-nothing/hold', '/api/sessions/nope-nothing/release']) {
+      const res = await app.inject({ method: 'POST', url, payload: { reason: 'w' } });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
+    }
+    expect(calls.filter((c) => c[1] === 'ws-hold' || c[1] === 'ws-release')).toEqual([]);
+    await app.close();
+  });
+
+  it('400s a missing, empty or non-string reason on /hold, without shelling out', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    for (const payload of [{}, { reason: '' }, { reason: '   ' }, { reason: 5 }]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
+    await app.close();
+  });
+
+  it('501s when the deployed ccd has neither verb, and shells out to nothing', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const deps = { ...testDeps(home, run), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'] } };
+    const app = await buildServer(deps);
+    const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason: 'w' } });
+    expect(resHold.statusCode).toBe(501);
+    expect(resHold.json()).toEqual({ ok: false, error: 'unsupported' });
+    const resRelease = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/release` });
+    expect(resRelease.statusCode).toBe(501);
+    expect(resRelease.json()).toEqual({ ok: false, error: 'unsupported' });
+    expect(calls.filter((c) => c[1] === 'ws-hold' || c[1] === 'ws-release')).toEqual([]);
+    await app.close();
+  });
+
+  it('200s and runs ccd ws-hold/ws-release --session, the reason passed through verbatim', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-hold') return { code: 0, stdout: `held ${ID}`, stderr: '' };
+      if (args[0] === 'ws-release') return { code: 0, stdout: `released ${ID}`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const app = await buildServer(testDeps(home, run));
+
+    const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`,
+      payload: { reason: 'program:agent-evals wave:1/4' } });
+    expect(resHold.statusCode).toBe(200);
+    expect(resHold.json()).toEqual({ ok: true });
+    expect(calls.find((c) => c[1] === 'ws-hold')?.slice(1))
+      .toEqual(['ws-hold', '--session', ID, '--reason', 'program:agent-evals wave:1/4']);
+
+    const resRelease = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/release` });
+    expect(resRelease.statusCode).toBe(200);
+    expect(resRelease.json()).toEqual({ ok: true });
+    expect(calls.find((c) => c[1] === 'ws-release')?.slice(1)).toEqual(['ws-release', '--session', ID]);
+    await app.close();
+  });
+});
+
 describe('layer 1 — the guard runner', () => {
   // `async` + `await`, and both are load-bearing: `expect(promise).rejects`
   // returns a promise, so a synchronous callback that neither awaits nor

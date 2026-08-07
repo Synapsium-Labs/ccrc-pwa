@@ -29,7 +29,23 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
   wsAudit: ['demo-quiet-basin'],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
   wsAttic: ['demo-quiet-basin'],
+  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4'],
+  wsRelease: ['demo-quiet-basin'],
 };
+
+/**
+ * NO EXEMPTION SET (review finding 1, and the reason this note replaces one).
+ *
+ * The first draft of the hold branch shipped `wsHold`/`wsRelease` as `CCD_ARGV`
+ * entries with no matching grant in `EXEC_WHITELIST.ccd`, and amended the two
+ * assertions below to EXPECT that — a documented `NOT_YET_GRANTED` set, so the
+ * file went green on exactly the state it exists to catch. What it was
+ * describing is the failure in this file's header, wearing the branch's own
+ * wording: in remote mode both routes answer `502 {stderr:'forbidden'}` for
+ * every session, forever, while `/archive` and `/restore` on the same actions
+ * sheet keep working. The grants landed instead; the assertion below is
+ * exhaustive again, `=== true` for every entry with no list to consult.
+ */
 
 describe('layer 2 — every argv the server can build passes the agent whitelist', () => {
   it('has a sample for every CCD_ARGV entry', () => {
@@ -239,6 +255,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAudit: ['ws-audit', '--session', 'demo-quiet-basin'],
     wsReap: ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
+    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4'],
+    wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {

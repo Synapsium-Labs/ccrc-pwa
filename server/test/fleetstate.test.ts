@@ -15,7 +15,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, bucket: 'idle', bucketSince: null,
+  hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
 });
 
 describe('fleetstate', () => {
@@ -217,6 +217,32 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     // rejected instead, the same stance revivePr takes for `checks`.
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), hookState: 'sleeping' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `held` — absent degrades to null, a non-string rejects the whole session', async () => {
+    // FIX-WAVE OBSERVATION. CHARACTERIZATION, DISCLOSED: green before this
+    // wave too — the code was already right and only the proof was missing.
+    // `reviveFleetSession`'s `held` handling shipped with no test at all. The field's own doc (shared/api.ts) asserts a SPLIT —
+    // absent → null (an older snapshot simply predates holds), any non-string →
+    // reject — and the 16 touched builders only ever added `held: null` to
+    // satisfy tsc, so both halves were unpinned. The split matters in the
+    // destructive direction: laundering an unparseable value into "unheld" is
+    // how a degraded-mode snapshot would let the archive gate run on a
+    // workspace a program has claimed.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.held).toBeNull();
+    expect(Object.keys(absent ?? {})).toContain('held');
+
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: 'program:agent-evals wave:1/4' }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.held).toBe('program:agent-evals wave:1/4');
+
+    // Not `held: null`, and not a dropped field: the WHOLE snapshot goes.
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: true }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: { reason: 'x' } }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
 

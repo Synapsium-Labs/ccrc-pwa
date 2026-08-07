@@ -11,7 +11,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null,
   bucket: 'idle', bucketSince: null, ...over,
 });
@@ -183,5 +183,146 @@ describe('archive and restore (D5 rider 1)', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /archive workspace/i }));
     expect(await screen.findByText(/Couldn't archive — not merged/)).toBeInTheDocument();
+  });
+});
+
+describe('hold and release', () => {
+  // `f`, not a second `s`: the brief's own tests name it `f`, and it is
+  // exactly `s` — one session-literal builder for this file.
+  const f = s;
+  const sheetProps = { open: true, onClose: () => {}, onReap: () => {} };
+
+  let heldCalls: { id: string; reason: string }[];
+  let released: string[];
+
+  beforeEach(() => {
+    heldCalls = [];
+    released = [];
+    // A fetch stub that RECORDS hold/release requests rather than merely
+    // answering 200 — `stubFetch`'s blanket 502 above is the wrong shape
+    // here (SwapSheet's useDisabledWrappers polls /api/accounts on its own
+    // effect, mounted alongside every SessionActionsSheet, and that call
+    // must not read as a hold/release failure).
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const id = url.split('/').at(-2) ?? '';
+      if (method === 'POST' && url.endsWith('/hold')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { reason?: string };
+        heldCalls.push({ id, reason: body.reason ?? '' });
+      } else if (method === 'POST' && url.endsWith('/release')) {
+        released.push(id);
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+  });
+
+  it('the actions sheet offers Hold on an unheld workspace and Release on a held one, never both', () => {
+    const { rerender } = render(<SessionActionsSheet session={f({ held: null })} {...sheetProps} />);
+    expect(screen.getByRole('button', { name: /hold/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /release/i })).toBeNull();
+    rerender(<SessionActionsSheet session={f({ held: 'program:x wave:2/4' })} {...sheetProps} />);
+    expect(screen.getByRole('button', { name: /release/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^hold/i })).toBeNull();
+  });
+
+  it('offers neither once the workspace is archived — a hold cannot protect a pane that is already gone', () => {
+    render(<SessionActionsSheet session={f({ held: null, archivedAt: 1785300000 })} {...sheetProps} />);
+    expect(screen.queryByRole('button', { name: /hold/i })).toBeNull();
+  });
+
+  // `fireEvent`, not `userEvent`, for every click below — matching this
+  // file's own established idiom for Sheet-rendered controls (every other
+  // describe block here does the same). vaul's Drawer attaches its own
+  // pointer/drag handlers to its content, and `userEvent.click`'s realistic
+  // pointerdown/pointerup sequence walks straight into them under jsdom
+  // (`getTranslate` reads a transform jsdom never sets) — an uncaught
+  // exception vitest reports separately from the assertions, real but
+  // orthogonal to anything this suite is testing.
+  it('Release names its consequence before acting', () => {
+    render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /release/i }));
+    // The confirm says what release re-enables BEFORE anything is sent:
+    expect(screen.getByText(/may archive it once its PR merges/)).toBeInTheDocument();
+    expect(released).toHaveLength(0);   // nothing sent yet — the copy precedes the act
+  });
+
+  it('Release promises a MAY, not a WILL — the gate has a deferral the hold knows nothing about', () => {
+    // FIX-WAVE OBSERVATION. The copy read "released — will archive on the next
+    // sweep after its PR merges", under a comment claiming it was ccd's own
+    // fact restated. ccd's `cmd_ws_release` says the next sweep MAY archive,
+    // and `archiveMerged` still defers on `archiveSafety` (busy/attached) —
+    // which the PrSheet two taps away is careful to name as a separate reason.
+    // An operator who released to unblock a merge and then watched three
+    // sweeps go by was told a certainty that was never on offer.
+    render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /release/i }));
+    expect(screen.queryByText(/will archive on the next sweep/)).not.toBeInTheDocument();
+    // And the deferral itself is named, not merely hedged away.
+    expect(screen.getByText(/busy or attached session defers/)).toBeInTheDocument();
+  });
+
+  it('confirming Release posts /release and closes the sheet', async () => {
+    const onClose = vi.fn();
+    render(<SessionActionsSheet session={f({ held: 'program:x' })} open onClose={onClose} onReap={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /release/i }));
+    // QuickConfirm's own confirm button — targeted by its wrapper class
+    // rather than role/name, which the opener Release button (still mounted
+    // behind it) also matches.
+    const confirmBtn = document.querySelector<HTMLButtonElement>('.qc-actions .btn-primary')!;
+    fireEvent.click(confirmBtn);
+    await waitFor(() => expect(released).toEqual(['demo-quiet-mesa']));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("Hold refuses to send an empty reason, with the server's own sentence", () => {
+    render(<SessionActionsSheet session={f({ held: null })} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /hold/i }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm|hold/i }));
+    expect(heldCalls).toHaveLength(0);
+    expect(screen.getByText(/say which program holds this/)).toBeInTheDocument();
+  });
+
+  it('the empty-reason refusal clears on the first keystroke, not on the next submit', () => {
+    // FIX-WAVE OBSERVATION: `holdError` was set by `confirmHold`'s empty branch
+    // and cleared only INSIDE `confirmHold`, after the non-empty check passed.
+    // So "empty reason — say which program holds this" sat under a box with a
+    // perfectly good reason typed into it until the operator submitted again —
+    // a refusal of what was on screen a moment ago, not of what is there now.
+    render(<SessionActionsSheet session={f({ held: null })} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    expect(screen.getByText(/say which program holds this/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'p' } });
+    expect(screen.queryByText(/say which program holds this/)).not.toBeInTheDocument();
+    expect(heldCalls).toHaveLength(0);   // typing is not sending
+  });
+
+  it('Hold sends the typed reason and closes the sheet on success', async () => {
+    const onClose = vi.fn();
+    render(<SessionActionsSheet session={f({ held: null })} open onClose={onClose} onReap={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:agent-evals wave:2/4' } });
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    await waitFor(() => expect(heldCalls).toEqual(
+      [{ id: 'demo-quiet-mesa', reason: 'program:agent-evals wave:2/4' }]));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("surfaces ccd's own refusal text when a hold request fails", async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: false, stderr: 'archived — restore first' }),
+      { status: 502, headers: { 'content-type': 'application/json' } },
+    )));
+    render(
+      <>
+        <SessionActionsSheet session={f({ held: null })} {...sheetProps} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:x' } });
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    expect(await screen.findByText(/Couldn't hold — archived — restore first/)).toBeInTheDocument();
   });
 });

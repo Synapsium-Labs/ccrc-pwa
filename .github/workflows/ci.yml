@@ -8,6 +8,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual re-run for the day the webhooks don't come: during the 2026-08-06
+  # Actions incident GitHub processed ~15% of webhooks, so pushes and PR
+  # events silently created NO run — and a required-checks branch protection
+  # then blocks on checks that never existed. `gh workflow run ci.yml
+  # --ref <branch>` is the escape hatch; it uses the workflow file from the
+  # ref it is dispatched on.
+  workflow_dispatch:
 
 jobs:
   test:

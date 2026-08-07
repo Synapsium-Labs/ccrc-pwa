@@ -96,6 +96,20 @@ export const UNSUPPORTED_VERB_TEXT =
   'The fleet host is running a ccd that does not have this verb yet.';
 
 /**
+ * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),
+ * verbatim: "empty reason — say which program holds this". The server's
+ * `/hold` route refuses the identical input before building any argv (400
+ * `bad-request`, no reason text on the wire back), so the ONLY place this
+ * sentence can come from for a same-session client-side refusal is this
+ * constant — copied, not fetched, because refusing before a network round
+ * trip is the whole point of catching it here. `SessionActionsSheet` is the
+ * one caller; keeping the string here rather than inline keeps it beside
+ * `UNSUPPORTED_VERB_TEXT`, this file's other copy of a truth that also lives
+ * in ccd.
+ */
+export const HOLD_EMPTY_REASON_TEXT = 'empty reason — say which program holds this';
+
+/**
  * Failures the LIFECYCLE routes name by CODE rather than by ccd's stderr. Same
  * reason as `SEND_ERROR_TEXT` and `UPLOAD_ERROR_TEXT` above: left raw these
  * reach a toast as a bare slug.
@@ -188,6 +202,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     archive: (id: string) => post(`${sid(id)}/archive`),
     restore: (id: string) => post(`${sid(id)}/restore`),
+    /** `POST /hold` — the server's own client-side mirror of ccd's refusal
+     *  lives in `SessionActionsSheet` (`HOLD_EMPTY_REASON_TEXT`), so an empty
+     *  reason never reaches this call; the server re-checks anyway (400
+     *  `bad-request`) because a client is not a security boundary. */
+    hold: (id: string, reason: string) => post(`${sid(id)}/hold`, { reason }),
+    release: (id: string) => post(`${sid(id)}/release`),
     workspaceAudit: (id: string) => getJson<WsAudit>(`${sid(id)}/workspace/audit`),
     workspaceReap: async (id: string, expect: string): Promise<ReapResult> =>
       (await (await request(`${sid(id)}/workspace/reap`, {

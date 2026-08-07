@@ -357,3 +357,17 @@ describe('archived sub-fold (Task 18)', () => {
     expect(ruleFor('.proj-archived-toggle')).toContain('min-height: var(--tap-min)');
   });
 });
+
+describe('the hold composer', () => {
+  it('declares its own placeholder colour — the block comment claims .proj-search verbatim', () => {
+    // FIX-WAVE OBSERVATION. The comment above this block says `.sess-hold-input`
+    // "copies .proj-search's declarations verbatim … same tokens, no new pair",
+    // and it omitted `::placeholder`, which .proj-search does declare. Left
+    // undeclared the placeholder falls to the UA default in both colour
+    // schemes — and this placeholder is the ONLY place the reason convention
+    // (`program:name wave:2/4`) is shown to whoever is typing it.
+    expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color'))
+      .toBe(declValue(ruleIn(css, '.proj-search::placeholder'), 'color'));
+    expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color')).toBe('var(--ink-tertiary)');
+  });
+});

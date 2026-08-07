@@ -204,6 +204,27 @@ describe('PR state on the wire', () => {
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.archivedAt).toBe(1785300123);
   });
+
+  // Fix round, finding 2. `held: r.held` is this task's ONE server line and it
+  // had no test: `hold-gate.test.ts` exercises `archiveMerged` against
+  // `SessionRecord`, never `assembleFleet`, so `held: null` here would have
+  // stayed green everywhere while every held workspace reached the phone
+  // unheld — no chip, and the actions sheet offering Hold instead of Release,
+  // which is the ONLY PWA route to the release that `ws-reap`'s refusal
+  // sentence tells the operator to take. Same shape as `archivedAt` above:
+  // the registry field, verbatim, on the assembled session.
+  it('carries held straight through, verbatim', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'demo-quiet-basin', 'claude', {
+      workspace: 'quiet-basin', hold: 'program:agent-evals wave:2/4',
+    });
+    seedSession(home, 'demo-still-lake', 'claude', { workspace: 'still-lake' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.held).toBe('program:agent-evals wave:2/4');
+    // Absence IS release — the verb unlinks — so no `.hold` file must reach
+    // the wire as null, not as an empty string a chip would render blank.
+    expect(fleet.find((x) => x.id === 'demo-still-lake')!.held).toBeNull();
+  });
 });
 
 describe('archived size on the wire', () => {

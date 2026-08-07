@@ -609,6 +609,48 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcdOr502(reply, argv);
   });
 
+  app.post('/api/sessions/:id/hold', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { reason?: unknown };
+    // A hold nobody can explain is an orphan by construction — reject it here
+    // too, before building any argv, rather than letting an empty string cross
+    // the wire and die in ccd's refusal.
+    //
+    // `.trim()`, and ccd's `cmd_ws_hold` now agrees: its guard was `[[ -n
+    // "$reason" ]]`, which passed `--reason "   "` while this one refused it,
+    // and `registry.ts`'s `field()` trims what it reads — so a whitespace
+    // reason landed as `held: ''`, enforced everywhere and displayed nowhere
+    // (fix-wave finding 9). The three layers refuse the same INPUT; they do
+    // not all say the same thing about it, and nothing should claim they do:
+    // this one answers a 400 `bad-request` code with no sentence at all, which
+    // is what a non-PWA client gets, while ccd and the composer share
+    // `HOLD_EMPTY_REASON_TEXT`'s wording.
+    if (typeof body.reason !== 'string' || body.reason.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const argv = CCD_ARGV.wsHold(id, body.reason);
+    // Same verb generation and same skew answer as `/archive`/`/restore`
+    // above — ws-hold/ws-release ship in the same branch that added them.
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    return runCcdOr502(reply, argv);
+  });
+
+  app.post('/api/sessions/:id/release', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const argv = CCD_ARGV.wsRelease(id);
+    // Same generation, same skew, same answer as `/hold` above.
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    return runCcdOr502(reply, argv);
+  });
+
   app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });

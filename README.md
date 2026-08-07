@@ -100,6 +100,37 @@ fleet as freshly-unseen several times a day.
 `status` itself stays frozen and hook-blind; a test asserts it is identical with
 and without hook state present.
 
+### Workspace holds & programs
+
+A **hold** is a program's declared claim on a workspace — `ccd ws-hold
+--session <id> --reason <text>` writes `$REG/<id>.hold`, and `ccd ws-release
+--session <id>` removes it. No timeout, no expiry, ever: the claim lasts as
+long as the reason is true, and the reason string *is* the whole display —
+verbatim on the fleet chip, the actions sheet, and the held-merged push,
+parsed nowhere. Workspace-only (a main checkout has nothing to protect) and an
+archived workspace refuses (restore first). An empty *or whitespace-only*
+reason refuses in all three layers — the composer and `ccd ws-hold` share one
+sentence (`empty reason — say which program holds this`), while the route
+answers a bare 400 `bad-request`, which is what a non-PWA client sees.
+
+A hold has exactly two consumers. `archiveMerged`'s auto-archive gate becomes
+*merged **and unheld*** — `held === null` is the new conjunct — so a workspace
+idle between two waves of the same program reads as claimed, not finished, and
+survives a sweep even after its PR merges. The hold is re-read from the
+registry at the archive decision point, not taken from the snapshot the sweep
+opened with, so a hold placed *during* a sweep still lands. And `ws-rm` /
+`ws-reap` grow one refusal rung apiece:
+destroying a workspace a program declared mid-flight takes two deliberate acts,
+never one — `ws-rm` dies with `held: <reason> — release first`, `ws-reap`
+answers `{"refused":"held"}`, and the cleanup sheet renders that as "A program
+has this workspace held — it is mid-flight, so nothing was removed." Release
+first, then clean up. Unchanged: the bucket ladder, `ws-archive` itself, and
+manual archive/restore — a merged-but-held workspace can still be archived by
+hand from the PR sheet, which is why that sheet names the hold instead of
+promising a sweep that will never come. See
+[`docs/superpowers/programs/TEMPLATE.md`](docs/superpowers/programs/TEMPLATE.md)
+for the wave-handoff ledger a program keeps beside its hold.
+
 ## Attention, notifications and answering
 
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it

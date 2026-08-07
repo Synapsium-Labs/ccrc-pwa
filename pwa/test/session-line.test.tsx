@@ -17,7 +17,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null,
   bucket: 'idle', bucketSince: null, ...over,
 });
@@ -522,6 +522,28 @@ describe('ask summary', () => {
       <SessionLine session={s({ hookState: 'working', askSummary: 'Deploy now?' })}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.sess-ask')).not.toBeInTheDocument();
+  });
+});
+
+describe('held chip', () => {
+  it('shows the held chip with the reason verbatim', () => {
+    render(<SessionLine session={s({ held: 'program:agent-evals wave:2/4' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('program:agent-evals wave:2/4')).toBeInTheDocument();
+  });
+
+  it('shows no chip when unheld — null is the wire default, not a state to render', () => {
+    render(<SessionLine session={s({ held: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/program:/)).toBeNull();
+    expect(document.querySelector('[data-held]')).toBeNull();
+  });
+
+  it('marks the chip data-held for tests, and carries the full reason as a title', () => {
+    render(<SessionLine session={s({ held: 'program:x wave:2/4' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const chip = document.querySelector('[data-held]');
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveAttribute('title', 'program:x wave:2/4');
   });
 });
 

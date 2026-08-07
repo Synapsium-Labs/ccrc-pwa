@@ -113,14 +113,22 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # arm runs `git worktree remove` and `git branch -d` on it.
   #
   # Fixed by filtering on the SUFFIX rather than matching every known field
-  # name — a field name never contains a dot (measured: `archived`,
-  # `archivedreason`, `archivemanifest`, `base`, `branch`, `home`,
-  # `lastcompact`, `lastswap`, `pool`, `prnumber`, `project`, `reaping`,
-  # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper` — every
-  # `_reg_set`/`_reg_get` field this file has today), so `$id.<field>` has
-  # exactly one dot after the id and `$id.x-y.uuid` has two. This is
-  # future-proof against a field this file adds tomorrow, which a hardcoded
-  # allowlist would not be — the two are the same shape either way.
+  # name — a field name never contains a dot, so `$id.<field>` has exactly one
+  # dot after the id and `$id.x-y.uuid` has two. This is future-proof against a
+  # field this file adds tomorrow, which a hardcoded allowlist would not be —
+  # the two are the same shape either way.
+  #
+  # The dot-free claim, measured against every registry file a session has
+  # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
+  # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
+  # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper`. That is a
+  # WIDER set than `_reg_set`/`_reg_get`: the inventory that stood here named
+  # only the shell-written fields and so silently dropped `prcheckedat`,
+  # `prphase` and `prhistory` (written by `_pr_py`'s own `put`/append) and
+  # `hookstate` (written by the hooks). The purge itself was always right — it
+  # matches the SUFFIX shape, not a list — but an inventory that omits files is
+  # an inventory a future reader trusts and a future writer copies.
   # AND THE ORDER IS PART OF THE CONTRACT — final-round verification P4. This
   # loop unlinks one file at a time in GLOB order, i.e. alphabetically, so
   # `archived` went first and `reaping` (r) several files later. A SIGKILL or an
@@ -509,7 +517,7 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper
   # the rows, with sys.argv identical. The rows cannot move to argv instead —
   # spec §7 is that no GitHub-sourced string is ever placed in an argv.
   python3 /dev/fd/3 "$@" 3<<'PY'
-import json, os, re, subprocess, sys, time
+import fcntl, json, os, re, subprocess, sys, time
 
 mode = sys.argv[1]
 # `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED, and `is_ours` puts the
@@ -614,7 +622,8 @@ def pick(rows, branch, base_short):
     return cands[-1] if cands else None
 
 if mode == 'state':
-    (id_, project, main, repo, branch, base, base_short, tip, ahead, dirty, template, reg) = sys.argv[2:14]
+    (id_, project, main, repo, branch, base, base_short, tip, ahead, dirty, template, reg,
+     answered_at) = sys.argv[2:15]
     # An argv can only carry a string, so "" is how the shell says UNMEASURED
     # for all three. None here and JSON null on the wire, never 0 and never "":
     # a number is a measurement, and none of these was measured. Deviation 7's
@@ -622,6 +631,23 @@ if mode == 'state':
     tip = tip or None
     ahead = int(ahead) if ahead != '' else None
     dirty = int(dirty) if dirty != '' else None
+
+    # THE STAMP ARRIVES WITH THE ANSWER — re-review of the fix wave. This is the
+    # value the compare-and-set below ranks runs by, so it has to describe WHEN
+    # GITHUB ANSWERED, not when this process finished writing. It used to be
+    # `int(time.time() * 1000)` taken further down, after `rows_in()` and after
+    # this session's `git log`, while `cmd_pr_state --project` makes ONE gh call
+    # and then loops `_pr_state_one` over every session of the repo — so the
+    # k-th session's stamp was SECONDS newer than the answer it was carrying and
+    # the CAS ranked completion times. `cmd_pr_state` now stamps the moment
+    # `_gh_pr_list` returns and hands the same value to every session of the
+    # sweep; the failure it closes is written out there.
+    #
+    # `''` IS NO STAMP AT ALL, and the fallback is this process's own clock —
+    # exactly the pre-fix behaviour. A caller that has no millisecond clock (or
+    # `_pr_state_one` invoked with four arguments, which the pr-state tests do)
+    # must lose the RANKING, never the update: this guard may only remove races.
+    checked_at = int(answered_at) if answered_at != '' else int(time.time() * 1000)
     raw_rows = rows_in()
     if raw_rows is None:
         # THE ID-LESS SHAPE, on purpose: the body is one gh call's answer for the
@@ -677,10 +703,21 @@ if mode == 'state':
                 parts = (rec.split('\x1f') + ['', '', ''])[:3]
                 commits.append({'sha': parts[0], 'subject': parts[1], 'body': parts[2].strip()})
 
-    checked_at = int(time.time() * 1000)
     def put(field, value):
         with open(os.path.join(reg, id_ + '.' + field), 'w') as f:
             f.write(str(value))
+
+    def get(field):
+        # put/clear's own path arithmetic, read instead of written. Needed by
+        # the prhistory chokepoint below to see the OUTGOING prnumber/prphase
+        # before `clear`/the next `put` overwrite them — nothing upstream of
+        # this `state` mode has read $REG for anything but rows_in()'s stdin,
+        # so there was no read helper here to reuse.
+        try:
+            with open(os.path.join(reg, id_ + '.' + field)) as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
 
     def clear(field):
         try:
@@ -713,28 +750,132 @@ if mode == 'state':
     # The unconditional `clear` also costs one unlink on the path where the
     # number is unchanged, which is the price of not having to reason about
     # which transitions are safe.
-    clear('prnumber')
-    put('prphase', phase)
-    # phase and number are ONE answer, so a writer that persists half of it
-    # lies. A PR that is deleted, force-pushed out of reachability, or whose
-    # slug ws-reap has recycled leaves {phase:'none', number:42} on disk if the
-    # number is merely left alone: fleet.ts hands that pair straight to the
-    # wire, so the cap renders `#42` under a phase whose own copy is "no pull
-    # request yet", and ws-archive reads the same field and files
-    # `archivedreason merged:#42` for a PR that no longer binds to this
-    # workspace. REMOVED rather than blanked, so the field is absent exactly as
-    # it is for a workspace that never had a PR.
     #
-    # NO FAILED READ REACHES THIS LINE, and it takes two guards to say that, not
-    # one. `_gh_pr_list` returns before `_pr_py` is called for every read that
-    # failed by EXIT CODE. An rc-0 read whose body is not a list of rows does
-    # reach `_pr_py` — and `rows_in` answering None returns above, before any
-    # `put`/`clear` runs. The comment here used to claim the first guard alone
-    # made this unreachable; it did not, and a `gh` that exited 0 with an empty
-    # or unparseable stdout cleared a persisted `merged:#42`.
-    if number is not None:
-        put('prnumber', number)
-    put('prcheckedat', checked_at)
+    # THE prhistory CHOKEPOINT. This `clear` is the only line in ccd that ever
+    # replaces a persisted `prnumber`, so it is the only place PR lineage can
+    # be recorded without depending on which sweep or verb caused the
+    # replacement. The OUTGOING record — the number about to stop being
+    # true — is appended here, immediately BEFORE the clear, because after it
+    # `get('prnumber')` can no longer see what is leaving.
+    #
+    # Appended only when a REAL prior number is about to become a DIFFERENT
+    # answer: `old_num != number` fires for another number and for `None`
+    # alike (a real number, incoming `None` counts as different, `old_num is
+    # not None` counts as int) — the between-waves gap where a program resets
+    # the branch and the old PR is not yet superseded by a new one must not
+    # lose the record either. Steady state — the sweep re-running every 120 s
+    # against an unchanged number — takes `old_num != number` to False and
+    # appends nothing, or every sweep for the life of a PR would duplicate it.
+    # A non-numeric `old_raw` (corrupt or hand-edited registry) leaves
+    # `old_num` None and also appends nothing: there is no number to retire.
+    # ONE WRITER AT A TIME, AND ONLY THE NEWEST ANSWER WRITES — fix-wave
+    # finding 4. Everything from here to `put('prcheckedat', …)` is one
+    # read-modify-write of a single session's entry, and TWO CONCURRENT
+    # `ccd pr-state` RUNS AGAINST ONE SESSION ARE ORDINARY: the PR sheet's
+    # `GET /api/sessions/:id/pr` fires one on every open while the watcher's
+    # 120 s sweep fires another, and nothing upstream serialises them (the send
+    # queue wraps the send routes, not these). The comment above reasons only
+    # about SERIAL re-runs; these are the two in-flight cases it does not cover.
+    #
+    #   (a) DUPLICATE. Both read `prnumber=577`, both compute 583, both take
+    #       `old_num != number`, and both append `{"pr":577,…}` before either
+    #       reaches `clear`. The ledger is append-only and `_ws_archive_manifest`
+    #       folds it in verbatim, so the archive card reads
+    #       `merged:#583 (waves: #577 #577)` for ever.
+    #   (b) FALSE RECORD. The sheet's run reads gh BEFORE the merge (rows bind
+    #       #577) while the sweep's reads AFTER (rows bind #583); the sweep
+    #       lands first and writes 583; the sheet's run then reads
+    #       `old_raw='583'`, takes `583 != 577`, and retires the NEWER, still-live
+    #       PR into history — then writes `prnumber` back to 577.
+    #
+    # The lock alone fixes (a) — under it the `get('prnumber')` below is fresh,
+    # so the loser sees 583, `old_num == number`, and appends nothing. It cannot
+    # fix (b), because there the loser's ANSWER is older than the winner's, not
+    # its read. That takes the compare-and-set: `prcheckedat` timestamps the gh
+    # answer this run is carrying — `checked_at`, which `cmd_pr_state` takes AT
+    # THE gh READ and passes in, so that the whole of a `--project` fan-out
+    # carries the one timestamp of the one call it made. A run whose answer
+    # predates what is already on disk persists NOTHING — no history line, no
+    # phase, no number. It still prints its own answer on stdout, which is what
+    # the caller asked for and the only thing it can honestly claim: a display
+    # one sweep stale, never a persisted lie.
+    #
+    # RANKING ANSWERS, NOT COMPLETIONS, is the whole of it. While the stamp was
+    # taken here instead — after `rows_in()` and after the `git log` above — (b)
+    # survived the CAS in the shape it is commonest in: the sweep's gh returns at
+    # T0 binding #577, the sheet's own `--session` read returns at T0+1.0s
+    # binding the NEW #583 and persists it, and the sweep reaches that session at
+    # T0+1.4s with a stamp that OUTRANKS the newer answer. #583 went into the
+    # append-only ledger and `prnumber` went back to #577.
+    #
+    # `flock` on this session's own `.uuid` — an existing file, opened
+    # read-only, never written here — rather than a new registry file: the
+    # contended pair is always same-id, the lock is advisory and every writer of
+    # these fields is this same block. If it cannot be taken at all (no `.uuid`,
+    # no fcntl, unreadable $REG) the write goes ahead unlocked, which is exactly
+    # today's behaviour: this guard may only remove races, never add a refusal
+    # that stops a phase from ever updating.
+    lock_f = None
+    try:
+        lock_f = open(os.path.join(reg, id_ + '.uuid'))
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        if lock_f is not None:
+            lock_f.close()
+        lock_f = None
+    try:
+        prev_at = None
+        prev_checked = get('prcheckedat')
+        if prev_checked is not None:
+            try:
+                prev_at = int(prev_checked.strip())
+            except ValueError:
+                prev_at = None     # unparseable: no newer answer is PROVEN, so this one still writes
+        # `<=`, not `<`: two runs landing in the same millisecond are not a
+        # staleness case, and refusing there would drop a real update.
+        if prev_at is None or prev_at <= checked_at:
+            old_raw = get('prnumber')
+            old_phase = get('prphase') or ''   # read before `put('prphase', ...)` below overwrites it
+            if old_raw is not None:
+                try:
+                    old_num = int(old_raw)
+                except ValueError:
+                    old_num = None
+                if old_num is not None and old_num != number:
+                    rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
+                           'recordedAt': int(time.time())}
+                    with open(os.path.join(reg, id_ + '.prhistory'), 'a') as f:
+                        f.write(json.dumps(rec) + '\n')
+            clear('prnumber')
+            put('prphase', phase)
+            # phase and number are ONE answer, so a writer that persists half
+            # of it lies. A PR that is deleted, force-pushed out of
+            # reachability, or whose slug ws-reap has recycled leaves
+            # {phase:'none', number:42} on disk if the number is merely left
+            # alone: fleet.ts hands that pair straight to the wire, so the cap
+            # renders `#42` under a phase whose own copy is "no pull request
+            # yet", and ws-archive reads the same field and files
+            # `archivedreason merged:#42` for a PR that no longer binds to this
+            # workspace. REMOVED rather than blanked, so the field is absent
+            # exactly as it is for a workspace that never had a PR.
+            #
+            # NO FAILED READ REACHES THIS LINE, and it takes two guards to say
+            # that, not one. `_gh_pr_list` returns before `_pr_py` is called for
+            # every read that failed by EXIT CODE. An rc-0 read whose body is
+            # not a list of rows does reach `_pr_py` — and `rows_in` answering
+            # None returns above, before any `put`/`clear` runs. The comment
+            # here used to claim the first guard alone made this unreachable; it
+            # did not, and a `gh` that exited 0 with an empty or unparseable
+            # stdout cleared a persisted `merged:#42`.
+            if number is not None:
+                put('prnumber', number)
+            # LAST, and that ordering is the compare-and-set's other half: this
+            # is the stamp the next writer compares against, so it must not
+            # advance until the answer it describes is actually on disk.
+            put('prcheckedat', checked_at)
+    finally:
+        if lock_f is not None:
+            lock_f.close()      # closing the fd releases the flock
 
     sys.stdout.write(json.dumps({
         'id': id_, 'project': project, 'repo': repo, 'branch': branch, 'base': base,
@@ -1032,6 +1173,17 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # The absence of a workspace field is what distinguishes a main checkout.
   [[ -n "$ws" ]] || die "$id is not a workspace — refusing to remove a main checkout"
   [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+
+  # A hold is a declaration that a program is mid-flight here. Destroying the
+  # workspace should take two deliberate acts — release, then remove — never
+  # one. The reason is echoed so the operator knows WHICH program refuses.
+  # `-e` not `-f`: present-but-unreadable still refuses — doubt reads as HELD.
+  # `die`, because this verb's caller is a terminal and every other refusal in
+  # it dies too; `cmd_ws_reap`'s copy of this rung answers in JSON on stdout
+  # instead, for the reason recorded there (the PWA reads tokens, not stderr).
+  if [[ -e "$REG/$id.hold" ]]; then
+    die "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+  fi
   local main="$PROJECTS_ROOT/$project"
 
   # Gather the evidence BEFORE anything is torn down, and gather it from git.
@@ -1296,12 +1448,89 @@ ws-archive
 ws-attic
 ws-audit
 ws-gc
+ws-hold
 ws-reap
+ws-release
 ws-rename
 ws-restore
 ws-rm
 ls
 EOF
+}
+
+cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
+  # workspace for an active program. The ONE input the merge-gated auto-archive
+  # was missing: an idle agent between waves is indistinguishable from a
+  # finished one, so the claim is DECLARED, never inferred. Non-destructive and
+  # idempotent: re-hold updates the reason. The reason string is the display
+  # everywhere — write it verbatim, parse it nowhere.
+  [[ $# -eq 4 && $1 == --session && $3 == --reason ]] \
+    || die "usage: ccd ws-hold --session <id> --reason <text>"
+  local id=$2 reason=$4
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  # An empty reason is an orphan hold by construction — nobody could ever say
+  # why it exists, and "visible on every surface, reason says why" is the whole
+  # deal that makes no-expiry acceptable.
+  #
+  # WHITESPACE COUNTS AS EMPTY — fix-wave finding 9. `[[ -n "$reason" ]]` alone
+  # passed `--reason "   "`, and the layers disagreed about what that meant:
+  # the route (`body.reason.trim() === ''`) and the PWA (`holdReason.trim()`)
+  # both refuse it, `registry.ts`'s `field()` trims what it reads, and `'' ??`
+  # does not short-circuit — so the hold landed as `held: ''`, enforced by
+  # every consumer and rendered as nothing at all on every surface. The
+  # orchestrator path is the primary one here (spec lifecycle step 1 is an
+  # agent invoking ccd directly), so ccd is where it has to be caught. The
+  # expansion strips every whitespace character rather than trimming the ends:
+  # a reason of one tab is as unsayable as a reason of one space, and an
+  # ordinary reason (`program:x wave:1/4`) still has plenty left after it.
+  [[ -n "${reason//[[:space:]]/}" ]] || die "empty reason — say which program holds this"
+  [[ -n "$(_reg_get "$id" workspace)" ]] \
+    || die "$id is not a workspace — nothing ever auto-archives a main checkout, so a hold there is a lie waiting to confuse someone"
+  [[ -f "$REG/$id.archived" ]] \
+    && die "$id is archived — restore first: a hold cannot protect a pane that is already gone"
+  # CHECKED, unlike every other `_reg_set` in this file, because this is the one
+  # field whose silent absence is destructive. `_reg_set` is `printf > file` and
+  # ccd runs `set -uo pipefail` with NO `-e`, so an unchecked write that failed
+  # falls straight through to the echo below. Measured on the unguarded version:
+  # `chmod 500 "$REG"` -> `Permission denied` on stderr, `held <id>: <reason>` on
+  # stdout, exit 0, no `.hold` file. The orchestrator protocol reads exit code +
+  # stdout, records the workspace as claimed, and dispatches the next wave; the
+  # archiveMerged sweep sees no hold and archives the merged workspace mid-run.
+  # So the ONE verb whose failure means UNPROTECTED refuses like every other
+  # doubt path in this function rather than announcing a success it did not have.
+  _reg_set "$id" hold "$reason" \
+    || die "could not record the hold for $id — it is NOT held"
+  echo "held $id: $reason"
+}
+
+cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim.
+  # After this, the very next archiveMerged sweep may archive a merged
+  # workspace — the level re-arms itself, no edge to miss. Idempotent.
+  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
+  local id=$2
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  if [[ -e "$REG/$id.hold" ]]; then
+    # CHECKED, for `cmd_ws_hold`'s reason with the polarity reversed — fix-wave
+    # findings 2/7. `rm -f` suppresses ENOENT ONLY; EACCES and EISDIR still fail
+    # and still exit non-zero, and ccd runs `set -uo pipefail` with NO `-e`, so
+    # the unchecked form fell straight through to the echo. Measured both:
+    # `chmod 500 "$REG"` -> `Permission denied` on stderr, `released <id>` on
+    # stdout, exit 0, hold still standing; `mkdir "$REG/$id.hold"` (which `-e`
+    # matches, so every consumer already reads the workspace as held) ->
+    # `Is a directory`, same false success. Downstream, `runCcdOr502` keys on
+    # the exit code, so `POST /release` answered 200 `{ok:true}` and the PWA's
+    # fire-and-forget confirm closed with no toast: the operator is told the
+    # claim is gone while `archiveMerged` keeps deferring and `ws-rm`/`ws-reap`
+    # keep refusing. Fail-shut in the safe direction, but a lie either way, and
+    # the sibling verb's own guard is the standard this file set.
+    rm -f -- "$REG/$id.hold" \
+      || die "could not remove the hold for $id — it is STILL held"
+    echo "released $id"
+  else
+    echo "not held $id"
+  fi
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
@@ -1348,7 +1577,17 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # Parsed, not merely non-empty: the fields are individually guarded above, and
   # this is what keeps a future unquoted or non-numeric field from becoming a
   # record that only LOOKS like JSON.
-  printf '%s' "$manifest" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null \
+  #
+  # `json.dumps(..., allow_nan=False)`, not a bare `json.loads` — fix-wave
+  # finding 3. `json.loads` alone accepts `NaN`/`Infinity`/`-Infinity`, which
+  # RFC 8259 has no literal for and `JSON.parse` in node throws on, so this
+  # last gate before the record is persisted agreed with a document its one
+  # real consumer (`manifestBytes`, server/src/registry.ts) cannot read. The
+  # round trip rejects both the bare literals and any number that floats to
+  # infinity; the guard now answers the question it is written to ask, which is
+  # "can the reader of this file parse it", not "can python".
+  printf '%s' "$manifest" \
+    | python3 -c 'import json,sys; json.dumps(json.loads(sys.stdin.read()), allow_nan=False)' 2>/dev/null \
     || die "archive manifest for $id is not valid JSON — nothing was touched"
 
   # Into the REGISTRY, never into the worktree — the worktree is the thing that
@@ -1432,7 +1671,7 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # strand merged-but-dirty workspaces in the live fleet permanently"), and the
   # same division `cmd_ws_rm` draws for this very divergence: the registry is a
   # witness, never the decider (ccd:465-471).
-  local id="$1" project workdir branch base main tip dirty ignored stashes bytes pr transcript
+  local id="$1" project workdir branch base main tip dirty ignored stashes bytes pr prhistory transcript
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   branch=$(_reg_get "$id" branch);   base=$(_reg_get "$id" base)
   [[ -n "$project" && -n "$workdir" && -n "$branch" ]] \
@@ -1561,11 +1800,114 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # against a cleanup that could free real disk.
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
   pr=$(_reg_get "$id" prnumber); [[ "$pr" =~ ^[0-9]+$ ]] || pr=null
+  # prHistory folds in the outgoing-PR ledger the prhistory chokepoint appends
+  # to (inside `_pr_py`'s `state` mode, immediately before its one
+  # `clear('prnumber')`), so an ARCHIVED workspace's record carries the whole
+  # lineage — the spec's `merged:#591 (waves: #577 #583 #591)` card — and not
+  # just the single current `pr` beside it.
+  #
+  # WHAT IT ACTUALLY OUTLIVES, MEASURED. The previous version of this comment
+  # asserted two mechanisms this file disproves — that the manifest is "the one
+  # record ws-reap later reads", and that the lineage therefore survives the
+  # worktree. Neither is true, and the correction is the contract:
+  #   - NOTHING IN ccd READS THIS MANIFEST BACK. `grep -n archivemanifest ccd`
+  #     is three sites: the field-name list, this write, and `ws-restore`'s
+  #     `rm -f`. `_ws_reap_eval` re-measures every fact it needs itself. The
+  #     only reader anywhere is `server/src/registry.ts`'s `manifestBytes`,
+  #     which extracts `worktreeBytes` and nothing else. This field's audience
+  #     is a HUMAN reading an archived workspace's record.
+  #   - IT DOES NOT SURVIVE A REAP. `_reg_purge` (ccd:100) unlinks every
+  #     dot-free `$REG/<id>.<suffix>` except `archived`/`reaping`, so ws-reap
+  #     step (i) takes this manifest AND the raw `.prhistory` together. The one
+  #     document that outlives a reaped workspace is the tombstone
+  #     `$REG/.reaped/<id>.json` (`_ws_tombstone`), which has no `prHistory`
+  #     field. Pinned by `the reap purge takes the manifest AND the raw ledger`.
+  #   - IT DOES SURVIVE A RESTORE, which is the durability the spec asks for
+  #     ("recoverable via `ws-restore`, prhistory intact", spec Failure modes):
+  #     `cmd_ws_restore` removes `archived`/`archivedreason`/`archivemanifest`
+  #     and leaves `.prhistory` standing, so a workspace that goes back into
+  #     the fleet re-archives later with its lineage complete.
+  #
+  # THREE INPUTS, THREE ANSWERS — and telling the third from the first is why
+  # the read below is exit-code-driven instead of one blanket `except`:
+  #   ABSENT -> `[]`. A workspace whose PR number was never replaced never grew
+  #     a history file; `[]` is the measured answer, not a stand-in for one.
+  #     (The scalars above answer `null` when unmeasured. This is an array whose
+  #     emptiness is a FACT rather than a gap, and `[]` for the absent file is
+  #     what the interface says.)
+  #   MALFORMED -> `[]`, raw file untouched on disk. A line the record cannot be
+  #     trusted to mean is neither a partial history nor a refusal: the manifest
+  #     stays valid JSON and the ledger is still there for a human to read.
+  #   PRESENT AND UNREADABLE -> REFUSAL, on this function's own stderr channel,
+  #     the REFUSED arm of the header's ladder ("a question git cannot answer at
+  #     all … an unreadable tree or ignored set"). A `chmod 000` ledger — or a
+  #     directory at that path — used to raise inside the blanket `except` and
+  #     write `"prHistory":[]` at exit 0: "this workspace retired no PRs", the
+  #     most reassuring answer available, in the record whose own header says a
+  #     manifest that lies pristine is a manifest that authorises a deletion.
+  #     That is THE SIXTEENTH FORGERY's exact shape (`_ws_clip_manifest`
+  #     below: `chmod 000` -> `[]` at rc 0 -> "clips: none"), and it is refused
+  #     here for the same reason rather than argued out of. Present-vs-absent is
+  #     distinguishable — the python tells them apart by which exception `open`
+  #     raises, which is also right when `[[ -r ]]` would lie (root, ACLs).
+  local prc
+  prhistory=$(python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        raw = f.read()
+except FileNotFoundError:
+    sys.stdout.write("[]"); raise SystemExit(0)
+except OSError:
+    raise SystemExit(3)          # present and unreadable — the caller refuses
+try:
+    rows = [json.loads(ln) for ln in raw.decode("utf-8").splitlines() if ln.strip()]
+    # `allow_nan=False` — fix-wave finding 3. Pythons json module accepts and
+    # EMITS `NaN`/`Infinity`/`-Infinity`, which RFC 8259 has no literal for, in
+    # both directions. So the malformed arm below had a hole: `{"pr": 1e999}`
+    # is VALID JSON by the spec (the class this whole ladder exists for — a
+    # corrupt or hand-edited ledger), loads to `inf`, and re-emitted as a bare
+    # `Infinity` token. Every "is it JSON" guard downstream is this same python
+    # and accepts it too, so the manifest persisted at exit 0 — and `JSON.parse`
+    # in node, the ONE real consumer (`manifestBytes`), throws on it, which
+    # pins `archivedBytes: null` for ever on the record whose own header says a
+    # manifest that lies pristine is a manifest that authorises a deletion.
+    # Raising ValueError here puts it in the MALFORMED arm where it belongs:
+    # `[]`, raw file untouched on disk, a human can still read the ledger.
+    out = json.dumps(rows, allow_nan=False)
+except ValueError:               # bad JSON, bytes that are not text at all, or a value JSON cannot express
+    sys.stdout.write("[]"); raise SystemExit(0)
+sys.stdout.write(out)
+' "$REG/$id.prhistory" 2>/dev/null); prc=$?
+  case "$prc" in
+    0) : ;;
+    3) echo "manifest: the PR ledger at $REG/$id.prhistory exists and cannot be read" >&2; return 1 ;;
+    # Everything else is the reader dying with the question unanswered — killed
+    # mid-run, or an interpreter that broke after `_json_str probe` proved it
+    # present. Not knowing is not `[]`.
+    *) echo "manifest: could not read the PR ledger at $REG/$id.prhistory (python3 exited $prc)" >&2; return 1 ;;
+  esac
+  # MUTATION SURVIVOR, DISCLOSED — and the disclosure that stood here was
+  # FALSE, which is the whole reason finding 3 shipped. It said "rc 0 above can
+  # only be `json.dumps(rows)` or the literal `[]`, both valid JSON, so no
+  # fixture can reach this refusal". `json.dumps(rows)` was not necessarily
+  # valid JSON: it emitted bare `Infinity`/`NaN` for any ledger line carrying a
+  # value python floats to infinity or NaN, and this guard — the same python —
+  # accepted them, so the invalid document sailed through into the manifest.
+  # `allow_nan=False` above closes the producer; this guard is now STRICT in
+  # its own right (`json.dumps(json.loads(...), allow_nan=False)`, which
+  # rejects both the bare literals on input and any value that cannot be
+  # re-emitted) rather than trusting the producer's shape. It stays a real
+  # refusal, not a substitution: after the ladder above, a field this function
+  # cannot compute is never allowed to read as a workspace that retired no PRs.
+  printf '%s' "$prhistory" \
+    | python3 -c 'import json,sys; json.dumps(json.loads(sys.stdin.read()), allow_nan=False)' >/dev/null 2>&1 \
+    || { echo "manifest: the PR ledger read for $id did not produce JSON" >&2; return 1; }
   transcript=$(_transcript_path "$id") || transcript=""
-  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"transcript":%s}\n' \
+  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
-    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$(_json_str "$transcript")"
+    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")"
 }
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
@@ -1668,8 +2010,14 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
   esac
 }
 
-_pr_state_one() {   # id main repo rows -> one JSON line
-  local id="$1" main="$2" repo="$3" rows="$4"
+_pr_state_one() {   # id main repo rows [answered-at-ms] -> one JSON line
+  # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
+  # rather than to this session: `cmd_pr_state` takes it once, at the read, and
+  # hands the same value to every session of a `--project` sweep. That is what
+  # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
+  # honest default for a caller that has none — `_pr_py` then falls back to its
+  # own clock, which is the pre-fix behaviour and not a refusal.
+  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}"
   local project branch base baseShort tip ahead workdir dirty tmpl
   project=$(_reg_get "$id" project); branch=$(_reg_get "$id" branch)
   base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
@@ -1791,7 +2139,7 @@ _pr_state_one() {   # id main repo rows -> one JSON line
   tmpl=""
   [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
-    "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG"
+    "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
 }
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
@@ -1832,7 +2180,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   fi
   (( ${#ids[@]} )) || return 0
 
-  local project main repo rows
+  local project main repo rows answeredAt
   project=$(_reg_get "${ids[0]}" project)
   # A registry VALUE, and `$main` is built from it. `--session` validated the id
   # it was handed and nothing validated this. `die`, not an answer object,
@@ -1845,9 +2193,40 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # The answer object _gh_pr_list printed IS the output on failure: one repo
   # failing marks that repo's sessions unknown and touches no other project.
   rows=$(_gh_pr_list "$repo") || { printf '%s\n' "$rows"; return 0; }
+  # ONE STAMP FOR THE WHOLE FAN-OUT, TAKEN AT THE ANSWER — re-review of the fix
+  # wave. `_pr_py`'s compare-and-set persists only the NEWEST answer, and it can
+  # only tell which that is if `prcheckedat` describes WHEN GITHUB ANSWERED. The
+  # stamp used to be taken inside python, per session, after `rows_in()` and
+  # after that session's `git log` — while this verb makes ONE gh call and then
+  # loops over every session of the repo below. Eight workspaces on one repo, and
+  # the k-th session's stamp was seconds newer than the answer it carried: the
+  # CAS ranked COMPLETION TIMES, which is not a fact about GitHub at all.
+  #
+  # What that cost, at the wave boundary this feature exists for: the sweep's gh
+  # returns at T0 binding #577; the operator opens the PR sheet at T0+0.4s and
+  # its own `pr-state --session` read returns at T0+1.0s binding the NEW #583 (a
+  # merge landed between the two reads) and persists it; the sweep reaches that
+  # session at T0+1.4s, out-stamps the newer answer, retires still-live #583 into
+  # the append-only ledger `_ws_archive_manifest` folds in verbatim, and writes
+  # `prnumber` back to #577. A manifest that lies is a manifest that authorises a
+  # deletion. With the stamp taken here, every session of this sweep carries T0
+  # and the sheet's newer answer stands.
+  #
+  # HERE rather than inside `_gh_pr_list`: its answer comes back through a
+  # command substitution — a SUBSHELL — so a variable it set would not survive to
+  # this line, and its stdout is the rows, shared with `cmd_pr_open` and
+  # `_ws_reap_eval`. This is the first statement after the answer arrives; the
+  # gap is a fork's return, not a sweep's.
+  #
+  # NOT NUMERIC IS UNMEASURED. `%3N` is GNU; a `date` that prints it literally
+  # leaves `answeredAt=""` and `_pr_py` falls back to its own clock, which is
+  # precisely the pre-fix behaviour. This guard may only remove races, never add
+  # a refusal that stops a phase from ever updating.
+  answeredAt=$(date +%s%3N 2>/dev/null)
+  [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
 
   local id
-  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows"; done
+  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt"; done
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>
@@ -4192,6 +4571,37 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the reap record safely"
 
+  # THE HOLD RUNG, the same declaration `cmd_ws_rm` refuses on: a program has
+  # said it is mid-flight in this workspace, so destroying it takes two
+  # deliberate acts — release, then reap — never one.
+  #
+  # ANSWERED IN THIS FUNCTION'S IDIOM, not `cmd_ws_rm`'s. `cmd_ws_rm` is the
+  # terminal path and `die`s; here a refusal prints JSON on stdout and exits 0
+  # (this function's own header says so, and the flock contest below does
+  # exactly this for `in-progress`, a state refusal `_ws_reap_eval` never
+  # evaluates either). The reason is mechanical: `parseReap`
+  # (server/src/wsaudit.ts) reads a `refused` TOKEN out of stdout and
+  # classifies everything else — a `die`'s stderr included — as its generic
+  # `error` refusal, whose sentence is the raw shell string: a bash command on
+  # a phone screen. So `held` is a named token, and it carries its sentence in
+  # that file's `SENTENCES` map, which `wsaudit.test.ts` holds exactly equal to
+  # the set of tokens this source can emit — a set it computes by grepping THIS
+  # FILE'S TEXT, comments included, so no comment here may spell a refusal
+  # object out in full (measured: an earlier draft of this one did, and
+  # invented a token called `error`).
+  #
+  # PLACED HERE, after the argv guards and before both the lock and
+  # `_ws_reap_eval`: after, because it reads `$id` and a caller whose argv this
+  # function would not accept must not receive a well-formed ANSWER; before,
+  # because learning a workspace is off-limits must not cost a gh call, a
+  # fetch, or a lock left behind. `-e` not `-f`: an unreadable-but-present hold
+  # still refuses — the fail-shut polarity is that doubt reads as HELD.
+  if [[ -e "$REG/$id.hold" ]]; then
+    printf '{"refused":"held","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id")"
+    return 0
+  fi
+
   # BEFORE either path, because ccd runs under `set -u` and `_ws_reap_tail`
   # reads REAP_PRNUM and REAP_PROOF unconditionally. On the resume path
   # `_ws_reap_eval` is never called, so without this they are UNBOUND, and the
@@ -6441,8 +6851,10 @@ case "${1:-}" in
   ws-attic)   shift; cmd_ws_attic "$@" ;;
   ws-audit)   shift; cmd_ws_audit "$@" ;;
   ws-reap)   shift; cmd_ws_reap "$@" ;;
+  ws-hold)    shift; cmd_ws_hold "$@" ;;
+  ws-release) shift; cmd_ws_release "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|pr-open|pr-state} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state} <args>" >&2; exit 1 ;;
 esac
 fi

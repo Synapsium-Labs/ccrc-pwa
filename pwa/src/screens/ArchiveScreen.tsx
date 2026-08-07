@@ -82,10 +82,29 @@ export function ArchiveScreen({
       <p className="archive-total">{`${count} archived · `}<span className="archive-total-bytes">{archivedSizeText(summary)}</span></p>
       {rows.map((s) => (
         <button key={s.id} type="button" className="archive-row"
-                aria-label={`workspace ${s.workspace ?? s.id} in ${s.project}`}
+                aria-label={`workspace ${s.workspace ?? s.id} in ${s.project}`
+                  + (s.held !== null ? `, held: ${s.held}` : '')}
                 onClick={() => onOpen(s.id)}>
           <span className="archive-project">{s.project}</span>
-          <span className="archive-slug">{s.workspace ?? s.id}</span>
+          {/* THE ONE SURFACE THAT OFFERS CLEANUP MUST NOT HIDE THE HOLD.
+              `ws-hold` refuses an archived workspace, but the reverse order is
+              a supported flow — hold, then archive by hand from the PR sheet,
+              which `ccd ws-archive` allows on purpose — so archived-and-held is
+              reachable, and `ws-reap` refuses it. This screen rendered project,
+              slug and size only, so the row led straight to a cleanup that
+              cannot happen with nothing on screen to say why. Inside the slug
+              cell rather than a fourth column: the row is a three-column grid
+              and this needs no new CSS, no new token and no new tap target.
+              `.sess-held` is SessionLine's own chip class; `title` carries the
+              reason verbatim past the cell's ellipsis, exactly as it does
+              there, and the aria-label carries it for a reader who has no
+              hover at all. */}
+          <span className="archive-slug">
+            {s.workspace ?? s.id}
+            {s.held !== null && (
+              <span className="sess-held" data-held="true" title={s.held}>{' · held'}</span>
+            )}
+          </span>
           <span className="archive-size">{s.archivedBytes === null ? '—' : humanBytes(s.archivedBytes)}</span>
         </button>
       ))}

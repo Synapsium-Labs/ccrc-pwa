@@ -528,7 +528,25 @@ export function ReapSheet({
               </>
             )}
 
-            {shown.verdict === 'reapable' && result === null && (
+            {/* THE HOLD, DISCLOSED BEFORE THE COMMIT, not after it. `ccd
+                ws-audit` has no held rung — it answers `reapable` for a
+                workspace `ws-reap` will then refuse with `{"refused":"held"}`
+                — so without this the sheet rendered a full removable verdict
+                and a live confirm token, and the refusal only arrived once the
+                operator had tapped the destructive button. `session.held` is
+                already on the wire and already in this component's props, so
+                the fact is here the whole time; nothing about the audit needs
+                to change to say it. Rendered verbatim (the no-parsing rule),
+                and it REPLACES the button rather than disabling it: a disabled
+                Remove with no sentence is the same silence in a different
+                shape, and the remedy — release first — is not something this
+                sheet can do. */}
+            {shown.verdict === 'reapable' && result === null && session.held !== null && (
+              <p className="reap-refusal">
+                {`A program has this workspace held — ${session.held} — so nothing can be removed. Release it first (Release, in the session’s actions sheet), then re-check.`}
+              </p>
+            )}
+            {shown.verdict === 'reapable' && result === null && session.held === null && (
               <button type="button" className="btn-primary reap-go" disabled={busy} onClick={confirm}>
                 {/* The confirm this whole design exists to protect: it must
                     say "unknown size", never a number `du` could not stand

@@ -1044,6 +1044,18 @@
 
 .sess-warn { color: var(--status-dead-text); flex: none; }
 
+/* The program's claim, as its own meta cell — reuses .sess-ask's
+   ink-tertiary token (below), so it needs no new contrast pair. Truncates
+   like .sess-acct next door; the reason can run long ("program:x wave:2/4")
+   and the row has no room to wrap it. */
+.sess-held {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-tertiary);
+}
+
 .sess-acct {
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -1121,6 +1133,52 @@
   margin: 0;
   font-size: var(--text-xs);
   color: var(--ink-secondary);
+}
+
+/* Hold's reason composer — inline in place of the opener button, not a
+   stacked confirm sheet (SessionActionsSheet.tsx explains why: the
+   empty-reason refusal needs exactly one control on screen at a time to stay
+   trivially testable). `.sess-hold-input` copies .proj-search's declarations
+   verbatim (edge-subtle border, bg-raised, ink-primary, and the
+   ink-tertiary ::placeholder the first version of this comment claimed to
+   have copied and had not) rather than reusing the class name across an
+   unrelated feature — same tokens, no new pair. The placeholder matters here
+   more than it does there: `program:name wave:2/4` is the only place the
+   convention is shown to whoever is typing the reason, and undeclared it
+   inherits the UA default, which is not a token this theme controls in
+   either colour scheme. */
+.sess-hold-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.sess-hold-input {
+  width: 100%;
+  min-height: var(--tap-min);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  padding: 0 var(--sp-3);
+  outline: none;
+}
+.sess-hold-input:focus {
+  border-color: var(--accent);
+}
+.sess-hold-input::placeholder {
+  color: var(--ink-tertiary);
+}
+.sess-hold-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+/* ccd's own refusal sentence — same register .proj-error already uses for
+   its failed-fetch text (--status-dead-text), so this needs no new pair. */
+.sess-hold-error {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--status-dead-text);
 }
 
 /* ── project card ─────────────────────────────────────────────────

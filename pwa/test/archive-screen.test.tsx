@@ -10,7 +10,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workspace: 'quiet-basin', name: null, status: 'dead', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: 1785300123,
-  archivedBytes: 1_200_000_000, hookState: null, askSummary: null, subagents: null,
+  archivedBytes: 1_200_000_000, hookState: null, askSummary: null, subagents: null, held: null,
   bucket: 'idle', bucketSince: null, ...over,
 });
 
@@ -78,6 +78,31 @@ describe('ArchiveScreen', () => {
     ]} onOpen={() => {}} />);
     expect(screen.getByRole('button', { name: 'workspace quiet-basin in demo' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'workspace demo-main in demo' })).toBeInTheDocument();
+  });
+
+  it('an archived-and-held row says it is held, with the reason verbatim', () => {
+    // FIX-WAVE OBSERVATION. `ws-hold` refuses an archived workspace, but the
+    // reverse order is a supported flow (hold, then archive by hand from the
+    // PR sheet — `ccd ws-archive` has no held rung on purpose), and `ws-reap`
+    // then refuses. This screen is the one surface whose whole job is offering
+    // cleanup, and it rendered project, slug and size only: the row led to a
+    // cleanup that cannot happen with nothing on screen to say why.
+    render(<ArchiveScreen sessions={[
+      s({ id: 'demo-quiet-basin', workspace: 'quiet-basin', project: 'demo',
+        held: 'program:agent-evals wave:3/4' }),
+    ]} onOpen={() => {}} />);
+    // The accessible name carries the reason VERBATIM — a reader with no
+    // hover gets the whole claim, not the word "held".
+    expect(screen.getByRole('button',
+      { name: 'workspace quiet-basin in demo, held: program:agent-evals wave:3/4' })).toBeInTheDocument();
+    expect(document.querySelector('.sess-held')?.getAttribute('title'))
+      .toBe('program:agent-evals wave:3/4');
+  });
+
+  it('an UNHELD archived row gains no hold marker — the label is unchanged', () => {
+    render(<ArchiveScreen sessions={[s({ workspace: 'quiet-basin', project: 'demo' })]} onOpen={() => {}} />);
+    expect(screen.getByRole('button', { name: 'workspace quiet-basin in demo' })).toBeInTheDocument();
+    expect(document.querySelector('.sess-held')).toBeNull();
   });
 
   it('shows each row size and the total', () => {

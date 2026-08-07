@@ -132,6 +132,16 @@ export const SENTENCES: Record<string, string> = {
   // for the reason `stash-unreadable` states — `ReapSheet` renders
   // `audit.sentence` and never `audit.detail`.
   'clips-unreadable': 'ccrc could not list this session’s pasted images (`~/.cc-clips/<session>`), so it cannot say what removing them would destroy. Nothing was removed. Check that directory’s permissions.',
+  // Build 2.5's hold rung in `cmd_ws_reap` — the one token on this map that
+  // reports a DECLARATION rather than a measurement: a program said it is
+  // mid-flight in this workspace, and nothing archives or reaps it until
+  // someone releases it. It is here because `parseReap` classifies any answer
+  // without a `refused` token as `refused:'error'` and renders the raw shell
+  // string, so a rung that `die`d would put a bash command on a phone screen —
+  // the exact failure this map exists to prevent. The reason string itself
+  // travels in `detail`; the remedy is IN THE SENTENCE for the reason
+  // `stash-unreadable` states (`ReapSheet` renders `sentence`, never `detail`).
+  'held': 'A program has this workspace held — it is mid-flight, so nothing was removed. Release it first (Release in the session’s actions sheet, or `ccd ws-release --session <id>`), then clean up.',
 };
 
 export function refusalSentence(token: string): string {
