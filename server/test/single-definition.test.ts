@@ -208,3 +208,30 @@ describe('extraction finding — one path to the ccd script', () => {
     }
   });
 });
+
+describe('one KeyedQueue for the process', () => {
+  // The seam the naming sweep needs. `buildServer` used to construct its own
+  // KeyedQueue inline (`server.ts:312`), which FleetWatcher — built two lines
+  // EARLIER in index.ts (`:61` vs `:63`) — had no way to reach. A watcher that
+  // built its own would serialise its rename against nothing, and
+  // `POST /workspace/reap` (`server.ts:702`) is exactly the write it must not
+  // race. An optional Deps field with a `?? new KeyedQueue()` fallback is the
+  // same bug with a green suite, which is why this scans for the CONSTRUCTOR
+  // rather than for the field.
+  const CONSTRUCTS = /\bnew KeyedQueue\s*\(/;
+
+  it('is constructed in exactly one file under server/src, and that file is the composition root', () => {
+    const holders = ALL.filter((f) => f.includes(`${path.sep}server${path.sep}src${path.sep}`))
+      .filter((f) => CONSTRUCTS.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['server/src/index.ts']);
+  });
+
+  it('both consumers take it from Deps rather than making their own', () => {
+    for (const f of ['server/src/server.ts', 'server/src/watch.ts']) {
+      const src = readFileSync(path.join(ccrcRoot, f), 'utf8');
+      expect(src, f).not.toMatch(CONSTRUCTS);
+    }
+    expect(readFileSync(path.join(ccrcRoot, 'server/src/server.ts'), 'utf8'))
+      .toContain('queue: deps.queue');
+  });
+});

@@ -5,6 +5,7 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { wireCmd } from '../src/remote/runner.js';
 import type { Deps } from '../src/server.js';
+import { KeyedQueue } from '../src/inject/queue.js';
 import { mkTmp } from './tmpHelpers.js';
 
 /**
@@ -34,5 +35,5 @@ export function testDeps(
 ): Deps {
   const guarded = guardRunner(run);
   const cfg = loadConfig({ CCRC_HOME: home });
-  return { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO };
+  return { cfg, runCcd: ccdRunner(guarded, cfg), tmux: new Tmux(guarded), io: localIO, queue: new KeyedQueue() };
 }

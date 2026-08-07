@@ -13,6 +13,7 @@ import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
+import { KeyedQueue } from '../src/inject/queue.js';
 import type { AskQuestion, Dialog } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -215,7 +216,7 @@ const streamWith = async (opts: {
     },
   };
   const cfg = loadConfig({ CCRC_HOME: home });
-  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io };
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
   const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
   const hookSeq = opts.hookstateSequence ?? [opts.hookstate ?? null];
   put(at(seq, 0));
@@ -522,7 +523,7 @@ describe('session WS', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -601,7 +602,7 @@ describe('session WS', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const menuCfg = loadConfig({ CCRC_HOME: home });
-    const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO }, new Bus());
+    const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO, queue: new KeyedQueue() }, new Bus());
     await menuApp.listen({ host: '127.0.0.1', port: 0 });
     const a = menuApp.server.address();
     const p = typeof a === 'object' && a !== null ? a.port : 0;

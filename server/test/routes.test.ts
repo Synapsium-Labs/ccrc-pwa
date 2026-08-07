@@ -14,6 +14,7 @@ import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, testDeps } from './helpers.js';
 import { askKey } from '../src/askkey.js';
+import { KeyedQueue } from '../src/inject/queue.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -58,7 +59,7 @@ async function makeApp(
   };
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
-  const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO }, bus);
+  const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, bus);
   return { app, calls, bus, home };
 }
 
@@ -691,5 +692,17 @@ describe('layer 1 — the guard runner', () => {
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
     await expect(tmuxRunner('tmux', ['kill-session', '-t', 'cc-x']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
+  });
+});
+
+describe('one queue for the process', () => {
+  it('Deps carries the queue, and submissions under one key run in order', async () => {
+    const deps = testDeps();
+    const seen: string[] = [];
+    await Promise.all([
+      deps.queue.run('demo-quiet-mesa', async () => { seen.push('a'); }),
+      deps.queue.run('demo-quiet-mesa', async () => { seen.push('b'); }),
+    ]);
+    expect(seen).toEqual(['a', 'b']);
   });
 });

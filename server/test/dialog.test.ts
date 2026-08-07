@@ -9,6 +9,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
+import { KeyedQueue } from '../src/inject/queue.js';
 import type { Dialog, FleetSession, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -239,7 +240,7 @@ describe('FleetWatcher dialog detection', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     const bus = new Bus();
     const msgs: SessionStreamMsg[] = [];
     const fleets: FleetSession[][] = [];
@@ -294,7 +295,7 @@ describe('FleetWatcher hookstate wiring', () => {
       ask: { questions: [{ question: 'Full text nobody should see on a card', header: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }] },
       subagents: [{ name: 'reviewer', startedAt: Date.now() - 5000 }],
     }));
-    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO };
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     const bus = new Bus();
     const fleets: FleetSession[][] = [];
     bus.on('fleet', (s) => fleets.push(s));
