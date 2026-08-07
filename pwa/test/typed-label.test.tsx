@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
+import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import { TYPE_MS, TypedLabel } from '../src/fleet/TypedLabel';
 
 // framer-motion's useReducedMotion caches its matchMedia answer in module state
@@ -91,6 +92,14 @@ describe('the fleet line', () => {
     expect(screen.getByText('ws/quiet-mesa')).toBeInTheDocument();
 
     rerender(<SessionLine session={s({ branch: 'ws/fix-the-pr-sheet' })} onOpen={() => {}} onActions={() => {}} />);
+    // Mid-flight, before advancing a single timer: a plain span reverting this
+    // feature would already show the whole new value and would never grow a
+    // caret. Both assertions exist to fail against exactly that revert — every
+    // assertion below this point is also true of a plain span, so it cannot
+    // pin the animation on its own.
+    expect(screen.queryByText('ws/fix-the-pr-sheet')).toBeNull();
+    expect(document.querySelector('.typed-caret')).not.toBeNull();
+
     act(() => { vi.advanceTimersByTime(TYPE_MS * 40); });
     expect(screen.getByText('ws/fix-the-pr-sheet')).toBeInTheDocument();
   });
@@ -106,6 +115,38 @@ describe('the fleet line', () => {
     rerender(<SessionLine session={s({ name: 'refactor-auth', branch: 'ws/fix-the-pr-sheet' })}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('refactor-auth')).toBeInTheDocument();
+    expect(document.querySelector('.typed-caret')).toBeNull();
+  });
+});
+
+// The spec names this mount point explicitly (design doc :293, "Mounted at
+// the fleet line and the session header crumb") and nothing above exercises
+// it — `header.test.tsx` only reads settled text (`toHaveTextContent`,
+// `getAllByText`), which is identical whether the crumb is a plain span or a
+// wrapped one. This is the header's half of the fleet-line case above.
+describe('the session header crumb', () => {
+  const headerProps = (session: FleetSession): SessionHeaderProps => ({
+    session, status: 'idle', statusUpdatedAt: null,
+    onInterrupt: () => {}, onOpenTerminal: () => {}, onBack: () => {},
+    onChangeModel: () => {}, onChangeEffort: () => {}, onMoveAccount: () => {},
+    onStopSession: () => {}, onReapWorkspace: () => {},
+  });
+
+  it('types the new branch in on the crumb when a rename lands', () => {
+    // workspace non-null, so the crumb renders at all (SessionHeader.tsx:191).
+    vi.useFakeTimers();
+    const { rerender, container } = render(
+      <SessionHeader {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/quiet-mesa' }))} />);
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-mesa');
+
+    rerender(<SessionHeader {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/fix-the-pr-sheet' }))} />);
+    // Mid-flight: a plain span would already show the whole new value and
+    // would never grow a caret — both false here, exactly as on the fleet line.
+    expect(container.querySelector('.chat-crumb')).not.toHaveTextContent('ws/fix-the-pr-sheet');
+    expect(document.querySelector('.typed-caret')).not.toBeNull();
+
+    act(() => { vi.advanceTimersByTime(TYPE_MS * 40); });
+    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/fix-the-pr-sheet');
     expect(document.querySelector('.typed-caret')).toBeNull();
   });
 });
