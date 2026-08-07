@@ -72,9 +72,11 @@ export function AccountsStrip(): ReactNode {
   const nowSec = Math.floor(now / 1000);
 
   // Three flavours of "nothing to gauge", each still worth naming rather than
-  // collapsing into one silence: no poll has landed/succeeded yet, a poll
-  // landed with zero accounts (fresh host, no `.cc-limits/*.json` yet), or
-  // every account that DID report is markered `-disabled`. The strip's own
+  // collapsing into one silence: no poll has landed/succeeded yet (or every
+  // poll so far has failed — `.catch` never sets state either, so this is
+  // indistinguishable from "hasn't landed" and stays named as one thing), a
+  // poll landed with zero accounts (fresh host, no `.cc-limits/*.json` yet),
+  // or every account that DID report is markered `-disabled`. The strip's own
   // filter for which GAUGES render stays exactly as it was ("the strip's
   // filter stays as is", Rider A) — only the element itself no longer
   // vanishes with them.
@@ -85,7 +87,8 @@ export function AccountsStrip(): ReactNode {
   // despite the declared `AccountUsage[] | null` — the strict check crashed
   // on exactly that instead of degrading to the same placeholder `null` did.
   let placeholder: string | null = null;
-  if (!accounts || accounts.length === 0) placeholder = 'no accounts reporting';
+  if (!accounts) placeholder = 'checking accounts…';
+  else if (accounts.length === 0) placeholder = 'no accounts reporting';
   else if (live.length === 0) placeholder = 'all lanes disabled';
 
   const openAccounts = (): void => navigate('/accounts');

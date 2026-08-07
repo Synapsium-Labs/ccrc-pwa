@@ -86,16 +86,20 @@ describe('AccountsStrip', () => {
       expect(location.pathname).toBe('/accounts');
     });
 
-    it('stays a tappable link before the first poll has landed (and if it never does)', () => {
+    it('stays a tappable link before the first poll has landed (and if it never does), naming that state distinctly from a landed-empty poll', () => {
       // A promise that never resolves — the same shape a permanently-failing
       // /api/accounts leaves the component in, since the poller's `.catch`
       // never sets state either. Asserted synchronously, right after mount,
       // with nothing awaited: this is the render BEFORE any microtask from
-      // the fetch could have run.
+      // the fetch could have run. This is a DIFFERENT fact from "the poll
+      // landed and reported zero accounts" (below) — collapsing the two into
+      // one string would erase the difference between "still waiting" and
+      // "asked, and got nothing back".
       vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
       render(<AccountsStrip />);
       expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
-      expect(screen.getByText(/no accounts reporting/i)).toBeInTheDocument();
+      expect(screen.getByText(/checking accounts…/i)).toBeInTheDocument();
+      expect(screen.queryByText(/no accounts reporting/i)).not.toBeInTheDocument();
     });
   });
 
