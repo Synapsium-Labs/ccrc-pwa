@@ -160,6 +160,22 @@ describe('the naming sweep', () => {
     expect(h.calls).toEqual([]);
   });
 
+  // Review finding 2: `ccd ws-archive` "DESTROYS NOTHING" (ccd:1670-1673) — an
+  // archived row keeps `workspace`, keeps `branch = ws/<slug>`, keeps its
+  // worktree and keeps its transcript, so without this guard the row is fully
+  // in scope for conditions 2-4 and a server restart (`attemptedRenames` is
+  // empty at boot) would rename a branch the operator can no longer find by
+  // name. Same guard, same shape, as `archiveMerged` (watch.ts).
+  it('does not rename an archived workspace, even though the row is otherwise eligible', async () => {
+    const h = harness();
+    seed(h.home, { archived: '1785300123' });
+    transcript(h.home, [TITLE('Brainstorm Helix and slide notes integration')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toEqual([]);
+  });
+
   it('does not fire when the title slugifies to the name it already has', async () => {
     const h = harness();
     seed(h.home);
@@ -186,6 +202,41 @@ describe('the naming sweep', () => {
     await again(w);
     await again(w);
     expect(h.calls).toHaveLength(1);
+  });
+
+  // Review finding 1. `has-upstream` is permanent BY CONSTRUCTION — a pushed
+  // branch is never un-pushed — so the pair-keyed guard alone is not enough:
+  // a live session's transcript keeps growing, the stat gate keeps
+  // reopening, and a title that later changes would derive a NEW pair the
+  // set has never seen. The session must be retired outright, and cheaply —
+  // before another stat, before another 256 KB tail read.
+  it('retires the whole SESSION on a permanent refusal, not just the one pair', async () => {
+    const h = harness('{"refused":"has-upstream","detail":"already on the remote","paths":[]}');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    seed(h.home);
+    const f = transcript(h.home, [TITLE('Fix the PR sheet')]);
+    let stats = 0, reads = 0;
+    const io: FleetIO = {
+      ...localIO,
+      stat: (p) => { if (p === f) stats += 1; return localIO.stat(p); },
+      readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+    };
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toHaveLength(1);
+    expect(reads).toBe(1);
+    const statsAfterFirst = stats;
+
+    // A DIFFERENT title, deriving a DIFFERENT pair — the pair-keyed guard
+    // alone would let this one through the second time; the session-level
+    // retirement must not, and must not even read the transcript to find out.
+    writeFileSync(f, TITLE('A completely different title') + '\n');
+    await again(w);
+    await again(w);
+    expect(h.calls, 'still exactly the one call from before the refusal').toHaveLength(1);
+    expect(reads, 'a retired session earns no further tail read at all').toBe(1);
+    expect(stats, 'nor even the cheaper stat the tail read is gated behind').toBe(statsAfterFirst);
   });
 
   // The retry key is `<id>:<derived-branch>`, not `<id>` — so a title that

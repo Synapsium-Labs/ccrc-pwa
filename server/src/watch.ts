@@ -33,6 +33,19 @@ const TASK_SWEEP_MS = 10_000;
  *  would be re-read forever, roughly 7.7 MB/min across the agent WS. */
 const NAME_SWEEP_MS = 10_000;
 
+/** Refusal tokens (of ccd's thirteen, `spec:55`) that cannot stop being true:
+ *  a branch, once pushed, is never un-pushed (`has-upstream`); a checkout
+ *  that is not a workspace, a worktree ccd cannot find registered, a worktree
+ *  whose directory belongs to a different session, and a branch
+ *  `_ws_branch_valid` rejects are all facts about the session's shape that a
+ *  title landing later cannot change. `name-taken-local`/`name-taken-origin`
+ *  and `unchanged` are deliberately absent — a name collision or a
+ *  since-changed title can resolve on the next sweep. See
+ *  `FleetWatcher.nameSweepRetired` and review finding 1. */
+const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
+  'has-upstream', 'not-a-workspace', 'worktree-unregistered', 'worktree-foreign', 'bad-branch',
+]);
+
 /** The fourth lane. A ccd install is a deliberate act by a human who is
  *  waiting, so a minute is the longest anyone should have to wonder whether
  *  the fleet noticed — and the agent's stat gate means an unchanged ccd costs
@@ -135,6 +148,20 @@ export class FleetWatcher {
    *  purge on reap, for a retry budget whose entire purpose is to be
    *  forgotten. */
   private attemptedRenames = new Set<string>();
+  /** Session ids the sweep will never spend another transcript read on.
+   *  `attemptedRenames` is keyed per (id, derived branch) and cannot express
+   *  this: a title that keeps changing on a workspace whose branch was
+   *  already pushed would keep minting fresh pairs forever, and each one
+   *  earns its "one fresh attempt" — the stat gate (`claimTitleRead`) never
+   *  closes on a session whose transcript is still growing. Populated only by
+   *  a refusal that is permanent BY CONSTRUCTION (`PERMANENT_REFUSALS`),
+   *  never by a transient one — a fleet outage or a name collision can stop
+   *  being true; a pushed branch cannot become un-pushed. Review finding 1:
+   *  without this, a live workspace stuck on `has-upstream` re-reads a 256 KB
+   *  tail every ten seconds indefinitely, the exact cost the stat gate exists
+   *  to price out. Deliberately not durable, same reasoning as
+   *  `attemptedRenames`. */
+  private nameSweepRetired = new Set<string>();
   /** Per session: the transcript state whose title the sweep has already acted
    *  on. Same gate, for the same reason, as `SessionStream.claimAskRead`
    *  (`sessionws.ts:178-187`). */
@@ -395,21 +422,37 @@ export class FleetWatcher {
    * Code already wrote. Four conditions, in this order, and the order is the
    * design:
    *
-   *   1. it is a workspace, not a main checkout;
+   *   1. it is a workspace, not a main checkout, and not archived — `ccd
+   *      ws-archive` "DESTROYS NOTHING" (`ccd:1670`), so an archived row keeps
+   *      `workspace`, `branch = ws/<slug>`, its worktree and its transcript,
+   *      fully in scope for conditions 2-4 unless excluded here; same guard,
+   *      same shape, as the write right below this one in the file
+   *      (`archiveMerged`, `r.workspace === null || r.archivedAt !== null`) —
+   *      review finding 2;
    *   2. the REGISTRY says the branch is still exactly `ws/<workspace>` —
    *      condition 2 is also the idempotence marker, which is why there is no
    *      new registry field, no marker file and nothing to purge on reap;
    *   3. the fleet's ccd implements the verb — asked BEFORE the probe below is
    *      recorded, so a fleet that installs a newer ccd re-reads transcripts
    *      that have not changed since;
-   *   4. this `(id, derived name)` pair has not been attempted.
+   *   4. this `(id, derived name)` pair has not been attempted, AND the
+   *      session has not been retired outright by an earlier refusal that is
+   *      permanent by construction (`PERMANENT_REFUSALS` — review finding 1;
+   *      `nameSweepRetired` is checked first, since it is the cheaper
+   *      question and answers it without a stat or a transcript read).
    *
    * KNOWN GAP IN CONDITION 3, accepted and not engineered around: `ccd caps`
    * has advertised `ws-rename` since long before it took flags (`ccd:1454`), so
-   * a fleet on an older ccd passes the verb gate and then answers bash's own
-   * usage refusal on stderr at exit 1. That is one non-ok result per (session,
-   * derived name), absorbed by the retry guard, and the rollout is agent-first
-   * so the window is one deploy long.
+   * a fleet on an older ccd passes the verb gate. The old body binds the verb's
+   * two arguments positionally — `local id="${1:?usage: …}"; local
+   * new="${2:?…}"` — and this argv is `['ws-rename', '--session', <id>,
+   * '--branch', <name>]`, so `$1` is the literal string `--session` and `$2`
+   * is `<id>` — BOTH non-empty, so neither `${1:?}` nor `${2:?}` fires. It
+   * falls through to `[[ -f "$REG/$id.uuid" ]] || die "no such session: $id"`
+   * with `id` bound to `--session`, and dies `no such session: --session` —
+   * NOT bash's own usage refusal (measured; see review finding 3). That is one
+   * non-ok result per (session, derived name), absorbed by the retry guard,
+   * and the rollout is agent-first so the window is one deploy long.
    *
    * The `<id>.uuid` inherited limitation applies and is not fixed here: it is
    * written once at `ccd start` and never refreshed, so after a `/clear` the
@@ -434,9 +477,16 @@ export class FleetWatcher {
     // Same reason sweepTasks and sweepPr read the registry themselves.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
-      if (r.workspace === null) continue;
+      // `ws-archive` destroys nothing — an archived row is still `workspace
+      // !== null` with `branch` still at the born name — so it is excluded
+      // here explicitly, the same shape `archiveMerged` below already uses.
+      if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
+      // The cheapest question in the function, asked before anything that
+      // costs a stat or a read: a session already retired by a permanent
+      // refusal (`has-upstream` and its siblings) can never un-retire.
+      if (this.nameSweepRetired.has(r.id)) continue;
       // A PROBE argv: it is never sent. `verbSupported` reads argv[0] only, and
       // asking here — before `claimTitleRead` writes anything — is what makes
       // "an unsupported verb records no attempt" true of the stat gate as well
@@ -478,6 +528,11 @@ export class FleetWatcher {
       catch { /* not an answer we can read — an older ccd, or a fault */ }
       if (typeof refused === 'string') {
         console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} refused: ${refused}`);
+        // Permanent by construction: nothing about a LATER title can make a
+        // pushed branch un-pushed, or a foreign/unregistered worktree become
+        // this session's own. Retire the session, not just this pair — see
+        // `nameSweepRetired`.
+        if (PERMANENT_REFUSALS.has(refused)) this.nameSweepRetired.add(r.id);
       }
     }
   }
