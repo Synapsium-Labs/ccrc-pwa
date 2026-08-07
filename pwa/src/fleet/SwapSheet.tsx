@@ -174,7 +174,9 @@ export function SwapSheet({
   // The CLASS is real by a different trigger, and it is reachable: the
   // QuickConfirm is a SIBLING of the outer `Sheet`, not a child, so it does not
   // go away when the sheet does. `SessionActionsSheet`'s reset-on-close effect
-  // (SessionActionsSheet.tsx:55-58) sets `swapOpen = false` whenever the
+  // (its `if (open) return; setSwapOpen(false)` — named rather than cited by
+  // line, because the last line number here went stale the moment holds added
+  // four `useState` hooks above it) sets `swapOpen = false` whenever the
   // actions sheet is dismissed, and FleetScreen keeps both components MOUNTED
   // across that close (its findings 2 and 3). So: open session A's actions ->
   // Swap -> pick alt·max -> dismiss the actions sheet. `open` goes false, the

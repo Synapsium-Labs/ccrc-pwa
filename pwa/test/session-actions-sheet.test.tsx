@@ -243,8 +243,23 @@ describe('hold and release', () => {
     render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
     fireEvent.click(screen.getByRole('button', { name: /release/i }));
     // The confirm says what release re-enables BEFORE anything is sent:
-    expect(screen.getByText(/will archive on the next sweep after its PR merges/)).toBeInTheDocument();
+    expect(screen.getByText(/may archive it once its PR merges/)).toBeInTheDocument();
     expect(released).toHaveLength(0);   // nothing sent yet — the copy precedes the act
+  });
+
+  it('Release promises a MAY, not a WILL — the gate has a deferral the hold knows nothing about', () => {
+    // FIX-WAVE OBSERVATION. The copy read "released — will archive on the next
+    // sweep after its PR merges", under a comment claiming it was ccd's own
+    // fact restated. ccd's `cmd_ws_release` says the next sweep MAY archive,
+    // and `archiveMerged` still defers on `archiveSafety` (busy/attached) —
+    // which the PrSheet two taps away is careful to name as a separate reason.
+    // An operator who released to unblock a merge and then watched three
+    // sweeps go by was told a certainty that was never on offer.
+    render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /release/i }));
+    expect(screen.queryByText(/will archive on the next sweep/)).not.toBeInTheDocument();
+    // And the deferral itself is named, not merely hedged away.
+    expect(screen.getByText(/busy or attached session defers/)).toBeInTheDocument();
   });
 
   it('confirming Release posts /release and closes the sheet', async () => {
@@ -266,6 +281,21 @@ describe('hold and release', () => {
     fireEvent.click(screen.getByRole('button', { name: /confirm|hold/i }));
     expect(heldCalls).toHaveLength(0);
     expect(screen.getByText(/say which program holds this/)).toBeInTheDocument();
+  });
+
+  it('the empty-reason refusal clears on the first keystroke, not on the next submit', () => {
+    // FIX-WAVE OBSERVATION: `holdError` was set by `confirmHold`'s empty branch
+    // and cleared only INSIDE `confirmHold`, after the non-empty check passed.
+    // So "empty reason — say which program holds this" sat under a box with a
+    // perfectly good reason typed into it until the operator submitted again —
+    // a refusal of what was on screen a moment ago, not of what is there now.
+    render(<SessionActionsSheet session={f({ held: null })} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    expect(screen.getByText(/say which program holds this/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'p' } });
+    expect(screen.queryByText(/say which program holds this/)).not.toBeInTheDocument();
+    expect(heldCalls).toHaveLength(0);   // typing is not sending
   });
 
   it('Hold sends the typed reason and closes the sheet on success', async () => {

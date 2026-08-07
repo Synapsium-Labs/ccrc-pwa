@@ -1139,8 +1139,14 @@
    stacked confirm sheet (SessionActionsSheet.tsx explains why: the
    empty-reason refusal needs exactly one control on screen at a time to stay
    trivially testable). `.sess-hold-input` copies .proj-search's declarations
-   verbatim (edge-subtle border, bg-raised, ink-primary) rather than reusing
-   the class name across an unrelated feature — same tokens, no new pair. */
+   verbatim (edge-subtle border, bg-raised, ink-primary, and the
+   ink-tertiary ::placeholder the first version of this comment claimed to
+   have copied and had not) rather than reusing the class name across an
+   unrelated feature — same tokens, no new pair. The placeholder matters here
+   more than it does there: `program:name wave:2/4` is the only place the
+   convention is shown to whoever is typing the reason, and undeclared it
+   inherits the UA default, which is not a token this theme controls in
+   either colour scheme. */
 .sess-hold-form {
   display: flex;
   flex-direction: column;
@@ -1159,6 +1165,9 @@
 }
 .sess-hold-input:focus {
   border-color: var(--accent);
+}
+.sess-hold-input::placeholder {
+  color: var(--ink-tertiary);
 }
 .sess-hold-actions {
   display: flex;

@@ -48,4 +48,36 @@ describe('README: workspace holds', () => {
   it('does not claim the archive gate is the only thing a hold changes', () => {
     expect(holdsSection()).not.toMatch(/one thing a hold changes/i);
   });
+
+  it('states the gate with the polarity the code actually has', () => {
+    // FIX-WAVE FINDING 8. The paragraph said the gate "gains `held !== null`
+    // as an extra conjunct". The code is `if (r.held !== null) continue` — a
+    // SKIP — so the conjunct is `held === null`, and as written the README
+    // described a gate that auto-archives exactly the workspaces a hold exists
+    // to protect and never archives released ones. The two tests above pinned
+    // which consumers are named and one forbidden sentence; neither pinned the
+    // conjunct, so the inversion was invisible to the very file that exists to
+    // stop this paragraph drifting.
+    const section = holdsSection();
+    expect(section).not.toMatch(/gains\s+`held !== null`/);
+    expect(section).toMatch(/`held === null`/);
+    // And the spec's own words for it, so a future rewrite that drops the
+    // code-shaped spelling still has to say which way round it is.
+    expect(section).toMatch(/merged \*\*and unheld\*\*/);
+  });
+
+  it('does not claim the server sends the same empty-reason sentence the client does', () => {
+    // Same finding's other half: the paragraph said an empty reason refuses
+    // "on both the client and ccd itself, with the identical sentence", which
+    // omitted the route — the ONLY enforcement for any non-PWA client, and one
+    // that answers a bare 400 `bad-request` with no sentence at all.
+    const section = holdsSection();
+    expect(section).not.toMatch(/on both the client and ccd itself, with the identical sentence/);
+    expect(section).toMatch(/bad-request/);
+    // The refusal is about whitespace too, in all three layers (ccd's guard
+    // strips it, the route and the composer trim) — and ccd is the layer the
+    // orchestrator path actually goes through.
+    expect(section).toMatch(/whitespace-only/i);
+    expect(ccd).toMatch(/\$\{reason\/\/\[\[:space:\]\]\/\}/);
+  });
 });

@@ -87,6 +87,14 @@ describe('prefix matching is a prefix, not a substring', () => {
     // The hold pair, granted in the same branch that added the verbs: same
     // substring/bare-refusal coverage the rest of the `--session` family has,
     // so a mutant dropping either `--session` requirement cannot go quiet.
+    //
+    // NON-DISCRIMINATING AT BASE, DISCLOSED (fix-wave test roll-up): these six
+    // rows are green against `8b323f2` too, because an UNGRANTED verb is
+    // refused by the same `false` a badly-formed granted one gets. That is the
+    // point of keeping them — the grant is what this branch added, and these
+    // pin that it did not arrive shaped like `ws-hold` (bare) or as a
+    // substring match. The row that DOES go red at base is the positive grant
+    // in whitelist.test.ts.
     [['ws-hold']], [['ws-hold', '--all']], [['ws-holdx', '--session', 'x']],
     [['ws-release']], [['ws-release', '--all']], [['ws-releasex', '--session', 'x']],
   ])('refuses ccd %j', (args) => {

@@ -26,11 +26,17 @@ import './fleet.css';
 
 /** Release's consequence sentence — what re-arming the auto-archive gate
  *  actually re-enables, named BEFORE the tap that sends it (spec's naming
- *  rule for every refusal/consequence). ccd's own `cmd_ws_release` comment
- *  puts it as "the very next archiveMerged sweep may archive a merged
- *  workspace"; this is that fact in the sentence the operator asked for. */
+ *  rule for every refusal/consequence).
+ *
+ *  MAY, NOT WILL — fix-wave observation. ccd's own `cmd_ws_release` comment
+ *  says "the very next archiveMerged sweep MAY archive a merged workspace",
+ *  and the gate behind it has a second deferral the hold knows nothing about:
+ *  `archiveSafety` still answers busy/attached for a session someone is
+ *  watching or that is mid-turn. The PrSheet two taps away is careful to name
+ *  that as its own separate reason; promising "will archive" here converted a
+ *  may into a will and then claimed ccd said so. */
 const RELEASE_CONSEQUENCE =
-  "released — will archive on the next sweep after its PR merges.";
+  "released — the next sweep may archive it once its PR merges (a busy or attached session defers).";
 
 const CRITICAL = 75;
 
@@ -247,7 +253,14 @@ export function SessionActionsSheet({
                 placeholder="program:name wave:2/4"
                 aria-label="Hold reason"
                 value={holdReason}
-                onChange={(e) => setHoldReason(e.target.value)}
+                /* The refusal clears on the FIRST keystroke, not on the next
+                   Confirm: it was only ever cleared inside `confirmHold`
+                   AFTER the non-empty check passed, so "empty reason — say
+                   which program holds this" sat under a box with a perfectly
+                   good reason typed into it until the operator submitted
+                   again. An error that outlives its cause reads as a refusal
+                   of what is on screen now. */
+                onChange={(e) => { setHoldReason(e.target.value); setHoldError(null); }}
                 autoFocus
               />
               {/* Client-side refusal, ccd's own sentence — see `confirmHold`. */}

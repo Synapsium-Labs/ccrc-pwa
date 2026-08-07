@@ -783,6 +783,25 @@ describe('mutation-sweep closures', () => {
     await waitFor(() => expect(document.querySelector('.toast--error')).toBeNull());
   });
 
+  // FIX-WAVE OBSERVATION. `ccd ws-audit` has no held rung — it answers
+  // `reapable` for a workspace `ws-reap` will then refuse with
+  // `{"refused":"held"}` — so this sheet rendered a full removable verdict AND
+  // a live confirm token, and the refusal only arrived once the operator had
+  // already tapped the destructive button. `session.held` is on the wire and
+  // in this component's props the whole time; nothing about the audit had to
+  // change for the sheet to say it first.
+  it('an archived-and-held workspace offers no Remove at all, and says which program holds it', async () => {
+    render(<><ToastHost /><ReapSheet session={sess({ held: 'program:agent-evals wave:3/4' })}
+                                     open onClose={() => {}} onReaped={() => {}} /></>);
+    expect(await screen.findByText(/program:agent-evals wave:3\/4/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove / })).toBeNull();
+  });
+
+  it('an unheld workspace with the same audit still offers Remove — the rung is the hold, not the sheet', async () => {
+    open();
+    expect(await screen.findByRole('button', { name: 'Remove quiet-basin · 1.2 GB' })).toBeInTheDocument();
+  });
+
   it('shows no refusal paragraph at all when the verdict is reapable', async () => {
     const { container } = open();
     await screen.findByRole('button', { name: 'Remove quiet-basin · 1.2 GB' });

@@ -219,6 +219,27 @@ describe('merged', () => {
     expect(screen.getByRole('button', { name: /archive now/i })).toBeInTheDocument();
   });
 
+  // FIX-WAVE FINDING 6. The fix round above corrected the MERGED branch and
+  // left the open/draft one saying "When it merges, ccrc archives this
+  // workspace automatically" — and that branch is the one an operator reads
+  // for the WHOLE of a wave, since a PR sits open for hours before it merges.
+  // For a held session the promise is simply false: `archiveMerged` hits the
+  // held rung before `archiveSafety` and skips for as long as the hold stands.
+  it('an OPEN PR on a held workspace does not promise an automatic archive', async () => {
+    const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
+    fetched = view({ pr: openPr, draft: null });
+    open(sess({ pr: openPr, held: 'program:agent-evals wave:1/4' }));
+    expect(await screen.findByText(/held — program:agent-evals wave:1\/4/)).toBeInTheDocument();
+    expect(screen.queryByText(/archives this workspace automatically/i)).not.toBeInTheDocument();
+  });
+
+  it('an OPEN PR on an UNHELD workspace still promises it — the sentence is not simply gone', async () => {
+    const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
+    fetched = view({ pr: openPr, draft: null });
+    open(sess({ pr: openPr }));
+    expect(await screen.findByText(/archives this workspace automatically/i)).toBeInTheDocument();
+  });
+
   it('hands cleanup to the caller rather than deleting anything itself', async () => {
     const onReap = vi.fn();
     fetched = view({ pr: merged, draft: null });

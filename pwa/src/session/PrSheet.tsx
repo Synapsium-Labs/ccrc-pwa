@@ -184,8 +184,19 @@ export function PrSheet({
                 Copy link
               </button>
               <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Refresh</button>
+              {/* THE HOLD CHANGES THIS SENTENCE TOO — fix-wave finding 6. The
+                  merged branch below was corrected and this one was not, and
+                  this is the branch an operator reads for the WHOLE of a wave:
+                  a PR sits open for hours, and "when it merges, ccrc archives
+                  this workspace automatically" is precisely what the hold
+                  suppresses (`archiveMerged` skips on the held rung before it
+                  ever asks `archiveSafety`). Same verbatim reason, same
+                  no-parsing rule, and it names the release path rather than
+                  promising a sweep that will never come. */}
               <p className="pr-note">
-                Merging happens on GitHub. When it merges, ccrc archives this workspace automatically.
+                {session.held !== null
+                  ? `Merging happens on GitHub. It will NOT archive this workspace: held — ${session.held}. Release it (Release, in the session’s actions sheet) and the next sweep after the merge archives it.`
+                  : 'Merging happens on GitHub. When it merges, ccrc archives this workspace automatically.'}
               </p>
             </>
           )}
