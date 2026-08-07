@@ -78,6 +78,19 @@ export class FleetWatcher {
    * options.
    */
   private actionlessAsks = new Map<string, string>();
+  /**
+   * `id#prNumber` keys already told "merged, held, nothing archived" — so
+   * `archiveMerged`'s held branch fires that push ONCE per (workspace, PR)
+   * rather than on every 2-minute sweep for as long as the hold stands.
+   *
+   * IN-MEMORY BY DESIGN, not a gap: a server restart forgets the latch and
+   * may repeat the push, but `pushOne`'s tag is `merged-<id>` — the SAME
+   * collapse key the real archive push uses — so the repeat REPLACES the
+   * prior notification on the phone rather than stacking a duplicate. The
+   * cost of losing this latch on restart is one redundant, silently-replaced
+   * notification; persisting it would buy nothing back for that price.
+   */
+  private heldMergedNotified = new Set<string>();
   /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
   private statuslines = new Map<string, Statusline>();
   /** Prior status per session — drives the busy→idle push. */
@@ -447,6 +460,25 @@ export class FleetWatcher {
       const pr = this.prStates.get(r.id);
       if (r.workspace === null || r.archivedAt !== null) continue;
       if (pr?.phase !== 'merged') continue;                 // unknown NEVER archives
+      if (r.held !== null) {
+        // A program claims this workspace: the merge is a WAVE boundary, not
+        // the end. Archive nothing; say so once per (workspace, PR) — the
+        // in-memory latch (see its own comment) means a server restart may
+        // repeat the push, which the shared `merged-<id>` collapse tag turns
+        // into a replace, not a stack. The bucket ladder is untouched: no
+        // `archivedAt` is written, so the workspace stays in the live
+        // buckets exactly as an ordinary session would.
+        const key = `${r.id}#${pr.number ?? '?'}`;
+        if (!this.heldMergedNotified.has(key)) {
+          this.heldMergedNotified.add(key);
+          this.pushOne({
+            kind: 'merged', sessionId: r.id, project: r.project,
+            title: `✓ merged › ${r.workspace}`,
+            body: `PR #${pr.number ?? '?'} merged — ${r.held}; nothing archived.`,
+          }, this.activeProjects);
+        }
+        continue;
+      }
       if ((await this.archiveSafety(r.id)) !== 'ok') continue;   // defers; the next sweep retries
       const argv = CCD_ARGV.wsArchive(r.id);
       // The same gate the `pr-state` sweep above and the `/archive` route

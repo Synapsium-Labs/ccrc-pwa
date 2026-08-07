@@ -23,6 +23,11 @@ export interface SessionRecord {
    *  manifest is absent or half-written — never 0, which would argue
    *  against a cleanup that would free gigabytes. */
   archivedBytes: number | null;
+  /** The workspace's program claim — `$REG/<id>.hold`, reason string verbatim,
+   *  null when absent. Absence IS release (the verb unlinks), so null → unheld
+   *  is the honest mapping here; the ccd-side destructive verbs are where
+   *  present-but-unreadable can be (and is) distinguished and read as held. */
+  held: string | null;
 }
 
 async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
@@ -57,7 +62,7 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
   const out: SessionRecord[] = [];
   for (const id of ids) {
     const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
-      base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw] = await Promise.all([
+      base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw] = await Promise.all([
       field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
       field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
       field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -66,6 +71,7 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
       field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
       field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
       field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
+      field(io, cfg.registryDir, id, 'hold'),
     ]);
     if (!wrapper || !workdir || !uuid) continue;   // incomplete registry entry — skip, don't crash
     out.push({
@@ -90,6 +96,7 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
        *  manifest is absent or half-written — never 0, which would argue
        *  against a cleanup that would free gigabytes. */
       archivedBytes: manifestBytes(manifestRaw),
+      held: holdRaw,
     });
   }
   return out;

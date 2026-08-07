@@ -29,7 +29,28 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
   wsAudit: ['demo-quiet-basin'],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
   wsAttic: ['demo-quiet-basin'],
+  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4'],
+  wsRelease: ['demo-quiet-basin'],
 };
+
+/**
+ * `wsHold`/`wsRelease` added a `CCD_ARGV` entry apiece — "the only new argv
+ * surface is the two verbs" — but the workspace-hold design deliberately
+ * grants NEITHER to the remote agent in this branch ("zero new agent
+ * whitelist grants"; `docs/superpowers/plans/2026-08-06-workspace-hold.md`).
+ * `server.ts`'s `/hold`/`/release` routes exist and are `verbSupported`-gated
+ * exactly like `/archive`, but in REMOTE mode `isExecAllowed('ccd', …)`
+ * answers false for both until a future branch grants them, and the call
+ * 502s there — not a 501, because that failure is the agent's, discovered at
+ * the same layer `/archive` already reports via `runCcdOr502`. Local mode
+ * execs `ccd` directly and never consults this file.
+ *
+ * Named here, in BOTH directions (see the pair of tests below), so this
+ * cannot silently start asserting more than the code proves: the day a grant
+ * lands, the entry has to be deleted from this set or the "not yet granted"
+ * assertion goes red — it can never just stay quiet on its own.
+ */
+const NOT_YET_GRANTED: ReadonlySet<keyof typeof CCD_ARGV> = new Set(['wsHold', 'wsRelease']);
 
 describe('layer 2 — every argv the server can build passes the agent whitelist', () => {
   it('has a sample for every CCD_ARGV entry', () => {
@@ -42,7 +63,21 @@ describe('layer 2 — every argv the server can build passes the agent whitelist
     // comparable type. `isExecAllowed` takes a mutable array, hence the copy.
     const build = CCD_ARGV[key] as (...a: unknown[]) => readonly string[];
     const argv = build(...(SAMPLES[key] as unknown[]));
-    expect(isExecAllowed('ccd', [...argv]), `${key} -> ccd ${argv.join(' ')}`).toBe(true);
+    // Every entry passes EXCEPT the two named above — see `NOT_YET_GRANTED`'s
+    // own comment for why that is the honest answer rather than a gap.
+    expect(isExecAllowed('ccd', [...argv]), `${key} -> ccd ${argv.join(' ')}`).toBe(!NOT_YET_GRANTED.has(key));
+  });
+
+  it('NOT_YET_GRANTED names verbs that are actually ungranted, not a stale exemption', () => {
+    // The other direction, same discipline as `verb-gate.test.ts`'s
+    // `UNGATED_BY_DECISION` and `ccdargv-brand.test.ts`'s own doc: an
+    // exemption list that can only grow is folklore. If either verb above
+    // gains a grant, THIS assertion goes red until the entry is removed.
+    for (const key of NOT_YET_GRANTED) {
+      const build = CCD_ARGV[key] as (...a: unknown[]) => readonly string[];
+      const argv = build(...(SAMPLES[key] as unknown[]));
+      expect(isExecAllowed('ccd', [...argv]), `${key} is granted now — remove it from NOT_YET_GRANTED`).toBe(false);
+    }
   });
 });
 
@@ -239,6 +274,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAudit: ['ws-audit', '--session', 'demo-quiet-basin'],
     wsReap: ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
+    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4'],
+    wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {

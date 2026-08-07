@@ -74,6 +74,8 @@ export const CCD_ARGV = {
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
   wsReap:    (tok: string, id: string) => argv(['ws-reap', '--expect', tok, '--session', id]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
+  wsHold:    (id: string, reason: string) => argv(['ws-hold', '--session', id, '--reason', reason]),
+  wsRelease: (id: string) => argv(['ws-release', '--session', id]),
 } as const;
 
 /**
