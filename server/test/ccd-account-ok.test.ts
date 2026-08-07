@@ -67,7 +67,19 @@ describe('_ws_least_loaded skips excluded lanes', () => {
   });
 });
 
-describe('_swap_target never returns a disabled home', () => {
+describe('_swap_target: disabled excludes a lane as a DESTINATION, never evacuates a session already there', () => {
+  it('cur==home, home disabled but under the rate ceiling -> stays (empty stdout)', () => {
+    // Spec rule, verbatim: "disabled excludes a lane as a destination; it
+    // never evacuates a session already there." The cur==home branch
+    // (ccd/ccd ~6406-6407) is `_avail "$home" && return 0` — deliberately no
+    // `_account_ok` check. A future edit that hoisted `_account_ok` above
+    // that `_avail` would evacuate every session off a lane the operator
+    // only meant to stop RECEIVING new work; today this stays green.
+    writeLimits('claude', 5, 5);   // well under SWAP_CEILING
+    disable('claude');
+    expect(sh('_swap_target claude-demo claude claude')).toBe('');
+  });
+
   it('registry home disabled, current wrapper fine -> stays put (empty stdout)', () => {
     // cur (claude2) and home (claude) differ; claude carries no telemetry so
     // the OLD `_avail "$home"` alone would call it free and route back onto it.
