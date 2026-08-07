@@ -99,12 +99,17 @@ on this box) is not re-read forever.
 JSON on stdout at exit 0 — thirteen named tokens, whose copy lives in
 `server/src/wsaudit.ts` — and only `git branch -m` itself failing is a non-zero
 exit, because that is a fault rather than a refusal. A refused workspace keeps
-its born name. Five of the thirteen refusals describe a fact about the
-workspace that a later title cannot change — `has-upstream` plus
-`not-a-workspace`, `worktree-unregistered`, `worktree-foreign` and
-`bad-branch` (`server/src/watch.ts`'s `PERMANENT_REFUSALS`) — and those retire
-the session outright: no further attempt, on any title, until the server
-restarts. Every other refusal marks only that one `(session, derived name)`
+its born name. Four of the thirteen refusals describe a fact about the
+workspace that a later title cannot change — `has-upstream`, `not-a-workspace`,
+`worktree-unregistered` and `worktree-foreign` (`server/src/watch.ts`'s
+`PERMANENT_REFUSALS`; the last two ship their own remedy in the refusal detail,
+`git -C $main worktree add …`, so "cannot stop being true" holds only in the
+sense that no title fixes it) — and those retire the session outright: no
+further attempt, on any title, until the server restarts. `bad-branch` is a
+verdict on the *derived branch*, not the workspace, so it is deliberately not
+in that set — a title that changes can change it — even though `deriveBranch`
+never actually emits a name `ccd` would reject, so the refusal does not fire
+in practice. Every other refusal marks only that one `(session, derived name)`
 pair attempted, so a title that changes to a different slug still earns a
 fresh attempt on the next sweep.
 

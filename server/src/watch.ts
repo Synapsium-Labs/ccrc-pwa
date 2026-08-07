@@ -35,15 +35,27 @@ const NAME_SWEEP_MS = 10_000;
 
 /** Refusal tokens (of ccd's thirteen, `spec:55`) that cannot stop being true:
  *  a branch, once pushed, is never un-pushed (`has-upstream`); a checkout
- *  that is not a workspace, a worktree ccd cannot find registered, a worktree
- *  whose directory belongs to a different session, and a branch
- *  `_ws_branch_valid` rejects are all facts about the session's shape that a
- *  title landing later cannot change. `name-taken-local`/`name-taken-origin`
+ *  that is not a workspace, a worktree ccd cannot find registered, and a
+ *  worktree whose directory belongs to a different session are all facts
+ *  about the session's shape that a title landing later cannot change (the
+ *  last two ship their own remedy in the refusal detail, `git -C $main
+ *  worktree add …`, which "cannot stop being true" only in the narrower
+ *  sense that no TITLE fixes it). `name-taken-local`/`name-taken-origin`
  *  and `unchanged` are deliberately absent — a name collision or a
  *  since-changed title can resolve on the next sweep. See
- *  `FleetWatcher.nameSweepRetired` and review finding 1. */
+ *  `FleetWatcher.nameSweepRetired` and review finding 1.
+ *
+ *  `bad-branch` is deliberately NOT here, unlike the earlier draft of this
+ *  set (review finding 5): it is a verdict on `deriveBranch(title)`, not on
+ *  the workspace, and a later title is exactly the thing that can change it.
+ *  Retiring the SESSION on `bad-branch` would be wrong the day it ever fires
+ *  — `attemptedRenames`'s per-(id, derived-branch) key is already the
+ *  correct guard for a name-dependent refusal. Today the arm is dead code:
+ *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
+ *  `_ws_branch_valid` (`ccd/ccd:1337-1347`) always accepts, so `bad-branch`
+ *  never actually reaches this lane — see `naming.ts:26-30`. */
 const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
-  'has-upstream', 'not-a-workspace', 'worktree-unregistered', 'worktree-foreign', 'bad-branch',
+  'has-upstream', 'not-a-workspace', 'worktree-unregistered', 'worktree-foreign',
 ]);
 
 /** The fourth lane. A ccd install is a deliberate act by a human who is

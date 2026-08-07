@@ -344,6 +344,60 @@ describe('the naming sweep', () => {
     await again(w);
     expect(reads).toBe(2);
   });
+
+  // Review finding 1/4: the test above only ever moves size and mtime
+  // TOGETHER (a real append changes both), so it cannot tell `p.size ===
+  // st.size && p.mtimeMs === st.mtimeMs` apart from either half alone — a
+  // mutant that drops one comparison still reads 1-then-2 against that
+  // fixture. These two feed `claimTitleRead` a stubbed stat so size and mtime
+  // can move independently, which a real filesystem write cannot promise.
+  it('re-reads a same-size rewrite once the mtime alone has moved', async () => {
+    const h = harness();
+    seed(h.home);
+    const f = transcript(h.home, [USER('go')]);   // no title: content never drives this
+    let reads = 0;
+    let st = { size: 10, mtimeMs: 1000 };
+    const io: FleetIO = {
+      ...localIO,
+      stat: (p) => (p === f ? Promise.resolve(st) : localIO.stat(p)),
+      readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+    };
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(reads).toBe(1);
+
+    // SAME size, mtime alone moves forward. A gate that dropped
+    // `p.mtimeMs === st.mtimeMs` (kept size-only) would call this
+    // "unchanged" and skip it — the in-place rewrite it exists to catch.
+    st = { size: 10, mtimeMs: 2000 };
+    await again(w);
+    expect(reads, 'size alone cannot prove an in-place rewrite did not happen').toBe(2);
+  });
+
+  it('re-reads a grown transcript even when the mtime lands back on the recorded value', async () => {
+    const h = harness();
+    seed(h.home);
+    const f = transcript(h.home, [USER('go')]);
+    let reads = 0;
+    let st = { size: 10, mtimeMs: 1000 };
+    const io: FleetIO = {
+      ...localIO,
+      stat: (p) => (p === f ? Promise.resolve(st) : localIO.stat(p)),
+      readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+    };
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(reads).toBe(1);
+
+    // SAME mtime, size alone grows. A gate that dropped `p.size === st.size`
+    // (kept mtime-only) would call this "unchanged" and skip it — the exact
+    // shape of an append that lands inside the same recorded millisecond.
+    st = { size: 20, mtimeMs: 1000 };
+    await again(w);
+    expect(reads, 'mtime alone cannot prove an append did not happen').toBe(2);
+  });
 });
 
 describe('the naming lane', () => {

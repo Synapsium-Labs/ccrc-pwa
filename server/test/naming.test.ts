@@ -141,12 +141,31 @@ describe('readAiTitle', () => {
   });
 
   it('never returns half a line that the tail cut through', async () => {
-    // The tail almost certainly starts mid-line; the first line of the chunk is
-    // dropped. Without that, a truncated `{"type":"ai-ti` reaches JSON.parse.
-    const f = fileWith([
-      ...Array.from({ length: 200 }, (_, i) => TITLE(`stale ${i} ${'y'.repeat(2000)}`)),
-      TITLE('The last one'),
-    ]);
-    expect(await readAiTitle(localIO, f)).toBe('The last one');
+    // Review finding 1/4: the earlier version of this fixture only proved the
+    // try/catch two lines below the shift, not the shift itself — its
+    // truncated first line was a chopped JSON object, which JSON.parse
+    // already rejects on its own, so deleting `if (from > 0) lines.shift()`
+    // left the suite green. This version makes the cut land EXACTLY at the
+    // start of a complete, independently-parseable `ai-title` object — the
+    // bytes the shift is supposed to throw away are valid JSON in isolation,
+    // so keeping them (the mutant) and dropping them (the shipped code)
+    // produce different, observable answers.
+    //
+    // `size - TITLE_TAIL_BYTES` (title.ts:13, 256 * 1024, not exported) is
+    // engineered to fall exactly on the first byte of `json` below: `padding`
+    // fixes that offset, and `filler` is sized so the total is exactly
+    // `padding.length + TITLE_TAIL_BYTES`.
+    const TITLE_TAIL_BYTES = 256 * 1024;
+    const json = TITLE('GHOST');
+    const padding = 'p'.repeat(100_000);
+    const filler = 'f'.repeat(TITLE_TAIL_BYTES - json.length - 1);
+    // One line (no interior `\n`) of padding+json, a real line break, then
+    // filler that carries no ai-title at all.
+    const f = path.join(mkTmp('ccrc-title-'), 't.jsonl');
+    writeFileSync(f, padding + json + '\n' + filler);
+
+    // Shipped code: the shift drops the chunk's first (cut) "line" — which is
+    // exactly `json` — so nothing in the tail carries a title.
+    expect(await readAiTitle(localIO, f)).toBeNull();
   });
 });
