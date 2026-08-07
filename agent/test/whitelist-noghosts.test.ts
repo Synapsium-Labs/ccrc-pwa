@@ -84,6 +84,11 @@ describe('prefix matching is a prefix, not a substring', () => {
     // survived silently. Added by the Task 9 mutation sweep.
     [['ws-restore']], [['ws-restore', '--all']],
     [['ws-audit']], [['ws-audit', '--all']],
+    // The hold pair, granted in the same branch that added the verbs: same
+    // substring/bare-refusal coverage the rest of the `--session` family has,
+    // so a mutant dropping either `--session` requirement cannot go quiet.
+    [['ws-hold']], [['ws-hold', '--all']], [['ws-holdx', '--session', 'x']],
+    [['ws-release']], [['ws-release', '--all']], [['ws-releasex', '--session', 'x']],
   ])('refuses ccd %j', (args) => {
     expect(isExecAllowed('ccd', args as string[])).toBe(false);
   });

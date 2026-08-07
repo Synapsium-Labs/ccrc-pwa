@@ -305,6 +305,17 @@ export const EXEC_WHITELIST = {
     ['ws-audit', '--session'],
     ['ws-reap',  '--expect'],   // load-bearing: no reap without a confirmation token
     ['ws-attic', '--session'],
+    // The workspace-hold pair. The spec's "zero new agent whitelist grants"
+    // bullet is about KEYS — no `gh`, no new command — and its own next clause
+    // names the two verbs as this branch's only new argv surface. A verb the
+    // server builds and the agent does not grant is not a narrower policy: in
+    // remote mode `POST /hold`/`/release` would answer `502 {stderr:
+    // 'forbidden'}` for every session, forever, while `/archive` and
+    // `/restore` on the same actions sheet kept working (review finding 1).
+    // Both are registry-file writes/unlinks, non-destructive, and a hold only
+    // ever REFUSES ws-rm/ws-reap — granting them widens nothing that deletes.
+    ['ws-hold',    '--session'],
+    ['ws-release', '--session'],
   ],
 } as const satisfies ExecWhitelist;
 

@@ -135,6 +135,12 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['ws-restore', '--session', 'x'])).toBe(true);
     expect(isExecAllowed('ccd', ['ws-audit', '--session', 'x'])).toBe(true);
     expect(isExecAllowed('ccd', ['ws-attic', '--session', 'x'])).toBe(true);
+    // The hold pair, at the same shape. `--reason` and its text sit past the
+    // granted prefix and are unconstrained, exactly as `--title`/`--body-b64`
+    // are for pr-open; what the prefix pins is that neither verb is reachable
+    // without naming a session.
+    expect(isExecAllowed('ccd', ['ws-hold', '--session', 'x', '--reason', 'program:evals wave:1/4'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-release', '--session', 'x'])).toBe(true);
   });
 
   it('is still a whitelist — plausible adjacent subcommands stay refused', () => {

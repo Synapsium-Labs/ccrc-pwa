@@ -11,8 +11,8 @@ import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { readRegistry } from '../src/registry.js';
-import { localIO } from '../src/io.js';
+import { readRegistry, HOLD_UNREADABLE } from '../src/registry.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { loadConfig } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
 
@@ -74,6 +74,15 @@ const sweepSettled = (w: FleetWatcher): Promise<void> =>
 
 const forceDue = (w: FleetWatcher): void => {
   (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+};
+
+/** `localIO` with every `<id>.hold` read failing and everything else real —
+ *  the shape `remote/io.ts` produces when one op of the ~17 a session's
+ *  `readRegistry` fires in parallel times out: null, indistinguishable at
+ *  `field()` from a file that is not there. */
+const holdUnreadableIO: FleetIO = {
+  ...localIO,
+  readFile: async (p) => (p.endsWith('.hold') ? null : localIO.readFile(p)),
 };
 
 describe('archiveMerged — merged AND unheld', () => {
@@ -169,6 +178,44 @@ describe('archiveMerged — merged AND unheld', () => {
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
     expect(notify.mock.calls[1]![0].body).toContain('PR #601');
+    // REVIEW FINDING 4, measured: with `watch.ts`/`registry.ts` reverted to
+    // `c120e88^` this test was the one new test that stayed GREEN — the OLD
+    // unconditional archive path pushes once per sweep too, and its body also
+    // names a PR number, so every assertion above was satisfied by the branch
+    // this file exists to pin. These two say WHICH branch fired: the held one,
+    // which archives nothing and says so.
+    for (const [payload] of notify.mock.calls) expect(payload.body).toContain('nothing archived');
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    w.stop();
+  });
+
+  it('a present-but-unreadable .hold reads as held and still blocks the archive', async () => {
+    // The remote-fleet fault the fail-shut mapping exists for (review finding
+    // 2): `readdir` succeeded — the file IS listed — and one `read` op over
+    // the agent WS did not, which `remote/io.ts` maps to null exactly as a
+    // missing file. Reading that as released archives a held workspace, and
+    // `ccd ws-archive` has no held rung to catch it: the pane dies mid-program.
+    const home = seed(['demo-quiet-basin', 'demo-still-cove']);
+    liveIdle(home);
+    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:2/4');
+    const cfg = loadConfig({ CCRC_HOME: home });
+
+    const records = await readRegistry(holdUnreadableIO, cfg);
+    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe(HOLD_UNREADABLE);
+    // …and the sentinel is not blanket: a session with no `.hold` at all is
+    // still unheld under the very same failing IO, which is what keeps this a
+    // fail-shut mapping rather than "nothing ever archives".
+    expect(records.find((r) => r.id === 'demo-still-cove')?.held).toBeNull();
+
+    const calls: string[][] = [];
+    const deps = {
+      ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      io: holdUnreadableIO,
+    };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    await w.tick();
+    await sweepSettled(w);
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     w.stop();
   });
 });

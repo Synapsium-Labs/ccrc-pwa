@@ -24,11 +24,34 @@ export interface SessionRecord {
    *  against a cleanup that would free gigabytes. */
   archivedBytes: number | null;
   /** The workspace's program claim — `$REG/<id>.hold`, reason string verbatim,
-   *  null when absent. Absence IS release (the verb unlinks), so null → unheld
-   *  is the honest mapping here; the ccd-side destructive verbs are where
-   *  present-but-unreadable can be (and is) distinguished and read as held. */
+   *  null when absent. Absence IS release (the verb unlinks), so ONLY absence
+   *  reads as unheld.
+   *
+   *  Fail-shut here too, and this layer can be (review finding 2): `field()`'s
+   *  own `readFile` cannot tell a failed read from a missing file — remote
+   *  `io.ts` maps every error to null — but `readRegistry` reads the registry
+   *  DIRECTORY first, and that listing names `<id>.hold` whether or not its
+   *  bytes can be fetched. A present-but-unread file therefore reads as held,
+   *  carrying `HOLD_UNREADABLE` as its reason. A readable but empty file is
+   *  held too (an empty string is not null), displayed as the empty string it
+   *  is; `ccd ws-hold` refuses to write one. */
   held: string | null;
 }
+
+/**
+ * The reason a held workspace carries when its `.hold` file is listed in the
+ * registry directory but its contents could not be read — one failed op over
+ * the agent WS is enough (`readRegistry` fires ~17 reads per session under one
+ * request timeout). Held with an unreadable reason, never unheld: the
+ * consumer is `archiveMerged`'s `held !== null` gate, and `ccd ws-archive` has
+ * no held rung of its own, so a misread that read as released would kill a
+ * live pane at a wave boundary.
+ *
+ * A human-readable sentence rather than a marker value because the reason
+ * string IS the display — this text is what the PWA chip and the merged push
+ * show, and it has to explain itself there with no parsing anywhere.
+ */
+export const HOLD_UNREADABLE = '<hold file unreadable — treated as held>';
 
 async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
   const content = await io.readFile(path.join(dir, `${id}.${name}`));
@@ -96,7 +119,10 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
        *  manifest is absent or half-written — never 0, which would argue
        *  against a cleanup that would free gigabytes. */
       archivedBytes: manifestBytes(manifestRaw),
-      held: holdRaw,
+      // `names` is the directory listing this function opened with, so it
+      // proves PRESENCE independently of whether the read succeeded — the one
+      // piece of evidence `field()` alone does not have. See `HOLD_UNREADABLE`.
+      held: holdRaw ?? (names.includes(`${id}.hold`) ? HOLD_UNREADABLE : null),
     });
   }
   return out;

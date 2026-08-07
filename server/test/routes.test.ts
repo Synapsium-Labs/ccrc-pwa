@@ -557,14 +557,15 @@ describe('notify ingestion', () => {
 });
 
 // POST /api/sessions/:id/hold and /release — same shape as /archive/restore
-// (pr-routes.test.ts): verbSupported-gated, 404/400/501/200. Built here
-// rather than through `helpers.ts`'s `testDeps` for the 200 case ONLY: that
-// harness wraps its runner in `guardRunner`, and this branch's own design
-// deliberately grants NEITHER verb to the remote agent yet ("zero new agent
-// whitelist grants" — see `whitelist-subset.test.ts`'s `NOT_YET_GRANTED`), so
-// a guarded runner would throw before ever reaching the mock ccd below. The
-// 404/400/501 cases never reach `deps.runCcd` at all and are unaffected
-// either way; the 501 case still uses `testDeps` since it needs `fleetState`.
+// (pr-routes.test.ts): verbSupported-gated, 404/400/501/200.
+//
+// The 200 case runs through `helpers.ts`'s `testDeps`, i.e. through
+// `guardRunner` — LAYER 1 of the three against "route added, whitelist not
+// updated, all suites green, dead on the fleet" (`whitelist-subset.test.ts`'s
+// header). An earlier draft built its deps by hand here precisely to escape
+// that guard, because neither verb was granted yet; that made this the one
+// route test whose argv the guard never saw (review finding 1). The grants
+// landed, so the ordinary harness works and covers both new argvs for free.
 describe('POST /api/sessions/:id/hold and /release', () => {
   it('404s an unknown session on both routes, before building any argv', async () => {
     const { app, calls } = await makeApp(['❯ \n']);
@@ -615,8 +616,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
       if (args[0] === 'ws-release') return { code: 0, stdout: `released ${ID}`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO });
+    const app = await buildServer(testDeps(home, run));
 
     const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`,
       payload: { reason: 'program:agent-evals wave:1/4' } });
