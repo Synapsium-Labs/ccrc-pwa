@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatEvent, Dialog, FleetSession, HookAsk } from '../../shared/api';
+import type { ChatEvent, Dialog, FleetSession, HookAsk, SessionStreamMsg } from '../../shared/api';
+import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
+import { setUpdater } from '../src/lib/swupdate';
 
 // — fixtures —
 
@@ -218,6 +220,15 @@ describe('applySessionMsg', () => {
     const e = s.events[0];
     expect(e?.kind).toBe('system');
     expect(e && 'text' in e ? e.text : '').toBe('cc swap: s1 moved claude -> claude2');
+  });
+
+  // The new `default` arm (Rider E): an old client must shrug at a frame type
+  // it has never heard of, not corrupt the store with `undefined` the way an
+  // unhandled switch case would.
+  it('an unknown frame type leaves the snapshot unchanged', () => {
+    const s = { ...emptySnap(), events: [user('a', 'hi')], uuid: 'u1', offset: 12 };
+    const future = { type: 'from_the_future' } as unknown as SessionStreamMsg;
+    expect(applySessionMsg(s, future)).toBe(s);
   });
 });
 
@@ -455,5 +466,62 @@ describe('fleet store', () => {
     expect(() => lastSocket().message(JSON.stringify({ type: 'mystery' }))).not.toThrow();
     expect(store.getState().sessions).toEqual([]);
     store.getState().disconnect();
+  });
+
+  // — the dormant handshake (Rider E) —
+  describe('the hello handshake', () => {
+    afterEach(() => setUpdater(() => {})); // never leak a test's spy into the next file's module state
+
+    it('a connection that never sends hello leaves blocked false', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [] }));
+      expect(store.getState().blocked).toBe(false);
+      store.getState().disconnect();
+    });
+
+    it('hello with min > FLEET_PROTO sets blocked and calls requestUpdate once', () => {
+      const update = vi.fn();
+      setUpdater(update);
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'hello', proto: FLEET_PROTO + 1, min: FLEET_PROTO + 1 }));
+      expect(store.getState().blocked).toBe(true);
+      expect(update).toHaveBeenCalledTimes(1);
+
+      // A second hello saying the SAME thing (e.g. the socket's automatic
+      // reconnect against a server that hasn't been fixed yet) must not fire
+      // the update check again — only the RISING edge does.
+      lastSocket().message(JSON.stringify({ type: 'hello', proto: FLEET_PROTO + 1, min: FLEET_PROTO + 1 }));
+      expect(update).toHaveBeenCalledTimes(1);
+      store.getState().disconnect();
+    });
+
+    it('a later compatible hello CLEARS blocked — not a one-way latch', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'hello', proto: FLEET_PROTO + 1, min: FLEET_PROTO + 1 }));
+      expect(store.getState().blocked).toBe(true);
+
+      lastSocket().message(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO }));
+      expect(store.getState().blocked).toBe(false);
+      store.getState().disconnect();
+    });
+
+    it('rejects a hello whose proto/min are not numbers rather than trusting it', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'hello', proto: '1', min: '1' }));
+      expect(store.getState().blocked).toBe(false);
+      store.getState().disconnect();
+    });
   });
 });

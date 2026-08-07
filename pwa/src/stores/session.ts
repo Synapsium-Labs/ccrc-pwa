@@ -163,6 +163,13 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       };
     case 'notice':
       return { ...s, events: [...s.events, localDivider(msg.message)] };
+    default:
+      // A frame type this build has never heard of — an old client on a
+      // newer server, the same skew the fleet-side handshake exists to
+      // manage. Shrug, not corrupt: the snapshot comes back exactly as it
+      // went in, rather than the `undefined` an unhandled case would return
+      // into the store.
+      return s;
   }
 }
 

@@ -7,7 +7,16 @@ export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
  *  ~/.local/bin/ccd is a copy, not a symlink to the repo, so passing the
  *  whitelist is not evidence a verb exists there. Optional: an older agent
- *  omits it, and the server treats absent as "no evidence either way". */
+ *  omits it, and the server treats absent as "no evidence either way".
+ *
+ *  `v` is deliberately UNREAD, declined rather than forgotten: this pair
+ *  already negotiates by CAPABILITY (`ccdVerbs` + `verbSupported`), which is
+ *  finer-grained than one generation number and answers the question `v`
+ *  would only gesture at. It stays reserved for the day the envelope's own
+ *  SHAPE breaks (not a verb gained or lost, but these fields changing) and
+ *  gets a reader only then. `shared/api.ts`'s `FLEET_PROTO`/`FLEET_PROTO_MIN`
+ *  is the sibling mechanism for the PWA↔server pair, wired because that pair
+ *  has no per-capability negotiation to fall back on the way this one does. */
 export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[] }
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }

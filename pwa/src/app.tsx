@@ -10,6 +10,7 @@
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
+import { BlockScreen } from './components/BlockScreen';
 import { ToastHost } from './components/Toast';
 import { AccountsStrip } from './fleet/AccountsStrip';
 import { navigate, usePath } from './lib/router';
@@ -31,6 +32,11 @@ export function App(): ReactNode {
     useFleetStore.getState().connect();
   }, []);
   const sessions = useFleetStore((s) => s.sessions);
+  // The dormant handshake (shared/api.ts's FLEET_PROTO_MIN): set by the fleet
+  // store on an incompatible `hello`, cleared by a later compatible one.
+  // BlockScreen mounts as a SIBLING before .app-shell, not inside it — a
+  // banner lives in a pane; this has to cover panes, sheets and toasts alike.
+  const blocked = useFleetStore((s) => s.blocked);
   const m = /^\/s\/([^/]+)\/?$/.exec(path);
   const sessionId = m ? decodeURIComponent(m[1]!) : null;
   const archive = /^\/archive\/?$/.test(path);
@@ -40,6 +46,7 @@ export function App(): ReactNode {
   const desktop = useMediaQuery('(min-width: 900px)');
   return (
     <>
+      {blocked && <BlockScreen />}
       <div className="app-shell" data-view={sessionId || archive ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">

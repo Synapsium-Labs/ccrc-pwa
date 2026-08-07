@@ -4,6 +4,7 @@ import { registerSW } from 'virtual:pwa-register';
 import './styles/base.css';
 import { App } from './app';
 import { initTheme } from './lib/theme';
+import { setUpdater } from './lib/swupdate';
 
 // Theme before first render (index.html pre-stamps the attribute so even the
 // pre-bundle paint is right; this adds the live change listener + meta sync).
@@ -37,5 +38,10 @@ registerSW({
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') check();
     });
+    // The fleet store's other reason to ask for a check: an incompatible
+    // `hello` off /ws/fleet means a deploy already landed and this tab is the
+    // stale one, which is worth acting on immediately rather than waiting for
+    // the timer or the next foreground.
+    setUpdater(check);
   },
 });

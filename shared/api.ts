@@ -1128,6 +1128,20 @@ export interface ProjectedHome {
   score: number;
 }
 
+/** Wire shape of `/ws/fleet`, the single source of truth for both ends — it
+ *  used to be a private type duplicated in `fleet.ts` and server.ts literals,
+ *  the exact two-copies failure this file's own revival logic elsewhere
+ *  documents. `hello` is the dormant protocol handshake (see `FLEET_PROTO`
+ *  below): sent synchronously as the first frame, before the async `fleet`
+ *  snapshot. `notice`'s shape is `Notice` (`server/src/bus.ts`) plus the
+ *  discriminant — copy the server's literal exactly if that type ever grows a
+ *  field; a tidier-looking union here that the server does not actually send
+ *  is worse than an ugly one that matches. */
+export type FleetMsg =
+  | { type: 'hello'; proto: number; min: number }
+  | { type: 'fleet'; sessions: FleetSession[] }
+  | { type: 'notice'; message: string };
+
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */
 export interface SlashCommand {
@@ -1247,6 +1261,13 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
  */
 export const PRESENCE_REFRESH_MS = 15_000;
 export const PRESENCE_TTL_MS = 45_000;
+
+/** Wire protocol generation of the PWA↔server pair. Bump on a breaking
+ *  wire change. FLEET_PROTO_MIN is the kill-switch: raise it above an
+ *  old build's FLEET_PROTO to block that client. Dormant until then —
+ *  both stay 1 and the invariant MIN <= PROTO is test-pinned. */
+export const FLEET_PROTO = 1;
+export const FLEET_PROTO_MIN = 1;
 
 /** One notification the server DECIDED to raise: recorded after the presence
  *  gate ("nothing fires for a session the operator is looking at"), before any
