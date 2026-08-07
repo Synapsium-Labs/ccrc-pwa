@@ -50,7 +50,12 @@ COMPACT_QUIET=60                # seconds a session must be idle before an auto-
 
 die() { echo "ccd: $*" >&2; exit 1; }
 
-_gpt_enabled() { [[ ! -f "$GPT_DISABLE_FILE" && -x "$WRAPPER_DIR/gpt" ]]; }   # kill-switch + wrapper present
+_lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
+# An account is a legal AUTOMATIC destination iff its wrapper exists and its
+# lane is enabled. Manual verbs (start/swap/prefer) deliberately bypass this:
+# a named wrapper is an operator override.
+_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }
+_gpt_enabled() { _account_ok gpt; }   # same file ($GPT_DISABLE_FILE == $REG/gpt-disabled), same semantics, one definition
 _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
   [[ -f "$GPT_DISABLE_FILE" ]] && { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
@@ -979,9 +984,10 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
-_ws_least_loaded() {   # -> the home-able account with the most headroom
+_ws_least_loaded() {   # -> the home-able account with the most headroom, or "" if none is placeable
   local best="" bs=1000 w sc
   for w in "${VALID_WRAPPERS[@]}"; do
+    _account_ok "$w" || continue
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && sc=0
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
@@ -6385,13 +6391,16 @@ _swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay 
   if [[ "$cur" == "$home" ]]; then
     _avail "$home" && return 0                        # home is fine: stay
   else
-    _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
+    # disabled excludes home as a DESTINATION only — it never evacuates a
+    # session already sitting on it, which is why the two "stay" branches
+    # above and below carry no _account_ok check.
+    _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
     _avail "$cur"  && return 0                        # cur still works, home down: stay put
   fi
   # must leave cur (home-but-down, or away-and-cur-down): pick the least-loaded AVAILABLE account
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
-    [[ -x "$WRAPPER_DIR/$cand" ]] || continue
+    _account_ok "$cand" || continue
     _avail "$cand" || continue
     sc=$(_limit_score "$cand"); : "${sc:=0}"
     [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
