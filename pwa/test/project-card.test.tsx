@@ -76,10 +76,16 @@ describe('folding', () => {
 
 describe('the + button', () => {
   it('still offers a + before any projection has landed', () => {
-    // /api/accounts has its own poll; the + must never wait on it.
-    render(<ProjectCard group={grp()} projected={null} onAddWorkspace={() => {}}
+    // /api/accounts has its own poll; the + must never wait on it. Before the
+    // first poll lands (or while every poll has failed) useProjectedHome
+    // yields `undefined`, NOT `null` — `null` is the server's own "nothing is
+    // placeable", a fact this render has not observed, so the label must not
+    // claim it (that claim is pinned separately below).
+    render(<ProjectCard group={grp()} projected={undefined} onAddWorkspace={() => {}}
                         onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByRole('button', { name: /new workspace on demo/i })).toBeEnabled();
+    const btn = screen.getByRole('button', { name: /new workspace on demo/i });
+    expect(btn).toBeEnabled();
+    expect(btn).toHaveAccessibleName('New workspace on demo');
   });
 
   it('disables itself while that project has an add in flight', () => {
@@ -145,11 +151,12 @@ describe('the + is icon-only', () => {
       .toHaveAttribute('title', 'New workspace on demo — alt·max, 91% free');
   });
 
-  // null covers two causes at once (no poll yet, or the server's projectHome
-  // genuinely found every lane disabled) — see the comment above addLabel in
-  // ProjectCard. The fallback names the one a user can act on; the button
-  // itself stays enabled either way (asserted in 'the + button' above).
-  it('names "all accounts disabled" when there is no projection to show', () => {
+  // `null` is the server's OWN answer (every home-able lane disabled) — a
+  // fact distinct from `undefined` ("no poll has landed yet", pinned above).
+  // Only `null` earns this copy; see the comment above addLabel in
+  // ProjectCard. The button itself stays enabled either way (asserted in
+  // 'the + button' above).
+  it('names "all accounts disabled" when the server projects nothing', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={null} />);
     expect(screen.getByLabelText('New workspace on demo — all accounts disabled')).toBeInTheDocument();

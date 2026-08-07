@@ -121,5 +121,19 @@ export async function readLimits(
                        disabled: disabledLanes.has(wrapper) };
     }
   }
+  // A lane can be markered off before it ever writes telemetry (fresh
+  // `touch <w>-disabled`, or a session simply never having run there yet) — the
+  // loop above only visits `.cc-limits/*.json`, so that lane would otherwise be
+  // ABSENT from `out` rather than present-and-disabled. Absent is indistinguishable
+  // from "unknown", which scores 0 and makes the account nobody can place a
+  // session on look like the emptiest one — the exact self-reinforcing hole
+  // `disabled` exists to close. The registry readdir already named every
+  // markered lane, so surface each one that telemetry didn't.
+  for (const wrapper of disabledLanes) {
+    if (wrapper in out) continue;
+    out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
+                     sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+                     disabled: true };
+  }
   return out;
 }

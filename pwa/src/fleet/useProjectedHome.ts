@@ -14,16 +14,26 @@ import { useEffect, useState } from 'react';
 import type { ProjectedHome } from '../../../shared/api';
 import { api } from '../lib/api';
 
-export function useProjectedHome(): ProjectedHome | null {
-  const [projected, setProjected] = useState<ProjectedHome | null>(null);
+export function useProjectedHome(): ProjectedHome | null | undefined {
+  // `undefined`: no answer yet — the first poll hasn't landed, or every poll
+  // so far has failed. `null`: an answer HAS landed, and it is the server's
+  // own "nothing is placeable" (every home-able lane disabled). These are
+  // different facts with different honest copy downstream (ProjectCard) —
+  // starting at `null` and letting a fetch error stay `null` would make
+  // "I don't know" indistinguishable from "the fleet told me no", which is
+  // the account-status equivalent of inventing a target.
+  const [projected, setProjected] = useState<ProjectedHome | null | undefined>(undefined);
 
   useEffect(() => {
     let live = true;
     const load = (): void => {
-      // Silent on failure: this is decoration on an affordance that must work
-      // regardless. A `+` with no account line is strictly better than a fleet
-      // screen that errors because telemetry is missing.
-      void api.accounts().then((r) => { if (live) setProjected(r.projected ?? null); }).catch(() => {});
+      // Silent on failure, and no state change on failure: this is decoration
+      // on an affordance that must work regardless. A `+` that says nothing is
+      // strictly better than a fleet screen that errors because telemetry is
+      // missing — but "says nothing" means leaving `projected` exactly where
+      // it was (`undefined` if nothing has ever landed, or the last good
+      // answer if one has), never forcing it toward either defined value.
+      void api.accounts().then((r) => { if (live) setProjected(r.projected); }).catch(() => {});
     };
     load();
     const t = setInterval(load, 20_000);

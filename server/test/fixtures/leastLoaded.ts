@@ -94,6 +94,28 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         + 'sides must admit it rather than name an account that cannot take work',
     },
     {
+      name: 'disabled-lane-no-telemetry',
+      // claude2 is markered off but has NEVER written a limits file — a fresh
+      // `touch claude2-disabled`, or a lane that's never had a session on it.
+      // No `claude2` key in `files` at all (an absent file, not an empty one).
+      files: { claude: fresh(50, 40), 'claude-corp': fresh(90, 95) },
+      disabled: ['claude2'],
+      expect: { wrapper: 'claude', score: 50 },
+      why: 'a markered lane with no telemetry file is still excluded — absent-from-map '
+        + 'must not be mistaken for unknown-and-therefore-free, or the account that has '
+        + 'never even run scores 0 and wins the very projection the marker forbids',
+    },
+    {
+      name: 'all-disabled-no-telemetry',
+      // Fresh box, or every lane markered before any of them ever wrote a
+      // limits file: `.cc-limits` is empty, `disabled` names all three anyway.
+      files: {},
+      disabled: ['claude', 'claude2', 'claude-corp'],
+      expect: null,
+      why: 'no telemetry anywhere AND every lane declared off: still null, not the '
+        + 'empty-directory tie-goes-to-claude case — declared-off overrides unknown-is-free',
+    },
+    {
       name: 'rolled-over-window',
       files: {
         // claude reads 98 on a week that already reset — the 2026-07-27 shape.
