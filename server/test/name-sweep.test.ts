@@ -239,6 +239,50 @@ describe('the naming sweep', () => {
     expect(stats, 'nor even the cheaper stat the tail read is gated behind').toBe(statsAfterFirst);
   });
 
+  // Review finding 5. `bad-branch` was removed from `PERMANENT_REFUSALS`: it is
+  // ccd's verdict on the DERIVED NAME (`deriveBranch`, `naming.ts:26-30`), not a
+  // fact about the session's shape, so a title that derives a different branch
+  // deserves a fresh attempt — unlike the four refusals that stay in the set.
+  // Re-adding 'bad-branch' to `PERMANENT_REFUSALS` must fail exactly this test:
+  // it would retire the session on the first refusal, and the second rename
+  // (for a new, different derived branch) would never fire.
+  it('a bad-branch refusal is retried once a new title derives a different branch', async () => {
+    const h = harness('{"refused":"bad-branch","detail":"invalid ref","paths":[]}');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    seed(h.home);
+    transcript(h.home, [TITLE('First guess at the work')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/first-guess-at-the-work']);
+
+    transcript(h.home, [TITLE('First guess at the work'), TITLE('A completely different title')]);
+    await again(w);
+    expect(renames(h.calls), 'a different derived branch after bad-branch earns a fresh attempt')
+      .toEqual(['ws/first-guess-at-the-work', 'ws/a-completely-different-title']);
+  });
+
+  // Contrast case, same shape as the test above: `not-a-workspace` IS a fact
+  // about the session (it names the checkout's own kind), not about the
+  // derived branch — so unlike `bad-branch`, it retires the session outright,
+  // and a later title that derives a different branch earns no attempt at all.
+  it('unlike bad-branch, a genuinely permanent refusal is not retried on a new title', async () => {
+    const h = harness('{"refused":"not-a-workspace","detail":"not a workspace","paths":[]}');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    seed(h.home);
+    transcript(h.home, [TITLE('First guess at the work')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/first-guess-at-the-work']);
+
+    transcript(h.home, [TITLE('First guess at the work'), TITLE('A completely different title')]);
+    await again(w);
+    await again(w);
+    expect(h.calls, 'a genuinely permanent refusal earns no further attempt, even on a new title')
+      .toHaveLength(1);
+  });
+
   // The retry key is `<id>:<derived-branch>`, not `<id>` — so a title that
   // changes WHILE THE BRANCH IS STILL AT ITS BORN NAME earns exactly one fresh
   // attempt. Synthetic on purpose: measured on a 91 MB transcript, `ai-title` is
