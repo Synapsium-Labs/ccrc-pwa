@@ -28,6 +28,14 @@ const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : nu
  *  chosen for it. */
 const HOME_ABLE = ['claude', 'claude2', 'claude-corp'] as const;
 
+/** Every wrapper this server will ever fabricate an account row for — mirrors
+ *  ccd's `_is_valid_wrapper` (`VALID_WRAPPERS` + `gpt`, ccd:14,99). The
+ *  registry dir holds `<name>-disabled` markers that are NOT accounts at all
+ *  (`autocompact-disabled` is a fleet-wide proactive-/compact kill switch,
+ *  ccd:22) — bounding the backfill below to this set is what stops one of
+ *  those from turning into a phantom "autocompact" row on GET /api/accounts. */
+const KNOWN_WRAPPERS: readonly string[] = [...HOME_ABLE, 'gpt'];
+
 /**
  * The account a new workspace would land on, and its pressure score.
  *
@@ -128,9 +136,13 @@ export async function readLimits(
   // from "unknown", which scores 0 and makes the account nobody can place a
   // session on look like the emptiest one — the exact self-reinforcing hole
   // `disabled` exists to close. The registry readdir already named every
-  // markered lane, so surface each one that telemetry didn't.
+  // markered lane, so surface each one that telemetry didn't — but only a
+  // KNOWN wrapper: the registry dir also holds `-disabled` markers that name
+  // no account at all (`autocompact-disabled`), and this loop is the only
+  // place that would otherwise turn one of those into a fabricated row.
   for (const wrapper of disabledLanes) {
     if (wrapper in out) continue;
+    if (!KNOWN_WRAPPERS.includes(wrapper)) continue;
     out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                      sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
                      disabled: true };
