@@ -188,7 +188,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),
     accounts: () =>
-      getJson<{ accounts: AccountUsage[]; projected: ProjectedHome }>('/api/accounts'),
+      getJson<{ accounts: AccountUsage[]; projected: ProjectedHome | null }>('/api/accounts'),
     projects: () =>
       getJson<{ roots: string[]; projects: { name: string; workdir: string }[] }>('/api/projects'),
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>

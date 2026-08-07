@@ -59,9 +59,15 @@ export function ProjectCard({
   // least-loaded account even when every account is pinned.
   const headroom = projected ? 100 - projected.score : null;
 
+  // null now carries two causes that collapse to one JS value: the first poll
+  // hasn't landed yet, or the server has genuinely projected nothing because
+  // every home-able lane is disabled (limits.ts projectHome). Telling them
+  // apart is Task 6's screen; here the honest fallback names the ONE cause a
+  // user can act on — the button stays enabled regardless, because ccd's die
+  // at ws-add time is the authority, not this forecast.
   const addLabel = projected
     ? `New workspace on ${group.project} — ${accountLabel(projected.wrapper)}, ${headroom}% free`
-    : `New workspace on ${group.project}`;
+    : `New workspace on ${group.project} — all accounts disabled`;
 
   // Status never owns the card's perimeter except for attention (the one state
   // that asks the reader to ACT). Busy lost it: on a one-session project the

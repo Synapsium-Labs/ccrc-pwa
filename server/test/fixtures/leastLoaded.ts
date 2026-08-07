@@ -16,7 +16,14 @@ export interface LeastLoadedCase {
   /** Per-wrapper file bytes under ~/.cc-limits. An ABSENT key means no file at
    *  all — which both sides must read as unknown, and unknown scores 0. */
   files: Record<string, string>;
-  expect: { wrapper: string; score: number };
+  /** Wrappers carrying a `<w>-disabled` marker (ccd's `$REG`, the server's
+   *  registryDir — same directory, same filename, on purpose: it is the one
+   *  file both implementations already read). Omitted/empty means no lane is
+   *  declared off. */
+  disabled?: string[];
+  /** `null` iff every home-able lane is disabled — nothing is placeable, and
+   *  both sides must say so in their own idiom (see the runner). */
+  expect: { wrapper: string; score: number } | null;
   why: string;
 }
 
@@ -69,6 +76,22 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       expect: { wrapper: 'claude-corp', score: 60 },
       why: 'gpt is a 4th lane, opt-in only (ccd:11-16) and absent from VALID_WRAPPERS — '
         + 'it must never win, however free it looks',
+    },
+    {
+      name: 'disabled-lane-skipped',
+      files: { claude: fresh(50, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95) },
+      disabled: ['claude2'],
+      expect: { wrapper: 'claude', score: 50 },
+      why: 'claude2 is cheapest but declared off — the runner-up wins, not the '
+        + 'account nobody can actually place a session on',
+    },
+    {
+      name: 'all-disabled',
+      files: { claude: fresh(50, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95) },
+      disabled: ['claude', 'claude2', 'claude-corp'],
+      expect: null,
+      why: 'every home-able lane declared off: nothing is placeable, and both '
+        + 'sides must admit it rather than name an account that cannot take work',
     },
     {
       name: 'rolled-over-window',

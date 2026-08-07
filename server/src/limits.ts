@@ -46,13 +46,25 @@ const HOME_ABLE = ['claude', 'claude2', 'claude-corp'] as const;
  * precisely the warning the user needs, and inventing "none available" here
  * would describe an outcome ccd never produces.
  *
+ * What IS filtered: `disabled`, since `_account_ok` (ccd:57) now gates
+ * `_ws_least_loaded` on exactly that marker. The honest delta: the server has
+ * no filesystem authority over `~/.local/bin`, so it cannot see a missing
+ * wrapper the way `_account_ok`'s `-x` check does — a projection can still
+ * name an account whose binary is gone. ccd's refusal at ws-add is the
+ * authority; this is a best-effort forecast of it. `null` iff every home-able
+ * lane is disabled, mirroring `_ws_least_loaded`'s empty-stdout "" for the
+ * same case — nothing is placeable, and inventing a target would lie.
+ *
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
-export function projectHome(limits: Record<string, AccountLimits>): ProjectedHome {
-  const scored = HOME_ABLE.map((wrapper) => ({
-    wrapper: wrapper as string,
-    score: Math.max(limits[wrapper]?.five ?? 0, limits[wrapper]?.seven ?? 0),
-  }));
+export function projectHome(limits: Record<string, AccountLimits>): ProjectedHome | null {
+  const scored = HOME_ABLE
+    .filter((wrapper) => limits[wrapper]?.disabled !== true)
+    .map((wrapper) => ({
+      wrapper: wrapper as string,
+      score: Math.max(limits[wrapper]?.five ?? 0, limits[wrapper]?.seven ?? 0),
+    }));
+  if (scored.length === 0) return null;
   return scored.reduce((best, cand) => (cand.score < best.score ? cand : best));
 }
 

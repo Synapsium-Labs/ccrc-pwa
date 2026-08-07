@@ -25,12 +25,12 @@ function seedLimits(files: Record<string, unknown>): string {
   return home;
 }
 
-async function getPayload(home: string): Promise<{ accounts: AccountUsage[]; projected: ProjectedHome }> {
+async function getPayload(home: string): Promise<{ accounts: AccountUsage[]; projected: ProjectedHome | null }> {
   const app = await buildServer(testDeps(home));
   try {
     const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(res.statusCode).toBe(200);
-    return res.json() as { accounts: AccountUsage[]; projected: ProjectedHome };
+    return res.json() as { accounts: AccountUsage[]; projected: ProjectedHome | null };
   } finally {
     await app.close();
   }

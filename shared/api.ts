@@ -1116,7 +1116,13 @@ export interface AccountUsage {
  *  from both. `score` is the account's pressure, max(5h%, 7d%), so headroom is
  *  `100 - score`. It can exceed the swap ceiling: the rule returns the least
  *  loaded account even when every account is pinned, and saying so before the
- *  tap is the entire point of showing it. */
+ *  tap is the entire point of showing it.
+ *
+ *  On the wire (`GET /api/accounts`'s `projected` field) this is
+ *  `ProjectedHome | null`: `null` iff every home-able lane carries the
+ *  `<wrapper>-disabled` marker, mirroring `_ws_least_loaded`'s own empty
+ *  stdout for the same case — nothing is placeable, and naming an account
+ *  anyway would be a display lying about what a tap would actually do. */
 export interface ProjectedHome {
   wrapper: string;
   score: number;

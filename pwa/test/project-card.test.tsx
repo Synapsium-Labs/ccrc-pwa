@@ -145,10 +145,14 @@ describe('the + is icon-only', () => {
       .toHaveAttribute('title', 'New workspace on demo — alt·max, 91% free');
   });
 
-  it('falls back to the plain name before the accounts poll lands', () => {
+  // null covers two causes at once (no poll yet, or the server's projectHome
+  // genuinely found every lane disabled) — see the comment above addLabel in
+  // ProjectCard. The fallback names the one a user can act on; the button
+  // itself stays enabled either way (asserted in 'the + button' above).
+  it('names "all accounts disabled" when there is no projection to show', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={null} />);
-    expect(screen.getByLabelText('New workspace on demo')).toBeInTheDocument();
+    expect(screen.getByLabelText('New workspace on demo — all accounts disabled')).toBeInTheDocument();
   });
 });
 
