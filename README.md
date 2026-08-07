@@ -95,23 +95,35 @@ transcript behind a size+mtime gate, so a transcript with no title (nine of 609
 on this box) is not re-read forever.
 
 **A branch that has been pushed is never renamed.** `ccd ws-rename` refuses with
-`has-upstream`, which is what makes running this unattended safe. It refuses in
-JSON on stdout at exit 0 — thirteen named tokens, whose copy lives in
-`server/src/wsaudit.ts` — and only `git branch -m` itself failing is a non-zero
-exit, because that is a fault rather than a refusal. A refused workspace keeps
-its born name. Four of the thirteen refusals describe a fact about the
-workspace that a later title cannot change — `has-upstream`, `not-a-workspace`,
-`worktree-unregistered` and `worktree-foreign` (`server/src/watch.ts`'s
-`PERMANENT_REFUSALS`; the last two ship their own remedy in the refusal detail,
-`git -C $main worktree add …`, so "cannot stop being true" holds only in the
-sense that no title fixes it) — and those retire the session outright: no
-further attempt, on any title, until the server restarts. `bad-branch` is a
-verdict on the *derived branch*, not the workspace, so it is deliberately not
-in that set — a title that changes can change it — even though `deriveBranch`
-never actually emits a name `ccd` would reject, so the refusal does not fire
-in practice. Every other refusal marks only that one `(session, derived name)`
-pair attempted, so a title that changes to a different slug still earns a
-fresh attempt on the next sweep.
+`has-upstream` — checked two ways, a configured tracking upstream OR the old
+name showing up on origin directly, so a branch pushed by hand with no `-u`
+(no upstream is configured, but the name is on the remote) is caught the same
+as one pushed through `ccd pr-open`'s `--set-upstream` — which is what makes
+running this unattended safe. `ccd ws-rename` also refuses `registry-branch-drift`
+when git's own record for the worktree disagrees with the registry's `branch`
+field — the same corroboration `ws-reap` already requires — so a workspace
+hand-renamed with a bare `git branch -m` (bypassing this verb, and so never
+updating the registry) cannot have some *other* branch renamed out from under
+it by a sweep that still believes the registry's stale name. It refuses in
+JSON on stdout at exit 0 — fourteen named tokens, whose copy lives in
+`server/src/wsaudit.ts` — and the one REFUSAL path that keeps a non-zero exit
+is `git branch -m` itself failing, a fault rather than a refusal (the only
+other non-zero path is the python3-availability probe at the top of the
+function, also a fault, not a refusal). A refused workspace keeps its born
+name. Five of the fourteen refusals describe a fact about the workspace that a
+later title cannot change — `has-upstream`, `not-a-workspace`,
+`worktree-unregistered`, `worktree-foreign` and `registry-branch-drift`
+(`server/src/watch.ts`'s `PERMANENT_REFUSALS`; the last three ship their own
+remedy in the refusal detail — the first two a `git -C $main worktree add …`,
+the last a re-run of `ccd ws-rename` once the registry and git agree again —
+so "cannot stop being true" holds only in the sense that no title fixes it) —
+and those retire the session outright: no further attempt, on any title, until
+the server restarts. `bad-branch` is a verdict on the *derived branch*, not the
+workspace, so it is deliberately not in that set — a title that changes can
+change it — even though `deriveBranch` never actually emits a name `ccd` would
+reject, so the refusal does not fire in practice. Every other refusal marks
+only that one `(session, derived name)` pair attempted, so a title that
+changes to a different slug still earns a fresh attempt on the next sweep.
 
 The name types itself into the fleet line and the session header when it lands
 (`pwa/src/fleet/TypedLabel.tsx`); `prefers-reduced-motion` swaps it instantly.
