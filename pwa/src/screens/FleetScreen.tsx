@@ -239,6 +239,14 @@ export function FleetScreen({
         </div>
       ))}
 
+      {/* Its own poller, independent of `sessions` — it must render in EVERY
+          branch below, not just the populated one. It used to sit only in
+          the third (populated) arm, so a fresh fleet with zero sessions ever
+          started (the first-run panel, mobile's only view of the strip)
+          rendered no accounts strip at all — the app's only door to
+          /accounts, gone in the exact state a new operator hits first. */}
+      {showAccounts && <AccountsStrip />}
+
       {sessions.length === 0 && conn !== 'open' ? (
         <div className="fleet-list" data-loading="true">
           {[0, 1, 2].map((i) => (
@@ -263,8 +271,6 @@ export function FleetScreen({
         </section>
       ) : (
         <>
-          {showAccounts && <AccountsStrip />}
-
           {/* Bucket chips — above the project cards, one per non-empty
               bucket, in the same RANK order the list itself sorts by. Counts
               come from THIS render's own `sessions` array, the identical one

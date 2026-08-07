@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, ProjectedHome } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
+import { Skeleton } from '../components/Skeleton';
 import { formatAge, formatReset } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, KNOWN_WRAPPERS } from '../lib/accounts';
@@ -105,11 +106,39 @@ export function AccountsScreen(): ReactNode {
       {projectionLine !== null && <p className="accounts-projection">{projectionLine}</p>}
 
       <div className="accounts-list">
-        {order.map((wrapper) => {
-          const a = accounts?.find((x) => x.wrapper === wrapper) ?? null;
+        {!accounts ? (
+          // No poll has landed yet — still in flight, or every attempt so
+          // far has failed (host down, PWA opened offline, mid restart).
+          // Rendering the rows below in that state would find `a === null`
+          // for every account and print "last reported —" across the board:
+          // literally true of the fixture ("nothing measured") but false of
+          // the account ("never asked" reads as "never landed" to whoever's
+          // looking). Same three-state discipline as `projectionLine` above
+          // — "don't know yet" gets its own render, not a borrowed one.
+          // Falsy, not `=== null`: a same-shape sibling (AccountsStrip) was
+          // handed a bare `undefined` by a test fixture whose stub returns
+          // `{}` for an unmatched route, despite the declared `T[] | null` —
+          // `!accounts` degrades to this branch instead of crashing on it.
+          order.map((wrapper) => (
+            <section key={wrapper} className="accounts-row" data-loading="true">
+              <Skeleton lines={3} />
+            </section>
+          ))
+        ) : order.map((wrapper) => {
+          const a = accounts.find((x) => x.wrapper === wrapper) ?? null;
           const disabled = a?.disabled === true;
           const ts = a?.ts ?? null;
-          const onAccount = sessions.filter((s) => s.wrapper === wrapper);
+          // "Sessions on this account" means LIVE sessions (Rider A §4): a
+          // workspace that is archived, mid-cleanup, or whose tmux session is
+          // gone (`status: 'dead'`) is not load on this account, even though
+          // it still carries the account's `wrapper` and stays in the fleet
+          // store until reaped. `archivedAt !== null` is `sessionBucket`'s own
+          // first check (shared/api.ts) — it alone covers both 'archived' and
+          // 'cleanup', so this predicate is exactly "neither of those, nor
+          // dead" without re-deriving the bucket ladder here.
+          const onAccount = sessions.filter(
+            (s) => s.wrapper === wrapper && s.archivedAt === null && s.status !== 'dead',
+          );
           return (
             <section key={wrapper} className="accounts-row" data-disabled={disabled ? 'true' : 'false'}>
               <div className="accounts-row-head">

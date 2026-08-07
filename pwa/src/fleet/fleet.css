@@ -612,6 +612,19 @@
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
+/* The strip's placeholder body — no poll landed/succeeded yet, zero accounts
+   reported, or every reporting lane is `-disabled`. Spans the whole grid so
+   it reads as one line regardless of the 2-/4-column breakpoint. Same muted
+   tertiary ink as `.accounts-fresh`/`.accounts-disabled-note` (already
+   vetted by the contrast gate) — no new token to register. */
+.accounts-strip-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
 .acct-rows {
   display: grid;
   gap: 1px;

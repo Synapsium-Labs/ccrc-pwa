@@ -49,17 +49,20 @@
      the app behind a gesture (and behind a mouse, on a touch-capable desktop).
      So it stays open, paid for by folding each gauge from three stacked lines
      (name / 5h / 7d) down to two — 46px against the old 158px, cheap enough to
-     keep on screen permanently. Hidden only until data lands (AccountsStrip
-     renders null while empty → :empty). */
+     keep on screen permanently. Genuinely permanent since Task 6 made the
+     strip double as the only nav affordance onto /accounts: AccountsStrip
+     used to render null (and this rule hid the now-empty bar with it) while
+     no telemetry had landed, or while every lane was disabled — exactly the
+     state the accounts screen exists to explain, so hiding its only door
+     there was the bug, not a feature. AccountsStrip now always renders a
+     non-empty `.accounts-strip`, with a quiet placeholder body in that state,
+     so this bar is never `:empty` and the old auto-hide rule is gone. */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
     padding: 4px var(--sp-4);
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
-  }
-  .shell-accounts:empty {
-    display: none;
   }
   /* One gauge per account across the width. 260px is all a gauge needs now that
      the name sits beside its windows rather than above them, so all four stay

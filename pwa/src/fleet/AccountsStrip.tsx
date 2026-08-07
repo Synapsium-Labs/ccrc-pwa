@@ -5,6 +5,13 @@
 // affordance onto the full accounts screen (Task 6, Build 3 PR G) — the same
 // component mounts twice (desktop top bar, mobile fleet list) and tapping
 // either one goes to /accounts.
+//
+// This is now the ONLY door to /accounts (grep `'/accounts'` in pwa/src — one
+// hit, the navigate() below), so it must never render nothing: the state it
+// used to bail out on entirely — every lane markered `-disabled`, or no poll
+// landed/succeeded yet — is exactly the state the accounts screen exists to
+// explain (its bespoke "all accounts disabled" copy). The link stays mounted
+// with a quiet placeholder body instead of disappearing with the gauges.
 import { useEffect, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage } from '../../../shared/api';
@@ -58,13 +65,28 @@ export function AccountsStrip(): ReactNode {
     return () => { live = false; clearInterval(t); };
   }, []);
 
-  if (!accounts || accounts.length === 0) return null;
   // `disabled` is optional on the wire in the sense that an older server omits
   // it — `a.disabled === true` treats that as enabled, so the PWA never needs
   // a server upgrade to render.
-  const live = accounts.filter((a) => a.disabled !== true);
-  if (live.length === 0) return null;
+  const live = (accounts ?? []).filter((a) => a.disabled !== true);
   const nowSec = Math.floor(now / 1000);
+
+  // Three flavours of "nothing to gauge", each still worth naming rather than
+  // collapsing into one silence: no poll has landed/succeeded yet, a poll
+  // landed with zero accounts (fresh host, no `.cc-limits/*.json` yet), or
+  // every account that DID report is markered `-disabled`. The strip's own
+  // filter for which GAUGES render stays exactly as it was ("the strip's
+  // filter stays as is", Rider A) — only the element itself no longer
+  // vanishes with them.
+  // `!accounts`, not `accounts === null`: the original bail-out this
+  // replaces was falsy-checked, and a malformed/short JSON body (a stub in
+  // one test returns bare `{}` for every unmatched route, `.accounts`
+  // reading `undefined`) is a real shape `.then` can hand `setAccounts`
+  // despite the declared `AccountUsage[] | null` — the strict check crashed
+  // on exactly that instead of degrading to the same placeholder `null` did.
+  let placeholder: string | null = null;
+  if (!accounts || accounts.length === 0) placeholder = 'no accounts reporting';
+  else if (live.length === 0) placeholder = 'all lanes disabled';
 
   const openAccounts = (): void => navigate('/accounts');
   // role="link" (not "button"): this mirrors an <a> to /accounts, so it takes
@@ -87,20 +109,24 @@ export function AccountsStrip(): ReactNode {
       onClick={openAccounts}
       onKeyDown={onKeyDown}
     >
-      {live.map((a) => (
-        <div key={a.wrapper} className="account-gauge">
-          <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>
-            {accountLabel(a.wrapper)}
-          </span>
-          {/* Wrapped so the label can sit inline beside the windows on desktop
-              (a flex row); on mobile this stays a plain block under the label.
-              Only render a window that exists — gpt (Codex Pro) is weekly-only. */}
-          <div className="acct-rows">
-            {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} />}
-            {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} />}
+      {placeholder !== null ? (
+        <span className="accounts-strip-empty">{placeholder}</span>
+      ) : (
+        live.map((a) => (
+          <div key={a.wrapper} className="account-gauge">
+            <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>
+              {accountLabel(a.wrapper)}
+            </span>
+            {/* Wrapped so the label can sit inline beside the windows on desktop
+                (a flex row); on mobile this stays a plain block under the label.
+                Only render a window that exists — gpt (Codex Pro) is weekly-only. */}
+            <div className="acct-rows">
+              {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} />}
+              {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} />}
+            </div>
           </div>
-        </div>
-      ))}
+        ))
+      )}
     </div>
   );
 }

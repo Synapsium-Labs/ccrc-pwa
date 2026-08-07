@@ -62,6 +62,43 @@ describe('AccountsStrip', () => {
     expect(screen.queryByText('gpt')).not.toBeInTheDocument();
   });
 
+  // The strip is now the app's ONLY door to /accounts (Task 6 review fix).
+  // It used to `return null` in exactly these states, which used to also take
+  // the desktop top bar down with it (shell.css's `.shell-accounts:empty`).
+  // Losing the gauges is fine — losing the one way to REACH the screen that
+  // explains why the gauges are gone is the bug.
+  describe('never disappears, even with nothing to gauge (Task 6 review fix)', () => {
+    it('stays a tappable link when every reporting lane is disabled', async () => {
+      stubAccounts([acct({ wrapper: 'claude', disabled: true }), acct({ wrapper: 'claude2', disabled: true })]);
+      render(<AccountsStrip />);
+      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
+      expect(screen.getByText(/all lanes disabled/i)).toBeInTheDocument();
+      fireEvent.click(link);
+      expect(location.pathname).toBe('/accounts');
+    });
+
+    it('stays a tappable link when the poll resolves with zero accounts (fresh host)', async () => {
+      stubAccounts([]);
+      render(<AccountsStrip />);
+      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
+      expect(screen.getByText(/no accounts reporting/i)).toBeInTheDocument();
+      fireEvent.click(link);
+      expect(location.pathname).toBe('/accounts');
+    });
+
+    it('stays a tappable link before the first poll has landed (and if it never does)', () => {
+      // A promise that never resolves — the same shape a permanently-failing
+      // /api/accounts leaves the component in, since the poller's `.catch`
+      // never sets state either. Asserted synchronously, right after mount,
+      // with nothing awaited: this is the render BEFORE any microtask from
+      // the fetch could have run.
+      vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+      render(<AccountsStrip />);
+      expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
+      expect(screen.getByText(/no accounts reporting/i)).toBeInTheDocument();
+    });
+  });
+
   // Task 6 (Build 3 PR G, Rider A): the strip is the nav affordance onto the
   // new /accounts screen — "both mounts, one behaviour" (it's rendered twice,
   // desktop top bar + mobile fleet list, but there's one component to make

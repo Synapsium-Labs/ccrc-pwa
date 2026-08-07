@@ -44,6 +44,40 @@ afterEach(() => {
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
 });
 
+// Review fix: `accounts === null` ("no poll has landed yet") used to fall
+// through to the same row-rendering path as a landed, empty response — every
+// row found `a === null` and printed "last reported —", stating as fact that
+// no telemetry has EVER landed when the truth is the screen never got an
+// answer. Mirrors the projection line's own three-state discipline a few
+// lines up in the component, which this used to be the one place that broke.
+describe('AccountsScreen — the waiting state, before any poll answers (review fix)', () => {
+  it('never asserts "last reported —" before the first poll resolves', () => {
+    // A promise that never resolves, asserted on synchronously right after
+    // render — nothing awaited, so this is the render before any microtask
+    // from the fetch could have run. Robust against microtask-timing
+    // assumptions in a way `mockResolvedValue` + a bare synchronous check
+    // would not be.
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    render(<AccountsScreen />);
+    expect(screen.queryByText(/last reported/i)).not.toBeInTheDocument();
+    // The house waiting state (Skeleton), not four confident "—" rows.
+    expect(screen.getAllByRole('status', { name: 'Loading' }).length).toBeGreaterThan(0);
+  });
+
+  it('stays in the waiting state when /api/accounts fails, rather than reporting on accounts it never heard from', async () => {
+    // The reviewer's exact scenario: the fleet host is up but the route
+    // 500s (or the PWA opened offline / mid restart). The poller's own
+    // `.catch(() => {})` never sets state on failure, so `accounts` stays
+    // `null` for as long as every attempt keeps failing.
+    vi.spyOn(api, 'accounts').mockRejectedValue(new Error('fleet host down'));
+    render(<AccountsScreen />);
+    // Let the rejected promise's microtask (and the effect's state-setting
+    // branch it does NOT take) settle before asserting the negative.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.queryByText(/last reported —/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('AccountsScreen — every account, never hidden', () => {
   it('renders a row for every known account, including one with no telemetry at all', async () => {
     // Only claude ever reported; claude2/claude-corp/gpt are absent from the
@@ -135,6 +169,30 @@ describe('AccountsScreen — sessions on this account', () => {
     expect(within(claudeRow).queryByText('ws/still-cove')).not.toBeInTheDocument();
     fireEvent.click(link);
     expect(location.pathname).toBe('/s/a');
+  });
+
+  // Review fix: `wrapper` alone used to be the whole predicate, so an
+  // archived workspace or a session whose tmux is long gone (`status:
+  // 'dead'`) rendered as if it were live load on the account — the exact
+  // overstatement this screen exists to correct. Rider A §4 says "live
+  // sessions"; `useFleetStore().sessions` is the whole registry-backed
+  // array, archived rows and all (ArchiveScreen's own `archivedAt !== null`
+  // filter is what pulls them out elsewhere).
+  it('excludes archived and dead sessions from the count and list — only live load counts', async () => {
+    stubAccounts([acct({ wrapper: 'claude' })]);
+    act(() => useFleetStore.setState({
+      conn: 'open',
+      sessions: [
+        sess({ id: 'live', wrapper: 'claude', name: 'still running' }),
+        sess({ id: 'gone', wrapper: 'claude', name: 'old workspace', archivedAt: 100 }),
+        sess({ id: 'dead', wrapper: 'claude', name: 'crashed pane', status: 'dead' }),
+      ],
+    }));
+    render(<AccountsScreen />);
+    const claudeRow = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
+    expect(within(claudeRow).getByRole('button', { name: 'still running' })).toBeInTheDocument();
+    expect(within(claudeRow).queryByText('old workspace')).not.toBeInTheDocument();
+    expect(within(claudeRow).queryByText('crashed pane')).not.toBeInTheDocument();
   });
 });
 
