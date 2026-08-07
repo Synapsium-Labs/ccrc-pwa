@@ -68,6 +68,7 @@ export const lawful: LawfulGrants<typeof lawfulTable> = lawfulTable;
  *  token is the reap confirmation; deleting the entry is the edit that would
  *  silently re-permit a token-free reap, and it breaks this build. */
 export type ReapNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reap'], '--expect'>>;
+export type RenameNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-rename'], '--session'>>;
 export type WsRmIsUngrantable = Assert<'ws-rm' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 export type WsGcIsUngrantable = Assert<'ws-gc' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 

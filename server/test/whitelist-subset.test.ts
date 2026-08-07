@@ -31,6 +31,7 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
   wsAttic: ['demo-quiet-basin'],
   wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4'],
   wsRelease: ['demo-quiet-basin'],
+  wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes'],
 };
 
 /**
@@ -160,6 +161,23 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsReap(tok, 'demo-quiet-basin')])).toBe(true);
   });
 
+  // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
+  // because the verb is destructive. `ws-rename` destroys nothing; it is here
+  // because it is the first verb the SERVER calls unattended — FleetWatcher's
+  // naming sweep, no human in the loop — so the grant must name the flag rather
+  // than the verb: a bare `['ws-rename']` permits `ccd ws-rename <anything>
+  // <anything…>`, which is exactly the positional argv surface this branch left
+  // behind. Cross-PACKAGE and object-reading, for the reasons the ws-reap
+  // assertion above states.
+  it('ws-rename is grantable ONLY with --session', () => {
+    const rn = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-rename');
+    expect(rn.length, 'exactly one ws-rename grant').toBe(1);
+    expect(rn[0]).toEqual(['ws-rename', '--session']);
+    expect(isExecAllowed('ccd', ['ws-rename', 'demo-quiet-basin', 'ws/x'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-rename'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsRename('demo-quiet-basin', 'ws/x')])).toBe(true);
+  });
+
   it('no ungrantable ccd verb is granted, with any flags at all', () => {
     // ws-rm is the unguarded legacy delete; ws-gc carries --prune. Both were
     // previously kept out only by the reachability check above (no route builds
@@ -257,6 +275,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
     wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4'],
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
+    wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
