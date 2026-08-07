@@ -138,6 +138,54 @@ describe('ccd ws-hold / ws-release', () => {
     expect(r.stdout).not.toContain(`held ${id}:`);
   });
 
+  it('refuses a WHITESPACE-ONLY reason — the three layers must agree on what empty means', () => {
+    // FIX-WAVE FINDING 9. ccd's guard was `[[ -n "$reason" ]]`, which passes
+    // `"   "`, while the route (`body.reason.trim() === ''`) and the composer
+    // both refuse it — and `registry.ts`'s `field()` trims what it reads, so
+    // the hold landed as `held: ''`: enforced by `archiveMerged`, `ws-rm` and
+    // `ws-reap`, and rendered as nothing at all on every surface. The spec's
+    // lifecycle step 1 is an orchestrator invoking ccd DIRECTLY, so this is
+    // the primary path into that state, not an edge one.
+    const id = workspaceId();
+    const r = shFail(`cmd_ws_hold --session ${id} --reason "   "`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('empty reason');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.hold`))).toBe(false);
+  });
+
+  it('a reason with ordinary spaces in it is NOT whitespace-only', () => {
+    // The guard strips every whitespace character to test for emptiness, so
+    // this pins that it did not become "no spaces allowed" — the convention
+    // the composer's own placeholder teaches has a space in it.
+    const id = workspaceId();
+    expect(h.sh(`cmd_ws_hold --session ${id} --reason "program:agent-evals wave:2/4"`))
+      .toContain(`held ${id}`);
+    expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.hold`), 'utf8'))
+      .toBe('program:agent-evals wave:2/4');
+  });
+
+  it('a failed UNLINK refuses — never `released` on stdout with the hold still on disk', () => {
+    // FIX-WAVE FINDINGS 2/7: `cmd_ws_hold`'s own guard, mirrored onto the verb
+    // that reverses it. `rm -f` suppresses ENOENT only; EISDIR and EACCES
+    // still fail, and ccd runs `set -uo pipefail` with no `-e`, so the
+    // unchecked form fell through to the echo. A directory at the path is the
+    // any-uid stand-in (root included) for the `chmod 500 "$REG"` case, and it
+    // is a real state in its own right: `-e` matches a directory, so every
+    // consumer already reads this workspace as held.
+    //
+    // The harm is honesty, not destruction: `runCcdOr502` keys on the exit
+    // code, so `POST /release` answered 200 `{ok:true}` and the PWA's
+    // fire-and-forget confirm closed with no toast, while `archiveMerged` kept
+    // deferring and `ws-rm`/`ws-reap` kept refusing.
+    const id = workspaceId();
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', `${id}.hold`));
+    const r = shFail(`cmd_ws_release --session ${id}`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('STILL held');
+    expect(r.stdout).not.toContain(`released ${id}`);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.hold`))).toBe(true);
+  });
+
   it('caps lists both verbs', () => {
     const caps = h.sh('cmd_caps');
     expect(caps).toContain('ws-hold');

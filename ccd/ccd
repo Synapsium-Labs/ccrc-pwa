@@ -115,9 +115,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # Fixed by filtering on the SUFFIX rather than matching every known field
   # name — a field name never contains a dot (measured: `archived`,
   # `archivedreason`, `archivemanifest`, `base`, `branch`, `hold`, `home`,
-  # `lastcompact`, `lastswap`, `pool`, `prnumber`, `project`, `reaping`,
-  # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper` — every
-  # `_reg_set`/`_reg_get` field this file has today), so `$id.<field>` has
+  # `hookstate`, `lastcompact`, `lastswap`, `pool`, `prcheckedat`,
+  # `prhistory`, `prnumber`, `prphase`, `project`, `reaping`, `setup`,
+  # `started`, `uuid`, `workdir`, `workspace`, `wrapper` — every registry file
+  # a session has today, which is a WIDER set than `_reg_set`/`_reg_get`: the
+  # inventory that stood here named only the shell-written fields and so
+  # silently dropped `prcheckedat`/`prphase`/`prhistory` (written by `_pr_py`'s
+  # own `put`/append) and `hookstate` (written by the hooks). The purge itself
+  # was always right — it matches the SUFFIX shape, not a list — but an
+  # inventory that omits files is an inventory a future reader trusts and a
+  # future writer copies), so `$id.<field>` has
   # exactly one dot after the id and `$id.x-y.uuid` has two. This is
   # future-proof against a field this file adds tomorrow, which a hardcoded
   # allowlist would not be — the two are the same shape either way.
@@ -509,7 +516,7 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper
   # the rows, with sys.argv identical. The rows cannot move to argv instead —
   # spec §7 is that no GitHub-sourced string is ever placed in an argv.
   python3 /dev/fd/3 "$@" 3<<'PY'
-import json, os, re, subprocess, sys, time
+import fcntl, json, os, re, subprocess, sys, time
 
 mode = sys.argv[1]
 # `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED, and `is_ours` puts the
@@ -743,40 +750,104 @@ if mode == 'state':
     # appends nothing, or every sweep for the life of a PR would duplicate it.
     # A non-numeric `old_raw` (corrupt or hand-edited registry) leaves
     # `old_num` None and also appends nothing: there is no number to retire.
-    old_raw = get('prnumber')
-    old_phase = get('prphase') or ''   # read before `put('prphase', ...)` below overwrites it
-    if old_raw is not None:
-        try:
-            old_num = int(old_raw)
-        except ValueError:
-            old_num = None
-        if old_num is not None and old_num != number:
-            rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
-                   'recordedAt': int(time.time())}
-            with open(os.path.join(reg, id_ + '.prhistory'), 'a') as f:
-                f.write(json.dumps(rec) + '\n')
-    clear('prnumber')
-    put('prphase', phase)
-    # phase and number are ONE answer, so a writer that persists half of it
-    # lies. A PR that is deleted, force-pushed out of reachability, or whose
-    # slug ws-reap has recycled leaves {phase:'none', number:42} on disk if the
-    # number is merely left alone: fleet.ts hands that pair straight to the
-    # wire, so the cap renders `#42` under a phase whose own copy is "no pull
-    # request yet", and ws-archive reads the same field and files
-    # `archivedreason merged:#42` for a PR that no longer binds to this
-    # workspace. REMOVED rather than blanked, so the field is absent exactly as
-    # it is for a workspace that never had a PR.
+    # ONE WRITER AT A TIME, AND ONLY THE NEWEST ANSWER WRITES — fix-wave
+    # finding 4. Everything from here to `put('prcheckedat', …)` is one
+    # read-modify-write of a single session's entry, and TWO CONCURRENT
+    # `ccd pr-state` RUNS AGAINST ONE SESSION ARE ORDINARY: the PR sheet's
+    # `GET /api/sessions/:id/pr` fires one on every open while the watcher's
+    # 120 s sweep fires another, and nothing upstream serialises them (the send
+    # queue wraps the send routes, not these). The comment above reasons only
+    # about SERIAL re-runs; these are the two in-flight cases it does not cover.
     #
-    # NO FAILED READ REACHES THIS LINE, and it takes two guards to say that, not
-    # one. `_gh_pr_list` returns before `_pr_py` is called for every read that
-    # failed by EXIT CODE. An rc-0 read whose body is not a list of rows does
-    # reach `_pr_py` — and `rows_in` answering None returns above, before any
-    # `put`/`clear` runs. The comment here used to claim the first guard alone
-    # made this unreachable; it did not, and a `gh` that exited 0 with an empty
-    # or unparseable stdout cleared a persisted `merged:#42`.
-    if number is not None:
-        put('prnumber', number)
-    put('prcheckedat', checked_at)
+    #   (a) DUPLICATE. Both read `prnumber=577`, both compute 583, both take
+    #       `old_num != number`, and both append `{"pr":577,…}` before either
+    #       reaches `clear`. The ledger is append-only and `_ws_archive_manifest`
+    #       folds it in verbatim, so the archive card reads
+    #       `merged:#583 (waves: #577 #577)` for ever.
+    #   (b) FALSE RECORD. The sheet's run reads gh BEFORE the merge (rows bind
+    #       #577) while the sweep's reads AFTER (rows bind #583); the sweep
+    #       lands first and writes 583; the sheet's run then reads
+    #       `old_raw='583'`, takes `583 != 577`, and retires the NEWER, still-live
+    #       PR into history — then writes `prnumber` back to 577.
+    #
+    # The lock alone fixes (a) — under it the `get('prnumber')` below is fresh,
+    # so the loser sees 583, `old_num == number`, and appends nothing. It cannot
+    # fix (b), because there the loser's ANSWER is older than the winner's, not
+    # its read. That takes the compare-and-set: `prcheckedat` timestamps the gh
+    # answer this run is carrying (`checked_at`, taken after `rows_in()`), so a
+    # run whose answer predates what is already on disk persists NOTHING — no
+    # history line, no phase, no number. It still prints its own answer on
+    # stdout, which is what the caller asked for and the only thing it can
+    # honestly claim: a display one sweep stale, never a persisted lie.
+    #
+    # `flock` on this session's own `.uuid` — an existing file, opened
+    # read-only, never written here — rather than a new registry file: the
+    # contended pair is always same-id, the lock is advisory and every writer of
+    # these fields is this same block. If it cannot be taken at all (no `.uuid`,
+    # no fcntl, unreadable $REG) the write goes ahead unlocked, which is exactly
+    # today's behaviour: this guard may only remove races, never add a refusal
+    # that stops a phase from ever updating.
+    lock_f = None
+    try:
+        lock_f = open(os.path.join(reg, id_ + '.uuid'))
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        if lock_f is not None:
+            lock_f.close()
+        lock_f = None
+    try:
+        prev_at = None
+        prev_checked = get('prcheckedat')
+        if prev_checked is not None:
+            try:
+                prev_at = int(prev_checked.strip())
+            except ValueError:
+                prev_at = None     # unparseable: no newer answer is PROVEN, so this one still writes
+        # `<=`, not `<`: two runs landing in the same millisecond are not a
+        # staleness case, and refusing there would drop a real update.
+        if prev_at is None or prev_at <= checked_at:
+            old_raw = get('prnumber')
+            old_phase = get('prphase') or ''   # read before `put('prphase', ...)` below overwrites it
+            if old_raw is not None:
+                try:
+                    old_num = int(old_raw)
+                except ValueError:
+                    old_num = None
+                if old_num is not None and old_num != number:
+                    rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
+                           'recordedAt': int(time.time())}
+                    with open(os.path.join(reg, id_ + '.prhistory'), 'a') as f:
+                        f.write(json.dumps(rec) + '\n')
+            clear('prnumber')
+            put('prphase', phase)
+            # phase and number are ONE answer, so a writer that persists half
+            # of it lies. A PR that is deleted, force-pushed out of
+            # reachability, or whose slug ws-reap has recycled leaves
+            # {phase:'none', number:42} on disk if the number is merely left
+            # alone: fleet.ts hands that pair straight to the wire, so the cap
+            # renders `#42` under a phase whose own copy is "no pull request
+            # yet", and ws-archive reads the same field and files
+            # `archivedreason merged:#42` for a PR that no longer binds to this
+            # workspace. REMOVED rather than blanked, so the field is absent
+            # exactly as it is for a workspace that never had a PR.
+            #
+            # NO FAILED READ REACHES THIS LINE, and it takes two guards to say
+            # that, not one. `_gh_pr_list` returns before `_pr_py` is called for
+            # every read that failed by EXIT CODE. An rc-0 read whose body is
+            # not a list of rows does reach `_pr_py` — and `rows_in` answering
+            # None returns above, before any `put`/`clear` runs. The comment
+            # here used to claim the first guard alone made this unreachable; it
+            # did not, and a `gh` that exited 0 with an empty or unparseable
+            # stdout cleared a persisted `merged:#42`.
+            if number is not None:
+                put('prnumber', number)
+            # LAST, and that ordering is the compare-and-set's other half: this
+            # is the stamp the next writer compares against, so it must not
+            # advance until the answer it describes is actually on disk.
+            put('prcheckedat', checked_at)
+    finally:
+        if lock_f is not None:
+            lock_f.close()      # closing the fd releases the flock
 
     sys.stdout.write(json.dumps({
         'id': id_, 'project': project, 'repo': repo, 'branch': branch, 'base': base,
@@ -1373,7 +1444,19 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # An empty reason is an orphan hold by construction — nobody could ever say
   # why it exists, and "visible on every surface, reason says why" is the whole
   # deal that makes no-expiry acceptable.
-  [[ -n "$reason" ]] || die "empty reason — say which program holds this"
+  #
+  # WHITESPACE COUNTS AS EMPTY — fix-wave finding 9. `[[ -n "$reason" ]]` alone
+  # passed `--reason "   "`, and the layers disagreed about what that meant:
+  # the route (`body.reason.trim() === ''`) and the PWA (`holdReason.trim()`)
+  # both refuse it, `registry.ts`'s `field()` trims what it reads, and `'' ??`
+  # does not short-circuit — so the hold landed as `held: ''`, enforced by
+  # every consumer and rendered as nothing at all on every surface. The
+  # orchestrator path is the primary one here (spec lifecycle step 1 is an
+  # agent invoking ccd directly), so ccd is where it has to be caught. The
+  # expansion strips every whitespace character rather than trimming the ends:
+  # a reason of one tab is as unsayable as a reason of one space, and an
+  # ordinary reason (`program:x wave:1/4`) still has plenty left after it.
+  [[ -n "${reason//[[:space:]]/}" ]] || die "empty reason — say which program holds this"
   [[ -n "$(_reg_get "$id" workspace)" ]] \
     || die "$id is not a workspace — nothing ever auto-archives a main checkout, so a hold there is a lie waiting to confuse someone"
   [[ -f "$REG/$id.archived" ]] \
@@ -1401,7 +1484,21 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   if [[ -e "$REG/$id.hold" ]]; then
-    rm -f -- "$REG/$id.hold"
+    # CHECKED, for `cmd_ws_hold`'s reason with the polarity reversed — fix-wave
+    # findings 2/7. `rm -f` suppresses ENOENT ONLY; EACCES and EISDIR still fail
+    # and still exit non-zero, and ccd runs `set -uo pipefail` with NO `-e`, so
+    # the unchecked form fell straight through to the echo. Measured both:
+    # `chmod 500 "$REG"` -> `Permission denied` on stderr, `released <id>` on
+    # stdout, exit 0, hold still standing; `mkdir "$REG/$id.hold"` (which `-e`
+    # matches, so every consumer already reads the workspace as held) ->
+    # `Is a directory`, same false success. Downstream, `runCcdOr502` keys on
+    # the exit code, so `POST /release` answered 200 `{ok:true}` and the PWA's
+    # fire-and-forget confirm closed with no toast: the operator is told the
+    # claim is gone while `archiveMerged` keeps deferring and `ws-rm`/`ws-reap`
+    # keep refusing. Fail-shut in the safe direction, but a lie either way, and
+    # the sibling verb's own guard is the standard this file set.
+    rm -f -- "$REG/$id.hold" \
+      || die "could not remove the hold for $id — it is STILL held"
     echo "released $id"
   else
     echo "not held $id"
@@ -1452,7 +1549,17 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # Parsed, not merely non-empty: the fields are individually guarded above, and
   # this is what keeps a future unquoted or non-numeric field from becoming a
   # record that only LOOKS like JSON.
-  printf '%s' "$manifest" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null \
+  #
+  # `json.dumps(..., allow_nan=False)`, not a bare `json.loads` — fix-wave
+  # finding 3. `json.loads` alone accepts `NaN`/`Infinity`/`-Infinity`, which
+  # RFC 8259 has no literal for and `JSON.parse` in node throws on, so this
+  # last gate before the record is persisted agreed with a document its one
+  # real consumer (`manifestBytes`, server/src/registry.ts) cannot read. The
+  # round trip rejects both the bare literals and any number that floats to
+  # infinity; the guard now answers the question it is written to ask, which is
+  # "can the reader of this file parse it", not "can python".
+  printf '%s' "$manifest" \
+    | python3 -c 'import json,sys; json.dumps(json.loads(sys.stdin.read()), allow_nan=False)' 2>/dev/null \
     || die "archive manifest for $id is not valid JSON — nothing was touched"
 
   # Into the REGISTRY, never into the worktree — the worktree is the thing that
@@ -1727,9 +1834,22 @@ except OSError:
     raise SystemExit(3)          # present and unreadable — the caller refuses
 try:
     rows = [json.loads(ln) for ln in raw.decode("utf-8").splitlines() if ln.strip()]
-except ValueError:               # bad JSON, or bytes that are not text at all
+    # `allow_nan=False` — fix-wave finding 3. Pythons json module accepts and
+    # EMITS `NaN`/`Infinity`/`-Infinity`, which RFC 8259 has no literal for, in
+    # both directions. So the malformed arm below had a hole: `{"pr": 1e999}`
+    # is VALID JSON by the spec (the class this whole ladder exists for — a
+    # corrupt or hand-edited ledger), loads to `inf`, and re-emitted as a bare
+    # `Infinity` token. Every "is it JSON" guard downstream is this same python
+    # and accepts it too, so the manifest persisted at exit 0 — and `JSON.parse`
+    # in node, the ONE real consumer (`manifestBytes`), throws on it, which
+    # pins `archivedBytes: null` for ever on the record whose own header says a
+    # manifest that lies pristine is a manifest that authorises a deletion.
+    # Raising ValueError here puts it in the MALFORMED arm where it belongs:
+    # `[]`, raw file untouched on disk, a human can still read the ledger.
+    out = json.dumps(rows, allow_nan=False)
+except ValueError:               # bad JSON, bytes that are not text at all, or a value JSON cannot express
     sys.stdout.write("[]"); raise SystemExit(0)
-sys.stdout.write(json.dumps(rows))
+sys.stdout.write(out)
 ' "$REG/$id.prhistory" 2>/dev/null); prc=$?
   case "$prc" in
     0) : ;;
@@ -1739,14 +1859,21 @@ sys.stdout.write(json.dumps(rows))
     # present. Not knowing is not `[]`.
     *) echo "manifest: could not read the PR ledger at $REG/$id.prhistory (python3 exited $prc)" >&2; return 1 ;;
   esac
-  # MUTATION SURVIVOR, DISCLOSED: rc 0 above can only be `json.dumps(rows)` or
-  # the literal `[]`, both valid JSON, so no fixture can reach this refusal —
-  # deleting it leaves the suite green. Kept because it is the last thing
-  # standing between a future edit of that python and a `"prHistory":` with
-  # nothing after the colon, and it now REFUSES rather than substituting `[]`:
-  # after the ladder above, a field this function cannot compute is never
-  # allowed to read as a workspace that retired no PRs.
-  printf '%s' "$prhistory" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' >/dev/null 2>&1 \
+  # MUTATION SURVIVOR, DISCLOSED — and the disclosure that stood here was
+  # FALSE, which is the whole reason finding 3 shipped. It said "rc 0 above can
+  # only be `json.dumps(rows)` or the literal `[]`, both valid JSON, so no
+  # fixture can reach this refusal". `json.dumps(rows)` was not necessarily
+  # valid JSON: it emitted bare `Infinity`/`NaN` for any ledger line carrying a
+  # value python floats to infinity or NaN, and this guard — the same python —
+  # accepted them, so the invalid document sailed through into the manifest.
+  # `allow_nan=False` above closes the producer; this guard is now STRICT in
+  # its own right (`json.dumps(json.loads(...), allow_nan=False)`, which
+  # rejects both the bare literals on input and any value that cannot be
+  # re-emitted) rather than trusting the producer's shape. It stays a real
+  # refusal, not a substitution: after the ladder above, a field this function
+  # cannot compute is never allowed to read as a workspace that retired no PRs.
+  printf '%s' "$prhistory" \
+    | python3 -c 'import json,sys; json.dumps(json.loads(sys.stdin.read()), allow_nan=False)' >/dev/null 2>&1 \
     || { echo "manifest: the PR ledger read for $id did not produce JSON" >&2; return 1; }
   transcript=$(_transcript_path "$id") || transcript=""
   printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s}\n' \

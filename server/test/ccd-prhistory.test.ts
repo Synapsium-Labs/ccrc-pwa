@@ -219,3 +219,123 @@ describe('what the folded lineage outlives', () => {
     expect(hist(id)).toEqual([{ pr: 577, branch: 'ws/quiet-basin', phase: 'merged', recordedAt: 1786000000 }]);
   });
 });
+
+// FIX-WAVE FINDING 3. `json.loads`/`json.dumps` round-trip RFC-8259-VALID input
+// into INVALID JSON: python accepts and emits bare `NaN`/`Infinity`/
+// `-Infinity`, which the grammar has no literal for. Every "is it JSON" guard
+// between the reader and the persisted manifest was that same python, so the
+// document sailed through at exit 0 — and `JSON.parse` in node, which is what
+// `manifestBytes` (server/src/registry.ts) actually runs, throws on it. The
+// disclosure above the second guard claimed no fixture could reach it; these
+// are the fixtures.
+describe('the folded ledger is JSON THE READER can parse, not JSON python can', () => {
+  const manifestRaw = (id: string): string =>
+    fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.archivemanifest`), 'utf8');
+
+  it('a ledger line carrying 1e999 does not become a bare Infinity in the manifest', () => {
+    // `1e999` is legal JSON by the spec and floats to `inf` in python. Measured
+    // pre-fix: the reader re-emitted `{"pr": Infinity}`, both python guards
+    // accepted it, the manifest was persisted, and
+    // `node -e 'JSON.parse(...)'` on it threw `Unexpected token 'N'` — so the
+    // archived workspace reported `archivedBytes: null` for ever and could
+    // never say what a reap would free.
+    const { id } = workspace();
+    h.sh(`printf '%s\\n' '{"pr": 1e999, "branch": "ws/quiet-basin"}' `
+      + `> "$HOME/.cc-sessions/${id}.prhistory"`);
+    h.sh(`${ARCH_STUBS} cmd_ws_archive --session ${id}`);
+    const raw = manifestRaw(id);
+    expect(raw).not.toMatch(/\bInfinity\b/);
+    // The assertion that matters is that THIS parses — the same call the one
+    // real consumer makes.
+    expect(JSON.parse(raw).prHistory).toEqual([]);
+    // Malformed, so the raw ledger is untouched: a human can still read it.
+    expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.prhistory`), 'utf8'))
+      .toContain('1e999');
+  });
+
+  it('a ledger line carrying a bare NaN literal degrades the same way', () => {
+    // The other direction of the same hole: `NaN` is not JSON at all, but
+    // python's `loads` accepts it, so the pre-fix reader laundered a line the
+    // MALFORMED arm was written to catch into an unparseable manifest.
+    const { id } = workspace();
+    h.sh(`printf '%s\\n' '{"pr": NaN, "branch": "ws/quiet-basin"}' `
+      + `> "$HOME/.cc-sessions/${id}.prhistory"`);
+    h.sh(`${ARCH_STUBS} cmd_ws_archive --session ${id}`);
+    const raw = manifestRaw(id);
+    expect(raw).not.toMatch(/\bNaN\b/);
+    expect(JSON.parse(raw).prHistory).toEqual([]);
+  });
+});
+
+// FIX-WAVE FINDING 4. The chokepoint is a read-then-append, and two concurrent
+// `ccd pr-state` runs against ONE session are ordinary: `GET
+// /api/sessions/:id/pr` fires one on every PR-sheet open while the watcher's
+// 120 s sweep fires another. Nothing serialised them.
+describe('the chokepoint is serialised, and only the newest answer writes', () => {
+  it('a run whose gh answer PREDATES what is on disk persists nothing — no false record', () => {
+    // Case (b), the false one, in its persisted form: the sweep's run (rows
+    // bound to the NEW PR) lands first and writes `prnumber=601` with its own
+    // `prcheckedat`; the sheet's run, whose gh read happened BEFORE the merge
+    // and still binds #591, then reaches the chokepoint, sees `601 != 591`,
+    // and retires the newer, still-live PR into the ledger — then writes
+    // `prnumber` back to 591. Pre-fix this file's own `hist()` showed
+    // `[{pr: 601, …}]` and the registry read 591.
+    //
+    // The winner's write is spelled directly (a future `prcheckedat`) rather
+    // than raced, because what the guard compares is the ANSWER's timestamp,
+    // and this is exactly the state the winner leaves behind.
+    const { id, tip } = workspace();
+    runPrStateWithGhAnswering(id, tip, { number: 601, state: 'OPEN' });
+    expect(hist(id)).toEqual([]);
+    const future = String(Date.now() + 600_000);
+    h.sh(`printf '%s' ${future} > "$HOME/.cc-sessions/${id}.prcheckedat"`);
+
+    runPrStateWithGhAnswering(id, tip, { number: 591, state: 'MERGED' });
+
+    expect(hist(id)).toEqual([]);                       // no record at all, false or otherwise
+    expect(h.reg(id, 'prnumber')).toBe('601');          // the newer answer still stands
+    expect(h.reg(id, 'prphase')).toBe('open');
+    expect(h.reg(id, 'prcheckedat')).toBe(future);
+  });
+
+  it('an answer no older than what is on disk still writes — the guard is staleness, not a freeze', () => {
+    // The control. A guard that refused everything would pass the test above
+    // and stop the fleet's PR state updating for ever.
+    const { id, tip } = workspace();
+    runPrStateWithGhAnswering(id, tip, { number: 601, state: 'OPEN' });
+    runPrStateWithGhAnswering(id, tip, { number: 611, state: 'OPEN' });
+    expect(hist(id)).toHaveLength(1);
+    expect(hist(id)[0]).toMatchObject({ pr: 601 });
+    expect(h.reg(id, 'prnumber')).toBe('611');
+  });
+
+  it('the write is under an exclusive lock — a second writer waits rather than interleaving', () => {
+    // Case (a), the duplicate: both runs read `prnumber=591`, both compute
+    // 601, and both append `{"pr":591,…}` before either clears it — into an
+    // append-only ledger that `_ws_archive_manifest` folds in verbatim, so the
+    // archive card reads `(waves: #591 #591)` for ever. The compare-and-set
+    // above cannot fix that one (neither answer is stale); the lock can,
+    // because under it the loser's `get('prnumber')` is fresh and reads 601.
+    //
+    // Asserted by BLOCKING, which is deterministic where a real double-run is
+    // not: an external `flock` holds this session's `.uuid` for 1.5 s, so a
+    // `pr-state` that takes the lock cannot return before it is released. The
+    // unlocked run is ~150 ms (the whole of this file's heaviest test,
+    // fixture and all, is 400 ms), so the 700 ms floor has a wide margin in
+    // both directions. `timeout` is NOT usable here: `GH_STUB` shadows it with
+    // a shell function, by design, so that ccd's own gh wrapper is stubbed.
+    const { id, tip } = workspace();
+    h.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
+    const r = h.run(`${GH_STUB}
+      flock -x "$HOME/.cc-sessions/${id}.uuid" -c 'touch "$HOME/locked"; sleep 1.5' &
+      while [[ ! -f "$HOME/locked" ]]; do sleep 0.02; done
+      s=$(date +%s%N); cmd_pr_state --session ${id} >/dev/null 2>&1; e=$(date +%s%N)
+      echo "waitedMs=$(( (e - s) / 1000000 ))"
+      wait`);
+    const waited = Number(/waitedMs=(\d+)/.exec(r.stdout)?.[1] ?? '0');
+    expect(waited).toBeGreaterThan(700);
+    // And it did not merely wait — it went on to do the work, so the lock is
+    // released rather than leaked.
+    expect(h.reg(id, 'prnumber')).toBe('591');
+  });
+});
