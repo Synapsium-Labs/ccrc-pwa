@@ -15,6 +15,9 @@ import type { SessionRecord } from './registry.js';
 import type { NotifyEvent, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
 import type { PushPayload } from './push.js';
+import { deriveBranch } from './naming.js';
+import { transcriptPath } from './transcript/resolve.js';
+import { readAiTitle } from './transcript/title.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -22,6 +25,13 @@ import type { PushPayload } from './push.js';
  *  own stream reads its list every tick, so the screen you're looking at stays
  *  live regardless. */
 const TASK_SWEEP_MS = 10_000;
+
+/** The sixth lane (the fifth is hook-state sweeping, which rides the 2 s tick).
+ *  Naming does NOT ride that tick: a title that appears ten seconds late costs
+ *  nothing, and reading transcripts thirty times a minute to learn nothing costs
+ *  real work — the nine transcripts on this box that carry no `ai-title` at all
+ *  would be re-read forever, roughly 7.7 MB/min across the agent WS. */
+const NAME_SWEEP_MS = 10_000;
 
 /** The fourth lane. A ccd install is a deliberate act by a human who is
  *  waiting, so a minute is the longest anyone should have to wonder whether
@@ -113,6 +123,22 @@ export class FleetWatcher {
    *  always refreshes — which is what recovers a server that connected to an
    *  agent whose boot-time caps read had already failed. */
   private lastCapsAt = 0;
+  /** The sixth lane's clock. */
+  private lastNameSweep = 0;
+  /** `<id>:<derived-branch>` for every pair already tried. THE DERIVED NAME,
+   *  not the born slug: a title that changes while the branch is still at its
+   *  born name earns exactly one fresh attempt, and a server restart earns one
+   *  retry — which is the right amount, because the usual reason a rename
+   *  failed is a condition a restart does not change, and the one reason it
+   *  might have (a transient fleet outage) is worth one more try. Deliberately
+   *  not durable: a registry marker would be state ccd has to own, write and
+   *  purge on reap, for a retry budget whose entire purpose is to be
+   *  forgotten. */
+  private attemptedRenames = new Set<string>();
+  /** Per session: the transcript state whose title the sweep has already acted
+   *  on. Same gate, for the same reason, as `SessionStream.claimAskRead`
+   *  (`sessionws.ts:178-187`). */
+  private titleProbe = new Map<string, { file: string; size: number; mtimeMs: number }>();
   /** Epoch ms the in-flight sweep started, or 0 when none is. A TIMESTAMP, not
    *  a boolean: see `PR_SWEEP_STUCK_MS`. */
   private prSweepStartedAt = 0;
@@ -231,6 +257,13 @@ export class FleetWatcher {
       // unhandled rejection via start()'s `void this.tick()`.
       void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
     }
+    // NEVER awaited, same reasoning as sweepPr above and then some: this one
+    // joins the per-session KeyedQueue, which `POST /workspace/reap` can hold
+    // for minutes. Awaiting it would put the dialog detector and the
+    // busy->idle push behind a reap. Overlapping sweeps are harmless — the
+    // attempted-set is written BEFORE the call, so a second sweep's condition 4
+    // refuses the pair the first is still running.
+    void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
     const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
     // The whole fleet is in scope right here, which is exactly what
     // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
@@ -331,6 +364,122 @@ export class FleetWatcher {
       }),
     );
     this.taskProgress = next;
+  }
+
+  /**
+   * May we spend a transcript tail read on this session's title? Records the
+   * state we read at, so the next sweep can tell whether anything could have
+   * changed.
+   *
+   * A transcript with no `ai-title` is a PERMANENT state, not a startup window
+   * — nine of the 609 on this box carry none, including some very large ones —
+   * so re-reading them every ten seconds forever is roughly 7.7 MB/min across
+   * the agent WS to learn nothing. Byte-identical bytes cannot have started
+   * saying something they did not say last time. Copied from
+   * `SessionStream.claimAskRead` (`sessionws.ts:178-187`), keyed per SESSION
+   * rather than per stream because this map outlives any one socket.
+   */
+  private claimTitleRead(id: string, file: string, st: { size: number; mtimeMs: number } | null): boolean {
+    if (st === null) {              // no transcript yet — nothing to read, nothing to remember
+      this.titleProbe.delete(id);
+      return false;
+    }
+    const p = this.titleProbe.get(id);
+    if (p !== undefined && p.file === file && p.size === st.size && p.mtimeMs === st.mtimeMs) return false;
+    this.titleProbe.set(id, { file, size: st.size, mtimeMs: st.mtimeMs });
+    return true;
+  }
+
+  /**
+   * Rename every workspace that is still on its born branch to the name Claude
+   * Code already wrote. Four conditions, in this order, and the order is the
+   * design:
+   *
+   *   1. it is a workspace, not a main checkout;
+   *   2. the REGISTRY says the branch is still exactly `ws/<workspace>` —
+   *      condition 2 is also the idempotence marker, which is why there is no
+   *      new registry field, no marker file and nothing to purge on reap;
+   *   3. the fleet's ccd implements the verb — asked BEFORE the probe below is
+   *      recorded, so a fleet that installs a newer ccd re-reads transcripts
+   *      that have not changed since;
+   *   4. this `(id, derived name)` pair has not been attempted.
+   *
+   * KNOWN GAP IN CONDITION 3, accepted and not engineered around: `ccd caps`
+   * has advertised `ws-rename` since long before it took flags (`ccd:1454`), so
+   * a fleet on an older ccd passes the verb gate and then answers bash's own
+   * usage refusal on stderr at exit 1. That is one non-ok result per (session,
+   * derived name), absorbed by the retry guard, and the rollout is agent-first
+   * so the window is one deploy long.
+   *
+   * The `<id>.uuid` inherited limitation applies and is not fixed here: it is
+   * written once at `ccd start` and never refreshed, so after a `/clear` the
+   * resolved path points at the superseded transcript. The chat stream and
+   * `sessionCommands` share it; in practice this fires minutes after creation,
+   * when the uuid is fresh.
+   *
+   * PUBLIC, unlike `sweepTasks`/`sweepPr`, and for a reason that is about the
+   * tests being real rather than about convenience: `tick()` dispatches this
+   * with `void` (it can sit on the queue for minutes), so a test that awaits
+   * `tick()` has NOT awaited the sweep — every negative assertion about it
+   * would pass while it was still running. `tick()` is already public for the
+   * same class of reason.
+   */
+  async sweepNames(): Promise<void> {
+    const now = Date.now();
+    if (this.lastNameSweep !== 0 && now - this.lastNameSweep < NAME_SWEEP_MS) return;
+    this.lastNameSweep = now;
+    // The REGISTRY's branch, never the assembled `FleetSession.branch`: that one
+    // is `sl?.branch ?? r.branch` (fleet.ts:155) and the statusline wins, so it
+    // lags a rename by however long Claude Code takes to re-render its pane.
+    // Same reason sweepTasks and sweepPr read the registry themselves.
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    for (const r of records) {
+      if (r.workspace === null) continue;
+      const born = `ws/${r.workspace}`;
+      if (r.branch !== born) continue;
+      // A PROBE argv: it is never sent. `verbSupported` reads argv[0] only, and
+      // asking here — before `claimTitleRead` writes anything — is what makes
+      // "an unsupported verb records no attempt" true of the stat gate as well
+      // as of the attempted set.
+      if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
+      const cfgDir = this.deps.cfg.wrappers[r.wrapper];
+      if (!cfgDir) continue;
+      const file = transcriptPath(cfgDir, r.workdir, r.uuid);
+      if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
+      const title = await readAiTitle(this.deps.io, file);
+      if (title === null) continue;
+      const branch = deriveBranch(title);
+      // A title that slugifies to nothing has no pair to mark: the retry key is
+      // `<id>:<derived-branch>` and there is no derived branch. The stat gate is
+      // what stops it being re-read, which is the same protection the marked
+      // pairs get.
+      if (branch === null) continue;
+      const key = `${r.id}:${branch}`;
+      if (this.attemptedRenames.has(key)) continue;
+      this.attemptedRenames.add(key);
+      // AFTER the add, deliberately: the spec's error table marks this pair
+      // attempted, and the key is the one this session would have used.
+      if (branch === born) continue;      // the title already names the workspace
+      // Through the per-session queue, so it serialises against every other
+      // server-originated write on this session — the reap it must not race is
+      // POST /workspace/reap, which is already queued. It does NOT serialise
+      // against a ws-reap or ws-restore run by hand on the box: those take
+      // `$REG/.reap-$id.lock`, which ws-rename does not, and that residue is
+      // accepted (a hand-run reap on a workspace whose first turn is still
+      // landing is not a case worth a lock for, and the rename is a
+      // `git branch -m` a reap would immediately make moot).
+      const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(CCD_ARGV.wsRename(r.id, branch)));
+      if (!res.ok) {
+        console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} failed: ${res.stderr.trim()}`);
+        continue;
+      }
+      let refused: unknown;
+      try { refused = (JSON.parse(res.stdout.trim()) as { refused?: unknown }).refused; }
+      catch { /* not an answer we can read — an older ccd, or a fault */ }
+      if (typeof refused === 'string') {
+        console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} refused: ${refused}`);
+      }
+    }
   }
 
   /**
