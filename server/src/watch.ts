@@ -29,8 +29,11 @@ const TASK_SWEEP_MS = 10_000;
 /** The sixth lane (the fifth is hook-state sweeping, which rides the 2 s tick).
  *  Naming does NOT ride that tick: a title that appears ten seconds late costs
  *  nothing, and reading transcripts thirty times a minute to learn nothing costs
- *  real work — the nine transcripts on this box that carry no `ai-title` at all
- *  would be re-read forever, roughly 7.7 MB/min across the agent WS. */
+ *  real work. `claimTitleRead`'s own docstring has the arithmetic for the nine
+ *  transcripts on this box that carry no `ai-title` at all, re-read forever at
+ *  THIS lane's real 10 s cadence: roughly 7.7 MB/min across the agent WS. The
+ *  2 s tick is five times faster, so riding it would cost five times that on
+ *  those same nine transcripts to learn nothing — roughly 38.5 MB/min. */
 const NAME_SWEEP_MS = 10_000;
 
 /** Refusal tokens (of ccd's fourteen, `spec:252-266` — the spec's own table
@@ -183,7 +186,17 @@ export class FleetWatcher {
    *  same recycled slug. `r.uuid` is minted fresh by every `ws-add`, so the
    *  combined key cannot survive a slug's reap-and-redraw cycle — the same
    *  self-healing property `titleProbe` already has via a transcript path that
-   *  changes with the uuid. */
+   *  changes with the uuid.
+   *
+   *  THE SAME KEY CHANGE ALSO HAPPENS WITHOUT A REAP: `ccd`'s `_sync_uuid`
+   *  (`ccd:6417`) rewrites the registry's `uuid` field in place, on the SAME
+   *  live session, whenever Claude Code rotates its own session uuid (a
+   *  `/clear`, a compaction) — no `ws-reap`/`ws-add` cycle required. So "a
+   *  server restart earns one retry", above, is not the only way a pair earns
+   *  a fresh attempt without a title change: the next sweep after a uuid
+   *  rotation reads a different `r.uuid`, computes a different incarnation,
+   *  and finds no entry here either — the same consequence a restart has, on
+   *  the process's own clock instead of one session's. */
   private attemptedRenames = new Set<string>();
   /** `<id>#<uuid>` incarnations the sweep will never spend another transcript
    *  read on. `attemptedRenames` is keyed per (incarnation, derived branch)
@@ -204,7 +217,15 @@ export class FleetWatcher {
    *  by (id, branch) at all, so a bare `<id>` key would silently retire every
    *  future workspace that ever draws a previously-retired slug, for the life
    *  of the process, with no log line anywhere to say why naming stopped
-   *  working for that one workspace. */
+   *  working for that one workspace.
+   *
+   *  THE SAME KEYING MEANS RETIREMENT IS NOT RESTART-ONLY EITHER: a session
+   *  `PERMANENT_REFUSALS` retired stays out of THIS incarnation's way for the
+   *  rest of the process's life, but `_sync_uuid` rotating that session's own
+   *  uuid mid-life (`attemptedRenames`'s docstring above has the mechanism) is
+   *  a second, independent way to earn a fresh incarnation that was never
+   *  added here — the sweep tries it again on the next tick, no server
+   *  restart required. */
   private nameSweepRetired = new Set<string>();
   /** Per session: the transcript state whose title the sweep has already acted
    *  on. Same gate, for the same reason, as `SessionStream.claimAskRead`
@@ -443,9 +464,14 @@ export class FleetWatcher {
    * changed.
    *
    * A transcript with no `ai-title` is a PERMANENT state, not a startup window
-   * — nine of the 609 on this box carry none, including some very large ones —
-   * so re-reading them every ten seconds forever is roughly 7.7 MB/min across
-   * the agent WS to learn nothing. Byte-identical bytes cannot have started
+   * — nine of the 609 on this box carry none, including some very large ones
+   * — so re-reading them every ten seconds (`NAME_SWEEP_MS`, THIS lane's real
+   * cadence, not a hypothetical one) forever is roughly 7.7 MB/min across the
+   * agent WS to learn nothing: six sweeps a minute times nine transcripts
+   * averaging under the 256 KB tail cap (`TITLE_TAIL_BYTES`). `NAME_SWEEP_MS`'s
+   * own comment derives the faster, rejected 2 s-tick cost from this same
+   * figure rather than re-measuring — the two must never state two different
+   * numbers for the same nine files. Byte-identical bytes cannot have started
    * saying something they did not say last time. Copied from
    * `SessionStream.claimAskRead` (`sessionws.ts:178-187`), keyed per SESSION
    * rather than per stream because this map outlives any one socket.
@@ -541,8 +567,10 @@ export class FleetWatcher {
       // keying on a transcript PATH that changes with the uuid.
       const incarnation = `${r.id}#${r.uuid}`;
       // The cheapest question in the function, asked before anything that
-      // costs a stat or a read: a session already retired by a permanent
-      // refusal (`has-upstream` and its siblings) can never un-retire.
+      // costs a stat or a read: THIS INCARNATION, once retired by a permanent
+      // refusal (`has-upstream` and its siblings), never un-retires — but a
+      // uuid rotation (`nameSweepRetired`'s docstring) computes a different
+      // incarnation for the same session id, which was never added here.
       if (this.nameSweepRetired.has(incarnation)) continue;
       // A PROBE argv: it is never sent. `verbSupported` reads argv[0] only, and
       // asking here — before `claimTitleRead` writes anything — is what makes
@@ -580,16 +608,30 @@ export class FleetWatcher {
         console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} failed: ${res.stderr.trim()}`);
         continue;
       }
-      let refused: unknown;
-      try { refused = (JSON.parse(res.stdout.trim()) as { refused?: unknown }).refused; }
+      let answer: { refused?: unknown; old?: unknown; new?: unknown } = {};
+      try { answer = JSON.parse(res.stdout.trim()) as typeof answer; }
       catch { /* not an answer we can read — an older ccd, or a fault */ }
-      if (typeof refused === 'string') {
-        console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} refused: ${refused}`);
+      if (typeof answer.refused === 'string') {
+        console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} refused: ${answer.refused}`);
         // Permanent by construction: nothing about a LATER title can make a
         // pushed branch un-pushed, or a foreign/unregistered worktree become
         // this session's own. Retire the session, not just this pair — see
         // `nameSweepRetired`.
-        if (PERMANENT_REFUSALS.has(refused)) this.nameSweepRetired.add(incarnation);
+        if (PERMANENT_REFUSALS.has(answer.refused)) this.nameSweepRetired.add(incarnation);
+      } else if (typeof answer.old === 'string' && typeof answer.new === 'string') {
+        // THE only line a successful rename ever writes — without it, the
+        // sweep's most common outcome (the branch actually landing on the
+        // title) leaves nothing a post-deploy audit can grep for.
+        console.log(`ccrc-server: ws-rename ${r.id} ${answer.old} -> ${answer.new}`);
+        // `res.ok` is true here even when `ccd`'s two origin probes
+        // (`has-upstream`'s second check, the `$new` collision check) could
+        // not reach origin: both warn-and-continue rather than refuse, so the
+        // rename still succeeds and the only trace of the degradation is this
+        // stderr string. Discarding it on the success arm alone (the `!res.ok`
+        // branch above already surfaces stderr on a hard failure) lost the one
+        // signal that a rename which LOOKED clean actually ran origin-blind.
+        const warn = res.stderr.trim();
+        if (warn !== '') console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch}: ${warn}`);
       }
     }
   }

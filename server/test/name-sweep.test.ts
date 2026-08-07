@@ -62,14 +62,14 @@ interface Harness { home: string; calls: string[][]; run: Runner }
  *  It goes through `testDeps`'s guardRunner, so an argv the agent whitelist
  *  refuses throws here rather than being silently recorded. */
 const harness = (stdout = `{"renamed":"${ID}","old":"ws/quiet-mesa","new":"ws/x"}`,
-                 statusBranch = 'ws/quiet-mesa'): Harness => {
+                 statusBranch = 'ws/quiet-mesa', stderr = ''): Harness => {
   const home = mkTmp('ccrc-name-');
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'capture-pane') return { code: 0, stdout: pane(statusBranch), stderr: '' };
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
-    if (args[0] === 'ws-rename') { calls.push([...args]); return { code: 0, stdout, stderr: '' }; }
+    if (args[0] === 'ws-rename') { calls.push([...args]); return { code: 0, stdout, stderr }; }
     return { code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run };
@@ -102,6 +102,44 @@ describe('the naming sweep', () => {
     expect(h.calls[0]).toEqual(
       ['ws-rename', '--session', ID, '--branch', 'ws/brainstorm-helix-and-slide-notes']);
     expect(h.calls).toHaveLength(1);
+  });
+
+  // Review finding 6: a successful rename used to log nothing at all, so a
+  // post-deploy audit had no line anywhere to grep for the sweep's most common
+  // outcome. One line, naming the session and both branch names.
+  it('logs one line on a successful rename — old, new and the session id', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const h = harness(
+      `{"renamed":"${ID}","old":"ws/quiet-mesa","new":"ws/brainstorm-helix-and-slide-notes"}`);
+    seed(h.home);
+    transcript(h.home, [TITLE('Brainstorm Helix and slide notes integration')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const [line] = logSpy.mock.calls[0] as [string];
+    expect(line).toContain(ID);
+    expect(line).toContain('ws/quiet-mesa');
+    expect(line).toContain('ws/brainstorm-helix-and-slide-notes');
+  });
+
+  // Review finding 6, the other half: `res.ok` is true even when `ccd`'s
+  // origin probes could not reach it — they warn and proceed rather than
+  // refuse — so the degradation warning lands on stderr of an otherwise
+  // ordinary success. Discarding `res` entirely on the success arm lost it.
+  it('surfaces a non-empty stderr as a warning even though the rename itself succeeded', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harness(
+      `{"renamed":"${ID}","old":"ws/quiet-mesa","new":"ws/x"}`, 'ws/quiet-mesa',
+      "warn: could not reach origin to check for 'ws/quiet-mesa' — renaming anyway");
+    seed(h.home);
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toHaveLength(1);
+    expect(warnSpy.mock.calls.some(([line]) => String(line).includes('could not reach origin')))
+      .toBe(true);
   });
 
   it('does not fire once the branch has been renamed', async () => {
@@ -358,10 +396,10 @@ describe('the naming sweep', () => {
     expect(h.calls, 'a drift refusal earns no further attempt, even on a new title').toHaveLength(1);
   });
 
-  // The retry key is `<id>:<derived-branch>`, not `<id>` — so a title that
-  // changes WHILE THE BRANCH IS STILL AT ITS BORN NAME earns exactly one fresh
-  // attempt. Synthetic on purpose: measured on a 91 MB transcript, `ai-title` is
-  // rewritten once per turn but the value never changed (1,809 lines, one
+  // The retry key is `<id>#<uuid>:<derived-branch>`, not `<id>` — so a title
+  // that changes WHILE THE BRANCH IS STILL AT ITS BORN NAME earns exactly one
+  // fresh attempt. Synthetic on purpose: measured on a 91 MB transcript, `ai-title`
+  // is rewritten once per turn but the value never changed (1,809 lines, one
   // distinct value), so real data cannot exercise this branch. A key of `<id>`
   // alone passes every other case in this file and fails here.
   it('a title that changes before the rename lands earns one fresh attempt', async () => {
