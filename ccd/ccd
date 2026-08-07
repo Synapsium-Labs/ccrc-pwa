@@ -682,6 +682,18 @@ if mode == 'state':
         with open(os.path.join(reg, id_ + '.' + field), 'w') as f:
             f.write(str(value))
 
+    def get(field):
+        # put/clear's own path arithmetic, read instead of written. Needed by
+        # the prhistory chokepoint below to see the OUTGOING prnumber/prphase
+        # before `clear`/the next `put` overwrite them — nothing upstream of
+        # this `state` mode has read $REG for anything but rows_in()'s stdin,
+        # so there was no read helper here to reuse.
+        try:
+            with open(os.path.join(reg, id_ + '.' + field)) as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
     def clear(field):
         try:
             os.remove(os.path.join(reg, id_ + '.' + field))
@@ -713,6 +725,36 @@ if mode == 'state':
     # The unconditional `clear` also costs one unlink on the path where the
     # number is unchanged, which is the price of not having to reason about
     # which transitions are safe.
+    #
+    # THE prhistory CHOKEPOINT. This `clear` is the only line in ccd that ever
+    # replaces a persisted `prnumber`, so it is the only place PR lineage can
+    # be recorded without depending on which sweep or verb caused the
+    # replacement. The OUTGOING record — the number about to stop being
+    # true — is appended here, immediately BEFORE the clear, because after it
+    # `get('prnumber')` can no longer see what is leaving.
+    #
+    # Appended only when a REAL prior number is about to become a DIFFERENT
+    # answer: `old_num != number` fires for another number and for `None`
+    # alike (a real number, incoming `None` counts as different, `old_num is
+    # not None` counts as int) — the between-waves gap where a program resets
+    # the branch and the old PR is not yet superseded by a new one must not
+    # lose the record either. Steady state — the sweep re-running every 120 s
+    # against an unchanged number — takes `old_num != number` to False and
+    # appends nothing, or every sweep for the life of a PR would duplicate it.
+    # A non-numeric `old_raw` (corrupt or hand-edited registry) leaves
+    # `old_num` None and also appends nothing: there is no number to retire.
+    old_raw = get('prnumber')
+    old_phase = get('prphase') or ''   # read before `put('prphase', ...)` below overwrites it
+    if old_raw is not None:
+        try:
+            old_num = int(old_raw)
+        except ValueError:
+            old_num = None
+        if old_num is not None and old_num != number:
+            rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
+                   'recordedAt': int(time.time())}
+            with open(os.path.join(reg, id_ + '.prhistory'), 'a') as f:
+                f.write(json.dumps(rec) + '\n')
     clear('prnumber')
     put('prphase', phase)
     # phase and number are ONE answer, so a writer that persists half of it
@@ -1494,7 +1536,7 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # strand merged-but-dirty workspaces in the live fleet permanently"), and the
   # same division `cmd_ws_rm` draws for this very divergence: the registry is a
   # witness, never the decider (ccd:465-471).
-  local id="$1" project workdir branch base main tip dirty ignored stashes bytes pr transcript
+  local id="$1" project workdir branch base main tip dirty ignored stashes bytes pr prhistory transcript
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   branch=$(_reg_get "$id" branch);   base=$(_reg_get "$id" base)
   [[ -n "$project" && -n "$workdir" && -n "$branch" ]] \
@@ -1623,11 +1665,45 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # against a cleanup that could free real disk.
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
   pr=$(_reg_get "$id" prnumber); [[ "$pr" =~ ^[0-9]+$ ]] || pr=null
+  # prHistory folds in the outgoing-PR ledger the prhistory chokepoint
+  # (ccd:~728, inside `_pr_py`'s `state` mode) appends to, so a workspace's
+  # whole PR lineage travels in the one record ws-reap later reads and the
+  # worktree does not survive to keep. PARSED DEFENSIVELY, following this
+  # function's own header split: a line the raw file cannot be trusted to mean
+  # (malformed JSON, on ANY line) is not a fact about the workspace, so the
+  # WHOLE field degrades to `[]` rather than becoming a partial history or a
+  # refusal — same "a manifest that lies pristine is a manifest that
+  # authorises a deletion" argument, applied to an array field instead of a
+  # scalar one. The raw `.prhistory` file itself is untouched either way: it
+  # is still there on disk for a human to read after the manifest gives up.
+  # Absent file reads the same as every other field this function has never
+  # measured — `[]`, not a refusal — because a workspace whose PR number was
+  # never replaced never grew a history file to begin with.
+  prhistory=$(python3 -c '
+import json, sys
+rows = []
+try:
+    with open(sys.argv[1]) as f:
+        for ln in f:
+            ln = ln.strip()
+            if ln:
+                rows.append(json.loads(ln))
+    sys.stdout.write(json.dumps(rows))
+except Exception:
+    sys.stdout.write("[]")
+' "$REG/$id.prhistory" 2>/dev/null)
+  # Guarded like every other field above rather than trusted outright: the
+  # python3 above already turns its OWN parse failures into "[]", but this
+  # catches the case it cannot — no output at all (no python3 on PATH, killed
+  # mid-run) — which would otherwise leave `$prhistory` empty and the printf
+  # below emitting `"prHistory":` with nothing after the colon.
+  printf '%s' "$prhistory" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' >/dev/null 2>&1 \
+    || prhistory='[]'
   transcript=$(_transcript_path "$id") || transcript=""
-  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"transcript":%s}\n' \
+  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
-    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$(_json_str "$transcript")"
+    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")"
 }
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
