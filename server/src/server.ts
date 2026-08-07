@@ -614,10 +614,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const body = (req.body ?? {}) as { reason?: unknown };
-    // A hold nobody can explain is an orphan by construction (ccd's own
-    // `cmd_ws_hold` refuses the same way) — reject it here too, before
-    // building any argv, rather than letting an empty string cross the wire
-    // and die in ccd's refusal.
+    // A hold nobody can explain is an orphan by construction — reject it here
+    // too, before building any argv, rather than letting an empty string cross
+    // the wire and die in ccd's refusal.
+    //
+    // `.trim()`, and ccd's `cmd_ws_hold` now agrees: its guard was `[[ -n
+    // "$reason" ]]`, which passed `--reason "   "` while this one refused it,
+    // and `registry.ts`'s `field()` trims what it reads — so a whitespace
+    // reason landed as `held: ''`, enforced everywhere and displayed nowhere
+    // (fix-wave finding 9). The three layers refuse the same INPUT; they do
+    // not all say the same thing about it, and nothing should claim they do:
+    // this one answers a 400 `bad-request` code with no sentence at all, which
+    // is what a non-PWA client gets, while ccd and the composer share
+    // `HOLD_EMPTY_REASON_TEXT`'s wording.
     if (typeof body.reason !== 'string' || body.reason.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }

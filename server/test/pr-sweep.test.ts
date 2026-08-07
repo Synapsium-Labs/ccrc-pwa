@@ -693,7 +693,7 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
     writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.wrapper'), 'ghost-wrapper');
     const calls: string[][] = [];
     const w = new FleetWatcher(testDeps(home, runnerFor('', calls)), new Bus(), 10_000);
-    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toBe('unknown');
+    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: null });
     w.stop();
   });
 
@@ -708,7 +708,7 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
     const home = seed(['demo-quiet-basin']);   // registry has demo-quiet-basin, NOT demo-ghost
     const calls: string[][] = [];
     const w = new FleetWatcher(testDeps(home, runnerFor('', calls)), new Bus(), 10_000);
-    await expect(w.archiveSafety('demo-ghost')).resolves.toBe('unknown');
+    await expect(w.archiveSafety('demo-ghost')).resolves.toEqual({ verdict: 'unknown', held: null });
     w.stop();
   });
 });

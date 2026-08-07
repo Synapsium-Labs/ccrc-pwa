@@ -32,9 +32,17 @@ export interface SessionRecord {
    *  `io.ts` maps every error to null — but `readRegistry` reads the registry
    *  DIRECTORY first, and that listing names `<id>.hold` whether or not its
    *  bytes can be fetched. A present-but-unread file therefore reads as held,
-   *  carrying `HOLD_UNREADABLE` as its reason. A readable but empty file is
-   *  held too (an empty string is not null), displayed as the empty string it
-   *  is; `ccd ws-hold` refuses to write one. */
+   *  carrying `HOLD_UNREADABLE` as its reason — after a second listing has
+   *  confirmed the file is still there, so an ordinary `ws-release` landing in
+   *  the gap between the two reads is not reported as corruption.
+   *
+   *  A readable but EMPTY file is held too (an empty string is not null), and
+   *  it carries `HOLD_NO_REASON` rather than the empty string: the reason IS
+   *  the display, and `held: ''` renders as nothing on every surface while
+   *  every consumer still enforces it — a hold visible nowhere is exactly what
+   *  the no-expiry design cannot afford. `ccd ws-hold` refuses to write one
+   *  (whitespace included, since `field()` trims), so the only ways to reach
+   *  it are `touch $REG/<id>.hold` and a truncated write. */
   held: string | null;
 }
 
@@ -52,6 +60,19 @@ export interface SessionRecord {
  * show, and it has to explain itself there with no parsing anywhere.
  */
 export const HOLD_UNREADABLE = '<hold file unreadable — treated as held>';
+
+/**
+ * The reason a held workspace carries when its `.hold` file reads back EMPTY.
+ * `ccd ws-hold` refuses to write one, but `touch $REG/<id>.hold` and a
+ * truncated write both produce it, and `''` is not null — so every consumer
+ * enforces the hold while every surface renders the reason as nothing at all:
+ * a `Held — ` with a blank after it, a fleet chip with an empty tooltip, a
+ * push reading `PR #591 merged — ; nothing archived.` The spec's stated price
+ * for having no expiry is that an orphan hold is visible everywhere with a
+ * reason saying why; this is the one hold that was visible nowhere, so it gets
+ * a sentence of its own instead of an empty one.
+ */
+export const HOLD_NO_REASON = '<hold file is empty — no program named>';
 
 async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
   const content = await io.readFile(path.join(dir, `${id}.${name}`));
@@ -83,6 +104,9 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
   if (names === null) return [];
   const ids = names.filter((n) => n.endsWith('.uuid')).map((n) => n.slice(0, -'.uuid'.length)).sort();
   const out: SessionRecord[] = [];
+  /** Ids whose `.hold` was in `names` but whose bytes came back null. Resolved
+   *  after the loop by ONE second listing — see below. */
+  const holdUnconfirmed = new Set<string>();
   for (const id of ids) {
     const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
       base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw] = await Promise.all([
@@ -97,6 +121,8 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
       field(io, cfg.registryDir, id, 'hold'),
     ]);
     if (!wrapper || !workdir || !uuid) continue;   // incomplete registry entry — skip, don't crash
+    const holdListed = names.includes(`${id}.hold`);
+    if (holdRaw === null && holdListed) holdUnconfirmed.add(id);
     out.push({
       id, wrapper, project: project ?? id, workdir, uuid,
       started: started === '1',
@@ -122,8 +148,34 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
       // `names` is the directory listing this function opened with, so it
       // proves PRESENCE independently of whether the read succeeded — the one
       // piece of evidence `field()` alone does not have. See `HOLD_UNREADABLE`.
-      held: holdRaw ?? (names.includes(`${id}.hold`) ? HOLD_UNREADABLE : null),
+      // An empty read is a hold with nothing to show, which is not the same
+      // fact as an unreadable one — see `HOLD_NO_REASON`.
+      held: holdRaw === null
+        ? (holdListed ? HOLD_UNREADABLE : null)
+        : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
     });
+  }
+  // ONE SECOND LISTING, and only when something needs it. `names` was taken
+  // before ~17 field reads per session; a `ccd ws-release` that lands anywhere
+  // inside that window leaves the name in the listing and no bytes behind it,
+  // which the evidence above cannot tell apart from a read that failed — so a
+  // perfectly ordinary release was reported as `HOLD_UNREADABLE`, the
+  // registry-is-broken sentence, and `archiveMerged` fired a held-merged push
+  // announcing corruption seconds after the operator tapped Release.
+  //
+  // Re-listing distinguishes them, because a directory read is exactly the
+  // evidence `field()` lacks: gone from the second listing = deleted on
+  // purpose (absence IS release, and it is now TWICE-observed absence, not an
+  // absent read). Still listed = genuinely unreadable, and it keeps
+  // `HOLD_UNREADABLE`. A second listing that FAILS proves nothing and changes
+  // nothing: fail-shut stands.
+  if (holdUnconfirmed.size > 0) {
+    const again = await io.readdir(cfg.registryDir);
+    if (again !== null) {
+      for (const rec of out) {
+        if (holdUnconfirmed.has(rec.id) && !again.includes(`${rec.id}.hold`)) rec.held = null;
+      }
+    }
   }
   return out;
 }

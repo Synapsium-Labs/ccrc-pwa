@@ -441,18 +441,52 @@ export class FleetWatcher {
    * config dir is missing or the status file is unreadable, and in remote mode
    * both of those reads cross the agent WS — so a socket hiccup reads as "not
    * working". Archive needs an AFFIRMATIVE idle.
+   *
+   * IT ALSO CARRIES `held`, read from the SAME fresh registry read — fix-wave
+   * findings 1/5. This is the only registry read that happens at the archive
+   * DECISION POINT; `archiveMerged`'s own `records` argument is the snapshot
+   * `sweepPr` took before it awaited one gh-bound `ccd pr-state` per project
+   * (20 s budget each, and a sweep is only abandoned after PR_SWEEP_STUCK_MS =
+   * 15 min), so a hold placed while the sweep is in flight is invisible there.
+   * The wave boundary IS the modal instant for placing one — the merge that
+   * ends wave N is what tells the orchestrator to hold for wave N+1 — so the
+   * stale window is exactly the window the feature exists for, and
+   * `ccd ws-archive` has no held rung of its own to catch what slips through
+   * (deliberately: a by-hand archive of a held workspace must still work, see
+   * README and PrSheet). This function already had the fresh record in hand
+   * and threw the field away; now it returns it.
+   *
+   * `held` is null for the `attached` answer, which returns BEFORE the read:
+   * that answer defers the archive anyway, so nothing can be destroyed by not
+   * knowing — the only thing lost is the held-merged push, which the caller's
+   * snapshot rung fires whenever the hold predates the sweep.
    */
-  async archiveSafety(id: string): Promise<'ok' | 'busy' | 'attached' | 'unknown'> {
-    if (this.bus.listenerCount(`session:${id}`) > 0) return 'attached';
+  async archiveSafety(id: string): Promise<{ verdict: 'ok' | 'busy' | 'attached' | 'unknown'; held: string | null }> {
+    if (this.bus.listenerCount(`session:${id}`) > 0) return { verdict: 'attached', held: null };
     const rec = (await readRegistry(this.deps.io, this.deps.cfg)).find((r) => r.id === id);
-    if (!rec) return 'unknown';
-    if (!(await this.deps.tmux.hasSession(id))) return 'ok';   // no pane: nothing is running
+    if (!rec) return { verdict: 'unknown', held: null };
+    const held = rec.held;
+    if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
     const pid = await this.deps.tmux.panePid(id);
     const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
-    if (!pid || !cfgDir) return 'unknown';
+    if (!pid || !cfgDir) return { verdict: 'unknown', held };
     const live = await readLiveState(this.deps.io, cfgDir, pid);
-    if (!live) return 'unknown';
-    return liveSessionStatus(live.status) === 'busy' ? 'busy' : 'ok';
+    if (!live) return { verdict: 'unknown', held };
+    return { verdict: liveSessionStatus(live.status) === 'busy' ? 'busy' : 'ok', held };
+  }
+
+  /** The held-merged push: once per (workspace, PR), from whichever rung saw
+   *  the hold — the snapshot's or `archiveSafety`'s fresh read. One latch key,
+   *  so the two rungs can never both announce the same pair. */
+  private notifyHeldMerged(r: SessionRecord, number: number | null, reason: string): void {
+    const key = `${r.id}#${number ?? '?'}`;
+    if (this.heldMergedNotified.has(key)) return;
+    this.heldMergedNotified.add(key);
+    this.pushOne({
+      kind: 'merged', sessionId: r.id, project: r.project,
+      title: `✓ merged › ${r.workspace}`,
+      body: `PR #${number ?? '?'} merged — ${reason}; nothing archived.`,
+    }, this.activeProjects);
   }
 
   private async archiveMerged(records: SessionRecord[]): Promise<void> {
@@ -468,18 +502,27 @@ export class FleetWatcher {
         // into a replace, not a stack. The bucket ladder is untouched: no
         // `archivedAt` is written, so the workspace stays in the live
         // buckets exactly as an ordinary session would.
-        const key = `${r.id}#${pr.number ?? '?'}`;
-        if (!this.heldMergedNotified.has(key)) {
-          this.heldMergedNotified.add(key);
-          this.pushOne({
-            kind: 'merged', sessionId: r.id, project: r.project,
-            title: `✓ merged › ${r.workspace}`,
-            body: `PR #${pr.number ?? '?'} merged — ${r.held}; nothing archived.`,
-          }, this.activeProjects);
-        }
+        //
+        // THE SNAPSHOT'S RUNG, and it is the fast one, not the authoritative
+        // one: `records` was read at the top of `sweepPr`, before every
+        // gh-bound round trip. It can only ever be a hold that ALREADY
+        // existed then, so it can never be wrong in the destructive direction
+        // — but it can be blind, and the `archiveSafety` rung below is the one
+        // that answers for holds placed while this sweep was in flight.
+        this.notifyHeldMerged(r, pr.number, r.held);
         continue;
       }
-      if ((await this.archiveSafety(r.id)) !== 'ok') continue;   // defers; the next sweep retries
+      // The FRESH answer, at the decision point: verdict and hold from one
+      // registry read taken now, not from the snapshot above (findings 1/5).
+      // The hold is checked FIRST because it is not a deferral of the same
+      // kind — 'busy'/'attached' say "not yet", a hold says "not until a
+      // human releases it", and the operator gets told which.
+      const safety = await this.archiveSafety(r.id);
+      if (safety.held !== null) {
+        this.notifyHeldMerged(r, pr.number, safety.held);
+        continue;
+      }
+      if (safety.verdict !== 'ok') continue;   // defers; the next sweep retries
       const argv = CCD_ARGV.wsArchive(r.id);
       // The same gate the `pr-state` sweep above and the `/archive` route
       // apply. Third instance of NF10's class, found in round 3: on a host

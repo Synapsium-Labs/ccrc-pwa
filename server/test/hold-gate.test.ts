@@ -11,7 +11,7 @@ import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { readRegistry, HOLD_UNREADABLE } from '../src/registry.js';
+import { readRegistry, HOLD_NO_REASON, HOLD_UNREADABLE } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { loadConfig } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
@@ -220,7 +220,133 @@ describe('archiveMerged — merged AND unheld', () => {
   });
 });
 
+describe('archiveMerged — the hold is re-read at the DECISION POINT', () => {
+  it('a hold placed while the sweep is in flight still blocks the archive', async () => {
+    // FIX-WAVE FINDINGS 1/5, the critical one. `sweepPr` reads `records` ONCE
+    // at the top, then awaits one gh-bound `ccd pr-state` per project (20 s
+    // budget each; the sweep is only abandoned after 15 minutes), and only
+    // then calls `archiveMerged(records)`. A hold placed inside that window is
+    // invisible to a gate that reads the snapshot — and the window is exactly
+    // when a hold gets placed, because the merge that ends wave N is what
+    // tells the orchestrator to hold for wave N+1. `ccd ws-archive` has no
+    // held rung to catch it, so the pane and its whole scrollback die at the
+    // wave boundary the feature exists to protect.
+    //
+    // The hold here is written by the `pr-state` leg itself: same ordering as
+    // the real thing (snapshot taken, THEN the hold appears, THEN
+    // archiveMerged runs), with no timing to get right.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_p: PushPayload) => {});
+    const inner = runnerFor(mergedLine('demo-quiet-basin'), calls);
+    const run: Runner = async (cmd, args) => {
+      const res = await inner(cmd, args);
+      if (args[0] === 'pr-state') hold(home, 'demo-quiet-basin', 'program:agent-evals wave:2/4');
+      return res;
+    };
+    const deps = { ...testDeps(home, run), push: { notify } as never };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    await w.tick();
+    await sweepSettled(w);
+
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    // And it is told, in the held branch's own words — not silently deferred
+    // as if the session were merely busy.
+    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    const payload = notify.mock.calls[0]![0];
+    expect(payload.body).toContain('program:agent-evals wave:2/4');
+    expect(payload.body).toContain('nothing archived');
+    w.stop();
+  });
+
+  it('a release landing mid-sweep defers ONE sweep and never archives on a stale hold', async () => {
+    // DOCUMENTS the two rungs' division of labour rather than covering a fix
+    // (it is green before the fix too — the existing "merged + released
+    // archives on the very next sweep" test covers the re-arm). The snapshot
+    // rung is kept in front of the fresh one because it costs no registry read
+    // in the steady state, where every hold predates the sweep; the price is
+    // that it is blind to a release that lands mid-sweep. That blindness has
+    // exactly one direction — it DEFERS — and a deferral destroys nothing and
+    // re-arms itself 120 s later, which is why the fresh read below it is the
+    // one that had to be added and this one did not have to be removed.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:4/4');
+    const calls: string[][] = [];
+    const inner = runnerFor(mergedLine('demo-quiet-basin'), calls);
+    const run: Runner = async (cmd, args) => {
+      const res = await inner(cmd, args);
+      if (args[0] === 'pr-state') release(home, 'demo-quiet-basin');
+      return res;
+    };
+    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    await w.tick();
+    await sweepSettled(w);
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+
+    forceDue(w);
+    await w.tick();
+    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
+    w.stop();
+  });
+});
+
 describe('SessionRecord.held', () => {
+  it('an EMPTY .hold file is held, and says so instead of showing nothing', async () => {
+    // `touch $REG/<id>.hold` and a truncated write both land here. `''` is not
+    // null, so every consumer enforces the hold — while the reason, which IS
+    // the display, renders as nothing at all on every surface: `Held — `, an
+    // empty chip tooltip, `PR #591 merged — ; nothing archived.` The one thing
+    // the no-expiry design cannot afford is a hold nobody can see.
+    const home = seed(['demo-quiet-basin']);
+    hold(home, 'demo-quiet-basin', '');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const records = await readRegistry(localIO, cfg);
+    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe(HOLD_NO_REASON);
+    expect(HOLD_NO_REASON).not.toBe('');
+  });
+
+  it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
+    // `readRegistry` lists the directory, then fires ~17 field reads per
+    // session. A `ccd ws-release` anywhere in that window leaves the name in
+    // the listing with no bytes behind it — indistinguishable at `field()`
+    // from a read that failed, so a perfectly ordinary release was reported as
+    // HOLD_UNREADABLE, the registry-is-broken sentence, and `archiveMerged`
+    // fired a held-merged push announcing corruption seconds after the
+    // operator tapped Release. One second listing tells them apart.
+    const home = seed(['demo-quiet-basin']);
+    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const releasedMidReadIO: FleetIO = {
+      ...localIO,
+      readdir: async (p) => {
+        const names = await localIO.readdir(p);
+        if (names === null || !names.includes('demo-quiet-basin.hold')) return names;
+        listings += 1;
+        // First listing: the hold is there. Then the release lands — so the
+        // read returns null and the SECOND listing no longer names it.
+        if (listings === 1) return names;
+        return names.filter((n) => n !== 'demo-quiet-basin.hold');
+      },
+      readFile: async (p) => (p.endsWith('.hold') ? null : localIO.readFile(p)),
+    };
+    const records = await readRegistry(releasedMidReadIO, cfg);
+    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBeNull();
+    expect(listings).toBe(2);
+  });
+
+  it('a still-listed unreadable hold stays HOLD_UNREADABLE after the re-check', async () => {
+    // The confirmation must not become an escape hatch: when the second
+    // listing still names the file, the fail-shut answer is unchanged.
+    const home = seed(['demo-quiet-basin']);
+    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const records = await readRegistry(holdUnreadableIO, cfg);
+    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe(HOLD_UNREADABLE);
+  });
+
   it('carries the reason verbatim, null when absent', async () => {
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
     hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
