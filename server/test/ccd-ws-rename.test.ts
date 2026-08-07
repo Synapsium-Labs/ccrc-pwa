@@ -64,7 +64,12 @@ describe('ws-rename', () => {
 
   /** Every refusal is an ANSWER now: one JSON object on stdout at exit 0. `h.sh`
    *  throws on a non-zero exit, so reading refusals THROUGH it is also the
-   *  assertion that only `git branch -m` failing may exit non-zero. */
+   *  assertion that `git branch -m` failing is the one REFUSAL path that keeps
+   *  a non-zero exit. It is not the only non-zero path in the function: the
+   *  `_json_str probe` at the top (ccd:1379-1380) is a FAULT for the same
+   *  reason, and on a python3-less box every refusal case below would throw at
+   *  the probe before ever reaching its own printf — this harness runs with
+   *  python3 present, which is what keeps that case from being vacuous here. */
   const rename = (id: string, branch: string): Record<string, unknown> =>
     JSON.parse(h.sh(`cmd_ws_rename --session '${id}' --branch '${branch}'`)) as Record<string, unknown>;
 
@@ -164,6 +169,22 @@ describe('ws-rename', () => {
     expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
   });
 
+  // The gap the `@{u}` check alone leaves: `git push origin <branch>` with no
+  // `-u` puts the branch on origin without writing any tracking config, so
+  // `@{u}` answers "no upstream configured" for a branch that has, in fact,
+  // been pushed — exactly the false negative that let a naming sweep push
+  // origin into carrying both the old and the new name. `has-upstream` must
+  // catch this the same way it catches a tracked push, since it is the same
+  // fact by a different route.
+  it('refuses has-upstream for a branch pushed WITHOUT a tracking upstream (no `-u`)', () => {
+    const wt = addOne();
+    h.git(wt, 'push', 'origin', 'ws/quiet-mesa');
+    expect(() => h.git(wt, 'rev-parse', '--abbrev-ref', 'ws/quiet-mesa@{u}')).toThrow();
+    expect(refusal('demo-quiet-mesa', 'feat/real-name')).toBe('has-upstream');
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('ws/quiet-mesa');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
   it('refuses a name that already exists locally', () => {
     const wt = addOne();
     h.git(path.join(h.home, 'projects', 'demo'), 'branch', 'feat/taken');
@@ -200,11 +221,14 @@ describe('ws-rename', () => {
     expect(o.new).toBe('feat/real-name');
   });
 
-  // `git branch -m` failing is THE one path that keeps a non-zero exit: nothing
-  // about the request was wrong, so it is a fault and not a refusal — the caller
-  // must not read it as a REFUSAL ANSWER (no token, no refusalSentence), but the
-  // pair IS still marked attempted, like every other non-ok CcdResult. The shim
-  // spells its own `command git` passthrough, as every git stub here does.
+  // `git branch -m` failing is the one REFUSAL path that keeps a non-zero exit
+  // — the only other non-zero path in the function is the `_json_str probe` at
+  // the top (ccd:1379-1380), also a fault rather than a verdict on the request.
+  // This one: nothing about the request was wrong, so it is a fault and not a
+  // refusal — the caller must not read it as a REFUSAL ANSWER (no token, no
+  // refusalSentence), but the pair IS still marked attempted, like every other
+  // non-ok CcdResult. The shim spells its own `command git` passthrough, as
+  // every git stub here does.
   it('exits non-zero when the rename itself fails — a fault, not a refusal', () => {
     const wt = addOne();
     const NOMV = `git() { [[ "$*" == *"branch -m"* ]] && { echo "fatal: nope" >&2; return 1; }; command git "$@"; };`;
@@ -291,6 +315,30 @@ describe('ws-rename', () => {
     expect(o.refused).toBe('worktree-unregistered');
     expect(String(o.detail)).toContain('no worktree record');
     expect(branches('ws/quiet-mesa')).not.toBe('');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  // A hand `git branch -m` bypasses ws-rename, so the registry keeps the OLD
+  // name while git's own record moves — the exact drift `cmd_ws_reap` already
+  // refuses on (`registry-branch-drift`) and the naming sweep's own condition
+  // 2 cannot see, because it reads the registry only. Without this check,
+  // ws-rename would derive `$old` from git (the NEW, hand-chosen name) and
+  // rename THAT to whatever the sweep derived — silently renaming a branch a
+  // human chose on purpose. This is what fails loudly if anyone "simplifies"
+  // the fix to "use the registry field" instead of corroborating both.
+  it('refuses when a hand `git branch -m` has moved git away from what the registry still says', () => {
+    const wt = addOne();
+    h.git(mainDir(), 'branch', '-m', 'ws/quiet-mesa', 'renamed-by-hand');
+    expect(h.sh(`_ws_wt_branch "${mainDir()}" "${wt}"`)).toBe('renamed-by-hand');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+
+    const o = rename('demo-quiet-mesa', 'feat/real-name');
+    expect(o.refused).toBe('registry-branch-drift');
+    expect(String(o.detail)).toContain('renamed-by-hand');
+    expect(String(o.detail)).toContain('ws/quiet-mesa');
+    // Nothing renamed on either side, and the registry is untouched.
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('renamed-by-hand');
+    expect(branches('feat/real-name')).toBe('');
     expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
   });
 

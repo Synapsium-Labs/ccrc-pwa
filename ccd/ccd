@@ -1369,7 +1369,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # `cmd_ws_reap` already writes every one of its ~30 refusals this way.
   #
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `cmd_ws_audit` (ccd:3733) and `cmd_ws_reap` (ccd:4571).
+  # same reason, as `cmd_ws_audit` (ccd:3907) and `cmd_ws_reap` (ccd:4745).
   # Every refusal below quotes its detail inside a printf ARGUMENT LIST, where a
   # failure is a swallowed status and an empty argument — `"detail":,` — i.e. a
   # document the server reports as a parse error rather than as the refusal it
@@ -1379,8 +1379,8 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the rename answer safely"
 
-  # Exact arity and flag order, the shape `cmd_ws_hold` (ccd:1467) and
-  # `cmd_ws_release` (ccd:1510) use. `[[ ]]` short-circuits, so `$1` is never
+  # Exact arity and flag order, the shape `cmd_ws_hold` (ccd:1635) and
+  # `cmd_ws_release` (ccd:1681) use. `[[ ]]` short-circuits, so `$1` is never
   # expanded when `$#` is 0 and `set -u` has nothing to complain about. The
   # positional form this replaces was a MINIMUM-arity guard (`${1:?}`/`${2:?}`)
   # whose usage refusal was bash's rather than ccd's, and it ignored extra argv.
@@ -1484,6 +1484,26 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
       "$(_json_str "$workdir is not a worktree of $main — nothing renamed; move or delete the directory by hand, then git -C $main worktree prune && git -C $main worktree add $workdir $old")"
     return 0
   fi
+  # $old is git's own record, corroborated above against the DIRECTORY. It is
+  # not yet corroborated against the REGISTRY, and the naming sweep's own
+  # idempotence check reads the registry's `branch` field, never this
+  # function's git-derived `$old` — the two are different sources of truth for
+  # the same fact, and this repo already models what happens when they drift: a
+  # hand `git branch -m` moves git's answer while the registry keeps the old
+  # name (`cmd_ws_reap`'s `registry-branch-drift`, ccd:3381, and
+  # `server/test/ccd-workspaces.test.ts:587`'s pinned scenario). Without this
+  # check, a workspace hand-renamed outside `ccd ws-rename` still reads as
+  # "still on its born name" to the sweep (the registry never moved) while this
+  # verb renames whatever git says instead — silently renaming a hand-chosen
+  # branch. Same rung `cmd_ws_reap` already refuses on, same token, same
+  # remedy: the registry only self-heals through `ws-rename`'s own
+  # `_reg_set … branch`, so a human who renamed by hand runs `ccd ws-rename`
+  # once by hand to re-corroborate the two.
+  if [[ "$old" != "$reg_branch" ]]; then
+    printf '{"refused":"registry-branch-drift","detail":%s,"paths":[]}\n' \
+      "$(_json_str "the registry says $reg_branch, git's worktree record for $workdir says $old — refusing to rename on a stale registry entry")"
+    return 0
+  fi
   if [[ "$old" == "$new" ]]; then
     printf '{"refused":"unchanged","detail":%s,"paths":[]}\n' \
       "$(_json_str "already named $new")"
@@ -1491,11 +1511,11 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   fi
 
   # Renaming after a push leaves the old name on the remote and creates a second
-  # branch there on the next push. An upstream is the evidence that happened.
-  # Asked in $main and about $old by name: branch config is shared across a
-  # repo's worktrees, so this is the same answer $workdir would give — from the
-  # repo that actually owns the branch. Measured on git 2.43.0: rc 0 printing
-  # `origin/<old>` with an upstream, rc 128 without one.
+  # branch there on the next push. An upstream is ONE kind of evidence that
+  # happened. Asked in $main and about $old by name: branch config is shared
+  # across a repo's worktrees, so this is the same answer $workdir would give —
+  # from the repo that actually owns the branch. Measured on git 2.43.0: rc 0
+  # printing `origin/<old>` with an upstream, rc 128 without one.
   #
   # THE load-bearing refusal, and the reason automatic naming is safe to run
   # unattended: a branch that has been pushed is never renamed.
@@ -1504,6 +1524,23 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
       "$(_json_str "$old has an upstream — it is already on the remote; rename before pushing, not after")"
     return 0
   fi
+  # An upstream is only tracking CONFIGURATION, not proof of a push: `git push
+  # origin ws/foo` with no `-u` puts the branch on origin and configures
+  # nothing, and the `@{u}` probe above answers `fatal: no upstream configured`
+  # for exactly that branch. So ask origin directly too, the same probe the
+  # `$new` collision check below already uses: rc 0 = $old is already on origin
+  # (refuse — this IS the "has been pushed" case, just reached a second way);
+  # rc 2 = never pushed, proceed; anything else = unreachable, and unreachable
+  # is not the same as pushed, so it stays a warning, not a refusal — the same
+  # convention the `$new` probe's unreachable case already uses.
+  local old_rc; git -C "$main" ls-remote --exit-code --heads origin "$old" >/dev/null 2>&1; old_rc=$?
+  case "$old_rc" in
+    0) printf '{"refused":"has-upstream","detail":%s,"paths":[]}\n' \
+         "$(_json_str "$old is already on origin (pushed without a tracking upstream) — rename before pushing, not after")"
+       return 0 ;;
+    2) : ;;
+    *) echo "warn: could not reach origin to check for '$old' — renaming anyway" >&2 ;;
+  esac
 
   if git -C "$main" show-ref --verify --quiet "refs/heads/$new"; then
     printf '{"refused":"name-taken-local","detail":%s,"paths":[]}\n' \
@@ -1531,10 +1568,13 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # refs/heads/feat/a`, after `branch refs/heads/feat/b`, rc 0) — which is what
   # lets ws-rm read the new name back out of the record afterwards.
   #
-  # THE ONE PATH THAT KEEPS A NON-ZERO EXIT. It is a fault, not a refusal:
-  # nothing about the request was wrong. The caller must not read this as a
-  # REFUSAL ANSWER — it carries no token and reaches no refusalSentence — but
-  # the pair IS still marked attempted, like every other non-ok CcdResult.
+  # THE ONE *REFUSAL* PATH THAT KEEPS A NON-ZERO EXIT — the other is the
+  # `_json_str probe` at the top of this function (ccd:1379-1380), which is a
+  # FAULT for the same reason this is: nothing about either failure is a verdict
+  # on the request. This one is a fault, not a refusal: nothing about the
+  # request was wrong. The caller must not read this as a REFUSAL ANSWER — it
+  # carries no token and reaches no refusalSentence — but the pair IS still
+  # marked attempted, like every other non-ok CcdResult.
   #
   # NO BUSY GUARD, deliberately, unlike `ws-archive`'s `session-busy`: when the
   # title this verb's automatic caller derives from lands, the session is busy by
