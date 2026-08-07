@@ -225,6 +225,21 @@ no branch, no registry entry — naming each wrapper and why (`disabled` or
 `missing`): `die "no account available for placement — …; nothing was
 touched"`.
 
+That refusal only covers the *declared* case. The score itself still has the
+opposite polarity for the undeclared one, and this rider does not touch it:
+`_limit_field` zeroes any sample whose window has run out — a `five` older
+than 18000s, a `seven` older than 604800s, or either past its own
+`resetAt` — and `_limit_score` returns `""` when a wrapper has no limits
+file at all, which `_ws_least_loaded` and `_swap_target` both fold to `0`.
+Zero is the *lowest* score either picker compares, so an account nobody has
+heard from in a week — no file, or a sample its own window has outlived —
+reads as maximum headroom and is placed **first**, not skipped. No
+telemetry still reads as free for *pressure*; only the declared marker
+excludes. The accounts screen's "last reported *age*" line is the only
+signal that the "least-loaded" pick landed there because it is healthy
+rather than because it has gone quiet; nothing short of the operator reading
+that line and `touch`ing `-disabled` stops it.
+
 The server mirrors only the half it can honestly see. `projectHome` filters
 `disabled` lanes before scoring, and returns `null` when every home-able
 lane is excluded — `ProjectedHome | null` on the wire (`GET /api/accounts`'s
