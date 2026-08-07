@@ -20,7 +20,7 @@
 
 ## Deviations found
 
-Four, recorded rather than silently redesigned. Each names the minimal faithful adaptation.
+Five, recorded rather than silently redesigned. Each names the minimal faithful adaptation.
 
 ### D-1 (blocking) — a `_ws_rename_refuse` helper defeats the refusal-token harvest
 
@@ -45,6 +45,12 @@ Rider D delta 2 says seven *including* the rename. Measured (`grep -rn '\.queue\
 ### D-4 (accepted hazard, stated) — `ccd caps` already advertises `ws-rename`
 
 `ccd/ccd:1454` lists `ws-rename` while the verb is still positional, so `verbSupported` answers **true** on a fleet whose ccd predates this PR: the probe-before-claim rule (`spec:326-339`) is necessary but not sufficient across this one upgrade. The old body binds its two arguments positionally — `local id="${1:?usage: …}"; local new="${2:?…}"` — and the new argv is `['ws-rename', '--session', <id>, '--branch', <name>]`, so `$1` is the literal `--session` and `$2` is `<id>`, **both non-empty**: neither `${1:?}` nor `${2:?}` fires. Execution falls through to `[[ -f "$REG/$id.uuid" ]] || die "no such session: $id"` with `id` bound to `--session`, so an old ccd dies **`no such session: --session`** — not bash's own usage refusal (measured; see Build 3 PR H review finding 3, which corrected the same false sentence in `watch.ts`'s docstring). **This is accepted and not engineered around** (Rider D delta 5): it surfaces as one non-ok `CcdResult` per (session, derived name), the retry guard absorbs it, and the rollout is agent-first so the window is the length of one deploy. Do not add a shape probe, a version verb, or a caps entry rename to close it.
+
+### D-5 (blocking, retroactive) — `PERMANENT_REFUSALS` deviates from spec:151-158/408 and the earlier plan text; both the design doc and Task 8's own copy were stale until this task
+
+Spec:151-158 and the definition of done (spec:408, "A workspace that refused once is not retried until its title changes or the server restarts") describe **one** retry rule for every refusal: a title change is always worth exactly one fresh attempt, never zero. Build 3 PR H review finding 1, landed earlier on this branch (commit 284679d), found that rule unsafe for five of the thirteen tokens — `has-upstream`, `not-a-workspace`, `worktree-unregistered`, `worktree-foreign`, `bad-branch` — because each names a fact about the workspace's shape that a later title cannot change, so retrying them forever on every title edit is pure waste. `server/src/watch.ts:45-47` (`PERMANENT_REFUSALS`) and `:164`/`:489`/`:535` (`nameSweepRetired`) implement the split: those five retire the *session* — `if (this.nameSweepRetired.has(r.id)) continue;` at `:489`, before any stat or transcript read — while the remaining eight (`bad-args`, `no-such-session`, `incomplete-registry`, `worktree-missing`, `detached`, `unchanged`, `name-taken-local`, `name-taken-origin`) still earn the spec's one fresh attempt per changed derived name, via `attemptedRenames`.
+
+That review finding updated only `watch.ts`'s own docstrings and this file's D-4 neighbourhood was left alone — Task 8's original prose (this plan, "Step 1: Write it") was copied verbatim from the spec's single-rule sentence, before finding 1 landed, and nobody re-diffed it after. It shipped in commit 8d3b350 describing behaviour the branch no longer has. **Adaptation:** README.md:101-102's retry sentence now names the five-token permanent set explicitly and says the other eight retry on a changed derived name, matching `PERMANENT_REFUSALS` rather than the single-rule spec text; the spec document itself is intentionally left as the historical design record and not edited by this task.
 
 ---
 

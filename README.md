@@ -99,7 +99,14 @@ on this box) is not re-read forever.
 JSON on stdout at exit 0 — thirteen named tokens, whose copy lives in
 `server/src/wsaudit.ts` — and only `git branch -m` itself failing is a non-zero
 exit, because that is a fault rather than a refusal. A refused workspace keeps
-its born name and is not retried until its title changes or the server restarts.
+its born name. Five of the thirteen refusals describe a fact about the
+workspace that a later title cannot change — `has-upstream` plus
+`not-a-workspace`, `worktree-unregistered`, `worktree-foreign` and
+`bad-branch` (`server/src/watch.ts`'s `PERMANENT_REFUSALS`) — and those retire
+the session outright: no further attempt, on any title, until the server
+restarts. Every other refusal marks only that one `(session, derived name)`
+pair attempted, so a title that changes to a different slug still earns a
+fresh attempt on the next sweep.
 
 The name types itself into the fleet line and the session header when it lands
 (`pwa/src/fleet/TypedLabel.tsx`); `prefers-reduced-motion` swaps it instantly.
@@ -447,15 +454,20 @@ general remote-shell:
   `stop`, `swap`, `ws-add`), but several now require a longer prefix before
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`, `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
-  `ws-hold`/`ws-release` need `--session`, and `ws-reap` needs `--expect` — a
-  load-bearing confirmation token, so an unconfirmed reap can never cross the
-  wire at all. `clip` and the legacy, unguarded `ws-rm` are gone; `ws-gc`
-  (which would permit `--prune`) was never granted. `gh` has no entry,
-  deliberately: the host token carries the `repo` write scope and there is no
-  read-only credential or cwd sandbox, so any `gh` grant would make this list
-  the sole control between the PWA and `gh pr merge` — the one PR write goes
-  through a `ccd` verb instead. Anything else comes back
-  `{ok:false, err:'forbidden'}`.
+  `ws-hold`/`ws-release`/`ws-rename` need `--session`, and `ws-reap` needs
+  `--expect` — a load-bearing confirmation token, so an unconfirmed reap can
+  never cross the wire at all. `ws-rename`'s flag guards a different hazard:
+  the verb destroys nothing, but it is the first whose argv the server builds
+  from model output (`FleetWatcher`'s naming sweep) and sends with no human
+  anywhere in the path — a bare `['ws-rename']` would still permit the whole
+  positional argv surface the verb used to have, so naming the flag is what
+  keeps the grant two tokens wide. `clip` and the legacy, unguarded `ws-rm`
+  are gone; `ws-gc` (which would permit `--prune`) was never granted. `gh`
+  has no entry, deliberately: the host token carries the `repo` write scope
+  and there is no read-only credential or cwd sandbox, so any `gh` grant
+  would make this list the sole control between the PWA and `gh pr merge` —
+  the one PR write goes through a `ccd` verb instead. Anything else comes
+  back `{ok:false, err:'forbidden'}`.
 - **Path whitelist**: every file op resolves the target through `realpath`
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
