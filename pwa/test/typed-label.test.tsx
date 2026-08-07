@@ -47,7 +47,12 @@ describe('TypedLabel', () => {
     const el = document.querySelector('span')!;
     expect(el.textContent!.startsWith('ws/fix')).toBe(true);
     expect(el.textContent).not.toContain('sheet');
-    expect(document.querySelector('.typed-caret')).not.toBeNull();
+    const caret = document.querySelector('.typed-caret');
+    expect(caret).not.toBeNull();
+    // Pinned: the caret is decoration, never announced on its own — its
+    // ancestor's aria-hidden wrapper already covers it, but this is the
+    // property that must hold regardless of where it sits in that tree.
+    expect(caret!.getAttribute('aria-hidden')).toBe('true');
 
     act(() => { vi.advanceTimersByTime(TYPE_MS * 'ws/fix-the-pr-sheet'.length); });
     expect(screen.getByText('ws/fix-the-pr-sheet')).toBeInTheDocument();
@@ -57,11 +62,43 @@ describe('TypedLabel', () => {
   it('the settled value is ONE text node, so getByText still finds it', () => {
     // Not decoration: header.test.tsx:502 reads the crumb through
     // getAllByText and asserts length 1, and getNodeText concatenates direct
-    // TEXT-node children only. A per-character split into sibling spans would
-    // make that query find nothing.
+    // TEXT-node children only. The text node lives one level down from
+    // `.chat-crumb` now (inside the `aria-hidden` wrapper — see the component
+    // docstring's ACCESSIBLE NAME section), so `.chat-crumb` itself carries no
+    // direct text node any more; a per-character split into sibling spans
+    // would still make BOTH queries below find nothing, which is what they
+    // pin against.
     render(<TypedLabel text="ws/quiet-mesa" className="chat-crumb" />);
-    const el = document.querySelector('.chat-crumb')!;
-    expect([...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE)).toHaveLength(1);
+    const root = document.querySelector('.chat-crumb')!;
+    expect([...root.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE)).toHaveLength(0);
+    const hidden = root.querySelector(':scope > [aria-hidden]')!;
+    expect([...hidden.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE)).toHaveLength(1);
+  });
+
+  // Review finding 8. The wrapper's whole reason to exist: the root's
+  // computed accessible name must be the FULL target text from the first
+  // frame, not `shown` (which starts at `''` the instant a rename begins,
+  // then grows one character per tick) — see TypedLabel's ACCESSIBLE NAME
+  // docstring section.
+  it('aria-label on the root carries the FULL value, even on the first frame of a change', () => {
+    vi.useFakeTimers();
+    const { rerender } = render(<TypedLabel text="ws/quiet-mesa" className="sess-label" />);
+    rerender(<TypedLabel text="ws/fix-the-pr-sheet" className="sess-label" />);
+
+    // Before a single timer tick: `shown` has already reset to '', but the
+    // root's aria-label must already say the FULL new name.
+    const root = document.querySelector('.sess-label')!;
+    expect(root.getAttribute('aria-label')).toBe('ws/fix-the-pr-sheet');
+    // `shown` is '' at this instant — only the caret glyph is visible, none
+    // of the new name yet — while the label above already says the whole word.
+    expect(root.querySelector(':scope > [aria-hidden]')?.textContent).toBe('▏');
+
+    act(() => { vi.advanceTimersByTime(TYPE_MS * 6); });
+    // Mid-flight: the label kept its full name; only the hidden text grew.
+    expect(root.getAttribute('aria-label')).toBe('ws/fix-the-pr-sheet');
+
+    act(() => { vi.advanceTimersByTime(TYPE_MS * 40); });
+    expect(root.getAttribute('aria-label')).toBe('ws/fix-the-pr-sheet');
   });
 
   it('reduced motion swaps instantly and never renders a caret', () => {
@@ -102,6 +139,30 @@ describe('the fleet line', () => {
 
     act(() => { vi.advanceTimersByTime(TYPE_MS * 40); });
     expect(screen.getByText('ws/fix-the-pr-sheet')).toBeInTheDocument();
+  });
+
+  // Review finding 8. `.sess-open` is a `<button>` whose only content is
+  // `TypedLabel` — before the aria-label fix its accessible name replayed
+  // `shown`'s own animation: empty on the frame the rename lands (before the
+  // interval's first tick), then a growing prefix, landing on the full name
+  // only once the caret was gone. `getByRole`'s `name` option computes the
+  // REAL accessible name (aria-label wins over content), so this fails
+  // against that regression the way a `textContent` check could not.
+  it('.sess-open’s accessible name is the full new branch on every frame, never empty or partial', () => {
+    vi.useFakeTimers();
+    const { rerender } = render(
+      <SessionLine session={s({ branch: 'ws/quiet-mesa' })} onOpen={() => {}} onActions={() => {}} />);
+
+    rerender(<SessionLine session={s({ branch: 'ws/fix-the-pr-sheet' })} onOpen={() => {}} onActions={() => {}} />);
+    // Frame zero: `shown` has already reset to '' but nothing has ticked yet.
+    expect(screen.getByRole('button', { name: 'ws/fix-the-pr-sheet' })).toBeInTheDocument();
+
+    act(() => { vi.advanceTimersByTime(TYPE_MS * 6); });   // mid-flight
+    expect(screen.getByRole('button', { name: 'ws/fix-the-pr-sheet' })).toBeInTheDocument();
+    expect(document.querySelector('.typed-caret')).not.toBeNull();   // still animating
+
+    act(() => { vi.advanceTimersByTime(TYPE_MS * 40); });   // settled
+    expect(screen.getByRole('button', { name: 'ws/fix-the-pr-sheet' })).toBeInTheDocument();
   });
 
   it('a session with a human-chosen name does not animate on a rename', () => {
