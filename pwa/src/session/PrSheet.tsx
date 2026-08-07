@@ -206,7 +206,28 @@ export function PrSheet({
                 </>
               ) : (
                 <>
-                  <p className="pr-note">Not archived yet (session busy)</p>
+                  {/* TWO reasons a merged PR can still be unarchived, and they
+                      are not the same refusal — this surface is the one an
+                      operator opens after a merge, so it must name the one
+                      that applies (spec: every refusal is named).
+                      `archiveMerged` (server/src/watch.ts) skips on
+                      `r.held !== null` BEFORE it ever asks `archiveSafety`,
+                      so when a hold is present it is the whole cause and the
+                      session is very often idle, not busy — "session busy"
+                      there would send the operator to wait out a session that
+                      is not running, a wait no sweep can ever end. The hold's
+                      reason is rendered verbatim (shared/api.ts's no-parsing
+                      rule) so the sentence names WHICH program refuses.
+                      "Archive now" stays offered in both branches, and that is
+                      not an oversight: `ccd ws-archive` has no held rung of
+                      its own (ccd:1415 — only `ws-rm`/`ws-reap` do), so a
+                      by-hand archive of a held workspace succeeds. Only the
+                      automatic gate is off. */}
+                  <p className="pr-note">
+                    {session.held !== null
+                      ? `Not archived — held: ${session.held}. A held workspace is skipped by every sweep; release it (Release, in the session’s actions sheet) or archive it by hand below.`
+                      : 'Not archived yet (session busy)'}
+                  </p>
                   <button type="button" className="btn-ghost" disabled={busy}
                           onClick={() => void act('Archiving', () => api.archive(session.id))}>
                     Archive now

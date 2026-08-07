@@ -205,6 +205,20 @@ describe('merged', () => {
     expect(screen.queryByRole('button', { name: /clean up/i })).not.toBeInTheDocument();
   });
 
+  // Fix round, finding 1. `archiveMerged` skips a held workspace on
+  // `r.held !== null` BEFORE `archiveSafety` runs, so for a held session the
+  // hold is the ONLY cause and the pane is usually idle — the sheet said
+  // "session busy" and pointed at a wait that can never end. The reason is
+  // rendered verbatim, and "Archive now" survives because `ccd ws-archive`
+  // has no held rung (only ws-rm/ws-reap do).
+  it('names the hold — not a busy session — when a merged workspace is held', async () => {
+    fetched = view({ pr: merged, draft: null });
+    open(sess({ pr: merged, archivedAt: null, held: 'program:agent-evals wave:2/4' }));
+    expect(await screen.findByText(/held: program:agent-evals wave:2\/4/)).toBeInTheDocument();
+    expect(screen.queryByText(/session busy/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /archive now/i })).toBeInTheDocument();
+  });
+
   it('hands cleanup to the caller rather than deleting anything itself', async () => {
     const onReap = vi.fn();
     fetched = view({ pr: merged, draft: null });

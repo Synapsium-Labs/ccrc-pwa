@@ -111,11 +111,18 @@ parsed nowhere. Workspace-only (a main checkout has nothing to protect) and an
 archived workspace refuses (restore first); an empty reason refuses, on both
 the client and ccd itself, with the identical sentence.
 
-The one thing a hold changes: `archiveMerged`'s auto-archive gate gains
+A hold has exactly two consumers. `archiveMerged`'s auto-archive gate gains
 `held !== null` as an extra conjunct, so a workspace idle between two waves of
 the same program reads as claimed, not finished, and survives a sweep even
-after its PR merges. Everything else — the bucket ladder, `ws-archive` itself,
-manual archive/restore — is unchanged. See
+after its PR merges. And `ws-rm` / `ws-reap` grow one refusal rung apiece:
+destroying a workspace a program declared mid-flight takes two deliberate acts,
+never one — `ws-rm` dies with `held: <reason> — release first`, `ws-reap`
+answers `{"refused":"held"}`, and the cleanup sheet renders that as "A program
+has this workspace held — it is mid-flight, so nothing was removed." Release
+first, then clean up. Unchanged: the bucket ladder, `ws-archive` itself, and
+manual archive/restore — a merged-but-held workspace can still be archived by
+hand from the PR sheet, which is why that sheet names the hold instead of
+promising a sweep that will never come. See
 [`docs/superpowers/programs/TEMPLATE.md`](docs/superpowers/programs/TEMPLATE.md)
 for the wave-handoff ledger a program keeps beside its hold.
 
