@@ -24,6 +24,7 @@ import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { sessionLabel } from './sessionLabel';
+import { TypedLabel } from './TypedLabel';
 import './fleet.css';
 
 /** Routing policy calls a window critical above this. */
@@ -201,7 +202,7 @@ export function SessionLine({
           aria-current={selected ? 'page' : undefined}
           onClick={open}
         >
-          <span className="sess-label">{label}</span>
+          <TypedLabel className="sess-label" text={label} />
         </button>
 
         {/* Second line: a quiet flex row, not a grid track — a missing cell

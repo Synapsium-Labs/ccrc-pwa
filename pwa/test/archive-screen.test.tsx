@@ -80,6 +80,13 @@ describe('ArchiveScreen', () => {
     expect(screen.getByRole('button', { name: 'workspace demo-main in demo' })).toBeInTheDocument();
   });
 
+  it('keeps the born slug after the branch has been renamed', () => {
+    render(<ArchiveScreen sessions={[s({ workspace: 'quiet-basin', branch: 'ws/fix-the-pr-sheet' })]}
+                          onOpen={() => {}} />);
+    expect(screen.getByText('quiet-basin')).toBeInTheDocument();
+    expect(screen.queryByText('ws/fix-the-pr-sheet')).not.toBeInTheDocument();
+  });
+
   it('an archived-and-held row says it is held, with the reason verbatim', () => {
     // FIX-WAVE OBSERVATION. `ws-hold` refuses an archived workspace, but the
     // reverse order is a supported flow (hold, then archive by hand from the

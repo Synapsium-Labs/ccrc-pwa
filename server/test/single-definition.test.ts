@@ -235,3 +235,23 @@ describe('one KeyedQueue for the process', () => {
       .toContain('queue: deps.queue');
   });
 });
+
+describe('one sessionLabel', () => {
+  // `pwa/src/fleet/sessionLabel.ts`'s whole docstring is "what to call a
+  // session, everywhere" — and by the time smart branch naming landed there
+  // were two: the sheet's title (`SessionActionsSheet.tsx:203`) had grown a
+  // verbatim copy of the chain. Same class as UNCHECKED_PR above, same fix, and
+  // this is the mechanism rather than another comment asking nicely.
+  const CHAIN = /session\.name \?\? session\.branch/;
+
+  it('is defined in exactly one file, and that file is sessionLabel.ts', () => {
+    const holders = ALL.filter((f) => CHAIN.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['pwa/src/fleet/sessionLabel.ts']);
+  });
+
+  it('is what the former copy site now uses', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'pwa/src/fleet/SessionActionsSheet.tsx'), 'utf8');
+    expect(src).toContain('sessionLabel');
+    expect(src).toMatch(/import \{ sessionLabel \} from '\.\/sessionLabel'/);
+  });
+});

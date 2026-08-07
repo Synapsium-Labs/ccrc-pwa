@@ -17,6 +17,7 @@ import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import { sessionLabel } from '../fleet/sessionLabel';
+import { TypedLabel } from '../fleet/TypedLabel';
 import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
@@ -218,7 +219,7 @@ export function SessionHeader({
               <span className="chat-crumb-sep" aria-hidden="true">
                 ›
               </span>
-              <span className="chat-crumb">{crumb}</span>
+              <TypedLabel className="chat-crumb" text={crumb} />
             </>
           )}
         </h1>

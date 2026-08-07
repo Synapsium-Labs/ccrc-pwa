@@ -1128,3 +1128,11 @@ describe('audits outliving the sheet that asked for them (fix round 3, P1)', () 
     expect(screen.queryByText(/alpha audit died/)).not.toBeInTheDocument();
   });
 });
+
+describe('the confirmation names what it will actually remove', () => {
+  it('keeps the born slug after the branch has been renamed', async () => {
+    render(<><ToastHost /><ReapSheet session={sess({ workspace: 'quiet-basin', branch: 'ws/fix-the-pr-sheet' })}
+                                     open onClose={() => {}} onReaped={() => {}} /></>);
+    expect(await screen.findAllByText(/quiet-basin/)).not.toHaveLength(0);
+  });
+});

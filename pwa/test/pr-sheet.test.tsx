@@ -597,3 +597,10 @@ describe('one copy of the phase words (final-round integration finding 5)', () =
     expect(hits[0]?.className).toBe('pr-lede');
   });
 });
+
+describe('the sheet names the directory, not the branch', () => {
+  it('keeps the born slug after the branch has been renamed', async () => {
+    open(sess({ workspace: 'quiet-basin', branch: 'ws/fix-the-pr-sheet' }));
+    expect(await screen.findByText('quiet-basin')).toBeInTheDocument();
+  });
+});

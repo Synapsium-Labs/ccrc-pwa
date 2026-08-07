@@ -20,6 +20,7 @@ import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { api, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
 import { accountLabel } from '../lib/accounts';
+import { sessionLabel } from './sessionLabel';
 import { SwapSheet } from './SwapSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
@@ -200,7 +201,7 @@ export function SessionActionsSheet({
     : seven !== null && seven > CRITICAL ? '7d'
     : null;
 
-  const label = session.name ?? session.branch ?? session.workspace ?? session.id;
+  const label = sessionLabel(session);
 
   return (
     <>
