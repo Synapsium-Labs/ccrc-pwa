@@ -168,15 +168,20 @@ whose entire purpose is to be forgotten.
 The paragraph above describes one rule for every refusal — a title change is
 always worth exactly one fresh attempt. **The shipped code does not do this.**
 `PERMANENT_REFUSALS` (`server/src/watch.ts`) retires the whole SESSION, not
-just the pair, on four tokens whose fact about the workspace no later title can
+just the pair, on five tokens whose fact about the workspace no later title can
 change: `has-upstream`, `not-a-workspace`, `worktree-unregistered`,
-`worktree-foreign` — and, added by the same review, `registry-branch-drift`
-(git's worktree record disagreeing with the registry's `branch` field). A
-session retired this way gets no further naming attempt, on any title, until
-the server restarts — `nameSweepRetired` is checked first in condition 4,
-before this section's `<id>:<derived-branch>` attempted-set even runs. Every
-other token (including `bad-branch`, which is a verdict on the *derived
-branch* and can change with the title) still follows the rule as originally
+`worktree-foreign` and `registry-branch-drift` (git's worktree record
+disagreeing with the registry's `branch` field). A session retired this way
+gets no further naming attempt, on any title, until the server restarts — or
+until Claude Code rotates that session's own uuid (a `/clear`, a compaction):
+`ccd`'s `_sync_uuid` mirrors the rotation into the registry, and both
+`nameSweepRetired` and the attempted-set below are keyed on `<id>#<uuid>`, so
+a fresh incarnation starts unretired without a restart (`attemptedRenames`'s
+docstring in `watch.ts` has the mechanism). `nameSweepRetired` is checked
+first in condition 4, before this section's `<id>#<uuid>:<derived-branch>`
+attempted-set even runs. Every other token (including `bad-branch`, which is a
+verdict on the *derived branch* and can change with the title) still follows
+the rule as originally
 specified above: one fresh attempt per (session, derived name). This
 correction is recorded here, in the binding document, rather than only in a
 successor plan's deviation note — an operator reading this spec to understand
@@ -432,8 +437,15 @@ and unharmed, and starts naming at the next caps refresh after its ccd is
 installed.
 
 **Corrected 2026-08-07, after the build.** The "not retried until its title
-changes" sentence above is the rule for eight of the shipped tokens only. Five —
-`has-upstream`, `not-a-workspace`, `worktree-unregistered`, `worktree-foreign`,
-`registry-branch-drift` — are not retried until the server restarts, full stop;
-a title change earns nothing for them. See the retry-storm guard section's
-correction for the mechanism and the reasoning.
+changes" sentence above is the rule for nine of the shipped tokens only — not
+eight; `cmd_ws_rename` emits fourteen tokens in total (`bad-args`,
+`no-such-session`, `not-a-workspace`, `incomplete-registry`,
+`worktree-missing`, `bad-branch`, `worktree-unregistered`, `detached`,
+`worktree-foreign`, `registry-branch-drift`, `unchanged`, `has-upstream`,
+`name-taken-local`, `name-taken-origin`), and nine plus the five below is
+fourteen, not thirteen. Five — `has-upstream`, `not-a-workspace`,
+`worktree-unregistered`, `worktree-foreign`, `registry-branch-drift` — are not
+retried on a title change at all; only the server restarting, or Claude Code
+rotating that session's own uuid (`_sync_uuid`, mirrored into the registry —
+retirement is keyed on `<id>#<uuid>`), earns a fresh attempt. See the
+retry-storm guard section's correction for the mechanism and the reasoning.

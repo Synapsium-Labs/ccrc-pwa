@@ -94,12 +94,15 @@ no new registry field and nothing to clean up on reap — and it reads the
 transcript behind a size+mtime gate, so a transcript with no title (nine of 609
 on this box) is not re-read forever.
 
-**A branch that has been pushed is never renamed.** `ccd ws-rename` refuses with
-`has-upstream` — checked two ways, a configured tracking upstream OR the old
-name showing up on origin directly, so a branch pushed by hand with no `-u`
-(no upstream is configured, but the name is on the remote) is caught the same
-as one pushed through `ccd pr-open`'s `--set-upstream` — which is what makes
-running this unattended safe. `ccd ws-rename` also refuses `registry-branch-drift`
+**A branch that has been pushed is never renamed — checked two ways against
+origin; when origin is unreachable the rename proceeds with a warning.**
+`ccd ws-rename` refuses with `has-upstream` for a configured tracking upstream
+OR the old name showing up on origin directly, so a branch pushed by hand with
+no `-u` (no upstream is configured, but the name is on the remote) is caught
+the same as one pushed through `ccd pr-open`'s `--set-upstream`. Both probes
+ask only `origin`, and — refusing here would make ws-rename unusable offline
+for a branch that has never been pushed — both warn and proceed rather than
+refuse when it cannot be reached. `ccd ws-rename` also refuses `registry-branch-drift`
 when git's own record for the worktree disagrees with the registry's `branch`
 field — the same corroboration `ws-reap` already requires — so a workspace
 hand-renamed with a bare `git branch -m` (bypassing this verb, and so never
@@ -118,7 +121,11 @@ remedy in the refusal detail — the first two a `git -C $main worktree add …`
 the last a re-run of `ccd ws-rename` once the registry and git agree again —
 so "cannot stop being true" holds only in the sense that no title fixes it) —
 and those retire the session outright: no further attempt, on any title, until
-the server restarts. `bad-branch` is a verdict on the *derived branch*, not the
+the server restarts — or until Claude Code rotates that session's own uuid (a
+`/clear`, a compaction), which `ccd`'s `_sync_uuid` mirrors into the registry
+and which earns a fresh incarnation just as a restart does, since retirement
+is keyed on `<id>#<uuid>` (`server/src/watch.ts`'s `attemptedRenames`
+docstring has the mechanism). `bad-branch` is a verdict on the *derived branch*, not the
 workspace, so it is deliberately not in that set — a title that changes can
 change it — even though `deriveBranch` never actually emits a name `ccd` would
 reject, so the refusal does not fire in practice. Every other refusal marks
