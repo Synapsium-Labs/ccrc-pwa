@@ -137,6 +137,37 @@ describe('_gpt_status must not call a Codex weekly cap a 5h cooldown', () => {
   });
 });
 
+describe('_gpt_status disabled branch goes through _lane_enabled, not a second read of the marker path', () => {
+  // Before this fix, _gpt_status checked `[[ -f "$GPT_DISABLE_FILE" ]]`
+  // directly while _gpt_enabled/_account_ok went through _lane_enabled — two
+  // readers of one boolean, spelled two different ways, free to drift. These
+  // tests override _lane_enabled itself (a plain shell function redefinition,
+  // resolved at call time) and check that _gpt_status follows THAT, not the
+  // marker file on disk — a direct `-f` check would ignore the override
+  // entirely and fail both assertions below.
+  const installGpt = (): void => {
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  };
+
+  it('reports DISABLED when _lane_enabled says so, even with no marker file on disk', () => {
+    installGpt();
+    expect(sh('_lane_enabled() { return 1; }; _gpt_status')).toContain('DISABLED');
+  });
+
+  it('does not report DISABLED when _lane_enabled says enabled, even with the marker file present', () => {
+    installGpt();
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
+    expect(sh('_lane_enabled() { return 0; }; _gpt_status')).not.toContain('DISABLED');
+  });
+
+  it('names the real marker path in the message (GPT_DISABLE_FILE survives as the display path)', () => {
+    installGpt();
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
+    expect(sh('_gpt_status')).toBe(`DISABLED (kill-switch; rm ${home}/.cc-sessions/gpt-disabled to re-enable)`);
+  });
+});
+
 describe('_fmt_eta unit boundaries', () => {
   // The unit used to be chosen from raw seconds and the figure rounded afterwards,
   // so 7199s rounded to 120 minutes but stayed in the minutes branch and printed

@@ -58,7 +58,12 @@ _account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }
 _gpt_enabled() { _account_ok gpt; }   # same file ($GPT_DISABLE_FILE == $REG/gpt-disabled), same semantics, one definition
 _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
-  [[ -f "$GPT_DISABLE_FILE" ]] && { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
+  # Same file `_gpt_enabled`/`_account_ok` check ($REG/gpt-disabled ==
+  # $GPT_DISABLE_FILE), read through the one function now: two readers of the
+  # same boolean used to mean two spellings of the same path that could drift
+  # independently. GPT_DISABLE_FILE itself stays — this message is its only
+  # remaining reader, to name the path for the operator.
+  _lane_enabled gpt || { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
   if ! _avail gpt; then
     # TWO different files can land here, and only one of them is a 429:
     #   • the compact exclusion ccd itself writes on a 429 ({"five":100,"seven":0,
