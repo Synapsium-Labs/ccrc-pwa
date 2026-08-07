@@ -78,6 +78,34 @@ The pane scraper still runs, and still raises a dialog the hook never got a
 write for (an older Claude Code, a hook that failed to install). Neither source
 suppresses the other; the PWA prefers the envelope and falls back to the scrape.
 
+### The branch takes the name the model already wrote
+
+A workspace is born `ws/soft-prairie` — two words from a random table, fixing
+the session id, the directory, the tmux session, the unit, the registry key and
+the branch. The name says nothing about the work. Claude Code, meanwhile, has
+already written one: every transcript carries an `ai-title` line generated from
+the first prompt, and until now nothing read it.
+
+`FleetWatcher`'s naming lane (10 s) renames the branch to that title, slugified:
+lowercase, non-alphanumeric runs collapsed to `-`, at most 40 characters cut
+back to a word boundary, prefixed `ws/`. It fires only while the branch is still
+exactly its born name — that comparison *is* the idempotence marker, so there is
+no new registry field and nothing to clean up on reap — and it reads the
+transcript behind a size+mtime gate, so a transcript with no title (nine of 609
+on this box) is not re-read forever.
+
+**A branch that has been pushed is never renamed.** `ccd ws-rename` refuses with
+`has-upstream`, which is what makes running this unattended safe. It refuses in
+JSON on stdout at exit 0 — thirteen named tokens, whose copy lives in
+`server/src/wsaudit.ts` — and only `git branch -m` itself failing is a non-zero
+exit, because that is a fault rather than a refusal. A refused workspace keeps
+its born name and is not retried until its title changes or the server restarts.
+
+The name types itself into the fleet line and the session header when it lands
+(`pwa/src/fleet/TypedLabel.tsx`); `prefers-reduced-motion` swaps it instantly.
+The workspace slug itself never changes — the archive list, the PR sheet and the
+cleanup confirmation all still name the directory on disk.
+
 ### The attention bucket
 
 Every session on the fleet wire carries `bucket` and `bucketSince`, computed
@@ -360,6 +388,11 @@ script in particular — must ship to the fleet host *before or with* the server
 because the server reads what the hook writes. Shipping a server that expects a
 newer envelope shape to a fleet still running the old hook is how you get a
 confident UI over stale data. A server+PWA-only change has no such constraint.
+`ccd ws-rename` is the same rule with a sharper edge: the naming lane calls it
+unattended, and `ccd caps` has advertised the verb since long before it took
+flags — so a server deployed ahead of its ccd sees the verb gate pass and the
+call fail. One attempt per workspace, absorbed by the lane's retry guard, and
+zero if the agent ships first.
 
 **Restore** (manual, from the target box — pick the `<ts>` to roll back to):
 
