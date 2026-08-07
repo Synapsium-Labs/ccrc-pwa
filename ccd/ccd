@@ -6423,10 +6423,19 @@ _swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay 
   [[ -n "$best" ]] && echo "$best"
 }
 
+_pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
+  # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
+  # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
+  # that WAS working and lost auth is exactly as stuck. "Select login method" stays OUT: that
+  # screen appears during an intentional login, not a failure — evacuating out from under an
+  # operator mid-login would be wrong (see _pane_login_screen, which owns that screen instead).
+  grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?|Invalid API key|Please run /login" <<<"$1"
+}
+
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
-  #   home the instant it has room again. A hard-blocked session (limit/spend banner up) swaps
-  #   immediately; any other move waits for a clean turn boundary.
+  #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
+  #   lost) swaps immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
@@ -6440,12 +6449,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   target=$(_swap_target "$id" "$wrapper" "$home")
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
-  # Hard-blocked (a real limit/spend banner is up): the session is stuck anyway -> swap now.
-  # The 429/rate-limit patterns also catch the gpt overflow lane hitting the ChatGPT-sub
-  # Codex usage cap (surfaces as "API Error: 429 ..."). When gpt is the exhausted account,
-  # write a cc-limits/gpt.json exclusion so OTHER sessions stop rotating into it until the
-  # 5h window rolls over (gpt has no native telemetry; this is its only "pool is full" signal).
-  if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?"; then
+  # Hard-blocked (a real limit/spend banner is up, or auth was lost): the session is stuck
+  # anyway -> swap now. The 429/rate-limit patterns also catch the gpt overflow lane hitting the
+  # ChatGPT-sub Codex usage cap (surfaces as "API Error: 429 ..."). When gpt is the exhausted
+  # account, write a cc-limits/gpt.json exclusion so OTHER sessions stop rotating into it until
+  # the 5h window rolls over (gpt has no native telemetry; this is its only "pool is full" signal).
+  if _pane_hard_blocked "$pane"; then
     [[ "$wrapper" == gpt ]] && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/gpt.json"
     _reg_set "$id" lastswap "$now"
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
@@ -6513,6 +6522,12 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
 }
 
+# Auth screens must never receive synthesized keystrokes: on a numbered login
+# menu a stray Enter selects whatever the cursor is on.
+_pane_login_screen() {
+  grep -Eq 'Select login method|Invalid API key|Please run /login' <<<"$1"
+}
+
 _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
@@ -6531,6 +6546,13 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   local t="$1" fromswap="${2:-0}" i pane
   for i in $(seq 1 450); do
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
+    # stuck on a human step. No keystroke here could be right, so stop polling and report —
+    # the caller (_spawn) must not chase this with an /effort injection either.
+    if _pane_login_screen "$pane"; then
+      echo "warn: session is waiting for login — attach and run /login" >&2
+      return 2
+    fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
     # without it supervise sits here for the full window and never reaches its watch loop.
@@ -6585,10 +6607,13 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # Follow the most-recent client's size (defensive; with attach -d there's only ever one client,
   # so the window always fits the device you're on — no smaller-client "dotted filler" clash).
   tmux set-option -t "$tname" window-size latest 2>/dev/null
-  _accept_first_run_prompts "$tname" "$fromswap"
+  local prompt_rc
+  _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
   # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (GPT backend
-  # doesn't take it and the injection would just error into the prompt box).
-  [[ "$wrapper" != gpt ]] && _inject_spawn_effort "$tname"
+  # doesn't take it and the injection would just error into the prompt box). Code 2 means
+  # _accept_first_run_prompts stopped at a login screen — skip the same way: a synthesized
+  # keystroke into an auth flow is never correct.
+  [[ "$wrapper" != gpt && "$prompt_rc" != 2 ]] && _inject_spawn_effort "$tname"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
