@@ -1402,15 +1402,22 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
     return 0
   fi
 
-  local ws project workdir
+  local ws project workdir reg_branch
   ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  reg_branch=$(_reg_get "$id" branch)
   # The absence of a workspace field is what distinguishes a main checkout.
   if [[ -z "$ws" ]]; then
     printf '{"refused":"not-a-workspace","detail":%s,"paths":[]}\n' \
       "$(_json_str "$id is not a workspace — refusing to rename a main checkout's branch")"
     return 0
   fi
-  if [[ -z "$project" || -z "$workdir" ]]; then
+  # `branch` joins `project`/`workdir` here — the same three fields
+  # cmd_ws_reap's identity phase requires (ccd:3323-3327). Without it, a row
+  # missing `branch` fell through to the registry-branch-drift rung below,
+  # which reads $reg_branch unconditionally: `"the registry says , git's
+  # worktree record for $workdir says $old"`, a detail with a blank clause
+  # standing in for a refusal that actually names the gap.
+  if [[ -z "$project" || -z "$workdir" || -z "$reg_branch" ]]; then
     printf '{"refused":"incomplete-registry","detail":%s,"paths":[]}\n' \
       "$(_json_str "incomplete registry for '$id'")"
     return 0
@@ -1453,7 +1460,8 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   #      here ("unable to locate repository") — it cannot rebuild a record that
   #      was deleted. Re-adding the worktree can, once the orphaned checkout is
   #      out of the way (measured: rc 0, and no prune needed — no record stands).
-  local reg_branch; reg_branch=$(_reg_get "$id" branch)
+  #      ($reg_branch itself was already fetched and checked non-empty above,
+  #      alongside project/workdir.)
   if (( registered != 0 )); then
     printf '{"refused":"worktree-unregistered","detail":%s,"paths":[]}\n' \
       "$(_json_str "no worktree record for $workdir in $main — nothing renamed; with no registration no branch name is corroborated (the registry says '${reg_branch:-?}', which nothing now ties to that path): move the leftover directory aside, then git -C $main worktree add $workdir ${reg_branch:-<branch>}")"

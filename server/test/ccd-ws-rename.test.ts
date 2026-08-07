@@ -73,9 +73,17 @@ describe('ws-rename', () => {
   const rename = (id: string, branch: string): Record<string, unknown> =>
     JSON.parse(h.sh(`cmd_ws_rename --session '${id}' --branch '${branch}'`)) as Record<string, unknown>;
 
+  // `paths` is asserted on the PARSED object, never by substring on the raw
+  // text — a mutant that widened the printf's `%s` slot to something other
+  // than the literal `[]` (or dropped the field) would still contain the
+  // six characters `"paths"` somewhere in the string. Every refusal here
+  // routes through this helper, so this is the one place that needs to say
+  // it: `cmd_ws_rename` never has paths to report — that field exists on
+  // this envelope only because `cmd_ws_reap`'s shares the shape.
   const refusal = (id: string, branch: string): string => {
     const o = rename(id, branch);
     expect(o.refused, `expected a refusal, got ${JSON.stringify(o)}`).toBeTruthy();
+    expect(o.paths, `expected "paths":[] on a refusal, got ${JSON.stringify(o)}`).toEqual([]);
     return String(o.refused);
   };
 
@@ -108,6 +116,13 @@ describe('ws-rename', () => {
       'demo-quiet-mesa feat/real-name',
       '--session demo-quiet-mesa --branch feat/real-name --draft true',
       '--branch feat/real-name --session demo-quiet-mesa',
+      // Single-clause mutants: `[[ $# -ne 4 || $1 != --session || $3 != --branch ]]`
+      // has three clauses, and the case above flips BOTH flag positions at
+      // once, so it cannot tell "the $1 check is gone" from "the $3 check is
+      // gone" apart — either alone still catches it. These two are arity 4
+      // with exactly one flag name wrong, so each kills only its own clause.
+      '--sess demo-quiet-mesa --branch feat/real-name',    // only $1 wrong
+      '--session demo-quiet-mesa --brnch feat/real-name',  // only $3 wrong
     ]) {
       const o = JSON.parse(h.sh(`cmd_ws_rename ${argv}`)) as Record<string, unknown>;
       expect(o.refused, `ccd ws-rename ${argv}`).toBe('bad-args');
@@ -137,6 +152,22 @@ describe('ws-rename', () => {
     h.sh(`_reg_set half-row uuid abc
           _reg_set half-row workspace quiet-mesa`);
     expect(refusal('half-row', 'feat/real-name')).toBe('incomplete-registry');
+  });
+
+  // `project` and `workdir` alone do not discriminate this guard: the fixture
+  // above is missing all three fields, so a check that forgot `branch`
+  // entirely would still pass it. This one is complete but for `branch`,
+  // which the registry-branch-drift rung two guards down reads
+  // unconditionally — without this check the row falls through and answers
+  // `{"refused":"registry-branch-drift","detail":"the registry says , git's
+  // worktree record for … says ws/quiet-mesa …"}`, a detail with a blank
+  // clause standing in for a refusal that actually names the gap.
+  it('refuses a registry row missing branch, though project and workdir are present', () => {
+    addOne();
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.branch'));
+    const o = rename('demo-quiet-mesa', 'feat/real-name');
+    expect(o.refused).toBe('incomplete-registry');
+    expect(String(o.detail)).not.toContain('registry says ,');
   });
 
   // The ruling on the missing-directory guard, pinned: ws-rename still REFUSES.
@@ -219,6 +250,25 @@ describe('ws-rename', () => {
       h.sh(`"${CCD}" ws-rename --session demo-quiet-mesa --branch feat/real-name`),
     ) as Record<string, unknown>;
     expect(o.new).toBe('feat/real-name');
+  });
+
+  // The OTHER non-zero path in this function: `_json_str probe`, checked ONCE
+  // up front, before even the arity check, so python3 missing is a FAULT —
+  // the verb cannot answer at all — rather than a swallowed status inside one
+  // of the refusals' own `$(_json_str …)` printing a document with a hole in
+  // it. Same shim idiom as `ccd-ws-audit.test.ts`'s python3-unrunnable case:
+  // `-c` is `_json_str`'s own invocation form and nothing else's here, so this
+  // breaks quoting without touching anything else that shells out to python3.
+  it('REFUSES outright when python3 cannot quote — a fault, not a refusal', () => {
+    addOne();
+    const NOPY = `python3() { [[ "\${1-}" == -c ]] && return 127; command python3 "$@"; };`;
+    expect(h.sh(`${NOPY} ( cmd_ws_rename --session demo-quiet-mesa --branch feat/real-name ) `
+      + `>out.json 2>err.txt; echo "exit=$?"`)).toBe('exit=1');
+    expect(fs.readFileSync(path.join(h.home, 'out.json'), 'utf8'),
+      'a fault must print no document, not a document with a hole in it').toBe('');
+    expect(fs.readFileSync(path.join(h.home, 'err.txt'), 'utf8')).toContain('python3');
+    expect(h.git(path.join(h.home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'))
+      .not.toBe('');
   });
 
   // `git branch -m` failing is the one REFUSAL path that keeps a non-zero exit
