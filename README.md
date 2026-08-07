@@ -163,6 +163,146 @@ Three routes can act on a session, each with its own named refusals:
 | `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
 | `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 
+## Accounts: usage, placement and the disabled marker
+
+**`/accounts`** (a fourth branch of the route ternary, reached by tapping the
+compact `AccountsStrip` mounted in the desktop top bar and the mobile fleet
+list) shows every account ccd knows about, not just the ones with headroom.
+It rides the existing `GET /api/accounts` pipeline — no new route, no new
+whitelist grant — with its own 20 s poller. Per account:
+
+- Both windows (5h / 7d) as bars with the strip's exact `%`/`reset`/`—`
+  three-way, never collapsed: `reset` means the window ended and the zero is
+  *inferred* from the reset timestamp; a measured `0%` means something ran
+  and the account really is empty; `—` means nothing has ever been measured.
+- A freshness line, **"last reported *age*"**. Telemetry is a byproduct of a
+  session rendering its statusline, so an idle account simply stops
+  reporting — the screen reads as "last known", never as live. There is no
+  refresh button: there is nothing to refresh until a session runs.
+- A disabled lane (`~/.cc-sessions/<wrapper>-disabled` present) renders
+  **greyed with "disabled on the fleet host" — shown as switched off, never
+  hidden.** The compact strip still hides a disabled lane entirely (right for
+  an always-on bar); the screen's whole job is "show me my accounts", so
+  hiding one here would be the wrong call in the other direction.
+- Live sessions whose `wrapper` matches the account, each tapping through to
+  `/s/<id>`.
+- A projection line naming ccd's own placement rule ("next workspace lands
+  here — least-loaded"), including the all-disabled case below.
+
+Band coloring uses one writer (`limitBand` from `LimitBar.tsx`) everywhere,
+including the strip: `crit` is `> 75`, matching `DIRECTION.md`, not `>= 75` —
+the strip used to carry its own copy of the threshold and disagreed with the
+limits bar at exactly 75.
+
+### Placement honors the disabled marker
+
+`~/.cc-sessions/<wrapper>-disabled` used to be a **UI-only** kill-switch:
+`server/src/limits.ts` parsed it for every lane, but ccd itself honored it
+for exactly one (`gpt`, via `_gpt_enabled`) — `touch`ing it for any other
+wrapper hid the account from every picker and changed nothing about where
+ccd actually placed sessions. ccd now generalizes the check:
+
+- `_lane_enabled <w>` — true iff `~/.cc-sessions/<w>-disabled` is absent.
+- `_account_ok <w>` — true iff the wrapper is executable **and** its lane is
+  enabled. `_gpt_enabled` is now just `_account_ok gpt`, same file, same
+  semantics, one definition.
+
+Both of ccd's automatic pickers gate on `_account_ok`: `_ws_least_loaded`
+(`ws-add`'s placement rule) skips a disabled or missing lane outright, and
+`_swap_target`'s candidate loop does the same, as does its "home recovered,
+go back" branch — a session never auto-rotates back onto a home that has
+since been disabled. **The two "stay put" branches are unchanged on
+purpose**: disabled excludes a lane as a *destination*; it never evacuates a
+session already sitting there. Manual placement (`ccd start`, `ccd swap`,
+`ccd prefer`) bypasses the gate entirely — naming a wrapper by hand is an
+operator override by construction.
+
+**Pressure alone still never refuses placement** — a fully pinned account is
+still the least-bad choice, and the headroom display is the warning, not a
+refusal. Only the declared marker excludes. But if *every* wrapper fails
+`_account_ok`, `ws-add` refuses **before creating anything** — no worktree,
+no branch, no registry entry — naming each wrapper and why (`disabled` or
+`missing`): `die "no account available for placement — …; nothing was
+touched"`.
+
+The server mirrors only the half it can honestly see. `projectHome` filters
+`disabled` lanes before scoring, and returns `null` when every home-able
+lane is excluded — `ProjectedHome | null` on the wire (`GET /api/accounts`'s
+`projected` field), rather than inventing a target. It cannot see `-x`: the
+server has no filesystem authority over `~/.local/bin`, so a projection can
+still name an account whose binary is gone. **ccd's refusal at `ws-add` is
+the authority; the server's projection is a best-effort forecast of it.**
+Kept in lockstep with the bash by the shared fixture harness
+(`server/test/fixtures/leastLoaded.ts`, run against both implementations).
+
+There is **no login detection** — no passive filesystem signal reliably
+distinguishes a logged-in account from a logged-out one on this box, and a
+probe-based check was rejected (spends tokens, races real logins). The
+`-disabled` marker is a *declared* fact the operator sets by hand
+(`touch`/`rm`), not a detected one.
+
+### Login screens get no keystrokes, and lost auth joins the rescue lane
+
+A session spawned onto a broken account used to spin its full ~15-minute
+startup window, return with no diagnostic, and then type `/effort ultracode`
++ Enter **into the login screen** — an unreviewed keystroke into an auth
+flow. `_accept_first_run_prompts` now recognizes a login screen (`Select
+login method`, `Invalid API key`, `Please run /login`) as its **last**
+check, after every ready-marker and startup gate, and returns a distinct
+code instead of a silent success; `_spawn` skips the `/effort` injection on
+that code, so no synthesized keystroke reaches an auth prompt. Instead it
+warns: `session is waiting for login — attach and run /login`.
+
+Mid-session auth loss joins the same rescue lane a 429 uses: the
+hard-blocked pane grep that drives `_auto_swap_check`'s emergency swap now
+also matches `Invalid API key` and `Please run /login` — a session that
+*was* working and lost auth evacuates immediately, exactly like a rate
+limit. **`Select login method` deliberately stays out of that grep** — that
+screen appears during an intentional operator login, and evacuating a
+session out from under someone mid-login would be wrong; that screen is the
+one case `_accept_first_run_prompts`'s login check owns instead, by warning
+and stopping rather than swapping.
+
+## The PWA↔server protocol handshake (dormant)
+
+Nothing in the system stamps a version today — no `git` sha ships, no
+`package.json` version key is read — and the one real skew window is a
+stale client: the service worker checks for updates every 15 minutes, so an
+open tab can hold pre-deploy JS against a post-deploy server. A synchronous
+`hello` frame closes that gap without doing anything yet:
+
+- `FLEET_PROTO` / `FLEET_PROTO_MIN` live once, in `shared/api.ts` beside
+  `PRESENCE_REFRESH_MS` — both currently `1`, with `MIN <= PROTO` pinned by a
+  test. **`FLEET_PROTO_MIN` is the kill-switch**: raise it above an old
+  build's `FLEET_PROTO` to block that build. It is dormant until then.
+- `/ws/fleet`'s first frame, sent synchronously before the async `fleet`
+  snapshot, is `{ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN }`.
+- **Absence permits.** A connection that never sends `hello` — an older
+  server — never blocks the client; every already-deployed PWA already drops
+  an unrecognized fleet frame silently, which is the safe direction.
+  Blocking requires positive evidence: `hello.min` greater than the client's
+  own `FLEET_PROTO`.
+- Only the client self-blocks — the server never refuses a client; it has no
+  way to know a build is "too new" and nothing here gives it one.
+- A **later, compatible** `hello` on the same connection **clears** the
+  block — deliberately not a one-way latch, so a reconnect to a fixed server
+  unblocks a client that briefly saw a bad frame.
+- While blocked, `BlockScreen` renders as a sibling *above* `.app-shell`
+  (not inside it — a wire-protocol mismatch has no partial-functionality
+  story), copy: *"This app build is too old for the fleet server.
+  Updating…"* plus a manual Reload button. Becoming blocked also **acts**:
+  it triggers the service worker's update check immediately rather than
+  waiting for the 15-minute poll, so most clients self-heal without the
+  button ever being needed.
+- The session stream's reducer (`applySessionMsg`) gained a `default` arm
+  that returns state unchanged — an old client receiving a frame type it
+  doesn't know must shrug at it, not corrupt the store.
+- `AgentReady.v` (the separate server↔agent pair) stays **deliberately
+  unread** — declined, not forgotten: that pair already negotiates by
+  *capability* (`ccdVerbs` + `verbSupported`), which is finer-grained than a
+  bare generation number. `v` remains reserved for a future breaking
+  frame-shape change and gets a consumer only then.
+
 ## Develop
 
 ```bash
@@ -250,10 +390,21 @@ general remote-shell:
   frame with the bearer token within 3 s, or the socket is closed; a wrong
   token closes with code `4401`.
 - **Exec whitelist**: only `tmux` (`has-session`, `list-panes`,
-  `capture-pane`, `send-keys`, `resize-window`) and `ccd` (`start`, `enable`,
-  `ensure`, `stop`, `swap`, `clip`) — matched against the exact bare command
-  name (no path components) and an exact first-argument subcommand. Anything
-  else comes back `{ok:false, err:'forbidden'}`.
+  `capture-pane`, `send-keys`, `resize-window`) and `ccd`, matched against the
+  exact bare command name (no path components) and an argv **prefix** — most
+  `ccd` verbs are still a bare first token (`start`, `enable`, `ensure`,
+  `stop`, `swap`, `ws-add`), but several now require a longer prefix before
+  anything after it is unconstrained: `pr-state` needs `--session` or
+  `--project`, `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
+  `ws-hold`/`ws-release` need `--session`, and `ws-reap` needs `--expect` — a
+  load-bearing confirmation token, so an unconfirmed reap can never cross the
+  wire at all. `clip` and the legacy, unguarded `ws-rm` are gone; `ws-gc`
+  (which would permit `--prune`) was never granted. `gh` has no entry,
+  deliberately: the host token carries the `repo` write scope and there is no
+  read-only credential or cwd sandbox, so any `gh` grant would make this list
+  the sole control between the PWA and `gh pr merge` — the one PR write goes
+  through a `ccd` verb instead. Anything else comes back
+  `{ok:false, err:'forbidden'}`.
 - **Path whitelist**: every file op resolves the target through `realpath`
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
