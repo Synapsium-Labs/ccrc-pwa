@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import type { ProjectedHome } from '../../shared/api.js';
+import { HOME_ABLE_WRAPPERS, type ProjectedHome } from '../../shared/api.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -22,11 +22,13 @@ const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-/** ccd's VALID_WRAPPERS (ccd:10) — the accounts a session may call HOME. `gpt`
- *  is deliberately absent: it is a 4th, opt-in-only lane a session reaches
- *  solely by being sent there on purpose (ccd:11-16), never as a landing spot
- *  chosen for it. */
-const HOME_ABLE = ['claude', 'claude2', 'claude-corp'] as const;
+/** Every wrapper this server will ever fabricate an account row for — mirrors
+ *  ccd's `_is_valid_wrapper` (`VALID_WRAPPERS` + `gpt`, ccd:14,99). The
+ *  registry dir holds `<name>-disabled` markers that are NOT accounts at all
+ *  (`autocompact-disabled` is a fleet-wide proactive-/compact kill switch,
+ *  ccd:22) — bounding the backfill below to this set is what stops one of
+ *  those from turning into a phantom "autocompact" row on GET /api/accounts. */
+const KNOWN_WRAPPERS: readonly string[] = [...HOME_ABLE_WRAPPERS, 'gpt'];
 
 /**
  * The account a new workspace would land on, and its pressure score.
@@ -46,13 +48,25 @@ const HOME_ABLE = ['claude', 'claude2', 'claude-corp'] as const;
  * precisely the warning the user needs, and inventing "none available" here
  * would describe an outcome ccd never produces.
  *
+ * What IS filtered: `disabled`, since `_account_ok` (ccd:57) now gates
+ * `_ws_least_loaded` on exactly that marker. The honest delta: the server has
+ * no filesystem authority over `~/.local/bin`, so it cannot see a missing
+ * wrapper the way `_account_ok`'s `-x` check does — a projection can still
+ * name an account whose binary is gone. ccd's refusal at ws-add is the
+ * authority; this is a best-effort forecast of it. `null` iff every home-able
+ * lane is disabled, mirroring `_ws_least_loaded`'s empty-stdout "" for the
+ * same case — nothing is placeable, and inventing a target would lie.
+ *
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
-export function projectHome(limits: Record<string, AccountLimits>): ProjectedHome {
-  const scored = HOME_ABLE.map((wrapper) => ({
-    wrapper: wrapper as string,
-    score: Math.max(limits[wrapper]?.five ?? 0, limits[wrapper]?.seven ?? 0),
-  }));
+export function projectHome(limits: Record<string, AccountLimits>): ProjectedHome | null {
+  const scored = HOME_ABLE_WRAPPERS
+    .filter((wrapper) => limits[wrapper]?.disabled !== true)
+    .map((wrapper) => ({
+      wrapper: wrapper as string,
+      score: Math.max(limits[wrapper]?.five ?? 0, limits[wrapper]?.seven ?? 0),
+    }));
+  if (scored.length === 0) return null;
   return scored.reduce((best, cand) => (cand.score < best.score ? cand : best));
 }
 
@@ -108,6 +122,24 @@ export async function readLimits(
                        sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
                        disabled: disabledLanes.has(wrapper) };
     }
+  }
+  // A lane can be markered off before it ever writes telemetry (fresh
+  // `touch <w>-disabled`, or a session simply never having run there yet) — the
+  // loop above only visits `.cc-limits/*.json`, so that lane would otherwise be
+  // ABSENT from `out` rather than present-and-disabled. Absent is indistinguishable
+  // from "unknown", which scores 0 and makes the account nobody can place a
+  // session on look like the emptiest one — the exact self-reinforcing hole
+  // `disabled` exists to close. The registry readdir already named every
+  // markered lane, so surface each one that telemetry didn't — but only a
+  // KNOWN wrapper: the registry dir also holds `-disabled` markers that name
+  // no account at all (`autocompact-disabled`), and this loop is the only
+  // place that would otherwise turn one of those into a fabricated row.
+  for (const wrapper of disabledLanes) {
+    if (wrapper in out) continue;
+    if (!KNOWN_WRAPPERS.includes(wrapper)) continue;
+    out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
+                     sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+                     disabled: true };
   }
   return out;
 }

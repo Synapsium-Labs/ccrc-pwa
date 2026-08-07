@@ -1,10 +1,11 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { FleetSession, NotifyEvent } from '../../../shared/api';
+import { FLEET_PROTO, type FleetMsg, type FleetSession, type NotifyEvent } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
+import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
 export interface FleetNotice {
@@ -16,6 +17,13 @@ export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
   notices: FleetNotice[];
+  /** The dormant protocol handshake (shared/api.ts's FLEET_PROTO_MIN): set on
+   *  a `hello` this build cannot satisfy, CLEARED on a later compatible one —
+   *  a reconnect to a fixed server must unblock, so this is never a one-way
+   *  latch. Absence permits: a server that never sends `hello` (older build)
+   *  leaves this false forever. Default false so every existing snapshot
+   *  (offline-persisted, or a store that never saw a frame) reads as usable. */
+  blocked: boolean;
   /**
    * Notifications the server RECORDED since this device last asked — i.e.
    * since the previous fleet-socket open, because that is the only moment the
@@ -43,12 +51,6 @@ export interface FleetState {
   clearMissed(): void;
 }
 
-// Wire shape of the fleet stream (server.ts /ws/fleet) — local to this store;
-// the shared types only cover the per-session stream.
-type FleetMsg =
-  | { type: 'fleet'; sessions: FleetSession[] }
-  | { type: 'notice'; message: string };
-
 const asFleetMsg = (m: unknown): FleetMsg | null => {
   if (typeof m !== 'object' || m === null) return null;
   const t = (m as { type?: unknown }).type;
@@ -56,6 +58,16 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     return m as FleetMsg;
   }
   if (t === 'notice' && typeof (m as { message?: unknown }).message === 'string') {
+    return m as FleetMsg;
+  }
+  // present-but-wrong-typed proto/min is rejected, not coerced — a `hello`
+  // this parser cannot trust is exactly the kind of frame absence-permits
+  // exists to be safe against, so it is dropped like any other unknown one.
+  if (
+    t === 'hello'
+    && typeof (m as { proto?: unknown }).proto === 'number'
+    && typeof (m as { min?: unknown }).min === 'number'
+  ) {
     return m as FleetMsg;
   }
   return null;
@@ -73,7 +85,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   let socket: ReconnectingSocket | null = null;
   let noticeSeq = 0;
 
-  return create<FleetState>()((set) => {
+  return create<FleetState>()((set, get) => {
     const nudge = (): void => socket?.nudge();
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') nudge();
@@ -88,6 +100,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       conn: 'connecting',
       notices: [],
       missed: [],
+      blocked: false,
 
       connect() {
         if (socket) return;
@@ -127,10 +140,21 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             if (msg.type === 'fleet') {
               saveFleetSnapshot(msg.sessions); // keep the offline snapshot fresh
               set({ sessions: msg.sessions });
-            } else {
+            } else if (msg.type === 'notice') {
               noticeSeq += 1;
               const notice: FleetNotice = { id: noticeSeq, message: msg.message };
               set((s) => ({ notices: [...s.notices, notice] }));
+            } else {
+              // hello: the server's own protocol generation, restated on
+              // every connect including reconnects. Blocking requires
+              // POSITIVE evidence (min > this build's own PROTO) — the
+              // absence-permits rule this pair shares with verbSupported.
+              // Fires the update check only on the RISING edge (newly
+              // blocked), not on every hello a still-blocked client keeps
+              // receiving from a server it cannot talk to yet.
+              const blocked = msg.min > FLEET_PROTO;
+              if (blocked && !get().blocked) requestUpdate();
+              set({ blocked });
             }
           },
           onState: (conn) => set({ conn }),

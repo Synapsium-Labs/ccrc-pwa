@@ -551,11 +551,28 @@ export interface WsTombstone {
 /* ---------------------------------------------------------------------------
  * Snapshot revival — reading a FleetSession[] that an OLDER BUILD persisted.
  *
- * The skew is across TIME, not across the wire: the server serves the PWA it
- * was built with, so a `/ws/fleet` frame always comes from this build. Two
- * snapshots do not — `ccrc.fleet-snapshot.v1` in localStorage
+ * A `/ws/fleet` frame is NOT guaranteed to come from this build — that used
+ * to be this comment's premise, and it is false: Rider E's handshake exists
+ * exactly because it is false. `autoUpdate`'s 15-minute SW check leaves a
+ * window where an open tab holds pre-deploy JS against a post-deploy server
+ * (`FleetMsg`'s `hello` frame below, `FLEET_PROTO`/`FLEET_PROTO_MIN`, and the
+ * block screen's "This app build is too old for the fleet server." all exist
+ * to manage exactly that skew). The conclusion below still holds, but for a
+ * narrower reason than "can't happen": the stale-client window is
+ * new-writer/old-reader ONE-WAY — a newer server only ever ADDS frame fields
+ * or types, and an already-deployed PWA already drops an unknown fleet frame
+ * type silently (`fleet.ts`) — so the failure mode this file exists to catch
+ * below (`undefined !== null` reading a whole fleet as archived) cannot arise
+ * from a live `/ws/fleet` frame. It is real for the two PERSISTED snapshots,
+ * because those are read back by whatever build starts NEXT — older, same,
+ * or newer than the one that wrote them, unlike a stale tab on a forward
+ * deploy, which can only ever be older than the server it talks to. (A
+ * rollback breaks even that: deploy.sh keeps per-timestamp backups
+ * precisely so the server can go back to a build older than a tab already
+ * holds — the "older, same, or newer" span above is the honest one, not a
+ * hedge.) The two snapshots: `ccrc.fleet-snapshot.v1` in localStorage
  * (pwa/src/lib/offline.ts) and `~/.ccrc/state-cache.json`
- * (server/src/fleetstate.ts) are read back by whatever build starts next.
+ * (server/src/fleetstate.ts).
  *
  * Reading them with a blind `as FleetSession[]` is not a cosmetic sin. Every
  * consumer tests `archivedAt !== null`, and `undefined !== null` is TRUE, so a
@@ -1092,6 +1109,16 @@ export interface FleetHealth {
   downSince: number | null;   // epoch ms since the agent connection dropped
 }
 
+/** The three accounts a session may call HOME — mirrors ccd's `VALID_WRAPPERS`
+ *  (ccd:14). `gpt` is deliberately absent: it is a 4th, opt-in-only lane a
+ *  session reaches solely by being sent there on purpose, never as a landing
+ *  spot chosen for it. Single source of truth for `server/src/limits.ts`'s
+ *  `projectHome` (which home-able lanes to score) and
+ *  `pwa/src/lib/accounts.ts`'s `homeAbleLabelList` (the same three, spelled
+ *  out by label) — both used to hand-maintain their own copy of this list,
+ *  linked only by a doc comment referencing the other. */
+export const HOME_ABLE_WRAPPERS = ['claude', 'claude2', 'claude-corp'] as const;
+
 /** One account's usage, read from telemetry (cc-limits) independent of whether a
  *  session is currently on it — so the display survives restarts/respawns/swaps.
  *  `ts` is epoch seconds of the last report. Telemetry is a byproduct of a
@@ -1116,11 +1143,31 @@ export interface AccountUsage {
  *  from both. `score` is the account's pressure, max(5h%, 7d%), so headroom is
  *  `100 - score`. It can exceed the swap ceiling: the rule returns the least
  *  loaded account even when every account is pinned, and saying so before the
- *  tap is the entire point of showing it. */
+ *  tap is the entire point of showing it.
+ *
+ *  On the wire (`GET /api/accounts`'s `projected` field) this is
+ *  `ProjectedHome | null`: `null` iff every home-able lane carries the
+ *  `<wrapper>-disabled` marker, mirroring `_ws_least_loaded`'s own empty
+ *  stdout for the same case — nothing is placeable, and naming an account
+ *  anyway would be a display lying about what a tap would actually do. */
 export interface ProjectedHome {
   wrapper: string;
   score: number;
 }
+
+/** Wire shape of `/ws/fleet`, the single source of truth for both ends — it
+ *  used to be a private type duplicated in `fleet.ts` and server.ts literals,
+ *  the exact two-copies failure this file's own revival logic elsewhere
+ *  documents. `hello` is the dormant protocol handshake (see `FLEET_PROTO`
+ *  below): sent synchronously as the first frame, before the async `fleet`
+ *  snapshot. `notice`'s shape is `Notice` (`server/src/bus.ts`) plus the
+ *  discriminant — copy the server's literal exactly if that type ever grows a
+ *  field; a tidier-looking union here that the server does not actually send
+ *  is worse than an ugly one that matches. */
+export type FleetMsg =
+  | { type: 'hello'; proto: number; min: number }
+  | { type: 'fleet'; sessions: FleetSession[] }
+  | { type: 'notice'; message: string };
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */
@@ -1241,6 +1288,13 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
  */
 export const PRESENCE_REFRESH_MS = 15_000;
 export const PRESENCE_TTL_MS = 45_000;
+
+/** Wire protocol generation of the PWA↔server pair. Bump on a breaking
+ *  wire change. FLEET_PROTO_MIN is the kill-switch: raise it above an
+ *  old build's FLEET_PROTO to block that client. Dormant until then —
+ *  both stay 1 and the invariant MIN <= PROTO is test-pinned. */
+export const FLEET_PROTO = 1;
+export const FLEET_PROTO_MIN = 1;
 
 /** One notification the server DECIDED to raise: recorded after the presence
  *  gate ("nothing fires for a session the operator is looking at"), before any

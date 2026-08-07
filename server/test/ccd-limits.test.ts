@@ -137,6 +137,37 @@ describe('_gpt_status must not call a Codex weekly cap a 5h cooldown', () => {
   });
 });
 
+describe('_gpt_status disabled branch goes through _lane_enabled, not a second read of the marker path', () => {
+  // Before this fix, _gpt_status checked `[[ -f "$GPT_DISABLE_FILE" ]]`
+  // directly while _gpt_enabled/_account_ok went through _lane_enabled — two
+  // readers of one boolean, spelled two different ways, free to drift. These
+  // tests override _lane_enabled itself (a plain shell function redefinition,
+  // resolved at call time) and check that _gpt_status follows THAT, not the
+  // marker file on disk — a direct `-f` check would ignore the override
+  // entirely and fail both assertions below.
+  const installGpt = (): void => {
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  };
+
+  it('reports DISABLED when _lane_enabled says so, even with no marker file on disk', () => {
+    installGpt();
+    expect(sh('_lane_enabled() { return 1; }; _gpt_status')).toContain('DISABLED');
+  });
+
+  it('does not report DISABLED when _lane_enabled says enabled, even with the marker file present', () => {
+    installGpt();
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
+    expect(sh('_lane_enabled() { return 0; }; _gpt_status')).not.toContain('DISABLED');
+  });
+
+  it('names the real marker path in the message (GPT_DISABLE_FILE survives as the display path)', () => {
+    installGpt();
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
+    expect(sh('_gpt_status')).toBe(`DISABLED (kill-switch; rm ${home}/.cc-sessions/gpt-disabled to re-enable)`);
+  });
+});
+
 describe('_fmt_eta unit boundaries', () => {
   // The unit used to be chosen from raw seconds and the figure rounded afterwards,
   // so 7199s rounded to 120 minutes but stayed in the minutes branch and printed
@@ -184,5 +215,38 @@ describe('the account that was stranded on 2026-07-27', () => {
   it('sends the exiled session home instead of leaving it on gpt', () => {
     strand();
     expect(sh('_swap_target claude-synapsium-platform gpt claude')).toBe('claude');
+  });
+});
+
+describe('_swap_target force arg: gates the two "stay" shortcuts only', () => {
+  // Verifier reproduction: a 429-while-away session (wrapper=claude2, home=claude) with home
+  // recovered (five=50, under SWAP_CEILING) must rescue straight home under force, not fall
+  // through to the must-leave candidate loop and land on some third lane (claude-corp, five=0,
+  // would otherwise look like the least-loaded pick).
+  it('forced away-from-home call still returns home when home has recovered', () => {
+    writeLimits('claude.json', json({ five: 50, seven: 0, ts: now() }));
+    writeLimits('claude-corp.json', json({ five: 0, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude2 claude 1')).toBe('claude');
+  });
+
+  it('leaves the unforced away-from-home call unchanged (same fixture, no force arg)', () => {
+    writeLimits('claude.json', json({ five: 50, seven: 0, ts: now() }));
+    writeLimits('claude-corp.json', json({ five: 0, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude2 claude')).toBe('claude');
+  });
+
+  // The Critical force exists for: a hard-blocked session must not read "cur/home is fine: stay"
+  // off telemetry that a rate limit never touched (auth loss writes no cc-limits file at all).
+  it('bypasses the cur==home "stay" shortcut: forced call leaves a fine home for the pool', () => {
+    writeLimits('claude.json', json({ five: 10, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude claude')).toBe('');       // unforced: stays (sanity)
+    expect(sh('_swap_target claude-demo claude claude 1')).not.toBe(''); // forced: leaves anyway
+  });
+
+  it('bypasses the "cur still works" shortcut: forced call leaves a fine cur for the pool', () => {
+    writeLimits('claude.json', json({ five: 99, seven: 0, ts: now() }));   // home: at the ceiling
+    writeLimits('claude2.json', json({ five: 5, seven: 0, ts: now() }));   // cur: fine
+    expect(sh('_swap_target claude-demo claude2 claude')).toBe('');        // unforced: stays on cur
+    expect(sh('_swap_target claude-demo claude2 claude 1')).not.toBe(''); // forced: leaves anyway
   });
 });

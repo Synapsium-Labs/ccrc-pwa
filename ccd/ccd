@@ -50,10 +50,20 @@ COMPACT_QUIET=60                # seconds a session must be idle before an auto-
 
 die() { echo "ccd: $*" >&2; exit 1; }
 
-_gpt_enabled() { [[ ! -f "$GPT_DISABLE_FILE" && -x "$WRAPPER_DIR/gpt" ]]; }   # kill-switch + wrapper present
+_lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
+# An account is a legal AUTOMATIC destination iff its wrapper exists and its
+# lane is enabled. Manual verbs (start/swap/prefer) deliberately bypass this:
+# a named wrapper is an operator override.
+_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }
+_gpt_enabled() { _account_ok gpt; }   # same file ($GPT_DISABLE_FILE == $REG/gpt-disabled), same semantics, one definition
 _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
-  [[ -f "$GPT_DISABLE_FILE" ]] && { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
+  # Same file `_gpt_enabled`/`_account_ok` check ($REG/gpt-disabled ==
+  # $GPT_DISABLE_FILE), read through the one function now: two readers of the
+  # same boolean used to mean two spellings of the same path that could drift
+  # independently. GPT_DISABLE_FILE itself stays — this message is its only
+  # remaining reader, to name the path for the operator.
+  _lane_enabled gpt || { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
   if ! _avail gpt; then
     # TWO different files can land here, and only one of them is a 429:
     #   • the compact exclusion ccd itself writes on a 429 ({"five":100,"seven":0,
@@ -979,9 +989,10 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
-_ws_least_loaded() {   # -> the home-able account with the most headroom
+_ws_least_loaded() {   # -> the home-able account with the most headroom, or "" if none is placeable
   local best="" bs=1000 w sc
   for w in "${VALID_WRAPPERS[@]}"; do
+    _account_ok "$w" || continue
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && sc=0
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
@@ -1020,6 +1031,22 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     || die "could not read free space for $WORKTREES_ROOT"
   (( free >= CCD_DISK_FLOOR_GB )) \
     || die "only ${free}G free on $WORKTREES_ROOT, floor is ${CCD_DISK_FLOOR_GB}G — reclaim space first: ccd ws-gc (archived workspaces are listed there and removed only on confirmation; pinned commits: ccd ws-attic --session <id>)"
+
+  # Same reasoning as the disk floor above: _ws_least_loaded is a pure read
+  # (no _account_ok candidate means no side effect), so picking the account
+  # here — before the worktree/branch/registry exist — is what lets an
+  # all-excluded refusal leave the box exactly as it found it. Pressure alone
+  # never refuses (the all-pinned fixture rule stands); only every lane
+  # failing _account_ok gets here.
+  local hw; hw=$(_ws_least_loaded)
+  if [[ -z "$hw" ]]; then
+    local w why=""
+    for w in "${VALID_WRAPPERS[@]}"; do
+      if [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
+      elif ! _lane_enabled "$w"; then why+=" $w:disabled"; fi
+    done
+    die "no account available for placement —${why}; enable one (rm $REG/<w>-disabled) and retry — nothing was touched"
+  fi
 
   # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
   # (round-3 P1), so it also refuses a slug whose only trace is the residue of
@@ -1067,7 +1094,6 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
 
   local id="$project-$slug"
   local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
-  local hw; hw=$(_ws_least_loaded)
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
@@ -6380,18 +6406,33 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   [[ "$sc" -lt "$SWAP_CEILING" ]]
 }
 
-_swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay put
-  local id="$1" cur="$2" home="$3" cand best="" best_score=999 sc
+_swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing = stay put
+  # `force` (any non-empty value): skip ONLY the "stay if telemetry says
+  # cur/home is under the ceiling" shortcuts, not the home-recovered MOVE.
+  # Needed because auth loss writes NO cc-limits telemetry (only rate limits
+  # do) — _avail on a hard-blocked wrapper reads exactly like a wrapper that
+  # is fine, so the ordinary "home is fine: stay" / "cur still works: stay"
+  # branches would never fire the rescue at all. The caller (_auto_swap_check)
+  # passes force iff _pane_hard_blocked already confirmed the session is
+  # stuck regardless of what telemetry says. The home-recovered MOVE below
+  # stays reachable under force when cur != home: in that branch cur is the
+  # blocked wrapper, so home is never the blocked lane, and a forced call
+  # that finds home recovered must go straight there instead of falling
+  # through to the pool loop and picking some third lane.
+  local id="$1" cur="$2" home="$3" force="${4:-}" cand best="" best_score=999 sc
   if [[ "$cur" == "$home" ]]; then
-    _avail "$home" && return 0                        # home is fine: stay
+    [[ -z "$force" ]] && { _avail "$home" && return 0; }                     # home is fine: stay
   else
-    _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
-    _avail "$cur"  && return 0                        # cur still works, home down: stay put
+    # disabled excludes home as a DESTINATION only — it never evacuates a
+    # session already sitting on it, which is why the two "stay" branches
+    # here and below carry no _account_ok check.
+    _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
+    [[ -z "$force" ]] && { _avail "$cur" && return 0; }                      # cur still works, home down: stay put
   fi
-  # must leave cur (home-but-down, or away-and-cur-down): pick the least-loaded AVAILABLE account
+  # must leave cur (home-but-down, away-and-cur-down, or forced with no recovered home): pick the least-loaded AVAILABLE account
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
-    [[ -x "$WRAPPER_DIR/$cand" ]] || continue
+    _account_ok "$cand" || continue
     _avail "$cand" || continue
     sc=$(_limit_score "$cand"); : "${sc:=0}"
     [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
@@ -6399,11 +6440,20 @@ _swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay 
   [[ -n "$best" ]] && echo "$best"
 }
 
+_pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
+  # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
+  # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
+  # that WAS working and lost auth is exactly as stuck. "Select login method" stays OUT: that
+  # screen appears during an intentional login, not a failure — evacuating out from under an
+  # operator mid-login would be wrong (see _pane_login_screen, which owns that screen instead).
+  grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?|Invalid API key|Please run /login" <<<"$1"
+}
+
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
-  #   home the instant it has room again. A hard-blocked session (limit/spend banner up) swaps
-  #   immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target
+  #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
+  #   lost) swaps immediately; any other move waits for a clean turn boundary.
+  local id="$1" wrapper home now last pane target hard_blocked=""
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
@@ -6413,15 +6463,26 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #  2026-07-26 with the same decision that took gpt out of the rotation: gpt is
   #  no longer a destination for projects that didn't ask for it. A session whose
   #  HOME is gpt still swaps onto it through the normal pool.)
-  target=$(_swap_target "$id" "$wrapper" "$home")
+  # Classify BEFORE picking a target, and pass the verdict in as `force`: a
+  # hard block (limit/spend banner, OR lost auth) must win over telemetry that
+  # says the wrapper is fine. Rate limits write cc-limits, so a 429 already
+  # makes _avail fail on its own — but auth loss writes NO telemetry (nothing
+  # marks cc-limits on a 401), so on a session sitting on its home account
+  # (the fleet's steady state) `_swap_target`'s own "home is fine: stay"
+  # shortcut would return empty before the auth patterns are ever reached,
+  # and the rescue below would never fire. `force` skips straight to the
+  # must-leave candidate loop so a hard block always finds a destination when
+  # one exists, regardless of what telemetry has to say about cur/home.
+  _pane_hard_blocked "$pane" && hard_blocked=1
+  target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked")
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
-  # Hard-blocked (a real limit/spend banner is up): the session is stuck anyway -> swap now.
-  # The 429/rate-limit patterns also catch the gpt overflow lane hitting the ChatGPT-sub
-  # Codex usage cap (surfaces as "API Error: 429 ..."). When gpt is the exhausted account,
-  # write a cc-limits/gpt.json exclusion so OTHER sessions stop rotating into it until the
-  # 5h window rolls over (gpt has no native telemetry; this is its only "pool is full" signal).
-  if echo "$pane" | grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?"; then
+  # Hard-blocked (a real limit/spend banner is up, or auth was lost): the session is stuck
+  # anyway -> swap now. The 429/rate-limit patterns also catch the gpt overflow lane hitting the
+  # ChatGPT-sub Codex usage cap (surfaces as "API Error: 429 ..."). When gpt is the exhausted
+  # account, write a cc-limits/gpt.json exclusion so OTHER sessions stop rotating into it until
+  # the 5h window rolls over (gpt has no native telemetry; this is its only "pool is full" signal).
+  if [[ -n "$hard_blocked" ]]; then
     [[ "$wrapper" == gpt ]] && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/gpt.json"
     _reg_set "$id" lastswap "$now"
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
@@ -6489,6 +6550,12 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
 }
 
+# Auth screens must never receive synthesized keystrokes: on a numbered login
+# menu a stray Enter selects whatever the cursor is on.
+_pane_login_screen() {
+  grep -Eq 'Select login method|Invalid API key|Please run /login' <<<"$1"
+}
+
 _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
@@ -6531,6 +6598,21 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
     if echo "$pane" | grep -q "trust this folder"; then
       tmux send-keys -t "$t" Enter; sleep 2; continue
     fi
+    # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
+    # stuck on a human step. No keystroke here could be right, so stop polling and report —
+    # the caller (_spawn) must not chase this with an /effort injection either. Checked LAST,
+    # after every ready-marker and gate branch above: those match specific, narrow footers
+    # ("Enter to confirm" + a gate title, "Bypass Permissions mode", "trust this folder"), so a
+    # substring hit for one of THIS check's banners anywhere else in ~50 lines of scrollback — a
+    # restored transcript discussing an old auth bug, ccd's own source open in the pane — can't
+    # short-circuit a healthy session or an unanswered gate. Only a pane that matches none of the
+    # branches above reaches here, which is what a real (short, banner-only) login screen does.
+    if _pane_login_screen "$pane"; then
+      # No $id/$wrapper in scope here (this function only knows the tmux
+      # NAME) — the warning that names the account is _spawn's job, once this
+      # returns 2. Keep this function's own job pure: a verdict, not a report.
+      return 2
+    fi
     sleep 2
   done
 }
@@ -6561,10 +6643,17 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # Follow the most-recent client's size (defensive; with attach -d there's only ever one client,
   # so the window always fits the device you're on — no smaller-client "dotted filler" clash).
   tmux set-option -t "$tname" window-size latest 2>/dev/null
-  _accept_first_run_prompts "$tname" "$fromswap"
+  local prompt_rc
+  _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
+  # Code 2 means _accept_first_run_prompts stopped at a login screen: $id and $wrapper are
+  # only in scope HERE, not inside that function (which only knows the tmux name), so the
+  # operator-facing warning — naming both, spec §5 — is emitted from this side of the return.
+  [[ "$prompt_rc" == 2 ]] && echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2
   # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (GPT backend
-  # doesn't take it and the injection would just error into the prompt box).
-  [[ "$wrapper" != gpt ]] && _inject_spawn_effort "$tname"
+  # doesn't take it and the injection would just error into the prompt box). Code 2 means
+  # _accept_first_run_prompts stopped at a login screen — skip the same way: a synthesized
+  # keystroke into an auth flow is never correct.
+  [[ "$wrapper" != gpt && "$prompt_rc" != 2 ]] && _inject_spawn_effort "$tname"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.

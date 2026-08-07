@@ -11,3 +11,18 @@ export function formatReset(resetAt: number | null, nowSec: number): string {
   if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
   return `${m}m`;
 }
+
+/** AccountsScreen's freshness line, from an age in seconds (nowSec - ts):
+ *  "2h ago", "3d ago", "just now" under two minutes, or "—" when `ts` itself
+ *  is null — no telemetry has ever landed for this account, which is a
+ *  different fact from "landed a moment ago" and must not collapse into it. */
+export function formatAge(ageSec: number | null): string {
+  if (ageSec === null) return '—';
+  const s = Math.max(0, ageSec);
+  const m = Math.floor(s / 60);
+  if (m < 2) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}

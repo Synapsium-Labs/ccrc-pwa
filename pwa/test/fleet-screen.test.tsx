@@ -210,6 +210,34 @@ describe('FleetScreen', () => {
     expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(3);
   });
 
+  // Review fix: AccountsStrip is the app's only door to /accounts (Task 6).
+  // It used to sit inside the populated arm only, so a phone that had never
+  // started a session — the first-run block is exactly what a brand-new
+  // fleet renders — had no accounts strip and so no way to reach /accounts
+  // at all. Same gap in the loading branch: a fleet mid-first-connect also
+  // rendered no strip.
+  it('renders the accounts strip in the first-run block, not just the populated fleet', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false }],
+      projected: { wrapper: 'claude', score: 0 },
+    });
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [] });
+
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
+  });
+
+  it('renders the accounts strip during the initial skeleton load, not just once sessions are known', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    // untouched store: conn 'connecting', no sessions — same state as the
+    // skeleton test above.
+    expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
+  });
+
   it('renders notices as dismissible banners', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);

@@ -49,17 +49,20 @@
      the app behind a gesture (and behind a mouse, on a touch-capable desktop).
      So it stays open, paid for by folding each gauge from three stacked lines
      (name / 5h / 7d) down to two — 46px against the old 158px, cheap enough to
-     keep on screen permanently. Hidden only until data lands (AccountsStrip
-     renders null while empty → :empty). */
+     keep on screen permanently. Genuinely permanent since Task 6 made the
+     strip double as the only nav affordance onto /accounts: AccountsStrip
+     used to render null (and this rule hid the now-empty bar with it) while
+     no telemetry had landed, or while every lane was disabled — exactly the
+     state the accounts screen exists to explain, so hiding its only door
+     there was the bug, not a feature. AccountsStrip now always renders a
+     non-empty `.accounts-strip`, with a quiet placeholder body in that state,
+     so this bar is never `:empty` and the old auto-hide rule is gone. */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
     padding: 4px var(--sp-4);
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
-  }
-  .shell-accounts:empty {
-    display: none;
   }
   /* One gauge per account across the width. 260px is all a gauge needs now that
      the name sits beside its windows rather than above them, so all four stay
@@ -178,6 +181,12 @@
   .shell-detail .chat-back {
     display: none;
   }
+  /* AccountsScreen's own back chevron (Task 6, Build 3 PR G) — same reasoning
+     as .chat-back just above: the fleet sidebar is always visible on desktop,
+     so an explicit way back out of the detail pane is redundant there. */
+  .shell-detail .accounts-back {
+    display: none;
+  }
 
   /* Empty-detail placeholder (no session selected) — fills the detail cell. */
   .shell-placeholder {
@@ -198,4 +207,36 @@
     font-size: var(--text-sm);
     color: var(--ink-secondary);
   }
+}
+
+/* ---- BlockScreen: the dormant handshake's block (Rider E) ------------ */
+/* Not viewport-gated like the two rules above — a stale build is exactly as
+   stale on a phone as on a desktop, so this covers both. Mounted OUTSIDE
+   .app-shell in app.tsx (a preceding sibling, not a descendant): fixed +
+   --z-block (above --z-toast) is what actually does the covering; the DOM
+   position is what keeps it out of any container that might clip or
+   transform its own descendants. */
+.block-screen {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-block);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-5);
+  padding: var(--sp-6);
+  background: var(--bg-page);
+  color: var(--ink-primary);
+  text-align: center;
+}
+.block-screen-copy {
+  max-width: 40ch;
+  font: var(--weight-medium) var(--text-base) / var(--leading-normal) var(--font-ui);
+}
+/* .btn-primary defaults to width:100% for its usual sheet-flow home; here it
+   sits alone on an open screen, so it gets its own width back. */
+.block-screen .btn-primary {
+  width: auto;
+  min-width: 180px;
 }

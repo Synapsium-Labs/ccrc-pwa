@@ -25,7 +25,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
 afterEach(() => {
   cleanup();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [] }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
 });
 
 describe('App /archive route', () => {
@@ -64,5 +64,41 @@ describe('App /archive route', () => {
     render(<App />);
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
     expect(screen.queryByText(/nothing is archived/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('App /accounts route (Task 6, Build 3 PR G)', () => {
+  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', () => {
+    // app.test.tsx's own warning (this file, Task 19 above) is real here too:
+    // /accounts has to ride the SAME data-view OR every other non-fleet route
+    // does, or a phone hides the very screen it just navigated to.
+    navigate('/accounts');
+    render(<App />);
+    expect(screen.getByRole('heading', { name: /accounts/i })).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+describe('App block overlay (the dormant handshake, Rider E)', () => {
+  it('renders BlockScreen OUTSIDE/above .app-shell when the fleet store is blocked', () => {
+    act(() => useFleetStore.setState({ blocked: true }));
+    render(<App />);
+
+    const shell = document.querySelector('.app-shell');
+    const block = document.querySelector('.block-screen');
+    expect(block).toBeInTheDocument();
+    // Not a descendant — a banner lives inside a pane, this has to cover the
+    // whole shell (and any sheet/toast on top of it), which only works as a
+    // SIBLING rendered before .app-shell, not nested inside it.
+    expect(shell?.contains(block)).toBe(false);
+    // DOM order: block comes BEFORE the shell, i.e. the shell "follows" it.
+    const rel = block!.compareDocumentPosition(shell!);
+    expect(rel & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('renders nothing when not blocked', () => {
+    act(() => useFleetStore.setState({ blocked: false }));
+    render(<App />);
+    expect(document.querySelector('.block-screen')).not.toBeInTheDocument();
   });
 });

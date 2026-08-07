@@ -16,7 +16,14 @@ export interface LeastLoadedCase {
   /** Per-wrapper file bytes under ~/.cc-limits. An ABSENT key means no file at
    *  all — which both sides must read as unknown, and unknown scores 0. */
   files: Record<string, string>;
-  expect: { wrapper: string; score: number };
+  /** Wrappers carrying a `<w>-disabled` marker (ccd's `$REG`, the server's
+   *  registryDir — same directory, same filename, on purpose: it is the one
+   *  file both implementations already read). Omitted/empty means no lane is
+   *  declared off. */
+  disabled?: string[];
+  /** `null` iff every home-able lane is disabled — nothing is placeable, and
+   *  both sides must say so in their own idiom (see the runner). */
+  expect: { wrapper: string; score: number } | null;
   why: string;
 }
 
@@ -69,6 +76,44 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       expect: { wrapper: 'claude-corp', score: 60 },
       why: 'gpt is a 4th lane, opt-in only (ccd:11-16) and absent from VALID_WRAPPERS — '
         + 'it must never win, however free it looks',
+    },
+    {
+      name: 'disabled-lane-skipped',
+      files: { claude: fresh(50, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95) },
+      disabled: ['claude2'],
+      expect: { wrapper: 'claude', score: 50 },
+      why: 'claude2 is cheapest but declared off — the runner-up wins, not the '
+        + 'account nobody can actually place a session on',
+    },
+    {
+      name: 'all-disabled',
+      files: { claude: fresh(50, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95) },
+      disabled: ['claude', 'claude2', 'claude-corp'],
+      expect: null,
+      why: 'every home-able lane declared off: nothing is placeable, and both '
+        + 'sides must admit it rather than name an account that cannot take work',
+    },
+    {
+      name: 'disabled-lane-no-telemetry',
+      // claude2 is markered off but has NEVER written a limits file — a fresh
+      // `touch claude2-disabled`, or a lane that's never had a session on it.
+      // No `claude2` key in `files` at all (an absent file, not an empty one).
+      files: { claude: fresh(50, 40), 'claude-corp': fresh(90, 95) },
+      disabled: ['claude2'],
+      expect: { wrapper: 'claude', score: 50 },
+      why: 'a markered lane with no telemetry file is still excluded — absent-from-map '
+        + 'must not be mistaken for unknown-and-therefore-free, or the account that has '
+        + 'never even run scores 0 and wins the very projection the marker forbids',
+    },
+    {
+      name: 'all-disabled-no-telemetry',
+      // Fresh box, or every lane markered before any of them ever wrote a
+      // limits file: `.cc-limits` is empty, `disabled` names all three anyway.
+      files: {},
+      disabled: ['claude', 'claude2', 'claude-corp'],
+      expect: null,
+      why: 'no telemetry anywhere AND every lane declared off: still null, not the '
+        + 'empty-directory tie-goes-to-claude case — declared-off overrides unknown-is-free',
     },
     {
       name: 'rolled-over-window',

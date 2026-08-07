@@ -282,6 +282,7 @@
   --z-sheet:  40;
   --z-drawer: 50;
   --z-toast:  60;
+  --z-block:  100;  /* BlockScreen — above the toast too; nothing outranks it */
 
   color-scheme: dark;
 }

@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
+import { FLEET_PROTO, FLEET_PROTO_MIN } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
@@ -78,6 +79,12 @@ describe('fleet REST + WS', () => {
       ws.on('error', reject);
     });
 
+    // The dormant handshake (Rider E): `hello` is the FIRST frame, ahead of
+    // the (awaited) fleet snapshot below — sent synchronously in the handler
+    // before assembleFleet is even called.
+    const hello = await next();
+    expect(hello).toEqual({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN });
+
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');
     expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude2-MekWarLive']);
@@ -125,6 +132,9 @@ describe('fleet REST + WS', () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
     const next = collect(ws);
     await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+    const hello = await next(); // hello precedes every fleet frame — see the test above
+    expect(hello.type).toBe('hello');
 
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');

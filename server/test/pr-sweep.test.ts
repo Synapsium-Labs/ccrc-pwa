@@ -319,10 +319,19 @@ describe('the swept state reaches the wire, not just currentPrStates()', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const msg = await new Promise<{ type: string; sessions: { id: string; pr: { phase: string } | null }[] }>((resolve, reject) => {
-        ws.on('message', (d) => resolve(JSON.parse(String(d))));
+      // The dormant handshake's `hello` is now the first frame on every
+      // connect (server.ts, Rider E) — skip it to reach the fleet snapshot
+      // this test actually pins.
+      type FleetFrame = { type: string; sessions: { id: string; pr: { phase: string } | null }[] };
+      const frames: FleetFrame[] = [];
+      const msg = await new Promise<FleetFrame>((resolve, reject) => {
+        ws.on('message', (d) => {
+          frames.push(JSON.parse(String(d)) as FleetFrame);
+          if (frames.length === 2) resolve(frames[1]!);
+        });
         ws.on('error', reject);
       });
+      expect(frames[0]?.type).toBe('hello');
       expect(msg.type).toBe('fleet');
       expect(msg.sessions.find((s) => s.id === 'demo-quiet-basin')?.pr?.phase).toBe('merged');
       ws.close();

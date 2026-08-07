@@ -25,12 +25,12 @@ function seedLimits(files: Record<string, unknown>): string {
   return home;
 }
 
-async function getPayload(home: string): Promise<{ accounts: AccountUsage[]; projected: ProjectedHome }> {
+async function getPayload(home: string): Promise<{ accounts: AccountUsage[]; projected: ProjectedHome | null }> {
   const app = await buildServer(testDeps(home));
   try {
     const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(res.statusCode).toBe(200);
-    return res.json() as { accounts: AccountUsage[]; projected: ProjectedHome };
+    return res.json() as { accounts: AccountUsage[]; projected: ProjectedHome | null };
   } finally {
     await app.close();
   }
@@ -126,5 +126,20 @@ describe('GET /api/accounts', () => {
     const accounts = await getAccounts(home);
     expect(accounts.find((a) => a.wrapper === 'gpt')!.disabled).toBe(true);
     expect(accounts.find((a) => a.wrapper === 'claude')!.disabled).toBe(false);
+  });
+
+  // Wire-contract defect: `.cc-sessions` holds `-disabled` markers that name
+  // no account at all — ccd ships `autocompact-disabled` there (a fleet-wide
+  // proactive-/compact kill switch, ccd:22). Before the readLimits fix, this
+  // file alone fabricated a phantom `{"wrapper":"autocompact",...}` row, and
+  // the accounts screen (which deliberately renders every disabled lane it is
+  // told about) would have shown a fake "autocompact" account.
+  it('never invents an account row from a non-wrapper marker in .cc-sessions', async () => {
+    const home = seedLimits({ claude: { five: 2, seven: 3 } });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'autocompact-disabled'), '');
+    const accounts = await getAccounts(home);
+    expect(accounts.map((a) => a.wrapper)).toEqual(['claude']);
+    expect(accounts.find((a) => a.wrapper === 'autocompact')).toBeUndefined();
   });
 });

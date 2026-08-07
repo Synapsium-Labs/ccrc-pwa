@@ -30,8 +30,9 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
-import type {
-  AccountUsage, FleetSession, SessionClientMsg, SessionStreamMsg, TaskItem,
+import {
+  FLEET_PROTO, FLEET_PROTO_MIN,
+  type AccountUsage, type FleetMsg, type FleetSession, type SessionClientMsg, type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
@@ -226,8 +227,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   app.get('/ws/fleet', { websocket: true }, (socket) => {
-    const onFleet = (sessions: FleetSession[]) => socket.send(JSON.stringify({ type: 'fleet', sessions }));
-    const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n }));
+    // The dormant protocol handshake (Rider E): sent SYNCHRONOUSLY, before the
+    // awaited assembleFleet below, so it is always the first frame a client
+    // sees — the one thing a stale client needs to learn before anything else
+    // arrives. Every already-deployed PWA drops an unknown frame type
+    // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
+    // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
+    socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
+    const onFleet = (sessions: FleetSession[]) =>
+      socket.send(JSON.stringify({ type: 'fleet', sessions } satisfies FleetMsg));
+    const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n } satisfies FleetMsg));
     void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()).then(onFleet);
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);

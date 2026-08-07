@@ -90,3 +90,38 @@ describe('disabled lanes', () => {
     expect(l.gpt.disabled).toBe(false);
   });
 });
+
+describe('disabled-marker backfill is bounded to known wrappers', () => {
+  it('surfaces a known wrapper disabled before it ever wrote telemetry', async () => {
+    // No claude2.json at all — the loop over `.cc-limits/*.json` would never
+    // visit claude2, so this row exists only because the backfill added it.
+    const home = mkTmp('ccrc-');
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'claude2-disabled'), '');
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l['claude2']).toEqual({
+      five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: true,
+    });
+  });
+
+  // The wire-contract defect: the registry dir is shared with markers that are
+  // NOT accounts. ccd ships `autocompact-disabled` there (a fleet-wide
+  // proactive-/compact kill switch, ccd:22) — before this fix, the backfill
+  // iterated every `*-disabled` filename with no filter, so this file alone
+  // fabricated a `{"wrapper":"autocompact",...,disabled:true}` row that GET
+  // /api/accounts served and the accounts screen would render as a phantom
+  // account. `bogus-lane-disabled` pins the general case, not just this one name.
+  it('never fabricates an account row for a non-wrapper marker (autocompact-disabled, and any other)', async () => {
+    const home = mkTmp('ccrc-');
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'autocompact-disabled'), '');
+    writeFileSync(path.join(home, '.cc-sessions', 'bogus-lane-disabled'), '');
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l['autocompact']).toBeUndefined();
+    expect(l['bogus-lane']).toBeUndefined();
+    expect(Object.keys(l)).toEqual([]);
+  });
+});

@@ -48,6 +48,20 @@ const seed = (files: Record<string, string>): void => {
   }
 };
 
+/** `<w>-disabled` in `.cc-sessions` — the one file both `_lane_enabled` (ccd's
+ *  `$REG`) and `readLimits` (the server's registryDir) read, same directory,
+ *  same filename. */
+const seedDisabled = (wrappers: string[]): void => {
+  const dir = path.join(home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of fs.readdirSync(dir)) {
+    if (name.endsWith('-disabled')) fs.rmSync(path.join(dir, name));
+  }
+  for (const w of wrappers) {
+    fs.writeFileSync(path.join(dir, `${w}-disabled`), '');
+  }
+};
+
 /** _limit_score says "wholly unknown" with an empty string; projectHome says it
  *  with 0, because _ws_least_loaded's own `[[ -z "$sc" ]] && sc=0` does. */
 const shellScore = (wrapper: string): number => Number(sh(`_limit_score ${wrapper}`) || '0');
@@ -57,8 +71,19 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
     '%s',
     async (_name, c) => {
       seed(c.files);
+      seedDisabled(c.disabled ?? []);
       const cfg = loadConfig({ CCRC_HOME: home });
       const projected = projectHome(await readLimits(localIO, cfg));
+
+      if (c.expect === null) {
+        // Nothing is placeable. The fixture can't express one shared "empty"
+        // value across languages (TS has `null`, bash has empty stdout), so
+        // this is the split expectation the runner promises: two assertions,
+        // one per side, neither weakened.
+        expect(projected, c.why).toBeNull();
+        expect(sh('_ws_least_loaded'), `ccd disagrees: ${c.why}`).toBe('');
+        return;
+      }
 
       // 1. The prediction is right in its own terms.
       expect(projected, c.why).toEqual(c.expect);
