@@ -6,15 +6,18 @@
 // placement rules that consume it (_ws_least_loaded, _swap_target) and the
 // re-expressed _gpt_enabled, which must keep exactly its old behavior.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 let home: string;
 
 const sh = (s: string, env: NodeJS.ProcessEnv = {}): string => h.sh(s, env);
 const ok = (snippet: string): boolean => sh(`${snippet} && echo yes || echo no`) === 'yes';
+const reg = (id: string, field: string): string | null => h.reg(id, field);
+const makeRepo = (name: string): string => h.makeRepo(name);
 
 const writeLimits = (w: string, five: number, seven: number): void =>
   fs.writeFileSync(path.join(home, '.cc-limits', `${w}.json`),
@@ -103,5 +106,54 @@ describe('_gpt_enabled re-expressed as _account_ok gpt', () => {
     expect(ok('_gpt_enabled')).toBe(true);
     disable('gpt');
     expect(ok('_gpt_enabled')).toBe(false);
+  });
+});
+
+// cmd_ws_add hoists the account pick into its preflight, beside the disk
+// floor: _ws_least_loaded is pure reads, so it is safe to run before anything
+// is created. All-excluded must refuse before the worktree/branch/registry
+// exist — the same "leave the box exactly as it found it" contract the disk
+// floor already keeps (ccd-workspaces.test.ts's disk-floor describe block).
+describe('cmd_ws_add preflight — all-excluded refuses before anything exists', () => {
+  it('dies and creates no worktree, no branch, no registry entry', () => {
+    makeRepo('demo');
+    disable('claude'); disable('claude2'); disable('claude-corp');
+    expect(() => sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`)).toThrow();
+    expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    // The branch must not exist either: a preflight that ran after
+    // `worktree add` would leave a branch behind on every refusal.
+    const branches = execFileSync('git',
+      ['-C', path.join(home, 'projects', 'demo'), 'branch', '--list', 'ws/quiet-mesa'],
+      { encoding: 'utf8' });
+    expect(branches.trim()).toBe('');
+  });
+
+  it('names each wrapper with its reason — disabled and missing both appear', () => {
+    makeRepo('demo');
+    disable('claude'); disable('claude-corp');
+    fs.rmSync(path.join(home, '.local', 'bin', 'claude2'));
+    let stderr = '';
+    try {
+      sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    } catch (e) {
+      stderr = String((e as { stderr?: string }).stderr ?? '');
+    }
+    expect(stderr).toContain('claude:disabled');
+    expect(stderr).toContain('claude2:missing');
+    expect(stderr).toContain('claude-corp:disabled');
+    expect(stderr).toContain('nothing was touched');
+  });
+
+  it('one enabled lane still succeeds and lands on it, even at the worst score', () => {
+    // Pressure alone never refuses (the all-pinned fixture rule stands):
+    // claude-corp is the only _account_ok lane, despite scoring worst.
+    makeRepo('demo');
+    writeLimits('claude', 5, 5);
+    writeLimits('claude2', 5, 5);
+    writeLimits('claude-corp', 90, 90);
+    disable('claude'); disable('claude2');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(reg('demo-quiet-mesa', 'wrapper')).toBe('claude-corp');
   });
 });

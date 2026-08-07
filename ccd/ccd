@@ -1027,6 +1027,22 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   (( free >= CCD_DISK_FLOOR_GB )) \
     || die "only ${free}G free on $WORKTREES_ROOT, floor is ${CCD_DISK_FLOOR_GB}G — reclaim space first: ccd ws-gc (archived workspaces are listed there and removed only on confirmation; pinned commits: ccd ws-attic --session <id>)"
 
+  # Same reasoning as the disk floor above: _ws_least_loaded is a pure read
+  # (no _account_ok candidate means no side effect), so picking the account
+  # here — before the worktree/branch/registry exist — is what lets an
+  # all-excluded refusal leave the box exactly as it found it. Pressure alone
+  # never refuses (the all-pinned fixture rule stands); only every lane
+  # failing _account_ok gets here.
+  local hw; hw=$(_ws_least_loaded)
+  if [[ -z "$hw" ]]; then
+    local w why=""
+    for w in "${VALID_WRAPPERS[@]}"; do
+      if [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
+      elif ! _lane_enabled "$w"; then why+=" $w:disabled"; fi
+    done
+    die "no account available for placement —${why}; enable one (rm $REG/<w>-disabled) and retry — nothing was touched"
+  fi
+
   # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
   # (round-3 P1), so it also refuses a slug whose only trace is the residue of
   # an interrupted purge — and "slug in use" on its own would send the operator
@@ -1073,7 +1089,6 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
 
   local id="$project-$slug"
   local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
-  local hw; hw=$(_ws_least_loaded)
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
