@@ -10,7 +10,7 @@ import type { FleetIO } from '../io.js';
  *  tight. Same figure as `ask.ts`'s TAIL_BYTES, arrived at from a different
  *  measurement — and far under `tail.ts`'s backlog window, which is what bounds
  *  the agent's RSS. */
-const TITLE_TAIL_BYTES = 256 * 1024;
+export const TITLE_TAIL_BYTES = 256 * 1024;
 
 /**
  * The LAST `ai-title` in the transcript's tail, or `null`.

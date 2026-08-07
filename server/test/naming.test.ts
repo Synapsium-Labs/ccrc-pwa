@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
 import { SLUG_MAX, deriveBranch } from '../src/naming.js';
-import { readAiTitle } from '../src/transcript/title.js';
+import { TITLE_TAIL_BYTES, readAiTitle } from '../src/transcript/title.js';
 import { mkTmp } from './tmpHelpers.js';
 
 describe('deriveBranch', () => {
@@ -151,11 +151,11 @@ describe('readAiTitle', () => {
     // so keeping them (the mutant) and dropping them (the shipped code)
     // produce different, observable answers.
     //
-    // `size - TITLE_TAIL_BYTES` (title.ts:13, 256 * 1024, not exported) is
-    // engineered to fall exactly on the first byte of `json` below: `padding`
-    // fixes that offset, and `filler` is sized so the total is exactly
+    // `size - TITLE_TAIL_BYTES` (title.ts:13, exported so a future shrink of
+    // it cannot leave this fixture green for the wrong reason) is engineered
+    // to fall exactly on the first byte of `json` below: `padding` fixes that
+    // offset, and `filler` is sized so the total is exactly
     // `padding.length + TITLE_TAIL_BYTES`.
-    const TITLE_TAIL_BYTES = 256 * 1024;
     const json = TITLE('GHOST');
     const padding = 'p'.repeat(100_000);
     const filler = 'f'.repeat(TITLE_TAIL_BYTES - json.length - 1);
