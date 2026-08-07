@@ -519,7 +519,13 @@ describe('fleet store', () => {
       store.getState().connect();
       lastSocket().open();
 
-      lastSocket().message(JSON.stringify({ type: 'hello', proto: '1', min: '1' }));
+      // min: '2' (not '1') makes this fixture discriminating: were the
+      // typeof guard removed, the frame would reach the numeric compare as
+      // '2' > FLEET_PROTO, which JS coerces to true — blocked would flip to
+      // true and this assertion would fail. '1' was the one value coercion
+      // makes indistinguishable from "guard applied" (either way blocked
+      // stays false), so it could never catch the guard's absence.
+      lastSocket().message(JSON.stringify({ type: 'hello', proto: '1', min: '2' }));
       expect(store.getState().blocked).toBe(false);
       store.getState().disconnect();
     });

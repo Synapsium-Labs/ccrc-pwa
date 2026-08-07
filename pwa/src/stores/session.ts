@@ -164,11 +164,16 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'notice':
       return { ...s, events: [...s.events, localDivider(msg.message)] };
     default:
-      // A frame type this build has never heard of — an old client on a
-      // newer server, the same skew the fleet-side handshake exists to
-      // manage. Shrug, not corrupt: the snapshot comes back exactly as it
-      // went in, rather than the `undefined` an unhandled case would return
-      // into the store.
+      // Two guarantees, not one. `satisfies never` keeps the compile-time
+      // exhaustiveness this switch had before this arm existed: add a
+      // variant to SessionStreamMsg and forget it here, and `tsc` fails
+      // right at this line instead of silently compiling a build that drops
+      // the frame. The `return s` beneath it is the runtime answer to a
+      // DIFFERENT skew — an already-built old client meeting a newer
+      // server's frame it was never compiled to know about. Shrug, not
+      // corrupt: the snapshot comes back exactly as it went in, rather than
+      // the `undefined` an unhandled case would return into the store.
+      msg satisfies never;
       return s;
   }
 }
