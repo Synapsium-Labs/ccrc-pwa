@@ -16,10 +16,13 @@ import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 
-// Fixtures are single-line and single-quoted into the snippet verbatim — the
-// pane text these functions see is always tmux capture-pane output, which is
-// this shape in practice. Multi-line fixtures would need heredoc plumbing
-// this suite doesn't need: documented limitation, not an oversight.
+// `matches()`'s fixtures below are single-line and single-quoted into the
+// snippet verbatim — enough for the two classifiers' truth tables, which only
+// need one banner string per case. Real tmux capture-pane output is multi-line
+// scrollback, and the wiring tests further down (`_accept_first_run_prompts`/
+// `_spawn`) exercise exactly that shape: their pane text travels through the
+// `PANE_TEXT` env var (see `acceptRc` and `SPAWN_STUB` below), not this
+// quoting helper, so it carries embedded newlines untouched.
 const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 const matches = (fn: string, pane: string): boolean =>
   h.sh(`${fn} ${q(pane)} && echo yes || echo no`) === 'yes';
@@ -53,8 +56,13 @@ describe('_pane_login_screen', () => {
     // strings, not a semantic read of the pane — this is deliberate (no
     // false positive from ordinary conversation), and it means a transcript
     // excerpt that happens to quote one of the banners verbatim would also
-    // match. That corner is out of scope: real login screens are short,
-    // banner-only panes, never a scrollback full of chat.
+    // match. That corner is not bounded by pane shape — a restored session's
+    // scrollback can absolutely contain one of these strings (open source
+    // file, an old auth bug under discussion). It is bounded by the CALLER:
+    // _accept_first_run_prompts checks this classifier LAST, after every
+    // ready-marker and gate branch (ccd/ccd ~6576-6581, and the "order
+    // regression this task fixes" test below), so a substring hit buried in
+    // scrollback can only win once nothing else already matched.
     expect(matches('_pane_login_screen', '> can you help me fix the login page bug?')).toBe(false);
   });
 });
@@ -124,6 +132,47 @@ describe('_accept_first_run_prompts (wiring, not just the classifier)', () => {
     const pane = '● Read ccd/ccd\n  grep -Eq "Please run /login"\n? for shortcuts';
     expect(acceptRc(pane)).toBe(0);
     expect(h.calls().some((c) => c.includes('send-keys'))).toBe(false);
+  });
+
+  // Reviewers' "Case B" — the ordering fix's other edge. The test above shows
+  // an ALREADY-HEALTHY pane (a ready marker present) surviving a banner quote
+  // in scrollback; this one shows a pane that is NOT healthy yet — a REAL
+  // first-run gate is up (Bypass Permissions: the highest-stakes gate, since
+  // a bare Enter there hits "1. No, exit" instead of "2. Yes, I accept") —
+  // while the SAME capture also quotes an auth banner in restored transcript
+  // text. If the login classifier ever moved earlier than the gate checks in
+  // `_accept_first_run_prompts`'s if/elif chain, this pane would short-circuit
+  // to rc=2 with the Bypass gate never answered: parked one stray Enter away
+  // from exiting instead of accepting. The fix (classifier checked LAST)
+  // means the gate still gets its Down/Enter.
+  it('answers a live Bypass-Permissions gate (Down, Enter) rather than bailing to the login path, when the same pane quotes an auth banner', () => {
+    const pane =
+      '★ Restored session — earlier scrollback:\n' +
+      '> user: I saw "Please run /login" yesterday and reran the login flow\n' +
+      'Bypass Permissions mode\n1. No, exit  2. Yes, I accept\nEnter to confirm';
+    // capture-pane hands back the gate+banner pane exactly once, then a
+    // healthy ready marker — enough to prove which branch fired without
+    // looping the function's full 450-iteration window (the gate branch
+    // `continue`s forever against a pane that never changes, which is
+    // correct behavior but not a test worth waiting out).
+    const out = h.sh(
+      `sleep() { :; };
+       tmux() { case "$1" in
+         capture-pane)
+           n=$(cat "$HOME/pane-calls" 2>/dev/null || echo 0)
+           echo $((n+1)) > "$HOME/pane-calls"
+           if [[ "$n" -lt 1 ]]; then printf '%s' "$PANE_TEXT"; else printf '%s' '? for shortcuts'; fi
+           ;;
+         *) echo "tmux $*" >> "$HOME/ccd-calls" ;;
+       esac; };
+       _accept_first_run_prompts cc-test 0; echo "rc=$?"`,
+      { PANE_TEXT: pane },
+    );
+    expect(Number(/rc=(\d+)/.exec(out)![1])).toBe(0);
+    const calls = h.calls();
+    const downIdx = calls.findIndex((c) => c.includes('Down'));
+    expect(downIdx).toBeGreaterThanOrEqual(0);
+    expect(calls[downIdx + 1]).toContain('Enter');
   });
 });
 
