@@ -1,4 +1,4 @@
-// The sixth lane. (The fifth is hook-state sweeping — watch.ts:104.) Four
+// The sixth lane. (The fifth is hook-state sweeping — watch.ts:154.) Four
 // conditions, and the two that are easy to get wrong are which `branch` it
 // reads (the registry's, not the assembled one) and when it records the stat
 // probe (after the verb gate, never before it).
@@ -38,14 +38,17 @@ const USER = (text: string): string =>
   JSON.stringify({ type: 'user', message: { role: 'user', content: text } });
 
 /** The transcript at exactly the path `transcriptPath(cfgDir, workdir, uuid)`
- *  resolves to for the row `seed` writes: `<home>/.claude/projects/<munged>/<uuid>.jsonl`. */
-const transcript = (home: string, lines: string[]): string => {
+ *  resolves to for a row with this uuid: `<home>/.claude/projects/<munged>/<uuid>.jsonl`. */
+const transcriptFor = (home: string, uuid: string, lines: string[]): string => {
   const dir = path.join(home, '.claude', 'projects', MUNGED);
   mkdirSync(dir, { recursive: true });
-  const f = path.join(dir, `${UUID}.jsonl`);
+  const f = path.join(dir, `${uuid}.jsonl`);
   writeFileSync(f, lines.join('\n') + '\n');
   return f;
 };
+
+/** Same, at the fixed `UUID` the default `seed()` row carries. */
+const transcript = (home: string, lines: string[]): string => transcriptFor(home, UUID, lines);
 
 /** A statusline pane in the shape `parseStatusline` parses: the branch is the
  *  `⎇` segment, delimited by the box-vertical. Check `src/pane/statusline.ts`
@@ -160,7 +163,7 @@ describe('the naming sweep', () => {
     expect(h.calls).toEqual([]);
   });
 
-  // Review finding 2: `ccd ws-archive` "DESTROYS NOTHING" (ccd:1670-1673) — an
+  // Review finding 2: `ccd ws-archive` "DESTROYS NOTHING" (ccd:1711-1714) — an
   // archived row keeps `workspace`, keeps `branch = ws/<slug>`, keeps its
   // worktree and keeps its transcript, so without this guard the row is fully
   // in scope for conditions 2-4 and a server restart (`attemptedRenames` is
@@ -239,6 +242,58 @@ describe('the naming sweep', () => {
     expect(stats, 'nor even the cheaper stat the tail read is gated behind').toBe(statsAfterFirst);
   });
 
+  // `<project>-<slug>` is a SLUG, recycled by `ws-reap` (`ccd:950-951`), and
+  // neither `nameSweepRetired` nor `attemptedRenames` is ever pruned when a
+  // row disappears — so a bare `<id>` key would let a REAPED workspace's
+  // retirement silently shadow an unrelated later workspace that draws the
+  // same slug, for the life of the process, with no log line anywhere. The
+  // uuid is what makes an incarnation stable: ccd mints a fresh one on every
+  // `ws-add`, so a recycled slug always pairs with a NEW uuid.
+  it('a brand-new workspace that draws a recycled slug is not retired by a dead one’s history', async () => {
+    const h = harness('{"refused":"has-upstream","detail":"already on the remote","paths":[]}');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    seed(h.home);                                    // uuid = UUID, "incarnation A"
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toHaveLength(1);                 // A is retired on has-upstream
+
+    // The slug is reaped and redrawn: same session id, a BRAND NEW uuid (a
+    // fresh Claude Code session), a fresh transcript, branch back at born —
+    // exactly what a fresh `ws-add` onto the same recycled slug writes.
+    // Nothing about incarnation A's refusal is a fact about this one.
+    const NEW_UUID = 'b'.repeat(36);
+    seed(h.home, { uuid: NEW_UUID });
+    transcriptFor(h.home, NEW_UUID, [TITLE('Totally unrelated new work')]);
+    await again(w);
+
+    expect(h.calls, 'incarnation B must still get its own rename attempt').toHaveLength(2);
+    expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet', 'ws/totally-unrelated-new-work']);
+  });
+
+  // Same hazard, the `attemptedRenames` side: a bare `<id>:<derived-branch>`
+  // key would already read as "attempted" for incarnation B if the two titles
+  // happen to slugify the same, even though B has never actually tried.
+  it('attemptedRenames does not carry a recycled incarnation’s pair into the new one', async () => {
+    const h = harness('{"refused":"name-taken-local","detail":"taken","paths":[]}');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    seed(h.home);
+    transcript(h.home, [TITLE('Same Title Both Times')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/same-title-both-times']);
+
+    const NEW_UUID = 'c'.repeat(36);
+    seed(h.home, { uuid: NEW_UUID });
+    transcriptFor(h.home, NEW_UUID, [TITLE('Same Title Both Times')]);   // same derived branch
+    await again(w);
+
+    expect(renames(h.calls), 'a new incarnation earns its own attempt at the same derived name')
+      .toEqual(['ws/same-title-both-times', 'ws/same-title-both-times']);
+  });
+
   // Review finding 5. `bad-branch` was removed from `PERMANENT_REFUSALS`: it is
   // ccd's verdict on the DERIVED NAME (`deriveBranch`, `naming.ts:26-30`), not a
   // fact about the session's shape, so a title that derives a different branch
@@ -281,6 +336,26 @@ describe('the naming sweep', () => {
     await again(w);
     expect(h.calls, 'a genuinely permanent refusal earns no further attempt, even on a new title')
       .toHaveLength(1);
+  });
+
+  // `registry-branch-drift` joined `PERMANENT_REFUSALS` alongside `has-upstream`
+  // for the same reason: it names a fact about the WORKTREE (git and the
+  // registry disagree about its branch), not about the derived name, so no
+  // later title can fix it — only a human re-syncing the two by hand can.
+  it('registry-branch-drift is also a permanent, session-level refusal', async () => {
+    const h = harness('{"refused":"registry-branch-drift","detail":"drifted","paths":[]}');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    seed(h.home);
+    transcript(h.home, [TITLE('First guess at the work')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/first-guess-at-the-work']);
+
+    transcript(h.home, [TITLE('First guess at the work'), TITLE('A completely different title')]);
+    await again(w);
+    await again(w);
+    expect(h.calls, 'a drift refusal earns no further attempt, even on a new title').toHaveLength(1);
   });
 
   // The retry key is `<id>:<derived-branch>`, not `<id>` — so a title that
@@ -334,7 +409,7 @@ describe('the naming sweep', () => {
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const deps = testDeps(h.home, h.run);
     let release!: () => void;
-    // Stands in for POST /workspace/reap (server.ts:702), which holds the same key.
+    // Stands in for POST /workspace/reap (server.ts:718), which holds the same key.
     void deps.queue.run(ID, () => new Promise<void>((r) => { release = r; }));
     const w = new FleetWatcher(deps, new Bus(), 2000);
 

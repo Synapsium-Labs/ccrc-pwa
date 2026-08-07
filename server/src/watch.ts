@@ -33,29 +33,45 @@ const TASK_SWEEP_MS = 10_000;
  *  would be re-read forever, roughly 7.7 MB/min across the agent WS. */
 const NAME_SWEEP_MS = 10_000;
 
-/** Refusal tokens (of ccd's thirteen, `spec:55`) that cannot stop being true:
- *  a branch, once pushed, is never un-pushed (`has-upstream`); a checkout
- *  that is not a workspace, a worktree ccd cannot find registered, and a
- *  worktree whose directory belongs to a different session are all facts
- *  about the session's shape that a title landing later cannot change (the
- *  last two ship their own remedy in the refusal detail, `git -C $main
- *  worktree add …`, which "cannot stop being true" only in the narrower
- *  sense that no TITLE fixes it). `name-taken-local`/`name-taken-origin`
- *  and `unchanged` are deliberately absent — a name collision or a
- *  since-changed title can resolve on the next sweep. See
- *  `FleetWatcher.nameSweepRetired` and review finding 1.
+/** Refusal tokens (of ccd's fourteen, `spec:252-266` — the spec's own table
+ *  predates the ninth and the fourteenth, `spec:49` is the unrelated `ws/`-
+ *  prefix paragraph) that cannot stop being true: a branch, once pushed, is
+ *  never un-pushed (`has-upstream`); a checkout that is not a workspace, a
+ *  worktree ccd cannot find registered, and a worktree whose directory
+ *  belongs to a different session are all facts about the session's shape
+ *  that a title landing later cannot change (the last two ship their own
+ *  remedy in the refusal detail, `git -C $main worktree add …`, which
+ *  "cannot stop being true" only in the narrower sense that no TITLE fixes
+ *  it). `name-taken-local`/`name-taken-origin` and `unchanged` are
+ *  deliberately absent — a name collision or a since-changed title can
+ *  resolve on the next sweep. See `FleetWatcher.nameSweepRetired` and review
+ *  finding 1.
+ *
+ *  `registry-branch-drift` joins the set for the same "no title fixes it"
+ *  reason as the worktree pair above: `cmd_ws_rename` now refuses when git's
+ *  own worktree record disagrees with the registry's `branch` field — the
+ *  corroboration `cmd_ws_reap` already requires (`ccd:3381`) — because
+ *  without it a hand `git branch -m` (which moves git's answer but never
+ *  updates the registry) leaves this sweep's own condition 2 believing the
+ *  branch is still at its born name while `ws-rename` would act on whatever
+ *  git says instead. The remedy is IN THE REFUSAL, same shape as the other
+ *  two repairable tokens: a rename of that same branch through `ccd
+ *  ws-rename` re-syncs the registry, which is a human action a later TITLE
+ *  cannot substitute for — hence session-level retirement, not a
+ *  per-derived-name retry.
  *
  *  `bad-branch` is deliberately NOT here, unlike the earlier draft of this
  *  set (review finding 5): it is a verdict on `deriveBranch(title)`, not on
  *  the workspace, and a later title is exactly the thing that can change it.
  *  Retiring the SESSION on `bad-branch` would be wrong the day it ever fires
- *  — `attemptedRenames`'s per-(id, derived-branch) key is already the
+ *  — `attemptedRenames`'s per-(incarnation, derived-branch) key is already the
  *  correct guard for a name-dependent refusal. Today the arm is dead code:
  *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
  *  `_ws_branch_valid` (`ccd/ccd:1337-1347`) always accepts, so `bad-branch`
  *  never actually reaches this lane — see `naming.ts:26-30`. */
 const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
   'has-upstream', 'not-a-workspace', 'worktree-unregistered', 'worktree-foreign',
+  'registry-branch-drift',
 ]);
 
 /** The fourth lane. A ccd install is a deliberate act by a human who is
@@ -150,29 +166,45 @@ export class FleetWatcher {
   private lastCapsAt = 0;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
-  /** `<id>:<derived-branch>` for every pair already tried. THE DERIVED NAME,
-   *  not the born slug: a title that changes while the branch is still at its
-   *  born name earns exactly one fresh attempt, and a server restart earns one
-   *  retry — which is the right amount, because the usual reason a rename
-   *  failed is a condition a restart does not change, and the one reason it
-   *  might have (a transient fleet outage) is worth one more try. Deliberately
-   *  not durable: a registry marker would be state ccd has to own, write and
-   *  purge on reap, for a retry budget whose entire purpose is to be
-   *  forgotten. */
+  /** `<id>#<uuid>:<derived-branch>` for every pair already tried. THE DERIVED
+   *  NAME, not the born slug: a title that changes while the branch is still
+   *  at its born name earns exactly one fresh attempt, and a server restart
+   *  earns one retry — which is the right amount, because the usual reason a
+   *  rename failed is a condition a restart does not change, and the one
+   *  reason it might have (a transient fleet outage) is worth one more try.
+   *  Deliberately not durable: a registry marker would be state ccd has to
+   *  own, write and purge on reap, for a retry budget whose entire purpose is
+   *  to be forgotten.
+   *
+   *  KEYED ON `<id>#<uuid>`, not `<id>` alone: `<project>-<slug>` is a SLUG,
+   *  recycled by `ws-reap` (`ccd:950-951`), and nothing in this map is ever
+   *  pruned when a row disappears — so a bare `<id>` key would let a reaped
+   *  workspace's stale pairs shadow an unrelated LATER workspace that drew the
+   *  same recycled slug. `r.uuid` is minted fresh by every `ws-add`, so the
+   *  combined key cannot survive a slug's reap-and-redraw cycle — the same
+   *  self-healing property `titleProbe` already has via a transcript path that
+   *  changes with the uuid. */
   private attemptedRenames = new Set<string>();
-  /** Session ids the sweep will never spend another transcript read on.
-   *  `attemptedRenames` is keyed per (id, derived branch) and cannot express
-   *  this: a title that keeps changing on a workspace whose branch was
-   *  already pushed would keep minting fresh pairs forever, and each one
-   *  earns its "one fresh attempt" — the stat gate (`claimTitleRead`) never
-   *  closes on a session whose transcript is still growing. Populated only by
-   *  a refusal that is permanent BY CONSTRUCTION (`PERMANENT_REFUSALS`),
+  /** `<id>#<uuid>` incarnations the sweep will never spend another transcript
+   *  read on. `attemptedRenames` is keyed per (incarnation, derived branch)
+   *  and cannot express this: a title that keeps changing on a workspace whose
+   *  branch was already pushed would keep minting fresh pairs forever, and
+   *  each one earns its "one fresh attempt" — the stat gate (`claimTitleRead`)
+   *  never closes on a session whose transcript is still growing. Populated
+   *  only by a refusal that is permanent BY CONSTRUCTION (`PERMANENT_REFUSALS`),
    *  never by a transient one — a fleet outage or a name collision can stop
    *  being true; a pushed branch cannot become un-pushed. Review finding 1:
    *  without this, a live workspace stuck on `has-upstream` re-reads a 256 KB
    *  tail every ten seconds indefinitely, the exact cost the stat gate exists
    *  to price out. Deliberately not durable, same reasoning as
-   *  `attemptedRenames`. */
+   *  `attemptedRenames`.
+   *
+   *  KEYED ON `<id>#<uuid>`, same reason and same recycling hazard as
+   *  `attemptedRenames` above — but sharper here: this set never expires a key
+   *  by (id, branch) at all, so a bare `<id>` key would silently retire every
+   *  future workspace that ever draws a previously-retired slug, for the life
+   *  of the process, with no log line anywhere to say why naming stopped
+   *  working for that one workspace. */
   private nameSweepRetired = new Set<string>();
   /** Per session: the transcript state whose title the sweep has already acted
    *  on. Same gate, for the same reason, as `SessionStream.claimAskRead`
@@ -435,7 +467,7 @@ export class FleetWatcher {
    * design:
    *
    *   1. it is a workspace, not a main checkout, and not archived — `ccd
-   *      ws-archive` "DESTROYS NOTHING" (`ccd:1670`), so an archived row keeps
+   *      ws-archive` "DESTROYS NOTHING" (`ccd:1711`), so an archived row keeps
    *      `workspace`, `branch = ws/<slug>`, its worktree and its transcript,
    *      fully in scope for conditions 2-4 unless excluded here; same guard,
    *      same shape, as the write right below this one in the file
@@ -447,14 +479,17 @@ export class FleetWatcher {
    *   3. the fleet's ccd implements the verb — asked BEFORE the probe below is
    *      recorded, so a fleet that installs a newer ccd re-reads transcripts
    *      that have not changed since;
-   *   4. this `(id, derived name)` pair has not been attempted, AND the
-   *      session has not been retired outright by an earlier refusal that is
-   *      permanent by construction (`PERMANENT_REFUSALS` — review finding 1;
-   *      `nameSweepRetired` is checked first, since it is the cheaper
-   *      question and answers it without a stat or a transcript read).
+   *   4. this `(incarnation, derived name)` pair has not been attempted, AND
+   *      the incarnation has not been retired outright by an earlier refusal
+   *      that is permanent by construction (`PERMANENT_REFUSALS` — review
+   *      finding 1; `nameSweepRetired` is checked first, since it is the
+   *      cheaper question and answers it without a stat or a transcript
+   *      read). "Incarnation" is `<id>#<uuid>`, not the bare session id — see
+   *      `attemptedRenames`'s own docstring for why a recycled slug needs the
+   *      uuid too.
    *
    * KNOWN GAP IN CONDITION 3, accepted and not engineered around: `ccd caps`
-   * has advertised `ws-rename` since long before it took flags (`ccd:1454`), so
+   * has advertised `ws-rename` since long before it took flags (`ccd:1628`), so
    * a fleet on an older ccd passes the verb gate. The old body binds the verb's
    * two arguments positionally — `local id="${1:?usage: …}"; local
    * new="${2:?…}"` — and this argv is `['ws-rename', '--session', <id>,
@@ -495,10 +530,20 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
+      // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
+      // recycled by ws-reap (`ccd:950-951`'s "144 per project, recycled") —
+      // `_ws_slug_free` only ever checks live registry rows, which `_reg_purge`
+      // deletes on reap, so nothing stops a later `ws-add` drawing the same
+      // slug for an unrelated workspace. `r.uuid` is the Claude Code session
+      // uuid, freshly minted by every `ws-add`, so a recycled id pairs with a
+      // NEW uuid and this key cannot collide with a retired incarnation of the
+      // same id — the same self-healing property `titleProbe` already has by
+      // keying on a transcript PATH that changes with the uuid.
+      const incarnation = `${r.id}#${r.uuid}`;
       // The cheapest question in the function, asked before anything that
       // costs a stat or a read: a session already retired by a permanent
       // refusal (`has-upstream` and its siblings) can never un-retire.
-      if (this.nameSweepRetired.has(r.id)) continue;
+      if (this.nameSweepRetired.has(incarnation)) continue;
       // A PROBE argv: it is never sent. `verbSupported` reads argv[0] only, and
       // asking here — before `claimTitleRead` writes anything — is what makes
       // "an unsupported verb records no attempt" true of the stat gate as well
@@ -512,11 +557,11 @@ export class FleetWatcher {
       if (title === null) continue;
       const branch = deriveBranch(title);
       // A title that slugifies to nothing has no pair to mark: the retry key is
-      // `<id>:<derived-branch>` and there is no derived branch. The stat gate is
-      // what stops it being re-read, which is the same protection the marked
-      // pairs get.
+      // `<incarnation>:<derived-branch>` and there is no derived branch. The
+      // stat gate is what stops it being re-read, which is the same protection
+      // the marked pairs get.
       if (branch === null) continue;
-      const key = `${r.id}:${branch}`;
+      const key = `${incarnation}:${branch}`;
       if (this.attemptedRenames.has(key)) continue;
       this.attemptedRenames.add(key);
       // AFTER the add, deliberately: the spec's error table marks this pair
@@ -544,7 +589,7 @@ export class FleetWatcher {
         // pushed branch un-pushed, or a foreign/unregistered worktree become
         // this session's own. Retire the session, not just this pair — see
         // `nameSweepRetired`.
-        if (PERMANENT_REFUSALS.has(refused)) this.nameSweepRetired.add(r.id);
+        if (PERMANENT_REFUSALS.has(refused)) this.nameSweepRetired.add(incarnation);
       }
     }
   }

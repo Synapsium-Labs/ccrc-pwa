@@ -211,13 +211,15 @@ describe('extraction finding — one path to the ccd script', () => {
 
 describe('one KeyedQueue for the process', () => {
   // The seam the naming sweep needs. `buildServer` used to construct its own
-  // KeyedQueue inline (`server.ts:312`), which FleetWatcher — built two lines
-  // EARLIER in index.ts (`:61` vs `:63`) — had no way to reach. A watcher that
-  // built its own would serialise its rename against nothing, and
-  // `POST /workspace/reap` (`server.ts:702`) is exactly the write it must not
-  // race. An optional Deps field with a `?? new KeyedQueue()` fallback is the
-  // same bug with a green suite, which is why this scans for the CONSTRUCTOR
-  // rather than for the field.
+  // KeyedQueue inline (`server.ts:321` on origin/main, the tree this diverged
+  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:61` vs
+  // `:63` on that same tree; `:68` vs `:70` on this one, now that the queue
+  // itself hoisted one level further to `index.ts:37`) — had no way to reach.
+  // A watcher that built its own would serialise its rename against nothing,
+  // and `POST /workspace/reap` (`server.ts:718`) is exactly the write it must
+  // not race. An optional Deps field with a `?? new KeyedQueue()` fallback is
+  // the same bug with a green suite, which is why this scans for the
+  // CONSTRUCTOR rather than for the field.
   const CONSTRUCTS = /\bnew KeyedQueue\s*\(/;
 
   it('is constructed in exactly one file under server/src, and that file is the composition root', () => {

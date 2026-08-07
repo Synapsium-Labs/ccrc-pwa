@@ -148,11 +148,16 @@ export const SENTENCES: Record<string, string> = {
   // `wsaudit.test.ts` enumerates ccd's source and requires the two sets to be
   // EQUAL — the mechanism that caught `branch-drift` -> `registry-branch-drift`
   // — and because if a rename control is ever added the copy is already right
-  // rather than a bash identifier on a phone screen. Four more of ws-rename's
-  // thirteen tokens (`no-such-session`, `not-a-workspace`, `incomplete-registry`,
-  // `worktree-missing`) are shared with ws-reap and are already above.
+  // rather than a bash identifier on a phone screen. Five more of ws-rename's
+  // fourteen tokens (`no-such-session`, `not-a-workspace`, `incomplete-registry`,
+  // `worktree-missing`, `registry-branch-drift`) are shared with ws-reap and
+  // are already above — `registry-branch-drift` for the exact reason its name
+  // says: `cmd_ws_rename` now refuses when git's worktree record disagrees
+  // with the registry's `branch` field, the same corroboration `ws-reap`
+  // already required, so it reuses `ws-reap`'s own token rather than minting a
+  // second name for one fact.
   //
-  // VOCABULARY DEFERRAL, recorded rather than fixed (spec:350-355): the reap
+  // VOCABULARY DEFERRAL, recorded rather than fixed (spec:371-376): the reap
   // side says `detached-head`, `foreign-worktree` and `no-worktree-record`
   // where these say `detached`, `worktree-foreign` and `worktree-unregistered`.
   // That is a real inconsistency, left as specified because nothing renders
