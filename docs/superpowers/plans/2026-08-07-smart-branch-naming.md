@@ -773,6 +773,7 @@ deliberately NOT aligned here; that deferral is recorded at the entries."
 - Modify: `agent/src/whitelist.ts:206-218` (`REQUIRED_VERB_FLAG` + its docstring), `:282-320` (`EXEC_WHITELIST.ccd` — after `['ws-release','--session']`, `:318`)
 - Modify: `agent/test/types/ok/legit-whitelist.ts:70` (after `ReapNeedsExpect`)
 - Modify: `server/src/remote/runner.ts:27-37` (`CCD_VERB_TIMEOUT_MS`)
+- Modify: `server/test/remote-runner.test.ts:78-84` (`describe('per-verb timeouts')` `it.each` table) — the row that lets a mutant on the new `CCD_VERB_TIMEOUT_MS` entry be caught
 - Modify: `server/test/whitelist-subset.test.ts:13-34` (`SAMPLES`), `:238-260` (`EXPECTED`), `:85-210` (layer 3)
 
 **Interfaces:**
@@ -800,12 +801,14 @@ Then add a new assertion inside `describe('layer 3 — the list never drifts wid
 ```ts
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
   // because the verb is destructive. `ws-rename` destroys nothing; it is here
-  // because it is the first verb the SERVER calls unattended — FleetWatcher's
-  // naming sweep, no human in the loop — so the grant must name the flag rather
-  // than the verb: a bare `['ws-rename']` permits `ccd ws-rename <anything>
-  // <anything…>`, which is exactly the positional argv surface this branch left
-  // behind. Cross-PACKAGE and object-reading, for the reasons the ws-reap
-  // assertion above states.
+  // because it is the SECOND verb the server calls unattended — after
+  // `ws-archive`, which `FleetWatcher.archiveMerged` already fires on merge
+  // with no human in the loop — and the first whose argv is derived from
+  // model output (FleetWatcher's naming sweep). So the grant must name the
+  // flag rather than the verb: a bare `['ws-rename']` permits `ccd ws-rename
+  // <anything> <anything…>`, which is exactly the positional argv surface
+  // this branch left behind. Cross-PACKAGE and object-reading, for the
+  // reasons the ws-reap assertion above states.
   it('ws-rename is grantable ONLY with --session', () => {
     const rn = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-rename');
     expect(rn.length, 'exactly one ws-rename grant').toBe(1);
@@ -826,7 +829,9 @@ Expected: FAIL — `typecheck-tests.test.ts` reports TS2353 (`wsRename` does not
 In `server/src/ccdargv.ts`, after the `wsRelease` line (`:78`):
 
 ```ts
-  /** The only ccd write with no human in the loop. `--branch` carries a name
+  /** The second ccd write with no human in the loop — after `wsArchive`, which
+   *  `FleetWatcher.archiveMerged` already fires unattended on merge — and the
+   *  first whose argv is derived from model output. `--branch` carries a name
    *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string) => argv(['ws-rename', '--session', id, '--branch', branch]),
@@ -847,12 +852,15 @@ In `agent/src/whitelist.ts`, replace the `REQUIRED_VERB_FLAG` docstring and cons
  * it is a DIFFERENT one — it permits an UNCONFIRMED reap, i.e. the exact thing
  * §7 says can never cross the wire.
  *
- * `ws-rename` destroys nothing, and is here because it is the first verb the
- * server calls UNATTENDED (FleetWatcher's naming sweep). Prefix matching means
- * a one-token `['ws-rename']` permits `ccd ws-rename <anything> <anything…>` —
- * the whole positional argv surface the verb used to have — for a call no human
- * ever reviews. Naming the flag makes the grant two tokens wide, and makes
- * losing it both a compile error and a boot refusal.
+ * `ws-rename` destroys nothing, and is here because it is the second verb the
+ * server calls UNATTENDED — after `ws-archive`, which `FleetWatcher.archiveMerged`
+ * already fires on merge with no human anywhere in the path — and the first
+ * whose argv is derived from model output (FleetWatcher's naming sweep).
+ * Prefix matching means a one-token `['ws-rename']` permits `ccd ws-rename
+ * <anything> <anything…>` — the whole positional argv surface the verb used
+ * to have — for a call no human ever reviews. Naming the flag makes the grant
+ * two tokens wide, and makes losing it both a compile error and a boot
+ * refusal.
  *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
@@ -887,6 +895,12 @@ In `server/src/remote/runner.ts`, inside `CCD_VERB_TIMEOUT_MS` (`:27-37`), after
   'ws-rename': 20_000,
 ```
 
+**Also add the discriminating row**, or this entry has no test that can tell it apart from its own absence. In `server/test/remote-runner.test.ts`, inside the `describe('per-verb timeouts')` `it.each` table (`:78-84`), after the `pr-state` row:
+
+```ts
+    [['ws-rename', '--session', 'x', '--branch', 'ws/x'], 20_000],
+```
+
 - [ ] **Step 6: Run the gates this task moves**
 
 Run: `cd agent && npx vitest run && cd ../server && npx vitest run test/whitelist-subset.test.ts test/verb-gate.test.ts test/ccdargv-brand.test.ts test/typecheck-tests.test.ts`
@@ -895,13 +909,15 @@ Expected: PASS everywhere. `verb-gate.test.ts` must **still pass**: `wsRename` h
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/ccdargv.ts agent/src/whitelist.ts agent/test/types/ok/legit-whitelist.ts server/src/remote/runner.ts server/test/whitelist-subset.test.ts
+git add server/src/ccdargv.ts agent/src/whitelist.ts agent/test/types/ok/legit-whitelist.ts server/src/remote/runner.ts server/test/whitelist-subset.test.ts server/test/remote-runner.test.ts
 git commit -m "feat(ccrc): the server may emit ws-rename, but only with --session
 
 REQUIRED_VERB_FLAG gains its second entry, and the first one that is not about a
-destructive verb: ws-rename is the first verb the server calls with no human in
-the loop, and a bare one-token grant would permit the entire positional argv
-surface the verb just left behind.
+destructive verb: ws-rename is the second verb the server calls with no human
+in the loop (after ws-archive, which FleetWatcher.archiveMerged already fires
+on merge) and the first whose argv is derived from model output. A bare
+one-token grant would permit the entire positional argv surface the verb just
+left behind.
 
 20s, the same budget pr-state was given, because it reaches origin through
 git ls-remote before it will rename anything."

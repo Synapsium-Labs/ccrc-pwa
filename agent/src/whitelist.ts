@@ -213,12 +213,15 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * it is a DIFFERENT one — it permits an UNCONFIRMED reap, i.e. the exact thing
  * §7 says can never cross the wire.
  *
- * `ws-rename` destroys nothing, and is here because it is the first verb the
- * server calls UNATTENDED (FleetWatcher's naming sweep). Prefix matching means
- * a one-token `['ws-rename']` permits `ccd ws-rename <anything> <anything…>` —
- * the whole positional argv surface the verb used to have — for a call no human
- * ever reviews. Naming the flag makes the grant two tokens wide, and makes
- * losing it both a compile error and a boot refusal.
+ * `ws-rename` destroys nothing, and is here because it is the second verb the
+ * server calls UNATTENDED — after `ws-archive`, which `FleetWatcher.archiveMerged`
+ * already fires on merge with no human anywhere in the path — and the first
+ * whose argv is derived from model output (FleetWatcher's naming sweep).
+ * Prefix matching means a one-token `['ws-rename']` permits `ccd ws-rename
+ * <anything> <anything…>` — the whole positional argv surface the verb used
+ * to have — for a call no human ever reviews. Naming the flag makes the grant
+ * two tokens wide, and makes losing it both a compile error and a boot
+ * refusal.
  *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
