@@ -1532,8 +1532,9 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # lets ws-rm read the new name back out of the record afterwards.
   #
   # THE ONE PATH THAT KEEPS A NON-ZERO EXIT. It is a fault, not a refusal:
-  # nothing about the request was wrong, and the caller must not mark the pair
-  # attempted-and-answered on the strength of it.
+  # nothing about the request was wrong. The caller must not read this as a
+  # REFUSAL ANSWER — it carries no token and reaches no refusalSentence — but
+  # the pair IS still marked attempted, like every other non-ok CcdResult.
   #
   # NO BUSY GUARD, deliberately, unlike `ws-archive`'s `session-busy`: when the
   # title this verb's automatic caller derives from lands, the session is busy by

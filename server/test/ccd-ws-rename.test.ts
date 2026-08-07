@@ -201,9 +201,10 @@ describe('ws-rename', () => {
   });
 
   // `git branch -m` failing is THE one path that keeps a non-zero exit: nothing
-  // about the request was wrong, so it is a fault and not a refusal, and the
-  // caller must not mark the pair attempted-and-answered on the strength of it.
-  // The shim spells its own `command git` passthrough, as every git stub here does.
+  // about the request was wrong, so it is a fault and not a refusal — the caller
+  // must not read it as a REFUSAL ANSWER (no token, no refusalSentence), but the
+  // pair IS still marked attempted, like every other non-ok CcdResult. The shim
+  // spells its own `command git` passthrough, as every git stub here does.
   it('exits non-zero when the rename itself fails — a fault, not a refusal', () => {
     const wt = addOne();
     const NOMV = `git() { [[ "$*" == *"branch -m"* ]] && { echo "fatal: nope" >&2; return 1; }; command git "$@"; };`;
