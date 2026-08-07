@@ -1345,24 +1345,102 @@ _ws_branch_valid() {
   return 0
 }
 
-cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is pushed
-  local id="${1:?usage: ccd ws-rename <id> <new-branch>}"
-  local new="${2:?usage: ccd ws-rename <id> <new-branch>}"
-  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
+  # workspace branch before it is pushed.
+  #
+  # FLAGS, not positionals, and every refusal is an ANSWER: one JSON object on
+  # stdout at exit 0. Both changes are for the same caller. This verb's first
+  # unattended caller is FleetWatcher's naming sweep, on the far side of the
+  # agent WS, where a non-zero exit carrying a stderr string is
+  # indistinguishable from the agent being down — and "this branch is already
+  # pushed, never rename it" must not be retried the way a transport failure is.
+  # The flags matter from the other end for the same reason: the agent's exec
+  # whitelist matches by PREFIX, so a positional verb can only be granted as the
+  # one-token ['ws-rename'], which permits `ccd ws-rename <anything>
+  # <anything…>` for a call no human ever reviews.
+  #
+  # THE TOKENS ARE INLINE LITERALS, not arguments to a helper, and that is
+  # load-bearing rather than stylistic. `server/test/wsaudit.test.ts:57` scans
+  # THIS FILE with /"refused":"([a-zA-Z0-9-]+)"/ and asserts set equality in
+  # both directions against `wsaudit.ts`'s SENTENCES; a helper whose format
+  # string reads `"refused":"%s"` contributes no token to that scan, so the nine
+  # sentences this verb needs would fail the reverse direction and the only
+  # fixes would be deleting copy or weakening an approved mechanism.
+  # `cmd_ws_reap` already writes every one of its ~30 refusals this way.
+  #
+  # `_json_str`'s status, checked ONCE and up front — the same probe, for the
+  # same reason, as `cmd_ws_audit` (ccd:3907) and `cmd_ws_reap` (ccd:4745).
+  # Every refusal below quotes its detail inside a printf ARGUMENT LIST, where a
+  # failure is a swallowed status and an empty argument — `"detail":,` — i.e. a
+  # document the server reports as a parse error rather than as the refusal it
+  # actually was. BEFORE the arity check, because `bad-args` is itself one of
+  # the refusals that needs quoting. python3 missing is a FAULT, not a refusal:
+  # the verb cannot answer at all.
+  _json_str probe >/dev/null 2>&1 \
+    || die "python3 unavailable — cannot quote the rename answer safely"
 
-  local ws project workdir
+  # Exact arity and flag order, the shape `cmd_ws_hold` (ccd:1635) and
+  # `cmd_ws_release` (ccd:1681) use. `[[ ]]` short-circuits, so `$1` is never
+  # expanded when `$#` is 0 and `set -u` has nothing to complain about. The
+  # positional form this replaces was a MINIMUM-arity guard (`${1:?}`/`${2:?}`)
+  # whose usage refusal was bash's rather than ccd's, and it ignored extra argv.
+  if [[ $# -ne 4 || $1 != --session || $3 != --branch ]]; then
+    printf '{"refused":"bad-args","detail":%s,"paths":[]}\n' \
+      "$(_json_str "usage: ccd ws-rename --session <id> --branch <name>")"
+    return 0
+  fi
+  local id=$2 new=$4
+  if [[ ! $id =~ ^[A-Za-z0-9._-]+$ ]]; then
+    printf '{"refused":"bad-args","detail":%s,"paths":[]}\n' \
+      "$(_json_str "bad session id: $id")"
+    return 0
+  fi
+
+  if [[ ! -f "$REG/$id.uuid" ]]; then
+    printf '{"refused":"no-such-session","detail":%s,"paths":[]}\n' \
+      "$(_json_str "ccrc has no registry entry for $id")"
+    return 0
+  fi
+
+  local ws project workdir reg_branch
   ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  reg_branch=$(_reg_get "$id" branch)
   # The absence of a workspace field is what distinguishes a main checkout.
-  [[ -n "$ws" ]] || die "$id is not a workspace — refusing to rename a main checkout's branch"
-  [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  if [[ -z "$ws" ]]; then
+    printf '{"refused":"not-a-workspace","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$id is not a workspace — refusing to rename a main checkout's branch")"
+    return 0
+  fi
+  # `branch` joins `project`/`workdir` here — the same three fields
+  # cmd_ws_reap's identity phase requires (ccd:3323-3327). Without it, a row
+  # missing `branch` fell through to the registry-branch-drift rung below,
+  # which reads $reg_branch unconditionally: `"the registry says , git's
+  # worktree record for $workdir says $old"`, a detail with a blank clause
+  # standing in for a refusal that actually names the gap.
+  if [[ -z "$project" || -z "$workdir" || -z "$reg_branch" ]]; then
+    printf '{"refused":"incomplete-registry","detail":%s,"paths":[]}\n' \
+      "$(_json_str "incomplete registry for '$id'")"
+    return 0
+  fi
   # KEPT deliberately, now that the branch no longer has to be read out of the
   # directory. The record does survive a hand-deletion, so this rename WOULD
   # work — but ws-rename exists for a workspace still being worked in, and a
   # vanished directory is a broken one. Renaming would print a success line and
   # say nothing about the breakage, hiding exactly what ws-gc exists to surface;
   # refusing names it, and ws-rm already handles a gone directory deliberately.
-  [[ -d "$workdir" ]] || die "worktree is gone: $workdir"
-  _ws_branch_valid "$new" || die "invalid branch name: $new"
+  if [[ ! -d "$workdir" ]]; then
+    printf '{"refused":"worktree-missing","detail":%s,"paths":[]}\n' \
+      "$(_json_str "worktree is gone: $workdir")"
+    return 0
+  fi
+  # NOT re-implemented on the server. This rule has one definition, on the box,
+  # and the server learns its verdict from the `bad-branch` token — two
+  # implementations of one rule drift, which is what they do.
+  if ! _ws_branch_valid "$new"; then
+    printf '{"refused":"bad-branch","detail":%s,"paths":[]}\n' \
+      "$(_json_str "invalid branch name: $new")"
+    return 0
+  fi
 
   local main="$PROJECTS_ROOT/$project"
   # THE branch source of truth, same as cmd_ws_rm: git's own record for that
@@ -1382,12 +1460,20 @@ cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is p
   #      here ("unable to locate repository") — it cannot rebuild a record that
   #      was deleted. Re-adding the worktree can, once the orphaned checkout is
   #      out of the way (measured: rc 0, and no prune needed — no record stands).
-  local reg_branch; reg_branch=$(_reg_get "$id" branch)
-  (( registered == 0 )) \
-    || die "no worktree record for $workdir in $main — nothing renamed; with no registration no branch name is corroborated (the registry says '${reg_branch:-?}', which nothing now ties to that path): move the leftover directory aside, then git -C $main worktree add $workdir ${reg_branch:-<branch>}"
+  #      ($reg_branch itself was already fetched and checked non-empty above,
+  #      alongside project/workdir.)
+  if (( registered != 0 )); then
+    printf '{"refused":"worktree-unregistered","detail":%s,"paths":[]}\n' \
+      "$(_json_str "no worktree record for $workdir in $main — nothing renamed; with no registration no branch name is corroborated (the registry says '${reg_branch:-?}', which nothing now ties to that path): move the leftover directory aside, then git -C $main worktree add $workdir ${reg_branch:-<branch>}")"
+    return 0
+  fi
   #   2: registered, and the registration says `detached`. The remedy is to check
   #      a branch out, not to repair anything.
-  [[ -n "$old" ]] || die "$id is on a detached HEAD — nothing to rename"
+  if [[ -z "$old" ]]; then
+    printf '{"refused":"detached","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$id is on a detached HEAD — nothing to rename")"
+    return 0
+  fi
   #   1: registered, with a branch — $old is git's own name for it.
   # ...but a registration outlives its directory, so it can be STALE: delete the
   # directory by hand, put anything else at that path, and git still names it —
@@ -1401,28 +1487,84 @@ cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is p
   # only drops records whose directory is missing — hence both, in that order.
   local wd_common main_common
   wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
-  [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
-    || die "$workdir is not a worktree of $main — nothing renamed; move or delete the directory by hand, then git -C $main worktree prune && git -C $main worktree add $workdir $old"
-  [[ "$old" != "$new" ]] || die "already named $new"
-
-  # Renaming after a push leaves the old name on the remote and creates a second
-  # branch there on the next push. An upstream is the evidence that happened.
-  # Asked in $main and about $old by name: branch config is shared across a
-  # repo's worktrees, so this is the same answer $workdir would give — from the
-  # repo that actually owns the branch. Measured on git 2.43.0: rc 0 printing
-  # `origin/<old>` with an upstream, rc 128 without one.
-  if git -C "$main" rev-parse --abbrev-ref "$old@{u}" >/dev/null 2>&1; then
-    die "$old has an upstream — it is already on the remote; rename before pushing, not after"
+  if [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
+    printf '{"refused":"worktree-foreign","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$workdir is not a worktree of $main — nothing renamed; move or delete the directory by hand, then git -C $main worktree prune && git -C $main worktree add $workdir $old")"
+    return 0
+  fi
+  # $old is git's own record, corroborated above against the DIRECTORY. It is
+  # not yet corroborated against the REGISTRY, and the naming sweep's own
+  # idempotence check reads the registry's `branch` field, never this
+  # function's git-derived `$old` — the two are different sources of truth for
+  # the same fact, and this repo already models what happens when they drift: a
+  # hand `git branch -m` moves git's answer while the registry keeps the old
+  # name (`cmd_ws_reap`'s `registry-branch-drift`, ccd:3381, and
+  # `server/test/ccd-workspaces.test.ts:587`'s pinned scenario). Without this
+  # check, a workspace hand-renamed outside `ccd ws-rename` still reads as
+  # "still on its born name" to the sweep (the registry never moved) while this
+  # verb renames whatever git says instead — silently renaming a hand-chosen
+  # branch. Same rung `cmd_ws_reap` already refuses on, same token, same
+  # remedy: the registry only self-heals through `ws-rename`'s own
+  # `_reg_set … branch`, so a human who renamed by hand runs `ccd ws-rename`
+  # once by hand to re-corroborate the two.
+  if [[ "$old" != "$reg_branch" ]]; then
+    printf '{"refused":"registry-branch-drift","detail":%s,"paths":[]}\n' \
+      "$(_json_str "the registry says $reg_branch, git's worktree record for $workdir says $old — refusing to rename on a stale registry entry")"
+    return 0
+  fi
+  if [[ "$old" == "$new" ]]; then
+    printf '{"refused":"unchanged","detail":%s,"paths":[]}\n' \
+      "$(_json_str "already named $new")"
+    return 0
   fi
 
-  git -C "$main" show-ref --verify --quiet "refs/heads/$new" \
-    && die "branch already exists locally: $new"
+  # Renaming after a push leaves the old name on the remote and creates a second
+  # branch there on the next push. An upstream is ONE kind of evidence that
+  # happened. Asked in $main and about $old by name: branch config is shared
+  # across a repo's worktrees, so this is the same answer $workdir would give —
+  # from the repo that actually owns the branch. Measured on git 2.43.0: rc 0
+  # printing `origin/<old>` with an upstream, rc 128 without one.
+  #
+  # THE load-bearing refusal, and the reason automatic naming is safe to run
+  # unattended: a branch that has been pushed is never renamed.
+  if git -C "$main" rev-parse --abbrev-ref "$old@{u}" >/dev/null 2>&1; then
+    printf '{"refused":"has-upstream","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$old has an upstream — it is already on the remote; rename before pushing, not after")"
+    return 0
+  fi
+  # An upstream is only tracking CONFIGURATION, not proof of a push: `git push
+  # origin ws/foo` with no `-u` puts the branch on origin and configures
+  # nothing, and the `@{u}` probe above answers `fatal: no upstream configured`
+  # for exactly that branch. So ask origin directly too, the same probe the
+  # `$new` collision check below already uses: rc 0 = $old is already on origin
+  # (refuse — this IS the "has been pushed" case, just reached a second way);
+  # rc 2 = never pushed, proceed; anything else = unreachable, and unreachable
+  # is not the same as pushed, so it stays a warning, not a refusal — the same
+  # convention the `$new` probe's unreachable case already uses.
+  local old_rc; git -C "$main" ls-remote --exit-code --heads origin "$old" >/dev/null 2>&1; old_rc=$?
+  case "$old_rc" in
+    0) printf '{"refused":"has-upstream","detail":%s,"paths":[]}\n' \
+         "$(_json_str "$old is already on origin (pushed without a tracking upstream) — rename before pushing, not after")"
+       return 0 ;;
+    2) : ;;
+    *) echo "warn: could not reach origin to check for '$old' — renaming anyway" >&2 ;;
+  esac
+
+  if git -C "$main" show-ref --verify --quiet "refs/heads/$new"; then
+    printf '{"refused":"name-taken-local","detail":%s,"paths":[]}\n' \
+      "$(_json_str "branch already exists locally: $new")"
+    return 0
+  fi
 
   # --exit-code: 0 = the head exists, 2 = it does not, anything else = we could
-  # not ask. Unreachable is not the same as taken.
+  # not ask. Unreachable is not the same as taken, and it stays a WARNING: a
+  # refusal here would make ws-rename unusable offline for a branch that has
+  # never been pushed.
   local rc; git -C "$main" ls-remote --exit-code --heads origin "$new" >/dev/null 2>&1; rc=$?
   case "$rc" in
-    0) die "branch already exists on origin: $new" ;;
+    0) printf '{"refused":"name-taken-origin","detail":%s,"paths":[]}\n' \
+         "$(_json_str "branch already exists on origin: $new")"
+       return 0 ;;
     2) : ;;
     *) echo "warn: could not reach origin to check for '$new' — renaming anyway" >&2 ;;
   esac
@@ -1433,9 +1575,23 @@ cmd_ws_rename() {   # id new-branch — rename a workspace branch before it is p
   # that worktree's HEAD and its registration with it (before `branch
   # refs/heads/feat/a`, after `branch refs/heads/feat/b`, rc 0) — which is what
   # lets ws-rm read the new name back out of the record afterwards.
+  #
+  # THE ONE *REFUSAL* PATH THAT KEEPS A NON-ZERO EXIT — the other is the
+  # `_json_str probe` at the top of this function (ccd:1379-1380), which is a
+  # FAULT for the same reason this is: nothing about either failure is a verdict
+  # on the request. This one is a fault, not a refusal: nothing about the
+  # request was wrong. The caller must not read this as a REFUSAL ANSWER — it
+  # carries no token and reaches no refusalSentence — but the pair IS still
+  # marked attempted, like every other non-ok CcdResult.
+  #
+  # NO BUSY GUARD, deliberately, unlike `ws-archive`'s `session-busy`: when the
+  # title this verb's automatic caller derives from lands, the session is busy by
+  # definition — it is answering the first prompt. A busy guard would refuse the
+  # only moment automatic naming ever fires.
   git -C "$main" branch -m "$old" "$new" || die "rename failed: $old -> $new"
   _reg_set "$id" branch "$new"
-  echo "renamed $id: $old -> $new"
+  printf '{"renamed":%s,"old":%s,"new":%s}\n' \
+    "$(_json_str "$id")" "$(_json_str "$old")" "$(_json_str "$new")"
 }
 
 cmd_caps() {   # one verb name per line — what THIS copy of ccd implements.

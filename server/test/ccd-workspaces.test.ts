@@ -476,7 +476,7 @@ describe('ws-rm', () => {
   // rename first.
   it('removes the RENAMED branch after ws-rename, leaving no ws/<slug> branch behind', () => {
     const wt = addOne();
-    sh(`cmd_ws_rename demo-quiet-mesa feat/renamed`);
+    sh(`cmd_ws_rename --session demo-quiet-mesa --branch feat/renamed`);
     sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
     expect(fs.existsSync(wt)).toBe(false);
     const main = path.join(home, 'projects', 'demo');

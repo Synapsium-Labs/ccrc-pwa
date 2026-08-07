@@ -77,6 +77,10 @@ describe('per-verb timeouts', () => {
 
   it.each([
     [['pr-state', '--session', 'x'], 20_000],
+    // Same reach and same number as pr-state: it shells out to `git
+    // ls-remote` before it will rename. Without this row, deleting or
+    // changing the entry in CCD_VERB_TIMEOUT_MS cannot fail a single test.
+    [['ws-rename', '--session', 'x', '--branch', 'ws/x'], 20_000],
     [['ws-archive', '--session', 'x'], 60_000],
     [['ws-restore', '--session', 'x'], 60_000],
     [['ws-audit', '--session', 'x'], 90_000],

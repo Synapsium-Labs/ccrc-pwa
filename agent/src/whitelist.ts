@@ -205,17 +205,29 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
 
 /**
  * Verbs that are only ever grantable WITH a mandatory flag immediately after
- * them. One entry, and it is the destructive one: `ccd ws-reap` deletes a
- * workspace, its branch and its clips, and `--expect <fingerprint>` is the
- * token ccd re-proves against the world before it does. A grant of bare
- * `['ws-reap']` is not a smaller grant, it is a DIFFERENT one — it permits an
- * UNCONFIRMED reap, i.e. the exact thing §7 says can never cross the wire.
+ * them. Two entries, for two different reasons.
+ *
+ * `ws-reap` is the destructive one: it deletes a workspace, its branch and its
+ * clips, and `--expect <fingerprint>` is the token ccd re-proves against the
+ * world before it does. A grant of bare `['ws-reap']` is not a smaller grant,
+ * it is a DIFFERENT one — it permits an UNCONFIRMED reap, i.e. the exact thing
+ * §7 says can never cross the wire.
+ *
+ * `ws-rename` destroys nothing, and is here because it is the second write the
+ * server calls UNATTENDED — after `ws-archive`, which `FleetWatcher.archiveMerged`
+ * already fires on merge with no human anywhere in the path — and the first
+ * whose argv is derived from model output (FleetWatcher's naming sweep).
+ * Prefix matching means a one-token `['ws-rename']` permits `ccd ws-rename
+ * <anything> <anything…>` — the whole positional argv surface the verb used
+ * to have — for a call no human ever reviews. Naming the flag makes the grant
+ * two tokens wide, and makes losing it both a compile error and a boot
+ * refusal.
  *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
  * different questions) is the one to avoid while fixing P1.
  */
-export const REQUIRED_VERB_FLAG = { 'ws-reap': '--expect' } as const;
+export const REQUIRED_VERB_FLAG = { 'ws-reap': '--expect', 'ws-rename': '--session' } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
 /**
@@ -316,6 +328,10 @@ export const EXEC_WHITELIST = {
     // ever REFUSES ws-rm/ws-reap — granting them widens nothing that deletes.
     ['ws-hold',    '--session'],
     ['ws-release', '--session'],
+    // Unattended caller (FleetWatcher's naming sweep): the flag is what keeps
+    // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what
+    // makes losing it a boot refusal rather than a widening nobody notices.
+    ['ws-rename',  '--session'],
   ],
 } as const satisfies ExecWhitelist;
 

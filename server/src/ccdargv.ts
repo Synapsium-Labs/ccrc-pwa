@@ -76,6 +76,12 @@ export const CCD_ARGV = {
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   wsHold:    (id: string, reason: string) => argv(['ws-hold', '--session', id, '--reason', reason]),
   wsRelease: (id: string) => argv(['ws-release', '--session', id]),
+  /** The second ccd write with no human in the loop — after `wsArchive`, which
+   *  `FleetWatcher.archiveMerged` already fires unattended on merge — and the
+   *  first whose argv is derived from model output. `--branch` carries a name
+   *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
+   *  and the server learns its verdict from the `bad-branch` refusal token. */
+  wsRename:  (id: string, branch: string) => argv(['ws-rename', '--session', id, '--branch', branch]),
 } as const;
 
 /**

@@ -357,6 +357,21 @@
 }
 
 /* ------------------------------------------------------------------ *
+ *  Typing caret (TypedLabel.tsx) — a plain glyph, never a blinking    *
+ *  stylesheet rule: an animated one would owe KEYFRAME_TROUGHS a      *
+ *  registered opacity trough for a mark on screen for at most a few   *
+ *  hundred ms (see the component's own comment for why). This rule    *
+ *  exists so the glyph's rendering is a decision recorded once,       *
+ *  rather than an accident of whichever mount point's ancestor it     *
+ *  happens to inherit from — it paints in the ambient ink and         *
+ *  (`user-select: none`) never joins a copy of the label text.        *
+ * ------------------------------------------------------------------ */
+.typed-caret {
+  color: currentColor;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------------ *
  *  Reduced motion — the canonical pattern from DIRECTION.md: disable  *
  *  the infinite loops outright and pin glow at mid-intensity (the     *
  *  1ms duration overrides in tokens.css handle one-shot transitions). *

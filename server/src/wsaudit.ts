@@ -142,6 +142,40 @@ export const SENTENCES: Record<string, string> = {
   // travels in `detail`; the remedy is IN THE SENTENCE for the reason
   // `stash-unreadable` states (`ReapSheet` renders `sentence`, never `detail`).
   'held': 'A program has this workspace held — it is mid-flight, so nothing was removed. Release it first (Release in the session’s actions sheet, or `ccd ws-release --session <id>`), then clean up.',
+  // ── ws-rename. Nine tokens whose copy no sheet renders TODAY: automatic
+  // naming logs its refusals server-side and surfaces nothing in the PWA, and
+  // this branch builds no manual rename control. They are here because
+  // `wsaudit.test.ts` enumerates ccd's source and requires the two sets to be
+  // EQUAL — the mechanism that caught `branch-drift` -> `registry-branch-drift`
+  // — and because if a rename control is ever added the copy is already right
+  // rather than a bash identifier on a phone screen. Five more of ws-rename's
+  // fourteen tokens (`no-such-session`, `not-a-workspace`, `incomplete-registry`,
+  // `worktree-missing`, `registry-branch-drift`) are shared with ws-reap and
+  // are already above — `registry-branch-drift` for the exact reason its name
+  // says: `cmd_ws_rename` now refuses when git's worktree record disagrees
+  // with the registry's `branch` field, the same corroboration `ws-reap`
+  // already required, so it reuses `ws-reap`'s own token rather than minting a
+  // second name for one fact.
+  //
+  // VOCABULARY DEFERRAL, recorded rather than fixed (spec:371-376): the reap
+  // side says `detached-head`, `foreign-worktree` and `no-worktree-record`
+  // where these say `detached`, `worktree-foreign` and `worktree-unregistered`.
+  // That is a real inconsistency, left as specified because nothing renders
+  // these strings — aligning them later is cheap, and churning a written plan
+  // and an approved table for a cosmetic gain is not worth it now.
+  // Rename-specific wording would be a lie the day any other verb reuses this
+  // token: the key is a bare string in a flat map shared across every ccd
+  // verb the linkage scan covers, not namespaced per-verb, so the copy stays
+  // neutral even though `ws-rename` is the only emitter today.
+  'bad-args': 'ccrc built a request ccd could not read. This is a ccrc bug, not something about this workspace.',
+  'bad-branch': 'The name this would rename the branch to is not a valid git branch name.',
+  'worktree-unregistered': 'git has no record of this directory as a worktree of this project, so there is no branch name to rename.',
+  'detached': 'git has this worktree on a detached HEAD, so there is no branch to rename.',
+  'worktree-foreign': 'This directory belongs to a different repository than the project it is registered under. Nothing was renamed.',
+  'unchanged': 'The branch already has this name.',
+  'has-upstream': 'This branch has already been pushed. Renaming it now would leave the old name on the remote and open a second branch there on the next push.',
+  'name-taken-local': 'A branch with that name already exists in this project.',
+  'name-taken-origin': 'A branch with that name already exists on the remote.',
 };
 
 export function refusalSentence(token: string): string {

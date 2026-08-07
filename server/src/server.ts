@@ -81,6 +81,13 @@ export interface Deps {
    *  refresh, so its absence is the mode test — the same shape `fleetState`
    *  already uses. */
   refreshCaps?: () => Promise<void>;
+  /** The ONE per-session write queue for the process. Built in `index.ts` and
+   *  handed to both `buildServer` and `FleetWatcher`, because the naming
+   *  sweep's `ws-rename` has to serialise against `POST /workspace/reap` — and
+   *  two `KeyedQueue`s serialise nothing at all. Required, not optional: an
+   *  absent field with a local fallback is exactly how a second queue gets
+   *  built with every suite green. */
+  queue: KeyedQueue;
   /** Override for tests; defaults to `fleetstate.ts`'s `defaultCachePath()`. */
   stateCachePath?: string;
   /** Web Push — present only when VAPID keys are configured. */
@@ -318,7 +325,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Write routes: serialized per session through one KeyedQueue; injection
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
-  const sendDeps: SendDeps = { tmux: deps.tmux, queue: new KeyedQueue() };
+  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
   const knownId = async (id: string): Promise<boolean> =>
     (await readRegistry(deps.io, deps.cfg)).some((r) => r.id === id);
 

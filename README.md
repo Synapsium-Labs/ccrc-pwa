@@ -78,6 +78,65 @@ The pane scraper still runs, and still raises a dialog the hook never got a
 write for (an older Claude Code, a hook that failed to install). Neither source
 suppresses the other; the PWA prefers the envelope and falls back to the scrape.
 
+### The branch takes the name the model already wrote
+
+A workspace is born `ws/soft-prairie` — two words from a random table, fixing
+the session id, the directory, the tmux session, the unit, the registry key and
+the branch. The name says nothing about the work. Claude Code, meanwhile, has
+already written one: every transcript carries an `ai-title` line generated from
+the first prompt, and until now nothing read it.
+
+`FleetWatcher`'s naming lane (10 s) renames the branch to that title, slugified:
+lowercase, non-alphanumeric runs collapsed to `-`, at most 40 characters cut
+back to a word boundary, prefixed `ws/`. It fires only while the branch is still
+exactly its born name — that comparison *is* the idempotence marker, so there is
+no new registry field and nothing to clean up on reap — and it reads the
+transcript behind a size+mtime gate, so a transcript with no title (nine of 609
+on this box) is not re-read forever.
+
+**A branch that has been pushed is never renamed — checked two ways against
+origin; when origin is unreachable the rename proceeds with a warning.**
+`ccd ws-rename` refuses with `has-upstream` for a configured tracking upstream
+OR the old name showing up on origin directly, so a branch pushed by hand with
+no `-u` (no upstream is configured, but the name is on the remote) is caught
+the same as one pushed through `ccd pr-open`'s `--set-upstream`. Both probes
+ask only `origin`, and — refusing here would make ws-rename unusable offline
+for a branch that has never been pushed — both warn and proceed rather than
+refuse when it cannot be reached. `ccd ws-rename` also refuses `registry-branch-drift`
+when git's own record for the worktree disagrees with the registry's `branch`
+field — the same corroboration `ws-reap` already requires — so a workspace
+hand-renamed with a bare `git branch -m` (bypassing this verb, and so never
+updating the registry) cannot have some *other* branch renamed out from under
+it by a sweep that still believes the registry's stale name. It refuses in
+JSON on stdout at exit 0 — fourteen named tokens, whose copy lives in
+`server/src/wsaudit.ts` — and the one REFUSAL path that keeps a non-zero exit
+is `git branch -m` itself failing, a fault rather than a refusal (the only
+other non-zero path is the python3-availability probe at the top of the
+function, also a fault, not a refusal). A refused workspace keeps its born
+name. Five of the fourteen refusals describe a fact about the workspace that a
+later title cannot change — `has-upstream`, `not-a-workspace`,
+`worktree-unregistered`, `worktree-foreign` and `registry-branch-drift`
+(`server/src/watch.ts`'s `PERMANENT_REFUSALS`; the last three ship their own
+remedy in the refusal detail — the first two a `git -C $main worktree add …`,
+the last a re-run of `ccd ws-rename` once the registry and git agree again —
+so "cannot stop being true" holds only in the sense that no title fixes it) —
+and those retire the session outright: no further attempt, on any title, until
+the server restarts — or until Claude Code rotates that session's own uuid (a
+`/clear`, a compaction), which `ccd`'s `_sync_uuid` mirrors into the registry
+and which earns a fresh incarnation just as a restart does, since retirement
+is keyed on `<id>#<uuid>` (`server/src/watch.ts`'s `attemptedRenames`
+docstring has the mechanism). `bad-branch` is a verdict on the *derived branch*, not the
+workspace, so it is deliberately not in that set — a title that changes can
+change it — even though `deriveBranch` never actually emits a name `ccd` would
+reject, so the refusal does not fire in practice. Every other refusal marks
+only that one `(session, derived name)` pair attempted, so a title that
+changes to a different slug still earns a fresh attempt on the next sweep.
+
+The name types itself into the fleet line and the session header when it lands
+(`pwa/src/fleet/TypedLabel.tsx`); `prefers-reduced-motion` swaps it instantly.
+The workspace slug itself never changes — the archive list, the PR sheet and the
+cleanup confirmation all still name the directory on disk.
+
 ### The attention bucket
 
 Every session on the fleet wire carries `bucket` and `bucketSince`, computed
@@ -360,6 +419,11 @@ script in particular — must ship to the fleet host *before or with* the server
 because the server reads what the hook writes. Shipping a server that expects a
 newer envelope shape to a fleet still running the old hook is how you get a
 confident UI over stale data. A server+PWA-only change has no such constraint.
+`ccd ws-rename` is the same rule with a sharper edge: the naming lane calls it
+unattended, and `ccd caps` has advertised the verb since long before it took
+flags — so a server deployed ahead of its ccd sees the verb gate pass and the
+call fail. One attempt per workspace, absorbed by the lane's retry guard, and
+zero if the agent ships first.
 
 **Restore** (manual, from the target box — pick the `<ts>` to roll back to):
 
@@ -414,15 +478,20 @@ general remote-shell:
   `stop`, `swap`, `ws-add`), but several now require a longer prefix before
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`, `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
-  `ws-hold`/`ws-release` need `--session`, and `ws-reap` needs `--expect` — a
-  load-bearing confirmation token, so an unconfirmed reap can never cross the
-  wire at all. `clip` and the legacy, unguarded `ws-rm` are gone; `ws-gc`
-  (which would permit `--prune`) was never granted. `gh` has no entry,
-  deliberately: the host token carries the `repo` write scope and there is no
-  read-only credential or cwd sandbox, so any `gh` grant would make this list
-  the sole control between the PWA and `gh pr merge` — the one PR write goes
-  through a `ccd` verb instead. Anything else comes back
-  `{ok:false, err:'forbidden'}`.
+  `ws-hold`/`ws-release`/`ws-rename` need `--session`, and `ws-reap` needs
+  `--expect` — a load-bearing confirmation token, so an unconfirmed reap can
+  never cross the wire at all. `ws-rename`'s flag guards a different hazard:
+  the verb destroys nothing, but it is the first whose argv the server builds
+  from model output (`FleetWatcher`'s naming sweep) and sends with no human
+  anywhere in the path — a bare `['ws-rename']` would still permit the whole
+  positional argv surface the verb used to have, so naming the flag is what
+  keeps the grant two tokens wide. `clip` and the legacy, unguarded `ws-rm`
+  are gone; `ws-gc` (which would permit `--prune`) was never granted. `gh`
+  has no entry, deliberately: the host token carries the `repo` write scope
+  and there is no read-only credential or cwd sandbox, so any `gh` grant
+  would make this list the sole control between the PWA and `gh pr merge` —
+  the one PR write goes through a `ccd` verb instead. Anything else comes
+  back `{ok:false, err:'forbidden'}`.
 - **Path whitelist**: every file op resolves the target through `realpath`
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,

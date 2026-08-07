@@ -231,6 +231,12 @@ describe('hold and release', () => {
     expect(screen.queryByRole('button', { name: /hold/i })).toBeNull();
   });
 
+  it('titles the sheet with the label chain, branch outranking the slug', () => {
+    render(<SessionActionsSheet session={f({ name: null, branch: 'ws/fix-the-pr-sheet', workspace: 'quiet-basin' })}
+                                {...sheetProps} />);
+    expect(screen.getByText('ws/fix-the-pr-sheet')).toBeInTheDocument();
+  });
+
   // `fireEvent`, not `userEvent`, for every click below — matching this
   // file's own established idiom for Sheet-rendered controls (every other
   // describe block here does the same). vaul's Drawer attaches its own

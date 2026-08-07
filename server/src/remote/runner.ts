@@ -26,6 +26,10 @@ const CLIENT_TIMEOUT_SLACK_MS = 5_000;
  *  for one, so there is nothing to override here. */
 const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   'pr-state': 20_000,
+  // Same reach as pr-state, and the same number: it shells out to `git
+  // ls-remote` against origin before it will rename. Without an entry it
+  // silently inherits the flat 90 s, which is nine naming lanes' worth.
+  'ws-rename': 20_000,
   'ws-archive': 60_000,
   'ws-restore': 60_000,
   // Equals CCD_TIMEOUT_MS's own default below — kept explicit, as

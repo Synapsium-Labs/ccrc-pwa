@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-03-ccrc-smart-branch-naming-design.md` (approved; decisions D1–D10 binding), executed with the eight Rider-D deltas of `docs/superpowers/specs/2026-08-07-build3-riders-design.md:191-226`.
 
-**Supersedes** `docs/superpowers/plans/2026-08-03-ccrc-smart-branch-naming.md`, which targets the pre-extraction `infra/ccrc/*` + `infra/ccrc-portability/ccd` layout that no longer exists. Task structure, code shapes and test cases are mined from it; **every path and every line anchor below was re-derived against this tree and verified by grep/read.**
+**Supersedes** `docs/superpowers/plans/2026-08-03-ccrc-smart-branch-naming.md`, which targets the pre-extraction `infra/ccrc/*` + `infra/ccrc-portability/ccd` layout that no longer exists. Task structure, code shapes and test cases are mined from it; **every path and every line anchor below was re-derived against `origin/main` — the tree this plan targets and the branch was cut from — and verified by grep/read.** (Corrected, Build 3 PR H whole-branch review: an earlier version of this plan's `ccd/ccd` and `server.ts` anchors used the scout's `7f2c250` base instead of `origin/main`, and were wrong throughout despite this same sentence claiming otherwise. See the Self-review section for the re-derivation and the specific corrected values. As execution proceeded across several review rounds, this tree ALSO moved past `origin/main` — an anchor here is a snapshot at plan-writing time, not a live index of the current source; trust the shipped source's own comments for that.)
 
 **Dependency, already satisfied:** the caps-refresh lane (`CAPS_REFRESH_MS`, `server/src/watch.ts:30`, `server/src/refreshcaps.ts`) is shipped. Without it a fleet whose ccd gains the new verb would keep answering `unsupported` until someone restarted the agent.
 
@@ -20,7 +20,9 @@
 
 ## Deviations found
 
-Four, recorded rather than silently redesigned. Each names the minimal faithful adaptation.
+**Post-build sync.** This plan's execution ran across several review rounds on the same branch, and fixes from later findings (review findings 1, 2, 3 and 5 — see D-5 below) landed in the shipped tree without every verbatim code block in this document being re-diffed against them. The blocks affected — the fault-vs-refusal comment in Task 1's `ccd-ws-rename.test.ts` excerpt, the `_ws_branch_valid` claim in Task 5's `naming.ts` docstring, Task 6's `sweepNames` docstring/constants/state (the archived guard and `PERMANENT_REFUSALS`/`nameSweepRetired`), and the Task 9 mutation table's `attemptedRenames.add(key)` row — have been aligned to the shipped tree after execution, each marked inline where it happens. This section's own prose (D-5 and its Task 9 correction) was already accurate; only the surrounding verbatim blocks had drifted.
+
+Five, recorded rather than silently redesigned. Each names the minimal faithful adaptation.
 
 ### D-1 (blocking) — a `_ws_rename_refuse` helper defeats the refusal-token harvest
 
@@ -30,7 +32,7 @@ The superseded plan factors the envelope into `_ws_rename_refuse() { printf '{"r
 for (const m of ccdSrc.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
 ```
 
-and `%` is not in `[a-zA-Z0-9-]`, so a helper contributes nothing to `ccdTokens`. The other three harvesting regexes (`_reap_refuse\s+<tok>`, `'!<tok>`, `"verdict":"<tok>"`) do not see `_ws_rename_refuse bad-args …` either. The consequence is not "the tokens are missed" — it is that `wsaudit.test.ts:88` (*every sentence in wsaudit.ts maps to a token ccd can actually emit*) and `:97` (*the two sets are exactly equal*) go **red on the nine new sentences the spec requires**, and the only fixes would be to delete the sentences or to weaken the linkage test — both of which the spec forbids (`spec:341-348`).
+and `%` is not in `[a-zA-Z0-9-]`, so a helper contributes nothing to `ccdTokens`. The other three harvesting regexes (`_reap_refuse\s+<tok>`, `'!<tok>`, `"verdict":"<tok>"`) do not see `_ws_rename_refuse bad-args …` either. The consequence is not "the tokens are missed" — it is that `wsaudit.test.ts:88` (*every sentence in wsaudit.ts maps to a token ccd can actually emit*) and `:97` (*the two sets are exactly equal*) go **red on the nine new sentences the spec requires**, and the only fixes would be to delete the sentences or to weaken the linkage test — both of which the spec forbids (`spec:362-369`).
 
 **Adaptation:** emit each refusal as an **inline literal `printf`**, which is ccd's own dominant idiom — `cmd_ws_reap` does exactly this at ~30 sites (`ccd/ccd:4600`, `:4680`, `:4731`, …); only the one genuinely dynamic verdict (`ccd/ccd:5002`) uses `%s`. Verified by running the harvest over `ccd/ccd` on this tree: **45 tokens today, 45 `SENTENCES` keys, and exactly nine of ws-rename's thirteen are new** (`bad-args`, `bad-branch`, `worktree-unregistered`, `detached`, `unchanged`, `has-upstream`, `name-taken-local`, `name-taken-origin`, `worktree-foreign`) — the spec's count, confirmed by measurement rather than assumed.
 
@@ -44,7 +46,17 @@ Rider D delta 2 says seven *including* the rename. Measured (`grep -rn '\.queue\
 
 ### D-4 (accepted hazard, stated) — `ccd caps` already advertises `ws-rename`
 
-`ccd/ccd:1454` lists `ws-rename` while the verb is still positional, so `verbSupported` answers **true** on a fleet whose ccd predates this PR: the probe-before-claim rule (`spec:326-339`) is necessary but not sufficient across this one upgrade. An old ccd passes the verb gate and then answers bash's own `${1:?}` usage refusal on stderr at exit 1. **This is accepted and not engineered around** (Rider D delta 5): it surfaces as one non-ok `CcdResult` per (session, derived name), the retry guard absorbs it, and the rollout is agent-first so the window is the length of one deploy. Do not add a shape probe, a version verb, or a caps entry rename to close it.
+`ccd/ccd:1480` on `origin/main` (the pre-PR ccd this paragraph describes; corrected from `:1454`, a scout-base anchor — Build 3 PR H whole-branch review) lists `ws-rename` while the verb is still positional, so `verbSupported` answers **true** on a fleet whose ccd predates this PR: the probe-before-claim rule (`spec:354-360`) is necessary but not sufficient across this one upgrade. The old body binds its two arguments positionally — `local id="${1:?usage: …}"; local new="${2:?…}"` — and the new argv is `['ws-rename', '--session', <id>, '--branch', <name>]`, so `$1` is the literal `--session` and `$2` is `<id>`, **both non-empty**: neither `${1:?}` nor `${2:?}` fires. Execution falls through to `[[ -f "$REG/$id.uuid" ]] || die "no such session: $id"` with `id` bound to `--session`, so an old ccd dies **`no such session: --session`** — not bash's own usage refusal (measured; see Build 3 PR H review finding 3, which corrected the same false sentence in `watch.ts`'s docstring). **This is accepted and not engineered around** (Rider D delta 5): it surfaces as one non-ok `CcdResult` per (session, derived name), the retry guard absorbs it, and the rollout is agent-first so the window is the length of one deploy. Do not add a shape probe, a version verb, or a caps entry rename to close it.
+
+### D-5 (blocking, retroactive) — `PERMANENT_REFUSALS` deviates from spec:151-158/408 (spec:429, after the spec's own later "Corrected" amendment shifted it) and the earlier plan text; both the design doc and Task 8's own copy were stale until this task
+
+Spec:151-158 and the definition of done (spec:429, "A workspace that refused once is not retried until its title changes or the server restarts") describe **one** retry rule for every refusal: a title change is always worth exactly one fresh attempt, never zero. Build 3 PR H review finding 1, landed earlier on this branch (commit 284679d), found that rule unsafe for five of the thirteen tokens — `has-upstream`, `not-a-workspace`, `worktree-unregistered`, `worktree-foreign`, `bad-branch` — because each names a fact about the workspace's shape that a later title cannot change, so retrying them forever on every title edit is pure waste. `server/src/watch.ts:45-47` (`PERMANENT_REFUSALS`) and `:164`/`:489`/`:535` (`nameSweepRetired`) implement the split: those five retire the *session* — `if (this.nameSweepRetired.has(r.id)) continue;` at `:489`, before any stat or transcript read — while the remaining eight (`bad-args`, `no-such-session`, `incomplete-registry`, `worktree-missing`, `detached`, `unchanged`, `name-taken-local`, `name-taken-origin`) still earn the spec's one fresh attempt per changed derived name, via `attemptedRenames`.
+
+That review finding updated only `watch.ts`'s own docstrings and this file's D-4 neighbourhood was left alone — Task 8's original prose (this plan, "Step 1: Write it") was copied verbatim from the spec's single-rule sentence, before finding 1 landed, and nobody re-diffed it after. It shipped in commit 8d3b350 describing behaviour the branch no longer has. **Adaptation:** README.md:101-102's retry sentence now names the five-token permanent set explicitly and says the other eight retry on a changed derived name, matching `PERMANENT_REFUSALS` rather than the single-rule spec text; the spec document itself is intentionally left as the historical design record and not edited by this task.
+
+**Correction (Task 9, review finding 5):** the paragraph above, `watch.ts:36-59`'s own comment, and README.md:102-105 all repeated the same false claim about `bad-branch` — that it "names a fact about the workspace's shape that a later title cannot change." It does not: `bad-branch` is a verdict on `deriveBranch(title)`, and a later title is precisely the thing that can change that verdict. `PERMANENT_REFUSALS` is now **four** tokens, not five — `has-upstream`, `not-a-workspace`, `worktree-unregistered`, `worktree-foreign` — and `bad-branch` retries per `(id, derived-branch)` like the other eight, via `attemptedRenames`, same as the spec's single rule already says for it. This was latent rather than live: `deriveBranch` (`naming.ts:32-49`) only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset `_ws_branch_valid` (`ccd/ccd:1337-1347`) always accepts, so the sweep has never actually produced a `bad-branch` refusal — but the comment asserted a permanence guarantee the code did not have, and the guard would have been wrong the day the arm ever did fire.
+
+**Correction (Build 3 PR H whole-branch review, retroactive):** the "spec document itself is intentionally left as the historical design record and not edited by this task" sentence above was itself found insufficient — an approved spec is the document a future implementer (and an operator following a stuck-workspace log line to the DoD) is told to trust, and it is served rendered, not read as an archive. The spec is now amended in place with two dated "Corrected 2026-08-07" notes (retry-storm guard section and Definition of Done) stating the session-level retirement rule directly, rather than leaving the correction findable only here. **`PERMANENT_REFUSALS` also grew a fifth token in the same review round, for an unrelated reason:** `registry-branch-drift`, a new refusal `cmd_ws_rename` now raises when git's own worktree record disagrees with the registry's `branch` field (the corroboration `cmd_ws_reap` already required) — see the spec's own retry-storm-guard correction and `server/src/watch.ts`'s `PERMANENT_REFUSALS` docstring for why it belongs in the same set as the other four.
 
 ---
 
@@ -71,7 +83,7 @@ Rider D delta 2 says seven *including* the rename. Measured (`grep -rn '\.queue\
 
 | file | responsibility | change |
 |---|---|---|
-| `ccd/ccd` | `cmd_ws_rename` (`:1322-1413`); `_ws_branch_valid` (`:1311-1320`) untouched; dispatch (`:6846`) and usage (`:6858`) untouched; `cmd_caps` (`:1454`) untouched | flags, exact arity, id validation, 13 inline refusal envelopes, JSON success |
+| `ccd/ccd` | `cmd_ws_rename` (`:1348-1439`); `_ws_branch_valid` (`:1337-1346`) untouched; dispatch (`:6935`) and usage (`:6947`) untouched; `cmd_caps` (`:1480`) untouched — **anchors re-derived against `origin/main`, the tree this plan targets (Build 3 PR H whole-branch review; the previous set used the scout's `7f2c250` base instead)** | flags, exact arity, id validation, 13 inline refusal envelopes, JSON success |
 | `server/test/ccd-ws-rename.test.ts` | the verb's own suite (24 cases: 5 on `_ws_branch_valid`, 19 on `ws-rename`) | rewrite the 19; the 5 are untouched |
 | `server/test/ccd-workspaces.test.ts:479` | the only other caller of the verb in the repo | positional → flags |
 | `server/src/wsaudit.ts` | refusal token → sentence | +9 entries (45 → 54) |
@@ -80,7 +92,7 @@ Rider D delta 2 says seven *including* the rename. Measured (`grep -rn '\.queue\
 | `agent/test/types/ok/legit-whitelist.ts` | compile-level pins on the rule tables | `+RenameNeedsSession` (after `:70`) |
 | `server/src/remote/runner.ts` | per-verb budgets (`CCD_VERB_TIMEOUT_MS`, `:27-37`) | `+'ws-rename': 20_000` |
 | `server/test/whitelist-subset.test.ts` | `SAMPLES` (`:13-34`), `EXPECTED` (`:238-260`), layer 3 | `+wsRename` in both (compile-enforced) + one grant assertion |
-| `server/src/server.ts` | `Deps` (`:68-96`), `sendDeps` (`:312`) | `queue` becomes a required `Deps` field |
+| `server/src/server.ts` | `Deps` (`:69-96`), `sendDeps` (`:321`) | `queue` becomes a required `Deps` field |
 | `server/src/index.ts` | composition root (`:32-52`, `:61`) | owns the one `KeyedQueue` |
 | `server/test/single-definition.test.ts` | structural one-definition guards | +1 guard: one `new KeyedQueue()`, at the root; +1 guard: one `sessionLabel` chain |
 | `server/src/naming.ts` | **new** — title → branch | create |
@@ -262,9 +274,10 @@ describe('ws-rename', () => {
   });
 
   // `git branch -m` failing is THE one path that keeps a non-zero exit: nothing
-  // about the request was wrong, so it is a fault and not a refusal, and the
-  // caller must not mark the pair attempted-and-answered on the strength of it.
-  // The shim spells its own `command git` passthrough, as every git stub here does.
+  // about the request was wrong, so it is a fault and not a refusal — the caller
+  // must not read it as a REFUSAL ANSWER (no token, no refusalSentence), but the
+  // pair IS still marked attempted, like every other non-ok CcdResult. The shim
+  // spells its own `command git` passthrough, as every git stub here does.
   it('exits non-zero when the rename itself fails — a fault, not a refusal', () => {
     const wt = addOne();
     const NOMV = `git() { [[ "$*" == *"branch -m"* ]] && { echo "fatal: nope" >&2; return 1; }; command git "$@"; };`;
@@ -729,7 +742,7 @@ Append to the `SENTENCES` object in `server/src/wsaudit.ts`, after the `'held'` 
   // thirteen tokens (`no-such-session`, `not-a-workspace`, `incomplete-registry`,
   // `worktree-missing`) are shared with ws-reap and are already above.
   //
-  // VOCABULARY DEFERRAL, recorded rather than fixed (spec:350-355): the reap
+  // VOCABULARY DEFERRAL, recorded rather than fixed (spec:371-376): the reap
   // side says `detached-head`, `foreign-worktree` and `no-worktree-record`
   // where these say `detached`, `worktree-foreign` and `worktree-unregistered`.
   // That is a real inconsistency, left as specified because nothing renders
@@ -773,6 +786,7 @@ deliberately NOT aligned here; that deferral is recorded at the entries."
 - Modify: `agent/src/whitelist.ts:206-218` (`REQUIRED_VERB_FLAG` + its docstring), `:282-320` (`EXEC_WHITELIST.ccd` — after `['ws-release','--session']`, `:318`)
 - Modify: `agent/test/types/ok/legit-whitelist.ts:70` (after `ReapNeedsExpect`)
 - Modify: `server/src/remote/runner.ts:27-37` (`CCD_VERB_TIMEOUT_MS`)
+- Modify: `server/test/remote-runner.test.ts:78-84` (`describe('per-verb timeouts')` `it.each` table) — the row that lets a mutant on the new `CCD_VERB_TIMEOUT_MS` entry be caught
 - Modify: `server/test/whitelist-subset.test.ts:13-34` (`SAMPLES`), `:238-260` (`EXPECTED`), `:85-210` (layer 3)
 
 **Interfaces:**
@@ -800,12 +814,14 @@ Then add a new assertion inside `describe('layer 3 — the list never drifts wid
 ```ts
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
   // because the verb is destructive. `ws-rename` destroys nothing; it is here
-  // because it is the first verb the SERVER calls unattended — FleetWatcher's
-  // naming sweep, no human in the loop — so the grant must name the flag rather
-  // than the verb: a bare `['ws-rename']` permits `ccd ws-rename <anything>
-  // <anything…>`, which is exactly the positional argv surface this branch left
-  // behind. Cross-PACKAGE and object-reading, for the reasons the ws-reap
-  // assertion above states.
+  // because it is the SECOND verb the server calls unattended — after
+  // `ws-archive`, which `FleetWatcher.archiveMerged` already fires on merge
+  // with no human in the loop — and the first whose argv is derived from
+  // model output (FleetWatcher's naming sweep). So the grant must name the
+  // flag rather than the verb: a bare `['ws-rename']` permits `ccd ws-rename
+  // <anything> <anything…>`, which is exactly the positional argv surface
+  // this branch left behind. Cross-PACKAGE and object-reading, for the
+  // reasons the ws-reap assertion above states.
   it('ws-rename is grantable ONLY with --session', () => {
     const rn = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-rename');
     expect(rn.length, 'exactly one ws-rename grant').toBe(1);
@@ -826,7 +842,9 @@ Expected: FAIL — `typecheck-tests.test.ts` reports TS2353 (`wsRename` does not
 In `server/src/ccdargv.ts`, after the `wsRelease` line (`:78`):
 
 ```ts
-  /** The only ccd write with no human in the loop. `--branch` carries a name
+  /** The second ccd write with no human in the loop — after `wsArchive`, which
+   *  `FleetWatcher.archiveMerged` already fires unattended on merge — and the
+   *  first whose argv is derived from model output. `--branch` carries a name
    *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string) => argv(['ws-rename', '--session', id, '--branch', branch]),
@@ -847,12 +865,15 @@ In `agent/src/whitelist.ts`, replace the `REQUIRED_VERB_FLAG` docstring and cons
  * it is a DIFFERENT one — it permits an UNCONFIRMED reap, i.e. the exact thing
  * §7 says can never cross the wire.
  *
- * `ws-rename` destroys nothing, and is here because it is the first verb the
- * server calls UNATTENDED (FleetWatcher's naming sweep). Prefix matching means
- * a one-token `['ws-rename']` permits `ccd ws-rename <anything> <anything…>` —
- * the whole positional argv surface the verb used to have — for a call no human
- * ever reviews. Naming the flag makes the grant two tokens wide, and makes
- * losing it both a compile error and a boot refusal.
+ * `ws-rename` destroys nothing, and is here because it is the second verb the
+ * server calls UNATTENDED — after `ws-archive`, which `FleetWatcher.archiveMerged`
+ * already fires on merge with no human anywhere in the path — and the first
+ * whose argv is derived from model output (FleetWatcher's naming sweep).
+ * Prefix matching means a one-token `['ws-rename']` permits `ccd ws-rename
+ * <anything> <anything…>` — the whole positional argv surface the verb used
+ * to have — for a call no human ever reviews. Naming the flag makes the grant
+ * two tokens wide, and makes losing it both a compile error and a boot
+ * refusal.
  *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
@@ -887,6 +908,12 @@ In `server/src/remote/runner.ts`, inside `CCD_VERB_TIMEOUT_MS` (`:27-37`), after
   'ws-rename': 20_000,
 ```
 
+**Also add the discriminating row**, or this entry has no test that can tell it apart from its own absence. In `server/test/remote-runner.test.ts`, inside the `describe('per-verb timeouts')` `it.each` table (`:78-84`), after the `pr-state` row:
+
+```ts
+    [['ws-rename', '--session', 'x', '--branch', 'ws/x'], 20_000],
+```
+
 - [ ] **Step 6: Run the gates this task moves**
 
 Run: `cd agent && npx vitest run && cd ../server && npx vitest run test/whitelist-subset.test.ts test/verb-gate.test.ts test/ccdargv-brand.test.ts test/typecheck-tests.test.ts`
@@ -895,13 +922,15 @@ Expected: PASS everywhere. `verb-gate.test.ts` must **still pass**: `wsRename` h
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/ccdargv.ts agent/src/whitelist.ts agent/test/types/ok/legit-whitelist.ts server/src/remote/runner.ts server/test/whitelist-subset.test.ts
+git add server/src/ccdargv.ts agent/src/whitelist.ts agent/test/types/ok/legit-whitelist.ts server/src/remote/runner.ts server/test/whitelist-subset.test.ts server/test/remote-runner.test.ts
 git commit -m "feat(ccrc): the server may emit ws-rename, but only with --session
 
 REQUIRED_VERB_FLAG gains its second entry, and the first one that is not about a
-destructive verb: ws-rename is the first verb the server calls with no human in
-the loop, and a bare one-token grant would permit the entire positional argv
-surface the verb just left behind.
+destructive verb: ws-rename is the second verb the server calls with no human
+in the loop (after ws-archive, which FleetWatcher.archiveMerged already fires
+on merge) and the first whose argv is derived from model output. A bare
+one-token grant would permit the entire positional argv surface the verb just
+left behind.
 
 20s, the same budget pr-state was given, because it reaches origin through
 git ls-remote before it will rename anything."
@@ -934,13 +963,15 @@ Append to `server/test/single-definition.test.ts` (it already scans `shared`, `s
 ```ts
 describe('one KeyedQueue for the process', () => {
   // The seam the naming sweep needs. `buildServer` used to construct its own
-  // KeyedQueue inline (`server.ts:312`), which FleetWatcher — built two lines
-  // EARLIER in index.ts (`:61` vs `:63`) — had no way to reach. A watcher that
-  // built its own would serialise its rename against nothing, and
-  // `POST /workspace/reap` (`server.ts:702`) is exactly the write it must not
-  // race. An optional Deps field with a `?? new KeyedQueue()` fallback is the
-  // same bug with a green suite, which is why this scans for the CONSTRUCTOR
-  // rather than for the field.
+  // KeyedQueue inline (`server.ts:321` on origin/main, the tree this diverged
+  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:61` vs
+  // `:63` on that same tree; `:68` vs `:70` on this one, now that the queue
+  // itself hoisted one level further to `index.ts:37`) — had no way to reach.
+  // A watcher that built its own would serialise its rename against nothing,
+  // and `POST /workspace/reap` (`server.ts:718`) is exactly the write it must
+  // not race. An optional Deps field with a `?? new KeyedQueue()` fallback is
+  // the same bug with a green suite, which is why this scans for the
+  // CONSTRUCTOR rather than for the field.
   const CONSTRUCTS = /\bnew KeyedQueue\s*\(/;
 
   it('is constructed in exactly one file under server/src, and that file is the composition root', () => {
@@ -1258,13 +1289,17 @@ Create `server/src/naming.ts`:
 export const SLUG_MAX = 40;
 
 /**
- * `null` when the title has nothing alphanumeric in it — not an empty string,
- * because `ws/` alone is a name `_ws_branch_valid` would take (it is not empty,
- * has no `..`, no leading dash) and a trailing-slash branch is a real git ref
- * hazard. A caller that gets `null` makes no call at all.
+ * `null` when the title has nothing alphanumeric in it — not an empty string.
+ * `ws/${''}` is `ws/`, and ccd's own `_ws_branch_valid` (`ccd/ccd:1337-1347`)
+ * DOES refuse a name that starts or ends with a slash, so the box would answer
+ * `bad-branch` rather than ever create that ref — but sending the call anyway
+ * would still burn the one-attempt-per-(id, derived-branch) retry budget on a
+ * name nobody chose, for a title that has nothing to give. A caller that gets
+ * `null` makes no call at all, which is the spec's own rule: "a title that
+ * slugifies to the empty string ... is not a rename — no call is made."
  *
  * The character class is a subset of what ccd's `_ws_branch_valid`
- * (`ccd/ccd:1311-1320`) permits, on purpose — but this is NOT a second copy of
+ * (`ccd/ccd:1337-1347`) permits, on purpose — but this is NOT a second copy of
  * that rule. The rule has one definition, on the box; this only avoids sending
  * names that are certain to be refused, and the verdict still comes back as
  * `bad-branch`.
@@ -1380,12 +1415,12 @@ Claude Code rewrites the line once per turn."
 ### Task 6: the naming sweep
 
 **Files:**
-- Modify: `server/src/watch.ts` — three imports (after `:9`); `NAME_SWEEP_MS` beside `TASK_SWEEP_MS` (`:24`); three fields (beside `lastCapsAt`, `:115`); one dispatch in `tick()` (after the caps block, which closes at `:233`); `claimTitleRead` + `sweepNames` (after `sweepTasks`, which closes at `:334`)
+- Modify: `server/src/watch.ts` — three imports (after `:9`); `NAME_SWEEP_MS` and `PERMANENT_REFUSALS` beside `TASK_SWEEP_MS` (`:24`); four fields (beside `lastCapsAt`, `:115`); one dispatch in `tick()` (after the caps block, which closes at `:233`); `claimTitleRead` + `sweepNames` (after `sweepTasks`, which closes at `:334`). Post-build sync: `PERMANENT_REFUSALS` and `nameSweepRetired` did not exist at this task originally — see the note before Step 3's code block.
 - Create: `server/test/name-sweep.test.ts`
 
 **Interfaces:**
 - Consumes: `readRegistry(io, cfg)` → `SessionRecord[]` with `workspace: string | null`, `branch: string | null`, `wrapper`, `workdir`, `uuid` (`server/src/registry.ts:102`); `transcriptPath(configDir, dir, uuid)` (`server/src/transcript/resolve.ts:8`); `readAiTitle` and `deriveBranch` (Task 5); `CCD_ARGV.wsRename` + `verbSupported` (Task 3, already imported at `watch.ts:9`); `this.deps.queue` (Task 4); `this.deps.runCcd`.
-- Produces: `NAME_SWEEP_MS = 10_000`; `private lastNameSweep`, `private attemptedRenames: Set<string>`, `private titleProbe: Map<…>`; `private claimTitleRead(...)`; **`async sweepNames(): Promise<void>` — public**.
+- Produces: `NAME_SWEEP_MS = 10_000`; `PERMANENT_REFUSALS: ReadonlySet<string>`; `private lastNameSweep`, `private attemptedRenames: Set<string>`, `private nameSweepRetired: Set<string>`, `private titleProbe: Map<…>`; `private claimTitleRead(...)`; **`async sweepNames(): Promise<void>` — public**.
 
 **Why `sweepNames` is public and `sweepTasks` is not:** `tick()` dispatches it with `void`, deliberately (it can wait minutes behind a queued reap), so a test that `await`s `tick()` has *not* awaited the sweep — every assertion about it would be a race, and every negative assertion would pass while the sweep was still running. Public, it is awaited directly and the tests are deterministic. One test still goes through `tick()`, to prove the lane is wired in *and* that the tick does not wait for it.
 
@@ -1398,7 +1433,7 @@ Claude Code rewrites the line once per turn."
 Create `server/test/name-sweep.test.ts`:
 
 ```ts
-// The sixth lane. (The fifth is hook-state sweeping — watch.ts:104.) Four
+// The sixth lane. (The fifth is hook-state sweeping — watch.ts:154.) Four
 // conditions, and the two that are easy to get wrong are which `branch` it
 // reads (the registry's, not the assembled one) and when it records the stat
 // probe (after the verb gate, never before it).
@@ -1639,7 +1674,7 @@ describe('the naming sweep', () => {
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const deps = testDeps(h.home, h.run);
     let release!: () => void;
-    // Stands in for POST /workspace/reap (server.ts:702), which holds the same key.
+    // Stands in for POST /workspace/reap (server.ts:718), which holds the same key.
     void deps.queue.run(ID, () => new Promise<void>((r) => { release = r; }));
     const w = new FleetWatcher(deps, new Bus(), 2000);
 
@@ -1758,7 +1793,7 @@ import { transcriptPath } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 ```
 
-and the constant, immediately after `TASK_SWEEP_MS` (`:24`):
+and the constants, immediately after `TASK_SWEEP_MS` (`:24`) — Post-build sync: `PERMANENT_REFUSALS` did not exist at this step originally; review findings 1 and 5 (see D-5) added and then corrected it, and this block now shows the shipped result rather than the intermediate one:
 
 ```ts
 /** The sixth lane (the fifth is hook-state sweeping, which rides the 2 s tick).
@@ -1767,9 +1802,34 @@ and the constant, immediately after `TASK_SWEEP_MS` (`:24`):
  *  real work — the nine transcripts on this box that carry no `ai-title` at all
  *  would be re-read forever, roughly 7.7 MB/min across the agent WS. */
 const NAME_SWEEP_MS = 10_000;
+
+/** Refusal tokens (of ccd's thirteen, `spec:55`) that cannot stop being true:
+ *  a branch, once pushed, is never un-pushed (`has-upstream`); a checkout
+ *  that is not a workspace, a worktree ccd cannot find registered, and a
+ *  worktree whose directory belongs to a different session are all facts
+ *  about the session's shape that a title landing later cannot change (the
+ *  last two ship their own remedy in the refusal detail, `git -C $main
+ *  worktree add …`, which "cannot stop being true" only in the narrower
+ *  sense that no TITLE fixes it). `name-taken-local`/`name-taken-origin`
+ *  and `unchanged` are deliberately absent — a name collision or a
+ *  since-changed title can resolve on the next sweep. See
+ *  `FleetWatcher.nameSweepRetired` and review finding 1.
+ *
+ *  `bad-branch` is deliberately NOT here, unlike the earlier draft of this
+ *  set (review finding 5): it is a verdict on `deriveBranch(title)`, not on
+ *  the workspace, and a later title is exactly the thing that can change it.
+ *  Retiring the SESSION on `bad-branch` would be wrong the day it ever fires
+ *  — `attemptedRenames`'s per-(id, derived-branch) key is already the
+ *  correct guard for a name-dependent refusal. Today the arm is dead code:
+ *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
+ *  `_ws_branch_valid` (`ccd/ccd:1337-1347`) always accepts, so `bad-branch`
+ *  never actually reaches this lane — see `naming.ts:26-30`. */
+const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
+  'has-upstream', 'not-a-workspace', 'worktree-unregistered', 'worktree-foreign',
+]);
 ```
 
-- [ ] **Step 4: Add the three pieces of state**
+- [ ] **Step 4: Add the four pieces of state**
 
 Beside the other lane clocks, after `lastCapsAt` (`:115`):
 
@@ -1786,6 +1846,20 @@ Beside the other lane clocks, after `lastCapsAt` (`:115`):
    *  purge on reap, for a retry budget whose entire purpose is to be
    *  forgotten. */
   private attemptedRenames = new Set<string>();
+  /** Session ids the sweep will never spend another transcript read on.
+   *  `attemptedRenames` is keyed per (id, derived branch) and cannot express
+   *  this: a title that keeps changing on a workspace whose branch was
+   *  already pushed would keep minting fresh pairs forever, and each one
+   *  earns its "one fresh attempt" — the stat gate (`claimTitleRead`) never
+   *  closes on a session whose transcript is still growing. Populated only by
+   *  a refusal that is permanent BY CONSTRUCTION (`PERMANENT_REFUSALS`),
+   *  never by a transient one — a fleet outage or a name collision can stop
+   *  being true; a pushed branch cannot become un-pushed. Review finding 1:
+   *  without this, a live workspace stuck on `has-upstream` re-reads a 256 KB
+   *  tail every ten seconds indefinitely, the exact cost the stat gate exists
+   *  to price out. Deliberately not durable, same reasoning as
+   *  `attemptedRenames`. */
+  private nameSweepRetired = new Set<string>();
   /** Per session: the transcript state whose title the sweep has already acted
    *  on. Same gate, for the same reason, as `SessionStream.claimAskRead`
    *  (`sessionws.ts:178-187`). */
@@ -1840,21 +1914,37 @@ Add both methods after `sweepTasks` (closes `:334`), before `sweepPr`'s docstrin
    * Code already wrote. Four conditions, in this order, and the order is the
    * design:
    *
-   *   1. it is a workspace, not a main checkout;
+   *   1. it is a workspace, not a main checkout, and not archived — `ccd
+   *      ws-archive` "DESTROYS NOTHING" (`ccd:1670`), so an archived row keeps
+   *      `workspace`, `branch = ws/<slug>`, its worktree and its transcript,
+   *      fully in scope for conditions 2-4 unless excluded here; same guard,
+   *      same shape, as the write right below this one in the file
+   *      (`archiveMerged`, `r.workspace === null || r.archivedAt !== null`) —
+   *      review finding 2;
    *   2. the REGISTRY says the branch is still exactly `ws/<workspace>` —
    *      condition 2 is also the idempotence marker, which is why there is no
    *      new registry field, no marker file and nothing to purge on reap;
    *   3. the fleet's ccd implements the verb — asked BEFORE the probe below is
    *      recorded, so a fleet that installs a newer ccd re-reads transcripts
    *      that have not changed since;
-   *   4. this `(id, derived name)` pair has not been attempted.
+   *   4. this `(id, derived name)` pair has not been attempted, AND the
+   *      session has not been retired outright by an earlier refusal that is
+   *      permanent by construction (`PERMANENT_REFUSALS` — review finding 1;
+   *      `nameSweepRetired` is checked first, since it is the cheaper
+   *      question and answers it without a stat or a transcript read).
    *
    * KNOWN GAP IN CONDITION 3, accepted and not engineered around: `ccd caps`
    * has advertised `ws-rename` since long before it took flags (`ccd:1454`), so
-   * a fleet on an older ccd passes the verb gate and then answers bash's own
-   * usage refusal on stderr at exit 1. That is one non-ok result per (session,
-   * derived name), absorbed by the retry guard, and the rollout is agent-first
-   * so the window is one deploy long.
+   * a fleet on an older ccd passes the verb gate. The old body binds the verb's
+   * two arguments positionally — `local id="${1:?usage: …}"; local
+   * new="${2:?…}"` — and this argv is `['ws-rename', '--session', <id>,
+   * '--branch', <name>]`, so `$1` is the literal string `--session` and `$2`
+   * is `<id>` — BOTH non-empty, so neither `${1:?}` nor `${2:?}` fires. It
+   * falls through to `[[ -f "$REG/$id.uuid" ]] || die "no such session: $id"`
+   * with `id` bound to `--session`, and dies `no such session: --session` —
+   * NOT bash's own usage refusal (measured; see review finding 3). That is one
+   * non-ok result per (session, derived name), absorbed by the retry guard,
+   * and the rollout is agent-first so the window is one deploy long.
    *
    * The `<id>.uuid` inherited limitation applies and is not fixed here: it is
    * written once at `ccd start` and never refreshed, so after a `/clear` the
@@ -1879,9 +1969,16 @@ Add both methods after `sweepTasks` (closes `:334`), before `sweepPr`'s docstrin
     // Same reason sweepTasks and sweepPr read the registry themselves.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
-      if (r.workspace === null) continue;
+      // `ws-archive` destroys nothing — an archived row is still `workspace
+      // !== null` with `branch` still at the born name — so it is excluded
+      // here explicitly, the same shape `archiveMerged` below already uses.
+      if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
+      // The cheapest question in the function, asked before anything that
+      // costs a stat or a read: a session already retired by a permanent
+      // refusal (`has-upstream` and its siblings) can never un-retire.
+      if (this.nameSweepRetired.has(r.id)) continue;
       // A PROBE argv: it is never sent. `verbSupported` reads argv[0] only, and
       // asking here — before `claimTitleRead` writes anything — is what makes
       // "an unsupported verb records no attempt" true of the stat gate as well
@@ -1923,10 +2020,19 @@ Add both methods after `sweepTasks` (closes `:334`), before `sweepPr`'s docstrin
       catch { /* not an answer we can read — an older ccd, or a fault */ }
       if (typeof refused === 'string') {
         console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} refused: ${refused}`);
+        // Permanent by construction: nothing about a LATER title can make a
+        // pushed branch un-pushed, or a foreign/unregistered worktree become
+        // this session's own. Retire the session, not just this pair — see
+        // `nameSweepRetired`.
+        if (PERMANENT_REFUSALS.has(refused)) this.nameSweepRetired.add(r.id);
       }
     }
   }
 ```
+
+Post-build sync: the block above shows the shipped `sweepNames` — the four-condition list now names the archived exclusion and the `nameSweepRetired` guard, and the KNOWN GAP paragraph carries the measured failure mode (review finding 3) rather than the assumed "bash's own usage refusal". Neither existed at this step originally; they landed via review findings 1, 2, 3 and 5 on this same branch (see D-5) and were never folded back into this code block until now.
+
+**Second post-build sync (Build 3 PR H whole-branch review, retroactive):** `sweepNames` changed again after the sync above — `registry-branch-drift` joined `PERMANENT_REFUSALS`, both retirement sets are now keyed on `<id>#<uuid>` rather than bare `<id>` (a recycled slug hazard, unrelated to D-5), and the KNOWN GAP paragraph's `ccd:1454` anchor was corrected to `ccd:1628` (the shipped tree's own `cmd_caps` entry — see the D-4 paragraph above for why that same fact reads `:1480` there instead: D-4 describes an OLD, pre-PR ccd, whose correct baseline is `origin/main`, not this branch's HEAD). The block above is **not** re-synced a second time — see the note on the plan's own line-anchor claims in the Self-review section: this document is an execution record of the tree at the time each task ran, not a live mirror of `server/src/watch.ts`. Read the shipped file for the current text.
 
 - [ ] **Step 7: Run the new suite and the structural gates**
 
@@ -2337,17 +2443,48 @@ transcript behind a size+mtime gate, so a transcript with no title (nine of 609
 on this box) is not re-read forever.
 
 **A branch that has been pushed is never renamed.** `ccd ws-rename` refuses with
-`has-upstream`, which is what makes running this unattended safe. It refuses in
-JSON on stdout at exit 0 — thirteen named tokens, whose copy lives in
-`server/src/wsaudit.ts` — and only `git branch -m` itself failing is a non-zero
-exit, because that is a fault rather than a refusal. A refused workspace keeps
-its born name and is not retried until its title changes or the server restarts.
+`has-upstream` — checked two ways, a configured tracking upstream OR the old
+name showing up on origin directly, so a branch pushed by hand with no `-u`
+(no upstream is configured, but the name is on the remote) is caught the same
+as one pushed through `ccd pr-open`'s `--set-upstream` — which is what makes
+running this unattended safe. `ccd ws-rename` also refuses `registry-branch-drift`
+when git's own record for the worktree disagrees with the registry's `branch`
+field — the same corroboration `ws-reap` already requires — so a workspace
+hand-renamed with a bare `git branch -m` (bypassing this verb, and so never
+updating the registry) cannot have some *other* branch renamed out from under
+it by a sweep that still believes the registry's stale name. It refuses in
+JSON on stdout at exit 0 — fourteen named tokens, whose copy lives in
+`server/src/wsaudit.ts` — and the one REFUSAL path that keeps a non-zero exit
+is `git branch -m` itself failing, a fault rather than a refusal (the only
+other non-zero path is the python3-availability probe at the top of the
+function, also a fault, not a refusal). A refused workspace keeps its born
+name. Five of the fourteen refusals describe a fact about the workspace that a
+later title cannot change — `has-upstream`, `not-a-workspace`,
+`worktree-unregistered`, `worktree-foreign` and `registry-branch-drift`
+(`server/src/watch.ts`'s `PERMANENT_REFUSALS`; the last three ship their own
+remedy in the refusal detail — the first two a `git -C $main worktree add …`,
+the last a re-run of `ccd ws-rename` once the registry and git agree again —
+so "cannot stop being true" holds only in the sense that no title fixes it) —
+and those retire the session outright: no further attempt, on any title, until
+the server restarts. `bad-branch` is a verdict on the *derived branch*, not the
+workspace, so it is deliberately not in that set — a title that changes can
+change it — even though `deriveBranch` never actually emits a name `ccd` would
+reject, so the refusal does not fire in practice. Every other refusal marks
+only that one `(session, derived name)` pair attempted, so a title that
+changes to a different slug still earns a fresh attempt on the next sweep.
 
 The name types itself into the fleet line and the session header when it lands
 (`pwa/src/fleet/TypedLabel.tsx`); `prefers-reduced-motion` swaps it instantly.
 The workspace slug itself never changes — the archive list, the PR sheet and the
 cleanup confirmation all still name the directory on disk.
 ```
+
+**Post-build sync (Build 3 PR H whole-branch review):** the block above is
+re-synced to the shipped `README.md` a second time — `registry-branch-drift`
+(a new refusal, and a fifth `PERMANENT_REFUSALS` token, for a reason unrelated
+to D-5) and the `has-upstream`/`git branch -m`-fault wording corrections both
+landed after commit 7019ee0's sync and are folded in here now rather than left
+to drift again.
 
 Then extend the deploy-ordering paragraph (`README.md:200-205`) with one sentence:
 
@@ -2380,6 +2517,8 @@ git commit -m "docs: the naming lane, and why ws-rename ships with the agent fir
 Run: `cd agent && npx vitest run && cd ../server && npx vitest run && cd ../pwa && npx vitest run` (`timeout: 600000`)
 Expected: PASS. **Record the real printed counts**, package by package, against the pre-branch baseline.
 
+Adaptation note (post-build): on the fleet host, the `server` suite exercises `ccd`'s own disk-floor check (`ccd/ccd:1005`, `CCD_DISK_FLOOR_GB`, default 10) through the fixture-HOME harness, so it needs at least that much free in `/tmp` (or wherever fixture homes land) or it goes red with `only <N>G free … floor is 10G` — not a code defect. `CCD_DISK_FLOOR_GB` is the one environment override `ccd` honours for exactly this; set it lower (e.g. `CCD_DISK_FLOOR_GB=1`) as a sanctioned override when the box is genuinely short on space, rather than reading it as a suite failure.
+
 - [ ] **Step 2: Typecheck the shipped builds**
 
 Run: `cd server && npx tsc --noEmit && cd ../agent && npx tsc --noEmit && cd ../pwa && npx tsc --noEmit`
@@ -2407,7 +2546,7 @@ One literal mutant per added construct, full suite per mutant, sha256-verified r
 | `claimTitleRead`: drop `p.size === st.size` (and independently `p.mtimeMs === st.mtimeMs`) | `does not re-read an unchanged transcript` |
 | move the `verbSupported` check BELOW `claimTitleRead` | `records NO attempt when the fleet's ccd lacks the verb` |
 | `r.branch !== born` → compare against the assembled fleet branch | `reads the registry branch, not the assembled one` |
-| delete `attemptedRenames.add(key)` | `does not re-fire after a refusal` |
+| delete `attemptedRenames.add(key)` | `a title that changes before the rename lands earns one fresh attempt` |
 | the key `` `${r.id}:${branch}` `` → `r.id` | `a title that changes before the rename lands earns one fresh attempt` |
 | `deps.queue` → a fresh `new KeyedQueue()` inside `sweepNames` | `joins the per-session queue` **and** `single-definition.test.ts` |
 | ccd: any refusal token renamed | `wsaudit.test.ts` set equality |
@@ -2418,6 +2557,8 @@ One literal mutant per added construct, full suite per mutant, sha256-verified r
 | `TYPE_MS` 28 → 0 | `streams a CHANGED value in` |
 | `TypedLabel`: delete `if (text === prev.current) return` | `is silent on first mount` |
 | `SessionActionsSheet`: re-inline the chain | `single-definition.test.ts` |
+
+Post-build sync: the `attemptedRenames.add(key)` row originally named `does not re-fire after a refusal` — the `has-upstream` fixture — as the killing test. Once `PERMANENT_REFUSALS` retired the whole session on that refusal (review finding 1), `nameSweepRetired` alone was enough to keep that fixture green with the `.add(key)` deleted, so the row no longer named a discriminating test. `a title that changes before the rename lands earns one fresh attempt` uses `name-taken-local`, which is not in `PERMANENT_REFUSALS`, so `attemptedRenames` is genuinely what the third call is gated on there — the test Task 9 actually verified this mutant against.
 
 A survivor is a finding, not a pass.
 
@@ -2480,8 +2621,9 @@ The definition of done is behavioural and must be demonstrated, not inferred.
 ## Self-review — what was checked, and how
 
 - **Every path in the File Structure table was `ls`/`grep`-verified to exist** (or is marked Create:). No `infra/` path appears as a target anywhere in this plan (the only two mentions are this line and the "supersedes" note); the superseded plan's 24 `infra/ccrc/*` and `infra/ccrc-portability/ccd` paths were each re-derived to `ccd/`, `server/`, `agent/`, `pwa/`.
-- **Every ccd anchor re-derived** against `ccd/ccd` on this branch: `_ws_branch_valid` 1142 → **1311-1320**; `cmd_ws_rename` 1153-1244 → **1322-1413**; the twelve refusal `die`s 1156/1161/1162/1169/1170/1192/1195/1210/1211/1220/1224/1230 → **1325/1330/1331/1338/1339/1360/1364/1378/1380/1388/1392/1399**; the `git branch -m` fault 1241 → **1410**; dispatch 5427 → **6846**; usage 5437 → **6858**; `cmd_caps`'s entry 1283 → **1454**; `_json_str` 192 → **212**; `_reg_get`/`_reg_set` 198-199 → **98-99**; the reap envelope 3690 → **4600** (and its `_json_str probe` siblings at **3733** / **4571**); the flag idiom `cmd_ws_hold` at **1461-1505**.
-- **Every server/PWA anchor re-derived:** `server.ts` sendDeps 234 → **312**; `Deps` → **68-96**; `index.ts` watcher 39 → **61** (buildServer **63**); `watch.ts` `TASK_SWEEP_MS` 21 → **24**, `CAPS_REFRESH_MS` **30**, `PR_SWEEP_MS` **35**, `tick()` 79 → **194**, `sweepTasks` **319-334**; `fleet.ts` name-drop 82 → **128**, branch precedence 100 → **155**; `sessionws.ts` claimAskRead 135-161 → **178-187**; `ask.ts` `readPendingAsk` **54**, `TAIL_BYTES` **9**, the `ai-title` skip comment **11-16**; `wsaudit.test.ts` linkage 52-101 → **52-101** (harvest regexes at **56-60**); `whitelist.ts` `REQUIRED_VERB_FLAG` **218** (unmoved), `EXEC_WHITELIST.ccd` **282-320**, `isExecAllowed` 541-605 → **552-615**; `runner.ts` `CCD_VERB_TIMEOUT_MS` **27-37** (unmoved); `ccdargv.ts` table 56-77 → **56-79**; `sessionLabel.ts` **14-15**; `SessionLine.tsx` label span 107 → **204** (import **26**); `SessionHeader.tsx` crumb 170 → **221** (import **19**, `branchDuplicatesCrumb` **206**); `PrSheet.tsx` **92** (unmoved); `ReapSheet.tsx` 175 → **190**; `ArchiveScreen.tsx` 88 → **103**; `ToolCard.tsx` **121,210** (unmoved); `header.test.tsx` crumb query 392-401 → **502**; `contrast.test.ts` `KEYFRAME_TROUGHS` 1262-1277 → **1298-1311**.
+- **Every ccd anchor re-derived** against `ccd/ccd` **on `origin/main`, the tree this plan actually targets** (corrected, Build 3 PR H whole-branch review: the values below previously came from the scout's `7f2c250` base rather than from `origin/main`, and were wrong throughout — see finding 6/10 of that review): `_ws_branch_valid` **1337-1346**; `cmd_ws_rename` **1348-1439**; the twelve refusal `die`s, in evaluation order (`no-such-session`/`not-a-workspace`/`incomplete-registry`/`worktree-missing`/`bad-branch`/`worktree-unregistered`/`detached`/`worktree-foreign`/`unchanged`/`has-upstream`/`name-taken-local`/`name-taken-origin`) → **1351/1356/1357/1364/1365/1387/1390/1405/1406/1415/1419/1425**; the `git branch -m` fault → **1436**; dispatch **6935**; usage **6947**; `cmd_caps`'s entry → **1480**; `_json_str` → **222**; `_reg_get`/`_reg_set` → **108-109**; the flag idiom `cmd_ws_hold` at **1487-1533**. (The reap-envelope-example and `_json_str probe`-siblings sub-claim from the previous version of this bullet is **dropped** rather than re-verified: it points at illustrative precedent inside `cmd_ws_reap`/`cmd_ws_audit`, not at anything Task 1 depends on, and is not worth re-deriving against a tree neither of those functions changed on. Trust the shipped source comments — `ccd/ccd:1371-1372` — for the current, HEAD-verified version of that same pointer.)
+- **Every server/PWA anchor re-derived:** `server.ts` sendDeps 234 → **321** (`origin/main`); `Deps` → **69-96**; `index.ts` watcher 39 → **61** (buildServer **63**); `watch.ts` `TASK_SWEEP_MS` 21 → **24**, `CAPS_REFRESH_MS` **30**, `PR_SWEEP_MS` **35**, `tick()` 79 → **194**, `sweepTasks` **319-334** (all four also re-verified directly against `origin/main`, the plan's own baseline — they drift further on later trees as unrelated lanes land, which is expected and not a re-verification failure); `fleet.ts` name-drop 82 → **128**, branch precedence 100 → **155**; `sessionws.ts` claimAskRead 135-161 → **178-187**; `ask.ts` `readPendingAsk` **54**, `TAIL_BYTES` **9**, the `ai-title` skip comment **11-16**; `wsaudit.test.ts` linkage 52-101 → **52-101** (harvest regexes at **56-60**); `whitelist.ts` `REQUIRED_VERB_FLAG` **218** (unmoved), `EXEC_WHITELIST.ccd` **282-320**, `isExecAllowed` 541-605 → **552-615**; `runner.ts` `CCD_VERB_TIMEOUT_MS` **27-37** (unmoved); `ccdargv.ts` table 56-77 → **56-79**; `sessionLabel.ts` **14-15**; `SessionLine.tsx` label span 107 → **204** (import **26**); `SessionHeader.tsx` crumb 170 → **221** (import **19**, `branchDuplicatesCrumb` **206**); `PrSheet.tsx` **92** (unmoved); `ReapSheet.tsx` 175 → **190**; `ArchiveScreen.tsx` 88 → **103**; `ToolCard.tsx` **121,210** (unmoved); `header.test.tsx` crumb query 392-401 → **502**; `contrast.test.ts` `KEYFRAME_TROUGHS` 1262-1277 → **1298-1311**.
+- **A note on reading any anchor in this plan later:** every number above was verified against `origin/main` at the time this plan was written — the tree the plan describes editing — not against whatever `ccd/ccd`/`server/src` look like today. Six commits and two whole-branch review rounds have moved code since; the shipped source's own comments (`ccd/ccd`, `server/src/watch.ts`) carry HEAD-verified anchors where they cite each other, and are the ones to trust for the current tree. This plan is an execution record, not a live index.
 - **The nine new refusal tokens were measured, not assumed.** I ran `wsaudit.test.ts`'s four harvesting regexes over `ccd/ccd`: 45 tokens, 45 `SENTENCES` keys, and exactly nine of ws-rename's thirteen absent. That measurement is what produced **Deviation D-1** — the superseded plan's `_ws_rename_refuse` helper would have left all nine unharvested and turned the spec's own requirement into a red suite.
 - **The queue join sites were counted, not quoted.** `grep -rn '\.queue\.run(' server/src` → seven, including `inject/ask.ts:39`, which the rider's list omits (**D-3**).
 - **The lane ordinal was checked against the code**, not the old plan: hook-state sweeping already calls itself the fifth lane (**D-2**).

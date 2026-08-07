@@ -164,6 +164,32 @@ outage) is worth one more try.
 it would be state ccd has to own, write, and purge on reap — for a retry budget
 whose entire purpose is to be forgotten.
 
+**Corrected 2026-08-07, after the build (Build 3 PR H whole-branch review).**
+The paragraph above describes one rule for every refusal — a title change is
+always worth exactly one fresh attempt. **The shipped code does not do this.**
+`PERMANENT_REFUSALS` (`server/src/watch.ts`) retires the whole SESSION, not
+just the pair, on five tokens whose fact about the workspace no later title can
+change: `has-upstream`, `not-a-workspace`, `worktree-unregistered`,
+`worktree-foreign` and `registry-branch-drift` (git's worktree record
+disagreeing with the registry's `branch` field). A session retired this way
+gets no further naming attempt, on any title, until the server restarts — or
+until Claude Code rotates that session's own uuid (a `/clear`, a compaction):
+`ccd`'s `_sync_uuid` mirrors the rotation into the registry, and both
+`nameSweepRetired` and the attempted-set below are keyed on `<id>#<uuid>`, so
+a fresh incarnation starts unretired without a restart (`attemptedRenames`'s
+docstring in `watch.ts` has the mechanism). `nameSweepRetired` is checked
+first in condition 4, before this section's `<id>#<uuid>:<derived-branch>`
+attempted-set even runs. Every other token (including `bad-branch`, which is a
+verdict on the *derived branch* and can change with the title) still follows
+the rule as originally
+specified above: one fresh attempt per (session, derived name). This
+correction is recorded here, in the binding document, rather than only in a
+successor plan's deviation note — an operator reading this spec to understand
+why a `has-upstream` workspace is not retrying after a title edit needs the
+true rule, not the one originally approved. See `README.md`'s "The branch
+takes the name the model already wrote" section for the operator-facing
+version of the same fact.
+
 ### Ordering against the rest of the fleet
 
 `cmd_ws_rename` takes no `flock`. The only two acquirers in ccd are
@@ -320,7 +346,7 @@ must name what it will actually remove.
 | no `ai-title` in the transcript | no call; re-checked next sweep |
 | title slugifies to the name it already has | no call; pair marked attempted |
 | title slugifies to empty | no call, and **no pair to mark** — the retry key is `<id>:<derived-branch>` and an empty slug derives no branch. The stat gate is what stops the re-read, which is the same protection a marked pair gets. |
-| ccd refuses (any token) | logged with the token; pair marked attempted; branch keeps its born name |
+| ccd refuses (any token) | logged with the token; pair marked attempted; branch keeps its born name. **Corrected 2026-08-07:** for `has-upstream`, `not-a-workspace`, `worktree-unregistered`, `worktree-foreign` and `registry-branch-drift`, the whole SESSION is marked retired instead — see the retry-storm guard section's correction above. |
 | `git branch -m` fails (`ccd:1241`) | non-zero exit, ordinary non-ok `CcdResult`; logged; pair marked attempted |
 | fleet down / transport failure | ordinary non-ok `CcdResult`; pair marked attempted; one retry after a server restart |
 | `verbSupported` says the fleet's ccd lacks the verb | no call, **no attempt recorded** — a verb that arrives later must still fire |
@@ -409,3 +435,17 @@ surfacing nothing in the PWA. A workspace that refused once is not retried until
 its title changes or the server restarts. A fleet running an older ccd is unchanged
 and unharmed, and starts naming at the next caps refresh after its ccd is
 installed.
+
+**Corrected 2026-08-07, after the build.** The "not retried until its title
+changes" sentence above is the rule for nine of the shipped tokens only — not
+eight; `cmd_ws_rename` emits fourteen tokens in total (`bad-args`,
+`no-such-session`, `not-a-workspace`, `incomplete-registry`,
+`worktree-missing`, `bad-branch`, `worktree-unregistered`, `detached`,
+`worktree-foreign`, `registry-branch-drift`, `unchanged`, `has-upstream`,
+`name-taken-local`, `name-taken-origin`), and nine plus the five below is
+fourteen, not thirteen. Five — `has-upstream`, `not-a-workspace`,
+`worktree-unregistered`, `worktree-foreign`, `registry-branch-drift` — are not
+retried on a title change at all; only the server restarting, or Claude Code
+rotating that session's own uuid (`_sync_uuid`, mirrored into the registry —
+retirement is keyed on `<id>#<uuid>`), earns a fresh attempt. See the
+retry-storm guard section's correction for the mechanism and the reasoning.
