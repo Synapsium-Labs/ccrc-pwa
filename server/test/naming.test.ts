@@ -50,11 +50,14 @@ describe('deriveBranch', () => {
   });
 
   it('does not drop back when the cut already lands on a boundary', () => {
-    // slug[40] === '-': the first 40 characters are a whole word run, so there
-    // is nothing to drop back over. A blind lastIndexOf would lose the last
-    // whole word for no reason.
-    const slug = 'a'.repeat(SLUG_MAX);
-    expect(deriveBranch(`${'a'.repeat(SLUG_MAX)} b`)).toBe(`ws/${slug}`);
+    // slug[40] === '-', but the first 40 characters are NOT a single whole
+    // word — `xxxxxxxxxx-yyyy...` has a dash of its own inside the cut, at
+    // index 10. A blind lastIndexOf would still find THAT dash and drop back
+    // to it, discarding the whole second word for no reason. The guard is
+    // what stops that: the cut already landed on a boundary, so nothing is
+    // dropped, and the second word survives intact.
+    expect(deriveBranch('xxxxxxxxxx yyyyyyyyyyyyyyyyyyyyyyyyyyyyy z'))
+      .toBe('ws/xxxxxxxxxx-yyyyyyyyyyyyyyyyyyyyyyyyyyyyy');
   });
 
   it('hard-cuts a single word with no dash in the first 40 characters', () => {
