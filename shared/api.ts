@@ -565,9 +565,13 @@ export interface WsTombstone {
  * below (`undefined !== null` reading a whole fleet as archived) cannot arise
  * from a live `/ws/fleet` frame. It is real for the two PERSISTED snapshots,
  * because those are read back by whatever build starts NEXT — older, same,
- * or newer than the one that wrote them, unlike a stale tab, which can only
- * ever be older than the server it talks to: `ccrc.fleet-snapshot.v1` in
- * localStorage (pwa/src/lib/offline.ts) and `~/.ccrc/state-cache.json`
+ * or newer than the one that wrote them, unlike a stale tab on a forward
+ * deploy, which can only ever be older than the server it talks to. (A
+ * rollback breaks even that: deploy.sh keeps per-timestamp backups
+ * precisely so the server can go back to a build older than a tab already
+ * holds — the "older, same, or newer" span above is the honest one, not a
+ * hedge.) The two snapshots: `ccrc.fleet-snapshot.v1` in localStorage
+ * (pwa/src/lib/offline.ts) and `~/.ccrc/state-cache.json`
  * (server/src/fleetstate.ts).
  *
  * Reading them with a blind `as FleetSession[]` is not a cosmetic sin. Every
@@ -1104,6 +1108,16 @@ export interface FleetHealth {
   connected: boolean;
   downSince: number | null;   // epoch ms since the agent connection dropped
 }
+
+/** The three accounts a session may call HOME — mirrors ccd's `VALID_WRAPPERS`
+ *  (ccd:14). `gpt` is deliberately absent: it is a 4th, opt-in-only lane a
+ *  session reaches solely by being sent there on purpose, never as a landing
+ *  spot chosen for it. Single source of truth for `server/src/limits.ts`'s
+ *  `projectHome` (which home-able lanes to score) and
+ *  `pwa/src/lib/accounts.ts`'s `homeAbleLabelList` (the same three, spelled
+ *  out by label) — both used to hand-maintain their own copy of this list,
+ *  linked only by a doc comment referencing the other. */
+export const HOME_ABLE_WRAPPERS = ['claude', 'claude2', 'claude-corp'] as const;
 
 /** One account's usage, read from telemetry (cc-limits) independent of whether a
  *  session is currently on it — so the display survives restarts/respawns/swaps.

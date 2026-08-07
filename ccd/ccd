@@ -6407,27 +6407,29 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
 }
 
 _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing = stay put
-  # `force` (any non-empty value): skip the "stay if telemetry says cur/home is
-  # under the ceiling" shortcuts and go straight to the must-leave candidate
-  # loop. Needed because auth loss writes NO cc-limits telemetry (only rate
-  # limits do) — _avail on a hard-blocked wrapper reads exactly like a wrapper
-  # that is fine, so the ordinary "home is fine: stay" / "cur still works:
-  # stay" branches would never fire the rescue at all. The caller
-  # (_auto_swap_check) passes force iff _pane_hard_blocked already confirmed
-  # the session is stuck regardless of what telemetry says.
+  # `force` (any non-empty value): skip ONLY the "stay if telemetry says
+  # cur/home is under the ceiling" shortcuts, not the home-recovered MOVE.
+  # Needed because auth loss writes NO cc-limits telemetry (only rate limits
+  # do) — _avail on a hard-blocked wrapper reads exactly like a wrapper that
+  # is fine, so the ordinary "home is fine: stay" / "cur still works: stay"
+  # branches would never fire the rescue at all. The caller (_auto_swap_check)
+  # passes force iff _pane_hard_blocked already confirmed the session is
+  # stuck regardless of what telemetry says. The home-recovered MOVE below
+  # stays reachable under force when cur != home: in that branch cur is the
+  # blocked wrapper, so home is never the blocked lane, and a forced call
+  # that finds home recovered must go straight there instead of falling
+  # through to the pool loop and picking some third lane.
   local id="$1" cur="$2" home="$3" force="${4:-}" cand best="" best_score=999 sc
-  if [[ -z "$force" ]]; then
-    if [[ "$cur" == "$home" ]]; then
-      _avail "$home" && return 0                        # home is fine: stay
-    else
-      # disabled excludes home as a DESTINATION only — it never evacuates a
-      # session already sitting on it, which is why the two "stay" branches
-      # above and below carry no _account_ok check.
-      _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
-      _avail "$cur"  && return 0                        # cur still works, home down: stay put
-    fi
+  if [[ "$cur" == "$home" ]]; then
+    [[ -z "$force" ]] && { _avail "$home" && return 0; }                     # home is fine: stay
+  else
+    # disabled excludes home as a DESTINATION only — it never evacuates a
+    # session already sitting on it, which is why the two "stay" branches
+    # here and below carry no _account_ok check.
+    _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
+    [[ -z "$force" ]] && { _avail "$cur" && return 0; }                      # cur still works, home down: stay put
   fi
-  # must leave cur (home-but-down, away-and-cur-down, or forced): pick the least-loaded AVAILABLE account
+  # must leave cur (home-but-down, away-and-cur-down, or forced with no recovered home): pick the least-loaded AVAILABLE account
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
     _account_ok "$cand" || continue

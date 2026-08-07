@@ -1,3 +1,5 @@
+import { HOME_ABLE_WRAPPERS } from '../../../shared/api';
+
 // Wrapper → jargon-free account label + color-token map. The ONLY place the
 // wrapper names are translated for humans (plan: "Move to another account",
 // never "swap wrapper"). Color is always a token custom-property NAME —
@@ -20,7 +22,7 @@ export function accountLabel(wrapper: string): string {
   return ACCOUNTS[wrapper]?.label ?? wrapper;
 }
 
-/** Mirrors server/src/limits.ts's `HOME_ABLE` — the only wrappers a
+/** `HOME_ABLE_WRAPPERS` (shared/api.ts) re-exported here — the only wrappers a
  *  `projected === null` fact is ever about. `gpt` is deliberately excluded
  *  (it is opt-in-only, never a landing spot ccd chooses on its own) and is
  *  never consulted for this fact — even though it renders as an account row
@@ -30,7 +32,7 @@ export function accountLabel(wrapper: string): string {
  *  claim false on its face. Same discipline ccd's own placement refusal
  *  already uses (ccd/ccd ~1041-1049: `claude:disabled claude2:disabled
  *  claude-corp:disabled`, never "all accounts"). */
-export const HOME_ABLE_WRAPPERS: readonly string[] = ['claude', 'claude2', 'claude-corp'];
+export { HOME_ABLE_WRAPPERS };
 
 /** "team·max, alt·max and team·shared" — the HOME_ABLE accounts by their
  *  human labels, joined for the one-line "nothing can take a new workspace"

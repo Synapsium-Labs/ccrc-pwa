@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import type { ProjectedHome } from '../../shared/api.js';
+import { HOME_ABLE_WRAPPERS, type ProjectedHome } from '../../shared/api.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -22,19 +22,13 @@ const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-/** ccd's VALID_WRAPPERS (ccd:10) — the accounts a session may call HOME. `gpt`
- *  is deliberately absent: it is a 4th, opt-in-only lane a session reaches
- *  solely by being sent there on purpose (ccd:11-16), never as a landing spot
- *  chosen for it. */
-const HOME_ABLE = ['claude', 'claude2', 'claude-corp'] as const;
-
 /** Every wrapper this server will ever fabricate an account row for — mirrors
  *  ccd's `_is_valid_wrapper` (`VALID_WRAPPERS` + `gpt`, ccd:14,99). The
  *  registry dir holds `<name>-disabled` markers that are NOT accounts at all
  *  (`autocompact-disabled` is a fleet-wide proactive-/compact kill switch,
  *  ccd:22) — bounding the backfill below to this set is what stops one of
  *  those from turning into a phantom "autocompact" row on GET /api/accounts. */
-const KNOWN_WRAPPERS: readonly string[] = [...HOME_ABLE, 'gpt'];
+const KNOWN_WRAPPERS: readonly string[] = [...HOME_ABLE_WRAPPERS, 'gpt'];
 
 /**
  * The account a new workspace would land on, and its pressure score.
@@ -66,7 +60,7 @@ const KNOWN_WRAPPERS: readonly string[] = [...HOME_ABLE, 'gpt'];
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
 export function projectHome(limits: Record<string, AccountLimits>): ProjectedHome | null {
-  const scored = HOME_ABLE
+  const scored = HOME_ABLE_WRAPPERS
     .filter((wrapper) => limits[wrapper]?.disabled !== true)
     .map((wrapper) => ({
       wrapper: wrapper as string,

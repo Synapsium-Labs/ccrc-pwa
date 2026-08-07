@@ -217,3 +217,36 @@ describe('the account that was stranded on 2026-07-27', () => {
     expect(sh('_swap_target claude-synapsium-platform gpt claude')).toBe('claude');
   });
 });
+
+describe('_swap_target force arg: gates the two "stay" shortcuts only', () => {
+  // Verifier reproduction: a 429-while-away session (wrapper=claude2, home=claude) with home
+  // recovered (five=50, under SWAP_CEILING) must rescue straight home under force, not fall
+  // through to the must-leave candidate loop and land on some third lane (claude-corp, five=0,
+  // would otherwise look like the least-loaded pick).
+  it('forced away-from-home call still returns home when home has recovered', () => {
+    writeLimits('claude.json', json({ five: 50, seven: 0, ts: now() }));
+    writeLimits('claude-corp.json', json({ five: 0, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude2 claude 1')).toBe('claude');
+  });
+
+  it('leaves the unforced away-from-home call unchanged (same fixture, no force arg)', () => {
+    writeLimits('claude.json', json({ five: 50, seven: 0, ts: now() }));
+    writeLimits('claude-corp.json', json({ five: 0, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude2 claude')).toBe('claude');
+  });
+
+  // The Critical force exists for: a hard-blocked session must not read "cur/home is fine: stay"
+  // off telemetry that a rate limit never touched (auth loss writes no cc-limits file at all).
+  it('bypasses the cur==home "stay" shortcut: forced call leaves a fine home for the pool', () => {
+    writeLimits('claude.json', json({ five: 10, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude claude')).toBe('');       // unforced: stays (sanity)
+    expect(sh('_swap_target claude-demo claude claude 1')).not.toBe(''); // forced: leaves anyway
+  });
+
+  it('bypasses the "cur still works" shortcut: forced call leaves a fine cur for the pool', () => {
+    writeLimits('claude.json', json({ five: 99, seven: 0, ts: now() }));   // home: at the ceiling
+    writeLimits('claude2.json', json({ five: 5, seven: 0, ts: now() }));   // cur: fine
+    expect(sh('_swap_target claude-demo claude2 claude')).toBe('');        // unforced: stays on cur
+    expect(sh('_swap_target claude-demo claude2 claude 1')).not.toBe(''); // forced: leaves anyway
+  });
+});
