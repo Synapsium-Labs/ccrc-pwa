@@ -163,7 +163,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
 
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
   // because the verb is destructive. `ws-rename` destroys nothing; it is here
-  // because it is the SECOND verb the server calls unattended — after
+  // because it is the SECOND WRITE the server calls unattended — after
   // `ws-archive`, which `FleetWatcher.archiveMerged` already fires on merge
   // with no human in the loop — and the first whose argv is derived from
   // model output (FleetWatcher's naming sweep). So the grant must name the

@@ -213,7 +213,7 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * it is a DIFFERENT one — it permits an UNCONFIRMED reap, i.e. the exact thing
  * §7 says can never cross the wire.
  *
- * `ws-rename` destroys nothing, and is here because it is the second verb the
+ * `ws-rename` destroys nothing, and is here because it is the second write the
  * server calls UNATTENDED — after `ws-archive`, which `FleetWatcher.archiveMerged`
  * already fires on merge with no human anywhere in the path — and the first
  * whose argv is derived from model output (FleetWatcher's naming sweep).
