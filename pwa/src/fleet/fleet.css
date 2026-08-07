@@ -588,12 +588,18 @@
 
 
 
-/* Accounts strip — usage shown once per account, with reset countdowns */
+/* Accounts strip — usage shown once per account, with reset countdowns. Also
+   the nav affordance onto /accounts (Task 6, Build 3 PR G): role="link" in
+   AccountsStrip.tsx, so the whole grid is one tap target — min-height off the
+   shared token rather than trusting the gauges inside it to always clear the
+   floor on their own. */
 .accounts-strip {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin-bottom: var(--sp-2);
+  min-height: var(--tap-min);
+  cursor: pointer;
 }
 @media (min-width: 700px) {
   .accounts-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -1385,3 +1391,57 @@
 .archive-slug { font-family: var(--font-mono); font-size: var(--text-sm); }
 .archive-size { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary); }
 .archive-empty { padding: var(--sp-4); color: var(--ink-secondary); }
+
+/* — Task 6 (Build 3 PR G): AccountsScreen — */
+.accounts-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
+.accounts-head { display: flex; align-items: center; gap: var(--sp-2); }
+/* Same visual contract as chat.css's `.chat-back` (SessionScreen's own back
+   chevron) — a separate rule rather than sharing the class, since the two
+   screens keep their styles in different sheets (session/chat.css vs this
+   file) and .chat-back's own selectors (`.shell-detail .chat-back`) are
+   scoped to the chat surface specifically. */
+.accounts-back {
+  flex: none;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  font: var(--weight-regular) 26px / 1 var(--font-ui);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.accounts-back:active { transform: scale(0.88); color: var(--ink-primary); }
+.accounts-title {
+  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-primary);
+}
+.accounts-projection { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.accounts-list { display: grid; gap: var(--sp-3); }
+.accounts-row {
+  display: grid;
+  gap: 4px;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+.accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
+.accounts-disabled-note { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary); }
+/* Freshness ("last reported …") and the disabled note share the same muted
+   tertiary ink already vetted elsewhere (.sess-held uses it identically) —
+   no new token, no opacity fade to register with the contrast gate. */
+.accounts-fresh { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary); margin-top: 2px; }
+.accounts-sessions { display: flex; flex-wrap: wrap; gap: var(--sp-2); list-style: none; padding: 0; margin: 4px 0 0; }
+.accounts-session {
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+  cursor: pointer;
+}

@@ -178,6 +178,12 @@
   .shell-detail .chat-back {
     display: none;
   }
+  /* AccountsScreen's own back chevron (Task 6, Build 3 PR G) — same reasoning
+     as .chat-back just above: the fleet sidebar is always visible on desktop,
+     so an explicit way back out of the detail pane is redundant there. */
+  .shell-detail .accounts-back {
+    display: none;
+  }
 
   /* Empty-detail placeholder (no session selected) — fills the detail cell. */
   .shell-placeholder {

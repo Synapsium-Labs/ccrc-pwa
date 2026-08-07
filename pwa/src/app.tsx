@@ -15,6 +15,7 @@ import { ToastHost } from './components/Toast';
 import { AccountsStrip } from './fleet/AccountsStrip';
 import { navigate, usePath } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
+import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
 import { FleetScreen } from './screens/FleetScreen';
 import { SessionScreen } from './screens/SessionScreen';
@@ -40,6 +41,7 @@ export function App(): ReactNode {
   const m = /^\/s\/([^/]+)\/?$/.exec(path);
   const sessionId = m ? decodeURIComponent(m[1]!) : null;
   const archive = /^\/archive\/?$/.test(path);
+  const accounts = /^\/accounts\/?$/.test(path);
   // On desktop the accounts strip is a full-width top bar (rendered here, once);
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
@@ -47,7 +49,7 @@ export function App(): ReactNode {
   return (
     <>
       {blocked && <BlockScreen />}
-      <div className="app-shell" data-view={sessionId || archive ? 'session' : 'fleet'}>
+      <div className="app-shell" data-view={sessionId || archive || accounts ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
             <AccountsStrip />
@@ -66,6 +68,8 @@ export function App(): ReactNode {
             <SessionScreen key={sessionId} id={sessionId} />
           ) : archive ? (
             <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
+          ) : accounts ? (
+            <AccountsScreen />
           ) : (
             <div className="shell-placeholder">
               <p className="shell-placeholder-mark" aria-hidden="true">

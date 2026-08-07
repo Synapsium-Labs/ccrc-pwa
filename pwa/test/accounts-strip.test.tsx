@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { AccountUsage } from '../../shared/api';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { api } from '../src/lib/api';
+import { navigate } from '../src/lib/router';
+import { declValue, ruleIn } from './cssRule';
+
+const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
 const nowSec = Math.floor(Date.now() / 1000);
 
@@ -22,7 +28,7 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
   });
 };
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); navigate('/'); });
 
 describe('AccountsStrip', () => {
   it('shows an inferred zero as "reset" and a measured zero as 0%', async () => {
@@ -54,5 +60,57 @@ describe('AccountsStrip', () => {
     render(<AccountsStrip />);
     expect(await screen.findByText('team·max')).toBeInTheDocument();
     expect(screen.queryByText('gpt')).not.toBeInTheDocument();
+  });
+
+  // Task 6 (Build 3 PR G, Rider A): the strip is the nav affordance onto the
+  // new /accounts screen — "both mounts, one behaviour" (it's rendered twice,
+  // desktop top bar + mobile fleet list, but there's one component to make
+  // tappable). It was a plain `<div role="group">` before this; a real
+  // interactive element earns the tap-target gate.
+  describe('nav affordance (Task 6)', () => {
+    it('is a link to /accounts, reachable by tap or keyboard', async () => {
+      stubAccounts([acct({ wrapper: 'claude' })]);
+      render(<AccountsStrip />);
+      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
+      fireEvent.click(link);
+      expect(location.pathname).toBe('/accounts');
+    });
+
+    it('activates on Enter (keyboard-only reachable, not just tap)', async () => {
+      stubAccounts([acct({ wrapper: 'claude' })]);
+      render(<AccountsStrip />);
+      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
+      fireEvent.keyDown(link, { key: 'Enter' });
+      expect(location.pathname).toBe('/accounts');
+    });
+
+    // jsdom evaluates no stylesheet (vitest runs with `css: false`), so a
+    // computed 44px cannot be asserted directly — the scrape proves the rule
+    // exists off the shared token, and the render proves the class is still
+    // on the element the scrape describes. See test/cssRule.ts for why a text
+    // scrape is the right tool here at all.
+    it('is at least one tap tall, off the shared token — the whole strip is now a link', () => {
+      expect(declValue(ruleIn(fleetCss, '.accounts-strip'), 'min-height')).toBe('var(--tap-min)');
+    });
+
+    it('is the class the rendered link actually carries', async () => {
+      stubAccounts([acct({ wrapper: 'claude' })]);
+      render(<AccountsStrip />);
+      const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
+      expect(link).toHaveClass('accounts-strip');
+    });
+  });
+
+  // DIRECTION.md's routing bands are `ok < 50`, `warn 50–75`, `crit > 75`
+  // (LimitBar.tsx's `limitBand`, test-pinned at primitives.test.tsx:105). The
+  // strip carried its own copy that read `crit` at `>= 75`, so the exact same
+  // account rendered two different colours depending on which surface you
+  // looked at. This is the flip: 75 itself is warn, never crit.
+  it('bands exactly 75 as warn, not crit (one writer: limitBand)', async () => {
+    stubAccounts([acct({ wrapper: 'claude', five: 75, seven: 10 })]);
+    const { container } = render(<AccountsStrip />);
+    await screen.findByText('75%');
+    const meters = container.querySelectorAll('.acct-meter');
+    expect(meters[0]).toHaveAttribute('data-band', 'warn');
   });
 });

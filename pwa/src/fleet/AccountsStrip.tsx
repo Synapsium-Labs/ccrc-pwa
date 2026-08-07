@@ -1,21 +1,28 @@
 // Accounts strip — per-account usage shown ONCE, read straight from telemetry
 // (/api/accounts, backed by ~/.cc-limits) so it survives restarts, respawns and
 // swaps regardless of which sessions are running. Each account shows its 5h and
-// 7d windows with %, a meter, and the countdown to reset.
+// 7d windows with %, a meter, and the countdown to reset. Also the nav
+// affordance onto the full accounts screen (Task 6, Build 3 PR G) — the same
+// component mounts twice (desktop top bar, mobile fleet list) and tapping
+// either one goes to /accounts.
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage } from '../../../shared/api';
+import { limitBand } from '../components/LimitBar';
 import { accountLabel, accountColorVar } from '../lib/accounts';
 import { api } from '../lib/api';
+import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
 import { formatReset } from './formatReset';
 import './fleet.css';
 
+// One writer for the band thresholds — DIRECTION.md's `crit` is `> 75`, not
+// `>= 75` (LimitBar.tsx's `limitBand`, test-pinned). This used to carry its
+// own `>= 75` copy, so the same account rendered `crit` here and `warn` on
+// the limits bar at exactly 75. `null` ("no telemetry") has no equivalent in
+// limitBand, which is why it stays a local wrapper rather than a re-export.
 function band(pct: number | null): string {
-  if (pct === null) return 'none';
-  if (pct >= 75) return 'crit';
-  if (pct >= 50) return 'warn';
-  return 'ok';
+  return pct === null ? 'none' : limitBand(pct);
 }
 
 function LimitRow({ label, pct, resetAt, nowSec, rolledOver }: {
@@ -59,8 +66,27 @@ export function AccountsStrip(): ReactNode {
   if (live.length === 0) return null;
   const nowSec = Math.floor(now / 1000);
 
+  const openAccounts = (): void => navigate('/accounts');
+  // role="link" (not "button"): this mirrors an <a> to /accounts, so it takes
+  // the anchor's own keyboard contract — Enter activates, Space does not
+  // (Space belongs to role="button"). tabIndex=0 is what makes a <div> reach
+  // the tab order at all; the tap-target floor is `.accounts-strip`'s own
+  // rule in fleet.css.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    openAccounts();
+  };
+
   return (
-    <div className="accounts-strip" role="group" aria-label="Account usage">
+    <div
+      className="accounts-strip"
+      role="link"
+      tabIndex={0}
+      aria-label="account usage — open accounts"
+      onClick={openAccounts}
+      onKeyDown={onKeyDown}
+    >
       {live.map((a) => (
         <div key={a.wrapper} className="account-gauge">
           <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>

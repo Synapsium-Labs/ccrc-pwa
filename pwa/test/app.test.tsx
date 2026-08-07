@@ -67,6 +67,18 @@ describe('App /archive route', () => {
   });
 });
 
+describe('App /accounts route (Task 6, Build 3 PR G)', () => {
+  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', () => {
+    // app.test.tsx's own warning (this file, Task 19 above) is real here too:
+    // /accounts has to ride the SAME data-view OR every other non-fleet route
+    // does, or a phone hides the very screen it just navigated to.
+    navigate('/accounts');
+    render(<App />);
+    expect(screen.getByRole('heading', { name: /accounts/i })).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
 describe('App block overlay (the dormant handshake, Rider E)', () => {
   it('renders BlockScreen OUTSIDE/above .app-shell when the fleet store is blocked', () => {
     act(() => useFleetStore.setState({ blocked: true }));
