@@ -120,3 +120,102 @@ describe('prhistory — the one chokepoint', () => {
     expect(manifest.prHistory).toEqual([]);
   });
 });
+
+// Fix-round finding 2. A ledger that EXISTS and cannot be READ is not a parse
+// failure and must not read as `[]` — `[]` here is the most reassuring answer
+// there is ("this workspace retired no PRs") in the record whose own header
+// says a manifest that lies pristine is a manifest that authorises a deletion.
+// The pre-fix `except Exception` collapsed absent, malformed and unopenable
+// into that one value at exit 0; both tests below FAIL against it (they got
+// rc 0 and a manifest carrying `"prHistory":[]`).
+describe('an unreadable prhistory refuses — it is not an empty one', () => {
+  const ledger = (id: string): string => path.join(h.home, '.cc-sessions', `${id}.prhistory`);
+
+  const expectRefusal = (id: string): void => {
+    const r = h.run(`${ARCH_STUBS} cmd_ws_archive --session ${id}`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/PR ledger/);
+    // NOTHING WAS TOUCHED, which is the half a bare rc check would miss: no
+    // manifest on disk, and — because `cmd_ws_archive` refuses before its
+    // markers go down — no `archived`/`archivedreason` either, so the next
+    // sweep re-tries instead of filing the workspace as archived on a record
+    // it could not tell truthfully.
+    expect(h.reg(id, 'archivemanifest')).toBeNull();
+    expect(h.reg(id, 'archived')).toBeNull();
+    expect(h.reg(id, 'archivedreason')).toBeNull();
+  };
+
+  it('chmod 000 on the ledger refuses the archive rather than folding []', () => {
+    const { id } = workspace();
+    h.sh(`printf '%s\\n' '{"pr":577,"branch":"ws/quiet-basin","phase":"merged","recordedAt":1786000000}' `
+      + `> "$HOME/.cc-sessions/${id}.prhistory"`);
+    fs.chmodSync(ledger(id), 0o000);
+    try {
+      expectRefusal(id);
+      // The raw ledger is still on disk, unread and undeleted — the refusal
+      // costs the archive, never the lineage.
+      expect(fs.existsSync(ledger(id))).toBe(true);
+    } finally {
+      // rmSync in the harness cleanup can unlink a 0o000 file, but the mode is
+      // restored anyway so a failure here leaves a readable fixture behind.
+      fs.chmodSync(ledger(id), 0o600);
+    }
+  });
+
+  it('a DIRECTORY at the ledger path refuses too — the root-proof shape of the same fault', () => {
+    // `chmod 000` is readable to uid 0, so on a root CI box that test alone
+    // would silently stop exercising the rung. `open()` on a directory raises
+    // IsADirectoryError for every uid, and it is the same OSError arm.
+    const { id } = workspace();
+    fs.mkdirSync(ledger(id));
+    expectRefusal(id);
+    expect(fs.statSync(ledger(id)).isDirectory()).toBe(true);
+  });
+});
+
+// Fix-round finding 1. CHARACTERIZATION, DISCLOSED: both of these pass against
+// the pre-fix ccd as well, because the defect was in the prose — the comment
+// above the field claimed the manifest is "the one record ws-reap later reads"
+// and that the lineage therefore outlives the worktree, and this file disproves
+// both. There is no behaviour change to catch, so what these pin is the pair of
+// mechanisms the CORRECTED comment asserts: a future change that alters either
+// one breaks a test here instead of quietly making the contract false again.
+describe('what the folded lineage outlives', () => {
+  it('the reap purge takes the manifest AND the raw ledger — neither outlives a reap', () => {
+    const { id } = workspace();
+    h.sh(`printf '%s\\n' '{"pr":577,"branch":"ws/quiet-basin","phase":"merged","recordedAt":1786000000}' `
+      + `> "$HOME/.cc-sessions/${id}.prhistory"`);
+    h.sh(`${ARCH_STUBS} cmd_ws_archive --session ${id}`);
+    expect(h.reg(id, 'archivemanifest')).not.toBeNull();
+    // The document that DOES outlive a reap, written at (b) — its field list is
+    // fixed and `prHistory` is not in it, which is the half of the corrected
+    // comment a purge assertion alone cannot show. The REAP_* globals are the
+    // ones `_ws_reap_eval` populates before calling it; seeded here because
+    // this test drives the writer, not the phase in front of it.
+    const tomb = h.sh(`REAP_IGNORED=(); REAP_CHILDLINES=""; REAP_TIP=deadbee; REAP_MERGE=cafe;
+      REAP_PROOF=merged; REAP_PRNUM=577; REAP_PRURL=https://example/577; REAP_SENSITIVE=();
+      _ws_tombstone ${id} '[]' >/dev/null; cat "$HOME/.cc-sessions/.reaped/${id}.json"`);
+    expect(JSON.parse(tomb)).not.toHaveProperty('prHistory');
+    // Step (i) of `_ws_reap_tail`, called directly — the tail's own fixture
+    // lives in ccd-ws-reap.test.ts; what is under test here is only which
+    // files the purge's dot-free-suffix filter matches.
+    h.sh(`_reg_purge ${id}`);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.prhistory`))).toBe(false);
+    expect(h.reg(id, 'archivemanifest')).toBeNull();
+  });
+
+  it('ws-restore takes the manifest and LEAVES the ledger — prhistory intact', () => {
+    // The spec's own recovery path for an over-eagerly archived workspace
+    // ("recoverable via ws-restore, prhistory intact"): the manifest is a
+    // record OF an archive and goes with it, the ledger belongs to the
+    // workspace and stays, so the re-archive after wave 2 is complete.
+    const { id } = workspace();
+    h.sh(`printf '%s\\n' '{"pr":577,"branch":"ws/quiet-basin","phase":"merged","recordedAt":1786000000}' `
+      + `> "$HOME/.cc-sessions/${id}.prhistory"`);
+    h.sh(`${ARCH_STUBS} cmd_ws_archive --session ${id}`);
+    h.sh(`${ARCH_STUBS} cmd_ws_restore --session ${id}`);
+    expect(h.reg(id, 'archivemanifest')).toBeNull();
+    expect(h.reg(id, 'archived')).toBeNull();
+    expect(hist(id)).toEqual([{ pr: 577, branch: 'ws/quiet-basin', phase: 'merged', recordedAt: 1786000000 }]);
+  });
+});

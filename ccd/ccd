@@ -1665,40 +1665,89 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # against a cleanup that could free real disk.
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
   pr=$(_reg_get "$id" prnumber); [[ "$pr" =~ ^[0-9]+$ ]] || pr=null
-  # prHistory folds in the outgoing-PR ledger the prhistory chokepoint
-  # (ccd:~728, inside `_pr_py`'s `state` mode) appends to, so a workspace's
-  # whole PR lineage travels in the one record ws-reap later reads and the
-  # worktree does not survive to keep. PARSED DEFENSIVELY, following this
-  # function's own header split: a line the raw file cannot be trusted to mean
-  # (malformed JSON, on ANY line) is not a fact about the workspace, so the
-  # WHOLE field degrades to `[]` rather than becoming a partial history or a
-  # refusal — same "a manifest that lies pristine is a manifest that
-  # authorises a deletion" argument, applied to an array field instead of a
-  # scalar one. The raw `.prhistory` file itself is untouched either way: it
-  # is still there on disk for a human to read after the manifest gives up.
-  # Absent file reads the same as every other field this function has never
-  # measured — `[]`, not a refusal — because a workspace whose PR number was
-  # never replaced never grew a history file to begin with.
+  # prHistory folds in the outgoing-PR ledger the prhistory chokepoint appends
+  # to (inside `_pr_py`'s `state` mode, immediately before its one
+  # `clear('prnumber')`), so an ARCHIVED workspace's record carries the whole
+  # lineage — the spec's `merged:#591 (waves: #577 #583 #591)` card — and not
+  # just the single current `pr` beside it.
+  #
+  # WHAT IT ACTUALLY OUTLIVES, MEASURED. The previous version of this comment
+  # asserted two mechanisms this file disproves — that the manifest is "the one
+  # record ws-reap later reads", and that the lineage therefore survives the
+  # worktree. Neither is true, and the correction is the contract:
+  #   - NOTHING IN ccd READS THIS MANIFEST BACK. `grep -n archivemanifest ccd`
+  #     is three sites: the field-name list, this write, and `ws-restore`'s
+  #     `rm -f`. `_ws_reap_eval` re-measures every fact it needs itself. The
+  #     only reader anywhere is `server/src/registry.ts`'s `manifestBytes`,
+  #     which extracts `worktreeBytes` and nothing else. This field's audience
+  #     is a HUMAN reading an archived workspace's record.
+  #   - IT DOES NOT SURVIVE A REAP. `_reg_purge` (ccd:100) unlinks every
+  #     dot-free `$REG/<id>.<suffix>` except `archived`/`reaping`, so ws-reap
+  #     step (i) takes this manifest AND the raw `.prhistory` together. The one
+  #     document that outlives a reaped workspace is the tombstone
+  #     `$REG/.reaped/<id>.json` (`_ws_tombstone`), which has no `prHistory`
+  #     field. Pinned by `the reap purge takes the manifest AND the raw ledger`.
+  #   - IT DOES SURVIVE A RESTORE, which is the durability the spec asks for
+  #     ("recoverable via `ws-restore`, prhistory intact", spec Failure modes):
+  #     `cmd_ws_restore` removes `archived`/`archivedreason`/`archivemanifest`
+  #     and leaves `.prhistory` standing, so a workspace that goes back into
+  #     the fleet re-archives later with its lineage complete.
+  #
+  # THREE INPUTS, THREE ANSWERS — and telling the third from the first is why
+  # the read below is exit-code-driven instead of one blanket `except`:
+  #   ABSENT -> `[]`. A workspace whose PR number was never replaced never grew
+  #     a history file; `[]` is the measured answer, not a stand-in for one.
+  #     (The scalars above answer `null` when unmeasured. This is an array whose
+  #     emptiness is a FACT rather than a gap, and `[]` for the absent file is
+  #     what the interface says.)
+  #   MALFORMED -> `[]`, raw file untouched on disk. A line the record cannot be
+  #     trusted to mean is neither a partial history nor a refusal: the manifest
+  #     stays valid JSON and the ledger is still there for a human to read.
+  #   PRESENT AND UNREADABLE -> REFUSAL, on this function's own stderr channel,
+  #     the REFUSED arm of the header's ladder ("a question git cannot answer at
+  #     all … an unreadable tree or ignored set"). A `chmod 000` ledger — or a
+  #     directory at that path — used to raise inside the blanket `except` and
+  #     write `"prHistory":[]` at exit 0: "this workspace retired no PRs", the
+  #     most reassuring answer available, in the record whose own header says a
+  #     manifest that lies pristine is a manifest that authorises a deletion.
+  #     That is THE SIXTEENTH FORGERY's exact shape (`_ws_clip_manifest`
+  #     below: `chmod 000` -> `[]` at rc 0 -> "clips: none"), and it is refused
+  #     here for the same reason rather than argued out of. Present-vs-absent is
+  #     distinguishable — the python tells them apart by which exception `open`
+  #     raises, which is also right when `[[ -r ]]` would lie (root, ACLs).
+  local prc
   prhistory=$(python3 -c '
 import json, sys
-rows = []
 try:
-    with open(sys.argv[1]) as f:
-        for ln in f:
-            ln = ln.strip()
-            if ln:
-                rows.append(json.loads(ln))
-    sys.stdout.write(json.dumps(rows))
-except Exception:
-    sys.stdout.write("[]")
-' "$REG/$id.prhistory" 2>/dev/null)
-  # Guarded like every other field above rather than trusted outright: the
-  # python3 above already turns its OWN parse failures into "[]", but this
-  # catches the case it cannot — no output at all (no python3 on PATH, killed
-  # mid-run) — which would otherwise leave `$prhistory` empty and the printf
-  # below emitting `"prHistory":` with nothing after the colon.
+    with open(sys.argv[1], "rb") as f:
+        raw = f.read()
+except FileNotFoundError:
+    sys.stdout.write("[]"); raise SystemExit(0)
+except OSError:
+    raise SystemExit(3)          # present and unreadable — the caller refuses
+try:
+    rows = [json.loads(ln) for ln in raw.decode("utf-8").splitlines() if ln.strip()]
+except ValueError:               # bad JSON, or bytes that are not text at all
+    sys.stdout.write("[]"); raise SystemExit(0)
+sys.stdout.write(json.dumps(rows))
+' "$REG/$id.prhistory" 2>/dev/null); prc=$?
+  case "$prc" in
+    0) : ;;
+    3) echo "manifest: the PR ledger at $REG/$id.prhistory exists and cannot be read" >&2; return 1 ;;
+    # Everything else is the reader dying with the question unanswered — killed
+    # mid-run, or an interpreter that broke after `_json_str probe` proved it
+    # present. Not knowing is not `[]`.
+    *) echo "manifest: could not read the PR ledger at $REG/$id.prhistory (python3 exited $prc)" >&2; return 1 ;;
+  esac
+  # MUTATION SURVIVOR, DISCLOSED: rc 0 above can only be `json.dumps(rows)` or
+  # the literal `[]`, both valid JSON, so no fixture can reach this refusal —
+  # deleting it leaves the suite green. Kept because it is the last thing
+  # standing between a future edit of that python and a `"prHistory":` with
+  # nothing after the colon, and it now REFUSES rather than substituting `[]`:
+  # after the ladder above, a field this function cannot compute is never
+  # allowed to read as a workspace that retired no PRs.
   printf '%s' "$prhistory" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' >/dev/null 2>&1 \
-    || prhistory='[]'
+    || { echo "manifest: the PR ledger read for $id did not produce JSON" >&2; return 1; }
   transcript=$(_transcript_path "$id") || transcript=""
   printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
