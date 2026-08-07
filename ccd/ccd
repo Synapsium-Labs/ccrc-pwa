@@ -6546,13 +6546,6 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   local t="$1" fromswap="${2:-0}" i pane
   for i in $(seq 1 450); do
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
-    # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
-    # stuck on a human step. No keystroke here could be right, so stop polling and report —
-    # the caller (_spawn) must not chase this with an /effort injection either.
-    if _pane_login_screen "$pane"; then
-      echo "warn: session is waiting for login — attach and run /login" >&2
-      return 2
-    fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
     # without it supervise sits here for the full window and never reaches its watch loop.
@@ -6576,6 +6569,19 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
     fi
     if echo "$pane" | grep -q "trust this folder"; then
       tmux send-keys -t "$t" Enter; sleep 2; continue
+    fi
+    # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
+    # stuck on a human step. No keystroke here could be right, so stop polling and report —
+    # the caller (_spawn) must not chase this with an /effort injection either. Checked LAST,
+    # after every ready-marker and gate branch above: those match specific, narrow footers
+    # ("Enter to confirm" + a gate title, "Bypass Permissions mode", "trust this folder"), so a
+    # substring hit for one of THIS check's banners anywhere else in ~50 lines of scrollback — a
+    # restored transcript discussing an old auth bug, ccd's own source open in the pane — can't
+    # short-circuit a healthy session or an unanswered gate. Only a pane that matches none of the
+    # branches above reaches here, which is what a real (short, banner-only) login screen does.
+    if _pane_login_screen "$pane"; then
+      echo "warn: session is waiting for login — attach and run /login" >&2
+      return 2
     fi
     sleep 2
   done

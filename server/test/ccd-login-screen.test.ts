@@ -85,3 +85,73 @@ describe('_pane_hard_blocked', () => {
     expect(matches('_pane_hard_blocked', 'Select login method')).toBe(false);
   });
 });
+
+// The two classifiers above are pure and correctly wired into ccd's OWN test
+// suite already — but nothing until here drove the functions that actually
+// CONSUME `_pane_login_screen`. A tmux/sleep stub in the ccd-archive idiom
+// (`tmux() { case "$1" in ...; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; }`)
+// makes `_accept_first_run_prompts` and `_spawn` run to completion in
+// milliseconds against a fixture pane, with every keystroke ccd would have
+// sent to a real terminal landing in `$HOME/ccd-calls` instead.
+const SPAWN_STUB = `sleep() { :; };
+  tmux() { case "$1" in
+    capture-pane) printf '%s' "$PANE_TEXT" ;;
+    *) echo "tmux $*" >> "$HOME/ccd-calls" ;;
+  esac; };`;
+
+/** `_accept_first_run_prompts cc-test <fromswap>`, returning its exit code —
+ *  the function's own return, not the wrapping shell's, which is why the
+ *  snippet echoes it explicitly instead of letting a nonzero code throw. */
+const acceptRc = (paneText: string, fromswap = '0'): number => {
+  const out = h.sh(
+    `${SPAWN_STUB} _accept_first_run_prompts cc-test ${fromswap}; echo "rc=$?"`,
+    { PANE_TEXT: paneText },
+  );
+  return Number(/rc=(\d+)/.exec(out)![1]);
+};
+
+describe('_accept_first_run_prompts (wiring, not just the classifier)', () => {
+  it('returns 2 and sends no keystrokes on a bare login screen', () => {
+    expect(acceptRc('Please run /login')).toBe(2);
+    expect(h.calls().some((c) => c.includes('send-keys'))).toBe(false);
+  });
+
+  // The order regression this task fixes: the login check used to run BEFORE
+  // the ready-marker check, over the FULL pane — so a healthy transcript that
+  // merely quotes one of the banner strings (open source file, restored chat
+  // discussing an old auth bug) tripped it and parked the session forever.
+  it('does not mistake a healthy pane that quotes a login banner in scrollback for a login screen', () => {
+    const pane = '● Read ccd/ccd\n  grep -Eq "Please run /login"\n? for shortcuts';
+    expect(acceptRc(pane)).toBe(0);
+    expect(h.calls().some((c) => c.includes('send-keys'))).toBe(false);
+  });
+});
+
+describe('_spawn (wiring): skips /effort injection exactly when login-gated', () => {
+  const spawnAgainstPane = (paneText: string): string[] => {
+    h.sh(
+      // Trailing `; :` because `_spawn`'s own last statement is
+      // `[[ ... ]] && _inject_spawn_effort ...` — on the login-gated pane
+      // that condition is false, so `_spawn`'s exit code is 1 and, being the
+      // last command in the snippet, would make `h.sh` throw on a perfectly
+      // correct skip. The `:` gives the snippet its own success exit code.
+      `${SPAWN_STUB}
+       _reg_set myid wrapper claude
+       _reg_set myid workdir '${h.home}'
+       _reg_set myid uuid deadbeef
+       _spawn myid new; :`,
+      { PANE_TEXT: paneText },
+    );
+    return h.calls();
+  };
+
+  it('sends no /effort keystrokes when the pane is a login screen', () => {
+    const calls = spawnAgainstPane('Please run /login');
+    expect(calls.some((c) => c.includes('/effort'))).toBe(false);
+  });
+
+  it('DOES send /effort keystrokes once the TUI is healthy (positive control — proves the harness would catch the previous test if the skip were dropped)', () => {
+    const calls = spawnAgainstPane('? for shortcuts');
+    expect(calls.some((c) => c.includes('/effort'))).toBe(true);
+  });
+});
