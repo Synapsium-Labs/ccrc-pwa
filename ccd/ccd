@@ -113,21 +113,22 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # arm runs `git worktree remove` and `git branch -d` on it.
   #
   # Fixed by filtering on the SUFFIX rather than matching every known field
-  # name — a field name never contains a dot (measured: `archived`,
-  # `archivedreason`, `archivemanifest`, `base`, `branch`, `hold`, `home`,
-  # `hookstate`, `lastcompact`, `lastswap`, `pool`, `prcheckedat`,
-  # `prhistory`, `prnumber`, `prphase`, `project`, `reaping`, `setup`,
-  # `started`, `uuid`, `workdir`, `workspace`, `wrapper` — every registry file
-  # a session has today, which is a WIDER set than `_reg_set`/`_reg_get`: the
-  # inventory that stood here named only the shell-written fields and so
-  # silently dropped `prcheckedat`/`prphase`/`prhistory` (written by `_pr_py`'s
-  # own `put`/append) and `hookstate` (written by the hooks). The purge itself
-  # was always right — it matches the SUFFIX shape, not a list — but an
-  # inventory that omits files is an inventory a future reader trusts and a
-  # future writer copies), so `$id.<field>` has
-  # exactly one dot after the id and `$id.x-y.uuid` has two. This is
-  # future-proof against a field this file adds tomorrow, which a hardcoded
-  # allowlist would not be — the two are the same shape either way.
+  # name — a field name never contains a dot, so `$id.<field>` has exactly one
+  # dot after the id and `$id.x-y.uuid` has two. This is future-proof against a
+  # field this file adds tomorrow, which a hardcoded allowlist would not be —
+  # the two are the same shape either way.
+  #
+  # The dot-free claim, measured against every registry file a session has
+  # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
+  # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
+  # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper`. That is a
+  # WIDER set than `_reg_set`/`_reg_get`: the inventory that stood here named
+  # only the shell-written fields and so silently dropped `prcheckedat`,
+  # `prphase` and `prhistory` (written by `_pr_py`'s own `put`/append) and
+  # `hookstate` (written by the hooks). The purge itself was always right — it
+  # matches the SUFFIX shape, not a list — but an inventory that omits files is
+  # an inventory a future reader trusts and a future writer copies.
   # AND THE ORDER IS PART OF THE CONTRACT — final-round verification P4. This
   # loop unlinks one file at a time in GLOB order, i.e. alphabetically, so
   # `archived` went first and `reaping` (r) several files later. A SIGKILL or an
@@ -621,7 +622,8 @@ def pick(rows, branch, base_short):
     return cands[-1] if cands else None
 
 if mode == 'state':
-    (id_, project, main, repo, branch, base, base_short, tip, ahead, dirty, template, reg) = sys.argv[2:14]
+    (id_, project, main, repo, branch, base, base_short, tip, ahead, dirty, template, reg,
+     answered_at) = sys.argv[2:15]
     # An argv can only carry a string, so "" is how the shell says UNMEASURED
     # for all three. None here and JSON null on the wire, never 0 and never "":
     # a number is a measurement, and none of these was measured. Deviation 7's
@@ -629,6 +631,23 @@ if mode == 'state':
     tip = tip or None
     ahead = int(ahead) if ahead != '' else None
     dirty = int(dirty) if dirty != '' else None
+
+    # THE STAMP ARRIVES WITH THE ANSWER — re-review of the fix wave. This is the
+    # value the compare-and-set below ranks runs by, so it has to describe WHEN
+    # GITHUB ANSWERED, not when this process finished writing. It used to be
+    # `int(time.time() * 1000)` taken further down, after `rows_in()` and after
+    # this session's `git log`, while `cmd_pr_state --project` makes ONE gh call
+    # and then loops `_pr_state_one` over every session of the repo — so the
+    # k-th session's stamp was SECONDS newer than the answer it was carrying and
+    # the CAS ranked completion times. `cmd_pr_state` now stamps the moment
+    # `_gh_pr_list` returns and hands the same value to every session of the
+    # sweep; the failure it closes is written out there.
+    #
+    # `''` IS NO STAMP AT ALL, and the fallback is this process's own clock —
+    # exactly the pre-fix behaviour. A caller that has no millisecond clock (or
+    # `_pr_state_one` invoked with four arguments, which the pr-state tests do)
+    # must lose the RANKING, never the update: this guard may only remove races.
+    checked_at = int(answered_at) if answered_at != '' else int(time.time() * 1000)
     raw_rows = rows_in()
     if raw_rows is None:
         # THE ID-LESS SHAPE, on purpose: the body is one gh call's answer for the
@@ -684,7 +703,6 @@ if mode == 'state':
                 parts = (rec.split('\x1f') + ['', '', ''])[:3]
                 commits.append({'sha': parts[0], 'subject': parts[1], 'body': parts[2].strip()})
 
-    checked_at = int(time.time() * 1000)
     def put(field, value):
         with open(os.path.join(reg, id_ + '.' + field), 'w') as f:
             f.write(str(value))
@@ -774,11 +792,21 @@ if mode == 'state':
     # so the loser sees 583, `old_num == number`, and appends nothing. It cannot
     # fix (b), because there the loser's ANSWER is older than the winner's, not
     # its read. That takes the compare-and-set: `prcheckedat` timestamps the gh
-    # answer this run is carrying (`checked_at`, taken after `rows_in()`), so a
-    # run whose answer predates what is already on disk persists NOTHING — no
-    # history line, no phase, no number. It still prints its own answer on
-    # stdout, which is what the caller asked for and the only thing it can
-    # honestly claim: a display one sweep stale, never a persisted lie.
+    # answer this run is carrying — `checked_at`, which `cmd_pr_state` takes AT
+    # THE gh READ and passes in, so that the whole of a `--project` fan-out
+    # carries the one timestamp of the one call it made. A run whose answer
+    # predates what is already on disk persists NOTHING — no history line, no
+    # phase, no number. It still prints its own answer on stdout, which is what
+    # the caller asked for and the only thing it can honestly claim: a display
+    # one sweep stale, never a persisted lie.
+    #
+    # RANKING ANSWERS, NOT COMPLETIONS, is the whole of it. While the stamp was
+    # taken here instead — after `rows_in()` and after the `git log` above — (b)
+    # survived the CAS in the shape it is commonest in: the sweep's gh returns at
+    # T0 binding #577, the sheet's own `--session` read returns at T0+1.0s
+    # binding the NEW #583 and persists it, and the sweep reaches that session at
+    # T0+1.4s with a stamp that OUTRANKS the newer answer. #583 went into the
+    # append-only ledger and `prnumber` went back to #577.
     #
     # `flock` on this session's own `.uuid` — an existing file, opened
     # read-only, never written here — rather than a new registry file: the
@@ -1982,8 +2010,14 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
   esac
 }
 
-_pr_state_one() {   # id main repo rows -> one JSON line
-  local id="$1" main="$2" repo="$3" rows="$4"
+_pr_state_one() {   # id main repo rows [answered-at-ms] -> one JSON line
+  # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
+  # rather than to this session: `cmd_pr_state` takes it once, at the read, and
+  # hands the same value to every session of a `--project` sweep. That is what
+  # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
+  # honest default for a caller that has none — `_pr_py` then falls back to its
+  # own clock, which is the pre-fix behaviour and not a refusal.
+  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}"
   local project branch base baseShort tip ahead workdir dirty tmpl
   project=$(_reg_get "$id" project); branch=$(_reg_get "$id" branch)
   base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
@@ -2105,7 +2139,7 @@ _pr_state_one() {   # id main repo rows -> one JSON line
   tmpl=""
   [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
-    "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG"
+    "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
 }
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
@@ -2146,7 +2180,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   fi
   (( ${#ids[@]} )) || return 0
 
-  local project main repo rows
+  local project main repo rows answeredAt
   project=$(_reg_get "${ids[0]}" project)
   # A registry VALUE, and `$main` is built from it. `--session` validated the id
   # it was handed and nothing validated this. `die`, not an answer object,
@@ -2159,9 +2193,40 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # The answer object _gh_pr_list printed IS the output on failure: one repo
   # failing marks that repo's sessions unknown and touches no other project.
   rows=$(_gh_pr_list "$repo") || { printf '%s\n' "$rows"; return 0; }
+  # ONE STAMP FOR THE WHOLE FAN-OUT, TAKEN AT THE ANSWER — re-review of the fix
+  # wave. `_pr_py`'s compare-and-set persists only the NEWEST answer, and it can
+  # only tell which that is if `prcheckedat` describes WHEN GITHUB ANSWERED. The
+  # stamp used to be taken inside python, per session, after `rows_in()` and
+  # after that session's `git log` — while this verb makes ONE gh call and then
+  # loops over every session of the repo below. Eight workspaces on one repo, and
+  # the k-th session's stamp was seconds newer than the answer it carried: the
+  # CAS ranked COMPLETION TIMES, which is not a fact about GitHub at all.
+  #
+  # What that cost, at the wave boundary this feature exists for: the sweep's gh
+  # returns at T0 binding #577; the operator opens the PR sheet at T0+0.4s and
+  # its own `pr-state --session` read returns at T0+1.0s binding the NEW #583 (a
+  # merge landed between the two reads) and persists it; the sweep reaches that
+  # session at T0+1.4s, out-stamps the newer answer, retires still-live #583 into
+  # the append-only ledger `_ws_archive_manifest` folds in verbatim, and writes
+  # `prnumber` back to #577. A manifest that lies is a manifest that authorises a
+  # deletion. With the stamp taken here, every session of this sweep carries T0
+  # and the sheet's newer answer stands.
+  #
+  # HERE rather than inside `_gh_pr_list`: its answer comes back through a
+  # command substitution — a SUBSHELL — so a variable it set would not survive to
+  # this line, and its stdout is the rows, shared with `cmd_pr_open` and
+  # `_ws_reap_eval`. This is the first statement after the answer arrives; the
+  # gap is a fork's return, not a sweep's.
+  #
+  # NOT NUMERIC IS UNMEASURED. `%3N` is GNU; a `date` that prints it literally
+  # leaves `answeredAt=""` and `_pr_py` falls back to its own clock, which is
+  # precisely the pre-fix behaviour. This guard may only remove races, never add
+  # a refusal that stops a phase from ever updating.
+  answeredAt=$(date +%s%3N 2>/dev/null)
+  [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
 
   local id
-  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows"; done
+  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt"; done
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>

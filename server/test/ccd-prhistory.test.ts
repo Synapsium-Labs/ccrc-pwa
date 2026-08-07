@@ -339,3 +339,110 @@ describe('the chokepoint is serialised, and only the newest answer writes', () =
     expect(h.reg(id, 'prnumber')).toBe('591');
   });
 });
+
+// RE-REVIEW OF THE FIX WAVE. The compare-and-set above only works if
+// `prcheckedat` timestamps the ANSWER. It used to timestamp the WRITE:
+// `checked_at` was `int(time.time() * 1000)` taken inside `_pr_py`, after
+// `rows_in()` and after that session's `git log`, while `cmd_pr_state
+// --project` makes ONE gh call and then loops `_pr_state_one` over every
+// session of the repo. The k-th session's stamp was therefore seconds newer
+// than the gh answer it was carrying, and the CAS ranked completion times.
+//
+// The three tests above cannot see it: each spells the winner's state directly
+// (a future `prcheckedat` written by hand), so the loser's stamp is python's
+// own clock in the fixed and the broken build alike. What is untested there is
+// the fan-out — where one gh read and N writes are separated by real seconds,
+// which is the divergence itself.
+describe('the --project fan-out is stamped at its ONE gh read, not per session', () => {
+  const MAIN = (): string => path.join(h.home, 'projects', 'demo');
+
+  /** A second workspace on the SAME repo, so one `--project` sweep answers for
+   *  both from one gh call. Glob order puts `demo-quiet-basin` first and
+   *  `demo-still-water` second, so still-water is the k-th session — the one
+   *  the sweep reaches last and the one the defect landed on. */
+  const secondWorkspace = (): { id: string; tip: string } => {
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-water cmd_ws_add demo`);
+    return { id: 'demo-still-water', tip: h.git(MAIN(), 'rev-parse', 'refs/heads/ws/still-water') };
+  };
+
+  /** One row of the repo-wide answer, bound to `branch` — `mergedRow`'s
+   *  defaults for every field the predicate reads that this block never
+   *  varies, with `headRefOid` set to that branch's own tip so `is_ours`
+   *  passes (a commit is an ancestor of itself). */
+  const row = (branch: string, tip: string, number: number, state = 'MERGED'): Record<string, unknown> =>
+    mergedRow({
+      number, headRefName: branch, headRefOid: tip,
+      ...(state === 'MERGED' ? {} : { state, mergedAt: null, mergeCommit: null }),
+    });
+
+  it('every session of one sweep carries the same stamp — the single gh call\'s', () => {
+    // The property the fix IS, said directly, and the cheapest thing to break:
+    // pre-fix these were two python clocks a session's git reads apart, and
+    // `prcheckedat` therefore answered "when did this write finish" rather than
+    // "when did GitHub answer". Measured pre-fix: 1786074143909 vs
+    // 1786074143746, 163 ms for two sessions — and one gh call answers eight.
+    const { id: a, tip: tipA } = workspace();
+    const { id: b, tip: tipB } = secondWorkspace();
+    h.ghRows([row('ws/quiet-basin', tipA, 591), row('ws/still-water', tipB, 591)]);
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`);
+    expect(h.reg(a, 'prcheckedat')).toBe(h.reg(b, 'prcheckedat'));
+    expect(h.reg(a, 'prcheckedat')).toMatch(/^\d{13}$/);
+  });
+
+  it('a per-session write with a NEWER answer is not regressed by a sweep that read gh BEFORE it', () => {
+    const { id: a, tip: tipA } = workspace();
+    const { id: b, tip: tipB } = secondWorkspace();
+
+    // Wave 1 — a real fan-out. One gh call, both sessions bound to #591.
+    // `t1` is read from session a alone: that the sweep's OTHER session got the
+    // same stamp is the sibling test above, and asserting it here too would
+    // mask the divergence assertions below behind it.
+    h.ghRows([row('ws/quiet-basin', tipA, 591), row('ws/still-water', tipB, 591)]);
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`);
+    const t1 = Number(h.reg(a, 'prcheckedat'));
+    expect(h.reg(a, 'prnumber')).toBe('591');
+    expect(h.reg(b, 'prnumber')).toBe('591');
+    expect(hist(b)).toEqual([]);
+
+    // The PR sheet's own read, AFTER the merge that opened #601 — a real
+    // `--session` run off the same clock, so its answer is genuinely newer.
+    // The #591 it retires here is the LEGITIMATE record, and the only one that
+    // may ever appear in this ledger.
+    h.ghRows([row('ws/still-water', tipB, 601, 'OPEN')]);
+    h.sh(`${GH_STUB} cmd_pr_state --session ${b}`);
+    const t2 = Number(h.reg(b, 'prcheckedat'));
+    expect(t2).toBeGreaterThan(t1);
+    expect(h.reg(b, 'prnumber')).toBe('601');
+    expect(hist(b)).toHaveLength(1);
+    expect(hist(b)[0]).toMatchObject({ pr: 591 });
+
+    // Wave 2 — the sweep whose gh call happened BETWEEN those two writes: it
+    // still binds #591 for both branches, because the merge had not landed when
+    // it read. `date` is stubbed exactly as `gh` and `timeout` are, and for the
+    // same reason: with the fix the stamp is a value the sweep READS at the
+    // answer, so it is a value a fixture can spell. Pre-fix nothing here is
+    // consulted at all — python takes its own clock, out-stamps #601, and the
+    // assertions below fail.
+    const mid = String(Math.floor((t1 + t2) / 2));
+    const DATE_STUB = `date() { [[ "$*" == "+%s%3N" ]] && { printf '%s\\n' ${mid}; return 0; }
+      command date "$@"; };`;
+    h.ghRows([row('ws/quiet-basin', tipA, 591), row('ws/still-water', tipB, 591)]);
+    h.sh(`${GH_STUB} ${DATE_STUB} cmd_pr_state --project demo`);
+
+    // (a) NO FALSE RECORD. #601 is newer and still live; retiring it into an
+    //     append-only ledger `_ws_archive_manifest` folds in verbatim is how a
+    //     manifest comes to authorise a deletion.
+    expect(hist(b)).toHaveLength(1);
+    expect(hist(b)[0]).toMatchObject({ pr: 591 });
+    // (b) NO REGRESSION. The newer number still stands, with its own stamp.
+    expect(h.reg(b, 'prnumber')).toBe('601');
+    expect(h.reg(b, 'prphase')).toBe('open');
+    expect(h.reg(b, 'prcheckedat')).toBe(String(t2));
+    // THE CONTROL, IN THE SAME SWEEP. The session whose answer was NOT out of
+    // date wrote normally off the very same stamp — so this is staleness, and
+    // not a fan-out that has stopped persisting.
+    expect(h.reg(a, 'prcheckedat')).toBe(mid);
+    expect(h.reg(a, 'prnumber')).toBe('591');
+    expect(hist(a)).toEqual([]);
+  });
+});
