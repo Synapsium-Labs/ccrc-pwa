@@ -18,7 +18,7 @@ import { limitBand } from '../components/LimitBar';
 import { Skeleton } from '../components/Skeleton';
 import { formatAge, formatReset } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, KNOWN_WRAPPERS } from '../lib/accounts';
+import { accountColorVar, accountLabel, homeAbleLabelList, KNOWN_WRAPPERS } from '../lib/accounts';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
@@ -88,10 +88,16 @@ export function AccountsScreen(): ReactNode {
   // (nothing polled yet) says nothing — same three-state read ProjectCard's
   // addLabel already makes, never collapsing "don't know yet" into either
   // defined answer.
+  //
+  // `projected === null` is a claim about HOME_ABLE lanes only (gpt is never
+  // consulted — see homeAbleLabelList) — this same screen renders a gpt row
+  // right below, so "all accounts disabled" would read as a claim about the
+  // list under it that the server never actually checked. Naming the three
+  // lanes individually is what ccd's own placement refusal already does.
   const projectionLine = projected === undefined
     ? null
     : projected === null
-      ? 'Next workspace: all accounts disabled — nothing can take it'
+      ? `Next workspace: ${homeAbleLabelList()} all disabled — nothing can take it`
       : `Next workspace lands on ${accountLabel(projected.wrapper)} — least-loaded`;
 
   return (

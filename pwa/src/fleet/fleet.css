@@ -1442,6 +1442,16 @@
 }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
 .accounts-disabled-note { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary); }
+/* A disabled lane greys the WHOLE row, not just its label: without this, a
+   lane disabled while its 5h/7d telemetry sat at crit keeps a solid red bar
+   forever (nothing runs there to refresh it), which reads as live pressure
+   on an account the same row calls switched off. Same specificity as the
+   band rules above (.acct-meter[data-band=…] .acct-fill) — this wins on
+   source order (it comes later in the file) regardless of which band a
+   frozen reading happened to land in. Also the only CSS consumer of
+   data-disabled; the two test files' row selector was previously the
+   attribute's only reason to exist. */
+.accounts-row[data-disabled='true'] .acct-fill { background: var(--edge-subtle); }
 /* Freshness ("last reported …") and the disabled note share the same muted
    tertiary ink already vetted elsewhere (.sess-held uses it identically) —
    no new token, no opacity fade to register with the contrast gate. */

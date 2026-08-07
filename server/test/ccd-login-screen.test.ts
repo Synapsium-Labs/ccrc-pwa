@@ -12,6 +12,8 @@
 //     intentional login, not a failure — evacuating out from under an
 //     operator mid-login would be wrong).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -202,5 +204,93 @@ describe('_spawn (wiring): skips /effort injection exactly when login-gated', ()
   it('DOES send /effort keystrokes once the TUI is healthy (positive control — proves the harness would catch the previous test if the skip were dropped)', () => {
     const calls = spawnAgainstPane('? for shortcuts');
     expect(calls.some((c) => c.includes('/effort'))).toBe(true);
+  });
+});
+
+// Regression (whole-branch review, Build 3 PR G): the spec (§5) and the
+// shipped README both quote `warn: <id> is waiting for login on <wrapper> —
+// attach and run /login`. The code shipped `warn: session is waiting for
+// login — attach and run /login` instead, emitted from INSIDE
+// _accept_first_run_prompts, where neither $id nor $wrapper is in scope (that
+// function only ever sees the tmux NAME). The warning now fires from _spawn,
+// which has both, on the login-gated return code (2).
+describe('_spawn (wiring): the login warning names the id and the wrapper (spec §5)', () => {
+  it('warns "<id> is waiting for login on <wrapper>" — not the generic "session"', () => {
+    const out = h.sh(
+      // 2>&1: the warning is written to stderr (`>&2` in ccd); the harness's
+      // `h.sh` only returns stdout, so the redirect is what makes it visible
+      // to this assertion. Trailing `; :` for the same reason as
+      // spawnAgainstPane above — _spawn's own last statement is false here.
+      `${SPAWN_STUB}
+       _reg_set myid wrapper claude
+       _reg_set myid workdir '${h.home}'
+       _reg_set myid uuid deadbeef
+       _spawn myid new 2>&1; :`,
+      { PANE_TEXT: 'Please run /login' },
+    );
+    expect(out).toContain('warn: myid is waiting for login on claude — attach and run /login');
+  });
+
+  it('stays silent on a healthy spawn (positive control)', () => {
+    const out = h.sh(
+      `${SPAWN_STUB}
+       _reg_set myid wrapper claude
+       _reg_set myid workdir '${h.home}'
+       _reg_set myid uuid deadbeef
+       _spawn myid new 2>&1; :`,
+      { PANE_TEXT: '? for shortcuts' },
+    );
+    expect(out).not.toContain('waiting for login');
+  });
+});
+
+// Regression for the dead auth-rescue lane (whole-branch review, Build 3 PR G):
+// _auto_swap_check's ONLY consumer of _pane_hard_blocked's auth patterns is
+// gated behind `_swap_target`, and `_swap_target`'s cur==home branch is
+// `_avail "$home" && return 0` — pure telemetry. Auth loss writes NO
+// cc-limits file (only rate limits do), so a session on its home account
+// (the fleet's steady state, since sessions default to and return to home)
+// reads as "home is fine: stay" and the auth strings in _pane_hard_blocked
+// are never reached. `_swap_target` now takes a `force` arg that
+// `_auto_swap_check` sets from the hard-blocked verdict, so the rescue no
+// longer depends on telemetry agreeing that something is wrong.
+describe('_auto_swap_check (wiring): lost auth on a session sitting on its HOME account', () => {
+  // Same stub idiom as SPAWN_STUB above (tmux capture-pane -> $PANE_TEXT),
+  // plus a `_dispatch_swap` stub so the rescue's real effect (which id moves
+  // to which wrapper) is observable without a real tmux/systemd-run.
+  const AUTO_SWAP_STUB = `
+    tmux() { case "$1" in capture-pane) printf '%s' "$PANE_TEXT" ;; esac; };
+    _dispatch_swap() { echo "DISPATCHED $1 $2" >> "$HOME/dispatch-calls"; };
+  `;
+  const dispatchCalls = (): string[] => {
+    const p = path.join(h.home, 'dispatch-calls');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+  };
+  const swapLog = (): string => {
+    const p = path.join(h.home, '.cc-sessions', 'swap.log');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  };
+
+  it('evacuates even though home carries zero telemetry (before the fix: _swap_target returned empty here and nothing dispatched)', () => {
+    h.sh('_reg_set claude-demo wrapper claude; _reg_set claude-demo home claude');
+    h.sh(`${AUTO_SWAP_STUB} _auto_swap_check claude-demo`,
+      { PANE_TEXT: 'Invalid API key · Please run /login' });
+    expect(dispatchCalls()).toContain('DISPATCHED claude-demo claude2');
+    expect(swapLog()).toContain('auto-rescue claude-demo: claude (blocked) -> claude2');
+  });
+
+  it('positive control: a pressure-driven rescue (429, telemetry agrees home is bad) still fires', () => {
+    fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude.json'),
+      JSON.stringify({ five: 99, seven: 99, ts: Math.floor(Date.now() / 1000) }));
+    h.sh('_reg_set claude-demo wrapper claude; _reg_set claude-demo home claude');
+    h.sh(`${AUTO_SWAP_STUB} _auto_swap_check claude-demo`,
+      { PANE_TEXT: 'API Error: 429 Too Many Requests' });
+    expect(dispatchCalls()).toContain('DISPATCHED claude-demo claude2');
+  });
+
+  it('does NOT evacuate a healthy pane on a telemetry-free home (force is driven by the classifier, not by missing telemetry alone)', () => {
+    h.sh('_reg_set claude-demo wrapper claude; _reg_set claude-demo home claude');
+    h.sh(`${AUTO_SWAP_STUB} _auto_swap_check claude-demo`, { PANE_TEXT: '? for shortcuts' });
+    expect(dispatchCalls()).toEqual([]);
   });
 });

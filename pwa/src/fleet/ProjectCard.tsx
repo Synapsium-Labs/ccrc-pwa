@@ -14,7 +14,7 @@
 // without touching localStorage.
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectedHome } from '../../../shared/api';
-import { accountColorVar, accountLabel } from '../lib/accounts';
+import { accountColorVar, accountLabel, homeAbleLabelList } from '../lib/accounts';
 import type { FleetGroup } from './groupFleet';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
@@ -68,13 +68,16 @@ export function ProjectCard({
   // task exists to fix). `undefined`: nothing is known yet (first poll still
   // in flight, or every poll so far has failed) — the label says nothing it
   // hasn't observed. `null`: the poll landed and the server itself found no
-  // home-able lane — that, and only that, earns "all accounts disabled". A
-  // value: name it. The button stays enabled in all three cases regardless,
-  // because ccd's die at ws-add time is the authority, not this forecast.
+  // home-able lane — that, and only that, earns this copy. It names the
+  // three HOME_ABLE lanes individually (homeAbleLabelList) rather than
+  // claiming "all accounts": gpt is never consulted for this fact, so a
+  // blanket "all" would overstate what the server actually knows. A value:
+  // name it. The button stays enabled in all three cases regardless, because
+  // ccd's die at ws-add time is the authority, not this forecast.
   const addLabel = projected
     ? `New workspace on ${group.project} — ${accountLabel(projected.wrapper)}, ${headroom}% free`
     : projected === null
-      ? `New workspace on ${group.project} — all accounts disabled`
+      ? `New workspace on ${group.project} — ${homeAbleLabelList()} all disabled`
       : `New workspace on ${group.project}`;
 
   // Status never owns the card's perimeter except for attention (the one state

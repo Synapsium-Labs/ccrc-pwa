@@ -103,6 +103,26 @@ describe('AccountsScreen — every account, never hidden', () => {
     const claudeRow = screen.getByText('team·max').closest('[data-disabled]');
     expect(claudeRow).toHaveAttribute('data-disabled', 'false');
   });
+
+  // Whole-branch review: `data-disabled` had no CSS consumer at all (the two
+  // row-selector assertions above were its only reason to exist) — a lane
+  // disabled while its own telemetry sat at crit-red kept a solid red 5h/7d
+  // bar forever, since nothing runs on a disabled lane to refresh it. The
+  // row's loudest element reported live pressure on an account the same row
+  // calls switched off. `limitBand`/`data-band` are untouched on purpose —
+  // the frozen reading is real data, not something to hide — only the
+  // row-level override neutralizes its COLOR.
+  it('mutes a disabled lane\'s meter fill even when its frozen reading is crit-red', async () => {
+    stubAccounts([acct({ wrapper: 'claude', five: 92, disabled: true })]);
+    render(<AccountsScreen />);
+    const claudeRow = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
+    expect(claudeRow).toHaveAttribute('data-disabled', 'true');
+    // The band itself still reports crit (proves this is a row-level CSS
+    // override, not a change to limitBand's own classification).
+    expect(claudeRow.querySelector(".acct-meter[data-band='crit']")).not.toBeNull();
+    expect(declValue(ruleIn(fleetCss, ".accounts-row[data-disabled='true'] .acct-fill"), 'background'))
+      .toBe('var(--edge-subtle)');
+  });
 });
 
 describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\'s own fixtures)', () => {
@@ -203,10 +223,11 @@ describe('AccountsScreen — the projection line', () => {
     expect(await screen.findByText(/next workspace lands on team·max/i)).toBeInTheDocument();
   });
 
-  it('falls back to naming the refusal when every account is disabled', async () => {
+  it('falls back to naming the three HOME_ABLE lanes individually — never "all accounts" — when every one is disabled', async () => {
     stubAccounts([acct({ wrapper: 'claude', disabled: true })], null);
     render(<AccountsScreen />);
-    expect(await screen.findByText(/all accounts disabled/i)).toBeInTheDocument();
+    expect(await screen.findByText('Next workspace: team·max, alt·max and team·shared all disabled — nothing can take it'))
+      .toBeInTheDocument();
   });
 });
 

@@ -551,11 +551,24 @@ export interface WsTombstone {
 /* ---------------------------------------------------------------------------
  * Snapshot revival — reading a FleetSession[] that an OLDER BUILD persisted.
  *
- * The skew is across TIME, not across the wire: the server serves the PWA it
- * was built with, so a `/ws/fleet` frame always comes from this build. Two
- * snapshots do not — `ccrc.fleet-snapshot.v1` in localStorage
- * (pwa/src/lib/offline.ts) and `~/.ccrc/state-cache.json`
- * (server/src/fleetstate.ts) are read back by whatever build starts next.
+ * A `/ws/fleet` frame is NOT guaranteed to come from this build — that used
+ * to be this comment's premise, and it is false: Rider E's handshake exists
+ * exactly because it is false. `autoUpdate`'s 15-minute SW check leaves a
+ * window where an open tab holds pre-deploy JS against a post-deploy server
+ * (`FleetMsg`'s `hello` frame below, `FLEET_PROTO`/`FLEET_PROTO_MIN`, and the
+ * block screen's "This app build is too old for the fleet server." all exist
+ * to manage exactly that skew). The conclusion below still holds, but for a
+ * narrower reason than "can't happen": the stale-client window is
+ * new-writer/old-reader ONE-WAY — a newer server only ever ADDS frame fields
+ * or types, and an already-deployed PWA already drops an unknown fleet frame
+ * type silently (`fleet.ts`) — so the failure mode this file exists to catch
+ * below (`undefined !== null` reading a whole fleet as archived) cannot arise
+ * from a live `/ws/fleet` frame. It is real for the two PERSISTED snapshots,
+ * because those are read back by whatever build starts NEXT — older, same,
+ * or newer than the one that wrote them, unlike a stale tab, which can only
+ * ever be older than the server it talks to: `ccrc.fleet-snapshot.v1` in
+ * localStorage (pwa/src/lib/offline.ts) and `~/.ccrc/state-cache.json`
+ * (server/src/fleetstate.ts).
  *
  * Reading them with a blind `as FleetSession[]` is not a cosmetic sin. Every
  * consumer tests `archivedAt !== null`, and `undefined !== null` is TRUE, so a

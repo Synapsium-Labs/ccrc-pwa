@@ -162,6 +162,26 @@ honest failure paths:
    **Parity via the existing shared-fixture harness**
    (`server/test/fixtures/leastLoaded.ts`, executed against both bash and
    TS): new cases `disabled-lane-skipped` and `all-disabled`.
+
+   **Corrected 2026-08-07, after the build.** "all accounts disabled" is
+   itself a HOME_ABLE-only claim wearing an unqualified word: `projectHome`
+   never consults `gpt` (deliberately — it is opt-in-only, never a landing
+   spot ccd chooses on its own), and the accounts screen this same label
+   sits on renders `gpt` as an account row in the identical list. A reader
+   looking at both at once sees the label say "all" while a row two inches
+   below it is neither disabled nor consulted for the claim. Shipped copy
+   instead names the three HOME_ABLE lanes individually by their human
+   labels (`homeAbleLabelList`, `pwa/src/lib/accounts.ts`) — the same
+   discipline ccd's own placement refusal already uses (`ccd/ccd`'s
+   `die "no account available for placement — claude:disabled
+   claude2:disabled claude-corp:disabled …"`, never "all accounts"). Found
+   by the whole-branch review's cross-file read (the projection line and the
+   row list are two renderings of one `/api/accounts` response, computed
+   from different subsets of it); recorded rather than quietly edited — a
+   spec that prescribes copy overstating what the server knows is the same
+   class of defect as a comment that asserts more than its code proves,
+   the same convention Build 2's I2 correction used
+   (`docs/superpowers/specs/2026-08-06-attention-ux-design.md`).
 5. **The spawn path stops typing into auth screens.**
    `_accept_first_run_prompts` gains a login-screen branch (patterns:
    `Select login method`, `Invalid API key`, `Please run /login`) that

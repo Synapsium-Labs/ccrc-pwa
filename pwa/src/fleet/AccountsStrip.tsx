@@ -10,8 +10,9 @@
 // hit, the navigate() below), so it must never render nothing: the state it
 // used to bail out on entirely — every lane markered `-disabled`, or no poll
 // landed/succeeded yet — is exactly the state the accounts screen exists to
-// explain (its bespoke "all accounts disabled" copy). The link stays mounted
-// with a quiet placeholder body instead of disappearing with the gauges.
+// explain (its bespoke "<home-able accounts>, all disabled" copy — see
+// homeAbleLabelList in lib/accounts.ts). The link stays mounted with a quiet
+// placeholder body instead of disappearing with the gauges.
 import { useEffect, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage } from '../../../shared/api';

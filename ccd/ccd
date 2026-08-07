@@ -6406,18 +6406,28 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   [[ "$sc" -lt "$SWAP_CEILING" ]]
 }
 
-_swap_target() {   # id cur home -> echo destination wrapper, or nothing = stay put
-  local id="$1" cur="$2" home="$3" cand best="" best_score=999 sc
-  if [[ "$cur" == "$home" ]]; then
-    _avail "$home" && return 0                        # home is fine: stay
-  else
-    # disabled excludes home as a DESTINATION only — it never evacuates a
-    # session already sitting on it, which is why the two "stay" branches
-    # above and below carry no _account_ok check.
-    _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
-    _avail "$cur"  && return 0                        # cur still works, home down: stay put
+_swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing = stay put
+  # `force` (any non-empty value): skip the "stay if telemetry says cur/home is
+  # under the ceiling" shortcuts and go straight to the must-leave candidate
+  # loop. Needed because auth loss writes NO cc-limits telemetry (only rate
+  # limits do) — _avail on a hard-blocked wrapper reads exactly like a wrapper
+  # that is fine, so the ordinary "home is fine: stay" / "cur still works:
+  # stay" branches would never fire the rescue at all. The caller
+  # (_auto_swap_check) passes force iff _pane_hard_blocked already confirmed
+  # the session is stuck regardless of what telemetry says.
+  local id="$1" cur="$2" home="$3" force="${4:-}" cand best="" best_score=999 sc
+  if [[ -z "$force" ]]; then
+    if [[ "$cur" == "$home" ]]; then
+      _avail "$home" && return 0                        # home is fine: stay
+    else
+      # disabled excludes home as a DESTINATION only — it never evacuates a
+      # session already sitting on it, which is why the two "stay" branches
+      # above and below carry no _account_ok check.
+      _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
+      _avail "$cur"  && return 0                        # cur still works, home down: stay put
+    fi
   fi
-  # must leave cur (home-but-down, or away-and-cur-down): pick the least-loaded AVAILABLE account
+  # must leave cur (home-but-down, away-and-cur-down, or forced): pick the least-loaded AVAILABLE account
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
     _account_ok "$cand" || continue
@@ -6441,7 +6451,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target
+  local id="$1" wrapper home now last pane target hard_blocked=""
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
@@ -6451,7 +6461,18 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #  2026-07-26 with the same decision that took gpt out of the rotation: gpt is
   #  no longer a destination for projects that didn't ask for it. A session whose
   #  HOME is gpt still swaps onto it through the normal pool.)
-  target=$(_swap_target "$id" "$wrapper" "$home")
+  # Classify BEFORE picking a target, and pass the verdict in as `force`: a
+  # hard block (limit/spend banner, OR lost auth) must win over telemetry that
+  # says the wrapper is fine. Rate limits write cc-limits, so a 429 already
+  # makes _avail fail on its own — but auth loss writes NO telemetry (nothing
+  # marks cc-limits on a 401), so on a session sitting on its home account
+  # (the fleet's steady state) `_swap_target`'s own "home is fine: stay"
+  # shortcut would return empty before the auth patterns are ever reached,
+  # and the rescue below would never fire. `force` skips straight to the
+  # must-leave candidate loop so a hard block always finds a destination when
+  # one exists, regardless of what telemetry has to say about cur/home.
+  _pane_hard_blocked "$pane" && hard_blocked=1
+  target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked")
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
   # Hard-blocked (a real limit/spend banner is up, or auth was lost): the session is stuck
@@ -6459,7 +6480,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # ChatGPT-sub Codex usage cap (surfaces as "API Error: 429 ..."). When gpt is the exhausted
   # account, write a cc-limits/gpt.json exclusion so OTHER sessions stop rotating into it until
   # the 5h window rolls over (gpt has no native telemetry; this is its only "pool is full" signal).
-  if _pane_hard_blocked "$pane"; then
+  if [[ -n "$hard_blocked" ]]; then
     [[ "$wrapper" == gpt ]] && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/gpt.json"
     _reg_set "$id" lastswap "$now"
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
@@ -6585,7 +6606,9 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
     # short-circuit a healthy session or an unanswered gate. Only a pane that matches none of the
     # branches above reaches here, which is what a real (short, banner-only) login screen does.
     if _pane_login_screen "$pane"; then
-      echo "warn: session is waiting for login — attach and run /login" >&2
+      # No $id/$wrapper in scope here (this function only knows the tmux
+      # NAME) — the warning that names the account is _spawn's job, once this
+      # returns 2. Keep this function's own job pure: a verdict, not a report.
       return 2
     fi
     sleep 2
@@ -6620,6 +6643,10 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   tmux set-option -t "$tname" window-size latest 2>/dev/null
   local prompt_rc
   _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
+  # Code 2 means _accept_first_run_prompts stopped at a login screen: $id and $wrapper are
+  # only in scope HERE, not inside that function (which only knows the tmux name), so the
+  # operator-facing warning — naming both, spec §5 — is emitted from this side of the return.
+  [[ "$prompt_rc" == 2 ]] && echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2
   # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (GPT backend
   # doesn't take it and the injection would just error into the prompt box). Code 2 means
   # _accept_first_run_prompts stopped at a login screen — skip the same way: a synthesized

@@ -266,7 +266,10 @@ login method`, `Invalid API key`, `Please run /login`) as its **last**
 check, after every ready-marker and startup gate, and returns a distinct
 code instead of a silent success; `_spawn` skips the `/effort` injection on
 that code, so no synthesized keystroke reaches an auth prompt. Instead it
-warns: `session is waiting for login — attach and run /login`.
+warns, naming the session **and** the account (`_accept_first_run_prompts`
+only ever sees the tmux name, so `_spawn` is what emits this, once it has
+both back): `<id> is waiting for login on <wrapper> — attach and run
+/login`.
 
 Mid-session auth loss joins the same rescue lane a 429 uses: the
 hard-blocked pane grep that drives `_auto_swap_check`'s emergency swap now
