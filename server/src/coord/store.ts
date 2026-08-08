@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import {
-  isProgramState, isRunState, RUN_TRANSITIONS,
-  type CoordCaps, type MailKind, type MailRejectCode, type ProgramState,
+  isMailDeliveryState, isProgramState, isRunState, RUN_TRANSITIONS,
+  type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type ProgramState,
   type RunItemTally, type RunState, type RunSummary, type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -292,6 +292,46 @@ export class CoordStore {
     return { id: Number(res.lastInsertRowid) };
   }
 
+  /**
+   * `'coordinator'` is a ROLE, not a session id (Task 7's own docstring on the
+   * ingress route). With a `runId`, it is that run's own claim; with none, it
+   * is the claim of the ONE active program — ambiguous (more than one active
+   * program) or absent (no program is both active and claimed) both answer
+   * `null`, which the caller turns into `unknown-recipient`: "no guessing" —
+   * an agent-to-agent message delivered to the wrong session is worse than
+   * one refused with a reason.
+   *
+   * Mirrors `openRun`'s own one-coordinator guard query (`claimedBy IS NOT
+   * NULL ORDER BY id LIMIT 1`) rather than re-deriving a different rule for
+   * the same fact.
+   */
+  resolveCoordinator(runId: number | null): string | null {
+    if (runId !== null) {
+      const row = this.db.prepare('SELECT claimedBy FROM runs WHERE id = ?')
+        .get(runId) as { claimedBy: string | null } | undefined;
+      return row?.claimedBy ?? null;
+    }
+    const active = this.db.prepare("SELECT slug FROM programs WHERE state = 'active'")
+      .all() as { slug: string }[];
+    if (active.length !== 1) return null;   // no single active program: ambiguous or absent
+    const row = this.db.prepare(
+      'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
+    ).get(active[0]!.slug) as { claimedBy: string | null } | undefined;
+    return row?.claimedBy ?? null;
+  }
+
+  /** One delivery row by id, for the ack route: it must know who a delivery
+   *  is ADDRESSED TO before deciding whether the acking session may touch it
+   *  — `dueDeliveries` cannot answer that, it is scoped to what a SWEEP should
+   *  inject, not to one row by id. */
+  delivery(id: number): { id: number; mailId: number; toId: string; state: MailDeliveryState } | null {
+    const row = this.db.prepare('SELECT id, mailId, toId, state FROM mail_deliveries WHERE id = ?')
+      .get(id) as { id: number; mailId: number; toId: string; state: string } | undefined;
+    if (!row) return null;
+    return { id: row.id, mailId: row.mailId, toId: row.toId,
+             state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
+  }
+
   queueDelivery(mailId: number, toId: string, envelope: string): { id: number } {
     const res = this.db.prepare(
       'INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)',
@@ -378,6 +418,25 @@ export class CoordStore {
       'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), r.code, r.fromId ?? null, r.fromUuid ?? null, r.toId ?? null, r.runId ?? null,
       r.kind ?? null, r.subject ?? null, r.detail ?? null);
+  }
+
+  /** Every recorded rejection, oldest first — spec:147-148's "a rejected
+   *  message is a fact about the fleet" needs a row, not necessarily a
+   *  reader; this file's own tests are today's only consumer (PR J's feed is
+   *  the eventual one). `code` stays a raw `string`: `mail_rejections.code`
+   *  is not one of D-8's five we-do-not-know columns (it is written only from
+   *  a typed `MailRejectCode` today, but nothing here re-validates it — the
+   *  same honesty `RunRowDb`'s comment gives every OTHER column that IS
+   *  guarded, stated instead of silently cast). */
+  rejections(): { id: number; at: number; code: string; fromId: string | null; fromUuid: string | null;
+                 toId: string | null; runId: number | null; kind: string | null; subject: string | null;
+                 detail: string | null }[] {
+    return this.db.prepare(
+      'SELECT id, at, code, fromId, fromUuid, toId, runId, kind, subject, detail ' +
+      'FROM mail_rejections ORDER BY id',
+    ).all() as { id: number; at: number; code: string; fromId: string | null; fromUuid: string | null;
+                 toId: string | null; runId: number | null; kind: string | null; subject: string | null;
+                 detail: string | null }[];
   }
 
   // ── disaster recovery (spec:82-85) ─────────────────────────────────────────

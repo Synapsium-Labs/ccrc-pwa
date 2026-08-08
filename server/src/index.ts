@@ -13,6 +13,8 @@ import { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { KeyedQueue } from './inject/queue.js';
 import { readMailToken } from './coord/token.js';
+import { openCoordDb } from './coord/db.js';
+import { CoordStore } from './coord/store.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -37,6 +39,14 @@ if (mailToken === null) {
     'accept unauthenticated callers. Ship one with deploy.sh (see deploy/ccrc-mail.token.example).');
 }
 
+// Opened at the root, before the watcher: a database that cannot be migrated
+// must stop the process, not be discovered by the first sweep that touches
+// it. The throw is deliberately uncaught — `deploy.sh`'s `verify-service.sh
+// ccrc.service` (added this build) is what turns it into a failed deploy with
+// the journal tail attached, rather than a green deploy in front of a
+// three-second crash loop.
+const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
+
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
@@ -55,13 +65,13 @@ if (cfg.fleetMode === 'remote') {
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
     cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
-    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
   deps = {
     cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
-    spawnPty: attachPty, push, notifyLog, presence, queue, mailToken,
+    spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
   };
 }
 

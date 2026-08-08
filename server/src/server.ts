@@ -31,6 +31,8 @@ import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
+import { registerCoordRoutes } from './coord/routes.js';
+import type { CoordStore } from './coord/store.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
   type AccountUsage, type FleetMsg, type FleetSession, type SessionClientMsg, type SessionStreamMsg, type TaskItem,
@@ -106,6 +108,11 @@ export interface Deps {
    *  way `queue` refuses to be — there is no fallback here that could quietly
    *  construct a second, different token. */
   mailToken?: string | null;
+  /** The coordination database (Build 7). Optional exactly like `push` and
+   *  `notifyLog`: absent means the coord routes answer 501 and the mail lane
+   *  never runs, which is what a box with no coordination configured should
+   *  do. */
+  coord?: CoordStore;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -298,6 +305,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (swap) bus.emit(`session:${swap[1]}`, { type: 'notice', message });
     return { ok: true };
   });
+
+  // Build 7 coordination: mail ingress + ack (this build) and run routes
+  // (Task 9) — registered from their own module because six-plus routes
+  // sharing one token+attribution gate inline here would be a second copy of
+  // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
+  // the same shape as the push routes and `/api/notifications/catchup` above.
+  registerCoordRoutes(app, deps, bus);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
