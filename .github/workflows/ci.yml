@@ -28,6 +28,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
+          # Above the engines floor in server/agent/pwa package.json
+          # (>=22.13.0, where node:sqlite stopped needing --experimental-sqlite).
+          # server/test/node-floor.test.ts asserts THIS interpreter satisfies it,
+          # so lowering either side turns that suite red rather than shipping a
+          # server that cannot open its own database.
           node-version: '22'
           cache: npm
           cache-dependency-path: ${{ matrix.package }}/package-lock.json
@@ -69,6 +74,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
+          # Above the engines floor in server/agent/pwa package.json
+          # (>=22.13.0, where node:sqlite stopped needing --experimental-sqlite).
+          # server/test/node-floor.test.ts asserts THIS interpreter satisfies it,
+          # so lowering either side turns that suite red rather than shipping a
+          # server that cannot open its own database.
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json

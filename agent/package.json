@@ -2,6 +2,7 @@
   "name": "ccrc-agent",
   "private": true,
   "type": "module",
+  "engines": { "node": ">=22.13.0" },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",

@@ -103,6 +103,8 @@ else
     && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ \
     && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc.service \
-    && systemctl --user restart ccrc.service && sleep 1 && curl -fsS '"$HEALTH_URL"
+    && systemctl --user restart ccrc.service \
+    && bash ~/ccrc/deploy/verify-service.sh ccrc.service \
+    && curl -fsS '"$HEALTH_URL"
   "${SSH[@]}" "$BOX" "$REMOTE_CMD"
 fi
