@@ -51,6 +51,24 @@ describe('readBranchTip', () => {
   it('answers null — never a guess — when neither exists', async () => {
     expect(await readBranchTip(localIO, project(null, null), 'demo', 'ws/quiet-mesa')).toBeNull();
   });
+  it('refuses a packed-refs line whose sha/ref-name column is off by one (finding 3, survived mutant 11)', async () => {
+    // A 41-hex sha — one character too many — shifts the space/ref-name
+    // column by one place: `.trim()` on `line.slice(41)` eats the single
+    // leading space and still lands on the exact target ref name, while
+    // `line.slice(0, 40)` still yields 40 valid-looking hex characters — a
+    // WRONG sha, missing its true last character. Only the column check
+    // (`line.length < 42 || line[40] !== ' '`) tells this apart from a
+    // genuine entry; without it this resolves to a real-looking but WRONG
+    // tip instead of null. Proven against the shipped body with that guard
+    // deleted: it returns the 41-'c' line's first 40 characters instead of
+    // null (scratchpad/columnprobe.mjs).
+    const root = mkTmp('ccrc-git-');
+    mkdirSync(path.join(root, 'demo', '.git'), { recursive: true });
+    const shiftedSha = 'c'.repeat(41);
+    writeFileSync(path.join(root, 'demo', '.git', 'packed-refs'),
+      `# pack-refs with: peeled fully-peeled sorted\n${shiftedSha} refs/heads/ws/quiet-mesa\n`);
+    expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBeNull();
+  });
   it('never falls through a PRESENT loose ref to a stale packed-refs entry (finding 5)', async () => {
     // A loose ref that IS readable but does not parse as a SHA — the shape a
     // symref (`ref: refs/heads/main`) has — must answer null, not whatever
@@ -228,6 +246,49 @@ describe('verifyDone — the mismatch table', () => {
     expect((res as { code: string; detail: string }).code).toBe('pr-regressed');
     expect((res as { code: string; detail: string }).detail)
       .toBe('the claim names PR #41, the branch is bound to #42');
+  });
+
+  it('rejects a claim that says merged against a branch the server measures as still open (finding 3, survived mutant 7)', async () => {
+    // `FIXED_CLAIM.prPhase` is `'open'` in every row of the table above, so
+    // `prVerdict`'s `claimed === 'merged' && measured !== 'merged'` arm never
+    // executes there — that table only ever drives the open/draft-vs-none
+    // arm and the unmeasurable arm. A worker that reported merged (a stale
+    // read, or a race with an in-flight `pr-state` refresh) against a branch
+    // the server re-measures as still open is exactly the regression this
+    // arm exists to catch, and must be refused rather than read as forward
+    // motion (`prVerdict`'s own docstring: "forward motion is not a
+    // mismatch" — but backward from a false "merged" is).
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const claim: DoneClaim = { ...FIXED_CLAIM, prPhase: 'merged' };
+    const res = await verifyDone(deps, RUN, claim);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('pr-regressed');
+  });
+
+  it('refuses pr-unmeasurable when pr-state exits 0 but names no full line for this session (finding 3, survived mutant 9)', async () => {
+    // `ccd pr-state --session <id>` can exit zero while the one line naming
+    // THIS session is a session-failure shape (`{id, phase:'unknown',
+    // reason}`, no `rows` array at all) rather than a full `CcdPrLine` — the
+    // shape `_pr_state_one` writes when the registry entry for this session
+    // has no bound branch (`prstate.ts`'s own `isFullLine` docstring: "the
+    // discriminator is `rows`, NOT `id`"). `runnerFor` above never produces
+    // this shape — every one of its rows carries `rows: []` or a bound row,
+    // which IS a full line — so this is the one case the mismatch table
+    // cannot carry: not "pr-state failed" (that is `res.ok === false`,
+    // pinned by the `pr: 'unknown'` row already) but "pr-state succeeded and
+    // said nothing usable about this session".
+    const root = project(TIP, null);
+    const noLineRunner: Runner = async () => ({
+      code: 0,
+      stdout: `${JSON.stringify({ id: SESSION, phase: 'unknown', reason: 'error' })}\n`,
+      stderr: '',
+    });
+    const deps = fingerprintDeps(noLineRunner, root);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string; detail: string }).code).toBe('pr-unmeasurable');
+    expect((res as { code: string; detail: string }).detail).toBe('pr-state answered no full line');
   });
 
   it('refuses pr-unmeasurable when the fleet host cannot answer pr-state at all (finding 3)', async () => {
