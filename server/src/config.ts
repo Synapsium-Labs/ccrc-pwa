@@ -23,6 +23,9 @@ export interface CcrcConfig {
   vapidPublic: string | null;
   vapidPrivate: string | null;
   vapidSubject: string;
+  /** The coordination database, on THIS box (see coord/db.ts). Overridable so
+   *  a test can point at a fixture home without exporting CCRC_HOME. */
+  coordDbPath: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
@@ -51,5 +54,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     vapidPublic: env.CCRC_VAPID_PUBLIC ?? null,
     vapidPrivate: env.CCRC_VAPID_PRIVATE ?? null,
     vapidSubject: env.CCRC_VAPID_SUBJECT ?? 'mailto:ccrc@server-box',
+    coordDbPath: env.CCRC_COORD_DB ?? path.join(home, '.ccrc', 'coord.db'),
   };
 }
