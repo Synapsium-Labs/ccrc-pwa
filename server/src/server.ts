@@ -30,6 +30,7 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
+import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
   type AccountUsage, type FleetMsg, type FleetSession, type SessionClientMsg, type SessionStreamMsg, type TaskItem,
@@ -99,6 +100,12 @@ export interface Deps {
   /** Which sessions a human is currently looking at, so `FleetWatcher` can
    *  suppress a push for the pane already on screen. */
   presence?: Presence;
+  /** The box token every fleet->server POST must carry (coord/token.ts).
+   *  Optional the same way `push`/`notifyLog` are: a box with none configured
+   *  keeps working, unauthenticated, and says so once at boot. NOT optional the
+   *  way `queue` refuses to be — there is no fallback here that could quietly
+   *  construct a second, different token. */
+  mailToken?: string | null;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -256,7 +263,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // Swap-notice ingestion: ccd's ~/.cc-sessions/notify.sh hook POSTs here.
   // Every notice fans out fleet-wide; a `cc swap:` message also targets the
   // moved session's stream so its chat surfaces the account change inline.
+  //
+  // AUTHENTICATED SINCE BUILD 7 (operator ruling, spec:150-155). This was the
+  // one box->server ingress carrying zero identity while the server
+  // regex-routed its body INTO a session's chat stream — see `checkMailToken`
+  // for the one-deploy-generation tolerance and for when it comes out.
   app.post('/api/notify', async (req, reply) => {
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    if (verdict === 'bad') return reply.code(401).send({ ok: false, error: 'unauthenticated' });
+    if (verdict === 'legacy') {
+      console.warn('ccrc-server: /api/notify accepted a request with NO box token (legacy ' +
+        'tolerance, one deploy generation) — deploy the agent to ship the new notify.sh');
+    }
     const body = (req.body ?? {}) as { message?: unknown };
     if (typeof body.message !== 'string') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });

@@ -36,6 +36,20 @@ ship_env() {
   fi
 }
 
+# One local, gitignored token file -> BOTH boxes, so the two copies of the one
+# secret are equal by construction rather than by someone remembering. The
+# server reads its copy at boot (coord/token.ts); the fleet host's copy is what
+# notify.sh and every coordinator/worker session present.
+ship_secret() {
+  local local_file="deploy/$1" remote_dir="$2" remote_name="$3"
+  if [ -f "$local_file" ]; then
+    echo "shipping $local_file -> $BOX:$remote_dir/$remote_name"
+    "${SSH[@]}" "$BOX" "mkdir -p $remote_dir && chmod 700 $remote_dir"
+    "${SCP[@]}" "$local_file" "$BOX:$remote_dir/$remote_name"
+    "${SSH[@]}" "$BOX" "chmod 600 $remote_dir/$remote_name"
+  fi
+}
+
 if [ "$TARGET" = "agent" ]; then
   # Back up what the previous deploy left before rsync --delete rewrites it,
   # and before ccd/notify.sh/session-hook.sh are overwritten. cp -a keeps
@@ -51,6 +65,7 @@ if [ "$TARGET" = "agent" ]; then
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     agent shared deploy "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
+  ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token
   # ccd installs BEFORE the agent restart, never after: the agent caches
   # `ccd caps` at boot (the 113-second lesson), so an agent restarted against
   # yesterday's ccd pins yesterday's verb set until someone restarts it again.
@@ -105,6 +120,7 @@ else
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     server shared deploy "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
+  ship_secret ccrc-mail.token '~/.ccrc' mail.token
   # verify-service.sh here closes the same crash-loop gap it closes on the
   # agent path above (see that chain's comment) — a restart that "succeeds"
   # the moment systemd forks, then dies every RestartSec. The curl AFTER it

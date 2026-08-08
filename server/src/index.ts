@@ -12,6 +12,7 @@ import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { KeyedQueue } from './inject/queue.js';
+import { readMailToken } from './coord/token.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -29,6 +30,12 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
 // wired. Same directory as the push subscription store.
 const notifyLog = new NotifyLog(path.join(cfg.home, '.ccrc', 'notify-log.json'));
 const presence = new Presence();
+
+const mailToken = readMailToken(cfg.mailTokenPath);
+if (mailToken === null) {
+  console.warn(`ccrc-server: no box token at ${cfg.mailTokenPath} — /api/notify and /api/mail ` +
+    'accept unauthenticated callers. Ship one with deploy.sh (see deploy/ccrc-mail.token.example).');
+}
 
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
@@ -48,13 +55,13 @@ if (cfg.fleetMode === 'remote') {
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
     cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
-    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
   deps = {
     cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
-    spawnPty: attachPty, push, notifyLog, presence, queue,
+    spawnPty: attachPty, push, notifyLog, presence, queue, mailToken,
   };
 }
 
