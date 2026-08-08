@@ -144,18 +144,23 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               noticeSeq += 1;
               const notice: FleetNotice = { id: noticeSeq, message: msg.message };
               set((s) => ({ notices: [...s.notices, notice] }));
-            } else {
-              // hello: the server's own protocol generation, restated on
-              // every connect including reconnects. Blocking requires
-              // POSITIVE evidence (min > this build's own PROTO) — the
-              // absence-permits rule this pair shares with verbSupported.
-              // Fires the update check only on the RISING edge (newly
-              // blocked), not on every hello a still-blocked client keeps
-              // receiving from a server it cannot talk to yet.
+            } else if (msg.type === 'hello') {
+              // the server's own protocol generation, restated on every
+              // connect including reconnects. Blocking requires POSITIVE
+              // evidence (min > this build's own PROTO) — the absence-permits
+              // rule this pair shares with verbSupported. Fires the update
+              // check only on the RISING edge (newly blocked), not on every
+              // hello a still-blocked client keeps receiving from a server it
+              // cannot talk to yet.
               const blocked = msg.min > FLEET_PROTO;
               if (blocked && !get().blocked) requestUpdate();
               set({ blocked });
             }
+            // else: `runs` (Build 7). This store gains its arm in the task
+            // that lands the run board (docs/superpowers/plans/2026-08-08-
+            // build7-core.md Task 10) — until then an already-deployed PWA
+            // drops the frame silently, which is the additive-wire contract
+            // FleetMsg's own docstring states.
           },
           onState: (conn) => set({ conn }),
           onOpen: askCatchUp,

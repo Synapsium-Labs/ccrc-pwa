@@ -1,0 +1,123 @@
+// The store is where a run's authority lives. Three things are worth a test
+// each: a transition the machine does not allow is REFUSED (not silently
+// applied), every transition that IS allowed writes who caused it, and the caps
+// are counts of rows rather than a second copy of a number.
+//
+// Plus the reconstruction drill spec:82-85 requires: a program is rebuildable
+// from the ledger + the registry + .prhistory after the database is LOST.
+import { describe, it, expect } from 'vitest';
+import path from 'node:path';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const store = (): CoordStore =>
+  new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+
+const openRun = (s: CoordStore, over: Partial<Parameters<CoordStore['openRun']>[0]> = {}) =>
+  s.openRun({ program: 'build4', title: 'Transcript surface', project: 'ccrc-pwa',
+              wave: 1, waveOf: 5, claimedBy: 'ccrc-pwa-coordinator', ...over });
+
+describe('CoordStore: runs', () => {
+  it('opens a run in `planned`, minting the program row once', () => {
+    const s = store();
+    // `openRun` returns `OpenRunResult`, a union with the refusal arm — narrow
+    // before reading `.state`/`.program`, the same pattern every later
+    // assertion in this file uses for its own `{ id: number }` cast. The
+    // plan's own draft accessed these fields unnarrowed; `test/typecheck-
+    // tests.test.ts` (a stricter, tests-inclusive tsc project the top-level
+    // `tsc --noEmit` run does not cover) is what caught it.
+    const a = openRun(s) as { id: number; program: string; state: string };
+    expect(a.state).toBe('planned');
+    const b = openRun(s, { wave: 2 }) as { id: number; program: string; state: string };
+    expect(b.program).toBe('build4');
+    expect(s.programs().length).toBe(1);          // second open reuses the slug
+  });
+
+  it('refuses a second coordinator rather than arbitrating', () => {
+    // spec:291-292 — one coordinator per program; `claimedBy` exists so a
+    // second one REFUSES.
+    const s = store();
+    openRun(s);
+    expect(openRun(s, { wave: 2, claimedBy: 'ccrc-pwa-other' }))
+      .toMatchObject({ refused: 'claimed-by-another' });
+  });
+
+  it('records who caused every transition, and refuses one the machine forbids', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    expect(s.advance(r.id, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(r.id, 'working', 'ccrc-pwa-quiet-mesa')).toMatchObject({ ok: true });
+    // planned is not reachable from working — and the run is UNCHANGED.
+    expect(s.advance(r.id, 'planned', 'operator'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'working', to: 'planned' });
+    expect(s.run(r.id)!.state).toBe('working');
+    expect(s.runEvents(r.id).map((e) => [e.fromState, e.toState, e.causedBy])).toEqual([
+      ['planned', 'dispatched', 'coordinator'],
+      ['dispatched', 'working', 'ccrc-pwa-quiet-mesa'],
+    ]);
+  });
+
+  it('reads a state token this build does not know as `unknown`, never as a raw string', () => {
+    // The designated we-do-not-know member (spec:77), the same shape PrPhase's
+    // 'unchecked' already has (registry.ts:133-140). Written by a NEWER build.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('reconciling', r.id);
+    expect(s.run(r.id)!.state).toBe('unknown');
+  });
+});
+
+describe('CoordStore: caps', () => {
+  it('counts running runs and 24h dispatches from the rows, not from a counter', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    const b = openRun(s, { wave: 2 }) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    s.markDispatched(b.id, 'ccrc-pwa-still-fen', 'still-fen', 'ws/still-fen', true, now - 25 * 3600_000);
+    expect(s.capsUsage(now)).toEqual({ running: 2, dispatchedIn24h: 1 });
+    expect(s.caps()).toEqual({ maxConcurrentWorkers: 3, maxSessionsPerDay: 12 });
+  });
+});
+
+describe('CoordStore: work items', () => {
+  it('tallies done/total per run without ever calling them tasks', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const one = s.addWorkItem(r.id, 'implement the reader', []);
+    s.addWorkItem(r.id, 'review it', [one.id]);
+    expect(s.itemTally(r.id)).toEqual({ done: 0, total: 2 });
+    s.setWorkItemState(one.id, 'done', 'ccrc-pwa-quiet-mesa');
+    expect(s.itemTally(r.id)).toEqual({ done: 1, total: 2 });
+  });
+});
+
+describe('the disaster-recovery path (spec:82-85)', () => {
+  it('reconstructs a representative program from the ledger, the registry and .prhistory', () => {
+    // The DATABASE IS THE ONE THING NOT AVAILABLE. This drill proves the three
+    // surviving artefacts carry enough: the ledger names the program and its
+    // waves, the registry names the workspace/branch/hold, and .prhistory names
+    // the PR lineage. It asserts the REBUILT run rows, so a future column that
+    // cannot be reconstructed fails here and has to justify itself.
+    const s = store();
+    const rebuilt = s.reconstruct({
+      ledger: {
+        slug: 'build4', title: 'Transcript surface',
+        waves: [{ wave: 1, of: 5, handoffCommit: 'a'.repeat(40) }, { wave: 2, of: 5, handoffCommit: null }],
+      },
+      registry: { sessionId: 'ccrc-pwa-quiet-mesa', project: 'ccrc-pwa',
+                  workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+                  held: 'program:build4 wave:2/5' },
+      prHistory: [{ pr: 31, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 }],
+    });
+    expect(rebuilt.map((r) => [r.wave, r.state, r.handoffCommit])).toEqual([
+      [1, 'done', 'a'.repeat(40)],
+      [2, 'working', null],
+    ]);
+    expect(s.run(rebuilt[1]!.id)!.prLineage).toEqual([]);       // wave 2 has retired no PR yet
+    expect(s.run(rebuilt[0]!.id)!.prLineage).toEqual([
+      { pr: 31, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 },
+    ]);
+  });
+});

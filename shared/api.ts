@@ -1167,7 +1167,11 @@ export interface ProjectedHome {
 export type FleetMsg =
   | { type: 'hello'; proto: number; min: number }
   | { type: 'fleet'; sessions: FleetSession[] }
-  | { type: 'notice'; message: string };
+  | { type: 'notice'; message: string }
+  /** Build 7. ADDITIVE, so no FLEET_PROTO bump: an already-deployed PWA drops
+   *  an unknown frame type silently (`pwa/src/stores/fleet.ts:54-73`), which is
+   *  the one-way new-writer/old-reader rule this file states at :560-566. */
+  | { type: 'runs'; runs: RunSummary[] };
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */
@@ -1318,6 +1322,193 @@ export interface NotifyEvent {
  *  to drop its watermark and trust the fleet snapshot, never to fabricate
  *  badges for events it cannot enumerate. */
 export interface CatchUp { epoch: string; seq: number; resync: boolean; events: NotifyEvent[] }
+
+// ── Build 7: coordination ────────────────────────────────────────────────────
+// The nouns, once, in the one module all four source roots import.
+// `TaskItem`/`TaskProgress`/`tasks` above are Claude Code's TodoWrite plan
+// items and have NOTHING to do with programs; the unit here is a WorkItem, its
+// table is `work_items`, and the wire tally is `items` — never `tasks`.
+// `single-definition.test.ts` holds that line, because a comment is a request
+// and a red suite is a mechanism.
+
+/** One wave of a program in one workspace: dispatch -> work -> PRs -> handoff
+ *  commit -> close.
+ *
+ *  `'unknown'` is the designated we-do-not-know member (spec:77) and is NEVER
+ *  WRITTEN: it is what a row from a newer build reads as, exactly the way
+ *  `PrPhase`'s `'unchecked'` degrades (`server/src/registry.ts:133-140`). A
+ *  state this build does not know must never reach a `switch` as a raw string
+ *  and render as nothing. */
+export type RunState =
+  | 'planned' | 'dispatched' | 'working' | 'awaiting-review'
+  | 'merging' | 'closing' | 'done' | 'failed' | 'unknown';
+
+/** The runtime list. Exported (the plan's own task-3 "Produces (shared)" list
+ *  names it, even though the plan's illustrative code block left it as a
+ *  module-private `const` — `CoordStore`'s tests and, later, PR J's renderer
+ *  both need to walk the full state space, and a second, module-private copy
+ *  is exactly the drift this file's other enums (`PR_REASONS`, `PR_PHASES`)
+ *  exist to prevent). */
+export const RUN_STATES: readonly RunState[] = [
+  'planned', 'dispatched', 'working', 'awaiting-review',
+  'merging', 'closing', 'done', 'failed', 'unknown',
+];
+
+/** Use THIS, never `RUN_STATES.includes(x as RunState)` — the same rule, for
+ *  the same reason, as `isPrPhase` (see its docstring: the array's element type
+ *  forces a caller to assert the very thing it is asking). */
+export function isRunState(v: unknown): v is RunState {
+  return typeof v === 'string' && (RUN_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * The machine. A transition absent from this table is REFUSED, and the refusal
+ * is an answer the caller reads — never a silent no-op, and never an
+ * unconditional write.
+ *
+ * `working` is reachable from `awaiting-review` and `merging` on purpose: a
+ * review that sends work back, or a merge that loses a race, is the ordinary
+ * case and not a failure. `failed` is reachable from everything that is not
+ * already terminal. `unknown` is not in the table at all — nothing transitions
+ * to or from a state this build cannot name.
+ */
+export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned:           ['dispatched', 'failed'],
+  dispatched:        ['working', 'failed'],
+  working:           ['awaiting-review', 'failed'],
+  'awaiting-review': ['merging', 'working', 'failed'],
+  merging:           ['closing', 'working', 'failed'],
+  closing:           ['done', 'failed'],
+  done:              [],
+  failed:            [],
+  unknown:           [],
+});
+
+/** A unit inside a run. `'unknown'` is the we-do-not-know member, as above. */
+export type WorkItemState = 'pending' | 'claimed' | 'done' | 'failed' | 'abandoned' | 'unknown';
+const WORK_ITEM_STATES: readonly WorkItemState[] =
+  ['pending', 'claimed', 'done', 'failed', 'abandoned', 'unknown'];
+export function isWorkItemState(v: unknown): v is WorkItemState {
+  return typeof v === 'string' && (WORK_ITEM_STATES as readonly string[]).includes(v);
+}
+
+/** A program's own lifecycle (`programs.state`) — `docs/superpowers/programs/
+ *  <slug>.md`'s machine-readable shadow. Deviation D-8: `schema.ts`'s header
+ *  comment originally claimed blanket we-do-not-know coverage for every v1
+ *  enum column, and this was one of the two it did not actually give one to.
+ *  Closed here, on the READ side, rather than reproduced on the wire —
+ *  `CoordStore.programs()` reads through `isProgramState`, never a cast. */
+export type ProgramState = 'active' | 'paused' | 'done' | 'abandoned' | 'unknown';
+const PROGRAM_STATES: readonly ProgramState[] = ['active', 'paused', 'done', 'abandoned', 'unknown'];
+export function isProgramState(v: unknown): v is ProgramState {
+  return typeof v === 'string' && (PROGRAM_STATES as readonly string[]).includes(v);
+}
+
+/** An agent-to-agent message. `artifact` carries PATHS, NEVER PAYLOADS
+ *  (spec:52-53). `'unknown'` is the read-side degradation member and is never
+ *  accepted at ingress — `bad-kind` is what an unrecognised kind gets there. */
+export type MailKind = 'finding' | 'question' | 'answer' | 'status' | 'artifact' | 'unknown';
+export const MAIL_KINDS: readonly MailKind[] =
+  ['finding', 'question', 'answer', 'status', 'artifact', 'unknown'];
+export function isMailKind(v: unknown): v is MailKind {
+  return typeof v === 'string' && (MAIL_KINDS as readonly string[]).includes(v);
+}
+/** The kinds an INGRESS may name. `unknown` is deliberately excluded: a sender
+ *  cannot ask for the we-do-not-know bucket. */
+export function isSendableMailKind(v: unknown): v is Exclude<MailKind, 'unknown'> {
+  return isMailKind(v) && v !== 'unknown';
+}
+
+/** `mail_deliveries.state` — the other of D-8's two exempt columns. The wire
+ *  type it feeds (`MailSummary.state` below) gets the same guard/`'unknown'`-
+ *  member shape `RunState`/`WorkItemState`/`ProgramState` already have, rather
+ *  than the closed four-member union the plan's own draft carried. */
+export type MailDeliveryState = 'queued' | 'delivered' | 'acked' | 'rejected' | 'unknown';
+const MAIL_DELIVERY_STATES: readonly MailDeliveryState[] =
+  ['queued', 'delivered', 'acked', 'rejected', 'unknown'];
+export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
+  return typeof v === 'string' && (MAIL_DELIVERY_STATES as readonly string[]).includes(v);
+}
+
+/** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
+ *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
+export const MAIL_BODY_MAX_BYTES = 8 * 1024;
+
+/**
+ * Every way the coordination layer can say no, enumerated in one place and
+ * pinned in BOTH directions by `mail-routes.test.ts` (every code here is
+ * emitted somewhere in `server/src/coord/`, and every code emitted there is
+ * here). Orca's rule, adopted: a stale `worker_done` can never settle a run,
+ * because the refusal is typed and the run state is unchanged.
+ *
+ * Groups, and they are not interchangeable:
+ *  - INGRESS (spec:145-147): the message never becomes a `mail` row.
+ *  - DELIVERY: the mail row is intact; only this delivery is parked.
+ *  - DONE-AUTHORITY (spec:127-132): the claim is rejected, the run is unchanged.
+ *
+ * `tip-unmeasurable`/`pr-unmeasurable` exist because NOT KNOWING IS NOT `[]` —
+ * ccd's own three-answer ladder (`ccd/ccd:2018-2035`). A fact the server could
+ * not re-measure must never read as a fact that matched.
+ */
+export const MAIL_REJECT_CODES = [
+  // ingress
+  'unauthenticated', 'unknown-sender', 'stale-uuid', 'unknown-recipient',
+  'unknown-run', 'oversize', 'bad-kind',
+  // delivery
+  'undeliverable',
+  // done-authority
+  'stale-tip', 'tip-unmeasurable', 'pr-regressed', 'pr-unmeasurable', 'no-handoff-commit',
+] as const;
+export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
+
+/** Work-item counts for one run. `items`, never `tasks` (D-7). */
+export interface RunItemTally { done: number; total: number }
+
+/** One run, as `/ws/fleet`'s `runs` frame and `GET /api/runs` carry it.
+ *  Deliberately flat and deliberately small: this rides the fleet socket
+ *  alongside a full session snapshot on every change. */
+export interface RunSummary {
+  id: number;
+  program: string;              // slug
+  programTitle: string;
+  wave: number;
+  waveOf: number | null;
+  project: string;
+  sessionId: string | null;
+  workspace: string | null;
+  branch: string | null;
+  state: RunState;
+  /** Deviation D-1: wave >= 2 resumes its session (no ccd verb can spawn
+   *  fresh into an existing workspace) and the dispatch route then injects
+   *  /clear through the send path, so the context is fresh even though the
+   *  pane was resumed. clearedAt below is the proof the second step ran. */
+  resumed: boolean;
+  clearedAt: number | null;
+  openedAt: number;
+  dispatchedAt: number | null;
+  closedAt: number | null;
+  handoffCommit: string | null;
+  items: RunItemTally;
+  /** Unacked mail addressed to this run's session. */
+  unreadMail: number;
+}
+
+/** One mail row, for the feed and the session strip (both PR J). */
+export interface MailSummary {
+  id: number;
+  at: number;
+  fromId: string;
+  toId: string;
+  runId: number | null;
+  kind: MailKind;
+  subject: string;
+  artifacts: string[];
+  state: MailDeliveryState;
+}
+
+/** The two enforced caps (spec:199-201). The two COUNTS are queries over
+ *  `runs`, never stored beside these — see `CoordStore.capsUsage`. */
+export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: number }
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */
