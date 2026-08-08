@@ -70,8 +70,16 @@ export class CoordStore {
     wave: number; waveOf: number | null; claimedBy: string;
   }): OpenRunResult {
     return tx(this.db, () => {
+      // `AND claimedBy IS NOT NULL` (deviation D-12, found in Task 3 review —
+      // the original query read the absolute first row regardless of whether
+      // it was ever claimed): `reconstruct` inserts every rebuilt run with
+      // `claimedBy` bound to NULL — it has no way to know who will resume the
+      // program — so without this clause the lowest-id row of a reconstructed
+      // program pinned the guard at NULL forever and a second coordinator was
+      // never refused. Skipping the unclaimed rows finds the first row a real
+      // `openRun` actually claimed, which is the one the refusal must read.
       const existing = this.db.prepare(
-        'SELECT claimedBy FROM runs WHERE program = ? ORDER BY id LIMIT 1',
+        'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
       ).get(input.program) as { claimedBy: string | null } | undefined;
       // spec:291-292: multi-coordinator arbitration is a NON-GOAL. A second
       // coordinator is refused, in words, rather than silently allowed to
@@ -229,8 +237,16 @@ export class CoordStore {
    * excuse for a second copy at all.
    */
   capsUsage(now: number = Date.now()): { running: number; dispatchedIn24h: number } {
+    // `dispatchedAt IS NOT NULL` (deviation D-13, found in Task 3 review):
+    // `state NOT IN ('done','failed')` alone also matched `planned` — the
+    // state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
+    // deliberately leaves a run in, with no session and no workspace. Three
+    // botched dispatches on one program would otherwise pin `running` at the
+    // default `maxConcurrentWorkers` forever. `dispatchedAt` is the one
+    // column only `markDispatched` ever sets, so it names the runs that
+    // actually hold a session rather than every non-terminal state.
     const running = (this.db.prepare(
-      "SELECT count(*) AS c FROM runs WHERE state NOT IN ('done','failed')",
+      "SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')",
     ).get() as { c: number }).c;
     const dispatchedIn24h = (this.db.prepare(
       'SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND dispatchedAt > ?',
@@ -279,13 +295,29 @@ export class CoordStore {
     return { id: Number(res.lastInsertRowid) };
   }
 
-  dueDeliveries(now: number): { id: number; mailId: number; toId: string; attempts: number;
-                                envelope: string; deliveredAt: number | null;
+  /**
+   * The due set for one sweep — two arms, not one (deviation, found in Task 3
+   * review — see the plan's D-10). Spec:174-177 requires replay: "Until
+   * acked, the delivery replays — verbatim, never re-rendered — on later
+   * sweeps after cooldown." Only the `queued` arm shipped originally —
+   * `markDelivered` moves a row OUT of `queued` and nothing ever moved it
+   * back, so an unacked delivery could never be re-selected once injected,
+   * which made replay-until-ack structurally impossible.
+   *
+   * `replayMs` is the caller's `MAIL_REPLAY_MS` (Task 8, `watch.ts`), passed
+   * in rather than owned here: this file stores rows, it does not own mail
+   * delivery POLICY — the same reason `capsUsage`/`markDispatched` take `now`
+   * from the caller instead of calling `Date.now()` internally.
+   */
+  dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
+                                attempts: number; envelope: string; deliveredAt: number | null;
                                 ingestedAt: number | null }[] {
     return this.db.prepare(
       'SELECT id, mailId, toId, attempts, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
-      "WHERE state = 'queued' AND nextAttemptAt <= ? ORDER BY id",
-    ).all(now) as { id: number; mailId: number; toId: string; attempts: number;
+      "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
+      "OR (state = 'delivered' AND COALESCE(ingestedAt, deliveredAt) + ? <= ?) " +
+      'ORDER BY id',
+    ).all(now, replayMs, now) as { id: number; mailId: number; toId: string; attempts: number;
                     envelope: string; deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
@@ -358,6 +390,20 @@ export class CoordStore {
    *    database. A wave that has not closed gets `[]`, and that is NOT a
    *    stand-in: nothing has folded into it yet (`ccd/ccd:2018-2035`'s
    *    three-answer ladder).
+   *
+   * A THIRD rule (deviation D-11, found in Task 3 review — the plan's own
+   * Step-4 rule 2, dropped on first landing): the LAST wave's state is read
+   * from the hold, not guessed from the ledger alone. A wave with no handoff
+   * commit is `working` ONLY while `registry.held` says the workspace is
+   * still claimed for it; if the hold is gone too, nothing backs a live
+   * session and calling it `working` would fabricate one — `spec:82-85`'s
+   * "nothing is invented" for the DB-lost path applies to the STATE column
+   * exactly as much as to any other field. Such a wave is `failed`: the
+   * honest "this did not complete and nothing is running it", not a silent
+   * default that also keeps counting against `capsUsage().running` forever.
+   * Every wave BEFORE the last one is expected to already carry a handoff
+   * commit (the ledger is append-only); the fallback below only ever matters
+   * for the last one.
    */
   reconstruct(input: {
     ledger: { slug: string; title: string;
@@ -376,10 +422,18 @@ export class CoordStore {
       const doneWaves = input.ledger.waves.filter((w) => w.handoffCommit !== null);
       const lastDoneWave = doneWaves.length > 0 ? doneWaves[doneWaves.length - 1] : null;
       const matchingLineage = input.prHistory.filter((e) => e.branch === input.registry.branch);
+      const lastWave = input.ledger.waves[input.ledger.waves.length - 1];
 
       const ids: number[] = [];
       for (const wave of input.ledger.waves) {
-        const state: RunState = wave.handoffCommit !== null ? 'done' : 'working';
+        // The hold-based rule (D-11, above) applies ONLY to the last wave; a
+        // done wave is always `done` regardless of position, matching the
+        // original formula for every wave that HAS a handoff commit.
+        const state: RunState = wave.handoffCommit !== null
+          ? 'done'
+          : wave === lastWave && input.registry.held === null
+            ? 'failed'
+            : 'working';
         const prLineage = wave === lastDoneWave ? matchingLineage : [];
         const res = this.db.prepare(
           'INSERT INTO runs (program, wave, waveOf, project, sessionId, workspace, branch, state, ' +

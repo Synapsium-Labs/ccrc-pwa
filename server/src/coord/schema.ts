@@ -120,6 +120,12 @@ export const MIGRATIONS: readonly string[] = [
     rejectCode    TEXT
   );
   CREATE INDEX mail_deliveries_due ON mail_deliveries(state, nextAttemptAt);
+  -- dueDeliveries's replay arm (deviation D-10, found in Task 3 review):
+  -- mail_deliveries_due above only ever covered the queued arm of that
+  -- query. Landed here, in v1, rather than a migration 2 -- coord.db has been
+  -- observed on no box yet (the same reasoning D-1's clearedAt amendment
+  -- already gives for widening v1 instead of adding a migration).
+  CREATE INDEX mail_deliveries_replay ON mail_deliveries(state, deliveredAt);
 
   CREATE TABLE mail_rejections (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,

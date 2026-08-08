@@ -1371,11 +1371,22 @@ export function isRunState(v: unknown): v is RunState {
  * case and not a failure. `failed` is reachable from everything that is not
  * already terminal. `unknown` is not in the table at all — nothing transitions
  * to or from a state this build cannot name.
+ *
+ * `dispatched` and `working` both reach `closing` directly (deviation, found
+ * in Task 3 review — see the plan's D-9). PR I never writes `awaiting-review`
+ * or `merging`: Task 9's dispatch route only ever advances a run to
+ * `dispatched`, and its close route immediately does `advance(id,'closing')`
+ * next — nothing in this PR walks a run through a review step first.
+ * `awaiting-review`/`merging` stay in the table for PR J's
+ * `POST /api/runs/:id/advance`, the operator-driven review step spec:126's
+ * "every transition records who caused it" anticipates; without the direct
+ * edges, every close Task 9 ships would 409 with `bad-transition` the first
+ * time it ran.
  */
 export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
   planned:           ['dispatched', 'failed'],
-  dispatched:        ['working', 'failed'],
-  working:           ['awaiting-review', 'failed'],
+  dispatched:        ['working', 'closing', 'failed'],
+  working:           ['awaiting-review', 'closing', 'failed'],
   'awaiting-review': ['merging', 'working', 'failed'],
   merging:           ['closing', 'working', 'failed'],
   closing:           ['done', 'failed'],
