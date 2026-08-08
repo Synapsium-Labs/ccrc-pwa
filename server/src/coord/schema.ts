@@ -2,12 +2,20 @@
  * The v1 DDL, and the ONLY place a migration is written.
  *
  * COLUMNS ARE ADDITIVE-ONLY (spec:77). A column is never repurposed and never
- * dropped; nullable means "an older build lacked it". Every enum column has a
- * designated we-do-not-know member on the READ side (`shared/api.ts`'s
- * `RunState`/`WorkItemState`/`MailKind` each carry one), so a token written by
- * a newer build lands somewhere honest instead of being switched on and
- * rendered as nothing — `PrPhase`'s `'unchecked'` is the precedent
- * (`server/src/registry.ts:133-140`).
+ * dropped; nullable means "an older build lacked it".
+ *
+ * THREE of this file's five enum columns have a designated we-do-not-know
+ * member on the READ side (`shared/api.ts`'s `RunState`/`WorkItemState`/
+ * `MailKind`, landing in Task 3), so a token written by a newer build lands
+ * somewhere honest instead of being switched on and rendered as nothing —
+ * `PrPhase`'s `'unchecked'` is the precedent (`server/src/registry.ts:133-140`).
+ * `programs.state` and `mail_deliveries.state` are NOT among the three: Task
+ * 3's plan currently reads them as raw strings (`programs()` returns `state:
+ * string`; `MailSummary.state` is a closed union with no `unknown` arm), which
+ * is the exact gap rule 2 above exists to close. This is not this task's
+ * column set to fix — `db.ts`/this file own storage, not the wire vocabulary
+ * — but whoever lands Task 3 must not copy that shape verbatim; see the
+ * plan's deviation D-8.
  *
  * `run_events` and `mail_rejections` are NOT in spec:106-117's six-table list.
  * They are forced by two of the spec's own sentences: "Every transition records
@@ -27,7 +35,9 @@ export const MIGRATIONS: readonly string[] = [
     slug       TEXT PRIMARY KEY,
     title      TEXT NOT NULL,
     createdAt  INTEGER NOT NULL,
-    state      TEXT NOT NULL              -- active|paused|done|abandoned
+    state      TEXT NOT NULL              -- active|paused|done|abandoned (no we-do-not-know
+                                           -- member yet on the read side — D-8; not this table's
+                                           -- fix, Task 3's)
   );
 
   CREATE TABLE runs (
@@ -90,7 +100,9 @@ export const MIGRATIONS: readonly string[] = [
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     mailId        INTEGER NOT NULL REFERENCES mail(id),
     toId          TEXT NOT NULL,          -- the resolved SESSION id
-    state         TEXT NOT NULL,          -- queued|delivered|acked|rejected
+    state         TEXT NOT NULL,          -- queued|delivered|acked|rejected (same D-8 gap: the
+                                           -- wire type MailSummary.state currently has no
+                                           -- 'unknown' arm)
     attempts      INTEGER NOT NULL DEFAULT 0,
     nextAttemptAt INTEGER NOT NULL DEFAULT 0,
     -- The rendered envelope, stored at QUEUE time. spec:174-177 requires a

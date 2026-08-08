@@ -13,6 +13,16 @@ describe('loadConfig', () => {
     expect(cfg.host).toBe('127.0.0.1');
     expect(cfg.port).toBe(7788);
   });
+
+  it('derives coordDbPath from CCRC_HOME by default, and honours CCRC_COORD_DB as an override', () => {
+    // The precedent this pins is `fleetstate.test.ts`'s `defaultCachePath`
+    // check: without an assertion HERE, a rename in `defaultCoordDbPath` (or a
+    // typo in the `CCRC_COORD_DB` key) goes green everywhere — no test imports
+    // the helper and none asserts `cfg.coordDbPath`.
+    expect(loadConfig({ CCRC_HOME: '/fake/home' }).coordDbPath).toBe('/fake/home/.ccrc/coord.db');
+    expect(loadConfig({ CCRC_HOME: '/fake/home', CCRC_COORD_DB: '/elsewhere/coord.db' }).coordDbPath)
+      .toBe('/elsewhere/coord.db');
+  });
   it('honours env overrides', () => {
     const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_HOST: '203.0.113.7', CCRC_PORT: '9000', CCRC_PROJECTS_ROOT: '/data/projects' });
     expect(cfg.host).toBe('203.0.113.7');

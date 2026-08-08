@@ -1,5 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
+import { defaultCoordDbPath } from './coord/db.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -54,6 +55,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     vapidPublic: env.CCRC_VAPID_PUBLIC ?? null,
     vapidPrivate: env.CCRC_VAPID_PRIVATE ?? null,
     vapidSubject: env.CCRC_VAPID_SUBJECT ?? 'mailto:ccrc@server-box',
-    coordDbPath: env.CCRC_COORD_DB ?? path.join(home, '.ccrc', 'coord.db'),
+    // `defaultCoordDbPath`, not a second inline `path.join` — the same string
+    // built twice, once tested and once not, is how a rename in one place
+    // silently opens a different (or brand-new, empty) database in the other.
+    coordDbPath: env.CCRC_COORD_DB ?? defaultCoordDbPath(home),
   };
 }
