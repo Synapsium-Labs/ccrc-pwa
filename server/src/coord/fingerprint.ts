@@ -1,16 +1,24 @@
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor } from '../prstate.js';
+import { readRegistry } from '../registry.js';
 import { readBranchTip } from './gitref.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { Deps } from '../server.js';
-import type { MailRejectCode, PrPhase } from '../../../shared/api.js';
+import { isPrPhase, type MailRejectCode, type PrPhase } from '../../../shared/api.js';
 
 const SHA = /^[0-9a-f]{40}$/;
 
 /** What a `worker_done` claims (mail kind `status`, subject `wave-done` —
- *  spec:127-129). Every field is UNTRUSTED input off an HTTP body. */
+ *  spec:127-129). Every field is UNTRUSTED input off an HTTP body, and the
+ *  `PrPhase` annotation on `prPhase` is a TYPE, not a runtime guarantee: the
+ *  route that builds this from JSON has no parse step named anywhere in the
+ *  plan, so a body that omits the field, or spells it in a vocabulary an
+ *  older/newer build used, arrives here as `undefined` or a bare string
+ *  wearing this annotation. `verifyDone` validates both `prPhase` and
+ *  `prNumber` itself, the same way it already validates `branchTip` and
+ *  `handoffCommit` — `isPrPhase` is the only door (`shared/api.ts:263`). */
 export interface DoneClaim {
   branchTip: string;
   prNumber: number | null;
@@ -34,6 +42,16 @@ export type DoneVerdict =
  *  the `verbSupported(` call two lines below it. Naming the types keeps the
  *  signature, params and return type on one line. */
 export interface VerifyDoneDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState }
+/** `branch` here is a FALLBACK, not the measurement: `verifyDone` resolves the
+ *  branch to re-measure against from the LIVE registry, keyed on `sessionId`,
+ *  and falls back to this field only when that registry row is gone entirely.
+ *  `DoneRun` reads field-for-field like the `runs` row it is usually built
+ *  from (`RunRow`, `store.ts:40`) — but `runs.branch` is written exactly once,
+ *  by `markDispatched` at dispatch time, and `FleetWatcher.sweepNames`
+ *  (`watch.ts:543-610`) renames the registry's branch autonomously, on the
+ *  ordinary path, strictly before the first push — i.e. before any
+ *  `worker_done` this claim could be. Do not read this type as "the run's
+ *  branch"; it is "the run's branch, if the registry has forgotten it". */
 export interface DoneRun { sessionId: string; project: string; branch: string }
 
 /**
@@ -61,7 +79,10 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
  *
  * WHAT IS RE-MEASURED, AND WHAT IS NOT (deviation D-2, stated here because this
  * is where a future reader will look for the guarantee):
- *  - `branchTip` — measured, from git's own ref files (`gitref.ts`).
+ *  - `branchTip` — measured, from git's own ref files (`gitref.ts`), against
+ *    the branch the LIVE REGISTRY names for this session, not `run.branch`
+ *    (see `DoneRun`'s own docstring — `run.branch` is a stale DB column on the
+ *    ordinary path, once `sweepNames` has renamed the workspace).
  *  - `prNumber`/`prPhase` — measured, through `ccd pr-state --session`, the
  *    same verb and the same parser the PR lane already uses. Never `gh`: there
  *    is no `gh` key in the agent's whitelist and there must not be one
@@ -73,6 +94,13 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
  *    the commit is a real handoff is the coordinator's ordinary review of the
  *    diff — spec:246-252, "briefs are written prose reviewed like code". Do
  *    not let a later reader mistake this token for the stronger claim.
+ *
+ * The claim is UNTRUSTED (`DoneClaim`'s own docstring): `branchTip` and
+ * `handoffCommit` are validated below by the same `SHA` regex; `prPhase` and
+ * `prNumber` are validated the same way, through `isPrPhase` and a `typeof`
+ * check, before either fact is re-measured — never trusted off the wire on
+ * the strength of a TypeScript annotation the route's JSON parse cannot
+ * enforce.
  */
 export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: DoneClaim): Promise<DoneVerdict> {
   // Cheapest first, and it is also the one that needs no I/O: a claim whose own
@@ -82,15 +110,31 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
     return { ok: false, code: 'no-handoff-commit',
       detail: 'handoffCommit must be the 40-hex sha this same claim reports as branchTip' };
   }
+  // Still cheap, still no I/O: `prPhase`/`prNumber` are typed but never
+  // parsed anywhere between the HTTP body and here (no route exists yet in
+  // this PR, and Task 9's plan never names a parse step) — an omitted or
+  // out-of-vocabulary `prPhase`, or a non-number `prNumber`, must be refused
+  // here rather than fall through `prVerdict` unmatched and read as `ok`.
+  if (!isPrPhase(claim.prPhase) || (claim.prNumber !== null && typeof claim.prNumber !== 'number')) {
+    return { ok: false, code: 'pr-unmeasurable',
+      detail: 'prPhase must be a recognised PrPhase and prNumber must be a number or null' };
+  }
 
-  const tip = await readBranchTip(deps.io, deps.cfg.projectsRoot, run.project, run.branch);
+  // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
+  // why the DB column cannot be trusted here. `record` is undefined for a run
+  // whose session the registry no longer carries at all (retired, purged); in
+  // that one case, and only that one, `run.branch` is the best answer left.
+  const record = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === run.sessionId);
+  const branch = record?.branch ?? run.branch;
+
+  const tip = await readBranchTip(deps.io, deps.cfg.projectsRoot, run.project, branch);
   if (tip === null) {
     return { ok: false, code: 'tip-unmeasurable',
-      detail: `no readable ref for ${run.branch} under ${run.project}` };
+      detail: `no readable ref for ${branch} under ${run.project}` };
   }
   if (tip !== claim.branchTip) {
     return { ok: false, code: 'stale-tip',
-      detail: `${run.branch} is at ${tip}, the claim says ${claim.branchTip}` };
+      detail: `${branch} is at ${tip}, the claim says ${claim.branchTip}` };
   }
 
   const argv = CCD_ARGV.prStateSession(run.sessionId);

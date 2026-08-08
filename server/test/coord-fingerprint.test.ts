@@ -17,13 +17,24 @@ import { mkTmp } from './tmpHelpers.js';
 const TIP = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 
-const project = (loose: string | null, packed: string | null): string => {
+const SESSION = 'demo-quiet-mesa';
+const PROJECT = 'demo';
+const BRANCH = 'ws/quiet-mesa';
+const BASE_SHORT = 'main';
+
+/** Builds `<root>/demo/.git` with a loose and/or packed ref for `branch`
+ *  (default `BRANCH`). Passing a different `branch` is how the registry-vs-
+ *  frozen-column tests below put the git fixture at the RENAMED name while
+ *  `RUN.branch` keeps the born one. */
+const project = (loose: string | null, packed: string | null, branch: string = BRANCH): string => {
   const root = mkTmp('ccrc-git-');
   const git = path.join(root, 'demo', '.git');
-  mkdirSync(path.join(git, 'refs', 'heads', 'ws'), { recursive: true });
-  if (loose !== null) writeFileSync(path.join(git, 'refs', 'heads', 'ws', 'quiet-mesa'), `${loose}\n`);
+  const segs = branch.split('/');
+  const file = segs.pop()!;
+  mkdirSync(path.join(git, 'refs', 'heads', ...segs), { recursive: true });
+  if (loose !== null) writeFileSync(path.join(git, 'refs', 'heads', ...segs, file), `${loose}\n`);
   if (packed !== null) writeFileSync(path.join(git, 'packed-refs'),
-    `# pack-refs with: peeled fully-peeled sorted\n${packed} refs/heads/ws/quiet-mesa\n`);
+    `# pack-refs with: peeled fully-peeled sorted\n${packed} refs/heads/${branch}\n`);
   return root;
 };
 
@@ -40,10 +51,65 @@ describe('readBranchTip', () => {
   it('answers null — never a guess — when neither exists', async () => {
     expect(await readBranchTip(localIO, project(null, null), 'demo', 'ws/quiet-mesa')).toBeNull();
   });
+  it('never falls through a PRESENT loose ref to a stale packed-refs entry (finding 5)', async () => {
+    // A loose ref that IS readable but does not parse as a SHA — the shape a
+    // symref (`ref: refs/heads/main`) has — must answer null, not whatever
+    // packed-refs says about the same name: git resolution SHADOWS packed
+    // with loose, it does not fall back through it. This fixture is exactly
+    // the "prefers the loose ref" one above with the loose content swapped
+    // for a symref string, which is the shape the old fall-through bug
+    // could not tell from "absent".
+    const root = mkTmp('ccrc-git-');
+    const git = path.join(root, 'demo', '.git');
+    mkdirSync(path.join(git, 'refs', 'heads', 'ws'), { recursive: true });
+    writeFileSync(path.join(git, 'refs', 'heads', 'ws', 'quiet-mesa'), 'ref: refs/heads/main\n');
+    writeFileSync(path.join(git, 'packed-refs'),
+      `# pack-refs with: peeled fully-peeled sorted\n${OTHER} refs/heads/ws/quiet-mesa\n`);
+    expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBeNull();
+  });
   it('refuses a branch name that could climb out of the ref tree', async () => {
     const root = project(TIP, null);
     for (const bad of ['../../../../etc/passwd', 'ws/../../x', 'ws/ x', '-x']) {
       expect(await readBranchTip(localIO, root, 'demo', bad)).toBeNull();
+    }
+  });
+  it('discriminates dropping the ".." guard alone — an escape, not just an absent file (finding 4)', async () => {
+    const root = project(TIP, null);
+    // Unguarded (or with only the `..` check removed, `BRANCH_OK` left
+    // intact), `ws/../../x` resolves to `<root>/demo/.git/refs/x` — inside
+    // this project's OWN `.git` but outside `refs/heads`. `BRANCH_OK` alone
+    // does NOT reject this string (every character is in its class and the
+    // first is alnum), so a decoy here is what actually distinguishes the
+    // guard working from the escape target simply not existing — which is
+    // all the four strings above prove, per the plan's own literal
+    // `readBranchTip: drop the ".." guard` mutant (plan:3056).
+    writeFileSync(path.join(root, 'demo', '.git', 'refs', 'x'), `${OTHER}\n`);
+    expect(await readBranchTip(localIO, root, 'demo', 'ws/../../x')).toBeNull();
+  });
+  it('discriminates dropping BOTH path guards — a real escape outside the project (finding 4)', async () => {
+    const root = project(TIP, null);
+    // Unguarded, `../../../../loot` resolves to `<root>/loot` — outside the
+    // project directory entirely, proving the WHOLE guard clause and not
+    // merely one half of it (`BRANCH_OK`'s leading-character rule alone
+    // already refuses this particular string, so this is the case that
+    // needs BOTH guards gone at once to reach the decoy).
+    writeFileSync(path.join(root, 'loot'), `${OTHER}\n`);
+    expect(await readBranchTip(localIO, root, 'demo', '../../../../loot')).toBeNull();
+  });
+  it('refuses a project name that could climb out of the projects root (finding 7)', async () => {
+    const root = mkTmp('ccrc-git-');
+    const projectsRoot = path.join(root, 'projects');
+    mkdirSync(projectsRoot, { recursive: true });
+    // Decoys at BOTH resolution targets: `..` from `projectsRoot` lands one
+    // level up, at `root`; `.` resolves to `projectsRoot` itself. Neither
+    // decoy is a real project, so a guard-less implementation returns a real
+    // (wrong) tip instead of null.
+    for (const dir of [root, projectsRoot]) {
+      mkdirSync(path.join(dir, '.git', 'refs', 'heads', 'ws'), { recursive: true });
+      writeFileSync(path.join(dir, '.git', 'refs', 'heads', 'ws', 'quiet-mesa'), `${OTHER}\n`);
+    }
+    for (const bad of ['..', '.']) {
+      expect(await readBranchTip(localIO, projectsRoot, bad, 'ws/quiet-mesa')).toBeNull();
     }
   });
 });
@@ -60,40 +126,55 @@ describe('readBranchTip', () => {
 // `testDeps` harness (`server/test/helpers.ts`) every other route/lifecycle
 // test uses, so `runCcd` is wired through the real `ccdRunner` + whitelist
 // guard rather than hand-rolled.
-const SESSION = 'demo-quiet-mesa';
-const PROJECT = 'demo';
-const BRANCH = 'ws/quiet-mesa';
-const BASE_SHORT = 'main';
 
 /** One `ccd pr-state` row, bound to `BRANCH`/`BASE_SHORT` the way
- *  `boundRow`/`isMergedRow` (`server/src/prstate.ts`) require. */
-const prRow = (state: 'OPEN' | 'CLOSED' | 'MERGED'): Record<string, unknown> => ({
+ *  `boundRow`/`isMergedRow` (`server/src/prstate.ts`) require. `proveMerge`
+ *  omits `mergedAt`/`mergeCommit` — the shape `isMergedRow` needs — which is
+ *  exactly the row gh reports MERGED without proving: `merge-unproven`. */
+const prRow = (state: 'OPEN' | 'CLOSED' | 'MERGED', proveMerge = true): Record<string, unknown> => ({
   number: 42, state, headRefName: BRANCH, baseRefName: BASE_SHORT,
   isCrossRepository: false, ours: true, isDraft: false,
-  ...(state === 'MERGED' ? { mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } } : {}),
+  ...(state === 'MERGED' && proveMerge ? { mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } } : {}),
 });
 
-const ccdLine = (row: Record<string, unknown>): string => JSON.stringify({
-  id: SESSION, rows: [row], baseShort: BASE_SHORT, branch: BRANCH, ahead: 1, checkedAt: Date.now(),
+const ccdLine = (rows: Record<string, unknown>[]): string => JSON.stringify({
+  id: SESSION, rows, baseShort: BASE_SHORT, branch: BRANCH, ahead: 1, checkedAt: Date.now(),
 });
 
-type MeasuredPr = 'open' | 'closed' | 'merged' | 'unknown';
+type MeasuredPr = 'open' | 'closed' | 'merged' | 'merge-unproven' | 'none' | 'unknown';
 
 /** `'unknown'` models "pr-state could not be read" as a real exec failure —
  *  `res.ok === false` — rather than as a phase, matching the code path
- *  `verifyDone` actually takes (it never gets as far as `phaseFor`). */
+ *  `verifyDone` actually takes (it never gets as far as `phaseFor`).
+ *  `'merge-unproven'` and `'none'` DO reach `phaseFor`: the first is a MERGED
+ *  row whose merge predicate has a failed conjunct (`isMergedRow`,
+ *  `prstate.ts:186-188`) — the case `prVerdict`'s `measured === 'unknown'`
+ *  arm exists for and the suite never reached before (finding 6); the second
+ *  is no bound row at all (`rows: []`), used by the untrusted-claim-field
+ *  tests below. */
 const runnerFor = (pr: MeasuredPr): Runner => async () => {
   if (pr === 'unknown') return { code: 1, stdout: '', stderr: 'boom: pr-state unreachable' };
-  const row = pr === 'open' ? prRow('OPEN') : pr === 'closed' ? prRow('CLOSED') : prRow('MERGED');
-  return { code: 0, stdout: `${ccdLine(row)}\n`, stderr: '' };
+  const rows: Record<string, unknown>[] = pr === 'none' ? [] :
+    [prRow(pr === 'open' ? 'OPEN' : pr === 'closed' ? 'CLOSED' : 'MERGED', pr !== 'merge-unproven')];
+  return { code: 0, stdout: `${ccdLine(rows)}\n`, stderr: '' };
 };
 
 /** `testDeps` (the house harness) builds a full `Deps`, wired through the real
  *  whitelist guard; only `cfg.projectsRoot` needs overriding to point at this
- *  test's fixture git tree. */
-const fingerprintDeps = (run: Runner, projectsRoot: string) => {
-  const base = testDeps(mkTmp('ccrc-fp-'), run);
-  return { ...base, cfg: { ...base.cfg, projectsRoot } };
+ *  test's fixture git tree. `home` defaults to a fresh, EMPTY fixture — no
+ *  registry row for `SESSION` — so `verifyDone` falls back to `RUN.branch`
+ *  unless a test seeds one itself (the registry-resolution tests below).
+ *  `verbs`, when passed, becomes `fleetState.ccdVerbs`; `undefined` (the
+ *  default) leaves `fleetState` unset, which `verbSupported` treats as
+ *  "permit everything" (`ccdargv.ts:97`). */
+const fingerprintDeps = (
+  run: Runner, projectsRoot: string, home: string = mkTmp('ccrc-fp-'), verbs?: string[],
+) => {
+  const base = testDeps(home, run);
+  return {
+    ...base, cfg: { ...base.cfg, projectsRoot },
+    ...(verbs !== undefined ? { fleetState: { connected: true, downSince: null, ccdVerbs: verbs } } : {}),
+  };
 };
 
 const FIXED_CLAIM: DoneClaim = { branchTip: TIP, prNumber: null, prPhase: 'open', handoffCommit: TIP };
@@ -103,24 +184,59 @@ describe('verifyDone — the mismatch table', () => {
   // Each row: what the server measures (the git ref it actually has, and what
   // pr-state actually answers), against the fixed claim above. A row missing
   // from here is a fact nobody re-measures, which is the whole failure mode
-  // this exists to prevent.
+  // this exists to prevent. `ok` rows also pin the exact `measured` payload —
+  // not just `ok: true` — because "settled, on whatever facts" is not the
+  // guarantee; "settled, on THESE re-measured facts" is (finding 3).
   it.each([
-    ['tip matches, pr matches, handoff = tip',      { tip: TIP,   pr: 'open' as const },    { ok: true }],
+    ['tip matches, pr matches, handoff = tip',      { tip: TIP,   pr: 'open' as const },
+      { ok: true, measured: { branchTip: TIP, prNumber: 42, prPhase: 'open' } }],
     ['tip has moved under the claim',               { tip: OTHER, pr: 'open' as const },    { code: 'stale-tip' }],
     ['the branch ref cannot be read at all',        { tip: null,  pr: 'open' as const },    { code: 'tip-unmeasurable' }],
     ['the PR closed after the worker looked',       { tip: TIP,   pr: 'closed' as const },  { code: 'pr-regressed' }],
     ['pr-state could not be read',                  { tip: TIP,   pr: 'unknown' as const }, { code: 'pr-unmeasurable' }],
-    ['the PR merged after the worker looked',       { tip: TIP,   pr: 'merged' as const },  { ok: true }],
+    ['the PR merged after the worker looked',       { tip: TIP,   pr: 'merged' as const },
+      { ok: true, measured: { branchTip: TIP, prNumber: 42, prPhase: 'merged' } }],
+    // gh answered fine and said MERGED, but a conjunct of the merge predicate
+    // failed — `unknown`/`merge-unproven`, never `ok` and never `pr-regressed`
+    // (finding 6: this is the row that actually drives `prVerdict`'s
+    // `measured === 'unknown'` arm through `phaseFor`, not through the
+    // exec-failure branch the old `'pr-state could not be read'` row hits).
+    ['gh says MERGED but a merge-predicate conjunct failed (merge-unproven)',
+      { tip: TIP, pr: 'merge-unproven' as const }, { code: 'pr-unmeasurable' }],
   ])('%s', async (_name, measured, verdict) => {
     const root = project(measured.tip, null);
     const deps = fingerprintDeps(runnerFor(measured.pr), root);
     const res = await verifyDone(deps, RUN, FIXED_CLAIM);
     if ('ok' in verdict) {
-      expect(res).toMatchObject({ ok: true });
+      expect(res).toMatchObject(verdict);
     } else {
       expect(res.ok).toBe(false);
       expect((res as { code: string }).code).toBe(verdict.code);
     }
+  });
+
+  it('rejects a claim naming the wrong PR number for a really-bound PR (finding 3)', async () => {
+    // `FIXED_CLAIM.prNumber` is `null` in every row of the table above — this
+    // re-measured fact has no row of its own there. `cmd_pr_state`'s own
+    // comment (`ccd/ccd:2389`) describes exactly this event: a worker whose
+    // claim still names an earlier PR number after the branch has rebound.
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root); // the real, bound PR is #42
+    const claim: DoneClaim = { ...FIXED_CLAIM, prNumber: 41 };
+    const res = await verifyDone(deps, RUN, claim);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string; detail: string }).code).toBe('pr-regressed');
+    expect((res as { code: string; detail: string }).detail)
+      .toBe('the claim names PR #41, the branch is bound to #42');
+  });
+
+  it('refuses pr-unmeasurable when the fleet host cannot answer pr-state at all (finding 3)', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root, mkTmp('ccrc-fp-'), []); // ccdVerbs: [] — no 'pr-state'
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string; detail: string }).code).toBe('pr-unmeasurable');
+    expect((res as { code: string; detail: string }).detail).toBe('the fleet host cannot answer pr-state');
   });
 
   it('rejects a handoff commit that is not the tip the same claim names', async () => {
@@ -163,5 +279,95 @@ describe('verifyDone — the mismatch table', () => {
     expect((res as { code: string }).code).toBe('stale-tip');
     expect(run).toEqual(RUN);
     expect(claim).toEqual(FIXED_CLAIM);
+  });
+});
+
+describe('verifyDone — prPhase/prNumber are validated, not merely typed (finding 2)', () => {
+  // `DoneClaim`'s own docstring: every field is UNTRUSTED input off an HTTP
+  // body. `branchTip`/`handoffCommit` are validated by the `SHA` regex above;
+  // these two were not, before this fix — a claim that OMITTED `prPhase`, or
+  // spelled it in the wrong case/vocabulary, fell through every arm of
+  // `prVerdict` unmatched and read as agreement (`ok: true`) on a branch with
+  // no PR at all, where the well-formed, honest claim is correctly refused.
+  // `pr: 'none'` (no bound row) is the fixture that makes that failure mode
+  // concrete: a well-formed `prPhase: 'open'` claim against it is a real
+  // `pr-regressed` (claimed open, measured none) — proof these claims are
+  // refused for being malformed, not coincidentally refused for some other
+  // reason the fixture would refuse anyway.
+  it('the well-formed baseline actually refuses, so the next two are not a coincidence', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('none'), root);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('pr-regressed');
+  });
+
+  it('refuses rather than passes an omitted prPhase', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('none'), root);
+    const claim = { branchTip: TIP, handoffCommit: TIP, prNumber: null } as unknown as DoneClaim;
+    const res = await verifyDone(deps, RUN, claim);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('pr-unmeasurable');
+  });
+
+  it('refuses a prPhase outside the PrPhase vocabulary (a worker on a different build)', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('none'), root);
+    const claim = { ...FIXED_CLAIM, prPhase: 'OPEN' } as unknown as DoneClaim;
+    const res = await verifyDone(deps, RUN, claim);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('pr-unmeasurable');
+  });
+
+  it('refuses a non-number, non-null prNumber', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const claim = { ...FIXED_CLAIM, prNumber: 'forty-two' } as unknown as DoneClaim;
+    const res = await verifyDone(deps, RUN, claim);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('pr-unmeasurable');
+  });
+});
+
+describe('verifyDone — the branch to re-measure comes from the live registry (finding 1)', () => {
+  /** Registry row for `SESSION`, the same field shape `name-sweep.test.ts`'s
+   *  own `seed()` writes — `readRegistry` needs wrapper+workdir+uuid or it
+   *  skips the row entirely (`registry.ts:122`). `branch: null` (the default)
+   *  seeds no row at all, so `readRegistry` never lists this id. */
+  const seedRegistry = (home: string, branch: string | null): void => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string | null> = {
+      wrapper: 'claude', project: PROJECT, workdir: '/w/demo/quiet-mesa', uuid: 'a'.repeat(36),
+      started: '1', workspace: 'quiet-mesa', branch,
+    };
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== null) writeFileSync(path.join(reg, `${SESSION}.${k}`), v);
+    }
+  };
+
+  it('measures the RENAMED branch the registry names, not the born branch frozen on the run row', async () => {
+    // The ordinary wave-1 path (finding 1): `RUN.branch` is `ws/quiet-mesa`,
+    // the name `markDispatched` froze at dispatch time — but `sweepNames` has
+    // since renamed the workspace, and the fixture's only git ref lives at
+    // the RENAMED name. Without this fix, `readBranchTip` would be asked
+    // about `ws/quiet-mesa`, find nothing, and answer `tip-unmeasurable`
+    // forever — there is no repair route for `runs.branch` in this PR.
+    const RENAMED = 'ws/fix-the-parser';
+    const home = mkTmp('ccrc-fp-');
+    seedRegistry(home, RENAMED);
+    const root = project(TIP, null, RENAMED);
+    const deps = fingerprintDeps(runnerFor('open'), root, home);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM); // RUN.branch is still the BORN name
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  it('falls back to the run row only when the registry has no row for this session at all', async () => {
+    const home = mkTmp('ccrc-fp-'); // no registry row seeded for SESSION
+    const root = project(TIP, null); // fixture's ref is at RUN.branch — the fallback value
+    const deps = fingerprintDeps(runnerFor('open'), root, home);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res).toMatchObject({ ok: true });
   });
 });
