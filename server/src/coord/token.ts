@@ -26,12 +26,30 @@ export const MAIL_TOKEN_HEADER = 'x-ccrc-mail-token';
  * other's.
  */
 export function readMailToken(tokenPath: string): string | null {
+  let raw: string;
   try {
-    const v = readFileSync(tokenPath, 'utf8').trim();
-    return v === '' ? null : v;
-  } catch {
-    return null;   // absent is a configuration state, not an error
+    raw = readFileSync(tokenPath, 'utf8');
+  } catch (err) {
+    // ABSENT (`ENOENT`) is the one fail-open the spec actually grants
+    // (spec:150-155: a box that has never been given a token keeps working,
+    // unauthenticated, and `index.ts` says so once at boot). Anything else —
+    // `EACCES`, `EISDIR`, `ELOOP`, `EIO` — means the token is PRESENT and this
+    // box cannot prove it, which is a different state and must not collapse
+    // into the same `null` a caller cannot distinguish from "never
+    // configured": `checkMailToken(null, …)` returns `'ok'` for every
+    // presented value, so silently returning `null` here would disarm the
+    // whole gate a chmod, a bad `chown` after a box rebuild, or a unit that
+    // gains a `User=` drop-in could trigger with nothing red anywhere (fix-
+    // round finding: readMailToken fails open on an unreadable token file).
+    // `coord/db.ts`'s `CoordDbUnmigratable` is the precedent for refusing
+    // loudly rather than starting in a state nobody asked for — this throws
+    // for the same reason, uncaught, so `index.ts` fails to boot rather than
+    // opening the tailnet ingress silently.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
   }
+  const v = raw.trim();
+  return v === '' ? null : v;
 }
 
 /**

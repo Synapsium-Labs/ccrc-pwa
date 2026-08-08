@@ -23,10 +23,39 @@ describe('POST /api/notify with a box token', () => {
   });
 
   it('refuses a WRONG token — a caller that presents one has no rollout excuse', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     app = await buildServer({ ...testDeps(mkTmp('ccrc-')), mailToken: TOKEN });
     const res = await post(app, { 'x-ccrc-mail-token': 'nope' });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toEqual({ ok: false, error: 'unauthenticated' });
+    // Fix-round finding: `Fastify({ logger: false })` plus a bare 401 left
+    // ZERO server-side signal that a refusal ever happened — the only arm of
+    // the gate that logged anything was `legacy`, the benign one. This is the
+    // arm an operator actually needs to see.
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/refused|401|WRONG/i);
+  });
+
+  it('a REJECTED notify never reaches the bus or the session stream — the negative half of the ' +
+     'property this task exists to establish', async () => {
+    // The task's whole point (server.ts's own comment on this route: "an
+    // unauthenticated caller's body is not worth parsing") is that a forged
+    // body must not get regex-routed into a session's chat stream. The
+    // positive direction ("still fans the notice out … when it accepts",
+    // above) was pinned; nothing pinned that a WRONG token gets NONE of that
+    // fan-out. A future refactor that hoists `bus.emit` above the token check
+    // — e.g. to record every inbound notice before authenticating — would
+    // leave every case above green while an unauthenticated tailnet caller's
+    // forged `cc swap:` line surfaced inside a real session's chat.
+    const bus = new Bus();
+    const noticed: string[] = [];
+    const sessionMsgs: unknown[] = [];
+    bus.on('notice', (n) => noticed.push(n.message));
+    bus.on('session:x', (m) => sessionMsgs.push(m));
+    app = await buildServer({ ...testDeps(mkTmp('ccrc-')), mailToken: TOKEN }, bus);
+    const res = await post(app, { 'x-ccrc-mail-token': 'nope' });
+    expect(res.statusCode).toBe(401);
+    expect(noticed).toEqual([]);
+    expect(sessionMsgs).toEqual([]);
   });
 
   it('accepts an ABSENT token for one deploy generation, and says so in the log', async () => {

@@ -235,4 +235,27 @@ describe('the verification is actually wired into the deploy, and can observe a 
         .toBeGreaterThan(restartSec);
     }
   });
+
+  it('both rsync lines exclude the mail token, so `ship_secret`\'s hardening is not undone by a plain copy', () => {
+    // Fix-round finding (deploy.sh rsyncs the secret to BOTH boxes at the
+    // local file's mode, three lines before `ship_secret` hardens the other
+    // copy). Both rsync lines push `deploy` as a source tree — `--exclude
+    // '*.env'` is there so `ship_env`'s secrets never ride along unhardened;
+    // `deploy/ccrc-mail.token` needs the identical treatment or it lands a
+    // second, unmanaged copy at whatever mode the local file happens to have,
+    // right next to the 0600-under-0700 copy `ship_secret` lands three lines
+    // later. Without this assertion the exclude can be dropped from either
+    // line — or from one but not the other — and every suite in this repo
+    // stays green; nothing else reads `deploy.sh`'s rsync invocations at all.
+    // Each invocation is a `\`-continued 3-line block (flags, this exclude,
+    // then the source list and destination) — match the WHOLE block, not one
+    // line, or the exclude living on its own continuation line would never
+    // be seen by a single-line check.
+    const rsyncBlocks = [...deploySh.matchAll(/rsync -az[\s\S]*?ccrc\//g)].map((m) => m[0]);
+    expect(rsyncBlocks.length, 'expected exactly two rsync invocations (agent path, server path)').toBe(2);
+    for (const block of rsyncBlocks) {
+      expect(block, `rsync invocation is missing --exclude 'ccrc-mail.token':\n${block}`)
+        .toContain("--exclude 'ccrc-mail.token'");
+    }
+  });
 });

@@ -62,7 +62,16 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; }"
+  # `--exclude 'ccrc-mail.token'`: the token lives at `deploy/ccrc-mail.token`
+  # (gitignored) exactly when `ship_secret` below is about to fire, and this
+  # rsync ships the whole `deploy/` directory. `--exclude '*.env'` is here for
+  # the identical reason on `ship_env`'s secrets — without a matching
+  # exclude, `-a` would carry the file over at whatever mode it has on THIS
+  # machine (0644 under a plain umask), a second, unmanaged copy sitting
+  # right next to the one `ship_secret` deliberately lands at 0600 under a
+  # 0700 directory three lines down, re-shipped on every `--delete` run.
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
+    --exclude 'ccrc-mail.token' \
     agent shared deploy "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
   ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token
@@ -117,7 +126,11 @@ else
   # the agent path: only an ABSENT source is skippable, a failed cp aborts.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS \
     && { [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; }"
+  # See the agent path's identical exclude, above, for why: this rsync also
+  # ships `deploy/` whole, and without the exclude the token rides along a
+  # second time, unhardened, next to `ship_secret`'s 0600 copy three lines down.
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
+    --exclude 'ccrc-mail.token' \
     server shared deploy "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
   ship_secret ccrc-mail.token '~/.ccrc' mail.token

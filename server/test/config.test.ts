@@ -23,6 +23,20 @@ describe('loadConfig', () => {
     expect(loadConfig({ CCRC_HOME: '/fake/home', CCRC_COORD_DB: '/elsewhere/coord.db' }).coordDbPath)
       .toBe('/elsewhere/coord.db');
   });
+
+  it('derives mailTokenPath from CCRC_HOME by default, and honours CCRC_MAIL_TOKEN_PATH as an override', () => {
+    // Same precedent as the `coordDbPath` check above, for the same reason:
+    // without an assertion HERE, a rename in the `.ccrc/mail.token` literal
+    // (or a typo in the `CCRC_MAIL_TOKEN_PATH` key) goes green everywhere —
+    // `readMailToken` reads nothing, `mailToken` is `null`, and
+    // `checkMailToken(null, …)` accepts every caller. Fix-round finding
+    // 4(a): this exact gap was named as the one construct in this task with
+    // no test anywhere in the repo.
+    expect(loadConfig({ CCRC_HOME: '/fake/home' }).mailTokenPath).toBe('/fake/home/.ccrc/mail.token');
+    expect(loadConfig({ CCRC_HOME: '/fake/home', CCRC_MAIL_TOKEN_PATH: '/elsewhere/mail.token' }).mailTokenPath)
+      .toBe('/elsewhere/mail.token');
+  });
+
   it('honours env overrides', () => {
     const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_HOST: '203.0.113.7', CCRC_PORT: '9000', CCRC_PROJECTS_ROOT: '/data/projects' });
     expect(cfg.host).toBe('203.0.113.7');

@@ -270,7 +270,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // for the one-deploy-generation tolerance and for when it comes out.
   app.post('/api/notify', async (req, reply) => {
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
-    if (verdict === 'bad') return reply.code(401).send({ ok: false, error: 'unauthenticated' });
+    if (verdict === 'bad') {
+      // `Fastify({ logger: false })` (above) means a bare 401 leaves NOTHING
+      // in the journal — three silent layers stack on top of it too
+      // (notify.sh's own `|| true`, and ccd invoking it with its output
+      // redirected to `/dev/null`), so this line is the only place a wrong
+      // token — a stray trailing space, a stale copy after a rotation — ever
+      // becomes visible to an operator, the same way `legacy` already is
+      // below. Never logs the presented value: that would put the secret
+      // (or a caller's guess at it) in a log file readable by anyone who can
+      // read the log.
+      console.warn('ccrc-server: /api/notify refused a request with the WRONG box token (401) — ' +
+        'check that deploy/ccrc-mail.token matches on both boxes byte-for-byte');
+      return reply.code(401).send({ ok: false, error: 'unauthenticated' });
+    }
     if (verdict === 'legacy') {
       console.warn('ccrc-server: /api/notify accepted a request with NO box token (legacy ' +
         'tolerance, one deploy generation) — deploy the agent to ship the new notify.sh');
