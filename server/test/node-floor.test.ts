@@ -4,11 +4,20 @@
 // imports it unconditionally, so a box or a CI leg below the floor does not
 // degrade, it fails to boot.
 //
-// THREE assertions, and the third is the one that matters: the first two pin
-// the DECLARATION (all three packages agree, and they say a number), the third
-// pins the FACT (this interpreter can actually do it). If they ever disagree,
-// the declaration is what moves — see the plan's deviation D-6. Do not "fix" a
-// red third assertion by lowering `engines`.
+// THREE assertions, and they are not equally strong. The first two pin the
+// DECLARATION: all three packages agree, and the interpreter running THIS
+// suite clears whatever number they agree on. Assertion 2 is RELATIVE and
+// ONE-DIRECTIONAL — it compares the interpreter against `engines.node`, not
+// against reality, so it goes green if `engines.node` is lowered to meet a
+// lowered interpreter (see .github/workflows/ci.yml's setup-node comment for
+// the concrete scenario). The THIRD assertion pins the FACT instead of the
+// declaration: it imports `node:sqlite` and round-trips a `DatabaseSync`,
+// reading no package.json at all, so it fails on any interpreter below the
+// real 22.13.0 flag boundary NO MATTER what `engines.node` says — it is the
+// one assertion that editing `engines` can never turn green. If assertion 3
+// is red while 1-2 are green, the declared number is too low; raise it — see
+// the plan's deviation D-6. Do not "fix" a red third assertion by lowering
+// `engines`: it cannot work, because assertion 3 never reads `engines` at all.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

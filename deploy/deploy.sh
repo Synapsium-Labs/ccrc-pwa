@@ -64,15 +64,21 @@ if [ "$TARGET" = "agent" ]; then
   "${SCP[@]}" ccd/session-hook.sh "$BOX":.cc-sessions/session-hook.sh
   "${SCP[@]}" ccd/install-session-hooks.sh "$BOX":.cc-sessions/install-session-hooks.sh
   "${SSH[@]}" "$BOX" 'chmod +x ~/.cc-sessions/session-hook.sh ~/.cc-sessions/install-session-hooks.sh && bash ~/.cc-sessions/install-session-hooks.sh'
-  # The trailing `verify-service.sh` is the agent's equivalent of the server
-  # path's `curl -fsS "$HEALTH_URL"` (final review round 2, gates finding 5).
-  # `systemctl restart` returns success the moment systemd FORKS, so without it
-  # an agent that throws during ESM evaluation — which `whitelist.ts` does BY
-  # DESIGN via `refuseToBoot`, and which is the one residual class no type can
-  # catch at build time — crash-loops every 3 seconds behind a deploy that
-  # exited 0. The script is read-only and fails loudly with the journal tail;
-  # because it is the last link of an `&&` chain, its exit status is the ssh
-  # exit status, and `set -e` at the top of this file aborts the deploy on it.
+  # `systemctl restart` returns success the moment systemd FORKS, so without a
+  # post-restart check an agent that throws during ESM evaluation — which
+  # `whitelist.ts` does BY DESIGN via `refuseToBoot`, and which is the one
+  # residual class no type can catch at build time — crash-loops every 3
+  # seconds behind a deploy that exited 0 (final review round 2, gates finding
+  # 5). `verify-service.sh` closes that: it samples `is-active`/MainPID across
+  # a window longer than `RestartSec` and fails loudly with the journal tail.
+  # The server chain below (build7-core Task 1) runs the SAME script, then
+  # ALSO curls `$HEALTH_URL` — the two answer different questions
+  # (verify-service.sh proves the process stayed up; the curl proves Fastify
+  # is actually listening), and the server is the only unit with an HTTP
+  # route to curl. The agent has none, so this is its only post-restart
+  # check. Because it is the last link of an `&&` chain, its exit status is
+  # the ssh exit status, and `set -e` at the top of this file aborts the
+  # deploy on it.
   AGENT_CMD='cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
     && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
@@ -99,6 +105,14 @@ else
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     server shared deploy "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
+  # verify-service.sh here closes the same crash-loop gap it closes on the
+  # agent path above (see that chain's comment) — a restart that "succeeds"
+  # the moment systemd forks, then dies every RestartSec. The curl AFTER it
+  # is not redundant: verify-service.sh proves the process survived the
+  # window, the curl proves Fastify is actually listening — different
+  # questions, both cheap here because (unlike the agent) this unit has an
+  # HTTP route to ask. agent/test/deploy-verify.test.ts pins both the
+  # ordering (restart -> verify -> curl) and that neither call is dropped.
   REMOTE_CMD='cd ~/ccrc/server && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ \
     && export XDG_RUNTIME_DIR=/run/user/$(id -u) \

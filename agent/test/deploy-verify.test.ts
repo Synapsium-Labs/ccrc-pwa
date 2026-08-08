@@ -1,8 +1,12 @@
-// FINAL REVIEW ROUND 2, gates finding 5. `deploy.sh server` ends its chain with
-// `sleep 1 && curl -fsS "$HEALTH_URL"`. `deploy.sh agent` ended at
+// FINAL REVIEW ROUND 2, gates finding 5. `deploy.sh agent` ended at
 // `systemctl --user restart ccrc-agent.service`, which returns success the
 // moment systemd FORKS — so an agent that throws during ESM evaluation
 // crash-looped at 3-second intervals behind a deploy that exited 0.
+// (`deploy.sh server` had `sleep 1 && curl -fsS "$HEALTH_URL"` at the time —
+// build7-core Task 1 replaced that `sleep 1` with the same verify-service.sh
+// call this suite pins for the agent, kept the curl after it, and this file's
+// second `describe` block below is what proves that wiring; see its
+// comments, not this paragraph, for the server chain's current shape.)
 //
 // That is not a spare failure mode. It is where the agent's own security design
 // puts its last line of defence: `auditExecWhitelist()` runs at module load and
@@ -13,10 +17,16 @@
 //
 // `deploy/verify-service.sh` closes it. This file is its gate.
 //
-// WHY IT LIVES IN THE AGENT PACKAGE: the script verifies the agent unit, the
-// agent suite already runs in the gate list, and this is the package whose
-// structural PATH containment makes it safe to run a script that shells out to
-// `systemctl` at all.
+// WHY IT LIVES IN THE AGENT PACKAGE: the script started out verifying only the
+// agent unit, the agent suite already ran in the gate list, and this is the
+// package whose structural PATH containment makes it safe to run a script
+// that shells out to `systemctl` at all. `verify-service.sh` itself now backs
+// BOTH deploy chains (build7-core Task 1), and this file grew to match — the
+// second `describe` block below reads `deploy.sh` directly and pins the
+// server chain's ordering and its `ccrc.service` RestartSec too. Nothing under
+// `server/test/` gates any of that: this is the only suite anywhere that would
+// go red if the server chain's `REMOTE_CMD` were reordered or `ccrc.service`'s
+// RestartSec were raised past the observation window.
 //
 // NOTHING HERE TOUCHES REAL SYSTEMD. Every case runs with a stub `systemctl`
 // earliest on PATH, and — following the discipline in `contain-path.test.ts` —
