@@ -1,8 +1,8 @@
 // The four properties spec:70-81 names, and one the spec implies: a
 // transaction that throws leaves nothing behind.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   COORD_SCHEMA_VERSION, CoordDbUnmigratable, defaultCoordDbPath, describeMigrationProgress,
@@ -43,9 +43,17 @@ describe('openCoordDb', () => {
     a.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')").run();
     a.close();
 
-    // Reopening at the current version migrates NOTHING and destroys nothing.
+    // Reopening at the current version migrates NOTHING and destroys nothing —
+    // and, since `current === COORD_SCHEMA_VERSION` here, it must NOT take the
+    // `current > COORD_SCHEMA_VERSION` rollback-read branch either. A mutant
+    // that widens the comparison to `>=` enters that branch instead of the
+    // (empty, on this path) migration loop; both return a usable `db`, so the
+    // warning is the ONLY observable difference — pin it, not just the data.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);
     expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
     b.close();
   });
 
@@ -106,10 +114,19 @@ describe('openCoordDb', () => {
     a.prepare(`INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')`).run();
     a.close();
 
+    // Rule 3 requires this path to be LOUD (spec:70-81). `current > VERSION`
+    // and `current >= VERSION` agree on every OTHER assertion in this test —
+    // same data, same unwritten-down version — so the warning is what a
+    // mutant widening that comparison would have to fake, and nothing else
+    // here would catch it.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);                       // no throw
     expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
     expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION + 7);              // never written DOWN
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/this build knows/i);
+    warnSpy.mockRestore();
     b.close();
   });
 
@@ -120,6 +137,25 @@ describe('openCoordDb', () => {
     writeFileSync(p, 'this is not a sqlite file\n');
     expect(() => openCoordDb(p)).toThrow();
     expect(existsSync(p)).toBe(true);
+  });
+
+  it('refuses a truncated (0-byte) file rather than silently adopting it as a fresh database', () => {
+    // SQLite alone cannot tell "never existed" from "existed and was
+    // truncated" apart — both are 0 bytes to `new DatabaseSync`, which would
+    // otherwise migrate 0->1 clean and answer "that program never happened"
+    // for whatever this file held (a disk-full write, an interrupted
+    // `cp`/`rsync --inplace`, a stray `> coord.db`). Rule 2 forbids exactly
+    // this: never start empty.
+    const home = mkTmp('ccrc-coord-');
+    const p = dbPathIn(home);
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, '');
+    expect(existsSync(p)).toBe(true);
+    expect(statSync(p).size).toBe(0);
+
+    expect(() => openCoordDb(p)).toThrow(CoordDbUnmigratable);
+    // Untouched: still 0 bytes, not silently stamped to schema 1.
+    expect(statSync(p).size).toBe(0);
   });
 
   it('tx rolls back everything on a throw, and commits everything otherwise', () => {

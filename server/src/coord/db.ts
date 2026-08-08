@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { COORD_SCHEMA_VERSION, MIGRATIONS } from './schema.js';
@@ -87,6 +87,29 @@ export function openCoordDb(dbPath: string): DatabaseSync {
   // runs `mkdir -p ~/.ccrc` only inside `ship_env`), so every writer makes its
   // own parent — `fleetstate.ts:40`, `push.ts:50`, `notifylog.ts:85`.
   mkdirSync(path.dirname(dbPath), { recursive: true });
+
+  // Rule 2 ("never start empty") has a hole `DatabaseSync` will not surface on
+  // its own: SQLite treats a zero-length file as a brand-new empty database,
+  // so a file that already existed and was truncated — a disk-full write, an
+  // interrupted `cp`/`rsync --inplace`, a stray `> coord.db` — is
+  // indistinguishable from a genuinely fresh install once `new DatabaseSync`
+  // has run. A fresh install has NO file at this point; only a previous boot
+  // that died between file creation and its first migration commit (which
+  // already refuses below) leaves a 0-byte one. Refusing here is that same
+  // refusal, one line earlier — never adopting a truncated file as new.
+  if (existsSync(dbPath) && statSync(dbPath).size === 0) {
+    throw new CoordDbUnmigratable(
+      `ccrc-server: ${dbPath} exists but is 0 bytes. REFUSING TO START: SQLite would treat this as ` +
+      'a brand-new empty database and migrate 0->1 clean, silently erasing whatever this file held ' +
+      'before it was truncated — the outcome rule 2 forbids by name. There is no coord.db backup: ' +
+      'deploy.sh backs up dist-pwa/agent-dist/ccd/notify.sh/session-hook.sh under ~/ccrc-backups/, ' +
+      'never coord.db, so that directory has nothing to restore for this file. Reconstruct the ' +
+      'program history from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the ' +
+      'registry and .prhistory (spec:82-85), or move the file aside and accept the loss — starting ' +
+      'empty would erase it silently instead.',
+    );
+  }
+
   const db = new DatabaseSync(dbPath);
 
   // Deliberately AFTER the version check and any migration attempt, not
