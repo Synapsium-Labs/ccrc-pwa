@@ -147,6 +147,13 @@ spec says so. `/api/notify` keeps its current shape (out of scope; noted).
 plus the done-authority set (§3). Every rejection is itself recorded (a
 rejected message is a fact about the fleet).
 
+**`/api/notify` adopts the box token in this build too** (operator ruling,
+2026-08-08) — the anonymous box→server ingress closes entirely. `notify.sh`
+gains the token read from `~/.cc-secrets/ccrc-mail.token`; the server
+accepts the old shape for one deploy generation (absent token → accepted,
+logged as legacy) so the hook cannot go dark mid-rollout, then the
+tolerance is removed.
+
 **Delivery — idle-timed injection, replay-until-ack:**
 
 - A new watcher lane (`MAIL_SWEEP_MS = 10_000`, never awaited) walks
@@ -284,11 +291,12 @@ composition (humans already have the composer); replacing the SDD skill
 mechanics; multi-coordinator arbitration (one coordinator per program; a
 `claimedBy` column exists so a second one refuses).
 
-## Open questions for the operator
+## Operator rulings (2026-08-08)
 
-1. Should `/api/notify` adopt the box token in this build too (closing the
-   anonymous ingress entirely), or stay as-is until the next touch?
-2. The coordinator's home account — pin it (`claude-corp`?) or let
-   `_ws_least_loaded` place it like any session?
-3. Dogfood target confirmed as Build 4, or would you rather burn in on a
-   smaller external-repo program first?
+1. **`/api/notify` adopts the box token in this build** — folded into §4.
+2. **The coordinator is placed like any session** — `_ws_least_loaded`, no
+   pinned account. (The four-homes skill install lane is what makes this
+   safe: a swap can never strand it on an account without the skill.)
+3. **Dogfood target confirmed: Build 4** run through the coordinator.
+
+**Status: approved for planning and execution.**
