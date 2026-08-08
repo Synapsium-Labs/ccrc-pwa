@@ -38,13 +38,14 @@ export type AdvanceResult =
 interface RunRowDb {
   id: number; program: string; programTitle: string; wave: number; waveOf: number | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
-  state: string; resumed: number; openedAt: number; dispatchedAt: number | null;
-  closedAt: number | null; handoffCommit: string | null; prLineage: string | null;
+  state: string; resumed: number; clearedAt: number | null; openedAt: number;
+  dispatchedAt: number | null; closedAt: number | null; handoffCommit: string | null;
+  prLineage: string | null;
 }
 
 const RUN_ROW_COLUMNS =
   'r.id, r.program, p.title AS programTitle, r.wave, r.waveOf, r.project, r.sessionId, ' +
-  'r.workspace, r.branch, r.state, r.resumed, r.openedAt, r.dispatchedAt, r.closedAt, ' +
+  'r.workspace, r.branch, r.state, r.resumed, r.clearedAt, r.openedAt, r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage';
 
 /**
@@ -181,12 +182,12 @@ export class CoordStore {
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',
       resumed: row.resumed !== 0,
-      // No backing column yet. Task 2's v1 schema added `resumed` for D-1 but
-      // not `clearedAt` — the dispatch route that actually performs `/clear`
-      // (Task 9) is what needs one, via its own additive migration. Honestly
-      // `null` for every run until then: nothing has cleared anything yet, so
-      // this is a measured answer, not a placeholder for a missing column.
-      clearedAt: null,
+      // A real column (`runs.clearedAt`), read straight through — not a
+      // placeholder. It reads null today because nothing writes it yet: the
+      // dispatch route that performs the post-resume `/clear` is Task 9's, and
+      // until it lands every run's answer is honestly "nothing has cleared
+      // anything", not a stand-in for a missing column.
+      clearedAt: row.clearedAt,
       openedAt: row.openedAt, dispatchedAt: row.dispatchedAt, closedAt: row.closedAt,
       handoffCommit: row.handoffCommit,
       items: this.itemTally(row.id),

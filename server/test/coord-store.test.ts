@@ -66,6 +66,21 @@ describe('CoordStore: runs', () => {
     s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('reconciling', r.id);
     expect(s.run(r.id)!.state).toBe('unknown');
   });
+
+  it('reads `clearedAt` from the real column, not a hardcoded null (D-1)', () => {
+    // D-1's dispatch route (Task 9) is what WRITES this column; nothing in
+    // this diff does, so a freshly opened run's answer is honestly null. The
+    // point of this test is the other half: once something else DOES write
+    // it (here, directly, the same way the state-token test above bypasses
+    // the store to prove the read side rather than the write side), `run()`
+    // must report the real value, not a value baked into `hydrateRun`.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    expect(s.run(r.id)!.clearedAt).toBeNull();
+    const at = 1_700_000_000_000;
+    s.db.prepare('UPDATE runs SET clearedAt = ? WHERE id = ?').run(at, r.id);
+    expect(s.run(r.id)!.clearedAt).toBe(at);
+  });
 });
 
 describe('CoordStore: caps', () => {
