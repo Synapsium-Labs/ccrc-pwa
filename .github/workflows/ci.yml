@@ -30,9 +30,18 @@ jobs:
         with:
           # Above the engines floor in server/agent/pwa package.json
           # (>=22.13.0, where node:sqlite stopped needing --experimental-sqlite).
-          # server/test/node-floor.test.ts asserts THIS interpreter satisfies it,
-          # so lowering either side turns that suite red rather than shipping a
-          # server that cannot open its own database.
+          # server/test/node-floor.test.ts's SECOND assertion asserts THIS
+          # interpreter satisfies the declared floor — but only on the `server`
+          # leg of this matrix, and only in ONE direction. It catches this
+          # node-version being lowered below the floor; it does NOT catch the
+          # floor (`engines.node`) being lowered to meet a low node-version —
+          # a floor at or below whatever interpreter is running stays green.
+          # Measured, not assumed: mirroring all three package.jsons to
+          # `>=22.0.0` left this suite 3/3 green under both a 24.x and a
+          # current-22.x interpreter. There is no assertion anywhere that pins
+          # `engines.node` to a specific number; only that the three packages
+          # agree with EACH OTHER and that the interpreter clears whatever they
+          # currently say.
           node-version: '22'
           cache: npm
           cache-dependency-path: ${{ matrix.package }}/package-lock.json
@@ -74,11 +83,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # Above the engines floor in server/agent/pwa package.json
-          # (>=22.13.0, where node:sqlite stopped needing --experimental-sqlite).
-          # server/test/node-floor.test.ts asserts THIS interpreter satisfies it,
-          # so lowering either side turns that suite red rather than shipping a
-          # server that cannot open its own database.
+          # '22' here for consistency with the `test` job, not because
+          # anything checks it. This job runs `npm run build` in pwa/ and
+          # never invokes vitest, so server/test/node-floor.test.ts — which
+          # only exists as a `server` package test — does NOT execute on this
+          # leg. Lowering node-version here, alone, is caught by nothing in
+          # this workflow; only the `test` job's `server` matrix leg is
+          # gated, and only against the interpreter falling below the
+          # declared floor (see the comment on that job's setup-node step).
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json

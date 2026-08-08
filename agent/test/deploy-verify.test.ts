@@ -168,24 +168,61 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(restartAt).toBeLessThan(links.length - 1);
   });
 
-  it('and the server path still has the check the agent path was measured against', () => {
-    // The finding is an ASYMMETRY. If the server's health curl ever went away,
-    // the two paths would agree again for the wrong reason.
-    expect(deploySh).toContain('curl -fsS ');
+  it('the server path calls verify-service.sh after the restart and before the health curl', () => {
+    // The server caller is not pinned by the agent-chain test above — it lives
+    // in a different quoted block (REMOTE_CMD, not AGENT_CMD). Without this,
+    // deleting `&& bash ~/ccrc/deploy/verify-service.sh ccrc.service` from
+    // deploy.sh, or reordering the curl in front of it to shave a few seconds
+    // off a deploy, left the whole server+agent+pwa suite green.
+    const remoteCmd = /REMOTE_CMD='([\s\S]*?)'/.exec(deploySh);
+    expect(remoteCmd, 'the server remote command is no longer a single quoted block').toBeTruthy();
+    const links = remoteCmd![1]!.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    const restartAt = links.findIndex((l) => l.includes('restart ccrc.service'));
+    const verifyAt = links.findIndex((l) => l.includes('verify-service.sh ccrc.service'));
+    const curlAt = links.findIndex((l) => l.startsWith('curl -fsS'));
+    expect(restartAt, 'the server path no longer restarts the unit').toBeGreaterThan(-1);
+    expect(verifyAt, 'verify-service.sh ccrc.service is missing from the server chain').toBeGreaterThan(-1);
+    expect(curlAt, 'the health curl is missing from the server chain').toBeGreaterThan(-1);
+    expect(verifyAt, 'verify-service.sh must run after the restart it is verifying')
+      .toBeGreaterThan(restartAt);
+    expect(curlAt, 'the health curl must run after verify-service.sh, not race it')
+      .toBeGreaterThan(verifyAt);
   });
 
-  it('the observation window is longer than the unit\'s RestartSec, or it cannot see a loop', () => {
+  it('the server path is the only one that also curls health — the agent has nothing to GET', () => {
+    // Before this task the asymmetry ran the OTHER way: only the agent chain
+    // called verify-service.sh and only the server chain curled. Now both
+    // chains share verify-service.sh (asserted above and by the agent-chain
+    // test), so a stale comment claiming "the server's health curl" is the
+    // asymmetry would be describing a tree that no longer exists. The
+    // surviving, correct asymmetry is narrower: only the server also curls,
+    // because — per verify-service.sh's own header — the agent binds a
+    // bearer-token WebSocket upgrade with nothing to GET.
+    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
+    expect(deploySh).toContain('curl -fsS ');
+    expect(agentCmd, 'the agent chain has no HTTP route to curl and must not carry one')
+      .not.toContain('curl');
+  });
+
+  it('the observation window is longer than EITHER unit\'s RestartSec, or it cannot see a loop', () => {
     // A cross-file invariant, because the two numbers live in different files
     // and only one of them looks like it matters. If RestartSec were raised to
-    // 10 and the window left at 5, every crash loop would pass with a stable
-    // PID and this whole gate would go quietly decorative.
+    // 10 on either unit and the window left at 5, every crash loop on that
+    // unit would pass with a stable PID and this whole gate would go quietly
+    // decorative. One verify-service.sh and one WINDOW default now guard BOTH
+    // units, so the invariant has to hold against both RestartSec values, not
+    // just the agent's — a `ccrc.service` RestartSec raised on its own, with
+    // nothing agent-side to trip, used to pass this suite.
     const verifySrc = readFileSync(VERIFY, 'utf8');
-    const unitSrc = readFileSync(path.join(deployDir, 'ccrc-agent.service'), 'utf8');
     const window = Number(/CCRC_VERIFY_WINDOW:-(\d+)/.exec(verifySrc)?.[1]);
-    const restartSec = Number(/^RestartSec=(\d+)/m.exec(unitSrc)?.[1]);
     expect(Number.isFinite(window), 'CCRC_VERIFY_WINDOW default not found').toBe(true);
-    expect(Number.isFinite(restartSec), 'RestartSec not found in ccrc-agent.service').toBe(true);
-    expect(window, `observation window ${window}s must exceed RestartSec ${restartSec}s`)
-      .toBeGreaterThan(restartSec);
+
+    for (const unitFile of ['ccrc-agent.service', 'ccrc.service']) {
+      const unitSrc = readFileSync(path.join(deployDir, unitFile), 'utf8');
+      const restartSec = Number(/^RestartSec=(\d+)/m.exec(unitSrc)?.[1]);
+      expect(Number.isFinite(restartSec), `RestartSec not found in ${unitFile}`).toBe(true);
+      expect(window, `observation window ${window}s must exceed ${unitFile}'s RestartSec ${restartSec}s`)
+        .toBeGreaterThan(restartSec);
+    }
   });
 });
