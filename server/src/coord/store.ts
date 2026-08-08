@@ -242,9 +242,13 @@ export class CoordStore {
     // state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
     // deliberately leaves a run in, with no session and no workspace. Three
     // botched dispatches on one program would otherwise pin `running` at the
-    // default `maxConcurrentWorkers` forever. `dispatchedAt` is the one
-    // column only `markDispatched` ever sets, so it names the runs that
-    // actually hold a session rather than every non-terminal state.
+    // default `maxConcurrentWorkers` forever. In normal dispatch flow
+    // `dispatchedAt` is the one column only `markDispatched` ever sets, so it
+    // names the runs that actually hold a session rather than every
+    // non-terminal state; `reconstruct`'s `working` wave (below) is the one
+    // other writer, and for the same reason — it too holds a live session,
+    // just one the database lost track of rather than one `markDispatched`
+    // just minted.
     const running = (this.db.prepare(
       "SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')",
     ).get() as { c: number }).c;
@@ -308,6 +312,17 @@ export class CoordStore {
    * in rather than owned here: this file stores rows, it does not own mail
    * delivery POLICY — the same reason `capsUsage`/`markDispatched` take `now`
    * from the caller instead of calling `Date.now()` internally.
+   *
+   * The replay arm ALSO gates on `nextAttemptAt` (fix, found in Task 3
+   * review — the two arms were asymmetric: `queued`'s arm always read it,
+   * `delivered`'s never did). `backOff` writes `attempts`/`lastError`/
+   * `nextAttemptAt` on whatever row it is given, delivered rows included —
+   * it never moves a row's `state` — so a delivered row that just backed off
+   * was selected again on the very next sweep regardless of the spacing
+   * `backOff` had just written, making exponential backoff a no-op for
+   * every replay (spec:170-172 held only for a delivery's first attempt).
+   * The column defaults to 0, so a delivered row that has never backed off
+   * is unaffected by this clause.
    */
   dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
                                 attempts: number; envelope: string; deliveredAt: number | null;
@@ -315,9 +330,9 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT id, mailId, toId, attempts, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
-      "OR (state = 'delivered' AND COALESCE(ingestedAt, deliveredAt) + ? <= ?) " +
+      "OR (state = 'delivered' AND COALESCE(ingestedAt, deliveredAt) + ? <= ? AND nextAttemptAt <= ?) " +
       'ORDER BY id',
-    ).all(now, replayMs, now) as { id: number; mailId: number; toId: string; attempts: number;
+    ).all(now, replayMs, now, now) as { id: number; mailId: number; toId: string; attempts: number;
                     envelope: string; deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
@@ -404,6 +419,21 @@ export class CoordStore {
    * Every wave BEFORE the last one is expected to already carry a handoff
    * commit (the ledger is append-only); the fallback below only ever matters
    * for the last one.
+   *
+   * A FOURTH rule (fix, found in Task 3 review): the `working` wave — and
+   * ONLY that one — gets `dispatchedAt` bound to the reconstruction time,
+   * the same honest-approximation reasoning `openedAt` already uses. Without
+   * this, `capsUsage().running`'s `dispatchedAt IS NOT NULL` predicate
+   * (below) could never count a rebuilt run no matter its state, so the very
+   * run a disaster rebuild most needs the cap to see — a live session
+   * surviving the database loss — was invisible to it; the THIRD rule's own
+   * justification above ("keeps counting against `capsUsage().running`
+   * forever" as the reason a hold-less last wave is `failed` rather than a
+   * silently-defaulted `working`) only became true once this bound
+   * `dispatchedAt` for `working`. A `done` or `failed` wave stays
+   * `dispatchedAt = null`: it holds no live session for the cap to count,
+   * and stamping the reconstruction time on a wave that in reality
+   * dispatched long ago would falsify `dispatchedIn24h` for it too.
    */
   reconstruct(input: {
     ledger: { slug: string; title: string;
@@ -435,13 +465,19 @@ export class CoordStore {
             ? 'failed'
             : 'working';
         const prLineage = wave === lastDoneWave ? matchingLineage : [];
+        // Fix, found in Task 3 review (see the fourth rule in this method's
+        // docstring): ONLY the `working` wave carries a live session, so only
+        // it gets `dispatchedAt` bound — the reconstruction time stands in
+        // for the real dispatch time nothing in the ledger preserves.
+        const dispatchedAt = state === 'working' ? now : null;
         const res = this.db.prepare(
           'INSERT INTO runs (program, wave, waveOf, project, sessionId, workspace, branch, state, ' +
-          'claimedBy, openedAt, handoffCommit, prLineage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'dispatchedAt, claimedBy, openedAt, handoffCommit, prLineage) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).run(
           input.ledger.slug, wave.wave, wave.of, input.registry.project,
           input.registry.sessionId, input.registry.workspace, input.registry.branch,
-          state, null, now, wave.handoffCommit, JSON.stringify(prLineage),
+          state, dispatchedAt, null, now, wave.handoffCommit, JSON.stringify(prLineage),
         );
         ids.push(Number(res.lastInsertRowid));
       }

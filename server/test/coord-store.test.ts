@@ -147,7 +147,15 @@ describe('the disaster-recovery path (spec:82-85)', () => {
     // waves, the registry names the workspace/branch/hold, and .prhistory names
     // the PR lineage. It asserts the REBUILT run rows, so a future column that
     // cannot be reconstructed fails here and has to justify itself.
+    //
+    // The wave/state/handoffCommit triple below is NOT the whole contract:
+    // `reconstruct`'s own docstring names further judgment calls this test
+    // must also pin, or nothing stops them silently regressing (found in
+    // Task 3 review, finding 5) — binding sessionId/workspace/branch to
+    // null, or leaving `dispatchedAt` unbound for the `working` wave, both
+    // used to pass every assertion that used to be here.
     const s = store();
+    const before = Date.now();
     const rebuilt = s.reconstruct({
       ledger: {
         slug: 'build4', title: 'Transcript surface',
@@ -158,10 +166,28 @@ describe('the disaster-recovery path (spec:82-85)', () => {
                   held: 'program:build4 wave:2/5' },
       prHistory: [{ pr: 31, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 }],
     });
+    const after = Date.now();
     expect(rebuilt.map((r) => [r.wave, r.state, r.handoffCommit])).toEqual([
       [1, 'done', 'a'.repeat(40)],
       [2, 'working', null],
     ]);
+    // Judgment call 1 (registry-derived triple): shared by EVERY wave.
+    for (const r of rebuilt) {
+      expect(r.sessionId).toBe('ccrc-pwa-quiet-mesa');
+      expect(r.workspace).toBe('quiet-mesa');
+      expect(r.branch).toBe('ws/quiet-mesa');
+      expect(r.resumed).toBe(false);
+      expect(r.openedAt).toBeGreaterThanOrEqual(before);
+      expect(r.openedAt).toBeLessThanOrEqual(after);
+    }
+    // Judgment call 3 (fix, found in Task 3 review): `dispatchedAt` is bound
+    // ONLY for the wave that actually holds a live session — otherwise a
+    // rebuilt live run is invisible to `capsUsage().running` no matter its
+    // state (see the dedicated test below).
+    expect(rebuilt[0]!.dispatchedAt).toBeNull();
+    expect(rebuilt[1]!.dispatchedAt).toBe(rebuilt[1]!.openedAt);
+
+    // Judgment call 2 (.prhistory folds onto the last DONE wave only).
     expect(s.run(rebuilt[1]!.id)!.prLineage).toEqual([]);       // wave 2 has retired no PR yet
     expect(s.run(rebuilt[0]!.id)!.prLineage).toEqual([
       { pr: 31, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 },
@@ -211,6 +237,35 @@ describe('the disaster-recovery path (spec:82-85)', () => {
                        wave: 3, waveOf: 1, claimedBy: 'ccrc-pwa-other' }))
       .toMatchObject({ refused: 'claimed-by-another', by: 'ccrc-pwa-coordinator' });
   });
+
+  it('counts a rebuilt `working` run against the cap — a reconstructed live session must not be invisible to capsUsage (found in Task 3 review)', () => {
+    // reconstruct review: `dispatchedAt` was never bound on ANY rebuilt run,
+    // so `capsUsage().running`'s `dispatchedAt IS NOT NULL` predicate (D-13)
+    // could not count this wave no matter its state — after a disaster
+    // rebuild, a coordinator resuming this program would see `running: 0`
+    // against a live session and be free to dispatch a full
+    // `maxConcurrentWorkers` on top of it.
+    const s = store();
+    s.reconstruct({
+      ledger: { slug: 'build7', title: 'Recovered live wave', waves: [{ wave: 1, of: 1, handoffCommit: null }] },
+      registry: { sessionId: 'ccrc-pwa-quiet-mesa', project: 'ccrc-pwa',
+                  workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+                  held: 'program:build7 wave:1/1' },
+      prHistory: [],
+    });
+    expect(s.capsUsage().running).toBe(1);
+  });
+
+  it('does NOT count a rebuilt `failed` (unheld) run against the cap — no live session backs it', () => {
+    const s = store();
+    s.reconstruct({
+      ledger: { slug: 'build8', title: 'Recovered, unheld', waves: [{ wave: 1, of: 1, handoffCommit: null }] },
+      registry: { sessionId: 'ccrc-pwa-still-fen', project: 'ccrc-pwa',
+                  workspace: 'still-fen', branch: 'ws/still-fen', held: null },
+      prHistory: [],
+    });
+    expect(s.capsUsage().running).toBe(0);
+  });
 });
 
 describe('CoordStore: mail delivery replay (spec:174-180)', () => {
@@ -244,5 +299,32 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
 
     s.markAcked(d.id, now + 100 + replayMs);
     expect(s.dueDeliveries(now + 100 + replayMs, replayMs)).toEqual([]);       // acked is never due
+  });
+
+  it('backs off a replay the same way it backs off a first attempt — the replay arm gates on nextAttemptAt too (found in Task 3 review)', () => {
+    // dueDeliveries review: the replay arm (`state = 'delivered' AND
+    // COALESCE(ingestedAt, deliveredAt) + replayMs <= now`) never read
+    // `nextAttemptAt`, so a `backOff` call on an already-delivered row was
+    // written and then never read — the row was re-selected on the very next
+    // sweep regardless of the spacing `backOff` had just written. This is
+    // the negative case: a delivery that is due for replay, fails to inject
+    // (e.g. `draft-present`), backs off, and must not be due again until its
+    // new `nextAttemptAt`.
+    const s = store();
+    const now = 1_000_000_000_000;
+    const replayMs = 600_000;
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+    s.markDelivered(d.id, now);
+
+    const dueAt = now + replayMs;
+    expect(s.dueDeliveries(dueAt, replayMs).map((x) => x.id)).toEqual([d.id]);  // due for replay
+
+    s.backOff(d.id, 'draft-present', dueAt + 30_000);
+    expect(s.dueDeliveries(dueAt + 1_000, replayMs)).toEqual([]);               // backed off: not due
+    expect(s.dueDeliveries(dueAt + 30_000, replayMs).map((x) => x.id)).toEqual([d.id]); // due again
   });
 });
