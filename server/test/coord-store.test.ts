@@ -202,6 +202,41 @@ describe('CoordStore: programs', () => {
     expect(s.programs()).toContainEqual({ slug: 'p1', title: 'Program one', state: 'done' });
     expect(s.resolveCoordinator(null)).toBe('ccrc-pwa-coordB');   // unwedged: p2 is the sole active program
   });
+
+  it('resolves \'coordinator\' to the NAMED RUN\'s own claim when a runId is given (fix-round finding 6) — zero coverage anywhere in the tree before this', () => {
+    // Every prior test of `resolveCoordinator` called it with `null` only
+    // (`coord-store.test.ts:195/199/203`, above) — the `runId !== null` arm
+    // ("the run's own claim", `store.ts`'s own docstring) had no test
+    // anywhere, and `routes.ts:185`'s `toId === 'coordinator' ?
+    // coord.resolveCoordinator(runId) : toId` is the only caller outside this
+    // file. Two programs, each claimed by a DIFFERENT session, so a mutant
+    // that ignored `runId` and fell through to the ambiguous `null` path (or
+    // that returned the wrong program's claim) is distinguishable.
+    const s = store();
+    const a = s.openRun({ program: 'pA', title: 'A', project: 'ccrc-pwa',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' }) as { id: number };
+    const b = s.openRun({ program: 'pB', title: 'B', project: 'ccrc-pwa',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' }) as { id: number };
+    expect(s.resolveCoordinator(a.id)).toBe('ccrc-pwa-coordA');
+    expect(s.resolveCoordinator(b.id)).toBe('ccrc-pwa-coordB');
+    expect(s.resolveCoordinator(4242)).toBeNull();   // no such run — absent, not ambiguous
+  });
+
+  it('setDeliveryEnvelope overwrites a delivery\'s stored envelope in place, without touching mailId/toId/state', () => {
+    // The second half of the mail-id/delivery-id fix (fix-round finding 5 /
+    // D-41): the ingress route inserts a delivery with a placeholder
+    // envelope, THEN calls this once it can name the delivery's own id.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '');
+    s.setDeliveryEnvelope(d.id, `<mail>id ${d.id}</mail>`);
+    const [row] = s.dueDeliveries(Date.now(), 60_000);
+    expect(row).toMatchObject({ id: d.id, mailId: mail.id, envelope: `<mail>id ${d.id}</mail>` });
+    expect(s.delivery(d.id)).toMatchObject({ toId: 'ccrc-pwa-quiet-mesa', state: 'queued' });
+  });
 });
 
 describe('the disaster-recovery path (spec:82-85)', () => {

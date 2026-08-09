@@ -1446,11 +1446,35 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
 export const MAIL_BODY_MAX_BYTES = 8 * 1024;
 
 /**
- * Every way the coordination layer can say no, enumerated in one place and
- * pinned in BOTH directions by `mail-routes.test.ts` (every code here is
- * emitted somewhere in `server/src/coord/`, and every code emitted there is
- * here). Orca's rule, adopted: a stale `worker_done` can never settle a run,
- * because the refusal is typed and the run state is unchanged.
+ * The two envelope fields `MAIL_BODY_MAX_BYTES` does NOT bound (fix-round
+ * finding 8 / D-44): `subject` renders as one envelope line and `artifacts`
+ * renders one line PER ENTRY (`coord/envelope.ts`'s own `renderEnvelope`),
+ * and `sendPrompt` costs one agent round trip PER LINE it types
+ * (`inject/send.ts:300-305`). A message whose `body` is well under 8KB can
+ * still carry tens of thousands of artifact-path lines and stay under
+ * Fastify's default 1 MiB request-body ceiling — `coord/envelope.ts`'s own
+ * COST paragraph names "a few hundred round trips" as the worst case the
+ * body cap prices in; these two caps keep `subject`/`artifacts` inside the
+ * same order of magnitude rather than leaving them open to blow past it by
+ * two.
+ */
+export const MAIL_SUBJECT_MAX_BYTES = 200;
+export const MAIL_ARTIFACTS_MAX = 64;
+export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
+
+/**
+ * Every way the coordination layer can say no, enumerated in one place.
+ * PINNED IN BOTH DIRECTIONS by `mail-routes.test.ts`, WITH ONE NAMED
+ * EXCEPTION (D-38): `undeliverable` is emitted by `watch.ts`'s mail-sweep
+ * lane (Task 8), and `watch.ts` sits entirely outside `server/src/coord` —
+ * the forward-direction scan (`mail-routes.test.ts`'s "every declared
+ * INGRESS/DONE-AUTHORITY code is emitted somewhere in server/src/coord"
+ * test) is scoped to that one directory and excludes `undeliverable` BY
+ * NAME, with its own comment saying so, not by an oversight this docstring
+ * used to paper over. Every OTHER code here is emitted somewhere in
+ * `server/src/coord`, and every code emitted there is here. Orca's rule,
+ * adopted: a stale `worker_done` can never settle a run, because the
+ * refusal is typed and the run state is unchanged.
  *
  * Groups, and they are not interchangeable:
  *  - INGRESS (spec:145-147): the message never becomes a `mail` row.
@@ -1459,12 +1483,16 @@ export const MAIL_BODY_MAX_BYTES = 8 * 1024;
  *
  * `tip-unmeasurable`/`pr-unmeasurable` exist because NOT KNOWING IS NOT `[]` —
  * ccd's own three-answer ladder (`ccd/ccd:2018-2035`). A fact the server could
- * not re-measure must never read as a fact that matched.
+ * not re-measure must never read as a fact that matched. `registry-unmeasurable`
+ * (D-37) is the INGRESS member of the same family: a `readRegistry` that could
+ * not list its directory, or that dropped a listed row for an unreadable
+ * sibling field, is not evidence the sender or recipient does not exist — see
+ * `coord/routes.ts`'s checks 5/6/7 for where this is measured.
  */
 export const MAIL_REJECT_CODES = [
   // ingress
-  'unauthenticated', 'unknown-sender', 'stale-uuid', 'unknown-recipient',
-  'unknown-run', 'oversize', 'bad-kind',
+  'unauthenticated', 'unknown-sender', 'stale-uuid', 'registry-unmeasurable',
+  'unknown-recipient', 'unknown-run', 'oversize', 'bad-kind',
   // delivery
   'undeliverable',
   // done-authority

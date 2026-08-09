@@ -377,6 +377,27 @@ export class CoordStore {
   }
 
   /**
+   * Overwrites a delivery's stored `envelope` — used by the ingress route
+   * ONLY, once, immediately after `queueDelivery`, to close a bug fix-round
+   * finding 5 / D-41 named: the envelope's own `ack:` line has to name the
+   * DELIVERY id (what `delivery(id)`/`markAcked` resolve by, both above),
+   * but `mail.id` and `mail_deliveries.id` are two SEPARATE `AUTOINCREMENT`
+   * sequences (`schema.ts`) that only happen to walk together while every
+   * mail resolves to exactly one delivery. The delivery id does not exist
+   * until the row is inserted, so the route inserts the row with an empty
+   * envelope, renders the real one now that it can name the delivery's own
+   * id, and calls this to land it — all inside the SAME transaction
+   * `queueDelivery` ran in, so no reader ever observes the empty
+   * intermediate. This is the second half of that one INSERT, not a
+   * re-render: `renderEnvelope` itself still runs exactly once, at queue
+   * time (spec:176-177, "verbatim, never re-rendered"), and this method
+   * never re-derives its argument — it only stores what the caller already
+   * computed. */
+  setDeliveryEnvelope(id: number, envelope: string): void {
+    this.db.prepare('UPDATE mail_deliveries SET envelope = ? WHERE id = ?').run(envelope, id);
+  }
+
+  /**
    * The due set for one sweep — two arms, not one (deviation, found in Task 3
    * review — see the plan's D-10). Spec:174-177 requires replay: "Until
    * acked, the delivery replays — verbatim, never re-rendered — on later

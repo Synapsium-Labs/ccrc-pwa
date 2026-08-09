@@ -1,15 +1,46 @@
 // Fix-round finding: everything outside `checkMailToken` was unpinned —
 // `mailTokenPath` (covered separately in `config.test.ts`), `readMailToken`
 // itself, and `deploy/notify.sh`'s half of the same contract. `checkMailToken`
-// already has five cases driving it through `notify-token.test.ts`'s route
-// tests; nothing here duplicates those.
+// already has cases driving it through `notify-token.test.ts`'s and
+// `mail-routes.test.ts`'s route tests; the direct unit block below (fix-round
+// finding 3 / D-39) covers only the ONE distinction those route tests cannot
+// see from the outside: `'ok'` vs `'unconfigured'` are two different return
+// VALUES of the same function, and a route test can only observe that both
+// currently lead a particular route to the same HTTP status — it cannot see
+// that `/api/notify` and `/api/mail` are reading the SAME verdict two
+// different ways on purpose.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MailTokenFileUnusable, readMailToken } from '../src/coord/token.js';
+import { checkMailToken, MailTokenFileUnusable, readMailToken } from '../src/coord/token.js';
 import { mkTmp } from './tmpHelpers.js';
+
+describe('checkMailToken', () => {
+  const TOKEN = 'f'.repeat(64);
+
+  it('answers \'unconfigured\' — never \'ok\' — when the server has no expected token, for ANY presented value', () => {
+    // Fix-round finding 3 / D-39: before this split, `expected === null`
+    // returned `'ok'` unconditionally — indistinguishable from a caller that
+    // actually presented the right secret. `/api/mail`/`/api/mail/:id/ack`
+    // read anything but `'ok'` as a refusal (`routes.ts`), so this split is
+    // what lets them fail shut on an unconfigured server while `/api/notify`
+    // (which still treats `'unconfigured'` as a pass-through) is unaffected.
+    expect(checkMailToken(null, undefined)).toBe('unconfigured');
+    expect(checkMailToken(null, '')).toBe('unconfigured');
+    expect(checkMailToken(null, TOKEN)).toBe('unconfigured');       // even the "right-shaped" guess
+    expect(checkMailToken(null, 'literally anything')).toBe('unconfigured');
+  });
+
+  it('still answers \'ok\'/\'legacy\'/\'bad\' exactly as before once a token IS configured', () => {
+    expect(checkMailToken(TOKEN, TOKEN)).toBe('ok');
+    expect(checkMailToken(TOKEN, undefined)).toBe('legacy');
+    expect(checkMailToken(TOKEN, '')).toBe('legacy');
+    expect(checkMailToken(TOKEN, 'wrong')).toBe('bad');
+    expect(checkMailToken(TOKEN, 123)).toBe('bad');                 // non-string presented value
+  });
+});
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');

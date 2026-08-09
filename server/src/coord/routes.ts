@@ -7,7 +7,10 @@ import { tx } from './db.js';
 import type { CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
-import { isSendableMailKind, MAIL_BODY_MAX_BYTES, type MailRejectCode } from '../../../shared/api.js';
+import {
+  isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  MAIL_SUBJECT_MAX_BYTES, type MailRejectCode,
+} from '../../../shared/api.js';
 
 /**
  * The coordination routes. Registered from `buildServer` rather than declared
@@ -78,16 +81,25 @@ export function registerCoordRoutes(
     // (fix-round finding 3/5: an earlier draft of this gate read `'legacy'`
     // as pass-through here too, treating notify's rollout excuse as if it
     // transferred — it does not; see coord/token.ts's `checkMailToken`
-    // docstring). `ok` is the only verdict that proceeds; `'legacy'` and
-    // `'bad'` both refuse, and — unlike `/api/notify`, which has no
-    // coordination store to record into — both land in `mail_rejections`
-    // via `refuse()` below, so "was a tokenless POST ever accepted" is an
-    // answerable question, not a silent gap.
+    // docstring). `ok` is the only verdict that proceeds; `'legacy'`,
+    // `'unconfigured'` and `'bad'` all refuse, and — unlike `/api/notify`,
+    // which has no coordination store to record into — all three land in
+    // `mail_rejections` via `refuse()` below, so "was a tokenless POST ever
+    // accepted" is an answerable question, not a silent gap.
+    //
+    // `'unconfigured'` (Task 7 fix-round finding 3 / D-39): a server whose
+    // token file was never minted must not run this route open, the way
+    // `/api/notify` is still entitled to — `/api/mail` has no pre-existing
+    // deployed caller a strict gate could strand, the identical argument
+    // that already ruled out a `'legacy'` tolerance here.
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
         ? 'no box token presented — /api/mail grants no legacy tolerance (that is /api/notify only)'
-        : 'wrong box token';
+        : verdict === 'unconfigured'
+          ? 'no box token is configured on this server — /api/mail fails shut on an unconfigured ' +
+            'token, it does not fail open (fix-round finding 3)'
+          : 'wrong box token';
       return refuse(reply, 401, 'unauthenticated', {}, detail);
     }
 
@@ -137,19 +149,69 @@ export function registerCoordRoutes(
         `unrecognised or missing mail kind: ${JSON.stringify(kind)}`);
     }
 
-    // 4: size cap, measured in UTF-8 BYTES — hookstate.ts:128-135 already had
+    // 4: size caps, measured in UTF-8 BYTES — hookstate.ts:128-135 already had
     // to learn this distinction; a body of astral characters is twice the
-    // string length in bytes.
+    // string length in bytes. `subject` and `artifacts` are capped here too
+    // (fix-round finding 8 / D-44): `subject` renders as ONE envelope line
+    // and `artifacts` renders ONE LINE PER ENTRY (`envelope.ts`), and
+    // `sendPrompt` costs one agent round trip PER LINE — an uncapped
+    // `artifacts` array is a way to smuggle tens of thousands of injection
+    // round trips through a request that never touches the body cap and
+    // stays well under Fastify's default 1 MiB body limit (`server.ts`
+    // builds `Fastify({ logger: false })` with no `bodyLimit` override).
     if (Buffer.byteLength(msgBody, 'utf8') > MAIL_BODY_MAX_BYTES) {
       return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
         `body exceeds ${MAIL_BODY_MAX_BYTES} bytes`);
     }
+    if (Buffer.byteLength(subject, 'utf8') > MAIL_SUBJECT_MAX_BYTES) {
+      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+        `subject exceeds ${MAIL_SUBJECT_MAX_BYTES} bytes`);
+    }
+    if (artifacts.length > MAIL_ARTIFACTS_MAX) {
+      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+        `artifacts exceeds ${MAIL_ARTIFACTS_MAX} entries`);
+    }
+    if ((artifacts as string[]).some((a) => Buffer.byteLength(a, 'utf8') > MAIL_ARTIFACT_PATH_MAX_BYTES)) {
+      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+        `an artifact path exceeds ${MAIL_ARTIFACT_PATH_MAX_BYTES} bytes`);
+    }
 
+    // 5/6/7 all read the registry, and the registry read ITSELF can fail —
+    // `io.readdir` returning `null` (an ordinary transient failure in remote
+    // mode: one dropped agent-WS round trip) is not evidence that no session
+    // exists anywhere on the fleet, and `readRegistry` collapses exactly that
+    // failure to `[]` (`registry.ts:104`). Reading `[]` as "the sender does
+    // not exist" turns a transient hiccup into a PERMANENT, recorded
+    // `unknown-sender` for a session that is plainly alive — the same
+    // NOT-KNOWING-IS-NOT-`[]` rule `tip-unmeasurable`/`pr-unmeasurable`
+    // already state for the done-authority checks, inverted here (fix-round
+    // finding 1 / D-37): a fact this route could not measure must never read
+    // as a fact that MISMATCHED either. `names` — the raw directory listing —
+    // is read directly, ONCE, and reused below rather than re-derived,
+    // mirroring the same fail-shut-on-unlistable-registry idiom Task 8's
+    // `sweepMail` and Task 9's dispatch-pause check both use for the same
+    // directory.
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names === null) {
+      return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+        'the registry directory could not be listed — transient, not a fact about the sender');
+    }
     const registry = await readRegistry(deps.io, deps.cfg);
 
     // 5: sender — a registry row must exist for fromId.
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
+      // `readRegistry` also drops a row that WAS listed (its `.uuid` file
+      // exists in `names`) when a sibling field read fails (`registry.ts:123`,
+      // "incomplete registry entry — skip, don't crash") — ALSO transient,
+      // not "this session does not exist". `names` proves presence
+      // independently of whether every field could be read, the same
+      // evidence `registry.ts`'s own `HOLD_UNREADABLE` sentinel already
+      // trusts for `.hold`.
+      if (names.includes(`${fromId}.uuid`)) {
+        return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+          `registry row for ${fromId} is listed but unreadable — transient, not a fact about the sender`);
+      }
       return refuse(reply, 403, 'unknown-sender', { fromId, toId, kind, subject, runId },
         `no registry row for ${fromId}`);
     }
@@ -162,8 +224,14 @@ export function registerCoordRoutes(
 
     // 7: recipient shape — the literal role 'coordinator', or an existing
     // registry row. Resolving the ROLE to a concrete session id happens below,
-    // after runId (check 8) is known to be real.
+    // after runId (check 8) is known to be real. Same transient-vs-terminal
+    // split as check 5, reusing the same `names`/`registry` reads rather than
+    // a second round trip.
     if (toId !== 'coordinator' && !registry.some((r) => r.id === toId)) {
+      if (names.includes(`${toId}.uuid`)) {
+        return refuse(reply, 502, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
+          `registry row for ${toId} is listed but unreadable — transient, not a fact about the recipient`);
+      }
       return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
         `no registry row for ${toId}`);
     }
@@ -188,19 +256,28 @@ export function registerCoordRoutes(
         "the 'coordinator' role has no single claimed active program to resolve to");
     }
 
-    // One tx: insert the mail row, render the envelope (needs the mail id),
-    // insert the one resolved delivery. `renderEnvelope` runs exactly ONCE,
-    // here, at queue time — spec:176-177's "verbatim, never re-rendered".
+    // One tx: insert the mail row, insert the delivery row (so its own id
+    // exists), render the envelope AGAINST THE DELIVERY ID (not the mail id
+    // — fix-round finding 5 / D-41: `envelope.ts`'s `ack:` line is the only
+    // ack instruction the recipient ever sees, and the ack route resolves
+    // its `:id` param against `mail_deliveries`, a SEPARATE `AUTOINCREMENT`
+    // sequence from `mail` — the two only happen to walk together while
+    // every mail resolves to exactly one delivery), then land the real
+    // envelope with `setDeliveryEnvelope`. `renderEnvelope` still runs
+    // exactly ONCE, here, at queue time — spec:176-177's "verbatim, never
+    // re-rendered"; `setDeliveryEnvelope` is the second half of the same
+    // INSERT, not a second render.
     const artifactPaths = artifacts as string[];
     const { id } = tx(coord.db, () => {
       const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
         artifacts: artifactPaths });
+      const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
       const envelope = renderEnvelope({
-        id: inserted.id, fromId, toId: resolvedToId, runId,
+        id: delivery.id, fromId, toId: resolvedToId, runId,
         program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
         kind, subject, body: msgBody, artifacts: artifactPaths,
       });
-      coord.queueDelivery(inserted.id, resolvedToId, envelope);
+      coord.setDeliveryEnvelope(delivery.id, envelope);
       return inserted;
     });
 
@@ -224,12 +301,16 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     // Same gate, same reasoning: see the ingress route above (fix-round
-    // finding 3/5) — `/api/mail/:id/ack` has no legacy caller either.
+    // finding 3/5) — `/api/mail/:id/ack` has no legacy caller either, and
+    // (fix-round finding 3 / D-39) no unconfigured-token pass-through either.
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
         ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance (that is /api/notify only)'
-        : 'wrong box token';
+        : verdict === 'unconfigured'
+          ? 'no box token is configured on this server — /api/mail/:id/ack fails shut on an ' +
+            'unconfigured token, it does not fail open (fix-round finding 3)'
+          : 'wrong box token';
       return refuse(reply, 401, 'unauthenticated', {}, detail);
     }
 
@@ -239,9 +320,23 @@ export function registerCoordRoutes(
     }
     const { fromId, fromUuid } = body;
 
+    // Same transient-vs-terminal split as the ingress route's checks 5/6
+    // (fix-round finding 1 / D-37): `io.readdir` failing outright is not
+    // evidence the acking session does not exist — the cost here is lower
+    // (a replay just retries the ack next sweep) but a recorded, permanent
+    // `unknown-sender` would be equally false.
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names === null) {
+      return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+        'the registry directory could not be listed — transient, not a fact about the sender');
+    }
     const registry = await readRegistry(deps.io, deps.cfg);
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
+      if (names.includes(`${fromId}.uuid`)) {
+        return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+          `registry row for ${fromId} is listed but unreadable — transient, not a fact about the sender`);
+      }
       return refuse(reply, 403, 'unknown-sender', { fromId }, `no registry row for ${fromId}`);
     }
     if (sender.uuid === '' || sender.uuid !== fromUuid) {
