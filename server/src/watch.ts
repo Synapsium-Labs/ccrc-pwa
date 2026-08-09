@@ -126,12 +126,27 @@ const MAIL_COOLDOWN_MS = 120_000;
  *  ignoring. */
 const MAIL_REPLAY_MS = 600_000;
 
-/** The attempt budget, and the spacing between attempts. Doubling from 30 s to
- *  the same 15-minute ceiling `PR_BACKOFF_MAX_MS` already uses — one ceiling
- *  for "this keeps not working" across the whole watcher. At the cap the
- *  delivery parks as `rejected('undeliverable')` and THE MAIL ROW IS UNTOUCHED
+/** The PRE-DELIVERY attempt budget, and the spacing between attempts —
+ *  applies ONLY while a delivery's own `deliveredAt` is still null (review
+ *  finding 4). A row that has NEVER been delivered parks as
+ *  `rejected('undeliverable')` at the cap, and THE MAIL ROW IS UNTOUCHED
  *  (spec:170-172): the record of what was said survives the failure to say
- *  it. */
+ *  it. The instant `deliveredAt` is set, this budget stops applying: the
+ *  row's own history already disproves 'undeliverable', so a failing REPLAY
+ *  backs off instead of rejecting — forever, bounded by ack rather than by a
+ *  count, which is what spec:174-177's "replays … until acked" actually
+ *  requires. `attempts` keeps counting on a delivered row too (it is one
+ *  cumulative column), just without a ceiling that turns it into a park.
+ *
+ *  That is also what makes the constant below real (review finding 9): a
+ *  NEVER-delivered row's own schedule (attempts 1..5, 30 s doubling to 8 min)
+ *  never reaches `MAIL_BACKOFF_MAX_MS` before `MAIL_MAX_ATTEMPTS` parks it —
+ *  `Math.min` never binds on that path and the ceiling is decorative there.
+ *  A delivered row's `attempts` is not capped at 6, so by attempt 6
+ *  (30 000 * 2^5 = 960 000) `Math.min` genuinely clamps to the ceiling —
+ *  doubling from 30 s to the same 15-minute ceiling `PR_BACKOFF_MAX_MS`
+ *  already uses, one ceiling for "this keeps not working" across the whole
+ *  watcher. */
 const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
@@ -309,6 +324,25 @@ export class FleetWatcher {
    *  The ATTEMPT budget, which protects a session from a loop rather than
    *  from a moment, IS durable: it is a column on the delivery. */
   private mailCooldown = new Map<string, number>();
+  /** Session ids with a `sendPrompt` currently in flight from THIS lane —
+   *  the cross-sweep single-flight guard `sweepMail` was missing (review
+   *  findings 1/5). `tick()` void-dispatches `sweepMail` every
+   *  `MAIL_SWEEP_MS`, and `sendPrompt` alone can run past that (four-plus
+   *  seconds of its own polling, longer still behind another
+   *  server-originated write holding the session's `KeyedQueue` slot — a
+   *  reap, an inject, `sweepNames`) — so without this, a second sweep starting
+   *  while the first is still blocked inside `sendPrompt` re-reads the SAME
+   *  still-`queued`/still-`delivered` row (`markDelivered`/`backOff` have not
+   *  run yet) and enqueues a SECOND send for it. Written BEFORE `sendPrompt`
+   *  is called and cleared in a `finally`, same before-the-call discipline
+   *  `sweepNames`'s `attemptedRenames` uses and for the identical reason —
+   *  except this one must be cleared once the send resolves (attempted-once
+   *  guards a lifetime; in-flight guards one send), so a `Set`, not a durable
+   *  marker. IN MEMORY BY DESIGN, same reasoning as `mailCooldown` just
+   *  above: a restart forgets an in-flight send along with the process that
+   *  was making it, and there is nothing left to guard once the process is
+   *  gone. */
+  private mailInFlight = new Set<string>();
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -741,6 +775,23 @@ export class FleetWatcher {
    * session in the first place — not the send path, which would happily
    * succeed.
    *
+   * CROSS-SWEEP SINGLE-FLIGHT (review findings 1/5), on TOP of the six
+   * conjuncts and the per-sweep `seen` set: `mailInFlight` is written BEFORE
+   * `sendPrompt` is called and cleared once it resolves, so a second sweep
+   * that starts while the first is still blocked inside `sendPrompt` (behind
+   * this session's `KeyedQueue`, which any other server-originated write can
+   * be holding) refuses the SAME row instead of re-passing a gate that has
+   * not changed and enqueueing a second send for it.
+   *
+   * THE `UserPromptSubmit` EDGE IS SAMPLED SEPARATELY (review finding 3),
+   * over `store.deliveredUnacked()` — every `delivered`, unacked row, with NO
+   * due-timing filter — rather than folded into the loop below over
+   * `store.dueDeliveries()`. `dueDeliveries`'s replay arm does not select a
+   * `delivered` row until `MAIL_REPLAY_MS` has already elapsed, so sampling
+   * the edge only from ITS result could never observe a turn that started
+   * (and, ordinarily, ended) any time before that — which is every ordinary
+   * turn. See `CoordStore.deliveredUnacked`'s own docstring.
+   *
    * `tick()` dispatches this with `void` (it can sit on the queue for as long
    * as `sendPrompt` does), so a test that awaits `tick()` has NOT awaited the
    * sweep — every negative assertion about it would pass while it was still
@@ -758,31 +809,57 @@ export class FleetWatcher {
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
 
-    const due = store.dueDeliveries(now, MAIL_REPLAY_MS);
-    if (due.length === 0) return;
+    const unacked = store.deliveredUnacked();
+    const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
+    if (unacked.length === 0 && dueBefore.length === 0) return;
     const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
+    // One hookstate read per SESSION this sweep, shared between the edge
+    // sample below and the gate's own read further down — both use this same
+    // `now`, so a cached answer is exactly as fresh as a second read would
+    // be. A `Map`, not a plain object, so a session with no readable
+    // hookstate (a real miss) is distinguishable from "not looked up yet"
+    // via `.has` rather than an `undefined` that could mean either.
+    const hsCache = new Map<string, HookState | null>();
+    const hookStateFor = async (toId: string): Promise<HookState | null> => {
+      if (hsCache.has(toId)) return hsCache.get(toId) ?? null;
+      const uuid = uuidByToId.get(toId);
+      const hs = uuid === undefined ? null
+        : await readHookState(this.deps.io, this.deps.cfg.registryDir, toId, uuid, now);
+      hsCache.set(toId, hs);
+      return hs;
+    };
+
+    // The UserPromptSubmit edge, over EVERY delivered-unacked row — see this
+    // method's own docstring and review finding 3. A recipient that has gone
+    // (`uuidByToId` has no entry) reads as no edge, same as `due`'s own loop
+    // treats a vanished recipient: the row waits.
+    for (const row of unacked) {
+      if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
+      const hs = await hookStateFor(row.toId);
+      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > (row.ingestedAt ?? row.deliveredAt)) {
+        store.markIngested(row.id, hs.updatedAt);
+      }
+    }
+
+    // Re-read due-ness AFTER the edge sample above, not before: `markIngested`
+    // can only ever push a row's replay clock LATER, so a `dueBefore` row
+    // whose edge just landed could have gone from due to not-due in the same
+    // sweep. Skipped when nothing was sampled (`unacked.length === 0`) —
+    // nothing could have changed, so `dueBefore` is still exact and a second
+    // identical query would only cost, never correct, anything.
+    const due = unacked.length === 0 ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
+    if (due.length === 0) return;
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
       if (seen.has(d.toId)) continue;
+      if (this.mailInFlight.has(d.toId)) continue;   // review findings 1/5 — see this method's docstring
       const last = this.mailCooldown.get(d.toId) ?? 0;
       if (now - last < MAIL_COOLDOWN_MS) continue;
       const rec = records.find((r) => r.id === d.toId);
       if (!rec) continue;                    // a recipient that went away: the row waits
       if (!(await this.deps.tmux.hasSession(d.toId))) continue;
-      const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, d.toId, rec.uuid, now);
-
-      // The UserPromptSubmit edge, folded into this SAME hookstate read —
-      // checked BEFORE the done/ask gate below, deliberately: a session that
-      // picked up a REPLAYED delivery and started its turn reads `working`,
-      // not `done`, and that is exactly the signal this re-dates the replay
-      // clock for (spec:178-180). `d.deliveredAt !== null` is the store-side
-      // test for "this is a replay candidate, not a first attempt" — a
-      // still-`queued` row has no delivery time for the edge to postdate.
-      if (d.deliveredAt !== null && hs !== null && hs.event === 'UserPromptSubmit' &&
-          hs.updatedAt > (d.ingestedAt ?? d.deliveredAt)) {
-        store.markIngested(d.id, hs.updatedAt);
-      }
-
+      const hs = await hookStateFor(d.toId);
       if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
       const pid = await this.deps.tmux.panePid(d.toId);
       const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
@@ -792,29 +869,45 @@ export class FleetWatcher {
       if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) continue;
 
       seen.add(d.toId);
-      // The stored envelope, byte for byte. `renderEnvelope` is not called here
-      // and must never be: spec:176-177's "verbatim, never re-rendered".
-      const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope);
-      if (res.ok) {
-        this.mailCooldown.set(d.toId, now);
-        store.markDelivered(d.id, now);
-        continue;
+      this.mailInFlight.add(d.toId);
+      try {
+        // The stored envelope, byte for byte. `renderEnvelope` is not called
+        // here and must never be: spec:176-177's "verbatim, never re-rendered".
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope);
+        if (res.ok) {
+          this.mailCooldown.set(d.toId, now);
+          store.markDelivered(d.id, now);
+          continue;
+        }
+        const attempts = d.attempts + 1;
+        // The park below applies ONLY to a row that has NEVER been delivered
+        // (review finding 4): `d.deliveredAt === null` is the row's own,
+        // durable proof of that. Rejecting a row that HAS been delivered
+        // would write a false 'undeliverable' record over a message that
+        // demonstrably reached the recipient, and would silently end
+        // replay-until-ack (spec:174-177) — see `MAIL_MAX_ATTEMPTS`'s own
+        // docstring for the full reasoning, including why this is also what
+        // makes `MAIL_BACKOFF_MAX_MS` reachable (review finding 9).
+        if (d.deliveredAt === null) {
+          // `enter-ignored` is terminal HERE and nowhere else, and only for a
+          // row that has never been delivered: the text is sitting in a
+          // FRESH box, `submitEnter`'s doctrine forbids a blind third Enter,
+          // and the rescue is a human looking at the pane. Re-injecting would
+          // type the whole envelope a second time UNDER the first one.
+          if (res.error === 'enter-ignored') {
+            store.rejectDelivery(d.id, 'undeliverable', res.error);
+            continue;
+          }
+          if (attempts >= MAIL_MAX_ATTEMPTS) {
+            store.rejectDelivery(d.id, 'undeliverable', res.error);
+            continue;
+          }
+        }
+        const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+        store.backOff(d.id, res.error, now + step);
+      } finally {
+        this.mailInFlight.delete(d.toId);
       }
-      // `enter-ignored` is terminal HERE and nowhere else: the text is sitting
-      // in the box, `submitEnter`'s doctrine forbids a blind third Enter, and
-      // the rescue is a human looking at the pane. Re-injecting would type the
-      // whole envelope a second time UNDER the first one.
-      if (res.error === 'enter-ignored') {
-        store.rejectDelivery(d.id, 'undeliverable', res.error);
-        continue;
-      }
-      const attempts = d.attempts + 1;
-      if (attempts >= MAIL_MAX_ATTEMPTS) {
-        store.rejectDelivery(d.id, 'undeliverable', res.error);
-        continue;
-      }
-      const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-      store.backOff(d.id, res.error, now + step);
     }
   }
 

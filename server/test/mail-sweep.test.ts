@@ -19,6 +19,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -39,6 +40,7 @@ const MAIL_COOLDOWN_MS = 120_000;
 const MAIL_REPLAY_MS = 600_000;
 const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
+const MAIL_BACKOFF_MAX_MS = 900_000; // watch.ts's own PR_BACKOFF_MAX_MS, mirrored — see its own comment
 const PAST_SWEEP_MS = MAIL_SWEEP_MS + 1_000; // clears the lane's own re-sweep gate
 
 const ENVELOPE = 'ccrc-mail test payload'; // 23 chars — under ECHO_NEEDLE(24), one line
@@ -86,6 +88,29 @@ const seedLiveState = (home: string, over: Record<string, unknown> = {}): void =
 
 const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
 
+/**
+ * An `io` whose `readdir` fails exactly once, on its NEXT call, then answers
+ * normally forever after — set-and-forget via the returned setter. Plain
+ * `unlistableIO` (`{ ...localIO, readdir: async () => null }`,
+ * `mail-routes.test.ts`'s own fixture for this exact kill-switch on the
+ * ingress side) is unusable here: `sweepMail`'s kill-switch check and
+ * `readRegistry` both call `io.readdir` on the SAME `registryDir`, so an
+ * unconditional null also empties the registry and blocks the send for an
+ * unrelated reason (`rec` not found) — a fail-OPEN mutant on the kill-switch
+ * line would still leave every test green, exactly the gap review finding 8
+ * names. Failing only the ONE read under test — the kill-switch's own,
+ * transient in the way a single dropped agent-WS round trip is — isolates
+ * the fail-shut behaviour from the registry read that follows it.
+ */
+const onceUnlistableIO = (): { io: FleetIO; failNext: () => void } => {
+  let fail = false;
+  const io: FleetIO = { ...localIO, readdir: async (p) => {
+    if (fail) { fail = false; return null; }
+    return localIO.readdir(p);
+  } };
+  return { io, failNext: () => { fail = true; } };
+};
+
 const queueTestDelivery = (coord: CoordStore, toId: string, envelope: string): { mailId: number; id: number } => {
   const mail = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
     kind: 'finding', subject: 'hi', body: envelope, artifacts: [] });
@@ -132,8 +157,10 @@ const harness = (opts: { hasSession?: boolean; panes?: (string | null)[] } = {})
  *  calling this, not before. Returns `deps` too, so a test that needs the
  *  SAME `KeyedQueue` the sweep will use (to prove injection actually goes
  *  through it) can reach in. */
-const primedWatcher = async (h: Harness, coord: CoordStore): Promise<{ w: FleetWatcher; deps: Deps }> => {
-  const deps: Deps = { ...testDeps(h.home, h.run), coord };
+const primedWatcher = async (
+  h: Harness, coord: CoordStore, over: Partial<Deps> = {},
+): Promise<{ w: FleetWatcher; deps: Deps }> => {
+  const deps: Deps = { ...testDeps(h.home, h.run), coord, ...over };
   const w = new FleetWatcher(deps, new Bus(), 2000);
   await w.tick();
   return { w, deps };
@@ -182,6 +209,31 @@ describe('sweepMail: the gate', () => {
     expect(literalSends(h.calls)).toEqual([]);
     expect(deliveryRow(coord, id1).state).toBe('queued');
     expect(deliveryRow(coord, id2).state).toBe('queued');
+  });
+
+  it('does NOT deliver when the kill-switch directory listing itself fails — an unreadable kill-switch fails SHUT (review finding 8)', async () => {
+    // Mutation-tested (review finding 8): flipping the fail-shut read to
+    // fail-open left this suite's PRE-fix state fully green, because nothing
+    // in it ever made `io.readdir` return null. This is that missing case —
+    // everything else about the fixture is the ordinary happy-path setup, so
+    // a fail-open regression here sends the envelope exactly like the first
+    // test in this file does. Only the KILL-SWITCH's own read fails — the
+    // registry read that follows it inside the same sweep succeeds normally
+    // — so a naive `io.readdir` stub that fails every call cannot be used
+    // here: it would also empty the registry and block the send via `rec`
+    // not being found, leaving the fail-shut line itself unexercised.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { io, failNext } = onceUnlistableIO();
+    const { w } = await primedWatcher(h, coord, { io });
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    queueTestDelivery(coord, ID, ENVELOPE);
+
+    failNext();
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
   });
 
   it('does NOT deliver to a session tmux does not have', async () => {
@@ -285,6 +337,28 @@ describe('sweepMail: the gate', () => {
     expect(literalSends(h.calls)).toEqual([]);
   });
 
+  it('does NOT deliver while the live status file affirmatively says busy — hookstate `done` is not enough on its own (review finding 7)', async () => {
+    // Mutation-tested (review finding 7): deleting the `liveSessionStatus(...)
+    // !== 'idle'` half of the conjunct (leaving only `!live`) left this
+    // suite's PRE-fix state fully green — no fixture anywhere wrote a
+    // non-idle `status` into the live file. This is that missing case: the
+    // hook says `done` (conjunct 4 passes) but the live file, read fresh,
+    // affirmatively disagrees — a fresh turn that started between the hook's
+    // write and this sweep. sweepMail's own "WHAT THIS CANNOT SEE" paragraph
+    // names typing into a mid-turn pane as the exact hazard this rung exists
+    // to prevent.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { status: 'busy' });
+    queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+  });
+
   it('does not fire on the priming tick — a restart delivers no storm', async () => {
     // The one test in this file that seeds the registry BEFORE priming, on
     // purpose: it has to prove the FIRST tick injects nothing even with an
@@ -330,6 +404,36 @@ describe('sweepMail: the send', () => {
     release();
     await sweep;
     expect(literalSends(h.calls)).toEqual([ENVELOPE]); // the exact stored bytes, unaltered
+  });
+
+  it('does not double-inject when a second sweep starts before the first sweep\'s send has resolved (review findings 1/5)', async () => {
+    // REPRODUCES the pre-fix bug: sweep A passes the whole gate and blocks
+    // inside sendPrompt's own KeyedQueue (held here by a stand-in for any
+    // other server-originated write on this session). The row is still
+    // `queued` — `markDelivered` hasn't run — and `mailCooldown` has no entry
+    // yet, so a naive second sweep re-passes the identical gate and enqueues
+    // a SECOND send for the same delivery. `mailInFlight` must refuse it.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w, deps } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    let release!: () => void;
+    void deps.queue.run(ID, () => new Promise<void>((r) => { release = r; }));
+    const sweepA = w.sweepMail();
+    await new Promise((r) => setTimeout(r, 20)); // real timer — let sweepA reach and block on the held key
+
+    advance(PAST_SWEEP_MS); // clears the lane's own cadence gate for a second sweep
+    expect(deliveryRow(coord, id).state).toBe('queued'); // sweep A has not written back yet
+    const sweepB = w.sweepMail(); // must see the row still queued and mailCooldown unset
+
+    release();
+    await Promise.all([sweepA, sweepB]);
+    expect(literalSends(h.calls)).toEqual([ENVELOPE]); // exactly ONE send, not two
+    expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
   it('never passes replaceDraft — a human mid-sentence wins, every time', async () => {
@@ -431,6 +535,47 @@ describe('sweepMail: the send', () => {
     expect(row.attempts).toBe(0);
     expect(coord.db.prepare('SELECT id FROM mail WHERE id = ?').get(mailId)).toBeTruthy();
   }, 10_000);
+
+  it('a DELIVERED row never parks as rejected on repeated replay failures — it backs off, unbounded, until acked (review findings 4/9)', async () => {
+    // The pre-fix bug: `attempts` is one cumulative counter shared by
+    // pre-delivery AND post-delivery (replay) failures, so a row that
+    // delivered cleanly once and then failed six replays in a row (a human
+    // draft sitting in the box every time) hit MAIL_MAX_ATTEMPTS and parked
+    // `rejected('undeliverable')` — a false record: the message WAS said.
+    // This also proves review finding 9's other half: once a delivered row
+    // is no longer capped at MAIL_MAX_ATTEMPTS, `attempts` climbs high enough
+    // for `Math.min(...)` to actually clamp at MAIL_BACKOFF_MAX_MS, which a
+    // never-delivered row's own (attempts 1..5) schedule can never reach.
+    const h = harness({ panes: [...HAPPY_PANES, '❯ half-typed draft\n'] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id, mailId } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+
+    // Advance far enough each round to clear BOTH the replay window and any
+    // backoff step, including the ceiling — draft-present never advances
+    // `deliveredAt`, so this is the row's own replay clock, unmoved.
+    const STEP = MAIL_BACKOFF_MAX_MS + 10_000;
+    let t = Date.now();
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      t += STEP;
+      vi.setSystemTime(t);
+      seedHookState(h.home, ID, { updatedAt: t - 1_000 }); // stay fresh past HOOKSTATE_FRESH_MS
+      await w.sweepMail();
+    }
+
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('delivered');                       // never rejected
+    expect(row.rejectCode).toBeNull();
+    expect(row.attempts).toBeGreaterThan(MAIL_MAX_ATTEMPTS);   // the pre-delivery budget did not stop it
+    expect(row.nextAttemptAt - t).toBe(MAIL_BACKOFF_MAX_MS);   // the ceiling is genuinely reached
+    expect(coord.db.prepare('SELECT id FROM mail WHERE id = ?').get(mailId)).toBeTruthy();
+  });
 });
 
 describe('sweepMail: replay until ack', () => {
@@ -475,8 +620,15 @@ describe('sweepMail: replay until ack', () => {
     expect(literalSends(h.calls)).toEqual([ENVELOPE]); // no second send — an acked row is never due
   });
 
-  it('records the UserPromptSubmit edge and dates the replay clock from it', async () => {
-    const h = harness({ panes: HAPPY_PANES });
+  it('records the UserPromptSubmit edge the moment it appears — long before the row would ever become due for replay (review finding 3)', async () => {
+    // The pre-fix bug: `markIngested` was called ONLY from inside the loop
+    // over `dueDeliveries()`, which does not select a `delivered` row until
+    // MAIL_REPLAY_MS has already elapsed — so the edge could only ever be
+    // observed 10 minutes after delivery, by which point the turn it was
+    // meant to prove had long since ended. This seeds the edge seconds after
+    // delivery — the realistic case — and proves it is sampled immediately,
+    // not 595 seconds late.
+    const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] }); // two full sends: the initial + one replay
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
@@ -489,18 +641,79 @@ describe('sweepMail: replay until ack', () => {
     const { deliveredAt } = coord.db.prepare('SELECT deliveredAt FROM mail_deliveries WHERE id = ?')
       .get(id) as { deliveredAt: number };
 
-    // The recipient's turn started (`working`, not `done`) — the state gate
-    // below refuses to re-inject, but the edge is still proof the mail was
-    // seen, and re-dates the replay clock so a still-thinking session isn't
-    // treated as one that ignored it.
-    advance(MAIL_REPLAY_MS + 1_000);
-    const edgeAt = deliveredAt + 5_000;
+    // The recipient's turn starts a few seconds later — nowhere near
+    // MAIL_REPLAY_MS away, so a row scoped to `dueDeliveries`'s own result
+    // would never even be looked at here.
+    advance(PAST_SWEEP_MS);
+    const edgeAt = Date.now();
     seedHookState(h.home, ID, { state: 'working', event: 'UserPromptSubmit', updatedAt: edgeAt });
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]); // no re-injection while working
-    const { ingestedAt } = coord.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?')
-      .get(id) as { ingestedAt: number | null };
-    expect(ingestedAt).toBe(edgeAt);
+    expect(literalSends(h.calls)).toEqual([ENVELOPE]);          // still no re-injection; not due
+    const ingestedNow = () => (coord.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?')
+      .get(id) as { ingestedAt: number | null }).ingestedAt;
+    expect(ingestedNow()).toBe(edgeAt);                         // sampled immediately, not 600 s later
+
+    // And the replay clock is dated from THAT edge, not from `deliveredAt`
+    // (review findings 2/6 also cover this arithmetic at the store level):
+    // at deliveredAt + MAIL_REPLAY_MS — which has already passed — the row
+    // must NOT replay; only at edgeAt + MAIL_REPLAY_MS does it become due.
+    seedHookState(h.home, ID); // the recipient goes idle again
+    vi.setSystemTime(deliveredAt + MAIL_REPLAY_MS + 1_000);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([ENVELOPE]);          // deliveredAt+replay passed; edgeAt+replay has not
+
+    vi.setSystemTime(edgeAt + MAIL_REPLAY_MS + 1_000);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]); // now due, from the EDGE's clock
+  });
+
+  it('a REPLAY (a fresh markDelivered) advances the due-clock past a stale ingestedAt — the spacing does not collapse to cooldown (review findings 2/6)', async () => {
+    // REPRODUCES the pre-fix bug: once ingestedAt has ever been written, a
+    // COALESCE-based clock is pinned there forever and a later successful
+    // REPLAY's own fresh deliveredAt is silently ignored — so every replay
+    // after the first ingested edge was due again almost immediately,
+    // spaced only by MAIL_COOLDOWN_MS (120 s) instead of MAIL_REPLAY_MS
+    // (600 s).
+    const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES, ...HAPPY_PANES] }); // three full sends
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();                                        // send #1 (initial delivery)
+    expect(literalSends(h.calls)).toEqual([ENVELOPE]);
+
+    // The UserPromptSubmit edge lands early, well inside the replay window.
+    advance(PAST_SWEEP_MS);
+    const edgeAt = Date.now();
+    seedHookState(h.home, ID, { state: 'working', event: 'UserPromptSubmit', updatedAt: edgeAt });
+    await w.sweepMail();
+    expect((coord.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?')
+      .get(id) as { ingestedAt: number | null }).ingestedAt).toBe(edgeAt);
+
+    // The row goes idle again and the FIRST replay fires, off the edge's own
+    // clock — a fresh, later `deliveredAt`, with `ingestedAt` untouched.
+    seedHookState(h.home, ID);
+    vi.setSystemTime(edgeAt + MAIL_REPLAY_MS + 1_000);
+    await w.sweepMail();                                        // send #2 (the replay)
+    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]);
+
+    // Just past MAIL_COOLDOWN_MS since that replay — under the pre-fix
+    // COALESCE clock (still pinned at `edgeAt`) this would already be due
+    // again; under the fix it must not be, all the way out past cooldown.
+    advance(MAIL_COOLDOWN_MS + 1_000);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]); // still no third send
+
+    // Only once MAIL_REPLAY_MS has elapsed from the REPLAY's own deliveredAt
+    // does the row become due a third time.
+    const { deliveredAt: secondDeliveredAt } = coord.db.prepare(
+      'SELECT deliveredAt FROM mail_deliveries WHERE id = ?').get(id) as { deliveredAt: number };
+    vi.setSystemTime(secondDeliveredAt + MAIL_REPLAY_MS + 1_000);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE, ENVELOPE]); // send #3
   });
 });

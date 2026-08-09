@@ -421,6 +421,23 @@ export class CoordStore {
    * every replay (spec:170-172 held only for a delivery's first attempt).
    * The column defaults to 0, so a delivered row that has never backed off
    * is unaffected by this clause.
+   *
+   * `MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0))`, not
+   * `COALESCE(ingestedAt, deliveredAt)` (fix, review findings 2/6): a REPLAY
+   * calls only `markDelivered`, which writes a fresh `deliveredAt` and never
+   * touches `ingestedAt` (`markIngested`'s own docstring). Under the old
+   * `COALESCE`, once `ingestedAt` had ever been written once it was picked
+   * forever and the new, later `deliveredAt` a replay just wrote was
+   * silently ignored — so the clock froze at the FIRST `UserPromptSubmit`
+   * edge and every replay after that one was due again almost immediately,
+   * spaced only by the per-session `MAIL_COOLDOWN_MS` instead of
+   * `MAIL_REPLAY_MS` (a 120 s floor standing in for the intended 10
+   * minutes). `MAX` always picks whichever of the two actually happened
+   * last, so a fresh replay's `deliveredAt` re-dates the clock exactly the
+   * way the first delivery's did. Both arguments are `COALESCE`d to `0`
+   * because SQLite's multi-argument `max()` returns NULL — not the other
+   * argument — the instant ANY argument is NULL, and `ingestedAt` is NULL
+   * until the first edge is ever observed.
    */
   dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
                                 attempts: number; envelope: string; deliveredAt: number | null;
@@ -428,10 +445,33 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT id, mailId, toId, attempts, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
-      "OR (state = 'delivered' AND COALESCE(ingestedAt, deliveredAt) + ? <= ? AND nextAttemptAt <= ?) " +
+      "OR (state = 'delivered' AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + ? <= ? " +
+      'AND nextAttemptAt <= ?) ' +
       'ORDER BY id',
     ).all(now, replayMs, now, now) as { id: number; mailId: number; toId: string; attempts: number;
                     envelope: string; deliveredAt: number | null; ingestedAt: number | null }[];
+  }
+
+  /**
+   * Every `delivered`, unacked row, with NO timing filter — unlike
+   * `dueDeliveries` above, which only surfaces a `delivered` row once
+   * `replayMs` has already elapsed since it last moved the clock. That is
+   * exactly wrong for the ONE thing `ingestedAt` exists to do (review
+   * finding 3): `hookstate.ts`'s own docstring calls a `UserPromptSubmit`
+   * newer than delivery "the cheapest available proof that the injected
+   * turn actually STARTED" — proof that is only worth anything while the
+   * turn it is proving might still be running, i.e. in the minutes right
+   * after delivery, not ten minutes later once `dueDeliveries` finally
+   * agrees to look. A sweep that samples the edge only through
+   * `dueDeliveries`'s own result can therefore never observe it before the
+   * replay it was supposed to prevent. This is the set that sweep instead
+   * walks EVERY tick of its own clock, independent of due-ness, purely to
+   * keep `ingestedAt` current.
+   */
+  deliveredUnacked(): { id: number; toId: string; deliveredAt: number | null; ingestedAt: number | null }[] {
+    return this.db.prepare(
+      "SELECT id, toId, deliveredAt, ingestedAt FROM mail_deliveries WHERE state = 'delivered'",
+    ).all() as { id: number; toId: string; deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
   markDelivered(id: number, at: number): void {
@@ -439,6 +479,11 @@ export class CoordStore {
       .run('delivered', at, id);
   }
 
+  /** The `UserPromptSubmit` edge (`hookstate.ts:23-34`). Deliberately does
+   *  NOT touch `deliveredAt` — a REPLAY re-dates the clock through its own
+   *  fresh `markDelivered` call, and `dueDeliveries`'s `MAX(...)` above is
+   *  what combines the two rather than either writer clobbering the other's
+   *  column. */
   markIngested(id: number, at: number): void {
     this.db.prepare('UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ?').run(at, id);
   }

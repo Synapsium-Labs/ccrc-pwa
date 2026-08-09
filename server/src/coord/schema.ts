@@ -131,11 +131,14 @@ export const MIGRATIONS: readonly string[] = [
   -- EXPLAIN QUERY PLAN on the shipped query picks mail_deliveries_due for
   -- both OR branches (measured); mail_deliveries_replay was never read by
   -- any query in this build and is dropped. The replay arm's OTHER
-  -- predicate -- COALESCE(ingestedAt, deliveredAt) + replayMs <= now -- is
-  -- an expression on two nullable columns no index on bare deliveredAt
-  -- could have served anyway; it stays an unindexed filter within the
-  -- (state, nextAttemptAt) row set, which the sweep's own scale (one poll
-  -- per MAIL_SWEEP_MS, not a hot path) does not need an index for.
+  -- predicate -- MAX(COALESCE(ingestedAt,0), COALESCE(deliveredAt,0)) +
+  -- replayMs <= now (review findings 2/6 changed this from a plain COALESCE,
+  -- which pinned the clock at the FIRST ingestedAt forever and starved every
+  -- later replay's own deliveredAt) -- is an expression on two nullable
+  -- columns no index on bare deliveredAt could have served anyway; it stays
+  -- an unindexed filter within the (state, nextAttemptAt) row set, which the
+  -- sweep's own scale (one poll per MAIL_SWEEP_MS, not a hot path) does not
+  -- need an index for.
   CREATE INDEX mail_deliveries_due ON mail_deliveries(state, nextAttemptAt);
 
   CREATE TABLE mail_rejections (

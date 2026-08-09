@@ -415,6 +415,59 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     expect(s.dueDeliveries(now + 100 + replayMs, replayMs)).toEqual([]);       // acked is never due
   });
 
+  it('dueDeliveries: a REPLAY\'s own markDelivered advances the due-clock past a stale ingestedAt — MAX, not COALESCE (review findings 2/6)', () => {
+    // The pre-fix bug: the replay arm read COALESCE(ingestedAt, deliveredAt),
+    // so once `markIngested` had EVER written a value, that value was picked
+    // forever and a later successful REPLAY's own fresh `markDelivered` call
+    // — which never touches `ingestedAt` — was silently ignored. The clock
+    // froze at the first ingested edge, and every replay after that one was
+    // due again almost immediately, spaced only by the caller's
+    // MAIL_COOLDOWN_MS instead of the intended `replayMs`.
+    const s = store();
+    const now = 1_000_000_000_000;
+    const replayMs = 600_000;
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+
+    s.markDelivered(d.id, now);                    // first delivery: deliveredAt = now
+    s.markIngested(d.id, now + 599_000);            // the UserPromptSubmit edge, well inside the window
+
+    // The row replays successfully later (a FRESH markDelivered call):
+    const replayAt = now + replayMs + 1_000;
+    s.markDelivered(d.id, replayAt);                // deliveredAt advances; ingestedAt is untouched
+
+    // Under the old COALESCE, the clock would still read the STALE ingestedAt
+    // (now + 599_000), so `now + 599_000 + replayMs` — already in the past
+    // relative to `replayAt` — would make the row due again immediately.
+    expect(s.dueDeliveries(replayAt, replayMs)).toEqual([]);                        // just replayed
+    expect(s.dueDeliveries(replayAt + replayMs - 1, replayMs)).toEqual([]);         // inside the window
+    expect(s.dueDeliveries(replayAt + replayMs, replayMs).map((x) => x.id)).toEqual([d.id]); // due, from the REPLAY
+  });
+
+  it('deliveredUnacked: every delivered row regardless of replay timing, and none once acked or still queued (review finding 3)', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>still queued</mail>');
+    const delivered = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>delivered</mail>');
+    s.markDelivered(delivered.id, now);
+    const acked = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>acked</mail>');
+    s.markDelivered(acked.id, now);
+    s.markAcked(acked.id, now + 1);
+
+    // A `delivered` row appears here EVEN THOUGH it is nowhere near due for
+    // replay yet — the whole point (review finding 3): the caller must be
+    // able to sample the ingestion edge long before `dueDeliveries` would
+    // ever select the row.
+    expect(s.deliveredUnacked().map((x) => x.id)).toEqual([delivered.id]);
+  });
+
   it('backs off a replay the same way it backs off a first attempt — the replay arm gates on nextAttemptAt too (found in Task 3 review)', () => {
     // dueDeliveries review: the replay arm (`state = 'delivered' AND
     // COALESCE(ingestedAt, deliveredAt) + replayMs <= now`) never read
