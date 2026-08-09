@@ -318,6 +318,19 @@ describe('the rejection table is total, in both directions', () => {
       'packed-refs',         // coord/gitref.ts — a git filename
       'bad-transition',      // coord/store.ts — AdvanceResult, not a mail code
       'claimed-by-another',  // coord/store.ts — OpenRunResult, not a mail code
+      // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`
+      // vocabulary for `POST /api/runs*`, deliberately not `MailRejectCode`
+      // members: these refuse a fleet ACT (dispatch/close), never a mail.
+      'coordinator-paused',   // $REG marker filename, not a code
+      'cap-concurrency',      // dispatch refusal — coordinator_state caps
+      'cap-daily',            // dispatch refusal — coordinator_state caps
+      'ambiguous-dispatch',   // dispatch refusal — zero or >1 new workspace
+      'not-dispatched',       // close refusal — no session to re-measure
+      'prhistory-unreadable', // close refusal — D-14's ladder, reused
+      'bad-request',          // the generic body-shape refusal server.ts
+                               // already uses throughout; not a mail code
+      'wave-brief',           // mail SUBJECT text (dispatch's own brief)
+      'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

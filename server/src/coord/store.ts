@@ -131,11 +131,52 @@ export class CoordStore {
     });
   }
 
+  /**
+   * Deviation (found while executing Task 9; not in the plan's own Task 9
+   * File Structure entry, which named only `routes.ts` — see the plan's D-45):
+   * `POST /api/runs`'s body may name an existing workspace (`sessionId?`,
+   * wave N>=2 reclaiming the workspace it held since wave 1) and the OPEN
+   * route places the hold immediately — spec:120-123, "When sessionId names
+   * an existing workspace, places the hold immediately." Task 9's dispatch
+   * route then needs to read `run.sessionId` back OFF THE ROW to decide
+   * `CCD_ARGV.wsAdd` vs `CCD_ARGV.ensure` (D-1: "No sessionId on the run ->
+   * ws-add; otherwise -> ensure") — but `openRun`'s own signature never took
+   * a `sessionId`, and no writer of the column existed for anything but
+   * `markDispatched` (a DISPATCH-time write that also stamps
+   * `dispatchedAt`/`resumed`, both false of an open-time claim). This is the
+   * matching open-time write, on `foldPrLineage`/`setHandoffCommit`'s single-
+   * column-`UPDATE` pattern, deliberately NOT touching `dispatchedAt` or
+   * `resumed` — a run whose wave N>=2 open just reclaimed its workspace has
+   * not been dispatched yet, and must not read as though it had.
+   */
+  setSession(runId: number, sessionId: string): void {
+    this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(sessionId, runId);
+  }
+
+  /**
+   * `runs.clearedAt` — the proof D-1's post-resume `/clear` actually
+   * committed (`RunSummary.clearedAt`'s own docstring; the column landed in
+   * Task 2's v1 DDL, unwritten, per D-1's own amendment). Mirrors
+   * `foldPrLineage`/`setHandoffCommit`: a single-column `UPDATE`, called once,
+   * by the dispatch route, and ONLY when the injected `/clear` actually
+   * verified — a refused send (dialog open, draft present) leaves this
+   * column honestly null, never called with a guess. */
+  setClearedAt(runId: number, at: number): void {
+    this.db.prepare('UPDATE runs SET clearedAt = ? WHERE id = ?').run(at, runId);
+  }
+
   /** Dispatch's write: the workspace a run landed in, and whether it was a
    *  fresh spawn or D-1's resume+`/clear`. Does NOT itself advance `state` —
    *  the caller (Task 9's dispatch route) calls `advance` separately, so the
-   *  two writes stay independently attributable in `run_events`. */
-  markDispatched(runId: number, sessionId: string, workspace: string, branch: string,
+   *  two writes stay independently attributable in `run_events`.
+   *
+   *  `workspace`/`branch` are nullable, matching the column (`runs.workspace`/
+   *  `runs.branch`, both `TEXT` with no `NOT NULL`) and `RunSummary`'s own
+   *  wire type — Task 9's dispatch route resolves both from the live
+   *  registry (falling back to the run row on wave N>=2, the identical
+   *  fallback `fingerprint.ts`'s `verifyDone` uses), which can genuinely come
+   *  back empty for a registry row `readRegistry` otherwise accepted. */
+  markDispatched(runId: number, sessionId: string, workspace: string | null, branch: string | null,
                  resumed: boolean, at: number = Date.now()): void {
     this.db.prepare(
       'UPDATE runs SET sessionId = ?, workspace = ?, branch = ?, resumed = ?, dispatchedAt = ? WHERE id = ?',

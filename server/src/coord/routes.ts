@@ -3,14 +3,76 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { readRegistry } from '../registry.js';
+import { CCD_ARGV, verbSupported } from '../ccdargv.js';
+import { sendPrompt } from '../inject/send.js';
 import { tx } from './db.js';
-import type { CoordStore } from './store.js';
+import type { CoordStore, RunRow } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
+import { readPrHistory } from './prhistory.js';
+import { verifyDone, type DoneClaim } from './fingerprint.js';
 import {
   isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, type MailRejectCode,
+  MAIL_SUBJECT_MAX_BYTES, type MailKind, type MailRejectCode, type RunSummary,
 } from '../../../shared/api.js';
+
+/** `$REG/coordinator-paused` — spec:199-205: "no verb, no route, no way for
+ *  the coordinator to unpause itself." Deliberately not `-disabled`-suffixed
+ *  like `mail-disabled`: `limits.ts:134-142` filters `<name>-disabled`
+ *  markers out of `/api/accounts` as candidate wrapper names, and this is not
+ *  a lane kill-switch — it must not read as one there. */
+const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
+
+/** The standing hold-reason convention (`registry.ts:26-46`, spec:120-123):
+ *  DISPLAY-ONLY, never parsed back anywhere in this tree — the run row's own
+ *  `program`/`wave`/`waveOf` columns are what every route and the store
+ *  actually read. Shared by the open route's immediate hold, dispatch's own
+ *  hold, and close's hold-reason update to the next wave, so the three
+ *  places this string is built can never drift apart from one another. */
+const holdReason = (program: string, wave: number, waveOf: number | null): string =>
+  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}`;
+
+/**
+ * The coordinator's OWN mail — the wave brief (dispatch) and a done-claim
+ * rejection mailed back (close) — queued DIRECTLY rather than through
+ * `POST /api/mail`'s ingress. The ingress exists to police attribution for a
+ * message this server did not originate (spec:136-148: a box token
+ * authenticates the box, `{fromId,fromUuid}` is verified against the
+ * registry); a message the SERVER itself is sending has no sender session to
+ * be stale about, so re-entering that gate would be checking a fact that
+ * cannot fail against itself. `'coordinator'` is used as both `fromId` and
+ * `fromUuid` — a fixed ROLE identity, not a registry row, the same role
+ * `resolveCoordinator`'s own docstring already treats `toId:'coordinator'`
+ * as. Mirrors the ingress route's own tx shape exactly (insert mail, insert
+ * delivery so its own id exists, render the envelope AGAINST THE DELIVERY ID,
+ * land it) — see that route's comment on `setDeliveryEnvelope` for why the
+ * two ids cannot be assumed to walk together.
+ */
+function queueSystemMail(
+  coord: CoordStore,
+  run: Pick<RunRow, 'program' | 'wave' | 'waveOf'>,
+  m: { toId: string; runId: number; kind: MailKind; subject: string; body: string },
+): void {
+  tx(coord.db, () => {
+    const inserted = coord.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: m.toId,
+      runId: m.runId, kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
+    const delivery = coord.queueDelivery(inserted.id, m.toId, '');
+    const envelope = renderEnvelope({ id: delivery.id, fromId: 'coordinator', toId: m.toId, runId: m.runId,
+      program: run.program, wave: run.wave, waveOf: run.waveOf,
+      kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
+    coord.setDeliveryEnvelope(delivery.id, envelope);
+  });
+}
+
+/** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
+ *  material `RunSummary`'s own docstring says is "deliberately absent" from
+ *  the wire shape — "neither small nor something that changes on every
+ *  frame." `GET /api/runs` is the first reader of `CoordStore.runs()` in this
+ *  tree; without this it would be the first LEAK of it too. */
+const toSummary = (row: RunRow): RunSummary => {
+  const { prLineage: _prLineage, ...summary } = row;
+  return summary;
+};
 
 /**
  * The coordination routes. Registered from `buildServer` rather than declared
@@ -358,5 +420,331 @@ export function registerCoordRoutes(
 
     const landed = coord.markAcked(id, Date.now());
     return reply.code(200).send({ ok: true, already: !landed });
+  });
+
+  // ── runs (Task 9) ──────────────────────────────────────────────────────
+  //
+  // spec:192-198: "It acts through the server's HTTP API, not raw ccd… One
+  // chokepoint means caps are ENFORCED, every act is RECORDED on the run, and
+  // the PWA sees everything." Three routes, ZERO NEW CCD VERBS — every argv
+  // below is one of the five already granted (`agent/src/whitelist.ts:310-
+  // 336`): `wsAdd`/`ensure` are dispatch, `wsHold` is the claim, `wsRelease`
+  // the close, `wsArchive` the one explicit-abandon escape hatch.
+  //
+  // UNAUTHENTICATED, deliberately: unlike `/api/mail`/`/api/mail/:id/ack`
+  // (Task 7), these routes carry no box-token gate. The box token exists to
+  // close the anonymous fleet-host->server INGRESS spec:136-148 names; these
+  // three routes are the coordinator (and the PWA) driving the SAME
+  // unauthenticated HTTP API `/api/sessions/*` already is (fact 3, spec's own
+  // §0) — Task 9's own plan text never names a token check for them, and
+  // adding one unasked would be a silent redesign, not an adaptation.
+
+  /**
+   * Open a run.
+   *
+   * THE LEDGER IS NOT WRITTEN HERE, AND IT IS NOT READ HERE. Opening a run
+   * expects the coordinator to have committed `docs/superpowers/programs/
+   * <slug>.md` in the project's own repo — that is what a fresh session, and a
+   * human reviewing a handoff, read to learn where the program stands
+   * (`docs/superpowers/programs/TEMPLATE.md:5-9`). The server cannot verify it
+   * and deliberately does not try: the ledger is prose for humans and PARSED BY
+   * NOTHING (spec:93-95, spec:246-248). What it CAN do is name the path in the
+   * response, so a coordinator that forgot has been told once, in the place it
+   * would notice.
+   *
+   * The two records are joined by the program slug and neither is derived from
+   * the other. If the database is lost, the ledger plus the registry plus
+   * `.prhistory` are what rebuild the runs (spec:82-85, and
+   * `CoordStore.reconstruct` with its drill).
+   */
+  app.post('/api/runs', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { program, title, project, wave, waveOf, claimedBy, sessionId } = body;
+    if (typeof program !== 'string' || program.trim() === '' ||
+        typeof title !== 'string' || title.trim() === '' ||
+        typeof project !== 'string' || project.trim() === '' ||
+        typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
+        typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1 ||
+        !(waveOf === undefined || waveOf === null || (typeof waveOf === 'number' && Number.isInteger(waveOf))) ||
+        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== ''))) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const waveOfVal = (waveOf ?? null) as number | null;
+
+    // `openRun` refuses a second coordinator (spec:291-292) rather than
+    // arbitrating — the run is NOT opened, nothing else below runs.
+    const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy });
+    if ('refused' in opened) {
+      return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
+    }
+
+    // `sessionId` names an existing workspace (wave N>=2, reclaiming what
+    // wave 1 held): place the hold immediately, and persist the id onto the
+    // row (`CoordStore.setSession`, this task's own deviation D-45) so the
+    // dispatch route can later read `run.sessionId` back and know to `ensure`
+    // rather than `ws-add` (deviation D-1).
+    if (typeof sessionId === 'string') {
+      coord.setSession(opened.id, sessionId);
+      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal));
+      if (!verbSupported(deps.fleetState, argv)) {
+        return reply.code(501).send({ ok: false, error: 'unsupported' });
+      }
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    }
+
+    return reply.code(200).send({
+      ok: true, id: opened.id, program: opened.program, state: opened.state,
+      ledgerPath: `docs/superpowers/programs/${program}.md`,
+    });
+  });
+
+  /**
+   * Dispatch a run: pause and caps checked FIRST, then either a fresh
+   * workspace (wave 1) or a resumed one with an injected `/clear` (wave N>=2,
+   * deviation D-1), then the hold, then the transition, then the brief — as
+   * MAIL, never injected directly (a fresh pane is `working` for its first
+   * seconds, and the delivery lane's own gate is exactly the thing that knows
+   * when it is not).
+   */
+  app.post('/api/runs/:id/dispatch', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const run = coord.run(id);
+    if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+
+    const body = (req.body ?? {}) as { brief?: unknown };
+    if (typeof body.brief !== 'string' || body.brief.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const brief = body.brief;
+
+    // 1: PAUSE FIRST, before anything is counted or spawned. A directory we
+    // cannot list is a pause we cannot rule out — fail-shut, the identical
+    // idiom `watch.ts`'s mail sweep uses for its own `mail-disabled`
+    // kill-switch marker, and for the same reason. spec:201-205: "no verb, no
+    // route, no way for the coordinator to unpause itself" — there is
+    // deliberately no `POST /api/coordinator/resume` anywhere in this build.
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names === null || names.includes(COORDINATOR_PAUSE_MARKER)) {
+      return reply.code(409).send({ ok: false, refused: 'paused' });
+    }
+
+    // 2: caps. The refusal carries the numbers — a cap that refuses without
+    // saying what it is is indistinguishable from a bug.
+    const caps = coord.caps();
+    const usage = coord.capsUsage();
+    if (usage.running >= caps.maxConcurrentWorkers) {
+      return reply.code(409).send({ ok: false, refused: 'cap-concurrency',
+        limit: caps.maxConcurrentWorkers, running: usage.running });
+    }
+    if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
+      return reply.code(409).send({ ok: false, refused: 'cap-daily',
+        limit: caps.maxSessionsPerDay, used: usage.dispatchedIn24h });
+    }
+
+    let sessionId: string; let workspace: string | null; let branch: string | null;
+    let resumed: boolean; let clearedAt: number | null = null;
+
+    if (run.sessionId === null) {
+      // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
+      // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
+      // <path> (branch …)`, `ccd/ccd:1116`) — a prose line nobody wrote a
+      // contract for, and this repo has already paid for one of those. Read
+      // the registry before and after; exactly one new `workspace !== null`
+      // row for this project is the run's session.
+      const before = await readRegistry(deps.io, deps.cfg);
+      const beforeIds = new Set(before.map((r) => r.id));
+      const argv = CCD_ARGV.wsAdd(run.project);
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+      const after = await readRegistry(deps.io, deps.cfg);
+      const candidates = after.filter((r) =>
+        !beforeIds.has(r.id) && r.project === run.project && r.workspace !== null);
+      if (candidates.length !== 1) {
+        // Nothing claimed on a guess: the run stays `planned`, no hold placed
+        // — the operator resolves it.
+        return reply.code(409).send({ ok: false, refused: 'ambiguous-dispatch', candidates: candidates.length });
+      }
+      const winner = candidates[0]!;
+      sessionId = winner.id; workspace = winner.workspace; branch = winner.branch;
+      resumed = false;
+    } else {
+      // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
+      // spawn fresh into an existing one), then discard the resumed context
+      // with an injected `/clear` through `sendPrompt`'s full proof
+      // discipline (echo verified, draft-present refused, dialog-open
+      // refused) inside the session's own `KeyedQueue` slot — the exact move
+      // ccd itself makes with `/compact` from `_auto_compact_check`, upgraded
+      // from blind send-keys to the verified path. `/clear` rotates the
+      // harness uuid (`_sync_uuid` refreshes the registry copy within one
+      // supervise tick), so mail attribution re-arms itself in a genuinely
+      // fresh context.
+      sessionId = run.sessionId;
+      const argv = CCD_ARGV.ensure(sessionId);
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+      resumed = true;
+      // The live registry, falling back to the run row — the identical
+      // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason
+      // (see `DoneRun`'s own docstring): the live registry is the fresher
+      // source, the run row is what is left when it cannot answer.
+      const record = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === sessionId);
+      workspace = record?.workspace ?? run.workspace;
+      branch = record?.branch ?? run.branch;
+      const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
+      // A refused `/clear` (dialog open, draft present) is not fatal to
+      // dispatch itself — the run still lands in `dispatched` below, with
+      // `clearedAt` left null as the honest record that the second step has
+      // not run yet; a coordinator that notices retries it like any other
+      // failed step (D-1, orchestrator amendment).
+      clearedAt = clearRes.ok ? Date.now() : null;
+    }
+
+    // 5: hold, behind `verbSupported` — the standing convention reason
+    // string, DISPLAY-ONLY and never parsed back (`registry.ts:26-46`).
+    const holdArgv = CCD_ARGV.wsHold(sessionId, holdReason(run.program, run.wave, run.waveOf));
+    if (!verbSupported(deps.fleetState, holdArgv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const holdRes = await deps.runCcd(holdArgv);
+    if (!holdRes.ok) return reply.code(502).send({ ok: false, stderr: holdRes.stderr });
+
+    // 6: one call each, so the `run_events` row happens and is independently
+    // attributable from the dispatch write (`markDispatched`'s own docstring).
+    coord.markDispatched(id, sessionId, workspace, branch, resumed);
+    if (clearedAt !== null) coord.setClearedAt(id, clearedAt);
+    const adv = coord.advance(id, 'dispatched', 'coordinator');
+    if (!adv.ok) return reply.code(409).send(adv);
+
+    // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
+    // injected directly.
+    queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body: brief });
+
+    return reply.code(200).send({ ok: true, id, sessionId, resumed, clearedAt });
+  });
+
+  /**
+   * Close a run: re-measure the done claim (never believe it), fold
+   * `.prhistory` (refusing to close on an unreadable ledger — a run record
+   * saying "retired no PRs" because a file could not be read is the forgery
+   * `ccd/ccd:2018-2035` names), then the transition, then the fleet act —
+   * and the fleet act is a RELEASE (deviation D-5), never an autonomous
+   * archive: `FleetWatcher.archiveMerged` does that on its own clock, through
+   * its own `archiveSafety` gate.
+   */
+  app.post('/api/runs/:id/close', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const run = coord.run(id);
+    if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    if (run.sessionId === null) {
+      // Never dispatched: there is no worker session for `verifyDone` to
+      // re-measure against and no worker to mail a rejection back to. Not one
+      // of D-3's typed `MailRejectCode`s (this is not a mail refusal) or of
+      // `AdvanceResult`'s (this is not a transition refusal either) — its own
+      // local, honest shape, on the same `refused` convention dispatch's own
+      // `ambiguous-dispatch`/`paused`/`cap-*` refusals already use.
+      return reply.code(409).send({ ok: false, refused: 'not-dispatched' });
+    }
+
+    const body = (req.body ?? {}) as
+      { fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
+        final?: unknown; state?: unknown; archive?: unknown };
+    const fp = body.fingerprint;
+    if (typeof fp !== 'object' || fp === null ||
+        typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
+        typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number') ||
+        typeof body.final !== 'boolean' ||
+        (body.state !== undefined && body.state !== 'done' && body.state !== 'failed') ||
+        (body.archive !== undefined && typeof body.archive !== 'boolean')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // The claim is UNTRUSTED off the wire (`DoneClaim`'s own docstring):
+    // `verifyDone` re-validates `branchTip`/`handoffCommit`/`prPhase`/
+    // `prNumber` itself, on the strength of nothing this route asserts.
+    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
+      prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
+    const final = body.final;
+    const state: 'done' | 'failed' = body.state === 'failed' ? 'failed' : 'done';
+    const archive = body.archive === true;
+
+    // 1: verifyDone — the run is NOT touched here (`fingerprint.ts`'s own
+    // docstring); this route decides.
+    const verdict = await verifyDone(
+      { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+      { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+      claim,
+    );
+    if (!verdict.ok) {
+      // The run state is UNCHANGED. The rejection is recorded (spec:147-148's
+      // "a rejected message is a fact about the fleet" — done-authority
+      // rejections get the identical courtesy), and a `status` mail carrying
+      // the code and detail is mailed back to the worker (spec:129-131).
+      coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
+      queueSystemMail(coord, run, { toId: run.sessionId, runId: id, kind: 'status',
+        subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
+      return reply.code(409).send({ ok: false, error: verdict.code, detail: verdict.detail });
+    }
+
+    // 2: `.prhistory` — refuse to close on an unreadable ledger; nothing
+    // closes.
+    const history = await readPrHistory(deps.io, deps.cfg.registryDir, run.sessionId);
+    if (!history.ok) {
+      return reply.code(409).send({ ok: false, refused: 'prhistory-unreadable' });
+    }
+    coord.foldPrLineage(id, history.entries);
+
+    // 3: the transition, and the handoff commit, recorded.
+    const closingAdv = coord.advance(id, 'closing', 'coordinator');
+    if (!closingAdv.ok) return reply.code(409).send(closingAdv);
+    const finalAdv = coord.advance(id, state, 'coordinator');
+    if (!finalAdv.ok) return reply.code(409).send(finalAdv);
+    coord.setHandoffCommit(id, claim.handoffCommit);
+
+    // 4: the fleet act — and it is a RELEASE (D-5), never an autonomous
+    // archive. `state:'failed'` with `archive:true` is the ONE explicit
+    // wsArchive call in the whole coordination lane, mirroring
+    // `POST /api/sessions/:id/archive` including its 501.
+    if (state === 'failed' && archive) {
+      const argv = CCD_ARGV.wsArchive(run.sessionId);
+      if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    } else if (final) {
+      const argv = CCD_ARGV.wsRelease(run.sessionId);
+      if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    } else {
+      const nextReason = holdReason(run.program, run.wave + 1, run.waveOf);
+      const argv = CCD_ARGV.wsHold(run.sessionId, nextReason);
+      if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    }
+
+    return reply.code(200).send({ ok: true, id, state });
+  });
+
+  /** `GET /api/runs?closed=1` — cold start, and the archive of finished runs
+   *  (spec:225-227). Strips `prLineage` on the way out (`toSummary`). */
+  app.get('/api/runs', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const q = req.query as { closed?: string };
+    const runs = deps.coord.runs({ includeClosed: q.closed === '1' });
+    const summaries: RunSummary[] = runs.map(toSummary);
+    return { runs: summaries };
   });
 }
