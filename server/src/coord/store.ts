@@ -150,6 +150,23 @@ export class CoordStore {
     this.db.prepare('UPDATE runs SET prLineage = ? WHERE id = ?').run(JSON.stringify(lineage), runId);
   }
 
+  /**
+   * `runs.handoffCommit`, written once at close (fix, found in a later Task 3
+   * review — D-25): before this method the column had exactly one writer in
+   * the whole tree, `reconstruct`'s disaster-recovery INSERT, so every run
+   * this build actually closed could only ever read `handoffCommit: null` on
+   * the wire — silently disagreeing with the fingerprint the close route
+   * re-measures and rejects a claim over (`fingerprint.ts`'s `no-handoff-
+   * commit`, D-2). Mirrors `foldPrLineage`'s shape on purpose: a single-
+   * column UPDATE, called once, at close. Task 9's close route (not yet
+   * written in this tree) is the intended caller — the same "known-green but
+   * unconsumed" posture this task's own docstring already gives
+   * `RunSummary`/`MailSummary`.
+   */
+  setHandoffCommit(runId: number, handoffCommit: string): void {
+    this.db.prepare('UPDATE runs SET handoffCommit = ? WHERE id = ?').run(handoffCommit, runId);
+  }
+
   run(id: number): RunRow | null {
     const row = this.db.prepare(
       `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program WHERE r.id = ?`,
@@ -169,6 +186,26 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT at, fromState, toState, causedBy FROM run_events WHERE runId = ? ORDER BY id',
     ).all(runId) as { at: number; fromState: string; toState: string; causedBy: string }[];
+  }
+
+  /**
+   * The writer `programs.state` had none of, outside `openRun`'s hardcoded
+   * `'active'` at first open (fix, found in a later Task 3 review — D-26):
+   * the two `INSERT … ON CONFLICT(slug) DO UPDATE` sites (`openRun`,
+   * `reconstruct`) both only ever touch `title` in their conflict arm, so a
+   * program could never be retired. That silently disarmed
+   * `resolveCoordinator(null)` the moment a SECOND program existed — its
+   * "single active program" guard reads `ambiguous` (`active.length !== 1`)
+   * forever once a prior program's runs finish and nothing ever moves it out
+   * of `active`, which is this build's ordinary steady state, not an edge
+   * case. Mirrors `setWorkItemState`'s shape. *Who* calls this and *when* a
+   * program should retire is routing/policy — a decision for whichever task
+   * closes the last run of a program (Task 9, not yet written in this tree),
+   * the same boundary D-1's `clearedAt` amendment already draws between "the
+   * write path exists" and "the route that drives it".
+   */
+  setProgramState(slug: string, state: ProgramState): void {
+    this.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run(state, slug);
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {

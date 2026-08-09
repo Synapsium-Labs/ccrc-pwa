@@ -85,6 +85,33 @@ describe('CoordStore: runs', () => {
     expect(s.advance(b.id, 'closing', 'coordinator')).toMatchObject({ ok: true, from: 'working' });
   });
 
+  it('writes handoffCommit through a real setter — the close path had none (found in a later Task 3 review, D-25)', () => {
+    // `runs.handoffCommit` had exactly one writer in the whole tree before
+    // this fix: `reconstruct`'s disaster-recovery INSERT. Every run this
+    // build actually closes needs its own write path, the same way
+    // `foldPrLineage` gives `prLineage` one.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    expect(s.run(r.id)!.handoffCommit).toBeNull();
+    const sha = 'c'.repeat(40);
+    s.setHandoffCommit(r.id, sha);
+    expect(s.run(r.id)!.handoffCommit).toBe(sha);
+  });
+
+  it('refuses a transition from a state token this build does not know, rather than throwing (found in a later Task 3 review, D-27)', () => {
+    // advance()'s OWN `isRunState` guard on `from` (store.ts:118) was pinned
+    // nowhere — only hydrateRun's copy (the test above) ever was. Without it,
+    // `RUN_TRANSITIONS['reconciling']` is `undefined` and `.includes(to)`
+    // throws a TypeError instead of answering a typed `bad-transition`
+    // refusal — the failure a rollback to a newer-build-written state would
+    // hit at `POST /api/runs/:id/advance`.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('reconciling', r.id);
+    expect(s.advance(r.id, 'working', 'coordinator'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'unknown', to: 'working' });
+  });
+
   it('reads `clearedAt` from the real column, not a hardcoded null (D-1)', () => {
     // D-1's dispatch route (Task 9) is what WRITES this column; nothing in
     // this diff does, so a freshly opened run's answer is honestly null. The
@@ -137,6 +164,43 @@ describe('CoordStore: work items', () => {
     expect(s.itemTally(r.id)).toEqual({ done: 0, total: 2 });
     s.setWorkItemState(one.id, 'done', 'ccrc-pwa-quiet-mesa');
     expect(s.itemTally(r.id)).toEqual({ done: 1, total: 2 });
+  });
+});
+
+describe('CoordStore: programs', () => {
+  it('reads a programs.state token this build does not know as `unknown`, never as a raw string (found in a later Task 3 review, D-27)', () => {
+    // `programs()`'s OWN `isProgramState` guard (store.ts, formerly :179) was
+    // pinned nowhere — D-8's closing note (plan:88) and schema.ts's header
+    // both say the gap is shut on the strength of the guard existing, but a
+    // green suite that cannot tell the guard from `r.state as ProgramState`
+    // is not the mechanism that record claims (shared/api.ts:1331: "a
+    // comment is a request and a red suite is a mechanism").
+    const s = store();
+    openRun(s);
+    s.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run('archived', 'build4');
+    expect(s.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'unknown' }]);
+  });
+
+  it('writes programs.state through a real setter, and unwedges resolveCoordinator once a finished program is retired (found in a later Task 3 review, D-26)', () => {
+    // Before this fix `programs.state` had no writer beyond `openRun`'s
+    // hardcoded 'active' at first open — so once a SECOND program opened,
+    // `resolveCoordinator(null)` (the shipped ingress's `toId:'coordinator'`
+    // resolution) died permanently: two 'active' rows is `ambiguous`, and
+    // nothing in the build could ever move the first one out of `active`,
+    // even after every one of its runs was done. This is the failure
+    // scenario, demonstrated at the store level, and its fix.
+    const s = store();
+    s.openRun({ program: 'p1', title: 'Program one', project: 'ccrc-pwa',
+                wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' });
+    expect(s.resolveCoordinator(null)).toBe('ccrc-pwa-coordA');
+
+    s.openRun({ program: 'p2', title: 'Program two', project: 'ccrc-pwa',
+                wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' });
+    expect(s.resolveCoordinator(null)).toBeNull();          // two active programs: ambiguous
+
+    s.setProgramState('p1', 'done');
+    expect(s.programs()).toContainEqual({ slug: 'p1', title: 'Program one', state: 'done' });
+    expect(s.resolveCoordinator(null)).toBe('ccrc-pwa-coordB');   // unwedged: p2 is the sole active program
   });
 });
 
@@ -269,6 +333,21 @@ describe('the disaster-recovery path (spec:82-85)', () => {
 });
 
 describe('CoordStore: mail delivery replay (spec:174-180)', () => {
+  it('reads a mail_deliveries.state token this build does not know as `unknown`, never as a raw string (found in a later Task 3 review, D-27)', () => {
+    // `delivery()`'s OWN `isMailDeliveryState` guard (store.ts, formerly
+    // :332) was pinned nowhere: mail-routes.test.ts's one assertion on this
+    // method reads a genuinely-'queued' row, which `row.state as
+    // MailDeliveryState` would return identically — not discriminating.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+    s.db.prepare('UPDATE mail_deliveries SET state = ? WHERE id = ?').run('archiving', d.id);
+    expect(s.delivery(d.id)).toMatchObject({ state: 'unknown' });
+  });
+
   it('dueDeliveries: queued is due at nextAttemptAt; delivered replays after replayMs; acked never returns (D-10)', () => {
     // dueDeliveries review: the shipped WHERE clause matched only
     // `state = 'queued'`, so once `markDelivered` moved a row to `delivered`
