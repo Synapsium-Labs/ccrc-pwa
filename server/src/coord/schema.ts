@@ -32,16 +32,21 @@
  * archive behind `NotifyLog`'s in-memory ring (`server/src/notifylog.ts`),
  * which keeps its exact current role — this table is what `GET /api/feed`
  * answers once the ring has evicted a row or the process has restarted and
- * re-minted a fresh epoch. `feed_events.kind` is shaped like a sixth enum
- * column but is deliberately NOT one of the five the paragraph above counts,
- * and is not held to the we-do-not-know discipline those five are: it is
- * written only from a value this server itself already typed as
- * `NotifyEvent['kind']` (`FleetWatcher.pushOne`'s own call sites), the
- * client-side `'unknown'` degrade member that type carries is a READ-side
- * concept for an older PWA parsing a newer server's frame
- * (`reviveNotifyEvent`), and this server never writes it here. `CoordStore.
- * feedEvents` reads it back with a documented cast — the same stance
- * `mail_rejections.code` below already takes, and for the identical reason.
+ * re-minted a fresh epoch. `feed_events.kind` IS a sixth we-do-not-know
+ * column (correction, review finding 2 — an earlier draft of this paragraph
+ * exempted it on the grounds that it is "written only from a value this
+ * server itself already typed", and likened that to `mail_rejections.code`
+ * below; both halves were wrong, the second more so, since that column's own
+ * docstring in `store.ts` states the OPPOSITE stance in so many words). The
+ * exemption's premise fails on a rollback: `deploy.sh` keeps per-timestamp
+ * backups, and `shared/api.ts`'s own rollback paragraph (`:567-571`) is
+ * exactly the "older, same, or newer" span that makes "this server itself
+ * already typed it" false the moment the running server is OLDER than the
+ * build that last wrote this column. `CoordStore.feedEvents` reads `kind`
+ * back through `isNotifyKind` (`shared/api.ts`, exported beside
+ * `NOTIFY_KINDS` for exactly this caller), degrading an unrecognised token
+ * to `'unknown'` — the same guard `isRunState`/`isProgramState`/
+ * `isMailDeliveryState` already give the other five, never a cast.
  *
  * `runs.claimedBy` implements spec:291-292's multi-coordinator non-goal: one
  * coordinator per program, and a second one refuses rather than arbitrating.

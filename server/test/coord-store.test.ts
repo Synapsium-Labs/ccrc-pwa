@@ -495,3 +495,28 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     expect(s.dueDeliveries(dueAt + 30_000, replayMs).map((x) => x.id)).toEqual([d.id]); // due again
   });
 });
+
+describe('CoordStore: feed (Task 10)', () => {
+  // Review finding 2. `feed_events.kind` was cast straight into
+  // `NotifyEvent['kind']` on the theory that this server only ever writes a
+  // value it already typed — false the moment a rollback (deploy.sh's
+  // per-timestamp backups) puts an OLDER server behind a store a NEWER build
+  // already wrote a seventh kind into. Same pattern as `run()`'s own
+  // `reads a state token this build does not know` test above: land the
+  // out-of-vocabulary token with a raw statement `recordFeedEvent`'s typed
+  // signature would never let a caller pass, then read it back.
+  it('reads a kind token this build does not know as `unknown`, never as a raw string', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'done', sessionId: 'cc-a', title: 't', body: 'b' });
+    s.db.prepare('UPDATE feed_events SET kind = ? WHERE seq = ?').run('review', 1);
+    expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['unknown']);
+  });
+
+  it('still reads every KNOWN kind through the same guard, unchanged', () => {
+    const s = store();
+    for (const kind of ['ask', 'done', 'merged', 'mail', 'run'] as const) {
+      s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind, sessionId: 'cc-a', title: 't', body: 'b' });
+    }
+    expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
+  });
+});

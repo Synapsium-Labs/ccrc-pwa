@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -551,6 +551,50 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(sent).toHaveLength(1);
       expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
     });
+
+    // Review finding 3. `mailQueuedSince`'s `project` comes off a `LEFT
+    // JOIN` to the mail's run and is NULL for ad-hoc mail with no run — a
+    // fully supported case (`POST /api/mail` treats `runId` as optional) —
+    // and every OTHER mail case in this file seeds exactly one project, so
+    // the decoration branch was never entered on this lane before now.
+    it('falls back to the RECIPIENT session\'s own project for run-less mail in a multi-project fleet', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      await w.tick();                  // priming
+
+      const mail = w.coord!.insertMail({
+        fromId: 'cc-b', fromUuid: 'u-b', toId: 'cc-a', runId: null,
+        kind: 'finding', subject: 'flaky test', body: 'b', artifacts: [],
+      });
+      w.coord!.queueDelivery(mail.id, 'cc-a', 'e1');
+      await w.tick();
+
+      expect(sent).toHaveLength(1);
+      // NOT the pre-fix `✉ finding › cc-a · ` (a dangling separator with
+      // nothing after it) — `cc-a`'s own project, read from this tick's
+      // fleet assembly.
+      expect(sent[0]!.title).toBe('✉ finding › cc-a · ccrc-pwa');
+    });
+
+    it('suppresses the decoration entirely — never a dangling separator — when even the recipient\'s project is unknown', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      await w.tick();
+
+      // `toId` names no live session (e.g. reaped between send and
+      // delivery) — no run, and no fleet entry to fall back to either.
+      const mail = w.coord!.insertMail({
+        fromId: 'cc-b', fromUuid: 'u-b', toId: 'cc-gone', runId: null,
+        kind: 'finding', subject: 'flaky test', body: 'b', artifacts: [],
+      });
+      w.coord!.queueDelivery(mail.id, 'cc-gone', 'e1');
+      await w.tick();
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.title).toBe('✉ finding › cc-gone');   // no ' · ' at all
+    });
   });
 
   describe('the `run` lane', () => {
@@ -578,9 +622,40 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       w.coord!.advance(run.id, 'closing', 'coordinator');
       w.coord!.advance(run.id, 'done', 'coordinator');
       await w.tick();
-      expect(sent).toHaveLength(3);              // one push per transition, not one per run
-      expect(sent.slice(1).map((p) => p.tag)).toEqual([
-        `run-${run.id}-closing`, `run-${run.id}-done`,
+      // `closing` fires only ONE push per run-worth-acting-on transition —
+      // `done` reaches the tray, `closing` does not (review finding 4:
+      // `closing` is internal bookkeeping between the close route's two
+      // adjacent `advance()` calls, a state the operator can neither act on
+      // nor ever observe as resting).
+      expect(sent).toHaveLength(2);
+      expect(sent[1]!.tag).toBe(`run-${run.id}-done`);
+    });
+
+    it('records the `closing` transition into the log and the feed, but never pushes it', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const log = new NotifyLog(path.join(await dir(), 'n.json'));
+      await log.load();
+      const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();                  // priming
+
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.setSession(run.id, 'cc-a');
+      w.coord!.advance(run.id, 'dispatched', 'coordinator');
+      w.coord!.advance(run.id, 'closing', 'coordinator');
+      w.coord!.advance(run.id, 'done', 'coordinator');
+      await w.tick();
+
+      // Two pushes (dispatched, done); THREE records — `recordOnly` exempts
+      // only the push, never the record, exactly as `recordAlways` exempts
+      // only the record from the presence gate above it.
+      expect(sent.map((p) => p.tag)).toEqual([`run-${run.id}-dispatched`, `run-${run.id}-done`]);
+      expect(log.seq).toBe(3);
+      expect(w.coord!.feedEvents(10).map((e) => e.title)).toEqual([
+        '▸ dispatched › ccrc-pwa', '▸ closing › ccrc-pwa', '▸ done › ccrc-pwa',
       ]);
     });
 
@@ -610,6 +685,61 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       w.coord!.advance(run2.id, 'dispatched', 'coordinator');
       await w.tick();
       expect(sent).toHaveLength(1);
+    });
+  });
+
+  // Review finding 1. `tick()`'s own docstring rule is that one bad lane must
+  // not kill the others — every neighbouring lane already earns that
+  // non-throwing property (sweepPr/sweepNames/sweepMail's `void …().catch`,
+  // saveSnapshot's try/catch, readRegistry's swallow-by-construction), and the
+  // four synchronous `CoordStore` calls Task 10 added were the exception.
+  // `node:sqlite` throws SYNCHRONOUSLY on the next statement once the
+  // connection is unusable (a full disk, `BEGIN IMMEDIATE` losing a lock race)
+  // — closing the connection reproduces that class of throw directly, without
+  // faking an error.
+  describe('a broken coord.db degrades, never crashes the poll', () => {
+    it('recordFeedEvent, pushNewMail and pushNewRuns each swallow the throw, warn, and let the push through', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const log = new NotifyLog(path.join(await dir(), 'n.json'));
+      await log.load();
+      const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();                    // priming tick — the db is fine here
+
+      w.coord!.db.close();
+
+      w.markIdle('cc-a');
+      // Every coord-touching call this tick reaches is now broken: `pushOne`'s
+      // `recordFeedEvent` (off the `done` push), `pushNewMail`'s
+      // `mailQueuedSince`, `pushNewRuns`'s `runEventsSince`, and `emitRuns`'s
+      // `coord.runs()`. None of them may escape `tick()`.
+      await expect(w.tick()).resolves.toBeUndefined();
+
+      // The push and the RING record still went through — only the durable
+      // ARCHIVE write failed. A regression that let the throw propagate out of
+      // `pushOne` would have lost this push too, not just the archive row.
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.title).toBe('✓ Finished');
+      expect(log.seq).toBe(1);
+
+      const warned = (needle: string) =>
+        warnSpy.mock.calls.some(([line]) => String(line).includes(needle));
+      expect(warned('recordFeedEvent failed')).toBe(true);
+      expect(warned('pushNewMail failed')).toBe(true);
+      expect(warned('pushNewRuns failed')).toBe(true);
+      expect(warned('emitRuns failed')).toBe(true);
+    });
+
+    it('a break on the very first (priming) tick leaves the watermarks at 0 instead of crashing', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const push = { notify: async () => {} };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      w.coord!.db.close();                // broken BEFORE the very first tick ever runs
+
+      await expect(w.tick()).resolves.toBeUndefined();
+      expect(warnSpy.mock.calls.some(([line]) =>
+        String(line).includes('priming the mail/run watermarks failed'))).toBe(true);
     });
   });
 });

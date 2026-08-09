@@ -13,7 +13,7 @@ import { readHookState, type HookState } from './hookstate.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
-import type { NotifyEvent, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress } from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
@@ -477,6 +477,13 @@ export class FleetWatcher {
     // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
     // have on their own clocks — see `activeProjects`'s own comment.
     const projects = new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.project));
+    // Per-session project, off the SAME fleet assembly — the honest fallback
+    // `pushNewMail` uses for run-less mail (review finding 3): a delivery's
+    // `project` is null whenever the mail has no run, which `mailQueuedSince`'s
+    // own docstring names as a fully supported case, not an edge one, and the
+    // RECIPIENT session's own project (known here, not down in that method's
+    // own scope) is the honest answer — never an empty string.
+    const sessionProjects = new Map(sessions.map((s) => [s.id, s.project]));
     // Push on a busy→idle finish (a session completed a turn). Skip the priming
     // tick — otherwise a restart notifies for every currently-idle session.
     if (this.primed) {
@@ -486,16 +493,43 @@ export class FleetWatcher {
         }
       }
       // Build 7's two new notify kinds ride the SAME primed gate as the
-      // `done` push above, for the identical restart reason.
-      this.pushNewMail(projects);
-      this.pushNewRuns(projects);
+      // `done` push above, for the identical restart reason. EACH WRAPPED
+      // (review finding 1): both walk straight into `node:sqlite`, which
+      // throws SYNCHRONOUSLY — a full disk (this fleet already ships a 10G
+      // floor check, so it is not hypothetical) or a second connection
+      // holding coord.db's write lock (`BEGIN IMMEDIATE` takes it eagerly,
+      // no busy timeout) is enough. `tick()` is fired by `start()` as `void
+      // this.tick()` with no `unhandledRejection` handler anywhere in this
+      // tree, so an unguarded throw here would kill the whole process over a
+      // fault every NEIGHBOURING lane already survives (sweepPr/sweepNames/
+      // sweepMail's `void …().catch(…)`, saveSnapshot's try/catch below,
+      // readRegistry's swallow-by-construction) — these two were the
+      // exception, not the rule this file otherwise keeps.
+      try { this.pushNewMail(projects, sessionProjects); }
+      catch (err) {
+        console.warn(`ccrc-server: pushNewMail failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      }
+      try { this.pushNewRuns(projects); }
+      catch (err) {
+        console.warn(`ccrc-server: pushNewRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      }
     } else if (this.deps.coord) {
       // The priming tick seeds both watermarks to "everything that already
       // exists" rather than 0, so the FIRST primed tick's `WHERE id > ?`
       // reads see only what changed after this process started — the mail-
       // lane courtesy spec's restart semantics name, extended here to runs.
-      this.lastMailNotifyId = this.deps.coord.maxMailDeliveryId();
-      this.lastRunNotifyId = this.deps.coord.maxRunEventId();
+      // Guarded for the identical reason as the two calls above (review
+      // finding 1): a priming-tick SQLite failure must leave both watermarks
+      // at 0, not kill the process — a later primed tick still reads
+      // everything queued since the process actually started, which is the
+      // same "replay a bit more than strictly necessary" cost every other
+      // lane in this file accepts over losing the poll outright.
+      try {
+        this.lastMailNotifyId = this.deps.coord.maxMailDeliveryId();
+        this.lastRunNotifyId = this.deps.coord.maxRunEventId();
+      } catch (err) {
+        console.warn(`ccrc-server: priming the mail/run watermarks failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+      }
     }
     for (const s of sessions) this.prevStatus.set(s.id, s.status);
     this.activeProjects = projects;
@@ -526,11 +560,24 @@ export class FleetWatcher {
    * having any. No `coord` -> nothing to read -> nothing ever emitted, the
    * same "absent means none of this exists" stance every other coord-gated
    * surface in this build takes.
+   *
+   * GUARDED (review finding 1): `coord.runs()` is a synchronous `node:sqlite`
+   * read, sitting directly on `tick()`'s own poll with no neighbouring
+   * `catch` to absorb it — the same fault (a full disk, a locked coord.db)
+   * that has a `try`/`.catch` at every OTHER synchronous or async lane in
+   * this file. A failure here skips just this tick's `runs` emission;
+   * `lastRunsJson` is left untouched so a later successful tick still diffs
+   * correctly against whatever was last actually broadcast.
    */
   private emitRuns(): void {
     const coord = this.deps.coord;
     if (!coord) return;
-    const runs = coord.runs().map(toRunSummary);
+    let runs: RunSummary[];
+    try { runs = coord.runs().map(toRunSummary); }
+    catch (err) {
+      console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+      return;
+    }
     const json = JSON.stringify(runs);
     if (json === this.lastRunsJson) return;
     this.lastRunsJson = json;
@@ -553,13 +600,24 @@ export class FleetWatcher {
    * last. `recordAlways: true` (spec:238-240): a message the operator is
    * looking at the recipient's pane for is still a fact that arrived: only
    * the PUSH is presence-gated, never the record.
+   *
+   * `sessionProjects` (review finding 3): `m.project` comes off a `LEFT JOIN`
+   * to the mail's run and is `null` for ad-hoc mail with no run context — a
+   * fully supported, first-class case (`mailQueuedSince`'s own docstring;
+   * `POST /api/mail` treats `runId` as optional). Falling back to `''` left a
+   * dangling ` · ` in a multi-project fleet: `pushOne` decorates on project
+   * COUNT alone, with no test ever exercising a run-less mail there (every
+   * mail case in `push-copy.test.ts` seeded one project). The recipient
+   * SESSION's own project, read one scope up in `tick()` from this same
+   * tick's fleet assembly, is the honest fallback.
    */
-  private pushNewMail(projects: Set<string>): void {
+  private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
     const coord = this.deps.coord;
     if (!coord) return;
     for (const m of coord.mailQueuedSince(this.lastMailNotifyId)) {
+      const project = m.project ?? sessionProjects.get(m.toId) ?? '';
       this.pushOne({
-        kind: 'mail', sessionId: m.toId, project: m.project ?? '',
+        kind: 'mail', sessionId: m.toId, project,
         title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
         tag: `mail-${m.toId}-${m.mailId}`,
@@ -570,11 +628,21 @@ export class FleetWatcher {
   }
 
   /**
-   * The `run` NotifyEvent lane (Task 10, spec:243-244): one push per
+   * The `run` NotifyEvent lane (Task 10, spec:243-244): one RECORD per
    * `run_events` row — every transition this run's own state machine
    * records, not just terminal ones. "A run transition is a fact about a
    * program, and the operator watching one pane must not erase it" —
    * `recordAlways: true` for the identical reason `pushNewMail` sets it.
+   *
+   * `closing` is `recordOnly` (review finding 4): `POST /api/runs/:id/close`
+   * commits `advance(id,'closing')` immediately followed by `advance(id,
+   * state)` — two adjacent synchronous statements with nothing between them
+   * that can fail in practice — so the SAME watcher tick always reads both
+   * rows, and every close fired TWO pushes, one naming a state that exists
+   * for microseconds: internal bookkeeping the operator can neither act on
+   * nor ever observe as a resting state. The feed still gets it in full — the
+   * record above is unconditional, same as every other transition — only the
+   * PUSH is suppressed for this one state.
    *
    * A transition with no `sessionId` yet (e.g. an early refusal before
    * dispatch ever minted one) is skipped rather than guessed: presence
@@ -593,6 +661,7 @@ export class FleetWatcher {
           body: `program:${r.program} wave ${r.wave}/${r.waveOf ?? '?'}`,
           tag: `run-${r.runId}-${r.toState}`,
           recordAlways: true,
+          recordOnly: r.toState === 'closing',
         }, projects);
       }
       this.lastRunNotifyId = r.eventId;
@@ -647,10 +716,24 @@ export class FleetWatcher {
      *  the record on presence would mean the operator watching a session
      *  ERASES the log of a message they never saw. */
     recordAlways?: boolean;
+    /** Record it (subject to the presence gate above, same as every other
+     *  kind) but never emit an actual push notification for it. Added for the
+     *  `run` lane's `closing` transition alone (review finding 4, see
+     *  `pushNewRuns`'s own docstring): the feed genuinely wants every
+     *  transition, which `recordAlways` already gets it; the tray does not,
+     *  and until now `pushOne` had no way to say so — `recordAlways` only
+     *  ever exempted the RECORD from the presence gate above, never the push
+     *  from firing at all. */
+    recordOnly?: boolean;
   }, projects: Set<string>): void {
     const visible = this.deps.presence?.isVisible(e.sessionId) === true;
     if (visible && !e.recordAlways) return;
-    const title = projects.size > 1 ? `${e.title} · ${e.project}` : e.title;
+    // Decorated only when BOTH more than one project is active AND the
+    // project is actually known (review finding 3) — an empty `e.project`
+    // (run-less mail whose recipient session could not be resolved either,
+    // `pushNewMail`'s own fallback chain) must degrade to no decoration at
+    // all, never to a dangling ` · ` with nothing after it.
+    const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
     const log = this.deps.notifyLog;
     const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
     void log?.flush();
@@ -658,9 +741,26 @@ export class FleetWatcher {
     // 10's orchestrator-added scope). Only reachable when NotifyLog actually
     // produced an event: no `notifyLog` configured means no `{epoch,seq}`
     // pair exists to mirror, and a feed row that mirrors nothing is not an
-    // archive of anything.
-    if (log && recorded) this.deps.coord?.recordFeedEvent(log.epoch, recorded);
+    // archive of anything. GUARDED (review finding 1): `node:sqlite` throws
+    // SYNCHRONOUSLY (a full disk, a second connection holding coord.db's
+    // write lock — `tx()`'s `BEGIN IMMEDIATE` takes it eagerly, no busy
+    // timeout) and this call sits directly on the poll, reached from every
+    // kind this method ever raises (the `done` push above, the ask push in
+    // `detectDialogs`, and both new Task 10 lanes). `tick()`'s own rule is
+    // that one bad lane must not kill the others — every neighbouring lane
+    // already earns that non-throwing property one way or another (see
+    // `tick()`'s own comment above `pushNewMail`/`pushNewRuns`) and this call
+    // was the one exception reachable from every push, not just two lanes.
+    // The ring record and the push below are UNAFFECTED by a failure here —
+    // only the archive row is lost.
+    if (log && recorded) {
+      try { this.deps.coord?.recordFeedEvent(log.epoch, recorded); }
+      catch (err) {
+        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — feed archive degraded, ring/push unaffected`);
+      }
+    }
     if (visible) return;                       // recorded, not pushed
+    if (e.recordOnly) return;                   // recorded, deliberately never pushed
     void this.deps.push?.notify({
       title, body: e.body, sessionId: e.sessionId,
       tag: e.tag ?? `${e.kind}-${e.sessionId}`,

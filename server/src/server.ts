@@ -274,7 +274,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // emitRuns`'s own byte-equality guard), so a client connecting into a
       // quiet fleet would otherwise see no runs until one moved. No `coord`
       // -> no frame at all, same as every other coord-gated surface here.
-      if (deps.coord) onRuns(deps.coord.runs().map(toRunSummary));
+      //
+      // GUARDED (review finding 1): `coord.runs()` is a synchronous
+      // `node:sqlite` read, and this `.then()` callback has no `.catch`
+      // anywhere on its chain — an unguarded throw here (a full disk, a
+      // second connection holding coord.db's write lock) becomes an
+      // unhandled promise rejection and kills the server for every socket,
+      // not just the one client connecting. Skipping the cold-start `runs`
+      // frame is the honest degrade: the socket still gets `hello`/`fleet`,
+      // and the next real transition's `FleetWatcher.emitRuns` broadcast
+      // reaches it exactly as it would any other already-connected client.
+      if (deps.coord) {
+        try { onRuns(deps.coord.runs().map(toRunSummary)); }
+        catch (err) {
+          console.warn(`ccrc-server: /ws/fleet cold-start runs() failed (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);

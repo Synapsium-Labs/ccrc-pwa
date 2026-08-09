@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
@@ -271,6 +271,48 @@ describe('fleet REST + WS', () => {
       // on the initial connect OR on any later tick.
       const msg = await next();
       expect(msg).toEqual({ type: 'notice', message: 'unrelated' });
+
+      ws.close();
+    });
+
+    // Review finding 1. `coord.runs()` here sits inside a `.then()` callback
+    // with no `.catch` anywhere on its chain: an unguarded throw becomes an
+    // unhandled promise rejection and kills the WHOLE server, not just this
+    // one connecting socket. Closing the connection reproduces the same class
+    // of synchronous `node:sqlite` throw a full disk or a lock race would.
+    it('a broken coord.db degrades the cold-start runs frame instead of crashing the connect handler', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      coord.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      });
+      coord.db.close();
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      // Deliberately NOT ticked — this isolates the `/ws/fleet` connect
+      // handler's own guard from `FleetWatcher`'s (which has its own tests).
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      // No `runs` frame ever arrives — the read failed and was swallowed,
+      // never sent broken — and, more importantly, the SERVER survived: a
+      // second, unrelated frame still reaches this same socket afterward.
+      bus.emit('notice', { message: 'still alive' });
+      const msg = await next();
+      expect(msg).toEqual({ type: 'notice', message: 'still alive' });
+
+      expect(warnSpy.mock.calls.some(([line]) =>
+        String(line).includes('/ws/fleet cold-start runs() failed'))).toBe(true);
 
       ws.close();
     });

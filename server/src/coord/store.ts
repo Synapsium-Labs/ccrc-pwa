@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import {
-  isMailDeliveryState, isProgramState, isRunState, RUN_TRANSITIONS,
+  isMailDeliveryState, isNotifyKind, isProgramState, isRunState, RUN_TRANSITIONS,
   type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type NotifyEvent,
   type ProgramState, type RunItemTally, type RunState, type RunSummary, type WorkItemState,
 } from '../../../shared/api.js';
@@ -659,9 +659,14 @@ export class CoordStore {
    * `GET /api/feed`'s reader — oldest-first (the route's own promise), `limit`
    * clamped into `(0, FEED_RETENTION]` so neither an absent/non-positive
    * value nor one past the table's own retention ceiling can be asked for.
-   * `kind` is read back with a cast, not a guard: see this file's own header
-   * comment (schema.ts) on why `feed_events.kind` is not one of D-8's five
-   * we-do-not-know columns.
+   * `kind` is read back through `isNotifyKind` (review finding 2), degrading
+   * an unrecognised token to `'unknown'` — the same guard `isRunState`/
+   * `isProgramState`/`isMailDeliveryState` already give the other we-do-not-
+   * know columns in this file, never a bare cast. `coord/schema.ts`'s header
+   * comment used to exempt this column on the grounds that it is "written
+   * only from a value this server itself already typed" — true only until a
+   * rollback (`shared/api.ts`'s own rollback paragraph) puts this server
+   * behind a store a NEWER build already wrote `feed_events.kind` into.
    */
   feedEvents(limit: number): NotifyEvent[] {
     const n = Number.isFinite(limit) && limit > 0
@@ -672,7 +677,7 @@ export class CoordStore {
       '(SELECT * FROM feed_events ORDER BY id DESC LIMIT ?) ORDER BY id ASC',
     ).all(n) as { seq: number; at: number; kind: string; sessionId: string; title: string; body: string }[];
     return rows.map((r) => ({
-      seq: r.seq, at: r.at, kind: r.kind as NotifyEvent['kind'], sessionId: r.sessionId,
+      seq: r.seq, at: r.at, kind: isNotifyKind(r.kind) ? r.kind : 'unknown', sessionId: r.sessionId,
       title: r.title, body: r.body,
     }));
   }

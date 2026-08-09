@@ -1330,11 +1330,32 @@ export interface NotifyEvent {
  *  badges for events it cannot enumerate. */
 export interface CatchUp { epoch: string; seq: number; resync: boolean; events: NotifyEvent[] }
 
-/** The recognised `NotifyEvent.kind` tokens — used ONLY by `reviveNotifyEvent`
- *  below to decide whether a wire value degrades to `unknown`; never
- *  `includes`d against the type-narrowed union itself (the same
- *  cast-the-constant-not-the-input rule `STATUSES`/`CHECKS` above state). */
-const NOTIFY_KINDS: readonly string[] = ['ask', 'done', 'merged', 'mail', 'run', 'unknown'];
+/** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
+ *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
+ *  the identical reason (that function's own docstring has the argument). */
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'unknown'];
+
+/**
+ * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
+ * same reason `isPrPhase`/`isRunState` give: the array's element type would
+ * force a caller to assert the very thing it is asking. Exported, unlike
+ * `NOTIFY_KINDS` itself, because `reviveNotifyEvent` below is no longer the
+ * only caller: `CoordStore.feedEvents` (`server/src/coord/store.ts`) reads
+ * `feed_events.kind` through this too (review finding 2, `coord/schema.ts`).
+ * That table's kind column was cast straight into `NotifyEvent['kind']` on
+ * an exemption whose own justification — "written only from a value this
+ * server itself already typed" — is the identical same-build-wrote-it
+ * assumption `user_version` and this file's own rollback paragraph (above,
+ * `:567-571`) exist to refuse: a rollback to an older server against a
+ * newer store, or a later build that adds a seventh `NotifyEvent.kind`, both
+ * put a token in that column this server never wrote and does not
+ * recognise. Every sibling vocabulary in this file (`isRunState`,
+ * `isWorkItemState`, `isProgramState`, `isMailDeliveryState`, `isPrReason`)
+ * already has a predicate; `NotifyEvent.kind` was the one left out.
+ */
+export function isNotifyKind(v: unknown): v is NotifyEvent['kind'] {
+  return typeof v === 'string' && (NOTIFY_KINDS as readonly string[]).includes(v);
+}
 
 /**
  * One catch-up event, revived into today's shape — the same discipline
@@ -1356,8 +1377,8 @@ export function reviveNotifyEvent(raw: unknown): NotifyEvent | null {
     // A kind this build does not recognise is exactly what a newer server's
     // frame looks like on an older client — degrade to `unknown`, the
     // client-side member this union carries for exactly this purpose, never
-    // reject the whole event over it.
-    const kind = (NOTIFY_KINDS.includes(kindRaw) ? kindRaw : 'unknown') as NotifyEvent['kind'];
+    // reject the whole event over it. Through `isNotifyKind`, never a cast.
+    const kind = isNotifyKind(kindRaw) ? kindRaw : 'unknown';
     return {
       seq: reqNum(o, 'seq'),
       at: reqNum(o, 'at'),
