@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { COORD_SCHEMA_VERSION, MIGRATIONS } from './schema.js';
@@ -37,6 +37,32 @@ export function describeMigrationProgress(current: number, v: number): string {
   return `Migration${migratedThisBoot === 1 ? '' : 's'} ${range} already committed earlier in this ` +
     `boot — the file is now at schema ${v}, not ${current} — before migration ${v + 1} failed and ` +
     'rolled back on its own.';
+}
+
+/**
+ * Whether `openCoordDb`'s migration-failure path should delete the file it
+ * just rolled back, isolated as a pure function for the same reason
+ * `describeMigrationProgress` above is: `existedBefore && sizeAfterRollback
+ * === 0` cannot be reached through `openCoordDb` itself, so an integration
+ * test driving only that function can never exercise a mutant that deletes
+ * the `!existedBefore` guard below. The guard above `openCoordDb`'s
+ * migration loop already refuses any file that is 0 bytes AND pre-existing
+ * before a migration is even attempted — so by the time this runs, a
+ * pre-existing file (`existedBefore === true`) can only have failed its
+ * migration with SOME content already on disk, and SQLite rolls a failed
+ * transaction back to its pre-transaction bytes, never to zero. That
+ * combination is structurally unreachable today; the guard stays anyway; a
+ * future change to the file above (or a subtler WAL-rollback edge case
+ * neither this comment nor its author fully trusts) is exactly the kind of
+ * thing "unreachable today" stops being true of without warning.
+ *
+ * Only a 0-byte file this call created and never wrote a row into
+ * (`!existedBefore`) is safe to remove — anything with bytes in it might be
+ * real, committed history, and rule 2 ("never start empty") forbids
+ * guessing that away.
+ */
+export function shouldRemoveMigrationFailureArtifact(existedBefore: boolean, sizeAfterRollback: number): boolean {
+  return !existedBefore && sizeAfterRollback === 0;
 }
 
 /** `~/.ccrc/coord.db` on the SERVER box — the same directory `push-subs.json`
@@ -93,11 +119,22 @@ export function openCoordDb(dbPath: string): DatabaseSync {
   // so a file that already existed and was truncated — a disk-full write, an
   // interrupted `cp`/`rsync --inplace`, a stray `> coord.db` — is
   // indistinguishable from a genuinely fresh install once `new DatabaseSync`
-  // has run. A fresh install has NO file at this point; only a previous boot
-  // that died between file creation and its first migration commit (which
-  // already refuses below) leaves a 0-byte one. Refusing here is that same
-  // refusal, one line earlier — never adopting a truncated file as new.
-  if (existsSync(dbPath) && statSync(dbPath).size === 0) {
+  // has run. This guard runs BEFORE that call, so at THIS instant a 0-byte
+  // file can only mean "predates this process" — PROVIDED nothing this
+  // process itself does can leave a 0-byte file behind for a later boot to
+  // find here. That provision does not hold for free: `new DatabaseSync`
+  // creates the file eagerly, at 0 bytes, before any migration writes a
+  // byte, so a fresh install whose migration 1 fails (disk-full, EIO, a
+  // SIGKILL in the window) would — absent the cleanup below — leave a
+  // 0-byte file of THIS run's own making, and the next boot would land here
+  // and refuse forever over a transient, already-remedied failure, with a
+  // message asserting data loss that never happened to a file that never
+  // held a row. `existedBefore` plus the unlink beside the migration-failure
+  // throw below close that hole at the source, so a 0-byte file reaching
+  // THIS check can only be one this process did not create — a genuinely
+  // truncated pre-existing database. Never adopt it as new.
+  const existedBefore = existsSync(dbPath);
+  if (existedBefore && statSync(dbPath).size === 0) {
     throw new CoordDbUnmigratable(
       `ccrc-server: ${dbPath} exists but is 0 bytes. REFUSING TO START: SQLite would treat this as ` +
       'a brand-new empty database and migrate 0->1 clean, silently erasing whatever this file held ' +
@@ -150,12 +187,30 @@ export function openCoordDb(dbPath: string): DatabaseSync {
       });
     } catch (err) {
       db.close();
+      // Left behind unremoved, a file THIS call created (fresh install,
+      // `!existedBefore`) whose migration never got far enough to commit
+      // would still be sitting at 0 bytes — `new DatabaseSync` wrote it into
+      // existence before this loop ran a single statement — and the NEXT
+      // boot would meet it at the guard above, unable to tell "this
+      // process's own aborted first attempt" from "a genuinely truncated
+      // pre-existing database", and refuse forever over a failure that may
+      // already be fixed. `shouldRemoveMigrationFailureArtifact` decides;
+      // best-effort — the throw below is what actually reports the failure,
+      // and a failed unlink must not replace it.
+      try {
+        const sizeNow = existsSync(dbPath) ? statSync(dbPath).size : null;
+        if (sizeNow !== null && shouldRemoveMigrationFailureArtifact(existedBefore, sizeNow)) {
+          unlinkSync(dbPath);
+        }
+      } catch { /* the CoordDbUnmigratable below is the real signal */ }
       // Earlier iterations of THIS loop (v ran from `current` up) may already
       // have committed — each is its own transaction, so a v0->v3 build
       // meeting a v0 file that fails migration 3 has already written schema 1
       // and 2 to disk before this throw. "Nothing was changed" is a lie in
       // that case, and both the operator's restore decision and the rollback
       // path (`current > COORD_SCHEMA_VERSION` above) turn on it being true.
+      // (And in that case the file is NOT 0 bytes, so the cleanup above is a
+      // no-op — real committed data is never the target of that unlink.)
       const dataStatus = describeMigrationProgress(current, v);
       throw new CoordDbUnmigratable(
         `ccrc-server: ${dbPath} is at schema ${v} and migration ${v + 1} failed: ` +

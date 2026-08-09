@@ -6,8 +6,9 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   COORD_SCHEMA_VERSION, CoordDbUnmigratable, defaultCoordDbPath, describeMigrationProgress,
-  openCoordDb, tx,
+  openCoordDb, shouldRemoveMigrationFailureArtifact, tx,
 } from '../src/coord/db.js';
+import { MIGRATIONS } from '../src/coord/schema.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
@@ -55,6 +56,32 @@ describe('openCoordDb', () => {
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
     b.close();
+  });
+
+  it('mail_deliveries carries exactly the index dueDeliveries can use — the dead mail_deliveries_replay index stays gone', () => {
+    // Finding: schema.ts shipped a SECOND index, mail_deliveries_replay
+    // (state, deliveredAt), reasoned (D-10) to be what dueDeliveries's
+    // replay arm needs the way mail_deliveries_due already covers the
+    // queued arm — true when D-10 landed, false of the query actually
+    // shipped: a later fix ("mail replay honors backoff") added
+    // `AND nextAttemptAt <= ?` to the replay arm too, so BOTH arms now
+    // filter on (state, nextAttemptAt) and mail_deliveries_due alone
+    // serves both — measured via EXPLAIN QUERY PLAN, both OR branches
+    // choose mail_deliveries_due, byte-identical with or without the
+    // second index. Every write to this hot table (every queued mail,
+    // every markDelivered/markIngested/backOff/ack, on the 10s
+    // MAIL_SWEEP_MS lane) was maintaining a b-tree no query ever read.
+    // This pins the FULL index set, not just the dead one's absence, so
+    // a stray replacement index cannot slip back in unnoticed either.
+    const home = mkTmp('ccrc-coord-');
+    const p = dbPathIn(home);
+    const db = openCoordDb(p);
+    const indexNames = (db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mail_deliveries' " +
+      "AND name NOT LIKE 'sqlite_%'",
+    ).all() as { name: string }[]).map((r) => r.name).sort();
+    expect(indexNames).toEqual(['mail_deliveries_due']);
+    db.close();
   });
 
   it('refuses to start, loudly, on a database it cannot migrate — and the WHOLE migration script rolls back, not just the statement that failed', () => {
@@ -156,6 +183,66 @@ describe('openCoordDb', () => {
     expect(() => openCoordDb(p)).toThrow(CoordDbUnmigratable);
     // Untouched: still 0 bytes, not silently stamped to schema 1.
     expect(statSync(p).size).toBe(0);
+
+    // And it stays refused, every time — this file PREDATES the process, so
+    // a caller that retries after "freeing the disk" (the wrong diagnosis
+    // for THIS refusal) must keep meeting the same guard, not have the file
+    // quietly vanish underneath it. This guard fires before `openCoordDb`
+    // ever reaches the migration-failure cleanup path (below,
+    // `shouldRemoveMigrationFailureArtifact`), which is the true target for
+    // an "unlinks every 0-byte file, not just the ones it created" mutant —
+    // pinned directly against that function instead, since a pre-existing
+    // 0-byte file never reaches it to demonstrate the mutant here.
+    expect(() => openCoordDb(p)).toThrow(CoordDbUnmigratable);
+    expect(existsSync(p)).toBe(true);
+    expect(statSync(p).size).toBe(0);
+  });
+
+  it('a fresh install whose first migration fails leaves NO file behind — so the next boot, once the cause is fixed, migrates clean instead of refusing forever over a file that never held a row', () => {
+    // The bug this pins: `new DatabaseSync` creates the file eagerly, at 0
+    // bytes, before any migration runs — so a migration 1 that fails on a
+    // path with no PRE-EXISTING file (disk-full, EIO, a SIGKILL in the
+    // window, any cause named in the refusal message below) leaves a 0-byte
+    // file that is entirely this call's own artifact. Left behind, that file
+    // would trip the 0-byte guard above on the VERY NEXT boot — turning one
+    // transient, already-remedied failure into a permanent refusal, over a
+    // message that asserts data loss ("silently erasing whatever this file
+    // held") which never happened.
+    const home = mkTmp('ccrc-coord-');
+    const p = dbPathIn(home);
+    expect(existsSync(p)).toBe(false);   // genuinely fresh: no file, no dir
+
+    // Force migration 1 to fail without a pre-existing file at `p` —
+    // `MIGRATIONS` is typed `readonly` for callers, but the runtime object
+    // is one plain array `db.ts` indexes into directly (`MIGRATIONS[v]`), so
+    // swapping its one entry for invalid SQL fails the exact statement
+    // `openCoordDb`'s loop executes, inside the same `tx()` this build ships,
+    // rather than a shape of it built out-of-band.
+    const mutable = MIGRATIONS as unknown as string[];
+    const original = mutable[0]!;
+    let caught: unknown;
+    try {
+      mutable[0] = 'CREATE TABLE broken (';   // invalid DDL: exec() throws
+      try { openCoordDb(p); } catch (err) { caught = err; }
+    } finally {
+      mutable[0] = original;   // restore even if an assertion below throws
+    }
+
+    expect(caught).toBeInstanceOf(CoordDbUnmigratable);
+    expect((caught as Error).message).toMatch(/no table data changed/i);
+
+    // The fix, measured directly rather than inferred from boot 2 alone: no
+    // file survives this call at all. (A fix that only special-cased boot 2
+    // — e.g. by checking mtime or a sentinel — would still fail this line.)
+    expect(existsSync(p)).toBe(false);
+
+    // Boot 2: the cause is fixed (MIGRATIONS restored above). This must
+    // migrate clean, not hit the 0-byte guard over a file that predates
+    // nothing and held nothing.
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    db.close();
   });
 
   it('tx rolls back everything on a throw, and commits everything otherwise', () => {
@@ -196,5 +283,27 @@ describe('describeMigrationProgress', () => {
   it('uses the singular for exactly one committed migration', () => {
     expect(describeMigrationProgress(0, 1)).toMatch(/^Migration 1 already committed/);
     expect(describeMigrationProgress(0, 1)).not.toMatch(/^Migrations/);
+  });
+});
+
+describe('shouldRemoveMigrationFailureArtifact', () => {
+  // Isolated the same way, and for the same reason, as `describeMigrationProgress`
+  // above: the 0-byte guard at the top of `openCoordDb` already refuses any file
+  // that is 0 bytes AND pre-existing before a migration is even attempted, so
+  // `existedBefore === true` reaching THIS decision with a post-rollback size of
+  // 0 cannot happen through `openCoordDb` end to end — a mutant that deletes the
+  // `!existedBefore` guard inside it would pass every `openCoordDb`-level test
+  // in this file for exactly that reason. Pinned directly instead.
+  it('removes a 0-byte file only when THIS call created it', () => {
+    expect(shouldRemoveMigrationFailureArtifact(false, 0)).toBe(true);
+  });
+
+  it('never removes a 0-byte file that predates this process', () => {
+    expect(shouldRemoveMigrationFailureArtifact(true, 0)).toBe(false);
+  });
+
+  it('never removes a file with real bytes in it, fresh install or not — only an EMPTY artifact is this call\'s own to discard', () => {
+    expect(shouldRemoveMigrationFailureArtifact(false, 4096)).toBe(false);
+    expect(shouldRemoveMigrationFailureArtifact(true, 4096)).toBe(false);
   });
 });

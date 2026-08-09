@@ -119,13 +119,24 @@ export const MIGRATIONS: readonly string[] = [
     ackedAt       INTEGER,
     rejectCode    TEXT
   );
+  -- dueDeliveries (deviation D-10, found in Task 3 review) reads BOTH arms
+  -- through this one index, not two. D-10 as first landed added a SECOND
+  -- index here, mail_deliveries_replay(state, deliveredAt), reasoned to be
+  -- what the replay arm needs the way this one already covers the queued
+  -- arm -- true of D-10's query at the time, false of the query actually
+  -- shipped: a later fix, ALSO found in Task 3 review ("mail replay honors
+  -- backoff" -- see store.ts's dueDeliveries docstring), added
+  -- "AND nextAttemptAt <= ?" to the replay arm too, so both arms now filter on
+  -- (state, nextAttemptAt) and this index alone serves both --
+  -- EXPLAIN QUERY PLAN on the shipped query picks mail_deliveries_due for
+  -- both OR branches (measured); mail_deliveries_replay was never read by
+  -- any query in this build and is dropped. The replay arm's OTHER
+  -- predicate -- COALESCE(ingestedAt, deliveredAt) + replayMs <= now -- is
+  -- an expression on two nullable columns no index on bare deliveredAt
+  -- could have served anyway; it stays an unindexed filter within the
+  -- (state, nextAttemptAt) row set, which the sweep's own scale (one poll
+  -- per MAIL_SWEEP_MS, not a hot path) does not need an index for.
   CREATE INDEX mail_deliveries_due ON mail_deliveries(state, nextAttemptAt);
-  -- dueDeliveries's replay arm (deviation D-10, found in Task 3 review):
-  -- mail_deliveries_due above only ever covered the queued arm of that
-  -- query. Landed here, in v1, rather than a migration 2 -- coord.db has been
-  -- observed on no box yet (the same reasoning D-1's clearedAt amendment
-  -- already gives for widening v1 instead of adding a migration).
-  CREATE INDEX mail_deliveries_replay ON mail_deliveries(state, deliveredAt);
 
   CREATE TABLE mail_rejections (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
