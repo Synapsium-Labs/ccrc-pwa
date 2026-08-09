@@ -19,12 +19,23 @@ Add to home screen in Android Chrome / iOS Safari for the standalone app.
   and `server/test/node-floor.test.ts` pins both the declaration and the
   import) + Fastify (TS ESM). One process, systemd user unit
   `ccrc.service`, bound to the Tailscale address only (`CCRC_HOST:CCRC_PORT`,
-  default `127.0.0.1:7788`; the box runs `203.0.113.7:7788`). No database —
-  in **local** fleet mode it reads ccd's flat files and shells out to
-  `ccd`/`tmux` directly through an injected `Runner`/`FleetIO`; in **remote**
-  fleet mode the exact same seams are backed by a WS client talking to
-  `agent/` on the fleet host instead (see "Remote fleet mode" below). Either
-  way the whole thing is unit-testable off-box against fixtures.
+  default `127.0.0.1:7788`; the box runs `203.0.113.7:7788`). One SQLite
+  database, `~/.ccrc/coord.db`, opened with `node:sqlite` (`DatabaseSync`,
+  WAL, `user_version` migrations that refuse to start rather than open
+  empty) — holding runs, work items, mail and coordinator state. This
+  repeals "No database," deliberately and in writing: the deferral had an
+  owner and a named trigger
+  (`docs/superpowers/specs/2026-08-06-attention-ux-design.md:356-357`, "No
+  SQLite… belongs to Build 7, not here"), and Build 7 is that trigger
+  arriving. ccd's flat files — the registry, the hold, `.prhistory` — stay
+  the fleet's own authority; the database holds only what coordination adds
+  on top of them, never a replacement for them (see "Fleet coordination"
+  below). Everything else still reads ccd's flat files and shells out to
+  `ccd`/`tmux` directly through an injected `Runner`/`FleetIO` in **local**
+  fleet mode; in **remote** fleet mode the exact same seams are backed by a
+  WS client talking to `agent/` on the fleet host instead (see "Remote fleet
+  mode" below). Either way the whole thing is unit-testable off-box against
+  fixtures.
 - `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
   packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
   server-only) WS service (TS ESM) that runs ON the fleet host and
@@ -446,10 +457,19 @@ systemctl --user restart ccrc.service
 ## Remote fleet mode
 
 By default (`CCRC_FLEET=local`, unset) the server reads ccd's flat files and
-shells out to `ccd`/`tmux` directly on its own box — this is what's deployed
-today. `CCRC_FLEET=remote` instead drives the fleet through `ccrc-agent`
-running on a separate fleet host, over a single authenticated WebSocket —
-the server never SSHes into the fleet box at runtime.
+shells out to `ccd`/`tmux` directly on its own box. `CCRC_FLEET=remote`
+instead drives the fleet through `ccrc-agent` running on a separate fleet
+host, over a single authenticated WebSocket — the server never SSHes into
+the fleet box at runtime.
+
+**`remote` is what's actually deployed, and has been** — `GET
+/api/fleet/health` answers `{"mode":"remote"}` on the live server, not
+`local`. The consequence this whole build rests on: **the server and the
+fleet host are different boxes**, and the link between them is read-only for
+files except `.cc-clips` (every other mutation crosses it as a whitelisted
+`ccd`/`tmux` verb, never a raw write). The coordinator's dispatch/close
+routes and the mail delivery lane all reach ccd through this same seam —
+see "Fleet coordination" below.
 
 ### Config
 
@@ -534,10 +554,109 @@ curl -fsS http://203.0.113.7:7788/api/fleet/health   # {"mode":"remote","connect
 
 Then kill/stop `ccrc-agent` on the fleet host and re-poll — `connected`
 should flip to `false`, `/api/fleet` should keep returning the last snapshot
-with `stale: true`, and the PWA banner should appear. Cutting the currently
-local-only deployment over to remote mode (wiring `ccrc.service` to source
-`CCRC_FLEET=remote` for real) is intentionally out of scope here — see the
-plan's self-review notes.
+with `stale: true`, and the PWA banner should appear; restart `ccrc-agent`
+to restore `connected: true`. `CCRC_FLEET=remote` is not a hypothetical
+cutover — it is the live server's actual, standing configuration (see
+"Architecture" above), so this drill exercises the degraded-mode path a real
+agent restart or network blip already produces, not a one-time migration.
+
+## Fleet coordination
+
+Build 7 turns a program into a live, server-observed thing: `~/.ccrc/coord.db`
+holds programs, runs, work items, mail and coordinator state (SQLite, opened
+with `node:sqlite`'s `DatabaseSync`, WAL mode, `user_version` migrations that
+refuse to start rather than open empty — a bad migration errors loudly
+instead of silently starting a program's history over). ccd's flat files —
+the registry, the hold, `.prhistory` — stay the fleet's own ground truth; the
+database is a server-side re-measurement of what they already say, never a
+replacement for them, and a lost `coord.db` reconstructs from them.
+
+**Run lifecycle**, six steps, one HTTP route per irreversible act:
+
+1. `POST /api/runs` opens a run against a program+workspace — a ledger
+   commit and a hold (`ccd ws-hold`); a second coordinator on the same
+   program is refused.
+2. `POST /api/runs/:id/dispatch` puts a wave on the pane: wave 1 is `ccd
+   ws-add`/`start`; wave ≥2 is `ccd ensure` (the harness resumes its own
+   transcript) followed by an injected `/clear` through `sendPrompt`'s full
+   proof discipline, so "genuinely fresh context" stays mechanical rather
+   than hoped for — then the wave brief is delivered as mail into that now-
+   empty context.
+3. The coordinator watches mail and `pr-state` the way an operator would —
+   `GET /api/runs` and the `runs` frame on `/ws/fleet` carry state and
+   work-item tallies, nothing new to poll.
+4. A worker's done-claim is **re-measured, never believed**: branch tip,
+   handoff commit, PR number and phase are all read fresh off git's own ref
+   files and `.prhistory`, not trusted off the claim body — a stale tip, a
+   regressed PR, or a handoff commit that isn't the claim's own branch tip
+   is refused and mailed back with the reason.
+5. The coordinator reviews the handoff commit like any other diff — brief
+   *quality* stays discipline, not something this server enforces — updates
+   the hold reason, and dispatches wave N+1 into the *same* workspace (back
+   to step 2).
+6. `POST /api/runs/:id/close` on the final wave releases the hold; the
+   ordinary merged-and-unheld sweep archives it on its own clock. An
+   explicit abandon (`state:'failed'`) archives immediately instead,
+   mirroring the manual archive route.
+
+**The mail bus and its token.** Sessions send each other mail — `finding |
+question | answer | status | artifact` — through `POST /api/mail`, attributed
+(`{fromId, fromUuid}` checked against the live registry: freshness, not
+forgery-proofness) and capped (an 8 KiB body, typed rejection codes, every
+rejection itself recorded, win or lose). A watcher lane (`MAIL_SWEEP_MS`,
+10 s) walks queued deliveries and, once a recipient has been idle-quiet for
+`MAIL_QUIET_MS` (60 s) with no dialog or ask pending, injects the fenced
+envelope through `sendPrompt`'s full proof discipline — never re-rendered,
+replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`,
+and again every `MAIL_REPLAY_MS`) until the recipient POSTs
+`/api/mail/:id/ack`.
+
+Both `/api/mail` (and its ack route) and `/api/notify` (ccd's swap hook) now
+require the same **box token** — one shared secret per box, read from a
+file, deliberately never an env var (`deploy/ccrc.service` ships no
+`EnvironmentFile=`, and this build does not add one, to avoid flipping a
+live unit's environment blind). It lives at `~/.cc-secrets/ccrc-mail.token`
+on the **fleet host** (read by `deploy/notify.sh`) and at
+`~/.ccrc/mail.token` on the **server** (`CCRC_MAIL_TOKEN_PATH` to
+override); both are shipped from one locally-gitignored
+`deploy/ccrc-mail.token` (`openssl rand -hex 32` to mint it, or `cp
+deploy/ccrc-mail.token.example deploy/ccrc-mail.token && edit`) by
+`deploy/deploy.sh`'s secret-shipping lane. `/api/mail` and its ack route
+have never tolerated a missing token — a request with none is `401
+unauthenticated`, full stop. `/api/notify` alone accepts a request with
+**no** token header for one deploy generation, logged as `legacy` so the
+swap hook cannot go dark mid-rollout; that tolerance comes out in the deploy
+*after* the one that ships `notify.sh`'s token read — it is a rollout
+bridge, not a standing policy.
+
+**Caps and pause.** The single-row `coordinator_state` table holds
+`maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
+terminal) and `maxSessionsPerDay` (default 12 — dispatches inside a rolling
+24h window, not a calendar day), both checked at
+`POST /api/runs/:id/dispatch` before anything else is touched. No route in
+this PR changes them; until PR J adds one, an operator edits the row
+directly: `sqlite3 ~/.ccrc/coord.db "UPDATE coordinator_state SET
+maxConcurrentWorkers=…, maxSessionsPerDay=… WHERE id=1"`. Pause is a
+**file**, on ccd's own `*-disabled`-marker convention, read from `$REG`
+(the fleet host's session registry, `~/.cc-sessions`) before every dispatch:
+`touch $REG/coordinator-paused` refuses every dispatch with `409
+refused:paused`; `rm` it to resume. There is no verb or route that can
+unpause the coordinator from the API or the PWA — a pause always traces back
+to a human at a terminal, on purpose. Mail delivery has the identical
+kill-switch on the same pattern: `touch $REG/mail-disabled` stops the sweep
+from injecting anything (queued mail waits, nothing is lost); `rm` it to
+resume.
+
+**The honest boundary.** The coordinator acts through this server's HTTP
+API — one recorded chokepoint for every irreversible act (dispatch, close,
+mail) — and that chokepoint is what makes the caps and the pause file real
+controls rather than suggestions. But raw ccd remains physically possible:
+every session on the fleet host shares one UNIX user, ccd has no caller
+auth, and any session can already run any verb directly. Nothing
+server-side stops that. The single recorded chokepoint is a contract the
+coordinator's skill honors, not a wall the OS enforces — the same "identity
+is attribution, not authentication" stance the mail bus already states for
+who a message claims to be from.
 
 ## Live end-to-end tests
 
