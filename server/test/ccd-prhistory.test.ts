@@ -112,6 +112,30 @@ describe('prhistory — the one chokepoint', () => {
     expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.prhistory`), 'utf8')).toContain('not json');
   });
 
+  // Fix-round finding 3. The corrupt-line test above uses a ONE-line ledger,
+  // and for a single bad line whole-file discard and this repo's per-line
+  // salvage (`server/src/coord/prhistory.ts`) answer the identical `[]` — so
+  // it cannot discriminate ccd's own MALFORMED policy from the reader's
+  // deliberate divergence from it, even though the reader's docstring cited
+  // this file for exactly that. This ledger puts a GOOD row (#577) ahead of
+  // the bad one: ccd's list comprehension (`ccd/ccd:2046`) raises on the bad
+  // line, the one `try` around the WHOLE comprehension (`:2060-2061`)
+  // discards every row it built — the good one included — down to `[]`,
+  // which is the only shape that tells whole-file discard apart from
+  // per-line salvage (which would answer `[{pr:577,...}]` here).
+  it('a corrupt line degrades the WHOLE ledger — a good row ahead of it is lost too', () => {
+    const { id } = workspace();
+    h.sh(`printf '%s\\n' '{"pr":577,"branch":"ws/demo","phase":"merged","recordedAt":1786000000}' 'not json' `
+      + `> "$HOME/.cc-sessions/${id}.prhistory"`);
+    h.sh(`${ARCH_STUBS} cmd_ws_archive --session ${id}`);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.archivemanifest`), 'utf8'));
+    expect(manifest.prHistory).toEqual([]);
+    // Malformed, so the raw ledger is untouched — the good row is only lost
+    // from the manifest fold, never off disk.
+    expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.prhistory`), 'utf8')).toContain('577');
+  });
+
   it('an absent prhistory file folds to [] too — never a refusal', () => {
     const { id } = workspace();
     h.sh(`${ARCH_STUBS} cmd_ws_archive --session ${id}`);

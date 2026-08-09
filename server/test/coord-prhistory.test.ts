@@ -16,10 +16,20 @@ const LINE = (pr: number) =>
 
 describe('readPrHistory', () => {
   it('reads JSONL in order, dropping nothing it can parse', async () => {
+    // Full-object equality, not `objectContaining({ pr })` — finding 1. The
+    // `objectContaining` form asserts only `pr`, so a mapping bug at the push
+    // site (`branch`/`phase`/`recordedAt` swapped for constants) is invisible
+    // to this suite. Measured: `entries.push({ pr: o['pr'], branch: '',
+    // phase: '', recordedAt: 0 })` left the pre-fix suite at 8/8 green.
     const d = reg();
     writeFileSync(path.join(d, 'demo-quiet-mesa.prhistory'), `${LINE(1)}\n${LINE(2)}\n`);
-    expect(await readPrHistory(localIO, d, 'demo-quiet-mesa'))
-      .toEqual({ ok: true, entries: [expect.objectContaining({ pr: 1 }), expect.objectContaining({ pr: 2 })] });
+    expect(await readPrHistory(localIO, d, 'demo-quiet-mesa')).toEqual({
+      ok: true,
+      entries: [
+        { pr: 1, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 },
+        { pr: 2, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 },
+      ],
+    });
   });
 
   it('answers a MEASURED [] when the file is absent — the workspace retired no PR', async () => {
@@ -107,18 +117,67 @@ describe('readPrHistory', () => {
       }
     });
 
-  // Fix-round finding 5. The four shape guards (`pr` a real integer, `branch`
-  // and `phase` strings, `recordedAt` a number) reject valid JSON that is the
-  // wrong SHAPE — a case distinct from the torn-tail test above, which never
-  // reaches the guards at all because `JSON.parse` throws first. Pre-fix,
-  // deleting all four guard lines left every test in this file byte-identical
-  // — this is the case that tells the difference.
-  it('drops a line that parses as JSON but fails the shape guards — wrong types, not bad syntax', async () => {
+  // Fix-round finding 5, RE-REVIEWED (findings 2 and 4). The prior version of
+  // this case wrote ONE record wrong in three fields at once
+  // (`{"pr":"577","branch":null,"phase":7}`) plus a bare `{}` — both die on
+  // the very FIRST guard (`typeof o['pr'] !== 'number'`), so every later
+  // guard is unreachable in the reject direction and the record read as
+  // covered when it wasn't. Measured, one construct at a time, restored
+  // between (baseline 8/8 green): dropping `!Number.isInteger(o['pr'])`
+  // alone, dropping `typeof o['branch'] !== 'string' || typeof o['phase']
+  // !== 'string'` alone, and dropping `typeof o['recordedAt'] !== 'number'`
+  // alone each left the bundled fixture byte-identical — only deleting all
+  // four guard lines together killed it. Each case below is wrong in exactly
+  // ONE field, everything else well-typed, so each guard construct has its
+  // own fixture that dies with it.
+  it('drops a line whose pr is the wrong type', async () => {
     const d = reg();
     writeFileSync(
       path.join(d, 'demo-quiet-mesa.prhistory'),
-      '{"pr":"577","branch":null,"phase":7}\n{}\n',
+      `${JSON.stringify({ pr: '577', branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 })}\n`,
     );
+    expect(await readPrHistory(localIO, d, 'demo-quiet-mesa')).toEqual({ ok: true, entries: [] });
+  });
+
+  it('drops a line whose pr is a number but not an integer', async () => {
+    const d = reg();
+    writeFileSync(
+      path.join(d, 'demo-quiet-mesa.prhistory'),
+      `${JSON.stringify({ pr: 577.5, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 })}\n`,
+    );
+    expect(await readPrHistory(localIO, d, 'demo-quiet-mesa')).toEqual({ ok: true, entries: [] });
+  });
+
+  it('drops a line whose branch is the wrong type', async () => {
+    const d = reg();
+    writeFileSync(
+      path.join(d, 'demo-quiet-mesa.prhistory'),
+      `${JSON.stringify({ pr: 577, branch: null, phase: 'merged', recordedAt: 1 })}\n`,
+    );
+    expect(await readPrHistory(localIO, d, 'demo-quiet-mesa')).toEqual({ ok: true, entries: [] });
+  });
+
+  it('drops a line whose phase is the wrong type', async () => {
+    const d = reg();
+    writeFileSync(
+      path.join(d, 'demo-quiet-mesa.prhistory'),
+      `${JSON.stringify({ pr: 577, branch: 'ws/quiet-mesa', phase: 7, recordedAt: 1 })}\n`,
+    );
+    expect(await readPrHistory(localIO, d, 'demo-quiet-mesa')).toEqual({ ok: true, entries: [] });
+  });
+
+  it('drops a line whose recordedAt is the wrong type', async () => {
+    const d = reg();
+    writeFileSync(
+      path.join(d, 'demo-quiet-mesa.prhistory'),
+      `${JSON.stringify({ pr: 577, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: '1' })}\n`,
+    );
+    expect(await readPrHistory(localIO, d, 'demo-quiet-mesa')).toEqual({ ok: true, entries: [] });
+  });
+
+  it('drops a completely empty object the same way', async () => {
+    const d = reg();
+    writeFileSync(path.join(d, 'demo-quiet-mesa.prhistory'), '{}\n');
     expect(await readPrHistory(localIO, d, 'demo-quiet-mesa')).toEqual({ ok: true, entries: [] });
   });
 });

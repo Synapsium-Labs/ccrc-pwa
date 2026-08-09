@@ -24,13 +24,17 @@ export type PrHistoryRead =
  * handling (`ccd/ccd:2020-2022`, `:2046`, `:2060-2061`) is WHOLE-FILE: one line
  * `json.loads` cannot parse raises inside a single list comprehension over
  * every line, which the one `try` around it catches, discarding EVERY row —
- * good ones included — down to `[]`; this repo's own `ccd-prhistory.test.ts:105`
- * pins exactly that. This reader instead salvages every line it can parse and
- * validate, in order, dropping only the lines it can't — because ccd's writer
- * only ever appends with `O_APPEND`, so the one line ever at risk of tearing is
- * the LAST one, and a torn tail is one lost record, not grounds to discard
- * every record that came before it. The cost of that choice: on a ledger whose
- * bad line ISN'T the tail (hand-edited, or a future ccd change to the record
+ * good ones included — down to `[]`; this repo's own `ccd-prhistory.test.ts:126`
+ * pins exactly that with a good row ahead of the bad one — the one shape that
+ * tells whole-file discard apart from this reader's per-line salvage (a
+ * single-line ledger, e.g. `ccd-prhistory.test.ts:105`, answers `[]` under
+ * either policy and proves nothing about which one ran). This reader instead
+ * salvages every line it can parse and validate, in order, dropping only the
+ * lines it can't — because ccd's writer only ever appends with `O_APPEND`, so
+ * the one line ever at risk of tearing is the LAST one, and a torn tail is
+ * one lost record, not grounds to discard every record that came before it.
+ * The cost of that choice: on a ledger whose bad line ISN'T the tail
+ * (hand-edited, or a future ccd change to the record
  * shape), this reader and ccd's OWN `ws-archive` fold can disagree — for the
  * same file, at the same moment — about whether a workspace retired any PRs.
  * ccd also performs no shape validation at all; a line that parses as JSON but
