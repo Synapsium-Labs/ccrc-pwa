@@ -5,7 +5,7 @@
 // carry: the D-2 correspondence check, and the "the run is not touched here"
 // guarantee the docstring makes.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
 import { readBranchTip } from '../src/coord/gitref.js';
@@ -81,6 +81,37 @@ describe('readBranchTip', () => {
     const git = path.join(root, 'demo', '.git');
     mkdirSync(path.join(git, 'refs', 'heads', 'ws'), { recursive: true });
     writeFileSync(path.join(git, 'refs', 'heads', 'ws', 'quiet-mesa'), 'ref: refs/heads/main\n');
+    writeFileSync(path.join(git, 'packed-refs'),
+      `# pack-refs with: peeled fully-peeled sorted\n${OTHER} refs/heads/ws/quiet-mesa\n`);
+    expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBeNull();
+  });
+  it('refuses a PRESENT loose ref this process cannot READ, rather than fall through to a stale packed-refs entry (findings 1 & 2)', async () => {
+    // The loose ref IS the true, current tip (TIP); packed-refs holds a STALE
+    // one (OTHER) — exactly the shape left behind by `git pack-refs` followed
+    // by a real commit. `chmod 000` makes the file's BYTES unreadable
+    // (`readFile` -> EACCES -> null) without making the ref absent: `stat`
+    // needs only search permission on the parent directory chain, not read
+    // permission on the leaf, so it still proves this path exists. Before the
+    // fix, `readFile === null` fell straight through to packed-refs and this
+    // returned OTHER — the stale tip — instead of refusing.
+    const root = project(TIP, OTHER);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    chmodSync(loosePath, 0o000);
+    try {
+      expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBeNull();
+    } finally {
+      chmodSync(loosePath, 0o644); // fixture cleanup doesn't need to fight the perms
+    }
+  });
+  it('refuses when the loose ref path is a DIRECTORY (EISDIR), rather than fall through to a stale packed-refs entry (findings 1 & 2)', async () => {
+    // One of the three triggers D-19's own problem statement named
+    // ("a torn write, an EISDIR, or a git symbolic-ref") and the one D-19's
+    // adaptation left unclosed: `readFile` on a directory throws EISDIR (->
+    // null), but `stat` on that same path succeeds (it IS something), so this
+    // must refuse rather than answer packed-refs' stale OTHER.
+    const root = mkTmp('ccrc-git-');
+    const git = path.join(root, 'demo', '.git');
+    mkdirSync(path.join(git, 'refs', 'heads', 'ws', 'quiet-mesa'), { recursive: true });
     writeFileSync(path.join(git, 'packed-refs'),
       `# pack-refs with: peeled fully-peeled sorted\n${OTHER} refs/heads/ws/quiet-mesa\n`);
     expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBeNull();
@@ -427,6 +458,124 @@ describe('verifyDone — the branch to re-measure comes from the live registry (
   it('falls back to the run row only when the registry has no row for this session at all', async () => {
     const home = mkTmp('ccrc-fp-'); // no registry row seeded for SESSION
     const root = project(TIP, null); // fixture's ref is at RUN.branch — the fallback value
+    const deps = fingerprintDeps(runnerFor('open'), root, home);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res).toMatchObject({ ok: true });
+  });
+});
+
+describe('verifyDone — a present-but-unreadable loose ref never settles a stale claim (findings 1 & 2)', () => {
+  // The exact failure scenario the findings measured end to end: the
+  // workspace branch was packed by an auto `git gc`, then advanced by a real
+  // commit (loose = NEW, packed-refs still = OLD). A `worker_done` naming OLD
+  // is stale and must be refused — but only IF the server can actually tell
+  // the loose ref apart from absent. On the sweep where the loose read
+  // hiccups (chmod 000 here; an EACCES/EISDIR/remote-mode round-trip failure
+  // in production), the pre-fix code fell through to packed-refs and settled
+  // the stale claim `ok: true`, with `measured.branchTip` naming OLD as if it
+  // had been re-measured — the exact inversion of "a stale worker_done can
+  // never settle a task" (spec:127-132).
+  const NEW_TIP = 'c'.repeat(40);
+  const OLD_TIP = 'd'.repeat(40);
+
+  it('refuses the STALE claim (tip-unmeasurable), never settles it ok:true, once the loose ref is unreadable', async () => {
+    const root = project(NEW_TIP, OLD_TIP);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    chmodSync(loosePath, 0o000);
+    try {
+      const deps = fingerprintDeps(runnerFor('open'), root);
+      const staleClaim: DoneClaim = { branchTip: OLD_TIP, prNumber: null, prPhase: 'open', handoffCommit: OLD_TIP };
+      const res = await verifyDone(deps, RUN, staleClaim);
+      expect(res.ok).toBe(false);
+      expect((res as { code: string }).code).toBe('tip-unmeasurable');
+    } finally {
+      chmodSync(loosePath, 0o644);
+    }
+  });
+
+  it('the HONEST claim (naming the true current tip) is refused too — unreadable means unmeasurable, not "trust the claim"', async () => {
+    // Read alone cannot confirm the honest claim either — that is exactly why
+    // this is UNMEASURABLE and not a pass. Pinned so a future "just believe
+    // the claim when the ref can't be read" shortcut fails this case.
+    const root = project(NEW_TIP, OLD_TIP);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    chmodSync(loosePath, 0o000);
+    try {
+      const deps = fingerprintDeps(runnerFor('open'), root);
+      const honestClaim: DoneClaim = { branchTip: NEW_TIP, prNumber: null, prPhase: 'open', handoffCommit: NEW_TIP };
+      const res = await verifyDone(deps, RUN, honestClaim);
+      expect(res.ok).toBe(false);
+      expect((res as { code: string }).code).toBe('tip-unmeasurable');
+    } finally {
+      chmodSync(loosePath, 0o644);
+    }
+  });
+
+  it('once the loose ref is readable again, the same OLD claim IS correctly refused as stale — the fixture is not confused with a real gap', async () => {
+    const root = project(NEW_TIP, OLD_TIP); // no chmod — loose ref reads clean
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const staleClaim: DoneClaim = { branchTip: OLD_TIP, prNumber: null, prPhase: 'open', handoffCommit: OLD_TIP };
+    const res = await verifyDone(deps, RUN, staleClaim);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('stale-tip');
+  });
+});
+
+describe('verifyDone — the run.branch fallback is reached by more than "session retired" (finding 3)', () => {
+  // `record?.branch ?? run.branch`'s own comment used to name exactly ONE
+  // trigger ("the registry no longer carries this session at all") as the
+  // only way to reach the `run.branch` fallback. These three pin the OTHER
+  // reachable triggers, each landing on the identical fallback for an
+  // unrelated — and often transient — reason. This is a documentation fix,
+  // not a behavioural one: the fallback already degrades safely (a stale
+  // `run.branch` earns a typed refusal, never a false accept, once it no
+  // longer names a real ref — see the "findings 1 & 2" block above), so every
+  // case below asserts the SAME `ok: true` a healthy fallback already
+  // produces, proving the trigger is reached at all, not that behaviour
+  // changed.
+  const seedField = (home: string, id: string, name: string, value: string): void => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(path.join(reg, `${id}.${name}`), value);
+  };
+
+  it('a registry directory that cannot be LISTED at all (io.readdir -> null) reaches the fallback, same as a retired session', async () => {
+    const home = mkTmp('ccrc-fp-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    chmodSync(reg, 0o000);
+    try {
+      const root = project(TIP, null); // ref lives at RUN.branch, the fallback value
+      const deps = fingerprintDeps(runnerFor('open'), root, home);
+      const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+      expect(res).toMatchObject({ ok: true });
+    } finally {
+      chmodSync(reg, 0o755); // let afterAll's rmSync clean up without fighting perms
+    }
+  });
+
+  it('a row present but with an INCOMPLETE identity (uuid missing) is dropped by readRegistry entirely, and also reaches the fallback', async () => {
+    const home = mkTmp('ccrc-fp-');
+    seedField(home, SESSION, 'wrapper', 'claude');
+    seedField(home, SESSION, 'workdir', '/w/demo/quiet-mesa');
+    // no `.uuid` file — registry.ts's `if (!wrapper || !workdir || !uuid) continue`
+    // drops the whole row, `record` is undefined the same as a retired session.
+    seedField(home, SESSION, 'branch', 'ws/some-other-branch'); // present, but never reached
+    const root = project(TIP, null); // ref lives at RUN.branch, the fallback value
+    const deps = fingerprintDeps(runnerFor('open'), root, home);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  it('a row that IS found, but whose OWN .branch field is absent, reaches the fallback WITHOUT `record` ever being undefined', async () => {
+    const home = mkTmp('ccrc-fp-');
+    seedField(home, SESSION, 'wrapper', 'claude');
+    seedField(home, SESSION, 'workdir', '/w/demo/quiet-mesa');
+    seedField(home, SESSION, 'uuid', 'a'.repeat(36));
+    // no `.branch` file: readRegistry returns this row (wrapper/workdir/uuid
+    // all present) with `branch: null` — `record` is DEFINED; it is
+    // `record.branch` that is null, and the `??` falls back on that.
+    const root = project(TIP, null); // ref lives at RUN.branch, the fallback value
     const deps = fingerprintDeps(runnerFor('open'), root, home);
     const res = await verifyDone(deps, RUN, FIXED_CLAIM);
     expect(res).toMatchObject({ ok: true });

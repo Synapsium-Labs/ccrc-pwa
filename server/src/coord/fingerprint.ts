@@ -44,14 +44,20 @@ export type DoneVerdict =
 export interface VerifyDoneDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState }
 /** `branch` here is a FALLBACK, not the measurement: `verifyDone` resolves the
  *  branch to re-measure against from the LIVE registry, keyed on `sessionId`,
- *  and falls back to this field only when that registry row is gone entirely.
- *  `DoneRun` reads field-for-field like the `runs` row it is usually built
- *  from (`RunRow`, `store.ts:40`) — but `runs.branch` is written exactly once,
- *  by `markDispatched` at dispatch time, and `FleetWatcher.sweepNames`
- *  (`watch.ts:543-610`) renames the registry's branch autonomously, on the
- *  ordinary path, strictly before the first push — i.e. before any
- *  `worker_done` this claim could be. Do not read this type as "the run's
- *  branch"; it is "the run's branch, if the registry has forgotten it". */
+ *  and falls back to this field whenever that lookup does not hand back a
+ *  branch — which is NOT only "the registry row is gone entirely". See the
+ *  `record?.branch ?? run.branch` call site in `verifyDone` for the other
+ *  reachable triggers (a failed registry directory listing, an incomplete row
+ *  `readRegistry` itself drops, and a found row whose own `.branch` field is
+ *  null) — this comment used to name only the first and call it exhaustive,
+ *  which it never was. `DoneRun` reads field-for-field like the `runs` row it
+ *  is usually built from (`RunRow`, `store.ts:40`) — but `runs.branch` is
+ *  written exactly once, by `markDispatched` at dispatch time, and
+ *  `FleetWatcher.sweepNames` (`watch.ts:543-610`) renames the registry's
+ *  branch autonomously, on the ordinary path, strictly before the first push
+ *  — i.e. before any `worker_done` this claim could be. Do not read this
+ *  type as "the run's branch"; it is "the run's branch, if the live registry
+ *  could not name a better one just now". */
 export interface DoneRun { sessionId: string; project: string; branch: string }
 
 /**
@@ -121,9 +127,33 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   }
 
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
-  // why the DB column cannot be trusted here. `record` is undefined for a run
-  // whose session the registry no longer carries at all (retired, purged); in
-  // that one case, and only that one, `run.branch` is the best answer left.
+  // why the DB column cannot be trusted here. `record` is undefined — sending
+  // this to the `run.branch` fallback below — on (at least) THREE distinct
+  // states, only one of which is "this session retired":
+  //  1. TERMINAL — the registry genuinely no longer carries a row for this
+  //     session (retired, purged). The only case an earlier version of this
+  //     comment named, as if it were the only one.
+  //  2. TRANSIENT — `readRegistry`'s own directory listing failed outright
+  //     (`io.readdir` -> null -> every row, not just this one, reads as
+  //     absent — `registry.ts:104`); in remote mode that is a single failed
+  //     agent-WS round trip, not evidence anything retired.
+  //  3. TRANSIENT — this session's row IS present in the listing but
+  //     `readRegistry` drops it silently for having a missing/unreadable
+  //     `wrapper`/`workdir`/`uuid` field (`registry.ts:123`, "incomplete
+  //     registry entry — skip, don't crash").
+  // A FOURTH state reaches this same `run.branch` fallback WITHOUT `record`
+  // ever being undefined at all: the row is found, but its own `.branch`
+  // field reads null (absent, or unreadable the same way `field()` collapses
+  // any read failure — `registry.ts:77-80`), and the `??` below falls back on
+  // THAT null, not on a missing record.
+  // Nothing on `SessionRecord` today lets a caller tell the transient states
+  // (2, 3, 4) apart from the terminal one (1) or from each other — the
+  // fallback is approximate in all four, not just the one case this comment
+  // used to admit to. It is tolerable rather than a correctness gap because a
+  // stale `run.branch` still degrades to a typed `tip-unmeasurable` refusal
+  // (never a false accept — see `readBranchTip`), and a `worker_done` this
+  // resolves wrong is replayed and re-verified on the next sweep the same as
+  // any other refusal (spec:174-177, D-10).
   const record = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === run.sessionId);
   const branch = record?.branch ?? run.branch;
 
