@@ -284,7 +284,8 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.branch).toBe('ws/demo-existing');
   });
 
-  it('leaves clearedAt null when the injected /clear is refused (dialog open) — dispatch still lands', async () => {
+  it('leaves clearedAt null when the injected /clear is refused (dialog open) — dispatch still lands, ' +
+     'the refusal is RECORDED, and the brief is NOT queued into the un-cleared context (D-47)', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing2');
     // A live AskUserQuestion menu pane — `sendPrompt` refuses `dialog-open`
@@ -296,10 +297,24 @@ describe('POST /api/runs/:id/dispatch', () => {
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, resumed: true, clearedAt: null });
+    expect(res.json()).toMatchObject({
+      ok: true, resumed: true, clearedAt: null, briefQueued: false, clearError: 'dialog-open',
+    });
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);   // refused before any keystroke
     expect(w.coord.run(opened.id)?.clearedAt).toBeNull();
     expect(w.coord.run(opened.id)?.state).toBe('dispatched');   // dispatch itself still lands
+    // D-47: the refusal is a fact about the run now, not a null column and a
+    // silently discarded error — `run_events.detail` names which of
+    // sendPrompt's typed refusals fired.
+    expect(w.coord.runEvents(opened.id)).toEqual([
+      { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator',
+        detail: 'clear-refused:dialog-open' },
+    ]);
+    // D-47: NOTHING was queued — the delivery lane must never be handed a
+    // brief to inject into a context `/clear` never actually verified as
+    // fresh (the exact hazard that, left unfixed, parks the brief
+    // `rejected('undeliverable')` after MAIL_MAX_ATTEMPTS with no signal why).
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
   });
 
   it('places the hold with the convention reason, and never parses one back', async () => {
@@ -340,8 +355,41 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
-      { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator' },
+      { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
     ]);
+  });
+
+  it('refuses a second dispatch before touching the fleet at all — the transition guard runs FIRST (D-46)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh5'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const first = await postDispatch(app, opened.id);
+    expect(first.statusCode).toBe(200);
+    const callsAfterFirst = calls.length;
+    const second = await postDispatch(app, opened.id);
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ ok: false, error: 'bad-transition', from: 'dispatched', to: 'dispatched' });
+    // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
+    // no second `run_events` row (still exactly the first dispatch's).
+    expect(calls.length).toBe(callsAfterFirst);
+    expect(w.coord.runEvents(opened.id).length).toBe(1);
+  });
+
+  it('a wave-2 double dispatch never re-injects /clear into a live, already-resumed worker (D-46)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing3');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing3' }))
+      .json() as { id: number };
+    await postDispatch(app, opened.id);
+    const sendKeysBefore = calls.filter((c) => c[0] === 'send-keys').length;
+    expect(sendKeysBefore).toBeGreaterThan(0);   // the first dispatch's own /clear landed
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(409);
+    const sendKeysAfter = calls.filter((c) => c[0] === 'send-keys').length;
+    expect(sendKeysAfter).toBe(sendKeysBefore);   // the SECOND call never wiped the worker again
   });
 
   it('answers 404 unknown-run for a run id that does not exist', async () => {
@@ -502,10 +550,11 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
   });
 
-  it('answers 501 when the fleet ccd does not support ws-release', async () => {
+  it('answers 501 when the fleet ccd does not support ws-release, and the run stays RETRYABLE — ' +
+     'not wedged done with the hold silently un-released (D-48)', async () => {
     const sessionId = `${PROJECT}-close7`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
-    const { id } = await dispatchedRun(sessionId, root,
+    const { id, coord } = await dispatchedRun(sessionId, root,
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' },
       // `pr-state` stays supported — `verifyDone` has its OWN `verbSupported`
       // gate (`fingerprint.ts`) and must succeed here, so the 501 this test
@@ -514,6 +563,101 @@ describe('POST /api/runs/:id/close', () => {
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toMatchObject({ ok: false, error: 'unsupported' });
+    // D-48: the fleet act moved AHEAD of the transition commit — a 501 here
+    // must leave the run exactly where it was, never terminally `done`
+    // (`RUN_TRANSITIONS.done = []` would give no retry at all).
+    expect(coord.run(id)!.state).toBe('dispatched');
+    expect(coord.run(id)!.closedAt).toBeNull();
+  });
+
+  it('refuses a second close before touching the fleet again — the transition guard runs first (D-48)', async () => {
+    const sessionId = `${PROJECT}-close8`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+    const first = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(first.statusCode).toBe(200);
+    const releasesAfterFirst = calls.filter((c) => c[0] === 'ws-release').length;
+    expect(releasesAfterFirst).toBe(1);
+    const second = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ ok: false, error: 'bad-transition', from: 'done', to: 'closing' });
+    // The retry never touched the fleet a second time.
+    expect(calls.filter((c) => c[0] === 'ws-release').length).toBe(releasesAfterFirst);
+    expect(coord.run(id)!.state).toBe('done');
+  });
+
+  it('closes state:failed WITHOUT re-measuring the claim — an operator abandon is not a done claim (D-49)', async () => {
+    const sessionId = `${PROJECT}-close9`;
+    // The REAL tip is OTHER_TIP — the same mismatch the very first test in
+    // this file proves `verifyDone` refuses for a `done` close (`stale-tip`).
+    // A `state:'failed'` close must succeed anyway: there is no claim of
+    // doneness here to re-measure.
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
+    const { id, coord } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
+    expect(res.statusCode).toBe(200);
+    expect(coord.run(id)!.state).toBe('failed');
+    // D-13's own wedge, reached through the DISPATCHED side instead of
+    // `planned`: a terminal run must not keep pinning the concurrency cap.
+    expect(coord.capsUsage().running).toBe(0);
+  });
+
+  it('folds real PR lineage read from a real .prhistory file — [] alone cannot discriminate ' +
+     'the fold call being dropped (D-50)', async () => {
+    const sessionId = `${PROJECT}-close10`;
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const line = JSON.stringify({ pr: 42, branch: `ws/${sessionId}`, phase: 'merged', recordedAt: 12345 });
+    writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), `${line}\n`);
+    const { run } = makeRunner(home, { wsAddCreates: [sessionId],
+      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+    const base = testDeps(home, run);
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const res = await postClose(app, opened.id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.statusCode).toBe(200);
+    // Deleting `coord.foldPrLineage(id, history.entries)` at the fold site
+    // would leave this answer `[]` too (`hydrateRun`'s own NULL-column
+    // default) — the same `[]` an absent ledger genuinely means. Only a REAL
+    // recorded entry discriminates the fold call from its own absence.
+    expect(w.coord.run(opened.id)!.prLineage).toEqual([
+      { pr: 42, branch: `ws/${sessionId}`, phase: 'merged', recordedAt: 12345 },
+    ]);
+  });
+
+  it('retires the program only once ALL its runs are terminal, mirroring whichever run ' +
+     'closes it out (D-51)', async () => {
+    const sessionA = `${PROJECT}-close11`;
+    const root = gitRoot(PROJECT, `ws/${sessionA}`, TIP);
+    const { id: idA, coord } = await dispatchedRun(sessionA, root,
+      { code: 0, stdout: `${ccdLine(sessionA, `ws/${sessionA}`, [prRow(`ws/${sessionA}`, 'MERGED')])}\n`, stderr: '' });
+
+    // A sibling run under the SAME program, seeded directly at the store
+    // level — the identical bypass `maxConcurrentWorkers`'s own fixture
+    // already uses for an auxiliary run that is not what this test proves.
+    const sibling = coord.openRun({ program: 'build4', title: 'Transcript surface', project: PROJECT,
+      wave: 2, waveOf: 3, claimedBy: CLAIMED_BY }) as { id: number };
+    coord.markDispatched(sibling.id, `${sessionA}-sib`, 'sib-ws', 'ws/sib', false);
+    coord.advance(sibling.id, 'dispatched', 'coordinator');
+
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'active' }]);
+    const resA = await postClose(app!, idA, { fingerprint: GOOD_CLAIM, final: true });
+    expect(resA.statusCode).toBe(200);
+    // The SIBLING is still non-terminal — the program must stay `active`.
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'active' }]);
+
+    // Close the sibling too, as an explicit abandon — D-49 lets this route
+    // skip verifyDone, so a fabricated sessionId with no real git root still
+    // closes cleanly. NOW it is the last run, and the program retires
+    // `abandoned`, mirroring the run that closed it out.
+    const resB = await postClose(app!, sibling.id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
+    expect(resB.statusCode).toBe(200);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'abandoned' }]);
   });
 
   it('answers 404 unknown-run for a run id that does not exist', async () => {

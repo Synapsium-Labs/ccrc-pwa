@@ -13,7 +13,7 @@ import { readPrHistory } from './prhistory.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import {
   isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, type MailKind, type MailRejectCode, type RunSummary,
+  MAIL_SUBJECT_MAX_BYTES, RUN_TRANSITIONS, type MailKind, type MailRejectCode, type RunSummary,
 } from '../../../shared/api.js';
 
 /** `$REG/coordinator-paused` — spec:199-205: "no verb, no route, no way for
@@ -519,6 +519,21 @@ export function registerCoordRoutes(
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
     const run = coord.run(id);
     if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    // Precondition, read-only, checked BEFORE anything else runs (fix, found
+    // in Task 9 review — D-46): `RUN_TRANSITIONS.dispatched` has no self-edge
+    // (`dispatched -> dispatched` is illegal), but the only place that fact
+    // used to get checked was `advance()`, at the very END of this route —
+    // AFTER `ccd ensure` and an injected `/clear` had already run against a
+    // LIVE worker. A second `POST .../dispatch` on an already-dispatched run
+    // (an HTTP retry after a client timeout, a double tap, a retried 502)
+    // previously destroyed the wave's context and only THEN answered 409.
+    // `advance()` below still re-checks the live row and is still the only
+    // WRITER of `state`; this only answers the question early enough that
+    // `ccd ensure`/`/clear`/`ws-add`/`ws-hold` never fire for a transition
+    // that was always going to be refused.
+    if (run.state !== 'planned') {
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: run.state, to: 'dispatched' });
+    }
 
     const body = (req.body ?? {}) as { brief?: unknown };
     if (typeof body.brief !== 'string' || body.brief.trim() === '') {
@@ -551,7 +566,7 @@ export function registerCoordRoutes(
     }
 
     let sessionId: string; let workspace: string | null; let branch: string | null;
-    let resumed: boolean; let clearedAt: number | null = null;
+    let resumed: boolean; let clearedAt: number | null = null; let clearError: string | null = null;
 
     if (run.sessionId === null) {
       // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
@@ -600,12 +615,16 @@ export function registerCoordRoutes(
       workspace = record?.workspace ?? run.workspace;
       branch = record?.branch ?? run.branch;
       const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
-      // A refused `/clear` (dialog open, draft present) is not fatal to
-      // dispatch itself — the run still lands in `dispatched` below, with
-      // `clearedAt` left null as the honest record that the second step has
-      // not run yet; a coordinator that notices retries it like any other
-      // failed step (D-1, orchestrator amendment).
+      // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
+      // not fatal to dispatch itself — the run still lands in `dispatched`
+      // below, with `clearedAt` left null as the honest record that the
+      // second step has not run yet; a coordinator that notices retries it
+      // like any other failed step (D-1, orchestrator amendment). What
+      // "recorded" and "retried" actually need — the refusal CODE, and never
+      // queuing a brief into a context D-1's own "genuinely fresh" guarantee
+      // was never met for — is deviation D-47 below.
       clearedAt = clearRes.ok ? Date.now() : null;
+      clearError = clearRes.ok ? null : clearRes.error;
     }
 
     // 5: hold, behind `verbSupported` — the standing convention reason
@@ -618,25 +637,62 @@ export function registerCoordRoutes(
     if (!holdRes.ok) return reply.code(502).send({ ok: false, stderr: holdRes.stderr });
 
     // 6: one call each, so the `run_events` row happens and is independently
-    // attributable from the dispatch write (`markDispatched`'s own docstring).
+    // attributable from the dispatch write (`markDispatched`'s own
+    // docstring). A `/clear` refusal is now RECORDED (deviation D-47, found
+    // in Task 9 review) — D-1's own amended text promises "the refusal
+    // recorded" and nothing did: `run_events.detail` carries the typed
+    // `sendPrompt` error code (`dialog-open`/`draft-present`/`verify-failed`/
+    // `enter-ignored`/…) an operator (or Task 11's own record) can otherwise
+    // only guess at.
     coord.markDispatched(id, sessionId, workspace, branch, resumed);
     if (clearedAt !== null) coord.setClearedAt(id, clearedAt);
-    const adv = coord.advance(id, 'dispatched', 'coordinator');
+    const adv = coord.advance(id, 'dispatched', 'coordinator',
+      clearError !== null ? `clear-refused:${clearError}` : undefined);
     if (!adv.ok) return reply.code(409).send(adv);
 
     // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
-    // injected directly.
-    queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body: brief });
+    // injected directly, and (deviation D-47) queued ONLY when the worker's
+    // context is one it can actually land in: wave 1 has never had anything
+    // else written into it, and wave N>=2's `/clear` must have actually
+    // VERIFIED. Queuing unconditionally, as before, meant a refused `/clear`
+    // still queued a brief into the resumed, un-cleared context — the exact
+    // hazard D-1's "genuinely fresh context" sentence exists to make
+    // mechanical rather than hopeful. Concretely, on `enter-ignored` the
+    // literal text `/clear` is left sitting in the worker's own input box
+    // (`send.ts`'s own `draft` return); the delivery lane's very next sweep
+    // calls `sendPrompt` with no `replaceDraft`, so it would hit
+    // `draft-present` immediately and keep hitting it — parking the brief
+    // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS`, with nothing
+    // surfacing WHY. `clearError` (this response's own field) is the signal
+    // a coordinator needs to decide what to do next; `POST /api/mail` stays
+    // open to send the brief directly once the context is actually fresh.
+    const briefQueued = !resumed || clearedAt !== null;
+    if (briefQueued) {
+      queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body: brief });
+    }
 
-    return reply.code(200).send({ ok: true, id, sessionId, resumed, clearedAt });
+    return reply.code(200).send({
+      ok: true, id, sessionId, resumed, clearedAt, briefQueued,
+      ...(clearError !== null ? { clearError } : {}),
+    });
   });
 
   /**
-   * Close a run: re-measure the done claim (never believe it), fold
-   * `.prhistory` (refusing to close on an unreadable ledger — a run record
-   * saying "retired no PRs" because a file could not be read is the forgery
-   * `ccd/ccd:2018-2035` names), then the transition, then the fleet act —
-   * and the fleet act is a RELEASE (deviation D-5), never an autonomous
+   * Close a run: re-measure the done claim (never believe it) — UNLESS the
+   * operator is explicitly ABANDONING the run (`state:'failed'`, deviation
+   * D-49): that is not a done-claim at all, so there is nothing to
+   * re-measure, and gating an abandon on the same re-measurement a done
+   * claim gets left a run whose branch tip becomes genuinely unmeasurable
+   * (a deleted branch, a reaped worktree) permanently unclosable — wedging
+   * `capsUsage().running` forever with no route in this PR able to free it.
+   * Then fold `.prhistory` (refusing to close on an unreadable ledger — a run
+   * record saying "retired no PRs" because a file could not be read is the
+   * forgery `ccd/ccd:2018-2035` names), then the FLEET ACT, then — only once
+   * it has actually succeeded — the transition (deviation D-48: the fleet
+   * act used to run AFTER the transition committed, so a 501/502 on
+   * `ws-release` wedged a run terminally `done`/`failed` with its hold never
+   * released and `RUN_TRANSITIONS.done = []`/`.failed = []` giving no retry
+   * at all). The fleet act is a RELEASE (deviation D-5), never an autonomous
    * archive: `FleetWatcher.archiveMerged` does that on its own clock, through
    * its own `archiveSafety` gate.
    */
@@ -658,6 +714,21 @@ export function registerCoordRoutes(
       // `ambiguous-dispatch`/`paused`/`cap-*` refusals already use.
       return reply.code(409).send({ ok: false, refused: 'not-dispatched' });
     }
+    // A second precondition, read-only, checked BEFORE the fleet act (fix,
+    // found in Task 9 review — D-48, the close-route half of D-46's same
+    // ordering fix for dispatch): a run that cannot legally reach `closing`
+    // from its CURRENT state — already `done`/`failed` (a second close), or
+    // still `planned` (sessionId set at OPEN time for a wave N>=2 reclaim,
+    // but never actually dispatched) — must never reach the fleet act at
+    // all. Without this, moving the fleet act ahead of the transition commit
+    // below would have made a double-close run `ws-release`/`ws-hold`/
+    // `ws-archive` a SECOND time before discovering the transition was
+    // always going to be refused — trading one wedge for another.
+    // `advance()` below still re-checks the live row and is still the only
+    // WRITER of `state`.
+    if (!RUN_TRANSITIONS[run.state].includes('closing')) {
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: run.state, to: 'closing' });
+    }
 
     const body = (req.body ?? {}) as
       { fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
@@ -673,29 +744,37 @@ export function registerCoordRoutes(
     }
     // The claim is UNTRUSTED off the wire (`DoneClaim`'s own docstring):
     // `verifyDone` re-validates `branchTip`/`handoffCommit`/`prPhase`/
-    // `prNumber` itself, on the strength of nothing this route asserts.
+    // `prNumber` itself, on the strength of nothing this route asserts — when
+    // it runs at all (see D-49, step 1 below).
     const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
     const final = body.final;
     const state: 'done' | 'failed' = body.state === 'failed' ? 'failed' : 'done';
     const archive = body.archive === true;
 
-    // 1: verifyDone — the run is NOT touched here (`fingerprint.ts`'s own
-    // docstring); this route decides.
-    const verdict = await verifyDone(
-      { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-      { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
-      claim,
-    );
-    if (!verdict.ok) {
-      // The run state is UNCHANGED. The rejection is recorded (spec:147-148's
-      // "a rejected message is a fact about the fleet" — done-authority
-      // rejections get the identical courtesy), and a `status` mail carrying
-      // the code and detail is mailed back to the worker (spec:129-131).
-      coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-      queueSystemMail(coord, run, { toId: run.sessionId, runId: id, kind: 'status',
-        subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
-      return reply.code(409).send({ ok: false, error: verdict.code, detail: verdict.detail });
+    // 1: verifyDone re-measures a DONE CLAIM (spec:127-129, "never believe a
+    // done claim"). `state:'failed'` is an explicit operator ABANDON, not a
+    // claim of doneness — there is nothing here to re-measure against
+    // (deviation D-49) — so it skips this step entirely rather than being
+    // permanently refused the moment the branch/worktree it would measure
+    // against stops existing. The run is NOT touched here either way
+    // (`fingerprint.ts`'s own docstring); this route decides.
+    if (state !== 'failed') {
+      const verdict = await verifyDone(
+        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+        claim,
+      );
+      if (!verdict.ok) {
+        // The run state is UNCHANGED. The rejection is recorded (spec:147-148's
+        // "a rejected message is a fact about the fleet" — done-authority
+        // rejections get the identical courtesy), and a `status` mail carrying
+        // the code and detail is mailed back to the worker (spec:129-131).
+        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
+        queueSystemMail(coord, run, { toId: run.sessionId, runId: id, kind: 'status',
+          subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
+        return reply.code(409).send({ ok: false, error: verdict.code, detail: verdict.detail });
+      }
     }
 
     // 2: `.prhistory` — refuse to close on an unreadable ledger; nothing
@@ -706,17 +785,14 @@ export function registerCoordRoutes(
     }
     coord.foldPrLineage(id, history.entries);
 
-    // 3: the transition, and the handoff commit, recorded.
-    const closingAdv = coord.advance(id, 'closing', 'coordinator');
-    if (!closingAdv.ok) return reply.code(409).send(closingAdv);
-    const finalAdv = coord.advance(id, state, 'coordinator');
-    if (!finalAdv.ok) return reply.code(409).send(finalAdv);
-    coord.setHandoffCommit(id, claim.handoffCommit);
-
-    // 4: the fleet act — and it is a RELEASE (D-5), never an autonomous
-    // archive. `state:'failed'` with `archive:true` is the ONE explicit
-    // wsArchive call in the whole coordination lane, mirroring
-    // `POST /api/sessions/:id/archive` including its 501.
+    // 3: the fleet act — moved ahead of the transition commit (deviation
+    // D-48). It is a RELEASE (D-5), never an autonomous archive.
+    // `state:'failed'` with `archive:true` is the ONE explicit `wsArchive`
+    // call in the whole coordination lane, mirroring
+    // `POST /api/sessions/:id/archive` including its 501 — a claim this
+    // route can now actually keep: a 501/502 here leaves `run.state`
+    // untouched, exactly like that route's own precondition-first shape,
+    // rather than arriving after the run was already committed terminal.
     if (state === 'failed' && archive) {
       const argv = CCD_ARGV.wsArchive(run.sessionId);
       if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
@@ -733,6 +809,26 @@ export function registerCoordRoutes(
       if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
       const res = await deps.runCcd(argv);
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    }
+
+    // 4: the transition and the handoff commit, committed only now that the
+    // fleet act above has actually succeeded (D-48). When this run was the
+    // LAST non-terminal one under its program, the program itself retires
+    // (deviation D-51, wiring D-26's own `setProgramState` for the first
+    // time — `resolveCoordinator(null)`'s "exactly one active program" guard
+    // must stop counting a program with nothing left to dispatch, mail, or
+    // hold). The program's retirement state mirrors the run that closed it
+    // out — `done` for a `done` close, `abandoned` for a `failed` one; a
+    // program whose OTHER waves failed earlier and whose LAST wave happens
+    // to close `done` (or vice-versa) is not modelled more precisely than
+    // that, a limitation stated here rather than left implicit.
+    const closingAdv = coord.advance(id, 'closing', 'coordinator');
+    if (!closingAdv.ok) return reply.code(409).send(closingAdv);
+    const finalAdv = coord.advance(id, state, 'coordinator');
+    if (!finalAdv.ok) return reply.code(409).send(finalAdv);
+    coord.setHandoffCommit(id, claim.handoffCommit);
+    if (coord.programOpenRunCount(run.program) === 0) {
+      coord.setProgramState(run.program, state === 'failed' ? 'abandoned' : 'done');
     }
 
     return reply.code(200).send({ ok: true, id, state });

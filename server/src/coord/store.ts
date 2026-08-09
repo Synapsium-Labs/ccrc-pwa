@@ -223,10 +223,16 @@ export class CoordStore {
     return rows.map((row) => this.hydrateRun(row));
   }
 
-  runEvents(runId: number): { at: number; fromState: string; toState: string; causedBy: string }[] {
+  /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
+   *  has always taken a `detail` parameter, but until the dispatch route's
+   *  refused-`/clear` fix started passing one, nothing in this file ever
+   *  wrote a non-null value, so no reader had ever needed the column back.
+   *  Widening the return type is additive-only — every existing caller reads
+   *  a subset of these fields, never the whole shape by positional index. */
+  runEvents(runId: number): { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[] {
     return this.db.prepare(
-      'SELECT at, fromState, toState, causedBy FROM run_events WHERE runId = ? ORDER BY id',
-    ).all(runId) as { at: number; fromState: string; toState: string; causedBy: string }[];
+      'SELECT at, fromState, toState, causedBy, detail FROM run_events WHERE runId = ? ORDER BY id',
+    ).all(runId) as { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[];
   }
 
   /**
@@ -239,14 +245,35 @@ export class CoordStore {
    * "single active program" guard reads `ambiguous` (`active.length !== 1`)
    * forever once a prior program's runs finish and nothing ever moves it out
    * of `active`, which is this build's ordinary steady state, not an edge
-   * case. Mirrors `setWorkItemState`'s shape. *Who* calls this and *when* a
-   * program should retire is routing/policy — a decision for whichever task
-   * closes the last run of a program (Task 9, not yet written in this tree),
-   * the same boundary D-1's `clearedAt` amendment already draws between "the
-   * write path exists" and "the route that drives it".
+   * case. Mirrors `setWorkItemState`'s shape.
+   *
+   * *Who* calls this and *when* a program should retire was deliberately left
+   * to "whichever task closes the last run of a program" — Task 9's close
+   * route now does (deviation D-51, found in Task 9 review: this writer had
+   * ZERO callers in the tree Task 9 actually shipped, and this very
+   * docstring still said "not yet written" about the task that had, by then,
+   * been written for two commits). It checks `programOpenRunCount` below
+   * immediately after its own final `advance()` succeeds, and calls this
+   * with `'done'` or `'abandoned'` depending on how the closing run itself
+   * ended — see the close route's own comment for the policy and its stated
+   * limitation.
    */
   setProgramState(slug: string, state: ProgramState): void {
     this.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run(state, slug);
+  }
+
+  /** Count of this program's runs still in a NON-terminal state — the
+   *  question `setProgramState`'s caller (the close route, D-51) needs
+   *  answered to know whether the run it just closed was the LAST one: zero
+   *  remaining means nothing under this program can dispatch, mail, or hold
+   *  a workspace open any more, so `resolveCoordinator`'s "exactly one
+   *  active program" guard (D-26) must stop counting it. Mirrors
+   *  `capsUsage().running`'s own `state NOT IN ('done','failed')` predicate,
+   *  scoped to one program instead of the whole fleet. */
+  programOpenRunCount(program: string): number {
+    return (this.db.prepare(
+      "SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ('done','failed')",
+    ).get(program) as { c: number }).c;
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {
