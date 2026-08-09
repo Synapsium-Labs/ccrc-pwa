@@ -7,6 +7,57 @@ import { timingSafeEqual } from 'node:crypto';
 export const MAIL_TOKEN_HEADER = 'x-ccrc-mail-token';
 
 /**
+ * Pulls the token VALUE out of raw file content: the first line that is
+ * neither blank nor a `#`-comment, with ALL whitespace stripped from it (not
+ * just the edges).
+ *
+ * THIS RULE, AND ONLY THIS RULE, IS ALSO WHAT `deploy/notify.sh` RUNS OVER
+ * ITS OWN COPY OF THE SAME FILE. Fix-round finding 1: before this, the server
+ * normalised with `.trim()` (edges only) while `notify.sh` normalised with
+ * `tr -d '[:space:]'` (everywhere) — the character CLASS matched but the
+ * SCOPE did not, so any file content with INTERIOR whitespace produced two
+ * different secrets from one committed file. That content is the likely one:
+ * `deploy/ccrc-mail.token.example` ships as a multi-line `#`-comment block
+ * (interior newlines and spaces throughout) above its one value line, and its
+ * own first line teaches `cp deploy/ccrc-mail.token.example
+ * deploy/ccrc-mail.token && edit` — the exact flow that a scope mismatch
+ * turns into a silent, total ingress outage (`checkMailToken` calls the
+ * resulting length mismatch `'bad'`, and both `notify.sh` and the fleet-side
+ * curl swallow the failure).
+ *
+ * Skipping `#`-comment lines is what lets `ccrc-mail.token.example` carry
+ * that comment preamble and still resolve to exactly one value — the line
+ * below it — on both boxes, rather than the whole blob.
+ */
+function extractToken(raw: string): string | null {
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === '' || t.startsWith('#')) continue;
+    const v = t.replace(/\s+/g, '');
+    return v === '' ? null : v;
+  }
+  return null;
+}
+
+/** Thrown when the token file EXISTS but carries no extractable value: 0
+ *  bytes, whitespace only, or every line a `#`-comment (the value line
+ *  deleted, or the whole file truncated mid-rotation). Fix-round finding 4:
+ *  this is PRESENT-but-unusable, the same class of state the non-`ENOENT`
+ *  arm below already refuses to collapse into "never configured", and for
+ *  the identical reason — `checkMailToken(null, …)` returns `'ok'` for every
+ *  presented value, so answering `null` here would disarm the whole gate a
+ *  truncated `openssl rand -hex 32 > …` redirect could trigger with nothing
+ *  red anywhere. Deliberately NOT caught anywhere: `index.ts` lets it kill
+ *  the process, the same stance `coord/db.ts`'s `CoordDbUnmigratable` takes
+ *  for a 0-byte `coord.db` (Task 2/D-24 is the precedent this mirrors — a
+ *  refusal, not a default). NOT what an un-edited `ccrc-mail.token.example`
+ *  copy produces — that file ships one placeholder value line specifically
+ *  so its SHAPE always extracts (see the file's own comment for why shipping
+ *  the placeholder ITSELF is still an operator mistake, just a different,
+ *  visible one this class does not catch). */
+export class MailTokenFileUnusable extends Error {}
+
+/**
  * The box token, off this box's own disk.
  *
  * WHY A FILE AND NOT AN ENV VAR (plan deviation D-4). `deploy/ccrc.service` has
@@ -48,23 +99,42 @@ export function readMailToken(tokenPath: string): string | null {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
   }
-  const v = raw.trim();
-  return v === '' ? null : v;
+  const token = extractToken(raw);
+  if (token === null) {
+    throw new MailTokenFileUnusable(
+      `${tokenPath} exists but carries no usable token (0 bytes, whitespace only, or every line is ` +
+      'a #-comment). This is PRESENT but unusable, not "never configured": see coord/token.ts.');
+  }
+  return token;
 }
 
 /**
  * `'ok' | 'legacy' | 'bad'`.
  *
- * `'legacy'` is the operator ruling's one-deploy-generation tolerance
- * (spec:150-155): a fleet host still running yesterday's `notify.sh` presents
- * NO token, and the hook must not go dark between the server deploy and the
- * agent deploy. A caller that presents a token and gets it WRONG has no such
- * excuse and is refused.
+ * `'legacy'` means "no token was presented" and is deliberately its OWN
+ * state rather than folded into `'bad'` — but it is NOT, by itself, a
+ * license to proceed. It is a tri-state precisely because exactly ONE
+ * caller, `/api/notify`, is granted a tolerance for it: the operator
+ * ruling's one-deploy-generation window (spec:150-155), because a fleet host
+ * still running yesterday's `notify.sh` presents NO token and the hook must
+ * not go dark between the server deploy and the agent deploy.
  *
- * REMOVE THE TOLERANCE ONE DEPLOY AFTER THIS SHIPS. It is not a permanent
- * accommodation: while it stands, the ingress is still open to anything on the
- * tailnet, which is the hole this whole task exists to close. The README's
- * coordination section names the deploy that removes it.
+ * FIX-ROUND FINDING 3/5: `/api/mail` and `/api/mail/:id/ack` are NOT
+ * grantees of that tolerance and must treat `'legacy'` the same as `'bad'`.
+ * The spec scopes the rollout tolerance to `/api/notify` by name
+ * (spec:150-155) and separately lists `unauthenticated` as one of
+ * `/api/mail`'s own typed, total rejection codes with no tolerance carved
+ * out (spec:136-148) — and the reason the tolerance exists at all ("the hook
+ * cannot go dark mid-rollout") cannot apply to a route with zero pre-existing
+ * deployed callers, which `/api/mail` is in this very build. A caller that
+ * presents a token and gets it WRONG has no rollout excuse either and is
+ * refused the same way.
+ *
+ * REMOVE `/api/notify`'S TOLERANCE ONE DEPLOY AFTER THIS SHIPS. It is not a
+ * permanent accommodation: while it stands, that one ingress is still open to
+ * anything on the tailnet, which is the hole this whole task exists to close.
+ * The README's coordination section names the deploy that removes it.
+ * `/api/mail` never had the hole open, so it has nothing to remove.
  *
  * `timingSafeEqual` needs equal lengths, so the length check comes first and
  * leaks only the length — which a caller can measure anyway by sending one.

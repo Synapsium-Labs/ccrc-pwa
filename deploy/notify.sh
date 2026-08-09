@@ -11,18 +11,26 @@
 # generation so a hook shipped before the token cannot go dark. Do not make
 # this hard-fail — that turns a rollout ordering detail into a silent loss of
 # every swap notice.
-# `tr -d '[:space:]'`, not `tr -d '\r\n'`: the server reads its copy of the
-# SAME file with `readFileSync(...).trim()` (coord/token.ts), which strips a
-# trailing space or tab as readily as a newline. A `tr` that only deleted CR/LF
-# left a stray trailing space on either box's copy producing two different
-# byte strings from one committed file — a length mismatch `checkMailToken`
-# has to call `'bad'`, permanently and silently (no journal line survives a
+#
+# THE EXTRACTION RULE BELOW MUST STAY IDENTICAL TO `coord/token.ts`'s
+# `readMailToken`/`extractToken`, WHICH READS THIS SAME COMMITTED FILE ON THE
+# OTHER BOX (fix-round finding 1): first line that is neither blank nor a
+# `#`-comment, whitespace stripped from it EVERYWHERE, not just the edges.
+# The character CLASS used to match (`tr -d '[:space:]'` here, `.trim()`
+# there) but the SCOPE did not — edges-only vs. everywhere — so any content
+# with INTERIOR whitespace produced two different secrets from one committed
+# file, permanently and silently (no journal line survives a
 # `curl ... >/dev/null 2>&1 || true` here, or the `>/dev/null 2>&1` ccd wraps
-# this script's invocation in). Stripping ALL whitespace is safe for the
-# token itself: `openssl rand -hex 32` never produces any.
+# this script's invocation in). `deploy/ccrc-mail.token.example`'s own
+# `#`-comment preamble is exactly that content, which is why comment lines
+# are skipped rather than folded into the token: without the skip, the
+# documented `cp *.example ccrc-mail.token && edit` setup path would ship a
+# secret whose leading bytes are a comment nobody meant to sign with.
 TOKEN_FILE="${CCRC_MAIL_TOKEN_FILE:-$HOME/.cc-secrets/ccrc-mail.token}"
 tok=""
-[ -r "$TOKEN_FILE" ] && tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+if [ -r "$TOKEN_FILE" ]; then
+  tok="$(grep -v '^[[:space:]]*#' "$TOKEN_FILE" | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')"
+fi
 
 curl -fsS -m 5 -X POST "http://${CCRC_ADDR:-203.0.113.7:7788}/api/notify" \
   -H 'content-type: application/json' \

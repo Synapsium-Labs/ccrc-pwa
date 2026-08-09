@@ -1,5 +1,6 @@
 # The Build 7 box token. Copy to `deploy/ccrc-mail.token` (gitignored, never
-# committed) with a real value and `deploy.sh` ships it to BOTH boxes:
+# committed), REPLACE THE LINE BELOW with a real value, and `deploy.sh` ships
+# it to BOTH boxes:
 #   fleet host  -> ~/.cc-secrets/ccrc-mail.token   (notify.sh + every session)
 #   server box  -> ~/.ccrc/mail.token              (read at boot)
 #
@@ -8,3 +9,16 @@
 # This authenticates THE BOX, not a session: every fleet session runs as one
 # UNIX user and can read the file. Per-session identity is attribution
 # (`{fromId, fromUuid}` checked against the registry), and the spec says so.
+#
+# Both boxes' readers (coord/token.ts, notify.sh) take the first line here
+# that is neither blank nor a `#`-comment as THE TOKEN, so this file's shape
+# — comments, then exactly one value line — already IS the deployable shape:
+# a real value on the line below is enough, no other edit needed. DO NOT SHIP
+# THE PLACEHOLDER BELOW AS-IS — it is committed to this public repo, so it
+# authenticates nobody. If you instead DELETE the line below and ship only
+# comments (or truncate the file to 0 bytes), both readers refuse to treat
+# that as "unconfigured": a PRESENT file with no extractable value throws
+# loudly at boot rather than silently opening the ingress (fix-round finding
+# 4) — "never shipped a token" and "shipped an empty one" are different
+# mistakes and must not read the same.
+REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32

@@ -91,6 +91,30 @@ describe('POST /api/mail — the rejection table', () => {
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
   });
 
+  // Fix-round finding 3/5: `/api/notify`'s one-deploy-generation `legacy`
+  // tolerance (an ABSENT token, checkMailToken's `'legacy'` verdict) does NOT
+  // extend to `/api/mail` — it has no pre-existing deployed caller a rollout
+  // could strand, and the spec lists `unauthenticated` as a plain, total
+  // rejection code for it (spec:136-148) with no tolerance carved out. This
+  // was entirely unpinned before: `send`'s `token` parameter supports `null`
+  // (no header at all) but nothing in this file ever called it that way, so
+  // a mutant widening `verdict === 'bad'` back to `!== 'ok'` — accepting a
+  // tokenless request as `/api/notify` does — survived the whole suite.
+  it('refuses a request with NO token header at all — /api/mail grants no legacy tolerance', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app, GOOD, null);
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+    // Unlike `/api/notify` (which has no coordination store to write into and
+    // relies on a `console.warn`), the mail routes DO have one — the refusal
+    // must be recorded, so "was a tokenless POST ever accepted" stays an
+    // answerable question through the rollout window.
+    expect(w.coord.rejections().map((r) => r.code)).toContain('unauthenticated');
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
+  });
+
   it('measures the 8KB cap in UTF-8 BYTES, not code units', async () => {
     // A body of 2100 astral characters is 2100 string units and 8400 bytes —
     // `hookstate.ts:128-135` already had to learn this distinction.
@@ -191,6 +215,12 @@ describe('POST /api/mail/:id/ack', () => {
     const wrongToken = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID }, 'wrong');
     expect(wrongToken.statusCode).toBe(401);
     expect(wrongToken.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+
+    // Fix-round finding 3/5: no legacy tolerance on the ack route either —
+    // see the matching ingress test above for the full rationale.
+    const noToken = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID }, null);
+    expect(noToken.statusCode).toBe(401);
+    expect(noToken.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
 
     const staleUuid = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: 'b'.repeat(36) });
     expect(staleUuid.statusCode).toBe(403);

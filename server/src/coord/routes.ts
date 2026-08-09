@@ -68,13 +68,27 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
 
-    // 1: box token. Same shared check `/api/notify` uses — one function, one
-    // meaning: the box is authenticated, or it isn't. `bad` refuses; `ok`
-    // and the one-deploy-generation `legacy` tolerance both proceed, exactly
-    // as `/api/notify` already treats them (coord/token.ts's own docstring).
+    // 1: box token. Same shared check `/api/notify` uses, but NOT the same
+    // gate: `/api/notify`'s one-deploy-generation `legacy` tolerance
+    // (spec:150-155) is scoped to that route by name, because it is the one
+    // route with a pre-existing deployed caller a rollout could go dark
+    // under. `/api/mail` is new in this very build — there is no old caller
+    // to protect, and the spec lists `unauthenticated` as a plain, total
+    // rejection code for it (spec:136-148) with no tolerance carved out
+    // (fix-round finding 3/5: an earlier draft of this gate read `'legacy'`
+    // as pass-through here too, treating notify's rollout excuse as if it
+    // transferred — it does not; see coord/token.ts's `checkMailToken`
+    // docstring). `ok` is the only verdict that proceeds; `'legacy'` and
+    // `'bad'` both refuse, and — unlike `/api/notify`, which has no
+    // coordination store to record into — both land in `mail_rejections`
+    // via `refuse()` below, so "was a tokenless POST ever accepted" is an
+    // answerable question, not a silent gap.
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
-    if (verdict === 'bad') {
-      return refuse(reply, 401, 'unauthenticated', {}, 'wrong box token');
+    if (verdict !== 'ok') {
+      const detail = verdict === 'legacy'
+        ? 'no box token presented — /api/mail grants no legacy tolerance (that is /api/notify only)'
+        : 'wrong box token';
+      return refuse(reply, 401, 'unauthenticated', {}, detail);
     }
 
     // 2: body shape. fromId/fromUuid/toId/subject/body must all be strings;
@@ -209,9 +223,14 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
 
+    // Same gate, same reasoning: see the ingress route above (fix-round
+    // finding 3/5) — `/api/mail/:id/ack` has no legacy caller either.
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
-    if (verdict === 'bad') {
-      return refuse(reply, 401, 'unauthenticated', {}, 'wrong box token');
+    if (verdict !== 'ok') {
+      const detail = verdict === 'legacy'
+        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance (that is /api/notify only)'
+        : 'wrong box token';
+      return refuse(reply, 401, 'unauthenticated', {}, detail);
     }
 
     const body = (req.body ?? {}) as { fromId?: unknown; fromUuid?: unknown };

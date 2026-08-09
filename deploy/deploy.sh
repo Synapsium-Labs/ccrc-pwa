@@ -40,6 +40,15 @@ ship_env() {
 # secret are equal by construction rather than by someone remembering. The
 # server reads its copy at boot (coord/token.ts); the fleet host's copy is what
 # notify.sh and every coordinator/worker session present.
+#
+# "Equal by construction" also needs both READERS to extract the same value
+# from the same bytes, not just receive the same bytes — coord/token.ts's
+# `readMailToken` and notify.sh's token line share one extraction rule (first
+# non-`#`, non-blank line; whitespace stripped everywhere in it) for exactly
+# this reason (fix-round finding 1: the two normalisers used to differ in
+# SCOPE, edges-only vs. everywhere, which the shipped .example's `#`-comment
+# preamble — interior whitespace throughout — would turn into two different
+# secrets from the one file this function ships unchanged).
 ship_secret() {
   local local_file="deploy/$1" remote_dir="$2" remote_name="$3"
   if [ -f "$local_file" ]; then
