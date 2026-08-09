@@ -153,6 +153,18 @@ describe('CoordStore: caps', () => {
     s.markDispatched(dispatched.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
     expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 1 });
   });
+
+  it('excludes a dispatch exactly 24h old — the window is `>`, not `>=` (D-59)', () => {
+    // Discriminates `capsUsage`: `>` -> `>=`. The only prior fixtures were
+    // `now` and `now - 25h`/`now - 23h` — nothing landed exactly on the
+    // boundary, so the mutant reproduced every assertion in both
+    // coord-store.test.ts and run-routes.test.ts unchanged.
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-boundary', 'boundary', 'ws/boundary', false, now - 24 * 3600_000);
+    expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 0 });
+  });
 });
 
 describe('CoordStore: work items', () => {

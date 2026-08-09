@@ -3,7 +3,7 @@
 // file proves gets exercised is one of the five `whitelist-subset.test.ts`
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -189,6 +189,27 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(w.coord.run(opened.id)?.state).toBe('planned');
   });
 
+  it('refuses paused even when BOTH caps are also exhausted — pause is the answer, not a cap', async () => {
+    // Discriminates `dispatch: check caps before the pause file`: with the
+    // schema defaults (Task 11 review finding), a lone pause fixture with
+    // `running: 0`/`dispatchedIn24h: 0` cannot tell the order apart — both
+    // orderings answer `refused: 'paused'`. Zeroing both caps means a
+    // caps-first ordering would answer `cap-concurrency` instead; this case
+    // fails against that mutant and passes only when the pause check truly
+    // runs first.
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    w.coord.setCaps({ maxConcurrentWorkers: 0, maxSessionsPerDay: 0 });
+    const opened = (await postOpen(app)).json() as { id: number };
+    writeFileSync(path.join(home, '.cc-sessions', 'coordinator-paused'), '');
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'paused' });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+  });
+
   it('refuses when the registry cannot be listed — an unreadable pause file is a PAUSE', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
@@ -219,19 +240,36 @@ describe('POST /api/runs/:id/dispatch', () => {
   });
 
   it('refuses at maxSessionsPerDay over a rolling 24h, not a calendar day', async () => {
-    const home = mkTmp('ccrc-runs-');
-    const { run } = makeRunner(home);
-    const w = await openApp(home, run); app = w.app;
-    const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
-      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
-    // Dispatched 23h ago — inside the rolling 24h window, so it still counts.
-    w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false, Date.now() - 23 * 3600_000);
-    w.coord.setCaps({ maxConcurrentWorkers: 12, maxSessionsPerDay: 1 });
+    // D-59 (Task 11 review): the original fixture used a bare `Date.now() -
+    // 23h` — a calendar-day count agrees with the rolling-24h answer
+    // whenever the real wall clock is within the last hour of the local
+    // day, so the mutant this case exists to kill only died 23 hours out of
+    // every 24. Fake timers pin `now` at a fixed local NOON, so `now - 23h`
+    // lands on the PREVIOUS calendar date deterministically, regardless of
+    // when this suite actually runs (assumes a UTC/UTC-like test host, the
+    // same assumption `mail-sweep.test.ts`/`pr-sweep.test.ts` already make
+    // with their own fixed `vi.setSystemTime` epochs).
+    const NOW = new Date('2024-06-15T12:00:00.000Z').getTime();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    try {
+      const home = mkTmp('ccrc-runs-');
+      const { run } = makeRunner(home);
+      const w = await openApp(home, run); app = w.app;
+      const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
+        wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
+      // Dispatched 23h ago — inside the rolling 24h window (counts), but on
+      // the PREVIOUS calendar date (a calendar-day count would not).
+      w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false, NOW - 23 * 3600_000);
+      w.coord.setCaps({ maxConcurrentWorkers: 12, maxSessionsPerDay: 1 });
 
-    const opened = (await postOpen(app)).json() as { id: number };
-    const res = await postDispatch(app, opened.id);
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, refused: 'cap-daily', limit: 1, used: 1 });
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, refused: 'cap-daily', limit: 1, used: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('runs ws-add for wave 1 and learns the id from the registry, not from ccd\'s sentence', async () => {

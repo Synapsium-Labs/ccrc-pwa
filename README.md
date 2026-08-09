@@ -571,17 +571,30 @@ the registry, the hold, `.prhistory` — stay the fleet's own ground truth; the
 database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
-**Run lifecycle**, six steps, one HTTP route per irreversible act:
+**Run lifecycle**, three HTTP routes driving six steps, one run row per wave
+(D-56, corrected — the version below was checked line-by-line against
+`server/src/coord/routes.ts`, not written from the route names alone):
 
-1. `POST /api/runs` opens a run against a program+workspace — a ledger
-   commit and a hold (`ccd ws-hold`); a second coordinator on the same
-   program is refused.
-2. `POST /api/runs/:id/dispatch` puts a wave on the pane: wave 1 is `ccd
-   ws-add`/`start`; wave ≥2 is `ccd ensure` (the harness resumes its own
-   transcript) followed by an injected `/clear` through `sendPrompt`'s full
-   proof discipline, so "genuinely fresh context" stays mechanical rather
-   than hoped for — then the wave brief is delivered as mail into that now-
-   empty context.
+1. `POST /api/runs` opens a run row for one wave — **the ledger is NOT
+   written or read here** (the route's own docstring says so verbatim); it
+   only names `docs/superpowers/programs/<slug>.md` in the response, so a
+   coordinator that forgot to commit it is told once, in the place it would
+   notice. A second coordinator on the same program is refused. Wave 1 (no
+   `sessionId` in the body) places **no hold yet** — dispatch is what claims
+   the workspace. Wave N≥2 (`sessionId` names the workspace being reclaimed)
+   holds it immediately (`ccd ws-hold`).
+2. `POST /api/runs/:id/dispatch` checks `$REG/coordinator-paused` and both
+   caps **before spawning or resuming anything**; wave 1 (`run.sessionId`
+   still null) runs `ccd ws-add` and learns the new session id by diffing
+   the registry before/after (never ccd's own echoed sentence, and never
+   `ccd start` — no ccd verb of that name runs anywhere in this lane). Wave
+   N≥2 resumes the *same* workspace with `ccd ensure` (the harness resumes
+   its own transcript) and then discards that resumed context with an
+   injected `/clear` through `sendPrompt`'s full proof discipline, so
+   "genuinely fresh context" stays mechanical rather than hoped for. Either
+   path ends in `ccd ws-hold` and the transition to `dispatched`; only once
+   that commits does the wave brief go out as mail, into a context proven
+   empty (wave 1) or proven `/clear`-verified (wave N≥2).
 3. The coordinator watches mail and `pr-state` the way an operator would —
    `GET /api/runs` and the `runs` frame on `/ws/fleet` carry state and
    work-item tallies, nothing new to poll.
@@ -589,15 +602,29 @@ replacement for them, and a lost `coord.db` reconstructs from them.
    handoff commit, PR number and phase are all read fresh off git's own ref
    files and `.prhistory`, not trusted off the claim body — a stale tip, a
    regressed PR, or a handoff commit that isn't the claim's own branch tip
-   is refused and mailed back with the reason.
+   is refused and mailed back with the reason. (An explicit abandon,
+   `state:'failed'`, skips this re-measurement entirely — there is no
+   worktree left to re-measure an abandon against.)
 5. The coordinator reviews the handoff commit like any other diff — brief
-   *quality* stays discipline, not something this server enforces — updates
-   the hold reason, and dispatches wave N+1 into the *same* workspace (back
-   to step 2).
-6. `POST /api/runs/:id/close` on the final wave releases the hold; the
-   ordinary merged-and-unheld sweep archives it on its own clock. An
-   explicit abandon (`state:'failed'`) archives immediately instead,
-   mirroring the manual archive route.
+   *quality* stays discipline, not something this server enforces — then
+   closes **this** run non-finally (`POST /api/runs/:id/close`,
+   `final:false`, `state` defaulting to `'done'`): that re-holds the same
+   workspace under the wave-N+1 reason and drives *this* run row to a
+   terminal `done`/`failed` (`RUN_TRANSITIONS` gives `done`/`failed` no
+   edges out — the row itself never dispatches again). Wave N+1 is a **new**
+   run: a second `POST /api/runs`, naming the same `sessionId`, back to
+   step 1 — then step 2's dispatch again, on the new run's id.
+6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
+   ws-release`); the ordinary merged-and-unheld sweep archives it on its own
+   clock. An explicit abandon (`state:'failed'`) alone still only
+   *releases*, exactly like a normal final close — archiving instead needs
+   `archive:true` passed explicitly (the one call in this whole lane to
+   `ccd ws-archive`, mirroring the manual archive route including its 501).
+   **Caution:** `state:'failed'` with `final:false` and no `archive`
+   re-holds the workspace under the *next* wave's reason even though this
+   run just went terminal — abandoning mid-program needs `final:true` or
+   `archive:true` explicitly, or the workspace stays held for a wave that
+   is never coming.
 
 **The mail bus and its token.** Sessions send each other mail — `finding |
 question | answer | status | artifact` — through `POST /api/mail`, attributed
