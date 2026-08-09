@@ -45,6 +45,7 @@ describe('readHookState', () => {
     expect(out).toEqual({
       state: 'waiting',
       updatedAt: NOW,
+      event: 'UserPromptSubmit',
       ask: {
         questions: [{
           question: 'Which?', header: 'Pick', multiSelect: true,
@@ -110,6 +111,35 @@ describe('readHookState', () => {
     seed(reg, ID, base({ state: 'done' }));
     const out = await readHookState(localIO, reg, ID, UUID, NOW);
     expect(out?.interrupted).toBe(false);
+  });
+
+  it('reads the event the hook wrote', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ event: 'Stop' }));
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out?.event).toBe('Stop');
+  });
+
+  it('event absent (a file written before this field existed) reads null', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    const body = base();
+    delete body['event'];
+    seed(reg, ID, body);
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out?.event).toBeNull();
+  });
+
+  it('event empty string reads null', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ event: '' }));
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out?.event).toBeNull();
+  });
+
+  it('event non-string (e.g. a number) rejects the WHOLE read, not just the field', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ event: 7 }));
+    expect(await readHookState(localIO, reg, ID, UUID, NOW)).toBeNull();
   });
 
   it('stale by 31 minutes → null', async () => {

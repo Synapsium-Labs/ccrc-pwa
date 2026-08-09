@@ -10,6 +10,7 @@ import { CCD_ARGV, verbSupported } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
+import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type { NotifyEvent, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
@@ -98,6 +99,53 @@ const PR_BACKOFF_MAX_MS = 900_000;
  *  (measured 0.51-0.69 s per project call), short enough that wedged is not
  *  permanent. */
 const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
+
+/** The SEVENTH lane. (Sixth is naming, fifth is hook-state sweeping.) spec:159
+ *  fixes the cadence; the rest of this block is the gate's arithmetic.
+ *
+ *  Ten seconds is not how fast mail should arrive — it is how often the lane
+ *  is allowed to ASK. Actual delivery is bounded below by `MAIL_QUIET_MS`,
+ *  which is the point: mail lands at a turn boundary, not mid-thought. */
+const MAIL_SWEEP_MS = 10_000;
+
+/** How long a session must have been idle before it is interruptible. ccd's
+ *  own `COMPACT_QUIET` (`ccd/ccd:45`), taken rather than re-derived: this is
+ *  the same judgement about the same panes, and two numbers for one policy is
+ *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
+ *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6697-6698`). */
+const MAIL_QUIET_MS = 60_000;
+
+/** No session gets two injections inside this window, however much mail is
+ *  queued for it. A fan-out of six findings arriving as six prompts in ninety
+ *  seconds is a denial of service dressed as coordination. */
+const MAIL_COOLDOWN_MS = 120_000;
+
+/** How long an UNACKED delivery waits before it is replayed. Dated from the
+ *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
+ *  the edge proves the turn started, so the recipient is thinking, not
+ *  ignoring. */
+const MAIL_REPLAY_MS = 600_000;
+
+/** The attempt budget, and the spacing between attempts. Doubling from 30 s to
+ *  the same 15-minute ceiling `PR_BACKOFF_MAX_MS` already uses — one ceiling
+ *  for "this keeps not working" across the whole watcher. At the cap the
+ *  delivery parks as `rejected('undeliverable')` and THE MAIL ROW IS UNTOUCHED
+ *  (spec:170-172): the record of what was said survives the failure to say
+ *  it. */
+const MAIL_MAX_ATTEMPTS = 6;
+const MAIL_BACKOFF_BASE_MS = 30_000;
+const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
+
+/** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
+ *  (`ccd/ccd:20-22`, `_lane_enabled` at `:53`), which the operator already
+ *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
+ *  registry directory, never by reading the file: `FleetIO.readFile` maps
+ *  every failure to null (`io.ts:41-43`), so a read would make an unreadable
+ *  kill-switch look like an absent one — fail-OPEN on the one control whose
+ *  entire job is to stop injection. `limits.ts:134-142` already filters
+ *  unknown `<name>-disabled` markers out of `/api/accounts`, so this name
+ *  cannot fabricate an account row there. */
+const MAIL_DISABLED_MARKER = 'mail-disabled';
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
@@ -251,6 +299,16 @@ export class FleetWatcher {
    *  inside a lane that promises never to block) is not on offer.
    */
   private activeProjects = new Set<string>();
+  /** The seventh lane's clock. */
+  private lastMailSweep = 0;
+  /** Per session: when this lane last injected. IN MEMORY BY DESIGN, and the
+   *  direction of the failure is why: a restart forgets the cooldown and may
+   *  deliver one message sooner than it should have. Persisting it would buy
+   *  a politeness guarantee across a restart at the price of a column and a
+   *  purge — the same trade `attemptedRenames` already declined (`:172-181`).
+   *  The ATTEMPT budget, which protects a session from a loop rather than
+   *  from a moment, IS durable: it is a column on the delivery. */
+  private mailCooldown = new Map<string, number>();
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -356,6 +414,12 @@ export class FleetWatcher {
     // attempted-set is written BEFORE the call, so a second sweep's condition 4
     // refuses the pair the first is still running.
     void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
+    // NEVER awaited, same reasoning as sweepNames immediately above: this one
+    // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
+    // is ~4.3 s of sleeps per message plus one round trip per line
+    // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
+    // detector and the busy->idle push behind a mail delivery.
+    void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
     const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
     // The whole fleet is in scope right here, which is exactly what
     // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
@@ -633,6 +697,124 @@ export class FleetWatcher {
         const warn = res.stderr.trim();
         if (warn !== '') console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch}: ${warn}`);
       }
+    }
+  }
+
+  /**
+   * Deliver queued mail, one message per eligible session per sweep.
+   *
+   * SIX CONJUNCTS, in this order, cheapest first — and the order is the design,
+   * because every rung below the first is a read that crosses the agent WS in
+   * remote mode:
+   *
+   *   0. the lane is primed (a restart delivers no storm — spec:256-258);
+   *   1. `$REG/mail-disabled` is absent, by DIRECTORY LISTING, fail-shut;
+   *   2. this session is off its per-session cooldown;
+   *   3. tmux has the session;
+   *   4. the hookstate is fresh AND says `done` AND carries no ask — `done` is
+   *      the hook's idle, and `readHookState` has already applied the freshness
+   *      and uuid gates (`hookstate.ts:149-154`), so a stale or foreign file
+   *      reads as null and null is NOT idle;
+   *   5. the live status file says AFFIRMATIVELY idle and `statusUpdatedAt` is
+   *      at least `MAIL_QUIET_MS` old. Affirmatively, because `liveStatus`
+   *      answers `'idle'` for a missing pid, a missing config dir and an
+   *      unreadable file (`fleet.ts:118-131`) — `archiveSafety`'s rule
+   *      (`:731-736`, "MUST NOT collapse `unknown` to idle") applies here for
+   *      the same reason: this ends in a keystroke.
+   *
+   * ONLY THEN `sendPrompt`, unchanged, with its whole proof discipline —
+   * echo verified, `draft-present` refused, `dialog-open` refused — inside the
+   * session's own `KeyedQueue` slot. NOTHING HERE TEACHES IT TO RETRY: the
+   * two-Enter budget and `submitEnter`'s one-Enter doctrine
+   * (`inject/send.ts:456-460`) are load-bearing, and the escalation for a stuck
+   * box is the human.
+   *
+   * `replaceDraft` IS NEVER PASSED. A half-typed human message outranks every
+   * agent-to-agent finding in this system; `draft-present` is a back-off, and
+   * the mail is still there in two minutes.
+   *
+   * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
+   * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
+   * that `draftOf` strips (`inject/send.ts:61`, pinned against a live capture
+   * at `send.test.ts:642`). So "the box reads empty" is not "nothing is
+   * pending", and the gate above is what keeps the lane away from a busy
+   * session in the first place — not the send path, which would happily
+   * succeed.
+   *
+   * `tick()` dispatches this with `void` (it can sit on the queue for as long
+   * as `sendPrompt` does), so a test that awaits `tick()` has NOT awaited the
+   * sweep — every negative assertion about it would pass while it was still
+   * running. PUBLIC for the same reason `sweepNames` is.
+   */
+  async sweepMail(): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastMailSweep !== 0 && now - this.lastMailSweep < MAIL_SWEEP_MS) return;
+    this.lastMailSweep = now;
+
+    // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
+    const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
+    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
+
+    const due = store.dueDeliveries(now, MAIL_REPLAY_MS);
+    if (due.length === 0) return;
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const seen = new Set<string>();          // one message per session per sweep
+    for (const d of due) {
+      if (seen.has(d.toId)) continue;
+      const last = this.mailCooldown.get(d.toId) ?? 0;
+      if (now - last < MAIL_COOLDOWN_MS) continue;
+      const rec = records.find((r) => r.id === d.toId);
+      if (!rec) continue;                    // a recipient that went away: the row waits
+      if (!(await this.deps.tmux.hasSession(d.toId))) continue;
+      const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, d.toId, rec.uuid, now);
+
+      // The UserPromptSubmit edge, folded into this SAME hookstate read —
+      // checked BEFORE the done/ask gate below, deliberately: a session that
+      // picked up a REPLAYED delivery and started its turn reads `working`,
+      // not `done`, and that is exactly the signal this re-dates the replay
+      // clock for (spec:178-180). `d.deliveredAt !== null` is the store-side
+      // test for "this is a replay candidate, not a first attempt" — a
+      // still-`queued` row has no delivery time for the edge to postdate.
+      if (d.deliveredAt !== null && hs !== null && hs.event === 'UserPromptSubmit' &&
+          hs.updatedAt > (d.ingestedAt ?? d.deliveredAt)) {
+        store.markIngested(d.id, hs.updatedAt);
+      }
+
+      if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
+      const pid = await this.deps.tmux.panePid(d.toId);
+      const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
+      if (!pid || !cfgDir) continue;
+      const live = await readLiveState(this.deps.io, cfgDir, pid);
+      if (!live || liveSessionStatus(live.status) !== 'idle') continue;
+      if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) continue;
+
+      seen.add(d.toId);
+      // The stored envelope, byte for byte. `renderEnvelope` is not called here
+      // and must never be: spec:176-177's "verbatim, never re-rendered".
+      const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope);
+      if (res.ok) {
+        this.mailCooldown.set(d.toId, now);
+        store.markDelivered(d.id, now);
+        continue;
+      }
+      // `enter-ignored` is terminal HERE and nowhere else: the text is sitting
+      // in the box, `submitEnter`'s doctrine forbids a blind third Enter, and
+      // the rescue is a human looking at the pane. Re-injecting would type the
+      // whole envelope a second time UNDER the first one.
+      if (res.error === 'enter-ignored') {
+        store.rejectDelivery(d.id, 'undeliverable', res.error);
+        continue;
+      }
+      const attempts = d.attempts + 1;
+      if (attempts >= MAIL_MAX_ATTEMPTS) {
+        store.rejectDelivery(d.id, 'undeliverable', res.error);
+        continue;
+      }
+      const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+      store.backOff(d.id, res.error, now + step);
     }
   }
 

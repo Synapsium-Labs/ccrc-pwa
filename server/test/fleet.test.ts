@@ -18,7 +18,7 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
 };
 
 const mkHookState = (over: Partial<HookState> = {}): HookState =>
-  ({ state: 'working', updatedAt: 1784600000000, ask: null, subagents: [], interrupted: false, ...over });
+  ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false, ...over });
 
 describe('idHomeWrapper', () => {
   it('longest prefix wins', () => {
