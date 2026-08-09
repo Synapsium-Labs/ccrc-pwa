@@ -38,9 +38,13 @@ jobs:
           # floor itself being lowered to meet a low node-version — a floor at
           # or below whatever interpreter is running stays green on assertion 2
           # alone. Measured, not assumed: mirroring all three package.jsons to
-          # `>=22.0.0` left assertions 1-2 green under both a 24.x and a
-          # current-22.x interpreter — both ABOVE the real node:sqlite flag
-          # boundary, so that experiment says nothing about assertion 3.
+          # `>=22.0.0` left assertions 1-2 green under this box's 24.x
+          # interpreter, well ABOVE the real node:sqlite flag boundary — so
+          # that experiment says nothing about assertion 3. (Not independently
+          # re-measured under a 22.x interpreter: this box has no other `node`
+          # binary and no nvm/fnm/volta/n to fetch one, and this branch has
+          # never been pushed, so CI's own 22.x leg has never run it either —
+          # the 24.x result alone is enough to support the point above.)
           # Assertion 3 is ABSOLUTE: it `import()`s node:sqlite and round-trips
           # a DatabaseSync, reading no package.json at all, so it fails on any
           # interpreter below 22.13.0 no matter what `engines.node` says. It is

@@ -15,7 +15,9 @@ Add to home screen in Android Chrome / iOS Safari for the standalone app.
 
 ## Architecture
 
-- `server/` — Node ≥22 + Fastify (TS ESM). One process, systemd user unit
+- `server/` — Node ≥22.13.0 (`engines.node`; `node:sqlite` needs it unflagged,
+  and `server/test/node-floor.test.ts` pins both the declaration and the
+  import) + Fastify (TS ESM). One process, systemd user unit
   `ccrc.service`, bound to the Tailscale address only (`CCRC_HOST:CCRC_PORT`,
   default `127.0.0.1:7788`; the box runs `203.0.113.7:7788`). No database —
   in **local** fleet mode it reads ccd's flat files and shells out to
@@ -23,7 +25,9 @@ Add to home screen in Android Chrome / iOS Safari for the standalone app.
   fleet mode the exact same seams are backed by a WS client talking to
   `agent/` on the fleet host instead (see "Remote fleet mode" below). Either
   way the whole thing is unit-testable off-box against fixtures.
-- `agent/` — Node ≥22 WS service (TS ESM) that runs ON the fleet host and
+- `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
+  packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
+  server-only) WS service (TS ESM) that runs ON the fleet host and
   exposes a small, whitelisted exec/file/tail/pty surface over a bearer-token
   connection. Only needed for remote fleet mode; local mode never touches it.
 - `pwa/` — React + Vite installable PWA ("phosphor & ink" design). Builds into
