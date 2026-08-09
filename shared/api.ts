@@ -1313,7 +1313,14 @@ export const FLEET_PROTO_MIN = 1;
  *  have been told about while you were away", never as "what reached a device". */
 export interface NotifyEvent {
   seq: number; at: number;
-  kind: 'ask' | 'done' | 'merged';
+  /** `mail` and `run` are Build 7's. `unknown` is the CLIENT-SIDE degradation
+   *  member and the server never records it: it is what a kind from a newer
+   *  server becomes on an older client, via `reviveNotifyEvent`. Without it
+   *  this union was closed and unvalidated — a bare `getJson<CatchUp>`
+   *  (`pwa/src/lib/api.ts`) hands a browser's JSON straight to a renderer that
+   *  switches on three members, so a fourth arrived typed as one of the three
+   *  it is not. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'unknown';
   sessionId: string; title: string; body: string;
 }
 
@@ -1322,6 +1329,48 @@ export interface NotifyEvent {
  *  to drop its watermark and trust the fleet snapshot, never to fabricate
  *  badges for events it cannot enumerate. */
 export interface CatchUp { epoch: string; seq: number; resync: boolean; events: NotifyEvent[] }
+
+/** The recognised `NotifyEvent.kind` tokens — used ONLY by `reviveNotifyEvent`
+ *  below to decide whether a wire value degrades to `unknown`; never
+ *  `includes`d against the type-narrowed union itself (the same
+ *  cast-the-constant-not-the-input rule `STATUSES`/`CHECKS` above state). */
+const NOTIFY_KINDS: readonly string[] = ['ask', 'done', 'merged', 'mail', 'run', 'unknown'];
+
+/**
+ * One catch-up event, revived into today's shape — the same discipline
+ * `reviveFleetSession` states once at :838-931 and for the same reason:
+ *  - a token from a newer build, where the type has a designated "we do not
+ *    know" member, becomes that member;
+ *  - a field of the wrong type, or a missing non-nullable one, REJECTS the
+ *    whole event (null), because a half-revived notification is a badge for
+ *    something that may not have happened.
+ *
+ * Rejection here collapses to `null` and the caller DROPS the event, which is
+ * the same answer the feed already gives for a resync (`notifymark.ts`'s
+ * `applyCatchUp`): nothing surfaced retroactively, ever, on doubt.
+ */
+export function reviveNotifyEvent(raw: unknown): NotifyEvent | null {
+  try {
+    const o = asObj(raw, 'notifyEvent');
+    const kindRaw = reqStr(o, 'kind');
+    // A kind this build does not recognise is exactly what a newer server's
+    // frame looks like on an older client — degrade to `unknown`, the
+    // client-side member this union carries for exactly this purpose, never
+    // reject the whole event over it.
+    const kind = (NOTIFY_KINDS.includes(kindRaw) ? kindRaw : 'unknown') as NotifyEvent['kind'];
+    return {
+      seq: reqNum(o, 'seq'),
+      at: reqNum(o, 'at'),
+      kind,
+      sessionId: reqStr(o, 'sessionId'),
+      title: reqStr(o, 'title'),
+      body: reqStr(o, 'body'),
+    };
+  } catch (err) {
+    if (err instanceof MalformedSnapshot) return null;
+    throw err;   // a real bug in here must not read as a corrupt snapshot
+  }
+}
 
 // ── Build 7: coordination ────────────────────────────────────────────────────
 // The nouns, once, in the one module all four source roots import.

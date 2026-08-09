@@ -2,8 +2,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import {
   isMailDeliveryState, isProgramState, isRunState, RUN_TRANSITIONS,
-  type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type ProgramState,
-  type RunItemTally, type RunState, type RunSummary, type WorkItemState,
+  type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type NotifyEvent,
+  type ProgramState, type RunItemTally, type RunState, type RunSummary, type WorkItemState,
 } from '../../../shared/api.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:855-858). Re-declared as a TYPE
@@ -22,6 +22,17 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  * rather than growing the wire type.
  */
 export interface RunRow extends RunSummary { prLineage: PrLineageEntry[] }
+
+/** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
+ *  material `RunSummary`'s own docstring says is "deliberately absent" from
+ *  the wire shape — "neither small nor something that changes on every
+ *  frame." Shared by `GET /api/runs` (`coord/routes.ts`) and the `runs` WS
+ *  frame's own emitter (`watch.ts`'s `emitRuns`, Task 10) rather than each
+ *  holding its own copy of the strip. */
+export const toRunSummary = (row: RunRow): RunSummary => {
+  const { prLineage: _prLineage, ...summary } = row;
+  return summary;
+};
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState }
@@ -608,6 +619,137 @@ export class CoordStore {
     ).all() as { id: number; at: number; code: string; fromId: string | null; fromUuid: string | null;
                  toId: string | null; runId: number | null; kind: string | null; subject: string | null;
                  detail: string | null }[];
+  }
+
+  // ── feed (Task 10, orchestrator-added scope: the durable archive behind ────
+  //    NotifyLog's in-memory ring — PR J interface 5)
+
+  /** Newest rows to keep. Also the upper clamp `feedEvents` enforces on its
+   *  own `limit` argument, so a route can never be made to walk (and
+   *  JSON-stringify) more history than the table is ever allowed to hold. */
+  private static readonly FEED_RETENTION = 2000;
+
+  /**
+   * Append one notify event to the durable feed, beside `NotifyLog.record`
+   * (`FleetWatcher.pushOne`'s own call — see that method's docstring). ALL
+   * kinds land here, not just `mail`/`run`: a scrollback that silently
+   * dropped `ask`/`done`/`merged` would not be a scrollback. `epoch`/`seq`
+   * are `NotifyLog`'s own pair AT RECORD TIME, mirrored for correlation —
+   * this table's own `id` is what orders `feedEvents`, since `seq` alone
+   * cannot: it resets to 0 on every epoch rotation (a restart with an
+   * unreadable watermark file), so two rows from different epochs can carry
+   * the same `seq`.
+   *
+   * Retention (newest `FEED_RETENTION`) is pruned in the SAME transaction as
+   * the insert, so a reader can never observe more rows than the retention
+   * promise, even mid-write.
+   */
+  recordFeedEvent(epoch: string, e: NotifyEvent): void {
+    tx(this.db, () => {
+      this.db.prepare(
+        'INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(epoch, e.seq, e.at, e.kind, e.sessionId, e.title, e.body);
+      this.db.prepare(
+        'DELETE FROM feed_events WHERE id NOT IN (SELECT id FROM feed_events ORDER BY id DESC LIMIT ?)',
+      ).run(CoordStore.FEED_RETENTION);
+    });
+  }
+
+  /**
+   * `GET /api/feed`'s reader — oldest-first (the route's own promise), `limit`
+   * clamped into `(0, FEED_RETENTION]` so neither an absent/non-positive
+   * value nor one past the table's own retention ceiling can be asked for.
+   * `kind` is read back with a cast, not a guard: see this file's own header
+   * comment (schema.ts) on why `feed_events.kind` is not one of D-8's five
+   * we-do-not-know columns.
+   */
+  feedEvents(limit: number): NotifyEvent[] {
+    const n = Number.isFinite(limit) && limit > 0
+      ? Math.min(Math.floor(limit), CoordStore.FEED_RETENTION)
+      : CoordStore.FEED_RETENTION;
+    const rows = this.db.prepare(
+      'SELECT seq, at, kind, sessionId, title, body FROM ' +
+      '(SELECT * FROM feed_events ORDER BY id DESC LIMIT ?) ORDER BY id ASC',
+    ).all(n) as { seq: number; at: number; kind: string; sessionId: string; title: string; body: string }[];
+    return rows.map((r) => ({
+      seq: r.seq, at: r.at, kind: r.kind as NotifyEvent['kind'], sessionId: r.sessionId,
+      title: r.title, body: r.body,
+    }));
+  }
+
+  // ── notify lanes (Task 10): what FleetWatcher polls to raise `mail`/`run` ──
+  //    NotifyEvent pushes — level-triggered watermarks, the same shape every
+  //    other lane in this build uses for "what is new since I last looked".
+
+  /** `mail_deliveries`'s current high-water id — `FleetWatcher`'s priming read
+   *  (its own `tick()`'s "no storm on boot" rule, extended to the mail lane
+   *  per spec's restart semantics), so a restart does not re-notify for every
+   *  delivery already queued before this process started. */
+  maxMailDeliveryId(): number {
+    return (this.db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM mail_deliveries').get() as { m: number }).m;
+  }
+
+  /**
+   * Every `mail_deliveries` row with `id > sinceId`, oldest first — mail
+   * queued since `FleetWatcher` last looked, regardless of whether the
+   * delivery lane (`sweepMail`) has attempted injection yet: spec:243-244's
+   * push fires "at queue time (the message exists and is a record then), not
+   * at injection — otherwise a message that never becomes deliverable is a
+   * fact nothing recorded."
+   *
+   * `mailId` (for the push's non-collapsing tag, spec:236-237) and
+   * `deliveryId` (the watermark's own unit) are deliberately BOTH returned —
+   * two independent `AUTOINCREMENT` sequences, the same D-41 reason
+   * `setDeliveryEnvelope`'s own comment gives for never assuming they walk
+   * together. `workspace`/`project` come from the delivery's RUN when one is
+   * named (`mail.runId`, nullable) — the common case, worker<->coordinator
+   * mail inside a wave — and are `null` for ad-hoc mail with no run context;
+   * the caller degrades both (`workspace ?? toId` for the title, same as
+   * `pushOne`'s own fallback chains elsewhere in this file's callers).
+   */
+  mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; kind: string;
+                                       subject: string; project: string | null;
+                                       workspace: string | null }[] {
+    return this.db.prepare(
+      'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.kind, m.subject, r.project, r.workspace ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs r ON r.id = m.runId ' +
+      'WHERE d.id > ? ORDER BY d.id',
+    ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; kind: string; subject: string;
+                         project: string | null; workspace: string | null }[];
+  }
+
+  /** `run_events`'s current high-water id — same priming role as
+   *  `maxMailDeliveryId`, over the run-transition notify lane. */
+  maxRunEventId(): number {
+    return (this.db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM run_events').get() as { m: number }).m;
+  }
+
+  /**
+   * Every `run_events` row with `id > sinceId`, oldest first, joined back to
+   * the run it belongs to — spec:243-244's `run` push copy needs `state`,
+   * `workspace ?? project`, `program:<slug> wave <n>/<of>`, all of which live
+   * on `runs` already (`program` IS the slug — `runs.program REFERENCES
+   * programs(slug)`; the copy names the slug, never the program's title, so
+   * no join to `programs` is needed here, unlike `RUN_ROW_COLUMNS`'s own
+   * join for `programTitle`).
+   *
+   * `sessionId` rides straight off `runs.sessionId` (nullable — a run can
+   * transition, e.g. `planned` -> `failed`, before dispatch ever mints one);
+   * the caller (`FleetWatcher`) skips a row with no session rather than
+   * guess one, since presence-gating and the push's own target both need a
+   * real session id.
+   */
+  runEventsSince(sinceId: number): { eventId: number; runId: number; toState: string; sessionId: string | null;
+                                      project: string; workspace: string | null; program: string;
+                                      wave: number; waveOf: number | null }[] {
+    return this.db.prepare(
+      'SELECT re.id AS eventId, re.runId, re.toState, r.sessionId, r.project, r.workspace, ' +
+      'r.program, r.wave, r.waveOf ' +
+      'FROM run_events re JOIN runs r ON r.id = re.runId ' +
+      'WHERE re.id > ? ORDER BY re.id',
+    ).all(sinceId) as { eventId: number; runId: number; toState: string; sessionId: string | null;
+                         project: string; workspace: string | null; program: string;
+                         wave: number; waveOf: number | null }[];
   }
 
   // ── disaster recovery (spec:82-85) ─────────────────────────────────────────

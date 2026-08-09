@@ -13,6 +13,8 @@ import { Presence } from '../src/presence.js';
 import { askKey } from '../src/askkey.js';
 import type { PushPayload } from '../src/push.js';
 import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
 
@@ -102,20 +104,27 @@ function watcher(opts: {
   push: { notify: (p: PushPayload) => Promise<void> };
   presence?: Presence;
   notifyLog?: NotifyLog;
+  /** Task 10: when true, a real `CoordStore` (over this fixture home's own
+   *  `.ccrc/coord.db`) is wired in and returned — the mail/run notify lanes
+   *  and the durable feed archive both need one to have anything to read. */
+  coord?: boolean;
   sessions: string[];
   pane?: string;
-}): { tick: () => Promise<void>; markIdle: (id: string) => void; home: string } {
+}): { tick: () => Promise<void>; markIdle: (id: string) => void; home: string; coord?: CoordStore } {
   const home = mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
+  const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
   const deps = {
     ...testDeps(home, runnerFor(info, opts.pane)),
     push: opts.push as never,
     presence: opts.presence,
     notifyLog: opts.notifyLog,
+    coord,
   };
   const w = new FleetWatcher(deps, new Bus(), 10_000);
   return {
     home,
+    coord,
     tick: () => w.tick(),
     markIdle: (id: string) => {
       const s = info.get(id);
@@ -420,5 +429,187 @@ describe('ask notifications carry actions only where the route would accept them
     const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
     const sent = await raiseAsk(ask);
     expect(sent[0]!.actions).toHaveLength(2);
+  });
+});
+
+describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
+  it('records ALL kinds into the durable feed beside notifyLog.record, and restart-survives', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a', 'ccrc-pwa/cc-b'] });
+    await w.tick();                    // priming — records nothing
+    w.markIdle('cc-a');
+    await w.tick();                    // an ordinary `done` push
+    expect(sent).toHaveLength(1);
+    expect(log.seq).toBe(1);
+    // The archive got the SAME row the ring did — every kind, not just
+    // Build 7's two new ones.
+    const events = w.coord!.feedEvents(10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ seq: 1, kind: 'done', sessionId: 'cc-a' });
+  });
+
+  it('the presence-gate exemption: a visible session still gets the RECORD, never the PUSH', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const presence = new Presence();
+    presence.setVisible(Symbol('t'), 'cc-a');
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const w = watcher({ push, presence, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+    await w.tick();                    // priming: seeds the mail watermark
+
+    const mail = w.coord!.insertMail({
+      fromId: 'coordinator', fromUuid: 'coordinator', toId: 'cc-a', runId: null,
+      kind: 'finding', subject: 'watch this', body: 'b', artifacts: [],
+    });
+    w.coord!.queueDelivery(mail.id, 'cc-a', 'envelope text');
+    await w.tick();
+
+    // Suppressed by presence — spec:238-240 says the RECORD is exempt, not
+    // the push, and `ask`/`done`/`merged` never carried `recordAlways` at
+    // all, so this is new behaviour Task 10 introduces.
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+    expect(w.coord!.feedEvents(10).map((e) => e.kind)).toEqual(['mail']);
+  });
+
+  describe('the `mail` lane', () => {
+    it('fires at QUEUE time, once per message, with a non-collapsing tag', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();                  // priming
+
+      const m1 = w.coord!.insertMail({
+        fromId: 'cc-b', fromUuid: 'u-b', toId: 'cc-a', runId: null,
+        kind: 'finding', subject: 'first', body: 'b1', artifacts: [],
+      });
+      w.coord!.queueDelivery(m1.id, 'cc-a', 'e1');
+      const m2 = w.coord!.insertMail({
+        fromId: 'cc-b', fromUuid: 'u-b', toId: 'cc-a', runId: null,
+        kind: 'question', subject: 'second', body: 'b2', artifacts: [],
+      });
+      w.coord!.queueDelivery(m2.id, 'cc-a', 'e2');
+      await w.tick();
+
+      expect(sent).toHaveLength(2);
+      // Two DIFFERENT messages to the SAME session must not collapse into
+      // one tray slot (spec:236-237) — unlike `ask`/`done`/`merged`'s
+      // default `${kind}-${sessionId}` key.
+      expect(sent.map((p) => p.tag)).toEqual([`mail-cc-a-${m1.id}`, `mail-cc-a-${m2.id}`]);
+      expect(sent[0]!.title).toBe('✉ finding › cc-a');   // no run -> falls back to the session id
+      expect(sent[0]!.body).toBe('first');
+      expect(sent[0]!.actions).toBeUndefined();           // v1: actionless
+    });
+
+    it('does not replay mail queued before the watcher ever started (no boot storm)', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      // Queued BEFORE the first (priming) tick — as if this mail had been
+      // sitting in the database since before this process started.
+      const stale = w.coord!.insertMail({
+        fromId: 'cc-b', fromUuid: 'u-b', toId: 'cc-a', runId: null,
+        kind: 'status', subject: 'old news', body: 'b', artifacts: [],
+      });
+      w.coord!.queueDelivery(stale.id, 'cc-a', 'e0');
+
+      await w.tick();                  // priming: seeds the watermark past `stale`
+      expect(sent).toEqual([]);
+
+      const fresh = w.coord!.insertMail({
+        fromId: 'cc-b', fromUuid: 'u-b', toId: 'cc-a', runId: null,
+        kind: 'status', subject: 'breaking news', body: 'b', artifacts: [],
+      });
+      w.coord!.queueDelivery(fresh.id, 'cc-a', 'e1');
+      await w.tick();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.body).toBe('breaking news');
+    });
+
+    it('names the run\'s workspace when the mail is run-scoped', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();
+
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.markDispatched(run.id, 'cc-a', 'cc-a-ws', 'build7/wave1', false);
+      const mail = w.coord!.insertMail({
+        fromId: 'cc-a', fromUuid: 'u-a', toId: 'coordinator', runId: run.id,
+        kind: 'status', subject: 'wave 1 update', body: 'b', artifacts: [],
+      });
+      w.coord!.queueDelivery(mail.id, 'cc-a', 'e1');
+      await w.tick();
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+    });
+  });
+
+  describe('the `run` lane', () => {
+    it('fires once per transition, tagged by run id and target state', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();                  // priming: seeds the run-events watermark
+
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.setSession(run.id, 'cc-a');
+      w.coord!.advance(run.id, 'dispatched', 'coordinator');
+      await w.tick();
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        title: '▸ dispatched › ccrc-pwa',        // no workspace set yet -> falls back to project
+        body: 'program:build7 wave 1/3',
+        tag: `run-${run.id}-dispatched`,
+      });
+
+      w.coord!.advance(run.id, 'closing', 'coordinator');
+      w.coord!.advance(run.id, 'done', 'coordinator');
+      await w.tick();
+      expect(sent).toHaveLength(3);              // one push per transition, not one per run
+      expect(sent.slice(1).map((p) => p.tag)).toEqual([
+        `run-${run.id}-closing`, `run-${run.id}-done`,
+      ]);
+    });
+
+    it('skips a transition with no session yet, but still advances past it', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();
+
+      // `planned` -> `failed` with NO session ever minted (e.g. a refusal
+      // before dispatch) — nothing to badge or presence-gate against.
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.advance(run.id, 'failed', 'coordinator');
+      await w.tick();
+      expect(sent).toEqual([]);
+
+      // The watermark still moved past it — a LATER, sessioned transition on
+      // a different run is not blocked behind the skipped one.
+      const run2 = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 2, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.setSession(run2.id, 'cc-a');
+      w.coord!.advance(run2.id, 'dispatched', 'coordinator');
+      await w.tick();
+      expect(sent).toHaveLength(1);
+    });
   });
 });

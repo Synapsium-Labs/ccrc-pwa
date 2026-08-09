@@ -34,11 +34,13 @@ describe('openCoordDb', () => {
       .toBe(COORD_SCHEMA_VERSION);
     expect((a.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode)
       .toBe('wal');
-    // Every table spec:106-117 names, plus the two D-3 adds.
+    // Every table spec:106-117 names, plus the two D-3 adds, plus Task 10's
+    // orchestrator-added `feed_events` (the durable archive behind NotifyLog's
+    // in-memory ring).
     const names = (a.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(names).toEqual(expect.arrayContaining([
-      'coordinator_state', 'mail', 'mail_deliveries', 'mail_rejections',
+      'coordinator_state', 'feed_events', 'mail', 'mail_deliveries', 'mail_rejections',
       'programs', 'run_events', 'runs', 'work_items',
     ]));
     a.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')").run();

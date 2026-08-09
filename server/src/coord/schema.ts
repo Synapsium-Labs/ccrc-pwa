@@ -27,6 +27,22 @@
  * stale uuid, and writing it into `mail` would put unattributable rows in the
  * table the delivery lane walks. See the plan's deviation D-3.
  *
+ * `feed_events` is a THIRD table beyond the six, added later still (Task 10's
+ * own orchestrator-added scope, PR J interface 5 reconciled): the durable
+ * archive behind `NotifyLog`'s in-memory ring (`server/src/notifylog.ts`),
+ * which keeps its exact current role — this table is what `GET /api/feed`
+ * answers once the ring has evicted a row or the process has restarted and
+ * re-minted a fresh epoch. `feed_events.kind` is shaped like a sixth enum
+ * column but is deliberately NOT one of the five the paragraph above counts,
+ * and is not held to the we-do-not-know discipline those five are: it is
+ * written only from a value this server itself already typed as
+ * `NotifyEvent['kind']` (`FleetWatcher.pushOne`'s own call sites), the
+ * client-side `'unknown'` degrade member that type carries is a READ-side
+ * concept for an older PWA parsing a newer server's frame
+ * (`reviveNotifyEvent`), and this server never writes it here. `CoordStore.
+ * feedEvents` reads it back with a documented cast — the same stance
+ * `mail_rejections.code` below already takes, and for the identical reason.
+ *
  * `runs.claimedBy` implements spec:291-292's multi-coordinator non-goal: one
  * coordinator per program, and a second one refuses rather than arbitrating.
  */
@@ -157,6 +173,25 @@ export const MIGRATIONS: readonly string[] = [
   );
   INSERT INTO coordinator_state (id, maxConcurrentWorkers, maxSessionsPerDay, updatedAt)
     VALUES (1, 3, 12, 0);
+
+  -- Task 10 (orchestrator-added scope): the durable archive behind NotifyLog's
+  -- in-memory ring. epoch/seq mirror NotifyLog's own pair AT RECORD TIME --
+  -- not a second counter -- so a row can be correlated back to the catch-up
+  -- watermark that was live when it was written; ordering for GET /api/feed is
+  -- this table's own id (monotonic across an epoch rotation, unlike seq,
+  -- which resets to 0 on one). Landed in v1 rather than a migration 2 for the
+  -- same reason D-1's runs.clearedAt amendment gives: coord.db exists on no
+  -- box yet, so amending v1 before it has ever been observed costs nothing.
+  CREATE TABLE feed_events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    epoch     TEXT NOT NULL,
+    seq       INTEGER NOT NULL,
+    at        INTEGER NOT NULL,
+    kind      TEXT NOT NULL,        -- ask|done|merged|mail|run — never 'unknown', see this file's header
+    sessionId TEXT NOT NULL,
+    title     TEXT NOT NULL,
+    body      TEXT NOT NULL
+  );
   `,
 ];
 

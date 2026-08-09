@@ -32,10 +32,11 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
-import type { CoordStore } from './coord/store.js';
+import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountUsage, type FleetMsg, type FleetSession, type SessionClientMsg, type SessionStreamMsg, type TaskItem,
+  type AccountUsage, type FleetMsg, type FleetSession, type RunSummary, type SessionClientMsg,
+  type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
@@ -258,12 +259,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const onFleet = (sessions: FleetSession[]) =>
       socket.send(JSON.stringify({ type: 'fleet', sessions } satisfies FleetMsg));
     const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n } satisfies FleetMsg));
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()).then(onFleet);
+    const onRuns = (runs: RunSummary[]) =>
+      socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
+    // The `runs` cold start is chained AFTER `fleet`'s own, not fired
+    // alongside it: `fleet` is itself async (`assembleFleet` awaits tmux/IO),
+    // while a `coord.runs()` read is synchronous, so firing both
+    // independently would race — and often WIN, sending `runs` before
+    // `fleet` ever resolves. Chaining pins the wire order every client (and
+    // `fleetws.test.ts`) can rely on: hello, fleet, runs.
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()).then((sessions) => {
+      onFleet(sessions);
+      // Cold start for THIS socket, same reasoning as the `fleet` push just
+      // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
+      // emitRuns`'s own byte-equality guard), so a client connecting into a
+      // quiet fleet would otherwise see no runs until one moved. No `coord`
+      // -> no frame at all, same as every other coord-gated surface here.
+      if (deps.coord) onRuns(deps.coord.runs().map(toRunSummary));
+    });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
+    bus.on('runs', onRuns);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
+      bus.off('runs', onRuns);
     });
   });
 

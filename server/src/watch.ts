@@ -19,6 +19,7 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
+import { toRunSummary } from './coord/store.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -343,6 +344,23 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
+   *  above, over `RunSummary[]` instead of `FleetSession[]`. `null` (not
+   *  `'[]'`) so the very first tick with a real `coord` always emits at
+   *  least once, even into an empty fleet — mirroring `lastJson`'s own
+   *  initial value. */
+  private lastRunsJson: string | null = null;
+  /** Watermark: the highest `mail_deliveries.id` this lane has already
+   *  raised a `mail` NotifyEvent for. Seeded to the CURRENT max id on the
+   *  priming tick (`tick()`'s own `!this.primed` arm) rather than left at 0,
+   *  so a restart does not replay a notify for mail queued before this
+   *  process started — the same "no storm on boot" courtesy `prevStatus`
+   *  gives the `done` push above, and spec's own restart semantics name by
+   *  name: "the primed-quiet rule... extends to the mail lane." */
+  private lastMailNotifyId = 0;
+  /** Same watermark discipline as `lastMailNotifyId`, over `run_events.id`
+   *  for the `run` NotifyEvent lane. */
+  private lastRunNotifyId = 0;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -467,6 +485,17 @@ export class FleetWatcher {
           this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
         }
       }
+      // Build 7's two new notify kinds ride the SAME primed gate as the
+      // `done` push above, for the identical restart reason.
+      this.pushNewMail(projects);
+      this.pushNewRuns(projects);
+    } else if (this.deps.coord) {
+      // The priming tick seeds both watermarks to "everything that already
+      // exists" rather than 0, so the FIRST primed tick's `WHERE id > ?`
+      // reads see only what changed after this process started — the mail-
+      // lane courtesy spec's restart semantics name, extended here to runs.
+      this.lastMailNotifyId = this.deps.coord.maxMailDeliveryId();
+      this.lastRunNotifyId = this.deps.coord.maxRunEventId();
     }
     for (const s of sessions) this.prevStatus.set(s.id, s.status);
     this.activeProjects = projects;
@@ -474,10 +503,100 @@ export class FleetWatcher {
     if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
       try { await saveSnapshot(sessions, this.cachePath); } catch { /* best-effort cache — never blocks the poll */ }
     }
+    // Independent of the `fleet` diff below: runs change on a different
+    // clock from sessions, and an unchanged session snapshot must not
+    // suppress a run transition from reaching an already-connected client.
+    this.emitRuns();
     const json = JSON.stringify(sessions);
     if (json === this.lastJson) return;
     this.lastJson = json;
     this.bus.emit('fleet', sessions);
+  }
+
+  /**
+   * The `{type:'runs'}` WS frame emitter (Task 10, spec:222-224). Runs every
+   * tick, unthrottled: `CoordStore.runs()` is a handful of indexed SQLite
+   * reads (synchronous — `DatabaseSync` has no async surface), not a pane
+   * capture or a network round trip, so there is nothing here worth a slower
+   * clock of its own the way `sweepNames`/`sweepMail` need one.
+   *
+   * Byte-equality guarded exactly like the `fleet` snapshot above: runs
+   * change on human-and-agent timescales, and re-broadcasting an unchanged
+   * list every 2 s would be new noise on a socket that spent real effort not
+   * having any. No `coord` -> nothing to read -> nothing ever emitted, the
+   * same "absent means none of this exists" stance every other coord-gated
+   * surface in this build takes.
+   */
+  private emitRuns(): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const runs = coord.runs().map(toRunSummary);
+    const json = JSON.stringify(runs);
+    if (json === this.lastRunsJson) return;
+    this.lastRunsJson = json;
+    this.bus.emit('runs', runs);
+  }
+
+  /**
+   * The `mail` NotifyEvent lane (Task 10, spec:243-244). Fires from the
+   * delivery lane's own data at QUEUE time — `mailQueuedSince` walks
+   * `mail_deliveries` by insertion order, so a row is raised the first tick
+   * after `POST /api/mail` (or the coordinator's own system mail) queued it,
+   * regardless of whether `sweepMail` has attempted injection yet. "Not at
+   * injection — otherwise a message that never becomes deliverable is a fact
+   * nothing recorded."
+   *
+   * `tag` is `mail-<toId>-<mailId>` (spec:236-237): NON-collapsing per
+   * session, on purpose — two different messages about one session must not
+   * replace each other in the tray, unlike `ask`/`done`/`merged`'s default
+   * `${kind}-${sessionId}` key, where the newest statement supersedes the
+   * last. `recordAlways: true` (spec:238-240): a message the operator is
+   * looking at the recipient's pane for is still a fact that arrived: only
+   * the PUSH is presence-gated, never the record.
+   */
+  private pushNewMail(projects: Set<string>): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    for (const m of coord.mailQueuedSince(this.lastMailNotifyId)) {
+      this.pushOne({
+        kind: 'mail', sessionId: m.toId, project: m.project ?? '',
+        title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
+        body: m.subject,
+        tag: `mail-${m.toId}-${m.mailId}`,
+        recordAlways: true,
+      }, projects);
+      this.lastMailNotifyId = m.deliveryId;
+    }
+  }
+
+  /**
+   * The `run` NotifyEvent lane (Task 10, spec:243-244): one push per
+   * `run_events` row — every transition this run's own state machine
+   * records, not just terminal ones. "A run transition is a fact about a
+   * program, and the operator watching one pane must not erase it" —
+   * `recordAlways: true` for the identical reason `pushNewMail` sets it.
+   *
+   * A transition with no `sessionId` yet (e.g. an early refusal before
+   * dispatch ever minted one) is skipped rather than guessed: presence
+   * gating and the push's own target both need a real session id, and
+   * `runEventsSince`'s own docstring states why the caller, not the store,
+   * makes that call.
+   */
+  private pushNewRuns(projects: Set<string>): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    for (const r of coord.runEventsSince(this.lastRunNotifyId)) {
+      if (r.sessionId !== null) {
+        this.pushOne({
+          kind: 'run', sessionId: r.sessionId, project: r.project,
+          title: `▸ ${r.toState} › ${r.workspace ?? r.project}`,
+          body: `program:${r.program} wave ${r.wave}/${r.waveOf ?? '?'}`,
+          tag: `run-${r.runId}-${r.toState}`,
+          recordAlways: true,
+        }, projects);
+      }
+      this.lastRunNotifyId = r.eventId;
+    }
   }
 
   /**
@@ -486,26 +605,67 @@ export class FleetWatcher {
    *  - Project context ONLY when more than one project is active. The server
    *    knows the whole fleet at push time, so it can tell — and "✓ ccrc-pwa"
    *    on a fleet running one project is noise dressed as information.
-   *  - NOTHING fires for a session the operator is looking at right now. A
+   *  - NOTHING PUSHES for a session the operator is looking at right now. A
    *    notification for the pane on your screen trains you to dismiss
-   *    notifications.
+   *    notifications. AMENDED for Build 7 (spec:238-240) — this used to be
+   *    absolute, gating the RECORD too, and it still is for `ask`/`done`/
+   *    `merged`. But agent-to-agent mail (and a run transition) is a record,
+   *    not a "needs your eyes" ping: gating the record on presence would mean
+   *    the operator watching a session ERASES the log of a message they
+   *    never saw. `recordAlways` exempts the RECORD from this gate; the PUSH
+   *    stays gated exactly as before, unconditionally, for every kind.
    *  - The log records what this method DECIDED to raise — after the presence
    *    gate, before delivery, and never corrected by delivery's outcome. It is
    *    not a record of what was sent: recording is unconditional while `push`
    *    is optional, so a reconnecting client's catch-up can and will list
    *    events no device ever received. `NotifyEvent`'s own docstring is the
-   *    wire contract for that; keep the two saying the same thing.
+   *    wire contract for that; keep the two saying the same thing. The
+   *    durable feed (`CoordStore.recordFeedEvent`, Task 10) is written at the
+   *    SAME point for the SAME reason, over ALL kinds — not just Build 7's
+   *    two — so the archive behind the ring can never disagree with what the
+   *    ring itself would have said.
    *
    *  `notifyLog` and `push` are independently optional, which is the reason
    *  above: the catch-up log is useful even on a box with no VAPID keys
-   *  configured, so it is never gated on `push` being present.
+   *  configured, so it is never gated on `push` being present. `coord` is a
+   *  THIRD, independently-optional sink for the identical reason: a box with
+   *  no coordination database still gets a working ring and catch-up, it
+   *  simply has no durable archive behind either.
    */
-  private pushOne(e: { kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] }, projects: Set<string>): void {
-    if (this.deps.presence?.isVisible(e.sessionId)) return;
+  private pushOne(e: {
+    kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
+    actions?: PushPayload['actions'];
+    /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
+     *  pass one: two different messages about one session must not replace
+     *  each other in the tray (spec:236-237), which is exactly what the
+     *  default key does — and does correctly for `ask`/`done`/`merged`, where
+     *  the newest statement about a session supersedes the last. */
+    tag?: string;
+    /** Record even when the operator is looking at this session. THE PRESENCE
+     *  GATE STILL SUPPRESSES THE PUSH; only the RECORD is exempt. spec:238-240:
+     *  agent-to-agent mail is a record, not a "needs your eyes" ping — gating
+     *  the record on presence would mean the operator watching a session
+     *  ERASES the log of a message they never saw. */
+    recordAlways?: boolean;
+  }, projects: Set<string>): void {
+    const visible = this.deps.presence?.isVisible(e.sessionId) === true;
+    if (visible && !e.recordAlways) return;
     const title = projects.size > 1 ? `${e.title} · ${e.project}` : e.title;
-    this.deps.notifyLog?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
-    void this.deps.notifyLog?.flush();
-    void this.deps.push?.notify({ title, body: e.body, sessionId: e.sessionId, tag: `${e.kind}-${e.sessionId}`, ...(e.actions ? { actions: e.actions } : {}) });
+    const log = this.deps.notifyLog;
+    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
+    void log?.flush();
+    // The durable feed archive — same record, same point, ALL kinds (Task
+    // 10's orchestrator-added scope). Only reachable when NotifyLog actually
+    // produced an event: no `notifyLog` configured means no `{epoch,seq}`
+    // pair exists to mirror, and a feed row that mirrors nothing is not an
+    // archive of anything.
+    if (log && recorded) this.deps.coord?.recordFeedEvent(log.epoch, recorded);
+    if (visible) return;                       // recorded, not pushed
+    void this.deps.push?.notify({
+      title, body: e.body, sessionId: e.sessionId,
+      tag: e.tag ?? `${e.kind}-${e.sessionId}`,
+      ...(e.actions ? { actions: e.actions } : {}),
+    });
   }
 
   /**

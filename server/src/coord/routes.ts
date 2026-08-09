@@ -6,7 +6,7 @@ import { readRegistry } from '../registry.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { tx } from './db.js';
-import type { CoordStore, RunRow } from './store.js';
+import { toRunSummary, type CoordStore, type RunRow } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { readPrHistory } from './prhistory.js';
@@ -63,16 +63,6 @@ function queueSystemMail(
     coord.setDeliveryEnvelope(delivery.id, envelope);
   });
 }
-
-/** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
- *  material `RunSummary`'s own docstring says is "deliberately absent" from
- *  the wire shape — "neither small nor something that changes on every
- *  frame." `GET /api/runs` is the first reader of `CoordStore.runs()` in this
- *  tree; without this it would be the first LEAK of it too. */
-const toSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, ...summary } = row;
-  return summary;
-};
 
 /**
  * The coordination routes. Registered from `buildServer` rather than declared
@@ -835,12 +825,28 @@ export function registerCoordRoutes(
   });
 
   /** `GET /api/runs?closed=1` — cold start, and the archive of finished runs
-   *  (spec:225-227). Strips `prLineage` on the way out (`toSummary`). */
+   *  (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`). */
   app.get('/api/runs', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { closed?: string };
     const runs = deps.coord.runs({ includeClosed: q.closed === '1' });
-    const summaries: RunSummary[] = runs.map(toSummary);
+    const summaries: RunSummary[] = runs.map(toRunSummary);
     return { runs: summaries };
+  });
+
+  /**
+   * `GET /api/feed?limit=<n>` (Task 10, orchestrator-added scope: PR J
+   * interface 5) — the durable archive behind `NotifyLog`'s in-memory ring,
+   * oldest-first. Survives both a ring eviction (the ring keeps only the
+   * newest 200, `notifylog.ts`'s `RING`) and a restart (a fresh `NotifyLog`
+   * mints a new epoch and an empty ring; this table is untouched by either).
+   * `limit` clamping is `CoordStore.feedEvents`'s own job, not repeated here
+   * — same division of labour as `GET /api/runs`'s `closed` flag above.
+   */
+  app.get('/api/feed', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const q = req.query as { limit?: string };
+    const limit = Number(q.limit);
+    return { events: deps.coord.feedEvents(limit) };
   });
 }

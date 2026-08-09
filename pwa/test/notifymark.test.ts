@@ -69,4 +69,27 @@ describe('applying a catch-up', () => {
     expect(applyCatchUp({ epoch: 'e1', seq: 6, resync: false, events: [] })).toEqual([]);
     expect(loadMark()).toEqual({ epoch: 'e1', seq: 6 });
   });
+
+  // Build 7 / Task 10: every event is REVIVED, never cast — the client-side
+  // degradation branch `NotifyEvent.kind`'s widened union exists for.
+  it('passes a recognised kind through unchanged', () => {
+    const r: CatchUp = { epoch: 'e1', seq: 1, resync: false, events: [{ ...ev(1), kind: 'mail' }] };
+    expect(applyCatchUp(r)).toEqual([{ ...ev(1), kind: 'mail' }]);
+  });
+
+  it('degrades a kind this build does not recognise to `unknown` rather than reject it', () => {
+    const raw = { ...ev(1), kind: 'something-new' };
+    const r: CatchUp = { epoch: 'e1', seq: 1, resync: false, events: [raw as unknown as NotifyEvent] };
+    expect(applyCatchUp(r)).toEqual([{ ...ev(1), kind: 'unknown' }]);
+  });
+
+  it('drops an event with a numeric title rather than fabricate a badge', () => {
+    const bad = { ...ev(1), title: 42 };
+    const good = ev(2);
+    const r: CatchUp = {
+      epoch: 'e1', seq: 2, resync: false,
+      events: [bad as unknown as NotifyEvent, good],
+    };
+    expect(applyCatchUp(r)).toEqual([good]);
+  });
 });

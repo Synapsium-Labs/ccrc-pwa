@@ -1,6 +1,6 @@
 // The client half of the notification watermark. See `server/src/notifylog.ts`
 // for the other half and the reasoning both sides share.
-import type { CatchUp } from '../../../shared/api';
+import { reviveNotifyEvent, type CatchUp, type NotifyEvent } from '../../../shared/api';
 
 const KEY = 'ccrc:notify:v1';
 
@@ -66,5 +66,12 @@ export function saveMark(mark: Mark): void {
  */
 export function applyCatchUp(r: CatchUp): CatchUp['events'] {
   saveMark({ epoch: r.epoch, seq: r.seq });
-  return r.resync ? [] : r.events;
+  if (r.resync) return [];
+  // Every event revived, never cast. A kind this build does not know becomes
+  // `unknown` rather than arriving typed as one of the ones it does — the
+  // degradation branch spec:234-236 requires, and the reason `NotifyEvent.kind`
+  // grew an `unknown` member at all. An event that fails revival is DROPPED:
+  // the mark has already advanced, and a fabricated badge is worse than a
+  // missed one (the same ruling as the resync arm above).
+  return r.events.map(reviveNotifyEvent).filter((e): e is NotifyEvent => e !== null);
 }
