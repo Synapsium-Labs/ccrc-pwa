@@ -41,10 +41,11 @@ export interface FleetState {
    * `pushOne`), so it can legitimately name events that were delivered and
    * read.
    *
-   * Two sources merged on `seq` (`lib/feed.ts`): the catch-up tail on every
-   * socket open, and `GET /api/feed` when `/mail` mounts (so the inbox is not
-   * empty after every deploy — the durable table survives one, the 200-event
-   * in-memory ring never did). Capped at FEED_CAP from the old end.
+   * Two sources merged by record identity, not by `seq` alone (`lib/feed.ts`):
+   * the catch-up tail on every socket open, and `GET /api/feed` when `/mail`
+   * mounts (so the inbox is not empty after every deploy — the durable table
+   * survives one, the 200-event in-memory ring never did). Capped at
+   * FEED_CAP from the old end.
    *
    * Empty after a resync — see `lib/notifymark.ts` for why nothing is ever
    * surfaced retroactively in that case.
@@ -63,10 +64,14 @@ export interface FleetState {
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
-  /** Union `events` into `feed` by `seq` (later wins a collision) and add
-   *  `dropped` to the running count. The one mutator both the catch-up tail
-   *  and `GET /api/feed` go through, so the two sources can never diverge on
-   *  merge policy. */
+  /** Union `events` into `feed` by record identity (`lib/feed.ts`'s
+   *  `${at}:${seq}`, never `seq` alone — `seq` resets to 0 on an epoch
+   *  rotation, so two different records can share one) — later wins a
+   *  collision — and set `feedDropped` to `dropped`, the LAST read's count
+   *  (its own docstring: not a running total; each read, including a
+   *  re-mount of `/mail`, reports for itself). The one mutator both the
+   *  catch-up tail and `GET /api/feed` go through, so the two sources can
+   *  never diverge on merge policy. */
   mergeFeed(events: NotifyEvent[], dropped?: number): void;
   clearFeed(): void;
 }
@@ -209,7 +214,16 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       },
 
       mergeFeed(events, dropped = 0) {
-        set((s) => ({ feed: mergeBySeq(s.feed, events), feedDropped: s.feedDropped + dropped }));
+        // NOT `s.feedDropped + dropped`: `feedDropped`'s own docstring says
+        // "the last read", not a running total. `GET /api/feed` is an
+        // idempotent, whole-source re-read — `/mail` calls this on every
+        // mount — so re-reading the SAME permanently-unreadable rows on a
+        // second visit must report the SAME count, not double it. Accumulating
+        // here made three permanently-dropped rows read as "3" on the first
+        // visit, "6" on the second, "9" on the third: a fabricated, ever-
+        // growing loss count on the one screen whose job is to be a truthful
+        // record.
+        set((s) => ({ feed: mergeBySeq(s.feed, events), feedDropped: dropped }));
       },
 
       clearFeed() {

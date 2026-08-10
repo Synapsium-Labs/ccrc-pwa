@@ -243,11 +243,20 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     submit: (id: string, expect: string) => post(`${sid(id)}/submit`, { expect }),
     catchUp: (epoch: string | null, seq: number) =>
       getJson<CatchUp>(`/api/notifications/catchup?epoch=${encodeURIComponent(epoch ?? '')}&seq=${seq}`),
-    /** Active AND finished runs (the client splits on `closedAt`) — cold start
-     *  and cold deep links for `/runs`, since the `{type:'runs'}` frame only
-     *  arrives after the socket is open. `closed=1` is the archive view;
-     *  omitted here because the board's default read is the active set. */
-    runs: () => getJson<{ runs: RunSummary[] }>('/api/runs'),
+    /** Cold start and cold deep links for `/runs`, since the `{type:'runs'}`
+     *  frame only arrives after the socket is open.
+     *
+     *  `closed` defaults to `false` — matching the server's own default
+     *  (`coord/routes.ts`'s `GET /api/runs`), a deliberate cold-start
+     *  bandwidth choice — and reads the active set. Pass `true` for the
+     *  archive view (`?closed=1`), the finished-runs half of the board that
+     *  splits on `closedAt`. Without this parameter there is no way to reach
+     *  a finished run from either of the client's two sources: the
+     *  `{type:'runs'}` frame is active-only too (`CoordStore.runs`'s own
+     *  default), so a caller that always omitted `closed` could never render
+     *  one. */
+    runs: (closed = false) =>
+      getJson<{ runs: RunSummary[] }>(closed ? '/api/runs?closed=1' : '/api/runs'),
     /** The DURABLE feed. `catchUp` is the live tail and is volatile by
      *  construction (notifymark.ts advances the mark at receipt); this is the
      *  read that still has bodies after a deploy. */

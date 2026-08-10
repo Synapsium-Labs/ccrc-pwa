@@ -505,6 +505,28 @@ describe('fleet store', () => {
     });
   });
 
+  describe('feedDropped', () => {
+    // feedDropped's own docstring: "how many records the LAST read could not
+    // place at all" — not a running total. `/mail`'s mount effect calls
+    // `mergeFeed(events, d)` against `GET /api/feed`, an IDEMPOTENT re-read;
+    // mounting the screen twice against the same three permanently-unreadable
+    // rows must report "3" both times, not "3" then "6".
+    it('reports the LAST mergeFeed call\'s drop count, not the sum across calls', () => {
+      const store = createFleetStore();
+      store.getState().mergeFeed([], 3);
+      expect(store.getState().feedDropped).toBe(3);
+      store.getState().mergeFeed([], 3); // same re-read, same three unreadable rows
+      expect(store.getState().feedDropped).toBe(3); // NOT 6
+    });
+
+    it('clearFeed resets it to 0', () => {
+      const store = createFleetStore();
+      store.getState().mergeFeed([], 2);
+      store.getState().clearFeed();
+      expect(store.getState().feedDropped).toBe(0);
+    });
+  });
+
   // — the dormant handshake (Rider E) —
   describe('the hello handshake', () => {
     afterEach(() => setUpdater(() => {})); // never leak a test's spy into the next file's module state

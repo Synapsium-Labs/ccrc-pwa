@@ -40,14 +40,32 @@ export function reviveNotifyEvents(raw: unknown): { events: NotifyEvent[]; dropp
   return { events, dropped };
 }
 
-/** Union two feed sources on `seq`, oldest first, capped from the OLD end.
- *  The later argument wins a collision: a re-read is fresher than a cached
- *  copy, and a catch-up event that also appears in a durable read is the same
- *  record seen twice, never two records. */
+/** Identity of a feed record: `seq` alone is NOT it. `seq` is unique only
+ *  WITHIN one `NotifyLog` epoch — `server/src/coord/schema.ts`'s own
+ *  `feed_events` comment says so verbatim, and the server mints a fresh epoch
+ *  (resetting `seq` to 0) whenever `~/.ccrc/notify-log.json` is missing,
+ *  unreadable or malformed, which is a designed-for restart path, not an
+ *  error path. `at` is the record's own timestamp, minted once
+ *  (`NotifyLog.record`, `Date.now()`) and written identically to both the
+ *  in-memory ring (the catch-up tail) and `feed_events` (the durable read) —
+ *  so it travels with the record on both paths a client can see it from, and
+ *  a `${at}:${seq}` pair is what actually identifies "the same record seen
+ *  twice" versus "two different epochs' seq-1 rows". */
+const recordKey = (e: NotifyEvent): string => `${e.at}:${e.seq}`;
+
+/** Union two feed sources on record identity (see `recordKey`), oldest first,
+ *  capped from the OLD end. The later argument wins a collision: a re-read is
+ *  fresher than a cached copy, and a catch-up event that also appears in a
+ *  durable read is the same record seen twice, never two records.
+ *
+ *  Ordered by `at` first, `seq` only as a same-millisecond tiebreaker: `at` is
+ *  wall-clock time and keeps increasing across an epoch rotation, while `seq`
+ *  resets to 0 there — sorting on `seq` alone would put a freshly-rotated
+ *  seq-1 event ahead of everything the previous epoch ever recorded. */
 export function mergeBySeq(a: readonly NotifyEvent[], b: readonly NotifyEvent[]): NotifyEvent[] {
-  const by = new Map<number, NotifyEvent>();
-  for (const e of a) by.set(e.seq, e);
-  for (const e of b) by.set(e.seq, e);
-  const all = [...by.values()].sort((x, y) => x.seq - y.seq);
+  const by = new Map<string, NotifyEvent>();
+  for (const e of a) by.set(recordKey(e), e);
+  for (const e of b) by.set(recordKey(e), e);
+  const all = [...by.values()].sort((x, y) => x.at - y.at || x.seq - y.seq);
   return all.length > FEED_CAP ? all.slice(all.length - FEED_CAP) : all;
 }

@@ -85,4 +85,31 @@ describe('mergeBySeq', () => {
     expect(out).toHaveLength(FEED_CAP);
     expect(out.at(-1)!.seq).toBe(FEED_CAP + 10);
   });
+
+  // `seq` is unique only WITHIN one NotifyLog epoch (`server/src/coord/
+  // schema.ts`'s `feed_events` comment, verbatim) — the server mints a fresh
+  // epoch and resets seq to 0 whenever ~/.ccrc/notify-log.json is missing,
+  // unreadable or malformed, a designed-for restart path. Two records from
+  // different epochs can carry the same seq, and must never collapse into one.
+  it('does NOT collapse two different epochs whose seq both start at 1 — seq alone is not a record\'s identity', () => {
+    const preRotation = [e({ seq: 1, at: 1_000, title: 'before the restart' })];
+    const postRotation = [e({ seq: 1, at: 9_000, title: 'after the restart' })];
+    const out = mergeBySeq(preRotation, postRotation);
+    expect(out).toHaveLength(2);
+    expect(out.map((x) => x.title)).toEqual(['before the restart', 'after the restart']);
+  });
+
+  it('orders by `at`, not by the `seq` that resets on rotation — a low post-rotation seq never jumps ahead of a high pre-rotation one', () => {
+    const durable = [e({ seq: 50, at: 1_000 })];   // late in the old epoch
+    const live = [e({ seq: 1, at: 9_000 })];        // seq just reset, but later in real time
+    expect(mergeBySeq(durable, live).map((x) => x.at)).toEqual([1_000, 9_000]);
+  });
+
+  it('still dedupes the SAME record seen twice — identical at AND seq, from two sources', () => {
+    const durable = [e({ seq: 3, at: 3_000, title: 'from GET /api/feed' })];
+    const live = [e({ seq: 3, at: 3_000, title: 'same record, from catch-up' })];
+    const out = mergeBySeq(durable, live);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.title).toBe('same record, from catch-up'); // later source wins
+  });
 });
