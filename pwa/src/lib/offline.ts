@@ -37,11 +37,18 @@ export interface FleetSnapshot {
  *
  *  - An EMPTY frame (`sessions.length === 0`). `readRegistry` answers `[]`
  *    on `io.readdir` failure (registry.ts) the SAME way it would for a
- *    genuinely empty fleet, and `watch.ts` broadcasts that `[]` with no
- *    non-empty guard of its own — so this is the client-side twin of
- *    `watch.ts`'s own C0.4 server-side shrink guard. The cost, stated as
- *    plainly as `seen.ts` states its own: a fleet that legitimately empties
- *    keeps its LAST snapshot until the next frame that has a session in it.
+ *    genuinely empty fleet — and while `watch.ts`'s tick path now refuses to
+ *    broadcast that shape (it takes `readRegistryMeasured` and returns before
+ *    `bus.emit('fleet', …)`), TWO producers still ship it: `server.ts`'s
+ *    `GET /api/fleet` fallback and the connect-time `/ws/fleet` push both
+ *    call `assembleFleet` fresh and take `readRegistry`'s `[]`-on-unlistable
+ *    answer — plus any older server predating the ladder (the same
+ *    FLEET_PROTO-stays-1 skew the `unmeasured` revival tolerates). So this
+ *    guard is defence in depth behind the watcher's, not a duplicate of it,
+ *    and stays load-bearing even after the tick path was closed. The cost,
+ *    stated as plainly as `seen.ts` states its own: a fleet that
+ *    legitimately empties keeps its LAST snapshot until the next frame that
+ *    has a session in it.
  *  - A frame carrying even ONE degraded row (`unmeasured` non-empty — the
  *    registry ladder's own evidence that this pass could not measure that
  *    session's identity). That row's `status`/`branch`/etc may be frozen at

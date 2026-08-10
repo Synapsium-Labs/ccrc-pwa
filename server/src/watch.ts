@@ -504,11 +504,20 @@ export class FleetWatcher {
         // once, not per tick (shared by every caller of `readRegistryMeasured`/
         // `readSessionRecord`), so nothing further is logged here — a box
         // that stays unlistable for an hour still gets exactly two log lines.
-        // The other per-tick lanes (`sweepPr`/`sweepNames`/`sweepMail`) simply
-        // do not fire this iteration; each is void-dispatched with its own
-        // slower/independent clock and its own registry read (`sweepMail`
-        // already fails shut the identical way), so skipping one 2s dispatch
-        // costs a few seconds' delay on an already-rare failure, never data.
+        // The other per-tick lanes fall into two groups, and this return skips
+        // them ALL — say so completely, because the second group is easy to
+        // miss. Registry-sourced (`sweepPr`/`sweepNames`/`sweepMail`): each is
+        // void-dispatched with its own slower/independent clock and its own
+        // registry read (`sweepMail` already fails shut the identical way), so
+        // skipping one 2s dispatch costs a few seconds' delay on an
+        // already-rare failure, never data. Coord-DB-sourced (`emitRuns`,
+        // `pushNewMail`/`pushNewRuns`): their data source is SQLite, perfectly
+        // readable while `io.readdir` fails, and they still stall here — a
+        // deliberate trade for one simple early return. Bounded and lossless:
+        // both notify lanes are watermark-based (`lastMailNotifyId`/
+        // `lastRunNotifyId`) and catch up on the next successful tick, and
+        // `emitRuns` is byte-equality guarded so it re-emits the moment it
+        // runs again. Delay, never loss.
         return;
       }
       const records = registryRead.records;
