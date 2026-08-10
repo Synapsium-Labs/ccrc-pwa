@@ -525,6 +525,20 @@ describe('fleet store', () => {
       store.getState().clearFeed();
       expect(store.getState().feedDropped).toBe(0);
     });
+
+    // The catch-up tail (`connect()`'s `askCatchUp`) calls `mergeFeed` with NO
+    // dropped argument — `applyCatchUp` never counts what it silently drops,
+    // so it has no honest number to give. A `dropped = 0` DEFAULT would read
+    // that silence as "confirmed nothing lost" and stomp a real count
+    // `/mail`'s mount had just set from `GET /api/feed`. Omitting the argument
+    // must leave `feedDropped` untouched, never reset it to 0.
+    it('a call with no dropped argument (the catch-up tail) never clobbers a real count with a fabricated 0', () => {
+      const store = createFleetStore();
+      store.getState().mergeFeed([], 3); // GET /api/feed: 3 rows this build could not read
+      expect(store.getState().feedDropped).toBe(3);
+      store.getState().mergeFeed([]); // a later catch-up tail — no idea how many, if any
+      expect(store.getState().feedDropped).toBe(3); // NOT 0
+    });
   });
 
   // — the dormant handshake (Rider E) —

@@ -67,9 +67,18 @@ export interface FleetState {
   /** Union `events` into `feed` by record identity (`lib/feed.ts`'s
    *  `${at}:${seq}`, never `seq` alone — `seq` resets to 0 on an epoch
    *  rotation, so two different records can share one) — later wins a
-   *  collision — and set `feedDropped` to `dropped`, the LAST read's count
-   *  (its own docstring: not a running total; each read, including a
-   *  re-mount of `/mail`, reports for itself). The one mutator both the
+   *  collision — and, WHEN `dropped` is supplied, set `feedDropped` to it:
+   *  the LAST read's count (its own docstring: not a running total; each
+   *  read, including a re-mount of `/mail`, reports for itself).
+   *
+   *  `dropped` is OPTIONAL, not defaulted to 0, on purpose. The catch-up tail
+   *  (`connect()`'s `askCatchUp`) calls this with events only — `applyCatchUp`
+   *  silently drops unrevivable events without counting them, so it has no
+   *  honest number to give, and 0 would assert "nothing was dropped" when the
+   *  truth is "this source cannot say". Omitting the argument leaves
+   *  `feedDropped` exactly as a prior `GET /api/feed` read left it, so a
+   *  reconnect's catch-up can never fabricate a false all-clear over a real
+   *  count `/mail`'s mount already surfaced. The one mutator both the
    *  catch-up tail and `GET /api/feed` go through, so the two sources can
    *  never diverge on merge policy. */
   mergeFeed(events: NotifyEvent[], dropped?: number): void;
@@ -213,7 +222,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
       },
 
-      mergeFeed(events, dropped = 0) {
+      mergeFeed(events, dropped) {
         // NOT `s.feedDropped + dropped`: `feedDropped`'s own docstring says
         // "the last read", not a running total. `GET /api/feed` is an
         // idempotent, whole-source re-read — `/mail` calls this on every
@@ -223,7 +232,18 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         // visit, "6" on the second, "9" on the third: a fabricated, ever-
         // growing loss count on the one screen whose job is to be a truthful
         // record.
-        set((s) => ({ feed: mergeBySeq(s.feed, events), feedDropped: dropped }));
+        //
+        // AND not a bare `dropped = 0` default either: the catch-up tail calls
+        // this with no second argument at all, because `applyCatchUp` never
+        // counts what it silently drops. Treating that omission as "0" would
+        // fabricate an all-clear the moment a reconnect's catch-up landed,
+        // overwriting whatever real count `GET /api/feed` had just reported.
+        // `dropped === undefined` is the caller saying "I don't know" — the
+        // only honest answer is to leave the field exactly as it was.
+        set((s) => ({
+          feed: mergeBySeq(s.feed, events),
+          feedDropped: dropped === undefined ? s.feedDropped : dropped,
+        }));
       },
 
       clearFeed() {
