@@ -423,6 +423,14 @@ describe('sweepMail: the send', () => {
     // `queued` — `markDelivered` hasn't run — and `mailCooldown` has no entry
     // yet, so a naive second sweep re-passes the identical gate and enqueues
     // a SECOND send for the same delivery. `mailInFlight` must refuse it.
+    //
+    // This pins ONLY the narrow window `mailInFlight` has always covered —
+    // sweep A already blocked INSIDE `sendPrompt`, by which point the claim
+    // has already landed under either the pre- or post-fix code. It is a
+    // guarantee worth keeping on its own, but it cannot discriminate the
+    // deeper race D-68 fixes — see the next test for the window this one
+    // cannot reach, and why a real 20ms timer here happened to be "long
+    // enough" on an idle box and too short under full-suite load.
     const h = harness({ panes: HAPPY_PANES });
     const coord = store(h.home);
     const { w, deps } = await primedWatcher(h, coord);
@@ -443,6 +451,81 @@ describe('sweepMail: the send', () => {
     release();
     await Promise.all([sweepA, sweepB]);
     expect(literalSends(h.calls)).toEqual([ENVELOPE]); // exactly ONE send, not two
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('does not double-inject when a second sweep\'s gate walk overlaps the first\'s, BEFORE either has claimed (D-68, orchestrator full-suite finding)', async () => {
+    // The REAL race: pre-fix, `mailInFlight` was written only right before
+    // `sendPrompt` — AFTER all four gate awaits (`hasSession`,
+    // `hookStateFor`, `panePid`, `readLiveState`). Sweep A can pass the
+    // `.has` check and yield inside ANY of those four; a sweep B that starts
+    // in that window sees `mailInFlight` exactly as empty as sweep A saw it.
+    // The test above can never exercise this: it blocks sweep A INSIDE
+    // `sendPrompt`'s own KeyedQueue, by which point the claim has already
+    // landed regardless of fix state. This one blocks sweep A on
+    // `tmux.hasSession` instead — the FIRST of the four gate awaits — via a
+    // promise released explicitly here, and every synchronization point
+    // below is a call count or a settled promise, never a wall-clock
+    // duration: that is precisely what made the old version of this file
+    // pass 5/5 in isolation and fail under a loaded 86-file run.
+    const home = mkTmp('ccrc-mail-sweep-');
+    const calls: string[][] = [];
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => { releaseGate = r; });
+    let hasSessionCalls = 0;
+    let capIdx = 0;
+    // Enough scripted captures for TWO full happy-path sends — sendPrompt
+    // itself serializes through the session's real KeyedQueue, so a
+    // reproduced double-send plays out as two full, back-to-back
+    // injections in strict order, never an interleaved one.
+    const panes = [...HAPPY_PANES, ...HAPPY_PANES];
+    const run: Runner = async (_cmd, args) => {
+      calls.push([...args]);
+      if (args[0] === 'has-session') {
+        hasSessionCalls++;
+        await gate;   // every call parks here until releaseGate() below
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') {
+        const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
+        capIdx++;
+        return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      }
+      if (args[0] === 'send-keys') return { code: 0, stdout: '', stderr: '' };
+      return { code: 1, stdout: '', stderr: '' };
+    };
+    const h: Harness = { home, calls, run };
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    const sweepA = w.sweepMail();
+    // Sweep A is PROVEN parked inside the gate — not "probably, after a
+    // real 20ms" — before this test does anything else.
+    await vi.waitFor(() => expect(hasSessionCalls).toBeGreaterThanOrEqual(1));
+
+    advance(PAST_SWEEP_MS); // clears the lane's own cadence gate for a second sweep
+    expect(deliveryRow(coord, id).state).toBe('queued'); // sweep A has not written back yet
+
+    let sweepBSettled = false;
+    const sweepB = w.sweepMail();
+    void sweepB.finally(() => { sweepBSettled = true; });
+    // By now sweep B has EITHER been refused immediately (fixed code: sweep
+    // A's claim already landed, synchronously, before sweep A ever reached
+    // `hasSession`) and settled on its own — OR walked the identical gate
+    // all the way to its own `hasSession` call and is now ALSO parked on
+    // the same promise (pre-fix code). Either way, sweep B's own read of
+    // `mailInFlight` has ALREADY happened by the time this resolves; no
+    // amount of further waiting changes what it saw.
+    await vi.waitFor(() => expect(hasSessionCalls >= 2 || sweepBSettled).toBe(true));
+
+    releaseGate();
+    await Promise.all([sweepA, sweepB]);
+    expect(literalSends(h.calls), 'exactly ONE send, not two').toEqual([ENVELOPE]);
     expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 

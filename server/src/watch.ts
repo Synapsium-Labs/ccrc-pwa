@@ -1056,13 +1056,27 @@ export class FleetWatcher {
    * session in the first place — not the send path, which would happily
    * succeed.
    *
-   * CROSS-SWEEP SINGLE-FLIGHT (review findings 1/5), on TOP of the six
-   * conjuncts and the per-sweep `seen` set: `mailInFlight` is written BEFORE
-   * `sendPrompt` is called and cleared once it resolves, so a second sweep
-   * that starts while the first is still blocked inside `sendPrompt` (behind
-   * this session's `KeyedQueue`, which any other server-originated write can
-   * be holding) refuses the SAME row instead of re-passing a gate that has
-   * not changed and enqueueing a second send for it.
+   * CROSS-SWEEP SINGLE-FLIGHT (review findings 1/5, hardened by 33/38), on
+   * TOP of the six conjuncts and the per-sweep `seen` set: `mailInFlight` is
+   * CLAIMED immediately after the `.has` check, with NO `await` between
+   * them, so the check-then-claim is atomic with respect to the event loop —
+   * no other sweep's turn can run between "is this row claimed" and "claim
+   * it". The surrounding try/finally begins at that claim, not at
+   * `sendPrompt`, and covers every gate below it (registry lookup, tmux
+   * session, hookstate, pane pid, live status, quiet time) as well as the
+   * send itself, so a row that fails ANY gate still releases its claim, via
+   * `finally`, before the loop moves on — a `continue` inside a `try` runs
+   * the `finally` first. A row therefore holds `mailInFlight` for its
+   * WHOLE walk through the gates, not just the sub-window where it is
+   * already blocked inside `sendPrompt`: a second sweep that starts while
+   * the first is still working through those `await`s for the same row
+   * — gate-checking OR sending — sees the claim already there and refuses
+   * the row, instead of re-passing gates that have not changed and
+   * enqueueing a second send for it. (An earlier version of this claim ran
+   * AFTER the four gate `await`s instead of before them, leaving exactly
+   * that gate-walking window unguarded — two concurrent sweeps could both
+   * pass the `.has` check, both clear the gates, and both send the same
+   * envelope. Fixed by moving the claim to immediately follow the check.)
    *
    * THE `UserPromptSubmit` EDGE IS SAMPLED SEPARATELY (review finding 3),
    * over `store.deliveredUnacked()` — every `delivered`, unacked row, with NO
@@ -1150,79 +1164,92 @@ export class FleetWatcher {
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
       if (seen.has(d.toId)) continue;
-      if (this.mailInFlight.has(d.toId)) continue;   // review findings 1/5 — see this method's docstring
-      const last = this.mailCooldown.get(d.toId) ?? 0;
-      if (now - last < MAIL_COOLDOWN_MS) continue;
-      const rec = records.find((r) => r.id === d.toId);
-      if (!rec) {
-        // Fix — review finding 30: a row whose recipient's registry row is
-        // genuinely ABSENT (reaped, purged) used to `continue` here with
-        // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
-        // reached through a FAILED `sendPrompt`, which never runs on this
-        // path, so the row was re-selected on every `MAIL_SWEEP_MS` tick
-        // indefinitely, and a purged workspace slug being re-minted
-        // (`_ws_slug_new` draws only from FREE slugs) could eventually hand
-        // this exact id to an unrelated program. Backed off on the SAME
-        // schedule a send failure gets, and eventually parked — the spec's
-        // own `rejected('undeliverable')` terminal state, otherwise
-        // structurally unreachable for exactly the recipients this build can
-        // prove are gone. Scoped to ONLY this gate: every gate below (no
-        // tmux session, hookstate not `done`, not idle, on cooldown) is
-        // ORDINARY and expected to hold indefinitely for a session that is
-        // merely busy, and must never accrue toward a park.
-        //
-        // Fix (scoped-verify): `records` came from `readRegistry`, which
-        // drops a row whose `.uuid` file IS listed when a SIBLING field read
-        // merely fails (`registry.ts:123`, "incomplete registry entry —
-        // skip, don't crash") — transient, not evidence the recipient is
-        // gone. `POST /api/mail`'s own ingress already draws this exact
-        // line, refusing `registry-unmeasurable` rather than guessing
-        // whenever a row's `.uuid` is listed but unreadable (D-37,
-        // `coord/routes.ts`'s `names.includes` checks, pinned at
-        // `mail-routes.test.ts:259`). `listing` — the raw directory read at
-        // the top of THIS sweep, in scope for exactly this reason — carries
-        // the same evidence of presence `names` gives the ingress. Without
-        // this check, one dropped agent-WS round trip on a SINGLE field of a
-        // LIVE session's registry row was indistinguishable from that
-        // session being reaped, and six backoffs (~15 minutes) permanently
-        // parked its mail `rejected('undeliverable')`. "Listed but
-        // unreadable" therefore keeps backing off, unmeasured, forever — the
-        // same as every ordinary gate below — while only a recipient absent
-        // from `listing` too can ever park.
-        //
-        // No `MailRejectCode` applies here (scoped-verify H6: a `backOff` is
-        // not a reject, so `registry-unmeasurable` — a `refuse(...)` code the
-        // ingress route returns on the wire — has nowhere typed to land on
-        // this row), but the two are the SAME underlying condition, and
-        // `mail_deliveries.lastError` is free text a maintainer greps, not a
-        // typed column — so the word itself rides along in the message
-        // below, not just in this comment, for whoever greps the ROW rather
-        // than the source.
-        const listedButUnreadable = listing.includes(`${d.toId}.uuid`);
-        const attempts = d.attempts + 1;
-        if (attempts >= MAIL_MAX_ATTEMPTS && !listedButUnreadable) {
-          store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
-        } else {
-          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-          store.backOff(d.id,
-            listedButUnreadable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
-            now + step);
-        }
-        continue;
-      }
-      if (!(await this.deps.tmux.hasSession(d.toId))) continue;
-      const hs = await hookStateFor(d.toId);
-      if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
-      const pid = await this.deps.tmux.panePid(d.toId);
-      const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
-      if (!pid || !cfgDir) continue;
-      const live = await readLiveState(this.deps.io, cfgDir, pid);
-      if (!live || liveSessionStatus(live.status) !== 'idle') continue;
-      if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) continue;
-
-      seen.add(d.toId);
+      if (this.mailInFlight.has(d.toId)) continue;   // CHECK — review findings 1/5, see this method's docstring
+      // CLAIM — immediately after the check, with NO await in between, so the
+      // check-then-act is atomic with respect to the event loop: nothing can
+      // run between "is it claimed" and "claim it" that would let a second
+      // concurrent sweep observe the pre-claim state (fix — review finding
+      // 33/38: see this method's docstring). The try/finally now begins HERE,
+      // not at the send, so every gate below that `continue`s — cooldown,
+      // missing registry row, no tmux session, hookstate not `done`, not
+      // idle, not quiet — releases the claim on its way out, exactly once,
+      // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
+        const last = this.mailCooldown.get(d.toId) ?? 0;
+        if (now - last < MAIL_COOLDOWN_MS) continue;
+        const rec = records.find((r) => r.id === d.toId);
+        if (!rec) {
+          // Fix — review finding 30: a row whose recipient's registry row is
+          // genuinely ABSENT (reaped, purged) used to `continue` here with
+          // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
+          // reached through a FAILED `sendPrompt`, which never runs on this
+          // path, so the row was re-selected on every `MAIL_SWEEP_MS` tick
+          // indefinitely, and a purged workspace slug being re-minted
+          // (`_ws_slug_new` draws only from FREE slugs) could eventually hand
+          // this exact id to an unrelated program. Backed off on the SAME
+          // schedule a send failure gets, and eventually parked — the spec's
+          // own `rejected('undeliverable')` terminal state, otherwise
+          // structurally unreachable for exactly the recipients this build can
+          // prove are gone. Scoped to ONLY this gate: every gate below (no
+          // tmux session, hookstate not `done`, not idle, on cooldown) is
+          // ORDINARY and expected to hold indefinitely for a session that is
+          // merely busy, and must never accrue toward a park.
+          //
+          // Fix (scoped-verify): `records` came from `readRegistry`, which
+          // drops a row whose `.uuid` file IS listed when a SIBLING field read
+          // merely fails (`registry.ts:123`, "incomplete registry entry —
+          // skip, don't crash") — transient, not evidence the recipient is
+          // gone. `POST /api/mail`'s own ingress already draws this exact
+          // line, refusing `registry-unmeasurable` rather than guessing
+          // whenever a row's `.uuid` is listed but unreadable (D-37,
+          // `coord/routes.ts`'s `names.includes` checks, pinned at
+          // `mail-routes.test.ts:259`). `listing` — the raw directory read at
+          // the top of THIS sweep, in scope for exactly this reason — carries
+          // the same evidence of presence `names` gives the ingress. Without
+          // this check, one dropped agent-WS round trip on a SINGLE field of a
+          // LIVE session's registry row was indistinguishable from that
+          // session being reaped, and six backoffs (~15 minutes) permanently
+          // parked its mail `rejected('undeliverable')`. "Listed but
+          // unreadable" therefore keeps backing off, unmeasured, forever — the
+          // same as every ordinary gate below — while only a recipient absent
+          // from `listing` too can ever park.
+          //
+          // No `MailRejectCode` applies here (scoped-verify H6: a `backOff` is
+          // not a reject, so `registry-unmeasurable` — a `refuse(...)` code the
+          // ingress route returns on the wire — has nowhere typed to land on
+          // this row), but the two are the SAME underlying condition, and
+          // `mail_deliveries.lastError` is free text a maintainer greps, not a
+          // typed column — so the word itself rides along in the message
+          // below, not just in this comment, for whoever greps the ROW rather
+          // than the source.
+          const listedButUnreadable = listing.includes(`${d.toId}.uuid`);
+          const attempts = d.attempts + 1;
+          if (attempts >= MAIL_MAX_ATTEMPTS && !listedButUnreadable) {
+            store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
+          } else {
+            const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+            store.backOff(d.id,
+              listedButUnreadable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
+              now + step);
+          }
+          continue;
+        }
+        if (!(await this.deps.tmux.hasSession(d.toId))) continue;
+        const hs = await hookStateFor(d.toId);
+        if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
+        const pid = await this.deps.tmux.panePid(d.toId);
+        const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
+        if (!pid || !cfgDir) continue;
+        const live = await readLiveState(this.deps.io, cfgDir, pid);
+        if (!live || liveSessionStatus(live.status) !== 'idle') continue;
+        if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) continue;
+
+        // `seen` is added only HERE, once every gate above has passed and the
+        // send is actually about to be attempted — it means "one message per
+        // session per sweep", not "one row considered per sweep", and moving
+        // the claim earlier must not change that.
+        seen.add(d.toId);
         // The stored envelope, byte for byte. `renderEnvelope` is not called
         // here and must never be: spec:176-177's "verbatim, never re-rendered".
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope);
