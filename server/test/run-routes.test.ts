@@ -415,6 +415,46 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.branch).toBeNull();
   });
 
+  // Blocking review finding 7: the SAME asymmetry the AFTER read above
+  // closes had a twin left open one branch over. Wave N>=2 used to source
+  // `record` from `readRegistry`'s OLD signature ([] on an unlistable
+  // registry) — the SAME shape "record is undefined" (genuinely absent)
+  // wears — so a dropped SECOND directory read (the pause-marker's own read
+  // a moment earlier, at the top of this same route, succeeded) forced
+  // `record` to `undefined`, `hs` to `null`, and skipped the worker-busy
+  // gate entirely: `/clear` would have been injected into a possibly
+  // mid-turn worker. Written FIRST and confirmed red against the pre-fix
+  // code, which answered 200 here (an injected `/clear`) instead of 502.
+  it('refuses registry-unmeasurable on wave N>=2 when the SECOND directory read (the resumed ' +
+     'session\'s own registry listing) fails, even though the pause-marker\'s own read moments ' +
+     'earlier succeeded — the busy gate must fail shut here exactly as hard as the AFTER read does',
+     async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    // Succeeds on the pause-marker's own read (call 1), fails on the very
+    // next one — this route's own registry read for the resumed session
+    // (call 2) — never a third: nothing else in this branch touches
+    // `io.readdir` before either of those two.
+    let n = 0;
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run, { io }); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    // `ensure` already ran (D-1 resumes the SAME workspace unconditionally,
+    // before this gate can even read the fresh record), but the busy gate
+    // and `/clear` must never be reached, and dispatch must never commit.
+    expect(calls.some((c) => c[0] === 'ensure' && c[1] === 'demo-existing')).toBe(true);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    const row = w.coord.run(opened.id);
+    expect(row?.state).toBe('planned');
+    expect(row?.workspace).toBeNull();
+    expect(row?.branch).toBeNull();
+  });
+
   it('runs ensure — never start — for wave 2 into the same workspace (D-1)', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');

@@ -732,9 +732,25 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
   // for a row whose OWN `.workdir`/`.uuid` this read could not confirm at
   // all, preserving the pre-change behaviour for the previously-dropped row
   // is exactly what this pins.
+  // Fix (blocking review finding 6): the fixture below is not enough on its
+  // own to kill the guard. `.workdir` is degraded, but this fixture used to
+  // stop at `!live` too (no `<pid>.json` on disk) — `readLiveState` finds
+  // nothing either way, so `{verdict:'unknown', held}` (with `held: null`
+  // anyway) arrives for an entirely unrelated reason, and the guard's own
+  // deletion is undetectable: reverted to a plain
+  // `{uuid: r.uuid, wrapper: r.wrapper, workdir: r.workdir}` read, `identity`
+  // still carries wrapper `'claude'` (untouched — this fixture never
+  // degrades it) and `pid`, and this same fixture reaches
+  // `configDirFor(...)` fine, `readLiveState` fine, and a concrete verdict —
+  // 'ok' or 'busy' — falls out the OTHER end, never 'unknown'. `liveIdle`
+  // below closes that gap: a busy/idle live-state file makes the
+  // guard-LESS path resolve to a real, concrete 'ok', so only the GUARD
+  // itself — not an unrelated `!live` stop — can be what still answers
+  // 'unknown' here.
   it('a row LISTED but with an unmeasured identity field is unknown, not ok — SKIP, preserving the ' +
      'previously-dropped row\'s own answer exactly', async () => {
     const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
     const unreadableWorkdir: FleetIO = {
       ...localIO,
       readFile: async (p) => (p.endsWith('demo-quiet-basin.workdir') ? null : localIO.readFile(p)),

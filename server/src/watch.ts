@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet } from './fleet.js';
-import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -471,6 +471,17 @@ export class FleetWatcher {
       // sweepTasks/sweepPr below are NOT included: both throttle to their own
       // slower clock and skip the read entirely on most ticks already.
       const records = await readRegistry(this.deps.io, this.deps.cfg);
+      // Blocking review finding 2: a row the registry ladder DEGRADES rather
+      // than drops now reaches `assembleFleet` below for the first time ever
+      // — and `assembleFleet` has no way to tell a degraded row from a
+      // measured one on the wire (`FleetSession` carries no `unmeasured`
+      // field). A degraded `r.wrapper` (`''`) makes `configDirFor` answer
+      // `undefined`, so `assembleFleet` never even reaches `readLiveState`
+      // and `status` freezes at its `alive` default of `'idle'` — a session
+      // that may be plainly mid-turn. Computed HERE, off the same `records`
+      // read `assembleFleet` below reuses via `readRegistry`, so this set
+      // names exactly the rows whose STATUS this tick could not measure.
+      const unmeasuredIds = new Set(records.filter((r) => measuredIdentity(r) === null).map((r) => r.id));
       // hook states FIRST, dialogs second — the order is load-bearing and there
       // is a test on it. `detectDialogs` composes the ask push, and the actions
       // it attaches come from `this.hookStates`; with the old ordering that map
@@ -532,6 +543,17 @@ export class FleetWatcher {
       // tick — otherwise a restart notifies for every currently-idle session.
       if (this.primed) {
         for (const s of sessions) {
+          // Blocking review finding 2: never assert a turn completed on a row
+          // this tick could not measure — `status` for a degraded row is a
+          // guess (see `unmeasuredIds`'s own comment above), and a push
+          // "says it happened" (the architecture doc's own words for exactly
+          // this class of surface). `continue`d before the transition check,
+          // not just before the push, so `prevStatus` (line ~590 below) is
+          // ALSO left untouched for this id this tick — the real busy→idle
+          // edge still fires, correctly, once the row heals and a later tick
+          // can actually measure it, rather than being silently lost the
+          // instant `prevStatus` was overwritten to an unmeasured 'idle'.
+          if (unmeasuredIds.has(s.id)) continue;
           if (this.prevStatus.get(s.id) === 'busy' && s.status === 'idle') {
             this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
           }
@@ -575,7 +597,10 @@ export class FleetWatcher {
           console.warn(`ccrc-server: priming the mail/run watermarks failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
         }
       }
-      for (const s of sessions) this.prevStatus.set(s.id, s.status);
+      // Skips the SAME unmeasured ids the push loop above skips — see its own
+      // comment: overwriting `prevStatus` with a guessed 'idle' here would
+      // permanently lose the real busy→idle edge the instant the row heals.
+      for (const s of sessions) { if (!unmeasuredIds.has(s.id)) this.prevStatus.set(s.id, s.status); }
       this.activeProjects = projects;
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
@@ -1205,7 +1230,25 @@ export class FleetWatcher {
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
     if (unacked.length === 0 && dueBefore.length === 0) return;
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
+    // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
+    // "this recipient is not in the registry" wears below (`rec ===
+    // undefined`) — so a single dropped agent-WS round trip on THIS read
+    // alone (the kill-switch listing three lines up already succeeded, and
+    // is a SEPARATE `readdir` call) used to make EVERY due row read as
+    // `unmeasurable = false` (line ~1292's `rec !== undefined`), ratchet
+    // `attempts` toward `MAIL_MAX_ATTEMPTS`, and terminally
+    // `rejectDelivery(..., 'undeliverable', 'recipient not in registry')` a
+    // recipient that is plainly alive and fully listed — the exact
+    // "unlistable read as proven absence" bug this ladder's own comment
+    // three lines below denies happening. `readRegistryMeasured` draws that
+    // line explicitly: `!listed` fails shut, the SAME way the kill-switch's
+    // own unreadable listing already does three lines up, rather than
+    // silently emptying `records` and letting every row downstream mistake
+    // "we could not read the fleet this pass" for "this recipient is gone".
+    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    if (!registryRead.listed) return;
+    const records = registryRead.records;
     const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
     // One hookstate read per SESSION this sweep, shared between the edge
     // sample below and the gate's own read further down — both use this same
@@ -1277,16 +1320,23 @@ export class FleetWatcher {
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < MAIL_COOLDOWN_MS) continue;
         const rec = records.find((r) => r.id === d.toId);
-        // registry ladder: `records` came from `readRegistry`, which now
-        // DEGRADES rather than drops a row whose `.uuid` is listed but a
-        // sibling identity field is not (registry.ts's own ladder) — so `rec`
-        // being found-but-degraded and `rec` being altogether ABSENT are two
-        // different facts, evidence read straight off the row itself
-        // (`measuredIdentity(rec)`) rather than the hand-rolled
-        // `listing.includes` probe this block used to run. `rec === undefined`
-        // therefore NARROWS to PROVEN absence: either never listed, or
-        // twice-observed gone within `readRegistry`'s own second-listing
-        // retirement — never "we just couldn't read one field this pass".
+        // registry ladder: `records` came from `readRegistryMeasured` above,
+        // with `!listed` already refused (fix — blocking review findings
+        // 1/5) — so by the time this line runs, a whole-fleet read failure
+        // has already returned out of this method entirely, and can no
+        // longer masquerade as "every row is absent" here. `readRegistry`'s
+        // per-row ladder DEGRADES rather than drops a row whose `.uuid` is
+        // listed but a sibling identity field is not (registry.ts's own
+        // ladder) — so `rec` being found-but-degraded and `rec` being
+        // altogether ABSENT are two different facts, evidence read straight
+        // off the row itself (`measuredIdentity(rec)`) rather than the
+        // hand-rolled `listing.includes` probe this block used to run.
+        // `rec === undefined` therefore NARROWS to PROVEN absence: either
+        // never listed, or twice-observed gone within `readRegistryMeasured`'s
+        // own second-listing retirement — never "we just couldn't list the
+        // registry this pass" (that case is refused above, before this loop
+        // is ever reached) and never "we just couldn't read one field this
+        // pass" (that is the degraded branch, not this one).
         const identity = rec !== undefined ? measuredIdentity(rec) : null;
         if (identity === null) {
           const unmeasurable = rec !== undefined;

@@ -111,6 +111,30 @@ const onceUnlistableIO = (): { io: FleetIO; failNext: () => void } => {
   return { io, failNext: () => { fail = true; } };
 };
 
+/**
+ * An `io` whose `readdir` passes through untouched until `arm()` is called,
+ * then ALTERNATES pass/fail on every subsequent call to the registry
+ * directory — the shape a single dropped agent-WS round trip produces on
+ * only the SECOND of `sweepMail`'s own two directory reads (the kill-switch
+ * listing, then `readRegistryMeasured`'s own internal one), sweep after
+ * sweep, without ever tripping the kill-switch itself. Unarmed during
+ * `primedWatcher`'s own priming tick (which fires several unrelated
+ * `readdir` calls of its own, over a registry directory that does not even
+ * exist yet) so those never perturb the parity; a test calls `arm()` once
+ * its fixtures are seeded and it is about to drive `sweepMail()` directly
+ * (blocking review findings 1/5).
+ */
+const alternatingUnlistableIO = (): { io: FleetIO; arm: () => void } => {
+  let armed = false;
+  let n = 0;
+  const io: FleetIO = { ...localIO, readdir: async (p) => {
+    if (!armed) return localIO.readdir(p);
+    n += 1;
+    return n % 2 === 0 ? null : localIO.readdir(p);
+  } };
+  return { io, arm: () => { armed = true; } };
+};
+
 /** A registry whose directory listing is fine but one specific session's
  *  field read is not — `readRegistry` drops that row entirely
  *  (`registry.ts:123`) even though its `.uuid` file is still listed. Mirrors
@@ -940,6 +964,53 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(row.state).toBe('queued');
     expect(row.rejectCode).toBeNull();
     expect(row.attempts).toBe(0);
+  });
+
+  it('does NOT terminally park a listed, live recipient\'s mail when only the SECOND of sweepMail\'s ' +
+     'own two directory reads drops — the kill-switch listing succeeds, readRegistryMeasured\'s own ' +
+     'internal readdir fails, and that whole-fleet collapse must fail SHUT exactly like the kill-' +
+     'switch\'s own read already does, never be read as "recipient not in registry" (blocking review ' +
+     'findings 1/5)', async () => {
+    // MEASURED (blocking review finding 5): before this fix, `sweepMail`
+    // sourced `records` from `readRegistry`'s OLD signature ([] on an
+    // unlistable directory) — the SAME shape "this recipient is not in the
+    // registry" wears below (`rec === undefined`) — so a single dropped
+    // agent-WS round trip on ONLY this second read (the kill-switch's own,
+    // three lines above inside `sweepMail`, succeeded) made every due row
+    // read `unmeasurable = false`, ratchet `attempts`, and terminally
+    // `rejectDelivery(..., 'undeliverable', 'recipient not in registry')` on
+    // the sixth sweep — for a recipient this fixture keeps fully listed and
+    // readable throughout. `alternatingUnlistableIO` reproduces exactly that:
+    // armed AFTER priming/seeding, it passes the kill-switch's own read
+    // (odd call) and fails readRegistryMeasured's own internal one (even
+    // call), every sweep, without ever tripping the kill-switch.
+    const h = harness();
+    const coord = store(h.home);
+    const { io, arm } = alternatingUnlistableIO();
+    const { w } = await primedWatcher(h, coord, { io });
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    arm();
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS; i++) {
+      // Clears both the MAIL_SWEEP_MS lane throttle and (were the bug still
+      // present) every backoff step up to MAIL_BACKOFF_MAX_MS between sweeps.
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+
+    expect(literalSends(h.calls),
+      'never reaches the send it would need to for the row to move any other way').toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'a whole-fleet read failure must never be read as "recipient not in registry"')
+      .toBe('queued');
+    expect(row.rejectCode).toBeNull();
+    // A row this method could never even LIST must never accrue toward the
+    // park ceiling either — the identical rule the per-field-degraded branch
+    // above already keeps, extended to the whole-fleet collapse.
+    expect(row.attempts, 'a whole-fleet read failure must never ratchet attempts').toBe(0);
   });
 
   it('an ORDINARY gate (busy, on cooldown, no tmux session) never accrues an attempt', async () => {

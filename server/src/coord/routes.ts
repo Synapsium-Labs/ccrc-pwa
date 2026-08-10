@@ -869,24 +869,40 @@ export function registerCoordRoutes(
       // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason
       // (see `DoneRun`'s own docstring): the live registry is the fresher
       // source, the run row is what is left when it cannot answer.
-      const record = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === sessionId);
-      // REFUSE here, before the busy gate and before EITHER of
-      // workspace/branch is persisted onto the run row below
-      // (`coord.markDispatched`) — registry ladder, and the spot the design
-      // names as most likely to get "simplified" back into a bug, so the
-      // reasoning is written at the call site rather than only in the spec:
-      // an unmeasured value persisted by `markDispatched` STOPS being a
-      // transient read and BECOMES a fact the run row carries forever: and a
-      // degraded `record.uuid` (`''`) fed to `readHookState` below looks up a
-      // hookstate file that matches no real one, reading back `null` — which
-      // the busy gate treats as "not busy" — silently turning a FAIL-SHUT
-      // busy gate FAIL-OPEN on a session this read simply could not measure,
-      // not one this read proved idle. `record === undefined` (the session's
-      // row is genuinely absent from the registry) is UNCHANGED by this gate
-      // and keeps falling back to `run.workspace`/`run.branch` below, same as
-      // always — that is the pre-existing, tolerated "honest stale" case
-      // `DoneRun`'s own docstring already names, not a hazard this ladder
-      // closes.
+      //
+      // REFUSE before the busy gate and before EITHER of workspace/branch is
+      // persisted onto the run row below (`coord.markDispatched`) — registry
+      // ladder, and the spot the design names as most likely to get
+      // "simplified" back into a bug, so the reasoning is written at the
+      // call site rather than only in the spec: an unmeasured value
+      // persisted by `markDispatched` STOPS being a transient read and
+      // BECOMES a fact the run row carries forever; and a degraded
+      // `record.uuid` (`''`) fed to `readHookState` below looks up a
+      // hookstate file that matches no real one, reading back `null` —
+      // which the busy gate treats as "not busy" — silently turning a
+      // FAIL-SHUT busy gate FAIL-OPEN on a session this read simply could
+      // not measure, not one this read proved idle.
+      //
+      // Fix (blocking review finding 7): the registry read ITSELF must not
+      // reopen that same fail-open door one level up. `readRegistry`'s old
+      // signature collapses a whole-fleet `io.readdir` failure to `[]` —
+      // exactly the shape "no such session" wears — so `record` used to come
+      // back `undefined` for TWO different facts this route must tell
+      // apart: the session's row is genuinely absent from a LISTABLE
+      // registry (the pre-existing, tolerated "honest stale" case
+      // `DoneRun`'s own docstring names, which keeps falling back to
+      // `run.workspace`/`run.branch` below, same as always), and the
+      // registry directory itself could not be listed at all — which proves
+      // NOTHING about this session and must refuse exactly like the AFTER
+      // read 30-odd lines above already does. `readRegistryMeasured` draws
+      // that line explicitly: `!listed` refuses OUTRIGHT, before `record` is
+      // ever computed, so `record === undefined` past this point means only
+      // the first, tolerated case — never the second.
+      const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
+      if (!registryRead.listed) {
+        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
+      }
+      const record = registryRead.records.find((r) => r.id === sessionId);
       const recordIdentity = record !== undefined ? measuredIdentity(record) : null;
       if (record !== undefined && recordIdentity === null) {
         return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });

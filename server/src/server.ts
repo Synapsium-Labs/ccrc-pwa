@@ -572,7 +572,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     // C0.3: one session's own row, not the whole registry.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!read.found) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    if (!read.found) {
+      // Fix (blocking review finding 3): `reason: 'unlistable'` is the SAME
+      // registry-unmeasurable fact the identity gate three lines below
+      // already answers 503 for — the whole-fleet cousin of a degraded row,
+      // and just as much not a proof this session is unknown ("404 would be
+      // a LIE" applies here too: the whole-fleet collapse proves nothing
+      // about THIS id one way or the other). Only `reason: 'absent'` — a
+      // listing that plainly does not name this id at all — earns the
+      // terminal unknown-session answer; a route that answered 404 for both
+      // would be reopening the exact overloaded-null this 503 gate exists
+      // to close, one branch over.
+      return reply.code(read.reason === 'unlistable' ? 503 : 404)
+        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    }
     // REFUSE, not degrade: this is identity, and stopPair below RECOMPUTES a
     // wrapper/project pair from these very fields to kill a tmux session by
     // name. Two unmeasured fields could otherwise conspire to name the WRONG
