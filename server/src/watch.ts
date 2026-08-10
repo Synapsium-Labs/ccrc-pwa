@@ -389,6 +389,15 @@ export class FleetWatcher {
    *  `SessionStream.ticking` (`sessionws.ts`) verbatim — same field, same
    *  set/clear-in-finally discipline, for the identical reason. */
   private ticking = false;
+  /** C0.4-followup: true once a snapshot write has been skipped because the
+   *  shrink guard below could not confirm every id that dropped out of this
+   *  tick's assembly was a GENUINE purge (see the guard's own comment).
+   *  Cleared the moment a write actually lands (growth, an unchanged size, or
+   *  a confirmed shrink) — so a refusal warns ONCE per stretch of refusals,
+   *  not once per 2-second tick for however long a read fault or a slow purge
+   *  confirmation lasts, while still guaranteeing the freeze this field is
+   *  named after can never be silent. */
+  private snapshotWriteSkippedWarned = false;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -582,10 +591,51 @@ export class FleetWatcher {
         // clobber a fuller one already on disk — implementing the intent this
         // class's own docstring already states above ("a stretch of
         // empty/partial reads never clobbers the last known good snapshot").
+        //
+        // C0.4-FOLLOWUP (blocking review findings 1/2): a bare length
+        // comparison cannot tell "this tick's read was partial" apart from
+        // "the fleet is genuinely smaller now" — and the second one is the
+        // ROUTINE case, not the rare one: `ccd`'s `_reg_purge` unlinks a
+        // session's whole registry entry from `cmd_ws_rm` (session rm),
+        // `ws-reap`, and `ws-gc --prune` alike. Comparing lengths ALONE turns
+        // every purge into a permanent high-water mark: once the fleet drops
+        // below it, `sessions.length < prior.sessions.length` stays true on
+        // every later tick FOREVER, even fully healthy ones, and the cache —
+        // every field of every surviving session included — freezes at the
+        // instant of the purge and never updates again. Silently: nothing
+        // failed loudly enough to log.
+        //
+        // The escape hatch is the same evidence `readRegistry`'s own
+        // hold-reconfirm already trusts (registry.ts): `_reg_purge` removes
+        // the id's `.uuid` too, so a GENUINE purge is a directory listing that
+        // no longer names `<id>.uuid` at all. A FAILED field read, by
+        // contrast, leaves `.uuid` (and the id's other files) sitting right
+        // there in the listing — only the bytes behind one of them came back
+        // null. So: when this tick assembled fewer sessions than the prior
+        // snapshot, list the registry directory fresh and check every id that
+        // dropped out against it. The write is allowed only when EVERY
+        // missing id is confirmed gone from that listing — one still-listed
+        // id is enough to treat the whole tick as a partial read and keep the
+        // prior snapshot, exactly as the original guard intended for that
+        // case. A failed (or absent) confirmation listing itself proves
+        // nothing either way, so it fails shut the same way.
         try {
           const prior = await loadSnapshot(this.cachePath);
           if (prior === null || sessions.length >= prior.sessions.length) {
             await saveSnapshot(sessions, this.cachePath);
+            this.snapshotWriteSkippedWarned = false;
+          } else {
+            const survivingIds = new Set(sessions.map((s) => s.id));
+            const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
+            const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
+            const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
+            if (allGenuinelyPurged) {
+              await saveSnapshot(sessions, this.cachePath);
+              this.snapshotWriteSkippedWarned = false;
+            } else if (!this.snapshotWriteSkippedWarned) {
+              this.snapshotWriteSkippedWarned = true;
+              console.warn(`ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears`);
+            }
           }
         } catch { /* best-effort cache — never blocks the poll */ }
       }

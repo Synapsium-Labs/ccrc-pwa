@@ -248,6 +248,124 @@ describe('fleet REST + WS', () => {
     rmSync(cacheDir, { recursive: true, force: true });
   });
 
+  // C0.4-FOLLOWUP (blocking review findings 1/2 on the shrink guard above): a
+  // bare length comparison cannot tell "the fleet genuinely shrank" apart
+  // from "this tick's read was partial" — and treating every shrink as the
+  // latter turns one ordinary `ccd` purge (`_reg_purge`, called from
+  // `cmd_ws_rm`/session rm, `ws-reap`, and `ws-gc --prune` alike — routine
+  // teardown, not an edge case) into a PERMANENT freeze: every later tick,
+  // however healthy, still sees fewer sessions than the pre-purge high-water
+  // mark and refuses to write forever, silently.
+  describe('the shrink guard tells a genuine purge from a partial read (C0.4-followup)', () => {
+    const purgeRegistryEntry = (id: string) => {
+      // `_reg_purge`'s own shape (ccd:110): every "$REG/$id.<field>" file for
+      // the id is unlinked, the `.uuid` included — not just one field going
+      // unreadable the way a mid-sweep hiccup would leave it.
+      const reg = path.join(home, '.cc-sessions');
+      for (const field of ['wrapper', 'project', 'workdir', 'uuid', 'started']) {
+        rmSync(path.join(reg, `${id}.${field}`), { force: true });
+      }
+    };
+
+    it('a genuine purge is allowed through immediately, and the cache keeps updating on every tick afterwards', async () => {
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick(); // both sessions readable — writes a 2-row cache
+      let snap = await loadSnapshot(cachePath);
+      expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+        ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+      );
+      const firstSavedAt = snap!.savedAt;
+
+      purgeRegistryEntry('claude-corp-orchard-api');
+      await new Promise((r) => setTimeout(r, 3)); // guarantee Date.now() moves
+
+      await watcher.tick(); // 1 row now — confirmed absent from the listing, not just unreadable
+      snap = await loadSnapshot(cachePath);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      expect(snap!.savedAt).toBeGreaterThan(firstSavedAt);
+      const secondSavedAt = snap!.savedAt;
+
+      // Not a one-tick exception — the survivor keeps getting a fresh
+      // snapshot on every subsequent healthy tick, exactly as an unshrunk
+      // fleet would.
+      await new Promise((r) => setTimeout(r, 3));
+      await watcher.tick();
+      const laterSnap = await loadSnapshot(cachePath);
+      expect(laterSnap!.savedAt).toBeGreaterThan(secondSavedAt);
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+
+    it('reproduces the reported freeze scenario and proves it now heals: 5 healthy ticks after a purge all keep the cache at the true, current size', async () => {
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick();
+      expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
+
+      purgeRegistryEntry('claude-corp-orchard-api');
+
+      // On the OLD guard (`sessions.length >= prior.sessions.length` alone,
+      // re-read from disk every tick) every one of these 5 ticks would still
+      // read back 2 rows and an unchanged `savedAt` — the exact freeze the
+      // review reproduced. The fix must drop to 1 and STAY there on every
+      // single one of them, not just the first.
+      for (let i = 0; i < 5; i++) {
+        await watcher.tick();
+        const snap = await loadSnapshot(cachePath);
+        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      }
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+
+    it('a genuinely PARTIAL read (the id stays listed — a failed field read, not a purge) still refuses to shrink the cache, and warns exactly once', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick();
+      expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
+
+      // Only ONE field goes unreadable — `.uuid` (and every sibling field)
+      // stays listed, so the registry directory itself still names this id:
+      // a read failure, never a purge.
+      rmSync(path.join(home, '.cc-sessions', 'claude-corp-orchard-api.workdir'));
+
+      await watcher.tick();
+      await watcher.tick();
+      await watcher.tick();
+
+      const snap = await loadSnapshot(cachePath);
+      expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+        ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+      );
+      // Warned once across all three refused ticks, not once per tick — the
+      // freeze must be visible in the logs, but not spammed forever.
+      const shrinkWarnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === 'string' && msg.includes('snapshot write skipped'),
+      );
+      expect(shrinkWarnings).toHaveLength(1);
+
+      warnSpy.mockRestore();
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+  });
+
   // C0.1: `tick()` had no re-entrancy guard, so a tick still in flight past
   // the next `intervalMs` edge got a second one stacked on top of it.
   describe('tick() re-entrancy (C0.1)', () => {
