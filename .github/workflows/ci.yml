@@ -28,6 +28,32 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
+          # Above the engines floor in server/agent/pwa package.json
+          # (>=22.13.0, where node:sqlite stopped needing --experimental-sqlite).
+          # server/test/node-floor.test.ts runs THREE assertions on the `server`
+          # leg of this matrix, and they are not symmetric.
+          # Assertion 2 is RELATIVE and ONE-DIRECTIONAL: it asserts THIS
+          # interpreter satisfies the declared `engines.node`. It catches this
+          # node-version being lowered below the floor; it does NOT catch the
+          # floor itself being lowered to meet a low node-version — a floor at
+          # or below whatever interpreter is running stays green on assertion 2
+          # alone. Measured, not assumed: mirroring all three package.jsons to
+          # `>=22.0.0` left assertions 1-2 green under this box's 24.x
+          # interpreter, well ABOVE the real node:sqlite flag boundary — so
+          # that experiment says nothing about assertion 3. (Not independently
+          # re-measured under a 22.x interpreter: this box has no other `node`
+          # binary and no nvm/fnm/volta/n to fetch one, and this branch has
+          # never been pushed, so CI's own 22.x leg has never run it either —
+          # the 24.x result alone is enough to support the point above.)
+          # Assertion 3 is ABSOLUTE: it `import()`s node:sqlite and round-trips
+          # a DatabaseSync, reading no package.json at all, so it fails on any
+          # interpreter below 22.13.0 no matter what `engines.node` says. It is
+          # what catches BOTH sides — this node-version AND every
+          # `engines.node` — being lowered together (e.g. to appease a pinned
+          # 22.10 runner), which is exactly the case assertion 2 cannot see.
+          # Nothing anywhere pins this node-version string against
+          # `engines.node`'s number directly; that gap is closed only by
+          # assertion 3 actually exercising node:sqlite.
           node-version: '22'
           cache: npm
           cache-dependency-path: ${{ matrix.package }}/package-lock.json
@@ -69,6 +95,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
+          # '22' here for consistency with the `test` job, not because
+          # anything checks it. This job runs `npm run build` in pwa/ and
+          # never invokes vitest, so server/test/node-floor.test.ts — which
+          # only exists as a `server` package test — does NOT execute on this
+          # leg. Lowering node-version here, alone, is caught by nothing in
+          # this workflow; only the `test` job's `server` matrix leg is
+          # gated, and only against the interpreter falling below the
+          # declared floor (see the comment on that job's setup-node step).
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json

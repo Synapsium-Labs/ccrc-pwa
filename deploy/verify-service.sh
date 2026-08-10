@@ -2,10 +2,13 @@
 # Post-restart verification for a ccrc systemd --user unit.
 #
 # WHY THIS EXISTS (final review round 2, gates finding 5).
-# `deploy.sh server` ended its chain with `sleep 1 && curl -fsS "$HEALTH_URL"`.
 # `deploy.sh agent` ended at `systemctl --user restart ccrc-agent.service`,
 # which returns SUCCESS the moment systemd forks — it says nothing about whether
-# the process that was forked stayed up.
+# the process that was forked stayed up. `deploy.sh server` had the same gap
+# behind a `sleep 1 && curl -fsS "$HEALTH_URL"` that only checked Fastify, never
+# the restart itself; build7-core Task 1 gave the server chain a call to THIS
+# script too, ahead of that curl — see deploy.sh's own comments on each chain
+# for the current shape, this file no longer being agent-only.
 #
 # That gap lands exactly where the agent's own security design puts its last
 # line of defence. `auditExecWhitelist()` runs at MODULE LOAD and `refuseToBoot`
@@ -19,9 +22,12 @@
 # `journalctl -u ccrc-agent`. The one residual class the throw exists for was
 # the one class the deploy would not notice.
 #
-# WHY NOT A HEALTH CURL, like the server. The agent has no HTTP routes: its
-# `createServer()` exists to carry a WebSocket upgrade, and it binds
-# `CCRC_AGENT_HOST` (127.0.0.1) behind a bearer token. There is nothing to GET.
+# WHY THE AGENT CHAIN HAS NO HEALTH CURL, unlike the server. The agent has no
+# HTTP routes: its `createServer()` exists to carry a WebSocket upgrade, and it
+# binds `CCRC_AGENT_HOST` (127.0.0.1) behind a bearer token. There is nothing
+# to GET, so this script is the agent's only post-restart check; the server
+# chain runs it too and keeps its curl after it, because the two checks answer
+# different questions (process survived vs. Fastify is listening).
 #
 # WHY MainPID STABILITY AND NOT JUST `is-active`. A unit that is crash-looping
 # spends most of a 3-second cycle in `activating (auto-restart)`, which

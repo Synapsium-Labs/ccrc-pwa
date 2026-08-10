@@ -20,6 +20,21 @@ const HOOKSTATE_MAX_BYTES = 65536;
 export interface HookState {
   state: 'working' | 'waiting' | 'done';
   updatedAt: number;
+  /** The hook event that produced this write — `session-hook.sh` has always
+   *  written it (`ccd/session-hook.sh:96,100`) and this reader has always
+   *  thrown it away. Build 7 spends it on exactly one thing: a
+   *  `UserPromptSubmit` newer than a delivery's `deliveredAt` is the cheapest
+   *  available proof that the injected turn actually STARTED, as opposed to
+   *  the text merely leaving the input box — which is all `sendPrompt`'s
+   *  `ok:true` can ever mean (`inject/send.ts:98-112`, and note that a BUSY
+   *  session satisfies it by queueing the message where the server cannot see
+   *  it).
+   *
+   *  `null`, not a union: the set of hook event names is Claude Code's, it
+   *  grows between harness versions, and narrowing it here would make a new
+   *  event name reject a whole hookstate read. A string this build does not
+   *  recognise is simply not the edge it was looking for. */
+  event: string | null;
   ask: HookAsk | null;
   subagents: { name: string; startedAt: number }[];
   interrupted: boolean;
@@ -156,6 +171,9 @@ export async function readHookState(
   const interruptedRaw = raw['interrupted'];
   if (interruptedRaw !== undefined && typeof interruptedRaw !== 'boolean') return null;
 
+  const eventRaw = raw['event'];
+  if (eventRaw !== undefined && eventRaw !== null && typeof eventRaw !== 'string') return null;
+
   try {
     const askRaw = raw['ask'];
     const ask = askRaw === null || askRaw === undefined ? null : reviveAsk(askRaw);
@@ -163,6 +181,7 @@ export async function readHookState(
     return {
       state: stateRaw as HookState['state'],
       updatedAt,
+      event: typeof eventRaw === 'string' && eventRaw !== '' ? eventRaw : null,
       ask,
       subagents,
       interrupted: interruptedRaw === true,

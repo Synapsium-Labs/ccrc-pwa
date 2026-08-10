@@ -10,14 +10,16 @@ import { CCD_ARGV, verbSupported } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
+import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
-import type { NotifyEvent, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress } from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
+import { toRunSummary } from './coord/store.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -98,6 +100,87 @@ const PR_BACKOFF_MAX_MS = 900_000;
  *  (measured 0.51-0.69 s per project call), short enough that wedged is not
  *  permanent. */
 const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
+
+/** The SEVENTH lane. (Sixth is naming, fifth is hook-state sweeping.) spec:159
+ *  fixes the cadence; the rest of this block is the gate's arithmetic.
+ *
+ *  Ten seconds is not how fast mail should arrive — it is how often the lane
+ *  is allowed to ASK. Actual delivery is bounded below by `MAIL_QUIET_MS`,
+ *  which is the point: mail lands at a turn boundary, not mid-thought. */
+const MAIL_SWEEP_MS = 10_000;
+
+/** How long a session must have been idle before it is interruptible. ccd's
+ *  own `COMPACT_QUIET` (`ccd/ccd:45`), taken rather than re-derived: this is
+ *  the same judgement about the same panes, and two numbers for one policy is
+ *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
+ *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6697-6698`). */
+const MAIL_QUIET_MS = 60_000;
+
+/** No session gets two injections inside this window, however much mail is
+ *  queued for it. A fan-out of six findings arriving as six prompts in ninety
+ *  seconds is a denial of service dressed as coordination. */
+const MAIL_COOLDOWN_MS = 120_000;
+
+/** How long an UNACKED delivery waits before it is replayed. Dated from the
+ *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
+ *  the edge proves the turn started, so the recipient is thinking, not
+ *  ignoring. */
+const MAIL_REPLAY_MS = 600_000;
+
+/** The PRE-DELIVERY attempt budget, and the spacing between attempts —
+ *  applies ONLY while a delivery's own `deliveredAt` is still null (review
+ *  finding 4). A row that has NEVER been delivered parks as
+ *  `rejected('undeliverable')` at the cap, and THE MAIL ROW IS UNTOUCHED
+ *  (spec:170-172): the record of what was said survives the failure to say
+ *  it. The instant `deliveredAt` is set, this budget stops applying: the
+ *  row's own history already disproves 'undeliverable', so a failing REPLAY
+ *  backs off instead of rejecting on THIS counter — `attempts` keeps
+ *  counting on a delivered row too (it is one cumulative column), just
+ *  without a ceiling that turns a failing SEND into a park.
+ *
+ *  A delivered row's own park is `MAIL_REPLAY_MAX_ATTEMPTS` below, a
+ *  SEPARATE counter over successful replays (fix — review finding 20: before
+ *  it existed, a delivery no one ever acked replayed "forever, bounded by
+ *  ack rather than by a count" — true, and that is exactly what left
+ *  spec:170-172's own terminal state structurally unreachable for any
+ *  delivery that succeeded even once, since `MAIL_COOLDOWN_MS` only SPACES
+ *  the injections and a send that keeps succeeding can never fail its way
+ *  into this counter).
+ *
+ *  That is also what makes the constant below real (review finding 9): a
+ *  NEVER-delivered row's own schedule (attempts 1..5, 30 s doubling to 8 min)
+ *  never reaches `MAIL_BACKOFF_MAX_MS` before `MAIL_MAX_ATTEMPTS` parks it —
+ *  `Math.min` never binds on that path and the ceiling is decorative there.
+ *  A delivered row's `attempts` is not capped at 6, so by attempt 6
+ *  (30 000 * 2^5 = 960 000) `Math.min` genuinely clamps to the ceiling —
+ *  doubling from 30 s to the same 15-minute ceiling `PR_BACKOFF_MAX_MS`
+ *  already uses, one ceiling for "this keeps not working" across the whole
+ *  watcher. */
+const MAIL_MAX_ATTEMPTS = 6;
+const MAIL_BACKOFF_BASE_MS = 30_000;
+const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
+
+/** The ceiling on successful, UNACKED replays (review finding 20) — see
+ *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
+ *  this role. At `MAIL_REPLAY_MS` (10 min) between replays, 20 attempts is
+ *  a little over three hours of a recipient provably receiving the same
+ *  envelope and never acking it — long enough that an ordinary slow ack
+ *  (a session busy on something else for a while) never comes close, short
+ *  enough that `MAIL_COOLDOWN_MS`'s own docstring's "denial of service
+ *  dressed as coordination" eventually parks rather than running for the
+ *  life of the box. */
+const MAIL_REPLAY_MAX_ATTEMPTS = 20;
+
+/** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
+ *  (`ccd/ccd:20-22`, `_lane_enabled` at `:53`), which the operator already
+ *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
+ *  registry directory, never by reading the file: `FleetIO.readFile` maps
+ *  every failure to null (`io.ts:41-43`), so a read would make an unreadable
+ *  kill-switch look like an absent one — fail-OPEN on the one control whose
+ *  entire job is to stop injection. `limits.ts:134-142` already filters
+ *  unknown `<name>-disabled` markers out of `/api/accounts`, so this name
+ *  cannot fabricate an account row there. */
+const MAIL_DISABLED_MARKER = 'mail-disabled';
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
@@ -251,6 +334,52 @@ export class FleetWatcher {
    *  inside a lane that promises never to block) is not on offer.
    */
   private activeProjects = new Set<string>();
+  /** The seventh lane's clock. */
+  private lastMailSweep = 0;
+  /** Per session: when this lane last injected. IN MEMORY BY DESIGN, and the
+   *  direction of the failure is why: a restart forgets the cooldown and may
+   *  deliver one message sooner than it should have. Persisting it would buy
+   *  a politeness guarantee across a restart at the price of a column and a
+   *  purge — the same trade `attemptedRenames` already declined (`:172-181`).
+   *  The ATTEMPT budget, which protects a session from a loop rather than
+   *  from a moment, IS durable: it is a column on the delivery. */
+  private mailCooldown = new Map<string, number>();
+  /** Session ids with a `sendPrompt` currently in flight from THIS lane —
+   *  the cross-sweep single-flight guard `sweepMail` was missing (review
+   *  findings 1/5). `tick()` void-dispatches `sweepMail` every
+   *  `MAIL_SWEEP_MS`, and `sendPrompt` alone can run past that (four-plus
+   *  seconds of its own polling, longer still behind another
+   *  server-originated write holding the session's `KeyedQueue` slot — a
+   *  reap, an inject, `sweepNames`) — so without this, a second sweep starting
+   *  while the first is still blocked inside `sendPrompt` re-reads the SAME
+   *  still-`queued`/still-`delivered` row (`markDelivered`/`backOff` have not
+   *  run yet) and enqueues a SECOND send for it. Written BEFORE `sendPrompt`
+   *  is called and cleared in a `finally`, same before-the-call discipline
+   *  `sweepNames`'s `attemptedRenames` uses and for the identical reason —
+   *  except this one must be cleared once the send resolves (attempted-once
+   *  guards a lifetime; in-flight guards one send), so a `Set`, not a durable
+   *  marker. IN MEMORY BY DESIGN, same reasoning as `mailCooldown` just
+   *  above: a restart forgets an in-flight send along with the process that
+   *  was making it, and there is nothing left to guard once the process is
+   *  gone. */
+  private mailInFlight = new Set<string>();
+  /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
+   *  above, over `RunSummary[]` instead of `FleetSession[]`. `null` (not
+   *  `'[]'`) so the very first tick with a real `coord` always emits at
+   *  least once, even into an empty fleet — mirroring `lastJson`'s own
+   *  initial value. */
+  private lastRunsJson: string | null = null;
+  /** Watermark: the highest `mail_deliveries.id` this lane has already
+   *  raised a `mail` NotifyEvent for. Seeded to the CURRENT max id on the
+   *  priming tick (`tick()`'s own `!this.primed` arm) rather than left at 0,
+   *  so a restart does not replay a notify for mail queued before this
+   *  process started — the same "no storm on boot" courtesy `prevStatus`
+   *  gives the `done` push above, and spec's own restart semantics name by
+   *  name: "the primed-quiet rule... extends to the mail lane." */
+  private lastMailNotifyId = 0;
+  /** Same watermark discipline as `lastMailNotifyId`, over `run_events.id`
+   *  for the `run` NotifyEvent lane. */
+  private lastRunNotifyId = 0;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -356,11 +485,24 @@ export class FleetWatcher {
     // attempted-set is written BEFORE the call, so a second sweep's condition 4
     // refuses the pair the first is still running.
     void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
+    // NEVER awaited, same reasoning as sweepNames immediately above: this one
+    // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
+    // is ~4.3 s of sleeps per message plus one round trip per line
+    // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
+    // detector and the busy->idle push behind a mail delivery.
+    void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
     const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
     // The whole fleet is in scope right here, which is exactly what
     // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
     // have on their own clocks — see `activeProjects`'s own comment.
     const projects = new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.project));
+    // Per-session project, off the SAME fleet assembly — the honest fallback
+    // `pushNewMail` uses for run-less mail (review finding 3): a delivery's
+    // `project` is null whenever the mail has no run, which `mailQueuedSince`'s
+    // own docstring names as a fully supported case, not an edge one, and the
+    // RECIPIENT session's own project (known here, not down in that method's
+    // own scope) is the honest answer — never an empty string.
+    const sessionProjects = new Map(sessions.map((s) => [s.id, s.project]));
     // Push on a busy→idle finish (a session completed a turn). Skip the priming
     // tick — otherwise a restart notifies for every currently-idle session.
     if (this.primed) {
@@ -369,6 +511,44 @@ export class FleetWatcher {
           this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
         }
       }
+      // Build 7's two new notify kinds ride the SAME primed gate as the
+      // `done` push above, for the identical restart reason. EACH WRAPPED
+      // (review finding 1): both walk straight into `node:sqlite`, which
+      // throws SYNCHRONOUSLY — a full disk (this fleet already ships a 10G
+      // floor check, so it is not hypothetical) or a second connection
+      // holding coord.db's write lock (`BEGIN IMMEDIATE` takes it eagerly,
+      // no busy timeout) is enough. `tick()` is fired by `start()` as `void
+      // this.tick()` with no `unhandledRejection` handler anywhere in this
+      // tree, so an unguarded throw here would kill the whole process over a
+      // fault every NEIGHBOURING lane already survives (sweepPr/sweepNames/
+      // sweepMail's `void …().catch(…)`, saveSnapshot's try/catch below,
+      // readRegistry's swallow-by-construction) — these two were the
+      // exception, not the rule this file otherwise keeps.
+      try { this.pushNewMail(projects, sessionProjects); }
+      catch (err) {
+        console.warn(`ccrc-server: pushNewMail failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      }
+      try { this.pushNewRuns(projects); }
+      catch (err) {
+        console.warn(`ccrc-server: pushNewRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      }
+    } else if (this.deps.coord) {
+      // The priming tick seeds both watermarks to "everything that already
+      // exists" rather than 0, so the FIRST primed tick's `WHERE id > ?`
+      // reads see only what changed after this process started — the mail-
+      // lane courtesy spec's restart semantics name, extended here to runs.
+      // Guarded for the identical reason as the two calls above (review
+      // finding 1): a priming-tick SQLite failure must leave both watermarks
+      // at 0, not kill the process — a later primed tick still reads
+      // everything queued since the process actually started, which is the
+      // same "replay a bit more than strictly necessary" cost every other
+      // lane in this file accepts over losing the poll outright.
+      try {
+        this.lastMailNotifyId = this.deps.coord.maxMailDeliveryId();
+        this.lastRunNotifyId = this.deps.coord.maxRunEventId();
+      } catch (err) {
+        console.warn(`ccrc-server: priming the mail/run watermarks failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+      }
     }
     for (const s of sessions) this.prevStatus.set(s.id, s.status);
     this.activeProjects = projects;
@@ -376,10 +556,137 @@ export class FleetWatcher {
     if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
       try { await saveSnapshot(sessions, this.cachePath); } catch { /* best-effort cache — never blocks the poll */ }
     }
+    // Independent of the `fleet` diff below: runs change on a different
+    // clock from sessions, and an unchanged session snapshot must not
+    // suppress a run transition from reaching an already-connected client.
+    this.emitRuns();
     const json = JSON.stringify(sessions);
     if (json === this.lastJson) return;
     this.lastJson = json;
     this.bus.emit('fleet', sessions);
+  }
+
+  /**
+   * The `{type:'runs'}` WS frame emitter (Task 10, spec:222-224). Runs every
+   * tick, unthrottled: `CoordStore.runs()` is a handful of indexed SQLite
+   * reads (synchronous — `DatabaseSync` has no async surface), not a pane
+   * capture or a network round trip, so there is nothing here worth a slower
+   * clock of its own the way `sweepNames`/`sweepMail` need one.
+   *
+   * Byte-equality guarded exactly like the `fleet` snapshot above: runs
+   * change on human-and-agent timescales, and re-broadcasting an unchanged
+   * list every 2 s would be new noise on a socket that spent real effort not
+   * having any. No `coord` -> nothing to read -> nothing ever emitted, the
+   * same "absent means none of this exists" stance every other coord-gated
+   * surface in this build takes.
+   *
+   * GUARDED (review finding 1): `coord.runs()` is a synchronous `node:sqlite`
+   * read, sitting directly on `tick()`'s own poll with no neighbouring
+   * `catch` to absorb it — the same fault (a full disk, a locked coord.db)
+   * that has a `try`/`.catch` at every OTHER synchronous or async lane in
+   * this file. A failure here skips just this tick's `runs` emission;
+   * `lastRunsJson` is left untouched so a later successful tick still diffs
+   * correctly against whatever was last actually broadcast.
+   */
+  private emitRuns(): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    let runs: RunSummary[];
+    try { runs = coord.runs().map(toRunSummary); }
+    catch (err) {
+      console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+      return;
+    }
+    const json = JSON.stringify(runs);
+    if (json === this.lastRunsJson) return;
+    this.lastRunsJson = json;
+    this.bus.emit('runs', runs);
+  }
+
+  /**
+   * The `mail` NotifyEvent lane (Task 10, spec:243-244). Fires from the
+   * delivery lane's own data at QUEUE time — `mailQueuedSince` walks
+   * `mail_deliveries` by insertion order, so a row is raised the first tick
+   * after `POST /api/mail` (or the coordinator's own system mail) queued it,
+   * regardless of whether `sweepMail` has attempted injection yet. "Not at
+   * injection — otherwise a message that never becomes deliverable is a fact
+   * nothing recorded."
+   *
+   * `tag` is `mail-<toId>-<mailId>` (spec:236-237): NON-collapsing per
+   * session, on purpose — two different messages about one session must not
+   * replace each other in the tray, unlike `ask`/`done`/`merged`'s default
+   * `${kind}-${sessionId}` key, where the newest statement supersedes the
+   * last. `recordAlways: true` (spec:238-240): a message the operator is
+   * looking at the recipient's pane for is still a fact that arrived: only
+   * the PUSH is presence-gated, never the record.
+   *
+   * `sessionProjects` (review finding 3): `m.project` comes off a `LEFT JOIN`
+   * to the mail's run and is `null` for ad-hoc mail with no run context — a
+   * fully supported, first-class case (`mailQueuedSince`'s own docstring;
+   * `POST /api/mail` treats `runId` as optional). Falling back to `''` left a
+   * dangling ` · ` in a multi-project fleet: `pushOne` decorates on project
+   * COUNT alone, with no test ever exercising a run-less mail there (every
+   * mail case in `push-copy.test.ts` seeded one project). The recipient
+   * SESSION's own project, read one scope up in `tick()` from this same
+   * tick's fleet assembly, is the honest fallback.
+   */
+  private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    for (const m of coord.mailQueuedSince(this.lastMailNotifyId)) {
+      const project = m.project ?? sessionProjects.get(m.toId) ?? '';
+      this.pushOne({
+        kind: 'mail', sessionId: m.toId, project,
+        title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
+        body: m.subject,
+        tag: `mail-${m.toId}-${m.mailId}`,
+        recordAlways: true,
+      }, projects);
+      this.lastMailNotifyId = m.deliveryId;
+    }
+  }
+
+  /**
+   * The `run` NotifyEvent lane (Task 10, spec:243-244): one RECORD per
+   * `run_events` row — every transition this run's own state machine
+   * records, not just terminal ones. "A run transition is a fact about a
+   * program, and the operator watching one pane must not erase it" —
+   * `recordAlways: true` for the identical reason `pushNewMail` sets it.
+   *
+   * `closing` is `recordOnly` (review finding 4): `POST /api/runs/:id/close`
+   * commits `advance(id,'closing')` and `advance(id, state)` inside ONE
+   * transaction, `CoordStore.closeRun` (corrected — this used to describe
+   * two adjacent synchronous route-level statements, true when review
+   * finding 4 was fixed but not since `closeRun` was introduced), so the
+   * SAME watcher tick always reads both rows, and every close fired TWO
+   * pushes, one naming a state that exists for microseconds: internal
+   * bookkeeping the operator can neither act on nor ever observe as a
+   * resting state. The feed still gets it in full — the record above is
+   * unconditional, same as every other transition — only the PUSH is
+   * suppressed for this one state.
+   *
+   * A transition with no `sessionId` yet (e.g. an early refusal before
+   * dispatch ever minted one) is skipped rather than guessed: presence
+   * gating and the push's own target both need a real session id, and
+   * `runEventsSince`'s own docstring states why the caller, not the store,
+   * makes that call.
+   */
+  private pushNewRuns(projects: Set<string>): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    for (const r of coord.runEventsSince(this.lastRunNotifyId)) {
+      if (r.sessionId !== null) {
+        this.pushOne({
+          kind: 'run', sessionId: r.sessionId, project: r.project,
+          title: `▸ ${r.toState} › ${r.workspace ?? r.project}`,
+          body: `program:${r.program} wave ${r.wave}/${r.waveOf ?? '?'}`,
+          tag: `run-${r.runId}-${r.toState}`,
+          recordAlways: true,
+          recordOnly: r.toState === 'closing',
+        }, projects);
+      }
+      this.lastRunNotifyId = r.eventId;
+    }
   }
 
   /**
@@ -388,26 +695,98 @@ export class FleetWatcher {
    *  - Project context ONLY when more than one project is active. The server
    *    knows the whole fleet at push time, so it can tell — and "✓ ccrc-pwa"
    *    on a fleet running one project is noise dressed as information.
-   *  - NOTHING fires for a session the operator is looking at right now. A
+   *  - NOTHING PUSHES for a session the operator is looking at right now. A
    *    notification for the pane on your screen trains you to dismiss
-   *    notifications.
+   *    notifications. AMENDED for Build 7 (spec:238-240) — this used to be
+   *    absolute, gating the RECORD too, and it still is for `ask`/`done`/
+   *    `merged`. But agent-to-agent mail (and a run transition) is a record,
+   *    not a "needs your eyes" ping: gating the record on presence would mean
+   *    the operator watching a session ERASES the log of a message they
+   *    never saw. `recordAlways` exempts the RECORD from this gate; the PUSH
+   *    stays gated exactly as before, unconditionally, for every kind.
    *  - The log records what this method DECIDED to raise — after the presence
    *    gate, before delivery, and never corrected by delivery's outcome. It is
    *    not a record of what was sent: recording is unconditional while `push`
    *    is optional, so a reconnecting client's catch-up can and will list
    *    events no device ever received. `NotifyEvent`'s own docstring is the
-   *    wire contract for that; keep the two saying the same thing.
+   *    wire contract for that; keep the two saying the same thing. The
+   *    durable feed (`CoordStore.recordFeedEvent`, Task 10) is written at the
+   *    SAME point for the SAME reason, over ALL kinds — not just Build 7's
+   *    two — so the archive behind the ring can never disagree with what the
+   *    ring itself would have said.
    *
    *  `notifyLog` and `push` are independently optional, which is the reason
    *  above: the catch-up log is useful even on a box with no VAPID keys
-   *  configured, so it is never gated on `push` being present.
+   *  configured, so it is never gated on `push` being present. `coord` is a
+   *  THIRD, independently-optional sink for the identical reason: a box with
+   *  no coordination database still gets a working ring and catch-up, it
+   *  simply has no durable archive behind either.
    */
-  private pushOne(e: { kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] }, projects: Set<string>): void {
-    if (this.deps.presence?.isVisible(e.sessionId)) return;
-    const title = projects.size > 1 ? `${e.title} · ${e.project}` : e.title;
-    this.deps.notifyLog?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
-    void this.deps.notifyLog?.flush();
-    void this.deps.push?.notify({ title, body: e.body, sessionId: e.sessionId, tag: `${e.kind}-${e.sessionId}`, ...(e.actions ? { actions: e.actions } : {}) });
+  private pushOne(e: {
+    kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
+    actions?: PushPayload['actions'];
+    /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
+     *  pass one: two different messages about one session must not replace
+     *  each other in the tray (spec:236-237), which is exactly what the
+     *  default key does — and does correctly for `ask`/`done`/`merged`, where
+     *  the newest statement about a session supersedes the last. */
+    tag?: string;
+    /** Record even when the operator is looking at this session. THE PRESENCE
+     *  GATE STILL SUPPRESSES THE PUSH; only the RECORD is exempt. spec:238-240:
+     *  agent-to-agent mail is a record, not a "needs your eyes" ping — gating
+     *  the record on presence would mean the operator watching a session
+     *  ERASES the log of a message they never saw. */
+    recordAlways?: boolean;
+    /** Record it (subject to the presence gate above, same as every other
+     *  kind) but never emit an actual push notification for it. Added for the
+     *  `run` lane's `closing` transition alone (review finding 4, see
+     *  `pushNewRuns`'s own docstring): the feed genuinely wants every
+     *  transition, which `recordAlways` already gets it; the tray does not,
+     *  and until now `pushOne` had no way to say so — `recordAlways` only
+     *  ever exempted the RECORD from the presence gate above, never the push
+     *  from firing at all. */
+    recordOnly?: boolean;
+  }, projects: Set<string>): void {
+    const visible = this.deps.presence?.isVisible(e.sessionId) === true;
+    if (visible && !e.recordAlways) return;
+    // Decorated only when BOTH more than one project is active AND the
+    // project is actually known (review finding 3) — an empty `e.project`
+    // (run-less mail whose recipient session could not be resolved either,
+    // `pushNewMail`'s own fallback chain) must degrade to no decoration at
+    // all, never to a dangling ` · ` with nothing after it.
+    const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
+    const log = this.deps.notifyLog;
+    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
+    void log?.flush();
+    // The durable feed archive — same record, same point, ALL kinds (Task
+    // 10's orchestrator-added scope). Only reachable when NotifyLog actually
+    // produced an event: no `notifyLog` configured means no `{epoch,seq}`
+    // pair exists to mirror, and a feed row that mirrors nothing is not an
+    // archive of anything. GUARDED (review finding 1): `node:sqlite` throws
+    // SYNCHRONOUSLY (a full disk, a second connection holding coord.db's
+    // write lock — `tx()`'s `BEGIN IMMEDIATE` takes it eagerly, no busy
+    // timeout) and this call sits directly on the poll, reached from every
+    // kind this method ever raises (the `done` push above, the ask push in
+    // `detectDialogs`, and both new Task 10 lanes). `tick()`'s own rule is
+    // that one bad lane must not kill the others — every neighbouring lane
+    // already earns that non-throwing property one way or another (see
+    // `tick()`'s own comment above `pushNewMail`/`pushNewRuns`) and this call
+    // was the one exception reachable from every push, not just two lanes.
+    // The ring record and the push below are UNAFFECTED by a failure here —
+    // only the archive row is lost.
+    if (log && recorded) {
+      try { this.deps.coord?.recordFeedEvent(log.epoch, recorded); }
+      catch (err) {
+        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — feed archive degraded, ring/push unaffected`);
+      }
+    }
+    if (visible) return;                       // recorded, not pushed
+    if (e.recordOnly) return;                   // recorded, deliberately never pushed
+    void this.deps.push?.notify({
+      title, body: e.body, sessionId: e.sessionId,
+      tag: e.tag ?? `${e.kind}-${e.sessionId}`,
+      ...(e.actions ? { actions: e.actions } : {}),
+    });
   }
 
   /**
@@ -632,6 +1011,292 @@ export class FleetWatcher {
         // signal that a rename which LOOKED clean actually ran origin-blind.
         const warn = res.stderr.trim();
         if (warn !== '') console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch}: ${warn}`);
+      }
+    }
+  }
+
+  /**
+   * Deliver queued mail, one message per eligible session per sweep.
+   *
+   * SIX CONJUNCTS, in this order, cheapest first — and the order is the design,
+   * because every rung below the first is a read that crosses the agent WS in
+   * remote mode:
+   *
+   *   0. the lane is primed (a restart delivers no storm — spec:256-258);
+   *   1. `$REG/mail-disabled` is absent, by DIRECTORY LISTING, fail-shut;
+   *   2. this session is off its per-session cooldown;
+   *   3. tmux has the session;
+   *   4. the hookstate is fresh AND says `done` AND carries no ask — `done` is
+   *      the hook's idle, and `readHookState` has already applied the freshness
+   *      and uuid gates (`hookstate.ts:149-154`), so a stale or foreign file
+   *      reads as null and null is NOT idle;
+   *   5. the live status file says AFFIRMATIVELY idle and `statusUpdatedAt` is
+   *      at least `MAIL_QUIET_MS` old. Affirmatively, because `liveStatus`
+   *      answers `'idle'` for a missing pid, a missing config dir and an
+   *      unreadable file (`fleet.ts:118-131`) — `archiveSafety`'s rule
+   *      (`:731-736`, "MUST NOT collapse `unknown` to idle") applies here for
+   *      the same reason: this ends in a keystroke.
+   *
+   * ONLY THEN `sendPrompt`, unchanged, with its whole proof discipline —
+   * echo verified, `draft-present` refused, `dialog-open` refused — inside the
+   * session's own `KeyedQueue` slot. NOTHING HERE TEACHES IT TO RETRY: the
+   * two-Enter budget and `submitEnter`'s one-Enter doctrine
+   * (`inject/send.ts:456-460`) are load-bearing, and the escalation for a stuck
+   * box is the human.
+   *
+   * `replaceDraft` IS NEVER PASSED. A half-typed human message outranks every
+   * agent-to-agent finding in this system; `draft-present` is a back-off, and
+   * the mail is still there in two minutes.
+   *
+   * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
+   * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
+   * that `draftOf` strips (`inject/send.ts:61`, pinned against a live capture
+   * at `send.test.ts:642`). So "the box reads empty" is not "nothing is
+   * pending", and the gate above is what keeps the lane away from a busy
+   * session in the first place — not the send path, which would happily
+   * succeed.
+   *
+   * CROSS-SWEEP SINGLE-FLIGHT (review findings 1/5, hardened by 33/38), on
+   * TOP of the six conjuncts and the per-sweep `seen` set: `mailInFlight` is
+   * CLAIMED immediately after the `.has` check, with NO `await` between
+   * them, so the check-then-claim is atomic with respect to the event loop —
+   * no other sweep's turn can run between "is this row claimed" and "claim
+   * it". The surrounding try/finally begins at that claim, not at
+   * `sendPrompt`, and covers every gate below it (registry lookup, tmux
+   * session, hookstate, pane pid, live status, quiet time) as well as the
+   * send itself, so a row that fails ANY gate still releases its claim, via
+   * `finally`, before the loop moves on — a `continue` inside a `try` runs
+   * the `finally` first. A row therefore holds `mailInFlight` for its
+   * WHOLE walk through the gates, not just the sub-window where it is
+   * already blocked inside `sendPrompt`: a second sweep that starts while
+   * the first is still working through those `await`s for the same row
+   * — gate-checking OR sending — sees the claim already there and refuses
+   * the row, instead of re-passing gates that have not changed and
+   * enqueueing a second send for it. (An earlier version of this claim ran
+   * AFTER the four gate `await`s instead of before them, leaving exactly
+   * that gate-walking window unguarded — two concurrent sweeps could both
+   * pass the `.has` check, both clear the gates, and both send the same
+   * envelope. Fixed by moving the claim to immediately follow the check.)
+   *
+   * THE `UserPromptSubmit` EDGE IS SAMPLED SEPARATELY (review finding 3),
+   * over `store.deliveredUnacked()` — every `delivered`, unacked row, with NO
+   * due-timing filter — rather than folded into the loop below over
+   * `store.dueDeliveries()`. `dueDeliveries`'s replay arm does not select a
+   * `delivered` row until `MAIL_REPLAY_MS` has already elapsed, so sampling
+   * the edge only from ITS result could never observe a turn that started
+   * (and, ordinarily, ended) any time before that — which is every ordinary
+   * turn. See `CoordStore.deliveredUnacked`'s own docstring.
+   *
+   * `tick()` dispatches this with `void` (it can sit on the queue for as long
+   * as `sendPrompt` does), so a test that awaits `tick()` has NOT awaited the
+   * sweep — every negative assertion about it would pass while it was still
+   * running. PUBLIC for the same reason `sweepNames` is.
+   */
+  async sweepMail(): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastMailSweep !== 0 && now - this.lastMailSweep < MAIL_SWEEP_MS) return;
+    this.lastMailSweep = now;
+
+    // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
+    const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
+    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
+
+    const unacked = store.deliveredUnacked();
+    const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
+    if (unacked.length === 0 && dueBefore.length === 0) return;
+    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
+    // One hookstate read per SESSION this sweep, shared between the edge
+    // sample below and the gate's own read further down — both use this same
+    // `now`, so a cached answer is exactly as fresh as a second read would
+    // be. A `Map`, not a plain object, so a session with no readable
+    // hookstate (a real miss) is distinguishable from "not looked up yet"
+    // via `.has` rather than an `undefined` that could mean either.
+    const hsCache = new Map<string, HookState | null>();
+    const hookStateFor = async (toId: string): Promise<HookState | null> => {
+      if (hsCache.has(toId)) return hsCache.get(toId) ?? null;
+      const uuid = uuidByToId.get(toId);
+      const hs = uuid === undefined ? null
+        : await readHookState(this.deps.io, this.deps.cfg.registryDir, toId, uuid, now);
+      hsCache.set(toId, hs);
+      return hs;
+    };
+
+    // The UserPromptSubmit edge, over EVERY delivered-unacked row — see this
+    // method's own docstring and review finding 3. A recipient that has gone
+    // (`uuidByToId` has no entry) reads as no edge, same as `due`'s own loop
+    // treats a vanished recipient: the row waits.
+    //
+    // `row.ingestedAt !== null` SKIPS the row entirely (fix — review finding
+    // 31): before this, the edge was sampled UNCONDITIONALLY, so every LATER
+    // prompt the session submitted — the operator talking to it, the next
+    // brief, its own tool loop's own `UserPromptSubmit` — re-dated
+    // `ingestedAt` again, and `dueDeliveries`'s `MAX(ingestedAt, deliveredAt)`
+    // replay gate never matured for as long as the session kept submitting
+    // prompts at least once per `MAIL_REPLAY_MS`, which is what a WORKING
+    // session does by definition. `hookstate.ts`'s own docstring calls this
+    // edge proof that "the injected turn actually STARTED" — proof of ONE
+    // specific turn, not a clock a whole session's later, unrelated activity
+    // should keep pushing out. Capturing it once and freezing it means a
+    // fresh, later edge from an actual REPLAY still re-dates the clock — via
+    // that replay's own `markDelivered`, not this loop — exactly as
+    // `dueDeliveries`'s `MAX(...)` already expects (see its own docstring).
+    for (const row of unacked) {
+      if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
+      if (row.ingestedAt !== null) continue;
+      const hs = await hookStateFor(row.toId);
+      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
+        store.markIngested(row.id, hs.updatedAt);
+      }
+    }
+
+    // Re-read due-ness AFTER the edge sample above, not before: `markIngested`
+    // can only ever push a row's replay clock LATER, so a `dueBefore` row
+    // whose edge just landed could have gone from due to not-due in the same
+    // sweep. Skipped when nothing was sampled (`unacked.length === 0`) —
+    // nothing could have changed, so `dueBefore` is still exact and a second
+    // identical query would only cost, never correct, anything.
+    const due = unacked.length === 0 ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
+    if (due.length === 0) return;
+    const seen = new Set<string>();          // one message per session per sweep
+    for (const d of due) {
+      if (seen.has(d.toId)) continue;
+      if (this.mailInFlight.has(d.toId)) continue;   // CHECK — review findings 1/5, see this method's docstring
+      // CLAIM — immediately after the check, with NO await in between, so the
+      // check-then-act is atomic with respect to the event loop: nothing can
+      // run between "is it claimed" and "claim it" that would let a second
+      // concurrent sweep observe the pre-claim state (fix — review finding
+      // 33/38: see this method's docstring). The try/finally now begins HERE,
+      // not at the send, so every gate below that `continue`s — cooldown,
+      // missing registry row, no tmux session, hookstate not `done`, not
+      // idle, not quiet — releases the claim on its way out, exactly once,
+      // and never leaves a session claimed across sweeps.
+      this.mailInFlight.add(d.toId);
+      try {
+        const last = this.mailCooldown.get(d.toId) ?? 0;
+        if (now - last < MAIL_COOLDOWN_MS) continue;
+        const rec = records.find((r) => r.id === d.toId);
+        if (!rec) {
+          // Fix — review finding 30: a row whose recipient's registry row is
+          // genuinely ABSENT (reaped, purged) used to `continue` here with
+          // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
+          // reached through a FAILED `sendPrompt`, which never runs on this
+          // path, so the row was re-selected on every `MAIL_SWEEP_MS` tick
+          // indefinitely, and a purged workspace slug being re-minted
+          // (`_ws_slug_new` draws only from FREE slugs) could eventually hand
+          // this exact id to an unrelated program. Backed off on the SAME
+          // schedule a send failure gets, and eventually parked — the spec's
+          // own `rejected('undeliverable')` terminal state, otherwise
+          // structurally unreachable for exactly the recipients this build can
+          // prove are gone. Scoped to ONLY this gate: every gate below (no
+          // tmux session, hookstate not `done`, not idle, on cooldown) is
+          // ORDINARY and expected to hold indefinitely for a session that is
+          // merely busy, and must never accrue toward a park.
+          //
+          // Fix (scoped-verify): `records` came from `readRegistry`, which
+          // drops a row whose `.uuid` file IS listed when a SIBLING field read
+          // merely fails (`registry.ts:123`, "incomplete registry entry —
+          // skip, don't crash") — transient, not evidence the recipient is
+          // gone. `POST /api/mail`'s own ingress already draws this exact
+          // line, refusing `registry-unmeasurable` rather than guessing
+          // whenever a row's `.uuid` is listed but unreadable (D-37,
+          // `coord/routes.ts`'s `names.includes` checks, pinned at
+          // `mail-routes.test.ts:259`). `listing` — the raw directory read at
+          // the top of THIS sweep, in scope for exactly this reason — carries
+          // the same evidence of presence `names` gives the ingress. Without
+          // this check, one dropped agent-WS round trip on a SINGLE field of a
+          // LIVE session's registry row was indistinguishable from that
+          // session being reaped, and six backoffs (~15 minutes) permanently
+          // parked its mail `rejected('undeliverable')`. "Listed but
+          // unreadable" therefore keeps backing off, unmeasured, forever — the
+          // same as every ordinary gate below — while only a recipient absent
+          // from `listing` too can ever park.
+          //
+          // No `MailRejectCode` applies here (scoped-verify H6: a `backOff` is
+          // not a reject, so `registry-unmeasurable` — a `refuse(...)` code the
+          // ingress route returns on the wire — has nowhere typed to land on
+          // this row), but the two are the SAME underlying condition, and
+          // `mail_deliveries.lastError` is free text a maintainer greps, not a
+          // typed column — so the word itself rides along in the message
+          // below, not just in this comment, for whoever greps the ROW rather
+          // than the source.
+          const listedButUnreadable = listing.includes(`${d.toId}.uuid`);
+          const attempts = d.attempts + 1;
+          if (attempts >= MAIL_MAX_ATTEMPTS && !listedButUnreadable) {
+            store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
+          } else {
+            const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+            store.backOff(d.id,
+              listedButUnreadable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
+              now + step);
+          }
+          continue;
+        }
+        if (!(await this.deps.tmux.hasSession(d.toId))) continue;
+        const hs = await hookStateFor(d.toId);
+        if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
+        const pid = await this.deps.tmux.panePid(d.toId);
+        const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
+        if (!pid || !cfgDir) continue;
+        const live = await readLiveState(this.deps.io, cfgDir, pid);
+        if (!live || liveSessionStatus(live.status) !== 'idle') continue;
+        if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) continue;
+
+        // `seen` is added only HERE, once every gate above has passed and the
+        // send is actually about to be attempted — it means "one message per
+        // session per sweep", not "one row considered per sweep", and moving
+        // the claim earlier must not change that.
+        seen.add(d.toId);
+        // The stored envelope, byte for byte. `renderEnvelope` is not called
+        // here and must never be: spec:176-177's "verbatim, never re-rendered".
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope);
+        if (res.ok) {
+          this.mailCooldown.set(d.toId, now);
+          store.markDelivered(d.id, now);
+          // A REPLAY — this row was already `delivered` before this send —
+          // counts against its own ceiling, independent of `attempts` (fix,
+          // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own
+          // docstring for why `attempts` cannot serve this role). The FIRST
+          // delivery (`d.deliveredAt === null`) never counts here.
+          if (d.deliveredAt !== null) {
+            const replays = store.bumpReplayCount(d.id);
+            if (replays >= MAIL_REPLAY_MAX_ATTEMPTS) {
+              store.rejectDelivery(d.id, 'undeliverable', 'replayed without ack past the replay ceiling');
+            }
+          }
+          continue;
+        }
+        const attempts = d.attempts + 1;
+        // The park below applies ONLY to a row that has NEVER been delivered
+        // (review finding 4): `d.deliveredAt === null` is the row's own,
+        // durable proof of that. Rejecting a row that HAS been delivered
+        // would write a false 'undeliverable' record over a message that
+        // demonstrably reached the recipient, and would silently end
+        // replay-until-ack (spec:174-177) — see `MAIL_MAX_ATTEMPTS`'s own
+        // docstring for the full reasoning, including why this is also what
+        // makes `MAIL_BACKOFF_MAX_MS` reachable (review finding 9).
+        if (d.deliveredAt === null) {
+          // `enter-ignored` is terminal HERE and nowhere else, and only for a
+          // row that has never been delivered: the text is sitting in a
+          // FRESH box, `submitEnter`'s doctrine forbids a blind third Enter,
+          // and the rescue is a human looking at the pane. Re-injecting would
+          // type the whole envelope a second time UNDER the first one.
+          if (res.error === 'enter-ignored') {
+            store.rejectDelivery(d.id, 'undeliverable', res.error);
+            continue;
+          }
+          if (attempts >= MAIL_MAX_ATTEMPTS) {
+            store.rejectDelivery(d.id, 'undeliverable', res.error);
+            continue;
+          }
+        }
+        const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+        store.backOff(d.id, res.error, now + step);
+      } finally {
+        this.mailInFlight.delete(d.toId);
       }
     }
   }

@@ -1,8 +1,12 @@
-// FINAL REVIEW ROUND 2, gates finding 5. `deploy.sh server` ends its chain with
-// `sleep 1 && curl -fsS "$HEALTH_URL"`. `deploy.sh agent` ended at
+// FINAL REVIEW ROUND 2, gates finding 5. `deploy.sh agent` ended at
 // `systemctl --user restart ccrc-agent.service`, which returns success the
 // moment systemd FORKS — so an agent that throws during ESM evaluation
 // crash-looped at 3-second intervals behind a deploy that exited 0.
+// (`deploy.sh server` had `sleep 1 && curl -fsS "$HEALTH_URL"` at the time —
+// build7-core Task 1 replaced that `sleep 1` with the same verify-service.sh
+// call this suite pins for the agent, kept the curl after it, and this file's
+// second `describe` block below is what proves that wiring; see its
+// comments, not this paragraph, for the server chain's current shape.)
 //
 // That is not a spare failure mode. It is where the agent's own security design
 // puts its last line of defence: `auditExecWhitelist()` runs at module load and
@@ -13,10 +17,16 @@
 //
 // `deploy/verify-service.sh` closes it. This file is its gate.
 //
-// WHY IT LIVES IN THE AGENT PACKAGE: the script verifies the agent unit, the
-// agent suite already runs in the gate list, and this is the package whose
-// structural PATH containment makes it safe to run a script that shells out to
-// `systemctl` at all.
+// WHY IT LIVES IN THE AGENT PACKAGE: the script started out verifying only the
+// agent unit, the agent suite already ran in the gate list, and this is the
+// package whose structural PATH containment makes it safe to run a script
+// that shells out to `systemctl` at all. `verify-service.sh` itself now backs
+// BOTH deploy chains (build7-core Task 1), and this file grew to match — the
+// second `describe` block below reads `deploy.sh` directly and pins the
+// server chain's ordering and its `ccrc.service` RestartSec too. Nothing under
+// `server/test/` gates any of that: this is the only suite anywhere that would
+// go red if the server chain's `REMOTE_CMD` were reordered or `ccrc.service`'s
+// RestartSec were raised past the observation window.
 //
 // NOTHING HERE TOUCHES REAL SYSTEMD. Every case runs with a stub `systemctl`
 // earliest on PATH, and — following the discipline in `contain-path.test.ts` —
@@ -168,24 +178,84 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(restartAt).toBeLessThan(links.length - 1);
   });
 
-  it('and the server path still has the check the agent path was measured against', () => {
-    // The finding is an ASYMMETRY. If the server's health curl ever went away,
-    // the two paths would agree again for the wrong reason.
-    expect(deploySh).toContain('curl -fsS ');
+  it('the server path calls verify-service.sh after the restart and before the health curl', () => {
+    // The server caller is not pinned by the agent-chain test above — it lives
+    // in a different quoted block (REMOTE_CMD, not AGENT_CMD). Without this,
+    // deleting `&& bash ~/ccrc/deploy/verify-service.sh ccrc.service` from
+    // deploy.sh, or reordering the curl in front of it to shave a few seconds
+    // off a deploy, left the whole server+agent+pwa suite green.
+    const remoteCmd = /REMOTE_CMD='([\s\S]*?)'/.exec(deploySh);
+    expect(remoteCmd, 'the server remote command is no longer a single quoted block').toBeTruthy();
+    const links = remoteCmd![1]!.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    const restartAt = links.findIndex((l) => l.includes('restart ccrc.service'));
+    const verifyAt = links.findIndex((l) => l.includes('verify-service.sh ccrc.service'));
+    const curlAt = links.findIndex((l) => l.startsWith('curl -fsS'));
+    expect(restartAt, 'the server path no longer restarts the unit').toBeGreaterThan(-1);
+    expect(verifyAt, 'verify-service.sh ccrc.service is missing from the server chain').toBeGreaterThan(-1);
+    expect(curlAt, 'the health curl is missing from the server chain').toBeGreaterThan(-1);
+    expect(verifyAt, 'verify-service.sh must run after the restart it is verifying')
+      .toBeGreaterThan(restartAt);
+    expect(curlAt, 'the health curl must run after verify-service.sh, not race it')
+      .toBeGreaterThan(verifyAt);
   });
 
-  it('the observation window is longer than the unit\'s RestartSec, or it cannot see a loop', () => {
+  it('the server path is the only one that also curls health — the agent has nothing to GET', () => {
+    // Before this task the asymmetry ran the OTHER way: only the agent chain
+    // called verify-service.sh and only the server chain curled. Now both
+    // chains share verify-service.sh (asserted above and by the agent-chain
+    // test), so a stale comment claiming "the server's health curl" is the
+    // asymmetry would be describing a tree that no longer exists. The
+    // surviving, correct asymmetry is narrower: only the server also curls,
+    // because — per verify-service.sh's own header — the agent binds a
+    // bearer-token WebSocket upgrade with nothing to GET.
+    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
+    expect(deploySh).toContain('curl -fsS ');
+    expect(agentCmd, 'the agent chain has no HTTP route to curl and must not carry one')
+      .not.toContain('curl');
+  });
+
+  it('the observation window is longer than EITHER unit\'s RestartSec, or it cannot see a loop', () => {
     // A cross-file invariant, because the two numbers live in different files
     // and only one of them looks like it matters. If RestartSec were raised to
-    // 10 and the window left at 5, every crash loop would pass with a stable
-    // PID and this whole gate would go quietly decorative.
+    // 10 on either unit and the window left at 5, every crash loop on that
+    // unit would pass with a stable PID and this whole gate would go quietly
+    // decorative. One verify-service.sh and one WINDOW default now guard BOTH
+    // units, so the invariant has to hold against both RestartSec values, not
+    // just the agent's — a `ccrc.service` RestartSec raised on its own, with
+    // nothing agent-side to trip, used to pass this suite.
     const verifySrc = readFileSync(VERIFY, 'utf8');
-    const unitSrc = readFileSync(path.join(deployDir, 'ccrc-agent.service'), 'utf8');
     const window = Number(/CCRC_VERIFY_WINDOW:-(\d+)/.exec(verifySrc)?.[1]);
-    const restartSec = Number(/^RestartSec=(\d+)/m.exec(unitSrc)?.[1]);
     expect(Number.isFinite(window), 'CCRC_VERIFY_WINDOW default not found').toBe(true);
-    expect(Number.isFinite(restartSec), 'RestartSec not found in ccrc-agent.service').toBe(true);
-    expect(window, `observation window ${window}s must exceed RestartSec ${restartSec}s`)
-      .toBeGreaterThan(restartSec);
+
+    for (const unitFile of ['ccrc-agent.service', 'ccrc.service']) {
+      const unitSrc = readFileSync(path.join(deployDir, unitFile), 'utf8');
+      const restartSec = Number(/^RestartSec=(\d+)/m.exec(unitSrc)?.[1]);
+      expect(Number.isFinite(restartSec), `RestartSec not found in ${unitFile}`).toBe(true);
+      expect(window, `observation window ${window}s must exceed ${unitFile}'s RestartSec ${restartSec}s`)
+        .toBeGreaterThan(restartSec);
+    }
+  });
+
+  it('both rsync lines exclude the mail token, so `ship_secret`\'s hardening is not undone by a plain copy', () => {
+    // Fix-round finding (deploy.sh rsyncs the secret to BOTH boxes at the
+    // local file's mode, three lines before `ship_secret` hardens the other
+    // copy). Both rsync lines push `deploy` as a source tree — `--exclude
+    // '*.env'` is there so `ship_env`'s secrets never ride along unhardened;
+    // `deploy/ccrc-mail.token` needs the identical treatment or it lands a
+    // second, unmanaged copy at whatever mode the local file happens to have,
+    // right next to the 0600-under-0700 copy `ship_secret` lands three lines
+    // later. Without this assertion the exclude can be dropped from either
+    // line — or from one but not the other — and every suite in this repo
+    // stays green; nothing else reads `deploy.sh`'s rsync invocations at all.
+    // Each invocation is a `\`-continued 3-line block (flags, this exclude,
+    // then the source list and destination) — match the WHOLE block, not one
+    // line, or the exclude living on its own continuation line would never
+    // be seen by a single-line check.
+    const rsyncBlocks = [...deploySh.matchAll(/rsync -az[\s\S]*?ccrc\//g)].map((m) => m[0]);
+    expect(rsyncBlocks.length, 'expected exactly two rsync invocations (agent path, server path)').toBe(2);
+    for (const block of rsyncBlocks) {
+      expect(block, `rsync invocation is missing --exclude 'ccrc-mail.token':\n${block}`)
+        .toContain("--exclude 'ccrc-mail.token'");
+    }
   });
 });

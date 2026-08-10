@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type FleetMsg, type FleetSession, type NotifyEvent } from '../../../shared/api';
+import { FLEET_PROTO, type FleetMsg, type FleetSession, type NotifyEvent, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -45,6 +45,11 @@ export interface FleetState {
    * surfaced retroactively in that case.
    */
   missed: NotifyEvent[];
+  /** Build 7's run board reads this. PR I fills it; PR J renders it. Shape-
+   *  validated only at the frame level (an array of runs), the same depth
+   *  `fleet` is: `reviveFleetSession`-grade revival for runs is PR J's problem
+   *  when it has a renderer to protect. */
+  runs: RunSummary[];
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -58,6 +63,9 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     return m as FleetMsg;
   }
   if (t === 'notice' && typeof (m as { message?: unknown }).message === 'string') {
+    return m as FleetMsg;
+  }
+  if (t === 'runs' && Array.isArray((m as { runs?: unknown }).runs)) {
     return m as FleetMsg;
   }
   // present-but-wrong-typed proto/min is rejected, not coerced — a `hello`
@@ -101,6 +109,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       notices: [],
       missed: [],
       blocked: false,
+      runs: [],
 
       connect() {
         if (socket) return;
@@ -144,17 +153,23 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               noticeSeq += 1;
               const notice: FleetNotice = { id: noticeSeq, message: msg.message };
               set((s) => ({ notices: [...s.notices, notice] }));
-            } else {
-              // hello: the server's own protocol generation, restated on
-              // every connect including reconnects. Blocking requires
-              // POSITIVE evidence (min > this build's own PROTO) — the
-              // absence-permits rule this pair shares with verbSupported.
-              // Fires the update check only on the RISING edge (newly
-              // blocked), not on every hello a still-blocked client keeps
-              // receiving from a server it cannot talk to yet.
+            } else if (msg.type === 'hello') {
+              // the server's own protocol generation, restated on every
+              // connect including reconnects. Blocking requires POSITIVE
+              // evidence (min > this build's own PROTO) — the absence-permits
+              // rule this pair shares with verbSupported. Fires the update
+              // check only on the RISING edge (newly blocked), not on every
+              // hello a still-blocked client keeps receiving from a server it
+              // cannot talk to yet.
               const blocked = msg.min > FLEET_PROTO;
               if (blocked && !get().blocked) requestUpdate();
               set({ blocked });
+            } else if (msg.type === 'runs') {
+              // Shape-validated only at the frame level (`asFleetMsg`'s own
+              // `Array.isArray` check) — PR J's renderer is what needs
+              // `reviveFleetSession`-grade per-row revival, once it exists to
+              // protect.
+              set({ runs: msg.runs });
             }
           },
           onState: (conn) => set({ conn }),

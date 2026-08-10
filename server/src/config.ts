@@ -1,5 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
+import { defaultCoordDbPath } from './coord/db.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -23,6 +24,14 @@ export interface CcrcConfig {
   vapidPublic: string | null;
   vapidPrivate: string | null;
   vapidSubject: string;
+  /** The coordination database, on THIS box (see coord/db.ts). Overridable so
+   *  a test can point at a fixture home without exporting CCRC_HOME. */
+  coordDbPath: string;
+  /** Where THIS box keeps its copy of the box token (coord/token.ts). The
+   *  fleet host keeps the same value at `~/.cc-secrets/ccrc-mail.token`;
+   *  neither box can read the other's, which is why there are two copies of
+   *  one secret and not one copy read twice. */
+  mailTokenPath: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
@@ -51,5 +60,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     vapidPublic: env.CCRC_VAPID_PUBLIC ?? null,
     vapidPrivate: env.CCRC_VAPID_PRIVATE ?? null,
     vapidSubject: env.CCRC_VAPID_SUBJECT ?? 'mailto:ccrc@server-box',
+    // `defaultCoordDbPath`, not a second inline `path.join` — the same string
+    // built twice, once tested and once not, is how a rename in one place
+    // silently opens a different (or brand-new, empty) database in the other.
+    coordDbPath: env.CCRC_COORD_DB ?? defaultCoordDbPath(home),
+    mailTokenPath: env.CCRC_MAIL_TOKEN_PATH ?? path.join(home, '.ccrc', 'mail.token'),
   };
 }

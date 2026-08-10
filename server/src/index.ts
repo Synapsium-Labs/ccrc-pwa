@@ -12,6 +12,9 @@ import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { KeyedQueue } from './inject/queue.js';
+import { readMailToken } from './coord/token.js';
+import { openCoordDb } from './coord/db.js';
+import { CoordStore } from './coord/store.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -29,6 +32,32 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
 // wired. Same directory as the push subscription store.
 const notifyLog = new NotifyLog(path.join(cfg.home, '.ccrc', 'notify-log.json'));
 const presence = new Presence();
+
+// D-57 (Task 11 review): this line said /api/notify AND /api/mail "accept
+// unauthenticated callers" — true the day it landed (eb9c88a), false since
+// D-39 (Task 7 fix round) made `checkMailToken(null, …)` answer
+// `'unconfigured'`, which BOTH mail gates (`routes.ts`'s ingress and ack)
+// treat as `verdict !== 'ok'` and refuse with 401 — in their own words,
+// "/api/mail fails shut on an unconfigured token, it does not fail open."
+// Only `/api/notify` still passes an unconfigured token through (`server.ts`
+// has no `'unconfigured'` arm on that gate, and logs nothing on that path
+// either). The two routes now have OPPOSITE postures on a missing token, and
+// this was the one line an operator would grep the journal for.
+const mailToken = readMailToken(cfg.mailTokenPath);
+if (mailToken === null) {
+  console.warn(`ccrc-server: no box token at ${cfg.mailTokenPath} — /api/notify accepts ` +
+    'unauthenticated callers (its one-deploy legacy tolerance), while /api/mail and ' +
+    '/api/mail/:id/ack FAIL SHUT and refuse every caller with 401 — the mail bus is dead, not ' +
+    'open. Ship a token with deploy.sh (see deploy/ccrc-mail.token.example).');
+}
+
+// Opened at the root, before the watcher: a database that cannot be migrated
+// must stop the process, not be discovered by the first sweep that touches
+// it. The throw is deliberately uncaught — `deploy.sh`'s `verify-service.sh
+// ccrc.service` (added this build) is what turns it into a failed deploy with
+// the journal tail attached, rather than a green deploy in front of a
+// three-second crash loop.
+const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
 
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
@@ -48,13 +77,13 @@ if (cfg.fleetMode === 'remote') {
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
     cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
-    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
   deps = {
     cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
-    spawnPty: attachPty, push, notifyLog, presence, queue,
+    spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
   };
 }
 

@@ -11,6 +11,7 @@ agent/dist/
 # local, gitignored env files with real tokens
 deploy/ccrc.env
 deploy/ccrc-agent.env
+deploy/ccrc-mail.token
 
 # migration working artifacts
 .extraction/

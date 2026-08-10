@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
@@ -10,6 +10,9 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { loadSnapshot } from '../src/fleetstate.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { NotifyLog } from '../src/notifylog.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -172,5 +175,222 @@ describe('fleet REST + WS', () => {
 
     expect(await loadSnapshot(cachePath)).toBeNull();
     rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  // — Task 10: the `runs` WS frame — additive, no FLEET_PROTO bump —
+  describe('the `runs` frame', () => {
+    it('a connecting client receives hello, then fleet, then runs — and a later transition re-emits it', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const opened = coord.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      const runs = await next();
+      expect(runs.type).toBe('runs');
+      expect(runs.runs.map((r: { id: number; state: string }) => [r.id, r.state])).toEqual([[opened.id, 'planned']]);
+
+      // A real transition (`coord.advance`, the ONLY writer of `runs.state` —
+      // `store.ts`'s own docstring) must re-emit the frame on the next tick.
+      coord.advance(opened.id, 'dispatched', 'coordinator');
+      await watcher.tick();
+      const pushed = await next();
+      expect(pushed.type).toBe('runs');
+      expect(pushed.runs[0].state).toBe('dispatched');
+
+      ws.close();
+    });
+
+    it('drops the frame from the broadcast when the JSON is unchanged', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      coord.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      });
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('runs');
+
+      // Nothing about the run changed — a second tick must NOT re-emit.
+      // Proven the same way the file's own `fleet` no-change test proves it:
+      // fire a distinguishable frame afterwards and assert IT is what
+      // arrives next, with no `runs` frame sitting in between.
+      await watcher.tick();
+      bus.emit('notice', { message: 'unrelated' });
+      const msg = await next();
+      expect(msg).toEqual({ type: 'notice', message: 'unrelated' });
+
+      ws.close();
+    });
+
+    it('a server with no coord sends no runs frame at all', async () => {
+      const deps = testDeps(home);
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+
+      await watcher.tick();
+      bus.emit('notice', { message: 'unrelated' });
+      // The very next frame is the notice — never a `runs` frame in between,
+      // on the initial connect OR on any later tick.
+      const msg = await next();
+      expect(msg).toEqual({ type: 'notice', message: 'unrelated' });
+
+      ws.close();
+    });
+
+    // Review finding 1. `coord.runs()` here sits inside a `.then()` callback
+    // with no `.catch` anywhere on its chain: an unguarded throw becomes an
+    // unhandled promise rejection and kills the WHOLE server, not just this
+    // one connecting socket. Closing the connection reproduces the same class
+    // of synchronous `node:sqlite` throw a full disk or a lock race would.
+    it('a broken coord.db degrades the cold-start runs frame instead of crashing the connect handler', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      coord.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      });
+      coord.db.close();
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      // Deliberately NOT ticked — this isolates the `/ws/fleet` connect
+      // handler's own guard from `FleetWatcher`'s (which has its own tests).
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      // No `runs` frame ever arrives — the read failed and was swallowed,
+      // never sent broken — and, more importantly, the SERVER survived: a
+      // second, unrelated frame still reaches this same socket afterward.
+      bus.emit('notice', { message: 'still alive' });
+      const msg = await next();
+      expect(msg).toEqual({ type: 'notice', message: 'still alive' });
+
+      expect(warnSpy.mock.calls.some(([line]) =>
+        String(line).includes('/ws/fleet cold-start runs() failed'))).toBe(true);
+
+      ws.close();
+    });
+  });
+
+  // — Task 10, orchestrator-added scope: the durable feed table behind
+  //   NotifyLog's in-memory ring —
+  describe('GET /api/feed', () => {
+    it('answers 501 without a coordination database', async () => {
+      app = await buildServer(testDeps(home));
+      const res = await app.inject({ method: 'GET', url: '/api/feed' });
+      expect(res.statusCode).toBe(501);
+      expect(res.json()).toEqual({ ok: false, error: 'not-configured' });
+    });
+
+    it('answers recorded events oldest-first, with the limit clamped', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      // Recorded directly through the store — the same call `FleetWatcher.
+      // pushOne` makes beside `notifyLog.record` — so this test does not
+      // depend on the notify lanes' own triggering mechanism to prove the
+      // route reads the table honestly.
+      for (let i = 1; i <= 3; i++) {
+        coord.recordFeedEvent('epoch-1', { seq: i, at: 1000 + i, kind: 'done', sessionId: 'cc-a', title: `t${i}`, body: '' });
+      }
+      app = await buildServer({ ...testDeps(home), coord });
+
+      const all = await app.inject({ method: 'GET', url: '/api/feed' });
+      expect(all.statusCode).toBe(200);
+      expect((all.json() as { events: { seq: number }[] }).events.map((e) => e.seq)).toEqual([1, 2, 3]);
+
+      // Clamped to the newest N, oldest-first within that window — never the
+      // OLDEST N (a limited read must still show what just happened).
+      const limited = await app.inject({ method: 'GET', url: '/api/feed?limit=2' });
+      expect((limited.json() as { events: { seq: number }[] }).events.map((e) => e.seq)).toEqual([2, 3]);
+    });
+
+    it('survives a restart: the durable table still answers once the ring is empty', async () => {
+      const dbPath = path.join(home, '.ccrc', 'coord.db');
+      const logPath = path.join(home, '.ccrc', 'notify-log.json');
+
+      // Round 1: a NotifyLog records one event and flushes its watermark;
+      // the SAME event is written into the durable table, exactly as
+      // `FleetWatcher.pushOne` does, beside each other, from the one call.
+      const logA = new NotifyLog(logPath);
+      await logA.load();
+      const coordA = new CoordStore(openCoordDb(dbPath));
+      const recorded = logA.record({ kind: 'mail', sessionId: 'cc-a', title: 'm1', body: 'b1' });
+      await logA.flush();
+      coordA.recordFeedEvent(logA.epoch, recorded);
+
+      const appA = await buildServer({ ...testDeps(home), coord: coordA });
+      const resA = await appA.inject({ method: 'GET', url: '/api/feed' });
+      expect((resA.json() as { events: unknown[] }).events).toHaveLength(1);
+      await appA.close();
+      coordA.db.close();
+
+      // Round 2 ("restart"): a FRESH CoordStore over the SAME coord.db file
+      // still answers `GET /api/feed` — the archive is the point.
+      const coordB = new CoordStore(openCoordDb(dbPath));
+      const appB = await buildServer({ ...testDeps(home), coord: coordB });
+      const resB = await appB.inject({ method: 'GET', url: '/api/feed' });
+      const eventsB = (resB.json() as { events: { seq: number; title: string }[] }).events;
+      expect(eventsB.map((e) => e.title)).toEqual(['m1']);
+      await appB.close();
+
+      // A FRESH NotifyLog over the SAME notify-log.json — the ring
+      // `pushOne` reads — is the OTHER half of the same restart, and it is
+      // NOT durable the way the table above is: `load()` adopts the
+      // persisted {epoch,seq} pair, but the in-memory ring itself starts
+      // empty, so a client that watermarked seq 0 (before this event was
+      // ever recorded) cannot be proven caught up any more and resyncs to
+      // an empty list — exactly the gap `feed_events` exists to answer.
+      const logB = new NotifyLog(logPath);
+      await logB.load();
+      expect(logB.epoch).toBe(logA.epoch);       // the watermark survived...
+      const caughtUp = logB.catchUp(logB.epoch, 0);
+      expect(caughtUp.resync).toBe(true);         // ...the RING did not
+      expect(caughtUp.events).toEqual([]);
+    });
   });
 });

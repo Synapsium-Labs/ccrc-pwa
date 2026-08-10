@@ -468,6 +468,43 @@ describe('fleet store', () => {
     store.getState().disconnect();
   });
 
+  // Build 7 / Task 10: additive, so no FLEET_PROTO bump — an already-deployed
+  // PWA must drop this frame exactly like `{type:'mystery'}` above, and this
+  // build must accept it once it knows the shape.
+  describe('the `runs` frame', () => {
+    const runSummary = (id: number, state: string) => ({
+      id, program: 'build7', programTitle: 'Fleet coordination', wave: 1, waveOf: 3,
+      project: 'ccrc-pwa', sessionId: 'cc-a', workspace: 'cc-a-ws', branch: 'build7/wave1',
+      state, resumed: false, clearedAt: null, openedAt: 1, dispatchedAt: 2, closedAt: null,
+      handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+    });
+
+    it('accepts a well-formed runs frame and stores it', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      const runs = [runSummary(1, 'working')];
+      lastSocket().message(JSON.stringify({ type: 'runs', runs }));
+      expect(store.getState().runs).toEqual(runs);
+      store.getState().disconnect();
+    });
+
+    it('rejects a runs frame whose `runs` is not an array — the property old clients depend on', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      // Same shape as `{type:'mystery'}` above: an unknown/malformed frame is
+      // dropped SILENTLY, never thrown — that silence is exactly what lets an
+      // already-deployed PWA sit in front of a newer server unharmed. Assert
+      // it explicitly here so nobody "helpfully" makes the parser throw.
+      expect(() => lastSocket().message(JSON.stringify({ type: 'runs' }))).not.toThrow();
+      expect(store.getState().runs).toEqual([]);
+      store.getState().disconnect();
+    });
+  });
+
   // — the dormant handshake (Rider E) —
   describe('the hello handshake', () => {
     afterEach(() => setUpdater(() => {})); // never leak a test's spy into the next file's module state

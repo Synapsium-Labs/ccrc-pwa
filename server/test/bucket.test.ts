@@ -125,7 +125,7 @@ describe('sessionBucket', () => {
 
     const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
     const waitingHookStates = new Map<string, HookState>([
-      ['claude2-MekWarLive', { state: 'waiting', updatedAt: 1784600000000, ask: null, subagents: [], interrupted: false }],
+      ['claude2-MekWarLive', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false }],
     ]);
     const withWaitingHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,

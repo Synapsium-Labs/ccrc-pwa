@@ -257,3 +257,27 @@ describe('one sessionLabel', () => {
     expect(src).toMatch(/import \{ sessionLabel \} from '\.\/sessionLabel'/);
   });
 });
+
+describe('Build 7 nouns', () => {
+  it('defines RunState exactly once, in shared/', () => {
+    const hits = ALL.filter((f) => /^\s*export type RunState\b/m.test(readFileSync(f, 'utf8')));
+    expect(hits.map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('defines MAIL_REJECT_CODES exactly once, in shared/', () => {
+    const hits = ALL.filter((f) => /^\s*export const MAIL_REJECT_CODES\b/m.test(readFileSync(f, 'utf8')));
+    expect(hits.map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  // D-7: `tasks` is Claude Code's TodoWrite vocabulary and belongs to it. A
+  // coordination type that spells itself Task is the collision spec:40-44
+  // exists to prevent, and it would land in the same union, the same store and
+  // the same strip.
+  it('does not grow a second Task* noun for work items', () => {
+    for (const f of ALL) {
+      const src = readFileSync(f, 'utf8');
+      expect(/\b(?:interface|type)\s+(?:RunTask|ProgramTask|CoordTask)\b/.test(src),
+        `${rel(f)} names a work item a Task — see the plan's D-7`).toBe(false);
+    }
+  });
+});

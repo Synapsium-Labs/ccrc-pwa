@@ -30,9 +30,13 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
+import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
+import { registerCoordRoutes } from './coord/routes.js';
+import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountUsage, type FleetMsg, type FleetSession, type SessionClientMsg, type SessionStreamMsg, type TaskItem,
+  type AccountUsage, type FleetMsg, type FleetSession, type RunSummary, type SessionClientMsg,
+  type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
 
 const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
@@ -99,6 +103,17 @@ export interface Deps {
   /** Which sessions a human is currently looking at, so `FleetWatcher` can
    *  suppress a push for the pane already on screen. */
   presence?: Presence;
+  /** The box token every fleet->server POST must carry (coord/token.ts).
+   *  Optional the same way `push`/`notifyLog` are: a box with none configured
+   *  keeps working, unauthenticated, and says so once at boot. NOT optional the
+   *  way `queue` refuses to be — there is no fallback here that could quietly
+   *  construct a second, different token. */
+  mailToken?: string | null;
+  /** The coordination database (Build 7). Optional exactly like `push` and
+   *  `notifyLog`: absent means the coord routes answer 501 and the mail lane
+   *  never runs, which is what a box with no coordination configured should
+   *  do. */
+  coord?: CoordStore;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -244,19 +259,76 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const onFleet = (sessions: FleetSession[]) =>
       socket.send(JSON.stringify({ type: 'fleet', sessions } satisfies FleetMsg));
     const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n } satisfies FleetMsg));
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()).then(onFleet);
+    const onRuns = (runs: RunSummary[]) =>
+      socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
+    // The `runs` cold start is chained AFTER `fleet`'s own, not fired
+    // alongside it: `fleet` is itself async (`assembleFleet` awaits tmux/IO),
+    // while a `coord.runs()` read is synchronous, so firing both
+    // independently would race — and often WIN, sending `runs` before
+    // `fleet` ever resolves. Chaining pins the wire order every client (and
+    // `fleetws.test.ts`) can rely on: hello, fleet, runs.
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()).then((sessions) => {
+      onFleet(sessions);
+      // Cold start for THIS socket, same reasoning as the `fleet` push just
+      // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
+      // emitRuns`'s own byte-equality guard), so a client connecting into a
+      // quiet fleet would otherwise see no runs until one moved. No `coord`
+      // -> no frame at all, same as every other coord-gated surface here.
+      //
+      // GUARDED (review finding 1): `coord.runs()` is a synchronous
+      // `node:sqlite` read, and this `.then()` callback has no `.catch`
+      // anywhere on its chain — an unguarded throw here (a full disk, a
+      // second connection holding coord.db's write lock) becomes an
+      // unhandled promise rejection and kills the server for every socket,
+      // not just the one client connecting. Skipping the cold-start `runs`
+      // frame is the honest degrade: the socket still gets `hello`/`fleet`,
+      // and the next real transition's `FleetWatcher.emitRuns` broadcast
+      // reaches it exactly as it would any other already-connected client.
+      if (deps.coord) {
+        try { onRuns(deps.coord.runs().map(toRunSummary)); }
+        catch (err) {
+          console.warn(`ccrc-server: /ws/fleet cold-start runs() failed (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+    });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
+    bus.on('runs', onRuns);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
+      bus.off('runs', onRuns);
     });
   });
 
   // Swap-notice ingestion: ccd's ~/.cc-sessions/notify.sh hook POSTs here.
   // Every notice fans out fleet-wide; a `cc swap:` message also targets the
   // moved session's stream so its chat surfaces the account change inline.
+  //
+  // AUTHENTICATED SINCE BUILD 7 (operator ruling, spec:150-155). This was the
+  // one box->server ingress carrying zero identity while the server
+  // regex-routed its body INTO a session's chat stream — see `checkMailToken`
+  // for the one-deploy-generation tolerance and for when it comes out.
   app.post('/api/notify', async (req, reply) => {
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    if (verdict === 'bad') {
+      // `Fastify({ logger: false })` (above) means a bare 401 leaves NOTHING
+      // in the journal — three silent layers stack on top of it too
+      // (notify.sh's own `|| true`, and ccd invoking it with its output
+      // redirected to `/dev/null`), so this line is the only place a wrong
+      // token — a stray trailing space, a stale copy after a rotation — ever
+      // becomes visible to an operator, the same way `legacy` already is
+      // below. Never logs the presented value: that would put the secret
+      // (or a caller's guess at it) in a log file readable by anyone who can
+      // read the log.
+      console.warn('ccrc-server: /api/notify refused a request with the WRONG box token (401) — ' +
+        'check that deploy/ccrc-mail.token matches on both boxes byte-for-byte');
+      return reply.code(401).send({ ok: false, error: 'unauthenticated' });
+    }
+    if (verdict === 'legacy') {
+      console.warn('ccrc-server: /api/notify accepted a request with NO box token (legacy ' +
+        'tolerance, one deploy generation) — deploy the agent to ship the new notify.sh');
+    }
     const body = (req.body ?? {}) as { message?: unknown };
     if (typeof body.message !== 'string') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
@@ -267,6 +339,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (swap) bus.emit(`session:${swap[1]}`, { type: 'notice', message });
     return { ok: true };
   });
+
+  // Build 7 coordination: mail ingress + ack (this build) and run routes
+  // (Task 9) — registered from their own module because six-plus routes
+  // sharing one token+attribution gate inline here would be a second copy of
+  // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
+  // the same shape as the push routes and `/api/notifications/catchup` above.
+  registerCoordRoutes(app, deps, bus);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
