@@ -1128,11 +1128,15 @@ export interface FleetHealth {
  * A missing entry in the FIRST of those killed chat for six of `claude-dev0`'s
  * 24 sessions, silently, for the account's entire life (`resolve()` in
  * `sessionws.ts` returned null; the client only ever saw "unknown session" —
- * indistinguishable from a reaped one). A hand-written, unordered copy in the
- * SECOND attributed a live session to the wrong account: `idHomeWrapper`
- * prefix-matched `claude-` before it ever tried `claude-dev0-`, so
- * `claude-dev0-quiet-basin` came back `claude` (`fleet.test.ts` pins the
- * corrected answer). Both are the same root defect — a concept enumerated by
+ * indistinguishable from a reaped one) — that one IS an observed production
+ * incident, fixed reactively before this roster existed. A hand-written,
+ * unordered copy in the SECOND would have attributed a session to the wrong
+ * account: `idHomeWrapper` prefix-matched `claude-` before it ever tried
+ * `claude-dev0-`, so `claude-dev0-quiet-basin` came back `claude`
+ * (`fleet.test.ts` pins the corrected answer). That second one is
+ * prophylactic, not observed — `claude-dev0` is not ccd-valid, so ccd cannot
+ * mint an id under that prefix today (see `fleet.ts`'s own docstring on
+ * `idHomeWrapper`). Both close the same root defect — a concept enumerated by
  * hand in N places fails the moment N+1 exists — with one fix: N=1.
  *
  * `shared/` imports nothing, not even `node:*` (the architecture doc's L0

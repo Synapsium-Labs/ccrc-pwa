@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PR_REASONS, isPrReason } from '../../shared/api.js';
+import { PR_REASONS, isPrReason, ACCOUNTS } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -287,12 +287,18 @@ describe('Build 7 nouns', () => {
 // type and no home, enumerated by hand in eight places across three languages.
 // `shared/api.ts`'s `ACCOUNTS` is now the one TypeScript home for it.
 describe('the account roster — one ACCOUNTS map, shared/api.ts', () => {
-  const WRAPPER_NAMES = ['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0'];
+  // Derived from the roster itself, NOT hand-typed — a hand-typed copy here
+  // would be the scanner that exists to prevent hand-typed copies being
+  // itself one: a 6th account added to `ACCOUNTS` (say `claude-dev1`) and
+  // then restated as `['claude-dev1', 'claude2']` somewhere under the four
+  // roots must score a hit, and a scanner still matching against a five-name
+  // literal frozen at write time would stay green while that drift reopened.
+  const WRAPPER_NAMES = Object.keys(ACCOUNTS);
 
-  // The fingerprint every historical copy shared: two or more of the five
-  // wrapper names quoted inside the SAME `[...]` array literal — fleet.ts's
-  // old `idHomeWrapper` prefix list, server.ts's old `ACCOUNT_ORDER`, pwa's
-  // old `KNOWN_WRAPPERS`, shared/api.ts's own old `HOME_ABLE_WRAPPERS`.
+  // The fingerprint every historical copy shared: two or more wrapper names
+  // quoted inside the SAME `[...]` array literal — fleet.ts's old
+  // `idHomeWrapper` prefix list, server.ts's old `ACCOUNT_ORDER`, pwa's old
+  // `KNOWN_WRAPPERS`, shared/api.ts's own old `HOME_ABLE_WRAPPERS`.
   // `ACCOUNTS`' own keys never trip this: they are bare object-literal
   // property names (`claude: {`), never inside square brackets, and a
   // roster entry's `idPrefix`/`configDirSuffix` VALUES are single strings,

@@ -12,20 +12,40 @@
 // and checks its answers against the roster, every suite run, rather than a
 // comment asking a future author not to.
 //
+// EVERY comparison below is bidirectional (a `toEqual` between two sets),
+// not "each roster member gets a matching ccd answer" — that weaker form was
+// this file's own first draft, and it has a hole: it only ever asks ccd
+// about wrappers `ACCOUNTS` already knows, so a lane ccd grows on its own
+// (`_is_valid_wrapper`'s established idiom is a literal appended after
+// `${VALID_WRAPPERS[@]}`, plus new `_cfg_dir`/`_id_wrapper` case arms, per
+// `gpt`'s own precedent — never touching `VALID_WRAPPERS` itself) is invisible
+// to it. Every describe below instead PARSES OR ENUMERATES ccd's own answer
+// space — the full arm set of a case statement, the full token list of a for
+// loop — and compares that set, both directions, against
+// `WRAPPERS.filter(w => ACCOUNTS[w].ccdValid)` (or `.homeAble` /
+// `.hooksAble`, per map). A wrapper ccd knows and the roster does not now
+// fails exactly as loudly as the reverse.
+//
 // `_cfg_dir`, `_id_wrapper`, `VALID_WRAPPERS` and `_is_valid_wrapper` are
 // executed for real, via the isolated-HOME `sh()` idiom every other ccd test
 // file in this directory uses (see ccdWsHelpers.ts's own docstring for why
-// HOME is the isolation boundary and `cwd: home` matters).
+// HOME is the isolation boundary and `cwd: home` matters). Where a function's
+// full answer SPACE (not just its answer to one input) is needed, `declare -f
+// <name>` dumps its body as text and the case-statement arms are parsed out
+// of that dump — still executed bash, just read back rather than probed input
+// by input.
 //
-// `install-session-hooks.sh`'s default `homes` array is the one exception:
-// invoked with no `--homes` argv it falls back to four literal
-// `"$HOME/.claude*"` paths, and even though every entry is skipped when the
-// directory doesn't exist (`[[ -d "$dir" ]] || continue` — so running it
-// under a fixture HOME would in fact be inert), there is no way to run it
-// and OBSERVE what its default list was without either parsing the source or
-// instrumenting the script itself. Per this task's own instruction ("if a
-// bash copy cannot be executed safely in a test, assert on its parsed source
-// text instead and SAY SO") — this asserts on the parsed source text.
+// `install-session-hooks.sh`'s default `homes` array and
+// `statusline-command.sh`'s two label maps are the exceptions: neither can be
+// USEFULLY executed in a fixture test (installing hooks needs a `--homes`-less
+// invocation whose only observable effect is which directories it touches,
+// and every one is skipped when it doesn't exist under a fixture HOME, so
+// running it is inert rather than revealing; the statusline script needs a
+// real `CLAUDE_CONFIG_DIR` pointed at by the process IT is the statusline of,
+// plus JSON piped to its stdin, to produce anything at all). Per this
+// project's own instruction ("if a bash copy cannot be executed safely in a
+// test, assert on its parsed source text instead and SAY SO") — both assert
+// on parsed source text, and both comparisons are still bidirectional sets.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -36,6 +56,13 @@ import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const WRAPPERS = Object.keys(ACCOUNTS) as Wrapper[];
+
+/** Set equality for two string lists, order-independent and dedup'd — every
+ *  comparison in this file is "the same SET", never "the same order", since
+ *  bash's case-arm declaration order and `ACCOUNTS`' declaration order have
+ *  no reason to agree (and `VALID_WRAPPERS`'s own describe below, which DOES
+ *  care about order, uses a plain `toEqual` instead). */
+const sortedSet = (xs: readonly string[]): string[] => [...new Set(xs)].sort();
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-wrapper-roster-'); });
@@ -51,10 +78,32 @@ describe('ccd VALID_WRAPPERS agrees with ACCOUNTS.homeAble', () => {
 
 describe('ccd _is_valid_wrapper agrees with ACCOUNTS.ccdValid', () => {
   it('accepts exactly the ccd-valid wrappers, and rejects every other one', () => {
+    // roster -> ccd: every wrapper ACCOUNTS knows gets asked, and its answer
+    // must match `.ccdValid`. This alone is the weaker, one-directional form
+    // (see file header) — the set-equality test right below is what closes
+    // the other direction.
     for (const w of WRAPPERS) {
       const ok = h.sh(`_is_valid_wrapper '${w}' && echo yes || echo no`) === 'yes';
       expect(ok, w).toBe(ACCOUNTS[w].ccdValid);
     }
+  });
+
+  it("ccd -> roster: _is_valid_wrapper's own accepted set is exactly ACCOUNTS' ccd-valid set", () => {
+    // `_is_valid_wrapper`'s body (ccd:104) is `for v in "${VALID_WRAPPERS[@]}"
+    // gpt; do ... done` — VALID_WRAPPERS (home-able) plus zero or more literal
+    // EXTRAS appended after it, which is the established, reviewed idiom for
+    // adding an opt-in (non-home-able) ccd-valid lane, per `gpt`'s own
+    // precedent. Parsing that literal tail — rather than only ever asking
+    // `_is_valid_wrapper` about wrappers `ACCOUNTS` already lists — is what
+    // catches a lane ccd grows that the roster never heard of.
+    const homeAble = h.sh('echo "${VALID_WRAPPERS[@]}"').split(/\s+/).filter(Boolean);
+    const body = h.sh('declare -f _is_valid_wrapper');
+    const m = /for v in "\$\{VALID_WRAPPERS\[@\]\}"([^;]*);/.exec(body);
+    expect(m, "_is_valid_wrapper's `for v in \"${VALID_WRAPPERS[@]}\" ...;` line").not.toBeNull();
+    const extras = (m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean);
+    const got = sortedSet([...homeAble, ...extras]);
+    const want = sortedSet(WRAPPERS.filter((w) => ACCOUNTS[w].ccdValid));
+    expect(got).toEqual(want);
   });
 });
 
@@ -70,6 +119,20 @@ describe('ccd _cfg_dir agrees with ACCOUNTS.configDirSuffix', () => {
       expect(got, w).toBe(want);
     }
   });
+
+  it("ccd -> roster: _cfg_dir's own case-arm set is exactly ACCOUNTS' ccd-valid set", () => {
+    // Every arm in `_cfg_dir`'s case statement is a BARE wrapper name
+    // (`claude)`, `claude2)`, ... — never a `-*)` glob, that's `_id_wrapper`'s
+    // shape below — so the pattern word IS the wrapper name directly.
+    // Anchored to a whole trimmed line (`declare -f` puts one case arm per
+    // line) so this can never also match an `echo "$HOME/..."` body line.
+    const body = h.sh('declare -f _cfg_dir');
+    const arms = [...body.matchAll(/^\s*([a-z][a-z0-9-]*)\)\s*$/gm)].map((m) => m[1]);
+    expect(arms.length).toBeGreaterThan(0); // the parse itself must find something, or this vacuously passes
+    const got = sortedSet(arms);
+    const want = sortedSet(WRAPPERS.filter((w) => ACCOUNTS[w].ccdValid));
+    expect(got).toEqual(want);
+  });
 });
 
 describe('ccd _id_wrapper agrees with ACCOUNTS.idPrefix, for the wrappers ccd knows', () => {
@@ -81,8 +144,23 @@ describe('ccd _id_wrapper agrees with ACCOUNTS.idPrefix, for the wrappers ccd kn
     }
   });
 
+  it("ccd -> roster: _id_wrapper's own set of possible answers is exactly ACCOUNTS' ccd-valid set", () => {
+    // Each `-*)` arm's body is `echo <wrapper>` on the very next line — that
+    // echoed token, not the glob prefix, is ccd's actual ANSWER for an id
+    // shaped that way, so it's what this compares against the roster (rather
+    // than relying on every `idPrefix` happening to equal `wrapper + '-'`,
+    // which is true of every member today but isn't a rule this file should
+    // assume elsewhere).
+    const body = h.sh('declare -f _id_wrapper');
+    const arms = [...body.matchAll(/^\s*[a-z][a-z0-9-]*-\*\)\s*\n\s*echo\s+(\S+)\s*$/gm)].map((m) => m[1]);
+    expect(arms.length).toBeGreaterThan(0);
+    const got = sortedSet(arms);
+    const want = sortedSet(WRAPPERS.filter((w) => ACCOUNTS[w].ccdValid));
+    expect(got).toEqual(want);
+  });
+
   // The bash-side twin of the exact bug `idHomeWrapper` (server/src/fleet.ts)
-  // fixed in TypeScript: ccd's own `_id_wrapper` case statement has no
+  // guards against: ccd's own `_id_wrapper` case statement has no
   // `claude-dev0-*` branch, so an id under that prefix falls through to the
   // shorter `claude-*` branch and comes back `claude` — still true today,
   // BY DESIGN of this increment (constraint D: the bash is not touched).
@@ -107,5 +185,53 @@ describe('install-session-hooks.sh default homes agrees with ACCOUNTS.hooksAble'
     const got = [...(m as RegExpExecArray)[1].matchAll(/"\$HOME\/([^"]+)"/g)].map((mm) => mm[1]);
     const want = WRAPPERS.filter((w) => ACCOUNTS[w].hooksAble).map((w) => ACCOUNTS[w].configDirSuffix);
     expect(got).toEqual(want);
+  });
+});
+
+describe('ccd statusline-command.sh label maps agree with ACCOUNTS', () => {
+  // Not executed — same reason as install-session-hooks.sh above: the script
+  // needs a real CLAUDE_CONFIG_DIR (it reads its OWN process's env, not an
+  // argv) plus a JSON stdin payload to produce anything at all. Parses the
+  // two `case "$cfg" in ... esac` blocks instead — one picks the human-facing
+  // `acct=` label (segment 0, the account chip), the other the `lbl=`
+  // filename fragment `~/.cc-limits/<lbl>.json` is written under.
+  //
+  // Both are verbatim duplicates of roster fields for the home-able three:
+  // `configDirSuffix -> label` for `acct=`, `configDirSuffix -> the roster
+  // KEY itself` for `lbl=`. `lbl=` is the load-bearing one — `lbl=""` (the
+  // `*)` fallback) skips the telemetry write entirely, so a home-able account
+  // missing from this map reports no usage, ever, and `projectHome`
+  // (server/src/limits.ts) then scores it the minimum: the `+` button
+  // projects every new workspace onto the account whose usage is UNKNOWN,
+  // forever.
+  const src = readFileSync(path.join(ccrcRoot, 'ccd', 'statusline-command.sh'), 'utf8');
+  const wantSuffixes = sortedSet(
+    WRAPPERS.filter((w) => ACCOUNTS[w].homeAble).map((w) => ACCOUNTS[w].configDirSuffix));
+  const suffixToWrapper = new Map(WRAPPERS.map((w) => [ACCOUNTS[w].configDirSuffix, w] as const));
+
+  it('the acct= display-label map (segment 0) covers exactly the home-able config dirs, with matching labels', () => {
+    const arms = [...src.matchAll(/"\$HOME\/([^"]+)"\)\s+acct="([^"]*)"\s*;;/g)]
+      .map((mm) => [mm[1], mm[2]] as const);
+    expect(arms.length).toBeGreaterThan(0);
+    expect(sortedSet(arms.map(([suffix]) => suffix))).toEqual(wantSuffixes);
+    for (const [suffix, raw] of arms) {
+      const w = suffixToWrapper.get(suffix);
+      expect(w, suffix).toBeDefined();
+      // Strip the ANSI colour wrapper (`${CYAN}...${RESET}`) — the label
+      // text itself is what must match the roster, not the colour it's
+      // painted in (that's `colorVar`, a PWA-only concern with no bash twin).
+      const label = raw.replace(/^\$\{[A-Z]+\}/, '').replace(/\$\{RESET\}$/, '');
+      expect(label, suffix).toBe(ACCOUNTS[w as Wrapper].label);
+    }
+  });
+
+  it('the lbl= telemetry-filename map covers exactly the home-able config dirs, with lbl equal to the roster key', () => {
+    const arms = [...src.matchAll(/"\$HOME\/([^"]+)"\)\s+lbl="([^"]*)"\s*;;/g)]
+      .map((mm) => [mm[1], mm[2]] as const);
+    expect(arms.length).toBeGreaterThan(0);
+    expect(sortedSet(arms.map(([suffix]) => suffix))).toEqual(wantSuffixes);
+    for (const [suffix, lbl] of arms) {
+      expect(lbl, suffix).toBe(suffixToWrapper.get(suffix));
+    }
   });
 });

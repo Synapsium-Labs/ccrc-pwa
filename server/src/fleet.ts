@@ -63,13 +63,21 @@ const BY_ID_PREFIX_LENGTH_DESC: readonly Wrapper[] =
  * (older sessions; ccd only started writing `home` recently).
  *
  * Longest-`idPrefix`-wins over `ACCOUNTS`, in `BY_ID_PREFIX_LENGTH_DESC`
- * order, is the entire fix for a live bug: this used to prefix-match a
- * hand-typed, unordered array that did not even MENTION `claude-dev0`, so
- * `claude-dev0-quiet-basin` fell through to the bare `'claude-'` branch and
- * came back `claude` — a session attributed to the wrong account
- * (`GET /api/fleet` in production reported `wrapper: "claude-dev0"`,
- * `home: "claude"` for exactly this id shape). `fleet.test.ts` pins the
- * corrected answer.
+ * order, replaces a hand-typed, unordered prefix array that did not even
+ * MENTION `claude-dev0`, under which `claude-dev0-quiet-basin` would have
+ * fallen through to the bare `'claude-'` branch and come back `claude` — a
+ * session attributed to the wrong account.
+ *
+ * Prophylactic, not a fix for an observed misattribution: `claude-dev0-*`
+ * cannot appear in the registry today. `ACCOUNTS['claude-dev0'].ccdValid`
+ * is `false`, and the cross-language fixture test
+ * (`wrapper-roster-fixture.test.ts`) pins that ccd's own `_is_valid_wrapper`
+ * rejects `claude-dev0` — so nothing under `ccd/` can mint an id with that
+ * prefix. What this ordering keeps true is that IF `claude-dev0` (or any
+ * future wrapper whose `idPrefix` is a strict extension of another member's)
+ * ever becomes ccd-valid, the longest match still wins rather than silently
+ * reproducing the old bug. `fleet.test.ts:40` pins the corrected answer as a
+ * regression guard, not as a record of a live incident.
  *
  * Falls back to `'claude'` for an id with no wrapper prefix at all — a main
  * checkout's id is the bare project name, never `<wrapper>-<slug>`.
