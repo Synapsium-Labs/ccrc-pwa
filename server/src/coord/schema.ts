@@ -138,7 +138,19 @@ export const MIGRATIONS: readonly string[] = [
     deliveredAt   INTEGER,
     ingestedAt    INTEGER,                -- the UserPromptSubmit edge (spec:178-180)
     ackedAt       INTEGER,
-    rejectCode    TEXT
+    rejectCode    TEXT,
+    replayCount   INTEGER NOT NULL DEFAULT 0   -- review finding 20: successful REPLAYS (a send
+                                                -- onto an already-delivered row), counted
+                                                -- separately from attempts (SEND FAILURES
+                                                -- only) -- the ceiling sweepMail uses to park a
+                                                -- delivery that keeps succeeding but is never
+                                                -- acked, since MAIL_MAX_ATTEMPTS structurally
+                                                -- cannot apply to a send that never fails. Landed
+                                                -- in v1 rather than a migration 2 for the same
+                                                -- reason D-1's runs.clearedAt amendment and Task
+                                                -- 10's feed_events both give: coord.db has shipped
+                                                -- to no box yet, so amending v1 before it has ever
+                                                -- been observed costs nothing.
   );
   -- dueDeliveries (deviation D-10, found in Task 3 review) reads BOTH arms
   -- through this one index, not two. D-10 as first landed added a SECOND

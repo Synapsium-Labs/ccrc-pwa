@@ -1,9 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import {
-  isMailDeliveryState, isNotifyKind, isProgramState, isRunState, RUN_TRANSITIONS,
-  type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type NotifyEvent,
-  type ProgramState, type RunItemTally, type RunState, type RunSummary, type WorkItemState,
+  isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, RUN_TRANSITIONS,
+  type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type MailSummary,
+  type NotifyEvent, type ProgramState, type RunItemTally, type RunState, type RunSummary,
+  type WorkItemState,
 } from '../../../shared/api.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:855-858). Re-declared as a TYPE
@@ -98,6 +99,27 @@ export class CoordStore {
       if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
         return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
       }
+      // Idempotent retry (fix — review findings 19/32): a run already open,
+      // `planned`, and claimed by the SAME coordinator for this exact
+      // (program, wave, waveOf) is REUSED rather than duplicated. Without
+      // this, an HTTP retry after a client timeout on a successful open, or
+      // after a transient `ws-hold` 501/502 on the wave N>=2 reclaim path
+      // below (the row is already committed by the time that call runs),
+      // minted a SECOND `planned` row pointing at the same claim — two
+      // dispatchable runs for one piece of work, and (finding 32)
+      // `programOpenRunCount` counting the orphan forever, wedging
+      // `resolveCoordinator(null)`'s "exactly one active program" guard the
+      // same way D-26/D-51 were filed to prevent. Scoped to `state =
+      // 'planned'`: a run that has already dispatched, closed, or failed is
+      // never a stand-in for a fresh open call naming the same wave.
+      const dup = this.db.prepare(
+        "SELECT id, state FROM runs WHERE program = ? AND wave = ? AND (waveOf IS ?) " +
+        "AND claimedBy = ? AND state = 'planned' ORDER BY id LIMIT 1",
+      ).get(input.program, input.wave, input.waveOf, input.claimedBy) as
+        { id: number; state: string } | undefined;
+      if (dup) {
+        return { id: dup.id, program: input.program, state: isRunState(dup.state) ? dup.state : 'unknown' };
+      }
       const now = Date.now();
       this.db.prepare(
         'INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?) ' +
@@ -122,24 +144,99 @@ export class CoordStore {
    * kind of claim this repo has already had to retract elsewhere.
    */
   advance(runId: number, to: RunState, causedBy: string, detail?: string): AdvanceResult {
+    return tx(this.db, () => this.advanceInner(runId, to, causedBy, detail));
+  }
+
+  /** `advance`'s body, WITHOUT its own `tx()` wrapper — split out (fix,
+   *  review finding 25/D-25's own wedge, reached a second way) so `closeRun`
+   *  below can commit `closing` and the final state as ONE transaction
+   *  instead of two independent ones. `DatabaseSync`'s transactions do not
+   *  nest (a second `BEGIN` while one is open throws), so a caller that needs
+   *  atomicity across more than one state write must call THIS, inside its
+   *  own single `tx()`, never the public `advance` twice. */
+  private advanceInner(runId: number, to: RunState, causedBy: string, detail?: string): AdvanceResult {
+    const row = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as
+      { state: string } | undefined;
+    if (!row) return { ok: false as const, error: 'unknown-run' as const };
+    const from = isRunState(row.state) ? row.state : 'unknown';
+    if (!(RUN_TRANSITIONS[from] as readonly string[]).includes(to)) {
+      return { ok: false as const, error: 'bad-transition' as const, from, to };
+    }
+    const now = Date.now();
+    this.db.prepare(
+      "UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ('done','failed') THEN ? ELSE closedAt END " +
+      'WHERE id = ?',
+    ).run(to, to, now, runId);
+    this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, now, from, to, causedBy, detail ?? null);
+    return { ok: true as const, from, to };
+  }
+
+  /**
+   * The WHOLE close-time commit, as ONE transaction (fix — review finding 25,
+   * D-25's wedge reached through a different door than the one D-25 itself
+   * closed): the close route used to run `advance(id,'closing')` and
+   * `advance(id, state)` as two INDEPENDENT transactions. A crash, a
+   * `node:sqlite` write failure on a full disk, or a SIGTERM landing between
+   * the two left the run wedged in `closing` PERMANENTLY — `RUN_TRANSITIONS.
+   * closing = ['done','failed']` has no self-edge, no route in this build
+   * exposes `POST /api/runs/:id/advance`'s `to:'closing'`, and every retried
+   * close 409s at the route's own precondition before touching anything —
+   * verbatim the harm D-48 already named for the OTHER ordering bug. Folding
+   * both `advance` calls, the handoff-commit write, the outstanding-delivery
+   * cancellation (review findings 8/14 — a run's own queued/delivered-unacked
+   * mail must not survive its close and replay into the NEXT wave's freshly
+   * `/clear`ed context) and the program-retirement check into one `tx()`
+   * means a crash between any two of these statements rolls the WHOLE close
+   * back to the run's PRE-close state — still `dispatched`/`working`, legally
+   * retryable — rather than to a state with no way out.
+   */
+  closeRun(input: {
+    runId: number; finalState: 'done' | 'failed'; causedBy: string;
+    handoffCommit: string | null; program: string;
+  }): AdvanceResult {
     return tx(this.db, () => {
-      const row = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as
-        { state: string } | undefined;
-      if (!row) return { ok: false as const, error: 'unknown-run' as const };
-      const from = isRunState(row.state) ? row.state : 'unknown';
-      if (!(RUN_TRANSITIONS[from] as readonly string[]).includes(to)) {
-        return { ok: false as const, error: 'bad-transition' as const, from, to };
+      const closingAdv = this.advanceInner(input.runId, 'closing', input.causedBy);
+      if (!closingAdv.ok) return closingAdv;
+      const finalAdv = this.advanceInner(input.runId, input.finalState, input.causedBy);
+      if (!finalAdv.ok) return finalAdv;
+      // Only a SHAPE-VALID handoff commit is ever written (fix — review
+      // findings 6/18): the caller (the close route) runs the same 40-hex
+      // `SHA` test `verifyDone` uses, independent of whether `verifyDone`
+      // itself ran (it is skipped entirely on an explicit abandon, D-49) —
+      // `null` is left standing rather than writing a claim this database has
+      // never measured or even shape-checked.
+      if (input.handoffCommit !== null) this.setHandoffCommit(input.runId, input.handoffCommit);
+      // Review findings 8/14: cancel this run's own outstanding mail rather
+      // than leave it to replay into whatever session (this run's own, next
+      // wave, or — once a purged workspace slug is re-minted — an unrelated
+      // program entirely) next satisfies `dueDeliveries`'s gate.
+      this.cancelOutstandingDeliveries(input.runId);
+      // D-51's program-retirement check, run inside the SAME transaction:
+      // the run just closed already reads as terminal to this COUNT, because
+      // the write above is visible to a later read within one `tx()`.
+      if (this.programOpenRunCount(input.program) === 0) {
+        this.setProgramState(input.program, input.finalState === 'failed' ? 'abandoned' : 'done');
       }
-      const now = Date.now();
-      this.db.prepare(
-        "UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ('done','failed') THEN ? ELSE closedAt END " +
-        'WHERE id = ?',
-      ).run(to, to, now, runId);
-      this.db.prepare(
-        'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(runId, now, from, to, causedBy, detail ?? null);
-      return { ok: true as const, from, to };
+      return finalAdv;
     });
+  }
+
+  /** Review findings 8/14: every `queued` or `delivered`-but-unacked delivery
+   *  of this run's OWN mail, parked `rejected('undeliverable')` — the same
+   *  typed park `sweepMail` already uses for a delivery that cannot be
+   *  completed. Called from `closeRun`'s own transaction, but plain enough
+   *  (no nested `tx()`) to also call standalone, which `mail-sweep.test.ts`'s
+   *  unit-level coverage of this method does. An already-`acked` row is left
+   *  alone — it is not outstanding, and this is not the ack-race guard
+   *  `markDelivered`/`rejectDelivery` carry for THEIR own callers. */
+  cancelOutstandingDeliveries(runId: number): void {
+    this.db.prepare(
+      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
+      "lastError = 'run closed' WHERE state IN ('queued','delivered') " +
+      'AND mailId IN (SELECT id FROM mail WHERE runId = ?)',
+    ).run(runId);
   }
 
   /**
@@ -210,10 +307,11 @@ export class CoordStore {
    * the wire — silently disagreeing with the fingerprint the close route
    * re-measures and rejects a claim over (`fingerprint.ts`'s `no-handoff-
    * commit`, D-2). Mirrors `foldPrLineage`'s shape on purpose: a single-
-   * column UPDATE, called once, at close. Task 9's close route (not yet
-   * written in this tree) is the intended caller — the same "known-green but
-   * unconsumed" posture this task's own docstring already gives
-   * `RunSummary`/`MailSummary`.
+   * column UPDATE, called once, at close. `closeRun` above is the caller
+   * (fix, review finding 28: this docstring called Task 9's close route
+   * "not yet written in this tree" for two fix rounds after it was — the
+   * same staleness D-51 was filed against a neighbouring comment for, not
+   * caught here at the time).
    */
   setHandoffCommit(runId: number, handoffCommit: string): void {
     this.db.prepare('UPDATE runs SET handoffCommit = ? WHERE id = ?').run(handoffCommit, runId);
@@ -307,10 +405,12 @@ export class CoordStore {
       state: isRunState(row.state) ? row.state : 'unknown',
       resumed: row.resumed !== 0,
       // A real column (`runs.clearedAt`), read straight through — not a
-      // placeholder. It reads null today because nothing writes it yet: the
-      // dispatch route that performs the post-resume `/clear` is Task 9's, and
-      // until it lands every run's answer is honestly "nothing has cleared
-      // anything", not a stand-in for a missing column.
+      // placeholder. `setClearedAt` is Task 9's dispatch route's own write
+      // (fix, review finding 28: this comment called that route "Task 9's"
+      // as future tense for two fix rounds after it landed and started
+      // calling `setClearedAt`) — null still means exactly what it always
+      // did for a run that has not resumed-and-cleared: "nothing has
+      // cleared anything," never a stand-in for a missing column.
       clearedAt: row.clearedAt,
       openedAt: row.openedAt, dispatchedAt: row.dispatchedAt, closedAt: row.closedAt,
       handoffCommit: row.handoffCommit,
@@ -448,6 +548,54 @@ export class CoordStore {
              state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
   }
 
+  /**
+   * Every delivery ADDRESSED TO `toId`, newest first, as `MailSummary` — the
+   * read side of `GET /api/mail?to=<id>` (review finding 15: this route fell
+   * in the seam between the two plans, each naming the other as its author —
+   * PR I's own D-9 said "PR J's `POST /api/runs/:id/advance`", PR J's own
+   * interface list named PR I as the author of this GET route, and neither
+   * shipped it). Joins through `mail_deliveries.toId` — the RESOLVED
+   * recipient session, never the literal `'coordinator'` role `mail.toId`
+   * may still carry (the same resolution `resolveCoordinator` already
+   * performs before `queueDelivery` is ever called) — so a session reading
+   * its own outstanding mail sees exactly what it was actually sent.
+   * `limit` clamped the same way `feedEvents` clamps its own: a route
+   * argument can never ask this table to walk more history than is
+   * reasonable to JSON-stringify into one response.
+   */
+  mailForRecipient(toId: string, limit = 100): MailSummary[] {
+    const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 500) : 100;
+    const rows = this.db.prepare(
+      'SELECT m.id AS id, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
+      'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'WHERE d.toId = ? ORDER BY d.id DESC LIMIT ?',
+    ).all(toId, n) as { id: number; at: number; fromId: string; toId: string; runId: number | null;
+                         kind: string; subject: string; artifacts: string; state: string }[];
+    return rows.map((r) => ({
+      id: r.id, at: r.at, fromId: r.fromId, toId: r.toId, runId: r.runId,
+      kind: isMailKind(r.kind) ? r.kind : 'unknown', subject: r.subject,
+      artifacts: JSON.parse(r.artifacts) as string[],
+      state: isMailDeliveryState(r.state) ? r.state : 'unknown',
+    }));
+  }
+
+  /** Whether an OUTSTANDING (`queued` or `delivered`, unacked) mail already
+   *  exists for this (runId, toId, subject) — review finding 33: a retried
+   *  close re-entering the SAME done-claim rejection queued a fresh mail +
+   *  delivery row, and a fresh non-collapsing push (spec:236-237), on EVERY
+   *  retry, with no dedupe and no rate limit. `subject` alone identifies
+   *  "the same fact restated" for the two system-mail subjects this build
+   *  ever sends on a retry loop (`wave-brief`, `wave-done-rejected`) —
+   *  `queueSystemMail`'s own call sites are the only callers. */
+  hasOutstandingMail(runId: number, toId: string, subject: string): boolean {
+    const row = this.db.prepare(
+      "SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id " +
+      "WHERE m.runId = ? AND d.toId = ? AND m.subject = ? AND d.state IN ('queued','delivered') LIMIT 1",
+    ).get(runId, toId, subject);
+    return row !== undefined;
+  }
+
   queueDelivery(mailId: number, toId: string, envelope: string): { id: number } {
     const res = this.db.prepare(
       'INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)',
@@ -553,9 +701,43 @@ export class CoordStore {
     ).all() as { id: number; toId: string; deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
+  /** `WHERE state != 'acked'` (fix — review finding 22): `sweepMail` reads
+   *  the row it is about to (re)send BEFORE `await sendPrompt(...)`, and
+   *  writes the outcome AFTER — a window of several seconds to half a minute
+   *  in which `POST /api/mail/:id/ack` can land on the SAME row via
+   *  `markAcked`. Before this guard, a REPLAY's `sendPrompt` resolving `ok`
+   *  after that ack overwrote `state='acked'` back to `state='delivered'`
+   *  unconditionally, leaving the row self-contradictory (`ackedAt` non-null,
+   *  `state='delivered'`) and permanently re-eligible for
+   *  `dueDeliveries`'s replay arm and `unreadMailCount` — an already-acked
+   *  message replayed into the recipient forever. `markAcked` itself already
+   *  reads-before-writing for the identical reason (see its own docstring);
+   *  this mirrors that discipline on the other three writers of this column,
+   *  which never had it. */
   markDelivered(id: number, at: number): void {
-    this.db.prepare('UPDATE mail_deliveries SET state = ?, deliveredAt = ? WHERE id = ?')
-      .run('delivered', at, id);
+    this.db.prepare("UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ? WHERE id = ? AND state != 'acked'")
+      .run(at, id);
+  }
+
+  /**
+   * `mail_deliveries.replayCount + 1`, returning the new value (review
+   * finding 20). Called by the sweep AFTER `markDelivered`, and ONLY when
+   * the row it read was already `delivered` before this send — i.e. this
+   * send was a REPLAY, not the first delivery. Kept independent of
+   * `attempts` (`MAIL_MAX_ATTEMPTS`'s own docstring: SEND FAILURES only) on
+   * purpose: without a separate counter, spec:174-177's replay-until-ack has
+   * no ceiling at all once a delivery succeeds even once — `MAIL_COOLDOWN_MS`
+   * only SPACES the injections, it was never a bound on their number, and a
+   * delivery that keeps succeeding can never fail its way into
+   * `MAIL_MAX_ATTEMPTS`. This is the ceiling that lets a delivery no one
+   * ever acks eventually reach `rejected('undeliverable')` — the spec's own
+   * terminal state, otherwise structurally unreachable for exactly the
+   * deliveries that succeed.
+   */
+  bumpReplayCount(id: number): number {
+    this.db.prepare('UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ?').run(id);
+    return (this.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?')
+      .get(id) as { replayCount: number }).replayCount;
   }
 
   /** The `UserPromptSubmit` edge (`hookstate.ts:23-34`). Deliberately does
@@ -586,10 +768,15 @@ export class CoordStore {
     ).run(lastError, nextAttemptAt, id);
   }
 
+  /** `WHERE state != 'acked'` (fix — review finding 22, the same ack-race
+   *  guard `markDelivered` above now carries, applied to this writer's own
+   *  unconditional `state` overwrite): a `sendPrompt` failure resolving after
+   *  a concurrent ack landed on the same row must not turn an ACKED message
+   *  into a `rejected('undeliverable')` one. */
   rejectDelivery(id: number, code: MailRejectCode, lastError: string): void {
     this.db.prepare(
-      'UPDATE mail_deliveries SET state = ?, rejectCode = ?, lastError = ? WHERE id = ?',
-    ).run('rejected', code, lastError, id);
+      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ? WHERE id = ? AND state != 'acked'",
+    ).run(code, lastError, id);
   }
 
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;
