@@ -134,10 +134,18 @@ const MAIL_REPLAY_MS = 600_000;
  *  (spec:170-172): the record of what was said survives the failure to say
  *  it. The instant `deliveredAt` is set, this budget stops applying: the
  *  row's own history already disproves 'undeliverable', so a failing REPLAY
- *  backs off instead of rejecting — forever, bounded by ack rather than by a
- *  count, which is what spec:174-177's "replays … until acked" actually
- *  requires. `attempts` keeps counting on a delivered row too (it is one
- *  cumulative column), just without a ceiling that turns it into a park.
+ *  backs off instead of rejecting on THIS counter — `attempts` keeps
+ *  counting on a delivered row too (it is one cumulative column), just
+ *  without a ceiling that turns a failing SEND into a park.
+ *
+ *  A delivered row's own park is `MAIL_REPLAY_MAX_ATTEMPTS` below, a
+ *  SEPARATE counter over successful replays (fix — review finding 20: before
+ *  it existed, a delivery no one ever acked replayed "forever, bounded by
+ *  ack rather than by a count" — true, and that is exactly what left
+ *  spec:170-172's own terminal state structurally unreachable for any
+ *  delivery that succeeded even once, since `MAIL_COOLDOWN_MS` only SPACES
+ *  the injections and a send that keeps succeeding can never fail its way
+ *  into this counter).
  *
  *  That is also what makes the constant below real (review finding 9): a
  *  NEVER-delivered row's own schedule (attempts 1..5, 30 s doubling to 8 min)
@@ -151,6 +159,17 @@ const MAIL_REPLAY_MS = 600_000;
 const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
+
+/** The ceiling on successful, UNACKED replays (review finding 20) — see
+ *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
+ *  this role. At `MAIL_REPLAY_MS` (10 min) between replays, 20 attempts is
+ *  a little over three hours of a recipient provably receiving the same
+ *  envelope and never acking it — long enough that an ordinary slow ack
+ *  (a session busy on something else for a while) never comes close, short
+ *  enough that `MAIL_COOLDOWN_MS`'s own docstring's "denial of service
+ *  dressed as coordination" eventually parks rather than running for the
+ *  life of the box. */
+const MAIL_REPLAY_MAX_ATTEMPTS = 20;
 
 /** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
  *  (`ccd/ccd:20-22`, `_lane_enabled` at `:53`), which the operator already
@@ -1094,10 +1113,26 @@ export class FleetWatcher {
     // method's own docstring and review finding 3. A recipient that has gone
     // (`uuidByToId` has no entry) reads as no edge, same as `due`'s own loop
     // treats a vanished recipient: the row waits.
+    //
+    // `row.ingestedAt !== null` SKIPS the row entirely (fix — review finding
+    // 31): before this, the edge was sampled UNCONDITIONALLY, so every LATER
+    // prompt the session submitted — the operator talking to it, the next
+    // brief, its own tool loop's own `UserPromptSubmit` — re-dated
+    // `ingestedAt` again, and `dueDeliveries`'s `MAX(ingestedAt, deliveredAt)`
+    // replay gate never matured for as long as the session kept submitting
+    // prompts at least once per `MAIL_REPLAY_MS`, which is what a WORKING
+    // session does by definition. `hookstate.ts`'s own docstring calls this
+    // edge proof that "the injected turn actually STARTED" — proof of ONE
+    // specific turn, not a clock a whole session's later, unrelated activity
+    // should keep pushing out. Capturing it once and freezing it means a
+    // fresh, later edge from an actual REPLAY still re-dates the clock — via
+    // that replay's own `markDelivered`, not this loop — exactly as
+    // `dueDeliveries`'s `MAX(...)` already expects (see its own docstring).
     for (const row of unacked) {
       if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
+      if (row.ingestedAt !== null) continue;
       const hs = await hookStateFor(row.toId);
-      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > (row.ingestedAt ?? row.deliveredAt)) {
+      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
         store.markIngested(row.id, hs.updatedAt);
       }
     }
@@ -1117,7 +1152,31 @@ export class FleetWatcher {
       const last = this.mailCooldown.get(d.toId) ?? 0;
       if (now - last < MAIL_COOLDOWN_MS) continue;
       const rec = records.find((r) => r.id === d.toId);
-      if (!rec) continue;                    // a recipient that went away: the row waits
+      if (!rec) {
+        // Fix — review finding 30: a row whose recipient's registry row is
+        // genuinely ABSENT (reaped, purged) used to `continue` here with
+        // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
+        // reached through a FAILED `sendPrompt`, which never runs on this
+        // path, so the row was re-selected on every `MAIL_SWEEP_MS` tick
+        // indefinitely, and a purged workspace slug being re-minted
+        // (`_ws_slug_new` draws only from FREE slugs) could eventually hand
+        // this exact id to an unrelated program. Backed off on the SAME
+        // schedule a send failure gets, and eventually parked — the spec's
+        // own `rejected('undeliverable')` terminal state, otherwise
+        // structurally unreachable for exactly the recipients this build can
+        // prove are gone. Scoped to ONLY this gate: every gate below (no
+        // tmux session, hookstate not `done`, not idle, on cooldown) is
+        // ORDINARY and expected to hold indefinitely for a session that is
+        // merely busy, and must never accrue toward a park.
+        const attempts = d.attempts + 1;
+        if (attempts >= MAIL_MAX_ATTEMPTS) {
+          store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
+        } else {
+          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+          store.backOff(d.id, 'recipient not in registry', now + step);
+        }
+        continue;
+      }
       if (!(await this.deps.tmux.hasSession(d.toId))) continue;
       const hs = await hookStateFor(d.toId);
       if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
@@ -1137,6 +1196,17 @@ export class FleetWatcher {
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
+          // A REPLAY — this row was already `delivered` before this send —
+          // counts against its own ceiling, independent of `attempts` (fix,
+          // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own
+          // docstring for why `attempts` cannot serve this role). The FIRST
+          // delivery (`d.deliveredAt === null`) never counts here.
+          if (d.deliveredAt !== null) {
+            const replays = store.bumpReplayCount(d.id);
+            if (replays >= MAIL_REPLAY_MAX_ATTEMPTS) {
+              store.rejectDelivery(d.id, 'undeliverable', 'replayed without ack past the replay ceiling');
+            }
+          }
           continue;
         }
         const attempts = d.attempts + 1;

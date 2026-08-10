@@ -716,4 +716,161 @@ describe('sweepMail: replay until ack', () => {
     await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE, ENVELOPE]); // send #3
   });
+
+  it('a SECOND, later UserPromptSubmit edge does not push the replay clock out again (review finding 31)', async () => {
+    // The pre-fix bug: `markIngested` fired on EVERY `UserPromptSubmit` edge
+    // newer than the last stamp, so a session that keeps submitting prompts
+    // — the ordinary shape of a session doing WORK — kept re-dating the
+    // replay clock and the delivery was never re-injected for as long as
+    // that continued.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+
+    advance(PAST_SWEEP_MS);
+    const edge1At = Date.now();
+    seedHookState(h.home, ID, { state: 'working', event: 'UserPromptSubmit', updatedAt: edge1At });
+    await w.sweepMail();
+    expect((coord.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?')
+      .get(id) as { ingestedAt: number | null }).ingestedAt).toBe(edge1At);
+
+    // A SECOND edge, well inside the replay window opened by the first —
+    // under the pre-fix behaviour this would push ingestedAt out to edge2At.
+    advance(60_000);
+    const edge2At = Date.now();
+    seedHookState(h.home, ID, { state: 'working', event: 'UserPromptSubmit', updatedAt: edge2At });
+    await w.sweepMail();
+    expect((coord.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?')
+      .get(id) as { ingestedAt: number | null }).ingestedAt).toBe(edge1At);   // frozen at the FIRST edge
+
+    // Due from edge1At + MAIL_REPLAY_MS — which, under the pre-fix bug,
+    // would NOT yet be due (the clock would have been pushed to edge2At).
+    seedHookState(h.home, ID);   // idle again
+    vi.setSystemTime(edge1At + MAIL_REPLAY_MS + 1_000);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]);   // the replay fired
+  });
+});
+
+describe('sweepMail: a dead recipient eventually parks (review finding 30)', () => {
+  it('a delivery whose recipient has no registry row backs off, then parks rejected(undeliverable)', async () => {
+    const h = harness();   // no seedRegistry at all for ID — the recipient is simply gone
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    // The registry DIRECTORY exists (an ordinary fleet host always has one
+    // once ccd has run) even though this ONE id's row does not — an
+    // unlistable directory is the SEPARATE kill-switch fail-shut case, not
+    // this one.
+    mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    let row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts).toBe(1);
+    expect(row.lastError).toBe('recipient not in registry');
+
+    // Advance past each backoff step and re-sweep until the ceiling parks it.
+    for (let i = 1; i < MAIL_MAX_ATTEMPTS; i++) {
+      row = deliveryRow(coord, id);
+      vi.setSystemTime(row.nextAttemptAt + 1_000);
+      await w.sweepMail();
+    }
+
+    row = deliveryRow(coord, id);
+    expect(row.state).toBe('rejected');
+    expect(row.rejectCode).toBe('undeliverable');
+    // `rejectDelivery` never touches `attempts` (same convention the
+    // existing enter-ignored/MAIL_MAX_ATTEMPTS tests above already pin) —
+    // the column stops at the last `backOff` call, one short of the ceiling
+    // that triggered the park.
+    expect(row.attempts).toBe(MAIL_MAX_ATTEMPTS - 1);
+    // The mail ROW itself survives — spec:170-172's "the record of what was
+    // said survives the failure to say it."
+    const { mailId } = queueTestDelivery(coord, ID, ENVELOPE);   // sanity: table still writable
+    expect(mailId).toEqual(expect.any(Number));
+  });
+
+  it('an ORDINARY gate (busy, on cooldown, no tmux session) never accrues an attempt', async () => {
+    // Only the registry-absent gate backs off; every other gate must stay
+    // free to hold indefinitely without ever parking a legitimately busy
+    // session's mail.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 2; i++) {
+      advance(PAST_SWEEP_MS);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts).toBe(0);
+  });
+});
+
+describe('sweepMail: successful replays eventually park too (review finding 20)', () => {
+  it('parks rejected(undeliverable) after MAIL_REPLAY_MAX_ATTEMPTS unacked replays', async () => {
+    const MAIL_REPLAY_MAX_ATTEMPTS = 20;
+    // 21 real sends, each polling `sendPrompt`'s own (unfaked) setTimeout
+    // loops — comfortably past the default 5 s test timeout.
+    // One full HAPPY_PANES script per send: the initial delivery plus every
+    // successful replay up to and past the ceiling.
+    const panes = Array.from({ length: MAIL_REPLAY_MAX_ATTEMPTS + 2 }, () => HAPPY_PANES).flat();
+    const h = harness({ panes });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();   // the initial delivery — never counts against the replay ceiling
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+
+    for (let i = 0; i < MAIL_REPLAY_MAX_ATTEMPTS; i++) {
+      const { deliveredAt } = coord.db.prepare('SELECT deliveredAt FROM mail_deliveries WHERE id = ?')
+        .get(id) as { deliveredAt: number };
+      const t = deliveredAt + MAIL_REPLAY_MS + 1_000;
+      vi.setSystemTime(t);
+      seedHookState(h.home, ID, { updatedAt: t - 1_000 });   // stay fresh past HOOKSTATE_FRESH_MS
+      seedLiveState(h.home, { statusUpdatedAt: t - MAIL_QUIET_MS - 1_000 });   // stay affirmatively idle+quiet
+      await w.sweepMail();
+    }
+
+    const row = coord.db.prepare('SELECT state, rejectCode, replayCount FROM mail_deliveries WHERE id = ?')
+      .get(id) as { state: string; rejectCode: string | null; replayCount: number };
+    expect(row.state).toBe('rejected');
+    expect(row.rejectCode).toBe('undeliverable');
+    expect(row.replayCount).toBe(MAIL_REPLAY_MAX_ATTEMPTS);
+  }, 30_000);
+
+  it('an acked delivery never accrues a replay count at all', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    coord.markAcked(id, Date.now());
+    advance(MAIL_REPLAY_MS + 1_000);
+    await w.sweepMail();
+    const row = coord.db.prepare('SELECT state, replayCount FROM mail_deliveries WHERE id = ?')
+      .get(id) as { state: string; replayCount: number };
+    expect(row.state).toBe('acked');
+    expect(row.replayCount).toBe(0);
+  });
 });
