@@ -19,7 +19,7 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { FleetSession, SessionBucket } from '../../../shared/api';
+import { unmeasuredFields, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { humanBytes } from '../screens/ArchiveScreen';
@@ -223,11 +223,16 @@ export function SessionLine({
               per-session detail worth a sentence — the tooltip does. Heals on
               its own the moment a later sweep measures clean, same as every
               other degrade-and-heal surface this ladder feeds. */}
-          {session.unmeasured.length > 0 && (
+          {/* `unmeasuredFields(session)`, not `session.unmeasured` directly
+              (blocking review finding 2): the live `fleet` frame is cast,
+              not revived (`stores/fleet.ts`'s `asFleetMsg`), so a row from a
+              server that predates this field can lack the key entirely at
+              runtime — see `unmeasuredFields`'s own docstring. */}
+          {unmeasuredFields(session).length > 0 && (
             <span
               className="sess-unmeasured"
               data-unmeasured="true"
-              title={`registry ${session.unmeasured.join('/')} temporarily unreadable — retrying`}
+              title={`registry ${unmeasuredFields(session).join('/')} temporarily unreadable — retrying`}
             >
               unreadable
             </span>

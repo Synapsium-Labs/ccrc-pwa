@@ -235,8 +235,18 @@ describe('fleet REST + WS', () => {
   it('writes the very first snapshot even from an empty fleet — nothing on disk yet to clobber', async () => {
     const cacheDir = mkTmp('ccrc-cache-');
     const cachePath = path.join(cacheDir, 'state-cache.json');
-    // No seeded session in this fresh home — an empty registry.
+    // No seeded session in this fresh home — an empty registry. The
+    // DIRECTORY itself still has to exist, though (blocking review findings
+    // 1/3): `tick()` now takes the typed `readRegistryMeasured` read, and
+    // `io.readdir` on a directory that was NEVER created answers `null` —
+    // the exact same shape as a directory that exists but cannot be read.
+    // Without creating it, this test would exercise "unlistable", not
+    // "genuinely empty", and `tick()` correctly (per THE PRINCIPLE's
+    // evidence-not-time bound) fails shut on that rather than treating an
+    // absent directory as proof of an empty fleet — the overloaded-null
+    // conflation this whole ladder exists to remove.
     const emptyHome = mkTmp('ccrc-empty-');
+    mkdirSync(path.join(emptyHome, '.cc-sessions'), { recursive: true });
     const cfg = loadConfig({ CCRC_HOME: emptyHome, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
     const watcher = new FleetWatcher(deps, new Bus());

@@ -477,18 +477,41 @@ export class FleetWatcher {
       // the difference between one registry read and two, every 2s, forever.
       // sweepTasks/sweepPr below are NOT included: both throttle to their own
       // slower clock and skip the read entirely on most ticks already.
-      const records = await readRegistry(this.deps.io, this.deps.cfg);
-      // Blocking review finding 2: a row the registry ladder DEGRADES rather
-      // than drops now reaches `assembleFleet` below for the first time ever
-      // — and `assembleFleet` has no way to tell a degraded row from a
-      // measured one on the wire (`FleetSession` carries no `unmeasured`
-      // field). A degraded `r.wrapper` (`''`) makes `configDirFor` answer
-      // `undefined`, so `assembleFleet` never even reaches `readLiveState`
-      // and `status` freezes at its `alive` default of `'idle'` — a session
-      // that may be plainly mid-turn. Computed HERE, off the same `records`
-      // read `assembleFleet` below reuses via `readRegistry`, so this set
-      // names exactly the rows whose STATUS this tick could not measure.
-      const unmeasuredIds = new Set(records.filter((r) => measuredIdentity(r) === null).map((r) => r.id));
+      //
+      // `readRegistryMeasured`, not `readRegistry` (blocking review findings
+      // 1/3): the old `[]`-on-unlistable signature made a single dropped
+      // `io.readdir` — the whole-fleet cousin of the per-row ladder, and the
+      // ordinary shape of one lost agent-WS round trip in remote mode — read
+      // as "the fleet is now empty" to every lane below. `sweepHookStates`/
+      // `sweepTasks` would rebuild both maps from zero rows, silently
+      // discarding every entry the retain-don't-erase branch further down
+      // exists to protect (findings 1/2's own harm, at fleet scale instead of
+      // row scale), and the unconditional `bus.emit('fleet', sessions)` at
+      // the bottom of this method would paint "no sessions" on every
+      // connected PWA. Fail shut instead, the same evidence-not-time bound
+      // `sweepMail` already draws three lanes down (`readRegistryMeasured`,
+      // `!registryRead.listed` return) and `registry.ts`'s own docstring
+      // states for this exact read: "a failed second listing proves nothing
+      // and changes nothing".
+      const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+      if (!registryRead.listed) {
+        // Retain, don't erase, at fleet scale: `this.hookStates`/
+        // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
+        // exactly as the prior successful tick set them. Nothing is broadcast
+        // this tick — a stale-but-real fleet on the connected client's screen
+        // is honest; an empty one is a lie. `registry.ts`'s own
+        // `noteWholeFleetListing` already logs this episode's entry and exit
+        // once, not per tick (shared by every caller of `readRegistryMeasured`/
+        // `readSessionRecord`), so nothing further is logged here — a box
+        // that stays unlistable for an hour still gets exactly two log lines.
+        // The other per-tick lanes (`sweepPr`/`sweepNames`/`sweepMail`) simply
+        // do not fire this iteration; each is void-dispatched with its own
+        // slower/independent clock and its own registry read (`sweepMail`
+        // already fails shut the identical way), so skipping one 2s dispatch
+        // costs a few seconds' delay on an already-rare failure, never data.
+        return;
+      }
+      const records = registryRead.records;
       // hook states FIRST, dialogs second — the order is load-bearing and there
       // is a test on it. `detectDialogs` composes the ask push, and the actions
       // it attaches come from `this.hookStates`; with the old ordering that map
@@ -534,20 +557,29 @@ export class FleetWatcher {
       // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
-      // `records` PASSED IN, never re-read here (blocking review finding 2,
-      // second pass): `unmeasuredIds` above is computed off THESE rows, and
-      // the push loop below refuses to assert a finished turn for any id in
-      // that set — but the set only means anything if it describes the very
-      // rows this assembly emits. While `assembleFleet` took its own read,
-      // the two were separate whole-fleet sweeps a few hundred ms apart, so
-      // a row that read clean HERE and degraded THERE was emitted with
-      // `status` frozen at the `!cfgDir` default of 'idle' with nothing in
-      // `unmeasuredIds` to suppress it — the false "✓ Finished" push fired
-      // exactly as before the gate existed. One read, one set of rows, one
-      // verdict. (It also drops a second ~17-reads-per-session registry
-      // sweep from every 2s tick, which is the same read-storm reason this
-      // read is already shared with `sweepHookStates`/`detectDialogs`.)
+      // `records` PASSED IN, never re-read here: `assembleFleet` would
+      // otherwise take its OWN read (`records ?? await readRegistry(...)`),
+      // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
+      // in remote mode, ~17 field reads per session, ~409 round trips on a
+      // 24-session fleet, doubled for no reason. Sharing the read also keeps
+      // `sweepHookStates`/`detectDialogs` (which already consumed `records`
+      // above) and this assembly looking at the identical snapshot, which is
+      // what lets `unmeasuredIds` below be derived FROM `sessions` rather
+      // than computed a second, independent way off `records` — see that
+      // derivation's own comment (blocking review finding 4).
       const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records);
+      // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
+      // carries the SAME evidence `measuredIdentity(records[i]) === null`
+      // would, one hop from `records[i]` in `sessions[i]` — so this reads it
+      // off the assembled rows directly (one derivation of one fact) rather
+      // than re-deriving it from `records` a second, independent way, which
+      // is exactly the kind of drift `fleet.ts`'s own `records`-parameter
+      // docstring warns a second copy of one shape invites. Names exactly the
+      // rows whose STATUS this tick could not measure: a degraded `r.wrapper`
+      // (`''`) makes `configDirFor` answer `undefined`, so `assembleFleet`
+      // never reaches `readLiveState` and `status` freezes at the `alive`
+      // default of `'idle'` — a session that may be plainly mid-turn.
+      const unmeasuredIds = new Set(sessions.filter((s) => s.unmeasured.length > 0).map((s) => s.id));
       // The whole fleet is in scope right here, which is exactly what
       // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
       // have on their own clocks — see `activeProjects`'s own comment.
@@ -961,7 +993,22 @@ export class FleetWatcher {
    */
   private async sweepHookStates(records?: SessionRecord[]): Promise<void> {
     const now = Date.now();
-    const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
+    let recs: SessionRecord[];
+    if (records) {
+      recs = records;
+    } else {
+      // Own read — only exercised when this method is called with no
+      // argument (tests only today; `tick()` always supplies its own
+      // already-listed `records`). Same fail-shut seam as `tick()`'s shared
+      // read and `sweepTasks`' own read below (blocking review findings
+      // 1/3): `readRegistryMeasured`, and `this.hookStates` is left
+      // UNTOUCHED on `{listed:false}` rather than rebuilt from an empty `[]`
+      // — a failed listing must not wipe every retained entry the branch
+      // below exists to protect.
+      const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+      if (!registryRead.listed) return;
+      recs = registryRead.records;
+    }
     const next = new Map<string, HookState>();
     await Promise.all(
       recs.map(async (r) => {
@@ -1001,7 +1048,24 @@ export class FleetWatcher {
     const now = Date.now();
     if (this.lastTaskSweep !== 0 && now - this.lastTaskSweep < TASK_SWEEP_MS) return;
     this.lastTaskSweep = now;
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // Own read, on its own slower clock — never shared with `tick()`'s
+    // (`sweepHookStates` above takes `tick()`'s `records` as a parameter;
+    // this method does not). `readRegistryMeasured`, fail shut on
+    // `{listed:false}` (blocking review findings 1/3): the old `readRegistry`
+    // `[]`-on-unlistable answer made a single dropped `io.readdir` here wipe
+    // `this.taskProgress` for the WHOLE fleet — the same harm the
+    // retain-don't-erase branch two lines down exists to prevent for one
+    // degraded row, at fleet scale, on a clock throttled to fire once per
+    // `TASK_SWEEP_MS` — so a hit here can leave every task tally blank for a
+    // whole sweep interval, exactly the cost this method's own comment names
+    // for a single row. `this.lastTaskSweep` is stamped above regardless
+    // (same ordering `sweepMail`'s own fail-shut kill-switch check uses): a
+    // failed listing still consumes this sweep's slot rather than retrying
+    // every 2 s tick, the same throttle discipline every other sweep here
+    // keeps.
+    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    if (!registryRead.listed) return;
+    const records = registryRead.records;
     const next = new Map<string, TaskProgress>();
     await Promise.all(
       records.map(async (r) => {

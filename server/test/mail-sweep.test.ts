@@ -119,8 +119,8 @@ const onceUnlistableIO = (): { io: FleetIO; failNext: () => void } => {
  * listing, then `readRegistryMeasured`'s own internal one), sweep after
  * sweep, without ever tripping the kill-switch itself. Unarmed during
  * `primedWatcher`'s own priming tick (which fires several unrelated
- * `readdir` calls of its own, over a registry directory that does not even
- * exist yet) so those never perturb the parity; a test calls `arm()` once
+ * `readdir` calls of its own, over a registry directory `harness()` creates
+ * empty-but-listable) so those never perturb the parity; a test calls `arm()` once
  * its fixtures are seeded and it is about to drive `sweepMail()` directly
  * (blocking review findings 1/5).
  */
@@ -166,6 +166,21 @@ interface Harness { home: string; calls: string[][]; run: Runner }
  *  uses). */
 const harness = (opts: { hasSession?: boolean; panes?: (string | null)[] } = {}): Harness => {
   const home = mkTmp('ccrc-mail-sweep-');
+  // Empty, but LISTABLE (blocking review findings 1/3): `primedWatcher`'s
+  // priming tick now takes the typed `readRegistryMeasured` read, and
+  // `io.readdir` cannot distinguish "this directory was never created" from
+  // "this directory could not be listed" (`io.ts`'s `readdir` maps every
+  // `fs` error, ENOENT included, to `null` — a documented, deliberate limit,
+  // see `io.test.ts`'s own pin and `coord-fingerprint.test.ts`'s identical
+  // comment). Left absent, priming would hit `{listed:false}` and `tick()`
+  // would correctly fail shut without ever setting `primed`, and every
+  // `sweepMail()` call in this file would then no-op forever on its own
+  // `if (!this.primed) return`. Created here rather than left to
+  // `seedRegistry` (which runs AFTER priming in every test) — same fix,
+  // same reasoning, as `fleetws.test.ts`'s "writes the very first snapshot"
+  // test and `coord-fingerprint.test.ts`'s `fingerprintDeps`. On a REAL
+  // fleet host `.cc-sessions` always exists once `ccd` has ever run.
+  mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const calls: string[][] = [];
   let capIdx = 0;
   const panes = opts.panes ?? [];
@@ -184,11 +199,13 @@ const harness = (opts: { hasSession?: boolean; panes?: (string | null)[] } = {})
   return { home, calls, run };
 };
 
-/** Primes the watcher against a registry with NOTHING in it yet — `tick()`'s
- *  own `detectDialogs` pass then loops zero times and issues zero
- *  `capture-pane` calls, so it can never misalign a later `sendPrompt`'s
- *  scripted panes. Seed the registry/hookstate/livestate fixtures AFTER
- *  calling this, not before. Returns `deps` too, so a test that needs the
+/** Primes the watcher against a registry with NOTHING in it yet — empty but
+ *  LISTABLE (`harness()` creates `.cc-sessions` before this runs) — so
+ *  `tick()`'s typed registry read sees `{listed: true, records: []}`, not
+ *  `{listed: false}`. `tick()`'s own `detectDialogs` pass then loops zero
+ *  times and issues zero `capture-pane` calls, so it can never misalign a
+ *  later `sendPrompt`'s scripted panes. Seed the registry/hookstate/livestate
+ *  fixtures AFTER calling this, not before. Returns `deps` too, so a test that needs the
  *  SAME `KeyedQueue` the sweep will use (to prove injection actually goes
  *  through it) can reach in. */
 const primedWatcher = async (
@@ -493,6 +510,10 @@ describe('sweepMail: the send', () => {
     // duration: that is precisely what made the old version of this file
     // pass 5/5 in isolation and fail under a loaded 86-file run.
     const home = mkTmp('ccrc-mail-sweep-');
+    // Same empty-but-listable fix as `harness()` above — this test builds its
+    // own `Harness` by hand rather than calling that factory, so it needs the
+    // same `.cc-sessions` directory created before `primedWatcher` primes.
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const calls: string[][] = [];
     let releaseGate!: () => void;
     const gate = new Promise<void>((r) => { releaseGate = r; });

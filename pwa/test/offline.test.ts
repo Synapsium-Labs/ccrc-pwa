@@ -157,6 +157,34 @@ describe('fleet store hydration + persistence', () => {
     expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
     store.getState().disconnect();
   });
+
+  // Blocking review finding 2: `saveFleetSnapshot` used to read
+  // `s.unmeasured.length` directly. A LIVE `fleet` frame is never revived
+  // (`stores/fleet.ts`'s `asFleetMsg` casts, it does not call
+  // `reviveFleetSession`), so a row from a server that predates this field —
+  // `FLEET_PROTO` stays 1 on purpose, an older server keeps talking to a
+  // newer client by design — can omit the `unmeasured` KEY entirely at
+  // runtime. The existing degraded-row case above always SETS the key
+  // (`unmeasured: ['workdir']`), so it cannot catch a missing key; this test
+  // deletes it from the wire object instead of setting it to anything.
+  it('a LIVE fleet frame whose rows omit `unmeasured` entirely (an older server) does not throw, ' +
+     'and is not treated as degraded', () => {
+    const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
+    store.getState().connect();
+    const sock = FakeSocket.instances[0]!;
+    sock.open();
+    const raw = session('claude2:mekwarlive') as unknown as Record<string, unknown>;
+    delete raw['unmeasured'];
+
+    expect(() => sock.message(JSON.stringify({ type: 'fleet', sessions: [raw] }))).not.toThrow();
+
+    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    // Absent reads as MEASURED (same rule `optUnmeasured` applies on the
+    // revival path), so this frame is not degraded and DOES overwrite the
+    // offline snapshot.
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    store.getState().disconnect();
+  });
 });
 
 /**

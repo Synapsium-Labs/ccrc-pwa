@@ -107,6 +107,32 @@ export interface FleetSession {
   unmeasured: readonly IdentityField[];
 }
 
+/**
+ * Tolerant read of `FleetSession.unmeasured` for a value that has NOT been
+ * through `reviveFleetSession` — i.e. the live `fleet` WS frame.
+ * `pwa/src/stores/fleet.ts`'s `asFleetMsg` validates only
+ * `Array.isArray(sessions)` and casts (`return m as FleetMsg`); a LIVE frame
+ * never revives. `FLEET_PROTO` stays 1 for this field on purpose (additive,
+ * so an older server keeps talking to a newer client by design), so a row
+ * from a server that predates Task 2 — a rollback, a `dist-pwa` deployed
+ * before the process restarts, a cached client shell reconnecting to an old
+ * process — can genuinely omit the `unmeasured` key at runtime even though
+ * the type says it is required. Reading `.unmeasured.length` directly on
+ * such a row is a hard `TypeError` (blocking review finding 2, MEASURED: it
+ * killed `saveFleetSnapshot` and, via `SessionLine.tsx`, the renderer too).
+ *
+ * This is the one place both call sites (`pwa/src/lib/offline.ts`,
+ * `pwa/src/fleet/SessionLine.tsx`) read the field, so they cannot drift onto
+ * two different fallbacks. Absence reads as measured (`[]`) — the same rule
+ * `optUnmeasured` below already applies on the persisted-snapshot revival
+ * path: every session a pre-Task-2 build ever sent was, by that build's own
+ * registry read, either fully measured or dropped outright, so there is no
+ * history here to be ignorant about.
+ */
+export function unmeasuredFields(s: { unmeasured?: readonly IdentityField[] }): readonly IdentityField[] {
+  return s.unmeasured ?? [];
+}
+
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
  *  `subject` is the row label, `activeForm` the present-participle line the
  *  spinner wears while the task runs ("Building claude_spend_reader…"). */

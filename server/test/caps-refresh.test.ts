@@ -84,6 +84,14 @@ describe('the caps lane', () => {
   it('asks once a minute, not once a tick', async () => {
     let calls = 0;
     const deps = { ...testDeps(), refreshCaps: async () => { calls += 1; } };
+    // Empty, but LISTABLE (blocking review findings 1/3): `tick()` now takes
+    // the typed `readRegistryMeasured` read, and `testDeps()`'s default home
+    // has no `.cc-sessions` directory at all — `io.readdir` cannot
+    // distinguish "never created" from "unreadable" (`io.test.ts`'s own
+    // pin), so `tick()` would correctly fail shut on `{listed: false}` and
+    // never reach the `refreshCaps` call below. Same fix as
+    // `mail-sweep.test.ts`'s `harness()`.
+    mkdirSync(deps.cfg.registryDir, { recursive: true });
     const w = new FleetWatcher(deps, new Bus(), 2000);
 
     vi.useFakeTimers();
@@ -111,6 +119,8 @@ describe('the caps lane', () => {
   it('fires exactly at the interval boundary, not only after it', async () => {
     let calls = 0;
     const deps = { ...testDeps(), refreshCaps: async () => { calls += 1; } };
+    // Empty, but LISTABLE — see the identical comment in the test above.
+    mkdirSync(deps.cfg.registryDir, { recursive: true });
     const w = new FleetWatcher(deps, new Bus(), 2000);
 
     vi.useFakeTimers();

@@ -6,7 +6,7 @@
 // store keeps conn 'connecting' until the socket opens, and FleetScreen
 // stale-marks everything under that state. /api and /ws are never cached
 // (network-only) — this snapshot is the only offline data, by design.
-import { reviveFleetSessions, type FleetSession } from '../../../shared/api';
+import { reviveFleetSessions, unmeasuredFields, type FleetSession } from '../../../shared/api';
 
 // Stays at v1 — deliberately. A snapshot written before `tasks`/`pr`/`archivedAt`
 // existed is still usable data, and the read normalizes it (reviveFleetSessions);
@@ -53,7 +53,12 @@ export interface FleetSnapshot {
  *    `~/.ccrc/state-cache.json`) have no other seam in common. */
 export function saveFleetSnapshot(sessions: FleetSession[]): void {
   if (sessions.length === 0) return;
-  if (sessions.some((s) => s.unmeasured.length > 0)) return;
+  // `unmeasuredFields`, not `s.unmeasured` directly (blocking review finding
+  // 2): a LIVE fleet frame never goes through `reviveFleetSession` (only this
+  // module's own persisted-snapshot read does), so a row from a server that
+  // predates this field can genuinely lack the key at runtime despite the
+  // static type — see `unmeasuredFields`'s own docstring in shared/api.ts.
+  if (sessions.some((s) => unmeasuredFields(s).length > 0)) return;
   try {
     const snap: FleetSnapshot = { savedAt: Date.now(), sessions };
     storage().setItem(KEY, JSON.stringify(snap));

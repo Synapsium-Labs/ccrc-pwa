@@ -414,3 +414,148 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     rmSync(home, { recursive: true, force: true });
   });
 });
+
+// Blocking review findings 1/3: retain-don't-erase (above) is proven only
+// against a SUCCESSFUL listing that no longer names an id. The whole-fleet
+// collapse — `io.readdir` itself returning null — is the LARGER cousin the
+// architecture doc calls out explicitly, and the old `readRegistry` ([] on
+// unlistable) answer made every id look "gone from the listing" at once:
+// `sweepHookStates`/`sweepTasks` would wipe both maps in full, and `tick()`
+// would broadcast an empty (or, on this fix, no) fleet frame. RED against the
+// code before this fix: `readdir -> null` used to empty `recs`/`records`
+// (`[]`), so the retain branch (`measuredIdentity(r) === null`) was never
+// even reached for anyone — every entry was dropped by the ordinary
+// full-rebuild-from-current-listing path, not retained.
+describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocking review findings 1/3)', () => {
+  const HOOK_UUID = '1'.repeat(36); // seedSession's own fixed uuid
+
+  it('tick() leaves hookStates/taskProgress untouched and broadcasts NO frame (not even an empty one) ' +
+     'while the registry directory cannot be listed, and heals on the next successful tick', async () => {
+    const home = mkTmp('ccrc-collapse-');
+    const id = 'claude2-MekWarLive';
+    seedSession(home, id, 'claude2');
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'waiting', event: 'Notification', sessionId: HOOK_UUID, pid: 40613,
+      updatedAt: Date.now(), ask: null, subagents: [],
+    }));
+    let listable = true;
+    const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const bus = new Bus();
+    const fleets: FleetSession[][] = [];
+    bus.on('fleet', (s) => fleets.push(s));
+    const watcher = new FleetWatcher(deps, bus);
+
+    await watcher.tick();
+    expect(fleets).toHaveLength(1);
+    expect(fleets[0]!.map((s) => s.id)).toEqual([id]);
+    const hookBefore = watcher.currentHookStates().get(id);
+    expect(hookBefore?.state).toBe('waiting');
+
+    listable = false; // the whole-fleet cousin of the per-row ladder
+    await watcher.tick();
+    expect(fleets).toHaveLength(1); // NO second frame — not `[]`, nothing at all
+    expect(watcher.currentHookStates().get(id)).toEqual(hookBefore); // RETAINED, not wiped
+
+    // A real change underneath, so the heal tick's frame is provably FRESH
+    // rather than the byte-equality guard (`lastJson`) simply re-suppressing
+    // an unchanged snapshot the way it correctly did on the failed tick above
+    // — that guard is orthogonal to this fix and must not be defeated by it.
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'working', event: 'Notification', sessionId: HOOK_UUID, pid: 40613,
+      updatedAt: Date.now(), ask: null, subagents: [],
+    }));
+    listable = true;
+    await watcher.tick();
+    expect(fleets).toHaveLength(2); // heals the instant the listing succeeds again
+    expect(fleets[1]!.map((s) => s.id)).toEqual([id]);
+    expect(watcher.currentHookStates().get(id)?.state).toBe('working'); // freshly re-read, not the stale retained value
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('sweepHookStates\' own read (called with no records — the only production shape this branch reaches ' +
+     'production code through today is tests, but the method stays independently callable) also retains ' +
+     'through an unlistable directory', async () => {
+    const home = mkTmp('ccrc-collapse-');
+    const id = 'claude2-MekWarLive';
+    seedSession(home, id, 'claude2');
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'waiting', event: 'Notification', sessionId: HOOK_UUID, pid: 40613,
+      updatedAt: Date.now(), ask: null, subagents: [],
+    }));
+    let listable = true;
+    const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const watcher = new FleetWatcher(deps, new Bus());
+    const sweep = (): Promise<void> => (watcher as unknown as { sweepHookStates: () => Promise<void> }).sweepHookStates();
+
+    await sweep();
+    const before = watcher.currentHookStates().get(id);
+    expect(before?.state).toBe('waiting');
+
+    listable = false;
+    await sweep();
+    expect(watcher.currentHookStates().get(id)).toEqual(before);
+
+    listable = true;
+    await sweep();
+    expect(watcher.currentHookStates().get(id)).toEqual(before);
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('sweepTasks\' own separate read leaves taskProgress untouched while the registry directory cannot be ' +
+     'listed', async () => {
+    const home = mkTmp('ccrc-collapse-');
+    const id = 'claude2-MekWarLive';
+    seedSession(home, id, 'claude2');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const cfgDir = configDirFor(cfg.home, 'claude2')!;
+    const dir = tasksDir(cfgDir, HOOK_UUID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, '1.json'), JSON.stringify({
+      id: '1', subject: 'one', description: 'do 1', activeForm: 'Doing one', status: 'in_progress',
+      blocks: [], blockedBy: [],
+    }));
+
+    let listable = true;
+    const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const watcher = new FleetWatcher(deps, new Bus());
+    // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
+    // clock before each call so this test can force a real re-sweep on its
+    // own schedule (same idiom as the retain-don't-erase test above).
+    const forceSweep = async (): Promise<void> => {
+      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
+    };
+
+    await forceSweep();
+    const before = watcher.currentTaskProgress().get(id);
+    expect(before?.total).toBe(1);
+
+    listable = false;
+    await forceSweep();
+    expect(watcher.currentTaskProgress().get(id)).toEqual(before); // RETAINED, not wiped
+
+    listable = true;
+    await forceSweep();
+    expect(watcher.currentTaskProgress().get(id)).toEqual(before); // heals
+
+    rmSync(home, { recursive: true, force: true });
+  });
+});

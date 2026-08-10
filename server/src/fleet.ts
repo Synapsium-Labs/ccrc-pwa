@@ -157,19 +157,24 @@ export async function assembleFleet(
    * `watch.ts`'s own `sweepTasks`/`archiveMerged` lanes use.
    *
    * Load-bearing for correctness, not just for the saved round trips
-   * (blocking review finding 2, second pass): `FleetSession` carries no
-   * `unmeasured` field, so a caller that must tell a DEGRADED row from a
-   * measured one — `tick()`'s busy→idle "✓ Finished" push is the only one —
-   * can only do that off the `SessionRecord`s themselves. When this function
-   * took its OWN read, that caller's evidence came from a DIFFERENT read
-   * than the one that produced these rows: two whole-fleet sweeps, ~17 field
-   * reads per session each, a few hundred ms apart inside one tick. A row
-   * that read clean in the caller's sweep and degraded in THIS one was
-   * therefore emitted with `status` frozen at the `!cfgDir` default of
-   * 'idle' while the caller's `unmeasured` set said nothing was wrong — and
-   * the false "✓ Finished" push fired anyway. Passing the rows in makes the
-   * caller's evidence and this assembly's rows the SAME observation, which
-   * is the only way the two can never disagree.
+   * (bba5c09; restated here — blocking review finding 4 — on its REAL ground,
+   * since the claim this comment used to make, "`FleetSession` carries no
+   * `unmeasured` field", is false as of Task 2: `unmeasured: r.unmeasured` is
+   * assigned into the returned session below). The actual reason a caller
+   * MUST pass its own rows rather than let this function take a second,
+   * independent read: `watch.ts`'s `tick()` derives its evidence — the
+   * `unmeasuredIds` set its busy→idle "✓ Finished" push refuses to fire for —
+   * straight off THIS call's own return value (`sessions[i].unmeasured`), not
+   * off a separately-read set of `SessionRecord`s. If this function took its
+   * OWN read instead of the rows `tick()` already has, that would be a
+   * SEPARATE whole-fleet sweep, ~17 field reads per session, a few hundred ms
+   * after the one `tick()` used for `sweepHookStates`/`detectDialogs` — and a
+   * row that read clean in tick()'s sweep and degraded in THIS one would
+   * still land in `sessions` with `unmeasured` empty (wrong), or vice versa.
+   * Passing the rows in makes every lane inside one tick describe the
+   * IDENTICAL observation, which is the only way they can never disagree —
+   * the same reasoning `tick()`'s own comment states for why it shares this
+   * read with `sweepHookStates`/`detectDialogs` in the first place.
    */
   records?: SessionRecord[],
 ): Promise<FleetSession[]> {
@@ -230,8 +235,9 @@ export async function assembleFleet(
       askSummary: hookAskSummary(hs),
       subagents: hs?.subagents ?? null,
       // Carried straight off the record — this IS the evidence `tick()`'s own
-      // `unmeasuredIds` (watch.ts) computes independently off the same
-      // `records`, now also shipped on the wire so the PWA (grey+reason,
+      // `unmeasuredIds` (watch.ts) now derives its Set from directly, one
+      // field of these very rows (one derivation of one fact — blocking
+      // review finding 4), shipped on the wire so the PWA (grey+reason,
       // SessionLine.tsx) and the offline/state-cache snapshots (Task 2) can
       // tell a degraded row from a measured one too.
       unmeasured: r.unmeasured,
