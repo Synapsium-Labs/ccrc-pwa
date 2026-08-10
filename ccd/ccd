@@ -301,10 +301,19 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   # <cfg>/projects/<workdir with / . _ all mapped to ->/<uuid>.jsonl — the same
   # munge server/src/munge.ts applies. Recorded so a reap never has to be
   # reconstructed from an escaped path after the registry is gone.
+  #
+  # The workdir is RESOLVED first (`_ws_realpath`, longest existing prefix):
+  # Claude Code munges its physical cwd — node's process.cwd() resolves
+  # symlinks — while the registry keeps the path ccd wrote, and on this box
+  # `~/projects -> /data/projects -> /mnt/...`, so the raw munge named a
+  # projects dir Claude never writes. cmd_swap's transcript copy already
+  # resolves for exactly this reason (its `readlink -f`), and the server's
+  # `resolveTranscriptFile` resolves the same way; this was the last raw one.
   local id="$1" wrapper cfg workdir uuid munged
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   cfg=$(_cfg_dir "$wrapper")
   [[ -n "$cfg" && -n "$workdir" && -n "$uuid" ]] || return 1
+  workdir=$(_ws_realpath "$workdir")
   munged=$(printf '%s' "$workdir" | tr './_' '---')
   printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"
 }
@@ -1614,6 +1623,7 @@ caps
 clip
 enable
 ensure
+forget
 list
 menu
 pick
@@ -3299,7 +3309,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
-  local children strays
+  local children strays contained=0 obase
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -3763,22 +3773,95 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \
     || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
-  up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null) \
-    || { _reap_refuse no-upstream "$branch was never pushed"; return 1; }
-  # The DIRECTION is unchanged and the SENTENCE is not — round-3 P2's class,
-  # last instance, found by the final-round destructive review (F5b). A failed
-  # `rev-list` yields "", which is `!= 0`, so this refuses, which is right; but
-  # it then printed " commit(s) are not on the remote" — a count, with the
-  # number missing, about a comparison that never ran. `_ws_gc_merged` and
-  # `_ws_gc_dirty` both already say the rule for the file: report unprovable as
-  # unprovable.
-  ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
-  [[ "$ahead" == 0 ]] \
-    || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
-           && echo "$ahead commit(s) are not on the remote" \
-           || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
+  if up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null); then
+    # The DIRECTION is unchanged and the SENTENCE is not — round-3 P2's class,
+    # last instance, found by the final-round destructive review (F5b). A failed
+    # `rev-list` yields "", which is `!= 0`, so this refuses, which is right; but
+    # it then printed " commit(s) are not on the remote" — a count, with the
+    # number missing, about a comparison that never ran. `_ws_gc_merged` and
+    # `_ws_gc_dirty` both already say the rule for the file: report unprovable as
+    # unprovable.
+    ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
+    [[ "$ahead" == 0 ]] \
+      || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
+             && echo "$ahead commit(s) are not on the remote" \
+             || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
+  else
+    # ── THE CONTAINED RUNG — never pushed, and nothing origin lacks ──
+    # A branch with no upstream used to refuse here unconditionally, which made
+    # every abandoned-but-merged workspace permanently unremovable from the
+    # sheet: the ladder demanded remote evidence (upstream -> pushed -> merged
+    # PR) for a proposition — "no unique work would be destroyed" — that is
+    # directly provable with no remote evidence at all when the tip is an
+    # ancestor of origin/HEAD. That is the same definition of merged that
+    # `_ws_gc_merged` applies to orphans and the per-child ladder above applies
+    # to nested checkouts; the parent was the only place that never asked.
+    #
+    # The rung mints proof `contained` and binds NO PR: REAP_PRNUM, REAP_PRURL,
+    # REAP_MERGE and REAP_HEADOID keep their reset "" — the audit prints them
+    # as null/"" (the same unbound shape every pre-Phase-C refusal has always
+    # had), never a plausible value nobody measured. Phase C's PR bind is
+    # skipped entirely below: there is no PR to bind, and `gh` has nothing to
+    # answer about a branch it has never seen.
+    #
+    # REAP_TIP is resolved HERE, not left to Phase C: `_ws_reap_tail`'s branch
+    # delete is `update-ref -d refs/heads/$branch "$REAP_TIP"`, and an empty
+    # old-value degrades that CAS into an unconditional delete (measured, git
+    # 2.43 — see the comment at the call site). Reapable with an empty tip is
+    # not a state this function may reach by any path.
+    REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
+      || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
+    git -C "$main" remote get-url origin >/dev/null 2>&1 \
+      || { _reap_refuse no-remote "no origin remote for $project — $branch was never pushed and there is nothing to prove containment against"; return 1; }
+    # Mergedness is NEVER proven against an unfetched ref — Phase C's own
+    # doctrine, and this rung proves a mergedness. The fetch runs FIRST, and a
+    # fetch that failed proves nothing rather than proving against yesterday.
+    timeout 60 git -C "$main" fetch --quiet origin \
+      || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
+    REAP_FETCHED=$(date +%s)
+    # THE SYMREF IS RE-DERIVED FROM THE REMOTE, not read from the clone-time
+    # memory — adversarial-review finding on this rung's first draft. `git
+    # fetch` neither prunes a branch the remote deleted nor moves the local
+    # origin/HEAD symref, so a remote that switched its default and deleted
+    # the old one left the draft proving containment against a FROZEN tracking
+    # ref: "origin already holds every commit on it", said about an origin
+    # that holds none of them (measured, git 2.43 — deleted default, symref
+    # still resolving, is-ancestor still 0). `set-head --auto` asks the remote
+    # what its HEAD is NOW and repoints the symref; the branch it lands on was
+    # just fetched, so the proof below runs against origin's present, not its
+    # past. A remote that advertises no default (unborn HEAD) fails this and
+    # refuses — the verdict stays no-upstream because the branch WAS never
+    # pushed, and the detail names the half that could not be checked.
+    timeout 60 git -C "$main" remote set-head origin --auto >/dev/null 2>&1 \
+      || { _reap_refuse no-upstream "$branch was never pushed, and origin did not advertise a default branch to prove containment against (git remote set-head origin --auto failed) — push the branch instead"; return 1; }
+    # No origin/HEAD is NOT "not an ancestor": `merge-base --is-ancestor`
+    # against a ref that does not resolve exits non-zero for a comparison that
+    # never ran. The per-child ladder refuses that state out loud; so does
+    # this. Post-set-head this is near-unreachable belt-and-braces, kept for
+    # the same polarity everywhere: nothing read, nothing passed.
+    obase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
+      || { _reap_refuse no-upstream "$branch was never pushed, and origin/HEAD does not resolve so containment cannot be proven"; return 1; }
+    git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$obase" 2>/dev/null
+    case $? in
+      0) REAP_PROOF=contained ;;
+      1) _reap_refuse no-upstream "$branch was never pushed and holds commits not reachable from $obase"; return 1 ;;
+      *) _reap_refuse no-upstream "$branch was never pushed, and comparing it against $obase failed — refusing on a comparison that did not run"; return 1 ;;
+    esac
+    # The base oid is a fingerprint input (12 of 14). Phase C resolves it after
+    # its own fetch and refuses `base-missing` rather than hashing a field
+    # nobody measured — deviation 6's rule — and this rung reaps under the same
+    # token discipline, so it does the same.
+    REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) \
+      || { _reap_refuse base-missing "$base does not resolve"; return 1; }
+    contained=1
+  fi
 
   # ── Phase C: the work is genuinely in main ─────────────────────
+  # Skipped in full when the contained rung proved there is no unique work: a
+  # PR bind for a branch that has no PR refuses `no-bound-pr`, and a merge
+  # proof against an empty merge commit refuses `merge-commit-missing` — both
+  # statements about evidence this verdict does not rest on.
+  if (( ! contained )); then
   REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
     || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
   repo=$(_gh_repo_slug "$main") || { _reap_refuse no-remote "no origin remote for $project"; return 1; }
@@ -3849,6 +3932,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     _reap_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
     return 1
   fi
+  fi   # (( ! contained )) — the contained rung proved its own tip, base and proof
 
   # ── Phase D1: the session ──────────────────────────────────────
   st=$(_ws_status "$id") || { _reap_refuse status-unknown "cannot read the wrapper status file"; return 1; }
@@ -4533,11 +4617,12 @@ _ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
   #     now, by `pins the tip even past the 200-ref cap`; how big it is still
   #     costs a fixture with 200 resolvable commits in it, and this dump is not
   #     read by any guard at all).
-  #   - the `REAP_PRNUM` numeric test — Phase C proved a bound merged PR before
-  #     this line can run, so it is always numeric HERE. The sibling in
-  #     `_ws_reap_tail`'s printf is genuinely reachable (the resume path prints
-  #     an empty one) and is pinned there; this one is the same shape kept for
-  #     the same reason, `"pr":` being invalid JSON.
+  #   - the `REAP_PRNUM` numeric test — no longer a survivor since the
+  #     contained rung landed: a fresh reap can now reach this line with an
+  #     EMPTY `REAP_PRNUM` (never pushed, nothing unique, no PR bound), and the
+  #     contained end-to-end test pins the null it prints. The sibling in
+  #     `_ws_reap_tail`'s printf was always reachable (the resume path prints
+  #     an empty one) and is pinned there.
   # The seventh is `|| transcript=""`, which cannot change anything at all: a
   # bare `VAR=$(cmd)` already assigns "" when cmd fails. It is written because
   # `cmd_ws_audit` (ccd:2161) writes it, and these two records name the same
@@ -6997,6 +7082,47 @@ cmd_stop() {   # <id>  |  <wrapper> <project>
   echo "stopped $id"
 }
 
+cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry.
+  # The end-of-life a plain session never had. `stop` deliberately leaves the
+  # registry (the row and its record survive a restart), archive/reap are
+  # workspace-only by contract, and ws-gc's dead-reg arm walks only
+  # `.workspace` entries — so a dead wrapper session on a project's main
+  # checkout was an immortal fleet row, removable by nothing.
+  #
+  # What this touches is EXACTLY the registry entry: no worktree, no branch,
+  # no git anything — a non-workspace session has none that are ccd's — and
+  # deliberately NOT the transcript or the pasted images. Those exist nowhere
+  # else; a verb whose confirmation surface is one line of stdout has no
+  # business destroying anything it would first have to enumerate. The row
+  # can be re-created any time by starting the session again; what cannot be
+  # re-created is kept.
+  local id="${1:?usage: ccd forget <id>}"
+  [[ $# -eq 1 ]] || die "usage: ccd forget <id>"
+  # The id is globbed against $REG by _reg_purge, so its shape is checked
+  # here the same way cmd_ws_hold checks its own.
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  local ws; ws=$(_reg_get "$id" workspace)
+  [[ -z "$ws" ]] \
+    || die "$id is a workspace — its removal is audited and confirmed: use the workspace sheet (ws-audit/ws-reap), or ccd ws-rm"
+  # A hold is a program's declaration that it is mid-flight here. Same rung,
+  # same polarity as ws-rm: `-e` not `-f`, present-but-unreadable refuses.
+  if [[ -e "$REG/$id.hold" ]]; then
+    die "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+  fi
+  # Deadness is a precondition, not an effect: forget is for a row whose
+  # session is already gone. Stopping a live one is `ccd stop`'s job, and
+  # collapsing the two into one verb turns a cleanup into a kill.
+  ! _alive "$id" || die "$id is still running — stop it first: ccd stop $id"
+  # The unit outlives the tmux session: enabled + dead is exactly the state
+  # systemd exists to reverse, and a purge that left it enabled would race a
+  # resurrection writing fresh registry files behind it.
+  _ws_unsupervise "$id"
+  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+  _reg_purge "$id"
+  echo "forgot $id — registry entry removed; the transcript and any pasted images are kept"
+}
+
 cmd_ls() {
   printf '%-28s %-12s %-6s %s\n' "ID" "WRAPPER" "ALIVE" "WORKDIR"
   local f id; shopt -s nullglob
@@ -7079,6 +7205,7 @@ case "${1:-}" in
   supervise) shift; cmd_supervise "$@" ;;
   enable)    shift; cmd_enable "$@" ;;
   stop)      shift; cmd_stop "$@" ;;
+  forget)    shift; cmd_forget "$@" ;;
   swap)      shift; cmd_swap "$@" ;;
   swap-self) shift; cmd_swap_self "$@" ;;
   prefer)    shift; cmd_prefer "$@" ;;
@@ -7100,6 +7227,6 @@ case "${1:-}" in
   ws-release) shift; cmd_ws_release "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state} <args>" >&2; exit 1 ;;
 esac
 fi

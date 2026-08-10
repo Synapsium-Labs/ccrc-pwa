@@ -17,7 +17,7 @@ import type { NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress } fr
 import { UNCHECKED_PR } from '../../shared/api.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
-import { transcriptPath } from './transcript/resolve.js';
+import { resolveTranscriptFile } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import { toRunSummary } from './coord/store.js';
 import { configDirFor } from './config.js';
@@ -1045,7 +1045,7 @@ export class FleetWatcher {
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
       const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
       if (!cfgDir) continue;
-      const file = transcriptPath(cfgDir, r.workdir, r.uuid);
+      const file = await resolveTranscriptFile(this.deps.io, cfgDir, r.workdir, r.uuid);
       if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
       const title = await readAiTitle(this.deps.io, file);
       if (title === null) continue;

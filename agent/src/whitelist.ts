@@ -309,6 +309,14 @@ export const EXEC_WHITELIST = {
   // `ws-gc` is absent and must stay absent: ['ws-gc'] would permit `--prune`.
   ccd: [
     ['start'], ['enable'], ['ensure'], ['stop'], ['swap'], ['ws-add'],
+    // `forget` removes a dead NON-workspace session's registry entry and
+    // nothing else — no worktree, no branch, no transcript, no clips. Every
+    // gate that decides it (not a workspace, not held, not alive) is ccd's
+    // own, re-proven on the box; the grant is one token wide because the verb
+    // takes nothing but the id. It is not ws-rm by another name: ws-rm tears
+    // down a WORKSPACE (worktree + branch), which is exactly what forget
+    // refuses to touch.
+    ['forget'],
     ['pr-state', '--session'],
     ['pr-state', '--project'],
     ['pr-open',  '--session'],
