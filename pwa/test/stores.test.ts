@@ -484,9 +484,14 @@ describe('fleet store', () => {
       store.getState().connect();
       lastSocket().open();
 
+      expect(store.getState().runsFrameSeen).toBe(false);
       const runs = [runSummary(1, 'working')];
       lastSocket().message(JSON.stringify({ type: 'runs', runs }));
       expect(store.getState().runs).toEqual(runs);
+      // `RunsScreen` (fix round 1, task 5, findings 1/3) reads this to tell
+      // "the frame genuinely said nothing" apart from "no frame has arrived
+      // yet" — a well-formed frame must flip it, even one carrying `[]`.
+      expect(store.getState().runsFrameSeen).toBe(true);
       store.getState().disconnect();
     });
 
@@ -501,6 +506,20 @@ describe('fleet store', () => {
       // it explicitly here so nobody "helpfully" makes the parser throw.
       expect(() => lastSocket().message(JSON.stringify({ type: 'runs' }))).not.toThrow();
       expect(store.getState().runs).toEqual([]);
+      // Dropped, not accepted — a malformed frame must not flip the "the
+      // socket has genuinely spoken" flag either.
+      expect(store.getState().runsFrameSeen).toBe(false);
+      store.getState().disconnect();
+    });
+
+    it('a well-formed frame carrying `[]` still flips `runsFrameSeen` — an honest empty roster is not silence', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'runs', runs: [] }));
+      expect(store.getState().runs).toEqual([]);
+      expect(store.getState().runsFrameSeen).toBe(true);
       store.getState().disconnect();
     });
   });

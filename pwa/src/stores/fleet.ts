@@ -58,9 +58,24 @@ export interface FleetState {
   feedDropped: number;
   /** Build 7's run board reads this. PR I fills it; PR J renders it. Shape-
    *  validated only at the frame level (an array of runs), the same depth
-   *  `fleet` is: `reviveFleetSession`-grade revival for runs is PR J's problem
-   *  when it has a renderer to protect. */
+   *  `fleet` is — per-row tolerance (a state this build's vocabulary has no
+   *  key for, a row with no `items`) is the renderer's job now that one
+   *  exists to protect: `pwa/src/fleet/runWords.ts`'s `runState`/`runItems`,
+   *  never a cast at this boundary (fix round 1, task 5, finding 2). */
   runs: RunSummary[];
+  /** Has `/ws/fleet` ever actually sent a `{type:'runs'}` frame THIS store
+   *  instance's lifetime — never reset, including across a reconnect, the
+   *  same "sticky until replaced" stance `runs`/`sessions` themselves take.
+   *  `runs.length > 0` cannot answer this: an active-only frame legitimately
+   *  broadcasts `[]` the moment the fleet's last open run closes, and that
+   *  empty array is indistinguishable from "nothing has arrived yet" by
+   *  content alone. `RunsScreen` needs the distinction to know whether `runs`
+   *  is CURRENT truth (trust it, including empty) or simply unset (fall back
+   *  to the cold `GET /api/runs` read instead) — without this flag, a run
+   *  that closes gets resurrected by a stale cold snapshot the moment the
+   *  live frame it should have deferred to says `[]` (fix round 1, task 5,
+   *  findings 1 and 3). */
+  runsFrameSeen: boolean;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -140,6 +155,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       feedDropped: 0,
       blocked: false,
       runs: [],
+      runsFrameSeen: false,
 
       connect() {
         if (socket) return;
@@ -196,10 +212,11 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               set({ blocked });
             } else if (msg.type === 'runs') {
               // Shape-validated only at the frame level (`asFleetMsg`'s own
-              // `Array.isArray` check) — PR J's renderer is what needs
-              // `reviveFleetSession`-grade per-row revival, once it exists to
-              // protect.
-              set({ runs: msg.runs });
+              // `Array.isArray` check) — RunsScreen's own `runWords.ts`
+              // (`runState`/`runItems`) is where a malformed ROW degrades.
+              // `runsFrameSeen` flips once and stays flipped: the frame has
+              // now genuinely spoken, even the FIRST time it says `[]`.
+              set({ runs: msg.runs, runsFrameSeen: true });
             }
           },
           onState: (conn) => set({ conn }),
