@@ -21,7 +21,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { readRegistry, readSessionRecord } from './registry.js';
+import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
@@ -433,9 +433,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // C0.3: one session's own row, not the whole registry — see
     // `registry.ts`'s `readSessionRecord`.
     readAsk: async (id: string) => {
-      const rec = await readSessionRecord(deps.io, deps.cfg, id);
-      if (rec === null) return null;
-      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, rec.uuid, Date.now());
+      const read = await readSessionRecord(deps.io, deps.cfg, id);
+      if (!read.found) return null;
+      // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
+      // look up hookstate under a value that matches no real file, reading
+      // as "no ask" rather than "we don't know" — null here is the honest
+      // answer and this route is polled, so it heals on the next read.
+      const identity = measuredIdentity(read.record);
+      if (identity === null) return null;
+      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, identity.uuid, Date.now());
       return hs === null ? null : { ask: hs.ask, state: hs.state };
     },
   };
@@ -565,21 +571,33 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
     // C0.3: one session's own row, not the whole registry.
-    const rec = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    if (!read.found) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    // REFUSE, not degrade: this is identity, and stopPair below RECOMPUTES a
+    // wrapper/project pair from these very fields to kill a tmux session by
+    // name. Two unmeasured fields could otherwise conspire to name the WRONG
+    // session — 404 unknown-session would be a LIE (the row is right there,
+    // just unmeasured), so this answers 503, the fleet's own
+    // registry-unmeasurable shape, instead.
+    const identity = measuredIdentity(read.record);
+    if (identity === null) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
+    const rec = read.record;
     // A workspace id is `<project>-<slug>` and encodes no wrapper at all, so
     // there is nothing to reverse: the prefix rule below would fall through to
-    // rec.wrapper and ccd would recompute `<wrapper>-<project>` — a DIFFERENT,
-    // live session, killed while the workspace kept running and the PWA
-    // reported success. ccd stop's one-argument form takes the id whole.
+    // identity.wrapper and ccd would recompute `<wrapper>-<project>` — a
+    // DIFFERENT, live session, killed while the workspace kept running and
+    // the PWA reported success. ccd stop's one-argument form takes the id
+    // whole.
     if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id));
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
-    // rec.wrapper, which a prior swap flips to the new account while the
+    // identity.wrapper, which a prior swap flips to the new account while the
     // id/tmux name keep the old prefix.
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
-      : rec.wrapper;
+      : identity.wrapper;
     return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project));
   });
 

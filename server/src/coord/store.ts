@@ -807,12 +807,21 @@ export class CoordStore {
    *  cosmetically wrong `lastError`/`attempts` on an already-closed row,
    *  never a resurrected replay — guarded anyway, for the same reason every
    *  other writer of this column is: the row's recorded reason for its own
-   *  terminal state should name the write that actually caused it. */
-  backOff(id: number, lastError: string, nextAttemptAt: number): void {
+   *  terminal state should name the write that actually caused it.
+   *
+   *  `countsAsAttempt` (registry ladder, default `true` — every EXISTING
+   *  caller is a genuine send failure and stays unchanged): `false` is
+   *  `sweepMail`'s own "recipient found but unmeasurable" branch, which never
+   *  even reached `sendPrompt` — `attempts` is SEND-FAILURE budget
+   *  (`MAIL_MAX_ATTEMPTS`'s own docstring), and ratcheting it on a row that
+   *  was never attempted would let that branch march toward the SAME park
+   *  ceiling a genuine failure does, for a recipient this sweep has not
+   *  actually proven gone. */
+  backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
     this.db.prepare(
-      'UPDATE mail_deliveries SET attempts = attempts + 1, lastError = ?, nextAttemptAt = ? ' +
+      'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +
       "WHERE id = ? AND state NOT IN ('acked','rejected')",
-    ).run(lastError, nextAttemptAt, id);
+    ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
   }
 
   /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22, the

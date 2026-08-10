@@ -104,6 +104,30 @@ describe('the naming sweep', () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  // Registry ladder (architecture doc, increment 1's second half): SKIP,
+  // before ANYTHING else — an unmeasured `uuid` would compute an
+  // `incarnation` key belonging to no real incarnation (`''` for every
+  // degraded session, so two unrelated degraded sessions collide on the
+  // SAME `attemptedRenames`/`nameSweepRetired` budget), and an unmeasured
+  // `.archivedAt` would defeat the archived-exclusion test. Written FIRST
+  // and confirmed red against the pre-gate code, which read `r.uuid`/
+  // `r.wrapper`/`r.workdir` straight off a row `readRegistry` used to drop
+  // entirely rather than degrade — this row reaches `sweepNames` for the
+  // first time ever under the ladder.
+  it('skips a row with an unmeasured identity field — never renames it, never reads its transcript', async () => {
+    const h = harness();
+    seed(h.home);
+    transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
+    const unreadableWrapper: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith(`${ID}.wrapper`) ? null : localIO.readFile(p)),
+    };
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: unreadableWrapper }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toEqual([]);
+  });
+
   // Review finding 6: a successful rename used to log nothing at all, so a
   // post-deploy audit had no line anywhere to grep for the sweep's most common
   // outcome. One line, naming the session and both branch names.

@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { assembleFleet, hookAskSummary, idHomeWrapper } from '../src/fleet.js';
+import { assembleFleet, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import type { HookState } from '../src/hookstate.js';
 import type { PrState } from '../../shared/api.js';
@@ -74,6 +74,65 @@ describe('assembleFleet', () => {
     const dead = fleet.find((s) => s.id === 'claude-dead-proj')!;
     expect(dead.status).toBe('dead');
     expect(dead.name).toBeNull();
+  });
+});
+
+// Registry ladder (architecture doc, increment 1's second half): `liveStatus`
+// backs `POST /api/sessions/:id/interrupt`'s own busy check
+// (`server.ts:514`) — a degraded row reading 'dead' makes that route refuse
+// an interrupt on a session that is plainly mid-turn, fails-open in exactly
+// the direction spec's own THE PRINCIPLE forbids ("fails toward refusing an
+// interrupt"). Written FIRST and confirmed red against the pre-ladder code,
+// where `readSessionRecord`'s old `null`-on-any-unreadable-field answer made
+// `!rec` true for a row this fixture proves is genuinely busy.
+describe('liveStatus', () => {
+  it('answers busy for a session with an unmeasured (but IRRELEVANT to this question) workdir/uuid — ' +
+     'never dead, never blind to a live pane because of a read failure on a field it does not even use', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude-quiet-mesa', 'claude');
+    const cfgDir = path.join(home, '.claude');
+    mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
+    writeFileSync(path.join(cfgDir, 'sessions', '4242.json'), JSON.stringify({
+      pid: 4242, sessionId: '1'.repeat(36), cwd: '/data/projects/claude-quiet-mesa',
+      status: 'busy', statusUpdatedAt: 1784600000000,
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    // `workdir` (irrelevant to liveStatus: it never reads it) is the ONE
+    // unreadable field — `wrapper` (which liveStatus DOES need, to resolve
+    // cfgDir) reads clean.
+    const unreadableWorkdir: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith('claude-quiet-mesa.workdir') ? null : localIO.readFile(p)),
+    };
+    const status = await liveStatus(unreadableWorkdir, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
+    expect(status).toBe('busy');
+  });
+
+  it('still answers dead for a session genuinely absent from the registry', async () => {
+    const home = mkTmp('ccrc-');
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const status = await liveStatus(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-nope');
+    expect(status).toBe('dead');
+  });
+
+  it('answers idle (never dead, never a throw) for an unmeasured WRAPPER — the existing !cfgDir fallback', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, 'claude-quiet-mesa', 'claude');
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const unreadableWrapper: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith('claude-quiet-mesa.wrapper') ? null : localIO.readFile(p)),
+    };
+    const status = await liveStatus(unreadableWrapper, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
+    expect(status).toBe('idle');
   });
 });
 

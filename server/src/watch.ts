@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet } from './fleet.js';
-import { readRegistry, readSessionRecord } from './registry.js';
+import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -1016,6 +1016,16 @@ export class FleetWatcher {
     // Same reason sweepTasks and sweepPr read the registry themselves.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
+      // SKIP a degraded row before anything else: an unmeasured `uuid`
+      // computes an `incarnation` key (`${r.id}#${identity.uuid}`, below)
+      // belonging to no real incarnation — `''` for every degraded session,
+      // so two unrelated degraded sessions would collide on the SAME
+      // `attemptedRenames`/`nameSweepRetired` budget — and an unmeasured
+      // `.archivedAt` would defeat the archived-exclusion test right below
+      // (a false null there makes an already-archived row look eligible for
+      // a rename it must never receive: `ws-rename` on an archived worktree).
+      const identity = measuredIdentity(r);
+      if (identity === null) continue;
       // `ws-archive` destroys nothing — an archived row is still `workspace
       // !== null` with `branch` still at the born name — so it is excluded
       // here explicitly, the same shape `archiveMerged` below already uses.
@@ -1026,12 +1036,13 @@ export class FleetWatcher {
       // recycled by ws-reap (`ccd:950-951`'s "144 per project, recycled") —
       // `_ws_slug_free` only ever checks live registry rows, which `_reg_purge`
       // deletes on reap, so nothing stops a later `ws-add` drawing the same
-      // slug for an unrelated workspace. `r.uuid` is the Claude Code session
-      // uuid, freshly minted by every `ws-add`, so a recycled id pairs with a
-      // NEW uuid and this key cannot collide with a retired incarnation of the
-      // same id — the same self-healing property `titleProbe` already has by
-      // keying on a transcript PATH that changes with the uuid.
-      const incarnation = `${r.id}#${r.uuid}`;
+      // slug for an unrelated workspace. `identity.uuid` is the Claude Code
+      // session uuid, freshly minted by every `ws-add`, so a recycled id
+      // pairs with a NEW uuid and this key cannot collide with a retired
+      // incarnation of the same id — the same self-healing property
+      // `titleProbe` already has by keying on a transcript PATH that changes
+      // with the uuid.
+      const incarnation = `${r.id}#${identity.uuid}`;
       // The cheapest question in the function, asked before anything that
       // costs a stat or a read: THIS INCARNATION, once retired by a permanent
       // refusal (`has-upstream` and its siblings), never un-retires — but a
@@ -1043,9 +1054,9 @@ export class FleetWatcher {
       // "an unsupported verb records no attempt" true of the stat gate as well
       // as of the attempted set.
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
-      const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
+      const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
       if (!cfgDir) continue;
-      const file = transcriptPath(cfgDir, r.workdir, r.uuid);
+      const file = transcriptPath(cfgDir, identity.workdir, identity.uuid);
       if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
       const title = await readAiTitle(this.deps.io, file);
       if (title === null) continue;
@@ -1266,7 +1277,19 @@ export class FleetWatcher {
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < MAIL_COOLDOWN_MS) continue;
         const rec = records.find((r) => r.id === d.toId);
-        if (!rec) {
+        // registry ladder: `records` came from `readRegistry`, which now
+        // DEGRADES rather than drops a row whose `.uuid` is listed but a
+        // sibling identity field is not (registry.ts's own ladder) — so `rec`
+        // being found-but-degraded and `rec` being altogether ABSENT are two
+        // different facts, evidence read straight off the row itself
+        // (`measuredIdentity(rec)`) rather than the hand-rolled
+        // `listing.includes` probe this block used to run. `rec === undefined`
+        // therefore NARROWS to PROVEN absence: either never listed, or
+        // twice-observed gone within `readRegistry`'s own second-listing
+        // retirement — never "we just couldn't read one field this pass".
+        const identity = rec !== undefined ? measuredIdentity(rec) : null;
+        if (identity === null) {
+          const unmeasurable = rec !== undefined;
           // Fix — review finding 30: a row whose recipient's registry row is
           // genuinely ABSENT (reaped, purged) used to `continue` here with
           // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
@@ -1283,24 +1306,31 @@ export class FleetWatcher {
           // ORDINARY and expected to hold indefinitely for a session that is
           // merely busy, and must never accrue toward a park.
           //
-          // Fix (scoped-verify): `records` came from `readRegistry`, which
-          // drops a row whose `.uuid` file IS listed when a SIBLING field read
-          // merely fails (`registry.ts:123`, "incomplete registry entry —
-          // skip, don't crash") — transient, not evidence the recipient is
-          // gone. `POST /api/mail`'s own ingress already draws this exact
-          // line, refusing `registry-unmeasurable` rather than guessing
-          // whenever a row's `.uuid` is listed but unreadable (D-37,
+          // A DEGRADED row (`unmeasurable`) must NEVER park, ever — the
+          // recipient plainly still exists, only this one read could not
+          // measure it — the same line `POST /api/mail`'s own ingress draws,
+          // refusing `registry-unmeasurable` rather than guessing whenever a
+          // row's `.uuid` is listed but a sibling is not (D-37,
           // `coord/routes.ts`'s `names.includes` checks, pinned at
-          // `mail-routes.test.ts:259`). `listing` — the raw directory read at
-          // the top of THIS sweep, in scope for exactly this reason — carries
-          // the same evidence of presence `names` gives the ingress. Without
-          // this check, one dropped agent-WS round trip on a SINGLE field of a
-          // LIVE session's registry row was indistinguishable from that
-          // session being reaped, and six backoffs (~15 minutes) permanently
-          // parked its mail `rejected('undeliverable')`. "Listed but
-          // unreadable" therefore keeps backing off, unmeasured, forever — the
-          // same as every ordinary gate below — while only a recipient absent
-          // from `listing` too can ever park.
+          // `mail-routes.test.ts:259`). Without this, one dropped agent-WS
+          // round trip on a SINGLE field of a LIVE session's registry row was
+          // indistinguishable from that session being reaped, and six
+          // backoffs (~15 minutes) permanently parked its mail
+          // `rejected('undeliverable')`. "Unmeasurable" therefore keeps
+          // backing off forever — the same as every ordinary gate below —
+          // while only a recipient PROVEN absent can ever park.
+          //
+          // `store.backOff`'s `countsAsAttempt: false` on the unmeasurable arm
+          // (checked every reader of the `attempts` column first: the ONLY
+          // other reader is this same file's own `d.attempts + 1` two lines
+          // below and `dueDeliveries`' pass-through select — no ratchet here
+          // means this row's own local `attempts` snapshot never advances
+          // past 1, so its backoff step stays fixed at `MAIL_BACKOFF_BASE_MS`
+          // rather than climbing toward `MAIL_MAX_ATTEMPTS` — the ceiling this
+          // branch must never reach) — attempts is SEND-FAILURE budget
+          // (`MAIL_MAX_ATTEMPTS`'s own docstring), and this row was never
+          // attempted at all, only found unmeasurable before any gate below
+          // could even run.
           //
           // No `MailRejectCode` applies here (scoped-verify H6: a `backOff` is
           // not a reject, so `registry-unmeasurable` — a `refuse(...)` code the
@@ -1310,15 +1340,14 @@ export class FleetWatcher {
           // typed column — so the word itself rides along in the message
           // below, not just in this comment, for whoever greps the ROW rather
           // than the source.
-          const listedButUnreadable = listing.includes(`${d.toId}.uuid`);
           const attempts = d.attempts + 1;
-          if (attempts >= MAIL_MAX_ATTEMPTS && !listedButUnreadable) {
+          if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
             store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
             store.backOff(d.id,
-              listedButUnreadable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
-              now + step);
+              unmeasurable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
+              now + step, !unmeasurable);
           }
           continue;
         }
@@ -1326,7 +1355,7 @@ export class FleetWatcher {
         const hs = await hookStateFor(d.toId);
         if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
         const pid = await this.deps.tmux.panePid(d.toId);
-        const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
+        const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
         if (!pid || !cfgDir) continue;
         const live = await readLiveState(this.deps.io, cfgDir, pid);
         if (!live || liveSessionStatus(live.status) !== 'idle') continue;
@@ -1519,12 +1548,28 @@ export class FleetWatcher {
   async archiveSafety(id: string): Promise<{ verdict: 'ok' | 'busy' | 'attached' | 'unknown'; held: string | null }> {
     if (this.bus.listenerCount(`session:${id}`) > 0) return { verdict: 'attached', held: null };
     // C0.3: one session's own row, not the whole registry.
-    const rec = await readSessionRecord(this.deps.io, this.deps.cfg, id);
-    if (!rec) return { verdict: 'unknown', held: null };
+    const read = await readSessionRecord(this.deps.io, this.deps.cfg, id);
+    if (!read.found) return { verdict: 'unknown', held: null };
+    const rec = read.record;
+    // SKIP (defer): a row with an unmeasured identity field — `measuredIdentity`
+    // answers null — is treated EXACTLY like the previously-dropped row it
+    // used to be before the ladder existed — `readSessionRecord` would have
+    // answered `{found:false}` for this same fixture, and `!read.found` above
+    // already meant `{unknown, held: null}`. `held: null`, not `rec.held`,
+    // to preserve that pre-change shape
+    // exactly, even though `.held` itself is a separate field that COULD
+    // still be readable — the point of this branch is "answer nothing more
+    // than the dropped row used to", not "answer everything we happen to
+    // still have". Preserved explicitly rather than left to fall out of
+    // `cfgDir`'s own failure below (only wrapper degradation would trigger
+    // that) — `workdir`/`uuid` degradation must defer too, even though
+    // neither is read directly in this function.
+    const identity = measuredIdentity(rec);
+    if (identity === null) return { verdict: 'unknown', held: null };
     const held = rec.held;
     if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
     const pid = await this.deps.tmux.panePid(id);
-    const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
+    const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
     if (!pid || !cfgDir) return { verdict: 'unknown', held };
     const live = await readLiveState(this.deps.io, cfgDir, pid);
     if (!live) return { verdict: 'unknown', held };
@@ -1547,6 +1592,14 @@ export class FleetWatcher {
 
   private async archiveMerged(records: SessionRecord[]): Promise<void> {
     for (const r of records) {
+      // SKIP, before ANYTHING else — including the workspace/archivedAt test
+      // right below, which itself becomes UNSAFE on a degraded row: both
+      // fields read null on an unreadable file, and `workspace === null`
+      // would make an actually-active merged workspace look like one with no
+      // workspace at all (harmless), while `archivedAt !== null` reading
+      // false-negative (null) on a row that WAS already archived would make
+      // an already-archived workspace look freshly archive-ELIGIBLE again.
+      if (measuredIdentity(r) === null) continue;
       const pr = this.prStates.get(r.id);
       if (r.workspace === null || r.archivedAt !== null) continue;
       if (pr?.phase !== 'merged') continue;                 // unknown NEVER archives

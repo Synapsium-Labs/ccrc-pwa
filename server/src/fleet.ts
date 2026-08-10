@@ -97,9 +97,20 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // over the rest of the fleet — so it reads just that id's row rather than
   // the whole registry (readRegistry's 24-generation sweep, ~409 round trips
   // on a 24-session fleet in remote mode, for a question about one session).
-  const rec = await readSessionRecord(io, cfg, id);
-  if (!rec || !(await tmux.hasSession(id))) return 'dead';
+  const read = await readSessionRecord(io, cfg, id);
+  // A degraded row must never answer 'dead' — the interrupt route's own
+  // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
+  // this read simply could not measure would let it refuse an interrupt on a
+  // plainly busy one. `!read.found` (genuinely absent, or the whole
+  // directory unlistable) is still 'dead': there is no pane to ask about
+  // either way, the same answer this gave before the ladder existed.
+  if (!read.found || !(await tmux.hasSession(id))) return 'dead';
+  const rec = read.record;
   const pid = await tmux.panePid(id);
+  // Unmeasured wrapper => 'idle', via the EXISTING `!cfgDir` fallback: a
+  // degraded `rec.wrapper` is `''`, which `configDirFor` (an unknown wrapper
+  // string) already answers `undefined` for — honest-but-blind, and it fails
+  // TOWARD refusing an interrupt rather than granting one on a guess.
   const cfgDir = configDirFor(cfg.home, rec.wrapper);
   if (!pid || !cfgDir) return 'idle';
   const live = await readLiveState(io, cfgDir, pid);

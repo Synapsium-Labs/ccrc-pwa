@@ -12,9 +12,11 @@ import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { readRegistry, HOLD_NO_REASON, HOLD_UNREADABLE } from '../src/registry.js';
+import type { SessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { loadConfig } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
+import type { PrState } from '../../shared/api.js';
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
@@ -185,6 +187,55 @@ describe('archiveMerged — merged AND unheld', () => {
     // this file exists to pin. These two say WHICH branch fired: the held one,
     // which archives nothing and says so.
     for (const [payload] of notify.mock.calls) expect(payload.body).toContain('nothing archived');
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    w.stop();
+  });
+
+  // Registry ladder (architecture doc, increment 1's second half): SKIP,
+  // before ANYTHING else — including the `workspace === null ||
+  // archivedAt !== null` test right below it in `archiveMerged`, which is
+  // itself UNSAFE on a degraded row (both fields read null on an unreadable
+  // file, and a false null on `archivedAt` would make an ALREADY-archived
+  // workspace look freshly archive-ELIGIBLE). Written FIRST and confirmed
+  // red against the pre-gate code: `records` comes from `readRegistry`,
+  // which now DEGRADES (never drops) a row with one unreadable identity
+  // field, so this row reaches `archiveMerged`'s loop for the first time
+  // ever — exactly the hazard the design's own review flagged ("emitting
+  // rows that were previously dropped exposes them to destructive lanes for
+  // the first time").
+  it('skips a row with an unmeasured identity field — never archives it, however merged it looks', async () => {
+    // Calls the private `archiveMerged` DIRECTLY, with a hand-built,
+    // FULLY WORKING `io` (a live, idle, unheld session that a healthy
+    // `archiveSafety` fresh read would happily answer 'ok' for) — isolating
+    // THIS guard from `archiveSafety`'s own, separate one (added by the same
+    // ladder): only the `records` snapshot handed to `archiveMerged` carries
+    // `unmeasured`, exactly modelling a field that read back unreadable in
+    // the PRE-SWEEP snapshot `sweepPr` took (this file's own "the hold is
+    // re-read at the DECISION POINT" block explains why that snapshot
+    // exists) yet would read clean if re-fetched right now. Deleting
+    // `archiveMerged`'s own early guard alone (leaving `archiveSafety`'s
+    // untouched) reaches this exact fully-working `io` and archives —
+    // proving neither guard is redundant with the other.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const deps = testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls));
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const degraded: SessionRecord = {
+      id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
+      started: true, home: null, pool: null, lastswap: null,
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main',
+      prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
+      unmeasured: ['wrapper'],
+    };
+    const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,
+      checkNames: null, ahead: 3, reason: null, checkedAt: 1785300000000, mergedAt: null, retryAt: null };
+    const cast = w as unknown as {
+      prStates: Map<string, PrState>;
+      archiveMerged(records: SessionRecord[]): Promise<void>;
+    };
+    cast.prStates.set('demo-quiet-basin', merged);
+    await cast.archiveMerged([degraded]);
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     w.stop();
   });

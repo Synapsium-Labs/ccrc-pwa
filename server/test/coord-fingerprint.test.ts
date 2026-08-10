@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { readBranchTip } from '../src/coord/gitref.js';
 import { verifyDone, type DoneClaim } from '../src/coord/fingerprint.js';
 import type { Runner } from '../src/exec.js';
@@ -210,15 +210,28 @@ const runnerFor = (pr: MeasuredPr): Runner => async () => {
 
 /** `testDeps` (the house harness) builds a full `Deps`, wired through the real
  *  whitelist guard; only `cfg.projectsRoot` needs overriding to point at this
- *  test's fixture git tree. `home` defaults to a fresh, EMPTY fixture — no
- *  registry row for `SESSION` — so `verifyDone` falls back to `RUN.branch`
- *  unless a test seeds one itself (the registry-resolution tests below).
+ *  test's fixture git tree. `home` defaults to a fresh fixture with an EMPTY,
+ *  but LISTABLE, `.cc-sessions` — no registry row for `SESSION` — so
+ *  `verifyDone` falls back to `RUN.branch` unless a test seeds one itself
+ *  (the registry-resolution tests below). The directory is created here
+ *  (registry ladder, architecture doc increment 1's second half) rather than
+ *  left absent: `io.readdir` cannot distinguish "this directory was never
+ *  created" from "this directory could not be listed" (`io.ts`'s `readdir`
+ *  maps every `fs` error, ENOENT included, to `null`) — and on a REAL fleet
+ *  host a `.cc-sessions` directory always exists once ccd has ever run
+ *  (`run-routes.test.ts`'s `openApp` makes the identical baseline explicit
+ *  for the same reason). Leaving it absent by default would have every
+ *  "no row for this session" fixture in this file accidentally exercise the
+ *  NEW `!registryRead.listed` refusal instead of the empty-registry fallback
+ *  it means to test; the "findings 3" describe block below is what
+ *  deliberately exercises the genuinely-unlistable case, via `chmodSync`.
  *  `verbs`, when passed, becomes `fleetState.ccdVerbs`; `undefined` (the
  *  default) leaves `fleetState` unset, which `verbSupported` treats as
  *  "permit everything" (`ccdargv.ts:97`). */
 const fingerprintDeps = (
   run: Runner, projectsRoot: string, home: string = mkTmp('ccrc-fp-'), verbs?: string[],
 ) => {
+  mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const base = testDeps(home, run);
   return {
     ...base, cfg: { ...base.cfg, projectsRoot },
@@ -524,37 +537,73 @@ describe('verifyDone — a present-but-unreadable loose ref never settles a stal
 describe('verifyDone — the run.branch fallback is reached by more than "session retired" (finding 3)', () => {
   // `record?.branch ?? run.branch`'s own comment used to name exactly ONE
   // trigger ("the registry no longer carries this session at all") as the
-  // only way to reach the `run.branch` fallback. These three pin the OTHER
+  // only way to reach the `run.branch` fallback. These pin the OTHER
   // reachable triggers, each landing on the identical fallback for an
   // unrelated — and often transient — reason. This is a documentation fix,
-  // not a behavioural one: the fallback already degrades safely (a stale
-  // `run.branch` earns a typed refusal, never a false accept, once it no
-  // longer names a real ref — see the "findings 1 & 2" block above), so every
-  // case below asserts the SAME `ok: true` a healthy fallback already
-  // produces, proving the trigger is reached at all, not that behaviour
-  // changed.
+  // not a behavioural one for the cases that still reach the fallback at
+  // all: the fallback already degrades safely (a stale `run.branch` earns a
+  // typed refusal, never a false accept, once it no longer names a real ref
+  // — see the "findings 1 & 2" block above), so those cases assert the SAME
+  // `ok: true` a healthy fallback already produces, proving the trigger is
+  // reached, not that behaviour changed. The registry ladder (architecture
+  // doc, increment 1's second half) CLOSES the other two triggers this
+  // block used to name and tolerate — the whole-listing collapse and a
+  // listed-but-unmeasured identity — turning them into an EARLY, typed
+  // `tip-unmeasurable` refusal that never reaches this fallback at all; see
+  // `verifyDone`'s own docstring for why that gap is now closed rather than
+  // merely documented.
   const seedField = (home: string, id: string, name: string, value: string): void => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     writeFileSync(path.join(reg, `${id}.${name}`), value);
   };
 
-  it('a registry directory that cannot be LISTED at all (io.readdir -> null) reaches the fallback, same as a retired session', async () => {
+  it('a registry directory that cannot be LISTED at all (io.readdir -> null) now REFUSES tip-unmeasurable ' +
+     'directly — the ladder closes this trigger rather than letting it reach the run.branch fallback', async () => {
     const home = mkTmp('ccrc-fp-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     chmodSync(reg, 0o000);
     try {
-      const root = project(TIP, null); // ref lives at RUN.branch, the fallback value
+      const root = project(TIP, null); // ref lives at RUN.branch — never reached
       const deps = fingerprintDeps(runnerFor('open'), root, home);
       const res = await verifyDone(deps, RUN, FIXED_CLAIM);
-      expect(res).toMatchObject({ ok: true });
+      expect(res.ok).toBe(false);
+      expect((res as { code: string }).code).toBe('tip-unmeasurable');
     } finally {
       chmodSync(reg, 0o755); // let afterAll's rmSync clean up without fighting perms
     }
   });
 
-  it('a row present but with an INCOMPLETE identity (uuid missing) is dropped by readRegistry entirely, and also reaches the fallback', async () => {
+  it('a row LISTED but with an unmeasured identity field also REFUSES tip-unmeasurable directly, never the ' +
+     'run.branch fallback (the gap this docstring used to confess to, closed)', async () => {
+    // Deliberately NO `.branch` file on the registry row: `record.branch`
+    // reads null, so `record?.branch ?? run.branch` would fall back to
+    // `RUN.branch` — which THIS fixture's git tree genuinely has a ref for
+    // (`project(TIP, null)` puts it at RUN.branch), so a gate-less run would
+    // settle `ok: true` on that fallback. Isolates the identity gate from
+    // the branch-mismatch path the FIRST draft of this test accidentally
+    // routed through instead (a seeded `.branch` naming a branch the git
+    // fixture has no ref for reaches `tip-unmeasurable` on ITS OWN, via
+    // `readBranchTip` returning null, whether or not the identity gate
+    // exists at all — measured: deleting the gate left that version green).
+    const home = mkTmp('ccrc-fp-');
+    seedField(home, SESSION, 'wrapper', 'claude');
+    seedField(home, SESSION, 'workdir', '/w/demo/quiet-mesa');
+    seedField(home, SESSION, 'uuid', 'a'.repeat(36));
+    const root = project(TIP, null); // ref lives at RUN.branch — the fallback a gate-less run would settle on
+    const unreadableWrapper: FleetIO = {
+      ...localIO, readFile: async (p) => (p.endsWith(`${SESSION}.wrapper`) ? null : localIO.readFile(p)),
+    };
+    const deps = { ...fingerprintDeps(runnerFor('open'), root, home), io: unreadableWrapper };
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('tip-unmeasurable');
+  });
+
+  it('a row present but with an INCOMPLETE identity (uuid file never written, not just unreadable) is ' +
+     'DROPPED by readRegistry entirely, and still reaches the fallback — a proven-absent row, not an ' +
+     'unmeasured one', async () => {
     const home = mkTmp('ccrc-fp-');
     seedField(home, SESSION, 'wrapper', 'claude');
     seedField(home, SESSION, 'workdir', '/w/demo/quiet-mesa');

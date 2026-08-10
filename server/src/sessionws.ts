@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { configDirFor } from './config.js';
-import { readSessionRecord } from './registry.js';
+import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
@@ -237,9 +237,19 @@ export class SessionStream {
   private async resolve(): Promise<Resolved | null> {
     // C0.3: one session's own row, not the whole registry — this stream only
     // ever asks about `this.id`, every 2 s, for as long as the socket is open.
-    const rec = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
-    if (!rec) return null;
-    const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
+    const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
+    if (!read.found) return null;
+    // Display/connectivity — DEGRADE-AND-HEAL, not a refusal: a degraded
+    // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
+    // that names nothing real, rather than this session's actual transcript.
+    // `measuredIdentity` — the one door to the triple — is null the instant
+    // ANY of the three is unmeasured; answering null here is the SAME
+    // "unknown session" the client already renders for a reaped one, and
+    // this poll re-runs every 2 s, so a transient field read heals itself on
+    // the very next tick with no special-casing beyond this early return.
+    const identity = measuredIdentity(read.record);
+    if (identity === null) return null;
+    const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
     if (!cfgDir) {
       // The two ways `resolve()` answers null are worlds apart, and the client
       // sees ONE sentence for both (`unknown session <id>`). A reaped session
@@ -253,12 +263,12 @@ export class SessionStream {
       // so the next occurrence is a grep and not an investigation. Not a
       // throw: one unmapped account must not take down the streams for the
       // mapped ones.
-      console.warn(`ccrc-server: session ${this.id} has wrapper "${rec.wrapper}" with no configured ` +
+      console.warn(`ccrc-server: session ${this.id} has wrapper "${identity.wrapper}" with no configured ` +
         'config dir — chat cannot resolve it (see config.ts\'s `configDirFor`); the client sees only ' +
         '"unknown session"');
       return null;
     }
-    let cwd = rec.workdir;
+    let cwd = identity.workdir;
     let status: SessionStatus = 'dead';
     let statusUpdatedAt: number | null = null;
     if (await this.deps.tmux.hasSession(this.id)) {
@@ -273,7 +283,7 @@ export class SessionStream {
         }
       }
     }
-    return { uuid: rec.uuid, file: transcriptPath(cfgDir, cwd, rec.uuid), cfgDir, status, statusUpdatedAt };
+    return { uuid: identity.uuid, file: transcriptPath(cfgDir, cwd, identity.uuid), cfgDir, status, statusUpdatedAt };
   }
 
   /**

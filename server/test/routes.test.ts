@@ -630,6 +630,64 @@ describe('notify ingestion', () => {
 // that guard, because neither verb was granted yet; that made this the one
 // route test whose argv the guard never saw (review finding 1). The grants
 // landed, so the ordinary harness works and covers both new argvs for free.
+// Registry ladder (architecture doc, increment 1's second half): REFUSE, not
+// degrade — `stopPair` below RECOMPUTES a wrapper/project pair from these
+// very fields to kill a tmux session BY NAME, so an unmeasured field must
+// never silently fall through to a guessed value. Had NO pin before this
+// (`registry.ts:123`'s old drop behaviour had never been exercised through
+// this route at all — no test here even named `/stop` until now). Written
+// FIRST and confirmed red against the pre-gate code, which would have
+// answered 404 unknown-session (a LIE: the row is right there, just
+// unmeasured) rather than 503.
+describe('POST /api/sessions/:id/stop', () => {
+  const unreadableField = (id: string, field: string): FleetIO => ({
+    ...localIO,
+    readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+  });
+
+  it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
+     'identity could not be measured', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    await app.close();
+  });
+
+  it('still refuses 404 unknown-session for a session PROVEN absent from the registry', async () => {
+    const home = mkTmp('ccrc-');
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-session' });
+    await app.close();
+  });
+
+  it('stops normally (200) when the row is fully measured', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+});
+
 describe('POST /api/sessions/:id/hold and /release', () => {
   it('404s an unknown session on both routes, before building any argv', async () => {
     const { app, calls } = await makeApp(['❯ \n']);

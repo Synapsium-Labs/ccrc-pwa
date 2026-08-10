@@ -891,17 +891,19 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(mailId).toEqual(expect.any(Number));
   });
 
-  it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks ' +
-     '(fix, scoped-verify R2 — a regression the fix wave above itself introduced)', async () => {
-    // registry.ts:123 drops a row whose `.uuid` file IS listed when a
-    // sibling field read merely fails — transient, the identical shape
-    // `POST /api/mail`'s own ingress refuses as `registry-unmeasurable`
-    // rather than guessing (D-37, mail-routes.test.ts:259). Before this fix,
-    // sweepMail's reaped-recipient park (the test right above this one)
-    // could not tell that apart from a GENUINELY absent recipient, so this
-    // exact fixture would park a LIVE session's mail `rejected('undeliverable')`
-    // after MAIL_MAX_ATTEMPTS backoffs — about 15 minutes of one dropped
-    // agent-WS round trip on a single field.
+  it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks, and NEVER ' +
+     'ratchets attempts (registry ladder: the row is now DEGRADED, not dropped, and `countsAsAttempt: false`' +
+     ' keeps this branch off the park-eligible counter entirely)', async () => {
+    // registry.ts's identity ladder DEGRADES (never drops) a row whose
+    // `.uuid` file IS listed when a sibling identity field merely fails to
+    // read — transient, the identical shape `POST /api/mail`'s own ingress
+    // refuses as `registry-unmeasurable` rather than guessing (D-37,
+    // mail-routes.test.ts:259). Before the ladder, sweepMail's reaped-
+    // recipient park (the test right above this one) could not tell that
+    // apart from a GENUINELY absent recipient, so this exact fixture would
+    // park a LIVE session's mail `rejected('undeliverable')` after
+    // MAIL_MAX_ATTEMPTS backoffs — about 15 minutes of one dropped agent-WS
+    // round trip on a single field.
     const h = harness();
     const io = withUnreadableField(ID, 'wrapper');
     const coord = store(h.home);
@@ -912,7 +914,13 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     await w.sweepMail();
     let row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
-    expect(row.attempts).toBe(1);
+    // NEVER ratcheted: `store.backOff`'s `countsAsAttempt: false` on this
+    // branch — attempts is SEND-FAILURE budget, and this row was never
+    // attempted at all, only found unmeasurable before any send-eligibility
+    // gate could even run. The mutant this kills: dropping the fourth
+    // argument (or defaulting it to `true`) would make this `1`, exactly
+    // the old (pre-ladder) behaviour this test used to pin.
+    expect(row.attempts).toBe(0);
     // Echoes `registry-unmeasurable` — the ingress route's own typed code
     // for the identical condition — in the free-text `lastError` itself
     // (scoped-verify H6), so a maintainer grepping the ROW for that word
@@ -921,7 +929,8 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
 
     // Drive it well past the point that WOULD park a genuinely absent
     // recipient (MAIL_MAX_ATTEMPTS backoffs, the test above this one) — it
-    // must still be backing off, never rejected.
+    // must still be backing off, never rejected, and attempts must STILL
+    // read 0 — the ladder promises "forever", not merely "longer".
     for (let i = 1; i < MAIL_MAX_ATTEMPTS + 4; i++) {
       row = deliveryRow(coord, id);
       vi.setSystemTime(row.nextAttemptAt + 1_000);
@@ -930,6 +939,7 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
     expect(row.rejectCode).toBeNull();
+    expect(row.attempts).toBe(0);
   });
 
   it('an ORDINARY gate (busy, on cooldown, no tmux session) never accrues an attempt', async () => {

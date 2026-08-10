@@ -267,12 +267,80 @@ describe('POST /api/mail — the rejection table', () => {
       expect(w.coord.rejections().map((r) => r.code)).toContain('registry-unmeasurable');
     });
 
-    it('refuses registry-unmeasurable, not unknown-recipient, when the recipient IS listed but one field could not be read', async () => {
+    // Registry ladder (architecture doc, increment 1's second half): a
+    // recipient's OWN identity is never re-derived by this route — mail is
+    // addressed and delivered by `toId` (a plain session-id string,
+    // `sweepMail`'s own `sendPrompt(tmux, queue, toId, envelope)` call)
+    // verbatim, never by uuid — so "does a row exist for this id" is the
+    // only fact recipient routing needs, and a degraded IDENTITY field on an
+    // otherwise-present recipient row answers that fact just as well as a
+    // fully-measured one. This inverts what this test used to pin (a 502
+    // refusal) — see check 5.5's own comment on `sender.unmeasured` for why
+    // the SENDER side still refuses: attribution re-derives uuid, recipient
+    // routing does not.
+    it('accepts a message to a recipient whose row is listed but one identity field is unreadable — routing ' +
+       'is by id, never by uuid, so a degraded recipient still receives mail', async () => {
       const home = mkTmp('ccrc-mail-');
       seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
       const w = await withMail(home, { io: withUnreadableField('demo-coordinator', 'wrapper') });
       app = w.app;
       const res = await send(app, { ...GOOD, toId: 'demo-coordinator' });
+      expect(res.statusCode).toBe(202);
+      const due = w.coord.dueDeliveries(Date.now(), 60_000);
+      expect(due.length).toBe(1);
+      expect(due[0]!.toId).toBe('demo-coordinator');
+    });
+
+    // The recipient row's OWN unmeasured identity must not become the SENDER's
+    // 502 — the sibling case above proves the accept path; this proves check
+    // 5.5 above (the sender's own gate) is the ONLY place unmeasured identity
+    // refuses in this route, not a blanket "any degraded row anywhere refuses".
+    it('still accepts when it is the SENDER that is fully measured and the RECIPIENT alone is degraded ' +
+       '(regression guard: unmeasured identity is not contagious across the two rows)', async () => {
+      const home = mkTmp('ccrc-mail-');
+      seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+      const w = await withMail(home, { io: withUnreadableField('demo-coordinator', 'uuid') });
+      app = w.app;
+      const res = await send(app, { ...GOOD, toId: 'demo-coordinator' });
+      expect(res.statusCode).toBe(202);
+    });
+  });
+
+  // Check 5.5: the NEW gate this build adds between checks 5 and 6. Written
+  // FIRST (registry-ladder task discipline) and confirmed red against the
+  // pre-gate code, where an unmeasured `sender.uuid` (reading `''`) fell
+  // through to check 6's `sender.uuid === '' || sender.uuid !== fromUuid` and
+  // was answered `stale-uuid` — a TERMINAL, 403 refusal for what is only a
+  // transient read failure on a sender that is plainly still there.
+  describe('an unmeasured SENDER identity refuses registry-unmeasurable, never stale-uuid (check 5.5)', () => {
+    it('refuses registry-unmeasurable, not stale-uuid, when the sender\'s OWN uuid field is listed but unreadable', async () => {
+      const home = mkTmp('ccrc-mail-');
+      seed(home, 'demo-quiet-mesa');
+      const w = await withMail(home, { io: withUnreadableField('demo-quiet-mesa', 'uuid') });
+      app = w.app;
+      const res = await send(app, GOOD);
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+      expect(w.coord.rejections().map((r) => r.code)).toContain('registry-unmeasurable');
+      // The mutant this kills: deleting check 5.5 (or reordering it after
+      // check 6) reaches `sender.uuid === '' || sender.uuid !== fromUuid` —
+      // `''` degraded-uuid trivially satisfies the first disjunct — and
+      // answers 403 stale-uuid instead.
+      expect(w.coord.rejections().map((r) => r.code)).not.toContain('stale-uuid');
+    });
+
+    it('refuses registry-unmeasurable for the ACK route too, on the same unmeasured-uuid sender shape', async () => {
+      const home = mkTmp('ccrc-mail-');
+      seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+      const w = await withMail(home); app = w.app;
+      await send(app, { ...GOOD, toId: 'demo-coordinator' });
+      const deliveryId = ackIdFromEnvelope(w.coord.dueDeliveries(Date.now(), 60_000)[0]!.envelope);
+      await w.app.close();
+      app = await buildServer({
+        ...testDeps(home), mailToken: TOKEN, coord: w.coord,
+        io: withUnreadableField('demo-coordinator', 'uuid'),
+      });
+      const res = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
       expect(res.statusCode).toBe(502);
       expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
     });

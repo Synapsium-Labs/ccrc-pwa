@@ -507,6 +507,34 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     expect(s.dueDeliveries(dueAt + 30_000, replayMs).map((x) => x.id)).toEqual([d.id]); // due again
   });
 
+  // Registry ladder (architecture doc, increment 1's second half): `backOff`'s
+  // fourth argument. `attempts` is SEND-FAILURE budget — `sweepMail`'s own
+  // "recipient found but unmeasurable" branch never even reaches a send
+  // attempt, so it must not ratchet toward the SAME park ceiling a genuine
+  // failure does. Every EXISTING caller (the test right above this one, and
+  // `watch.ts`'s own two ordinary-failure call sites) omits the argument and
+  // must see the OLD, unchanged behaviour — that is what the first case below
+  // pins; the second is the new one.
+  it('backOff bumps attempts by default (countsAsAttempt omitted) but NOT when countsAsAttempt is false', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: null, kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    const a = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+    s.backOff(a.id, 'recipient not in registry', 1_000);
+    expect(s.dueDeliveries(1_000, 600_000).find((d) => d.id === a.id)?.attempts).toBe(1);
+
+    const b = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+    s.backOff(b.id, 'registry row listed but unreadable (registry-unmeasurable)', 1_000, false);
+    expect(s.dueDeliveries(1_000, 600_000).find((d) => d.id === b.id)?.attempts).toBe(0);
+
+    // Both still write lastError/nextAttemptAt regardless of the flag — only
+    // the counter is gated.
+    const row = (id: number) => s.db.prepare('SELECT lastError, nextAttemptAt FROM mail_deliveries WHERE id = ?')
+      .get(id) as { lastError: string; nextAttemptAt: number };
+    expect(row(a.id)).toEqual({ lastError: 'recipient not in registry', nextAttemptAt: 1_000 });
+    expect(row(b.id)).toEqual({ lastError: 'registry row listed but unreadable (registry-unmeasurable)', nextAttemptAt: 1_000 });
+  });
+
   it('markDelivered/rejectDelivery refuse to reopen an already-parked row — a send in flight when a ' +
      'close commits the park must not un-park it (scoped-verify R1)', () => {
     // The interleaving the verifier reproduced: `sweepMail` reads a row
