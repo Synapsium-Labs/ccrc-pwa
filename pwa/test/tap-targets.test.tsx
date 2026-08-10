@@ -19,12 +19,13 @@ import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { FleetSession, PrState, WsAudit } from '../../shared/api';
+import type { FleetSession, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { MailScreen } from '../src/screens/MailScreen';
+import { RunsScreen } from '../src/screens/RunsScreen';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
@@ -77,6 +78,17 @@ const wsAudit: WsAudit = {
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
+});
+
+// Build 7 Task 5 — RunSummary as PR I actually shipped it (see
+// runs-screen.test.tsx's own fixture comment for the field-shape reconciliation).
+const run = (over: Partial<RunSummary> = {}): RunSummary => ({
+  id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
+  wave: 3, waveOf: 4, project: 'ccrc-pwa',
+  sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
+  state: 'working', resumed: false, clearedAt: null,
+  openedAt: Date.now() - 1_000_000, dispatchedAt: Date.now() - 900_000, closedAt: null,
+  handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,
 });
 
 // — the token itself —
@@ -192,17 +204,20 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the eight on the token, never a bare 44px literal', () => {
+  it('keeps every one of the twelve on the token, never a bare 44px literal', () => {
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
-    // 4 (`.mail-badge`, `.mail-back`) joins the same loop rather than getting
-    // its own — one place where "every floored rule stays on the token" is
-    // checked, not a second copy of the assertion per branch.
+    // 4 (`.mail-badge`, `.mail-back`) and Task 5 (`.fleet-runs-row`,
+    // `.runs-back`, `.run-row`, `.run-open`) join the same loop rather than
+    // getting their own — one place where "every floored rule stays on the
+    // token" is checked, not a second copy of the assertion per branch.
     for (const rule of [
       ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
       ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
       ruleIn(fleetCss, '.mail-badge'), ruleIn(fleetCss, '.mail-back'),
+      ruleIn(fleetCss, '.fleet-runs-row'), ruleIn(fleetCss, '.runs-back'),
+      ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-open'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -232,5 +247,44 @@ describe('.mail-back — the feed’s back control', () => {
   it('is the class the rendered control actually carries', () => {
     render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
+  });
+});
+
+// — Build 7, Task 5: the run board's footer door, back control and rows —
+
+describe('.fleet-runs-row — the only door to /runs', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.fleet-runs-row'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered footer row actually carries', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    act(() => { store.setState({ conn: 'open', sessions: [sess()] }); });
+    expect(screen.getByRole('button', { name: /runs · none active/i })).toHaveClass('fleet-runs-row');
+  });
+});
+
+describe('.runs-back — the run board’s own back control', () => {
+  it('is at least one tap square, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.runs-back'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered control actually carries', () => {
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('runs-back');
+  });
+});
+
+describe('.run-row and .run-open — every row on the run board', () => {
+  it('.run-row is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.run-row'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('.run-open is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.run-open'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('.run-open is the class the rendered row’s own button actually carries', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [run()] }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByRole('button', { name: /clear-cove/i })).toHaveClass('run-open');
   });
 });

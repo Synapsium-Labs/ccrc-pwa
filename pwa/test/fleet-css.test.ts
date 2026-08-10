@@ -358,6 +358,20 @@ describe('archived sub-fold (Task 18)', () => {
   });
 });
 
+describe('runs are not living panes', () => {
+  it('no run rule glows, breathes or animates', () => {
+    // DIRECTION.md's refused list, by name: "glow on non-living things". A run
+    // row is a record of a lifecycle position; the pane it names may be alive,
+    // and THAT row (the fleet line) is where the lamp belongs.
+    for (const sel of ['.run-row', '.run-glyph', '.run-state', '.runs-group', '.fleet-runs-row']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+});
+
 describe('the hold composer', () => {
   it('declares its own placeholder colour — the block comment claims .proj-search verbatim', () => {
     // FIX-WAVE OBSERVATION. The comment above this block says `.sess-hold-input`

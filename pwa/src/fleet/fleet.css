@@ -1532,3 +1532,53 @@
   font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
 .mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }
+
+/* — Build 7: the run board. Machine voice throughout (ids, slugs, waves and
+   tallies are all things the fleet says, not things a person wrote), and NO
+   glow, no breathe, no box-shadow: a run is a record of a lifecycle position.
+   The pane it names may well be alive — and the fleet line, which is where the
+   lamp lives, is one tap away. */
+.fleet-runs-row {
+  min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-2);
+  background: none; border: 0; cursor: pointer; text-align: left;
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary);
+}
+.runs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
+.runs-head { display: flex; align-items: center; gap: var(--sp-2); }
+.runs-back {
+  flex: none; min-width: var(--tap-min); min-height: var(--tap-min);
+  border: none; background: none; border-radius: var(--r-sm);
+  font: var(--weight-regular) 26px / 1 var(--font-ui); color: var(--ink-secondary); cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.runs-back:active { transform: scale(0.88); color: var(--ink-primary); }
+.runs-title { font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono); color: var(--ink-primary); }
+.runs-empty { padding: var(--sp-4); color: var(--ink-secondary); }
+.runs-group { display: grid; gap: var(--sp-1); }
+.runs-group-head {
+  display: flex; align-items: baseline; gap: var(--sp-2);
+  background: var(--bg-surface); color: var(--ink-primary);
+  border-radius: var(--r-md); padding: var(--sp-1) var(--sp-3);
+  font: var(--weight-medium) var(--text-xs) / 1.6 var(--font-mono);
+}
+.runs-program { font-family: var(--font-mono); }
+.runs-wave { font-variant-numeric: tabular-nums; color: var(--ink-tertiary); }
+.runs-list { display: grid; gap: var(--sp-1); }
+.run-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
+  min-height: var(--tap-min); padding: 0 var(--sp-2);
+  background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+  font-family: var(--font-mono); font-size: var(--text-sm);
+}
+.run-open {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
+  width: 100%; min-height: var(--tap-min); padding: 0;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  color: var(--ink-primary); font: inherit;
+}
+.run-glyph { color: var(--ink-tertiary); }
+.run-state { font-size: var(--text-xs); color: var(--ink-secondary); }
+.run-ws { font-size: var(--text-sm); }
+.run-tally, .run-when {
+  font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+}

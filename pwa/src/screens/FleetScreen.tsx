@@ -144,6 +144,10 @@ export function FleetScreen({
   // Once, not three times in one interpolation: the footer's count and its
   // size must describe the same pass over the same list.
   const archived = archivedSummary(sessions);
+  // Build 7's run board footer. `closedAt === null` is "IS finished"'s own
+  // negation (RunSummary's own docstring on that field) — the same split
+  // RunsScreen itself uses to separate its active/finished groups.
+  const activeRuns = useStore((s) => s.runs).filter((r) => r.closedAt === null).length;
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
@@ -376,6 +380,18 @@ export function FleetScreen({
               />
             ))}
           </div>
+          {/* The only door to /runs, so it renders whenever this arm does —
+              including with nothing running. `.fleet-archived-row` may come and go
+              with its own count because /archive has a second route in from every
+              project card's sub-fold; this one has no second route. */}
+          <button
+            type="button"
+            className="fleet-runs-row"
+            aria-label={activeRuns > 0 ? `Runs · ${activeRuns} active` : 'Runs · none active'}
+            onClick={() => navigate('/runs')}
+          >
+            Runs · {activeRuns > 0 ? `${activeRuns} active` : 'none active'}
+          </button>
           {archived.count > 0 && (
             /* Folded, never hidden — and never a place that DELETES anything:
                this routes to a list, and every removal still goes through the
