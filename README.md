@@ -638,23 +638,35 @@ replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`,
 and again every `MAIL_REPLAY_MS`) until the recipient POSTs
 `/api/mail/:id/ack`.
 
-Both `/api/mail` (and its ack route) and `/api/notify` (ccd's swap hook) now
-require the same **box token** — one shared secret per box, read from a
-file, deliberately never an env var (`deploy/ccrc.service` ships no
-`EnvironmentFile=`, and this build does not add one, to avoid flipping a
-live unit's environment blind). It lives at `~/.cc-secrets/ccrc-mail.token`
-on the **fleet host** (read by `deploy/notify.sh`) and at
-`~/.ccrc/mail.token` on the **server** (`CCRC_MAIL_TOKEN_PATH` to
-override); both are shipped from one locally-gitignored
-`deploy/ccrc-mail.token` (`openssl rand -hex 32` to mint it, or `cp
-deploy/ccrc-mail.token.example deploy/ccrc-mail.token && edit`) by
-`deploy/deploy.sh`'s secret-shipping lane. `/api/mail` and its ack route
-have never tolerated a missing token — a request with none is `401
+`/api/mail` (and its ack route), the run routes (`POST /api/runs`,
+`/:id/dispatch`, `/:id/close`, `/:id/advance`), `GET /api/mail?to=<id>` and
+`/api/notify` (ccd's swap hook) all require the same **box token** — one
+shared secret per box, read from a file, deliberately never an env var
+(`deploy/ccrc.service` ships no `EnvironmentFile=`, and this build does not
+add one, to avoid flipping a live unit's environment blind). It lives at
+`~/.cc-secrets/ccrc-mail.token` on the **fleet host** (read by
+`deploy/notify.sh`) and at `~/.ccrc/mail.token` on the **server**
+(`CCRC_MAIL_TOKEN_PATH` to override); both are shipped from one
+locally-gitignored `deploy/ccrc-mail.token` (`openssl rand -hex 32` to mint
+it, or `cp deploy/ccrc-mail.token.example deploy/ccrc-mail.token && edit`)
+by `deploy/deploy.sh`'s secret-shipping lane. **The run routes were
+unauthenticated for a stretch of this build's own history** — an earlier
+design note argued they were no worse than the pre-existing, also-open
+`/api/sessions/*` surface — but a whole-branch review found that posture
+inverted the intent (`ccd ws-add`, an injected `/clear` and
+`ws-release`/`ws-archive` are strictly more dangerous than inserting a mail
+row, which required the token all along) and closed it: every coordinator
+write route now fails the same way the mail pair always has. None of these
+six routes tolerates a missing token — a request with none is `401
 unauthenticated`, full stop. `/api/notify` alone accepts a request with
 **no** token header for one deploy generation, logged as `legacy` so the
 swap hook cannot go dark mid-rollout; that tolerance comes out in the deploy
 *after* the one that ships `notify.sh`'s token read — it is a rollout
-bridge, not a standing policy.
+bridge, not a standing policy. **Minting the token file matters as much as
+having one:** `deploy/ccrc-mail.token.example`'s own placeholder value line
+must actually be replaced — copying the example verbatim is refused loudly
+at server boot (`MailTokenPlaceholderUnedited`), not silently accepted,
+because that exact placeholder is committed to this public repo.
 
 **Caps and pause.** The single-row `coordinator_state` table holds
 `maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
@@ -672,7 +684,10 @@ unpause the coordinator from the API or the PWA — a pause always traces back
 to a human at a terminal, on purpose. Mail delivery has the identical
 kill-switch on the same pattern: `touch $REG/mail-disabled` stops the sweep
 from injecting anything (queued mail waits, nothing is lost); `rm` it to
-resume.
+resume. Dispatch honours this marker too, not only `coordinator-paused` — it
+refuses outright (`409 refused:'mail-disabled'`) rather than resuming a
+worker and injecting `/clear` into a context whose wave brief would then sit
+held by the very kill-switch the operator just raised.
 
 **The honest boundary.** The coordinator acts through this server's HTTP
 API — one recorded chokepoint for every irreversible act (dispatch, close,
