@@ -35,19 +35,29 @@
 // of that dump — still executed bash, just read back rather than probed input
 // by input.
 //
-// `install-session-hooks.sh`'s default `homes` array (and, since PR J's
-// install lane, `install-coordinator-skill.sh`'s own — same fallback shape,
-// same reason) and `statusline-command.sh`'s two label maps are the
-// exceptions: neither can be USEFULLY executed in a fixture test (installing
-// hooks/a skill needs a `--homes`-less invocation whose only observable
-// effect is which directories it touches, and every one is skipped when it
-// doesn't exist under a fixture HOME, so running it is inert rather than
-// revealing; the statusline script needs a real `CLAUDE_CONFIG_DIR` pointed
-// at by the process IT is the statusline of, plus JSON piped to its stdin, to
-// produce anything at all). Per this project's own instruction ("if a bash
-// copy cannot be executed safely in a test, assert on its parsed source text
-// instead and SAY SO") — both assert on parsed source text, and both
-// comparisons are still bidirectional sets.
+// `statusline-command.sh`'s two label maps are the one entry here that truly
+// CANNOT be usefully executed in a fixture test: the script reads its own
+// process's `CLAUDE_CONFIG_DIR` env var (there is no argv to point it at a
+// fixture HOME) and needs JSON piped to its stdin to produce anything at
+// all. Per this project's own instruction ("if a bash copy cannot be
+// executed safely in a test, assert on its parsed source text instead and
+// SAY SO") it gets a parsed-source-text pin below instead — a bidirectional
+// set comparison, same as every other describe in this file.
+//
+// `install-session-hooks.sh`'s and `install-coordinator-skill.sh`'s default
+// `homes` arrays are NOT in that category, and an earlier version of this
+// comment claimed they were — a claim disproved by this same commit's own
+// `install-session-hooks.test.ts` ("...default homes agree with
+// ACCOUNTS.hooksAble, behaviourally") and `install-coordinator-skill.test.ts`
+// ("...default homes agree with ACCOUNTS.hooksAble, behaviourally"): both
+// give a fixture HOME a config dir for EVERY roster wrapper first (not "every
+// one is skipped when it doesn't exist" — none is absent), run the installer
+// with no `--homes` argv (its real default), and assert the managed file
+// lands in exactly the `hooksAble` ones. That is a `--homes`-less invocation
+// whose effect is fully revealing, and it passes. The two `describe` blocks
+// immediately below are a second, cheaper pin on the identical claim — parsed
+// source text, no subprocess — not a substitute for one a fixture cannot
+// make revealing.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

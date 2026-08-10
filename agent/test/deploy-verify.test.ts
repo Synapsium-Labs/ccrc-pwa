@@ -251,7 +251,22 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // then the source list and destination) — match the WHOLE block, not one
     // line, or the exclude living on its own continuation line would never
     // be seen by a single-line check.
-    const rsyncBlocks = [...deploySh.matchAll(/rsync -az[\s\S]*?ccrc\//g)].map((m) => m[0]);
+    //
+    // Fix-round finding: a bare `rsync -az[\s\S]*?ccrc\//` is lazy across
+    // EVERY `rsync -az` in the file, not just these two — deploy.sh's
+    // coordinator-skill lane (`rsync -az --delete -e "${SSH[*]}"
+    // ccd/coordinator-skill/ "$BOX":.cc-sessions/coordinator-skill/`) is a
+    // third invocation with neither `deploy/` in its source nor the token in
+    // its tree (its source is `ccd/coordinator-skill/`, which cannot contain
+    // a secret), and matched as a false third block. Anchoring the START on
+    // the literal prefix unique to a `deploy/`-shipping invocation (`--exclude
+    // node_modules`, present on both the agent and server rsyncs, absent from
+    // the skill one) keeps the skill lane out of scope BY CONSTRUCTION — it
+    // never begins a match — rather than by accident of how many `"$BOX":ccrc/`
+    // strings happen to exist in the file.
+    const rsyncBlocks = [...deploySh.matchAll(
+      /rsync -az --delete -e "\$\{SSH\[\*\]\}" --exclude node_modules[\s\S]*?"\$BOX":ccrc\//g,
+    )].map((m) => m[0]);
     expect(rsyncBlocks.length, 'expected exactly two rsync invocations (agent path, server path)').toBe(2);
     for (const block of rsyncBlocks) {
       expect(block, `rsync invocation is missing --exclude 'ccrc-mail.token':\n${block}`)

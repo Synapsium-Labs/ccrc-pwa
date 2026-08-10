@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { ACCOUNTS, type Wrapper } from '../../shared/api.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-coordinator-skill.sh');
 const SRC = path.resolve(__dirname, '../../ccd/coordinator-skill');
@@ -65,6 +66,13 @@ describe('install-coordinator-skill', () => {
     fs.rmSync(path.join(home, '.claude-gpt'), { recursive: true });
     run();
     expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);
+    // Fix-round finding (mutation M2): deleting the `[[ -d "$dir" ]] ||
+    // continue` guard entirely still passes THIS FAR — `mkdir -p
+    // "$dir/skills"` conjures the absent home right back into existence,
+    // silently manufacturing a wrapper's config dir on a box that never had
+    // it. The missing home must STAY missing, not merely "still process the
+    // others" — that's the property the guard actually holds.
+    expect(fs.existsSync(path.join(home, '.claude-gpt'))).toBe(false);
   });
 
   it('refuses the whole run when the source has no SKILL.md, touching nothing', () => {
@@ -87,12 +95,45 @@ describe('install-coordinator-skill', () => {
     expect(threw).toBe(true);
     expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(skill('.claude-personal', 'SKILL.md'))).toBe(true);
+    // Fix-round finding (mutation M1): asserting only the two homes
+    // processed BEFORE the blocked one cannot tell "continued past the bad
+    // home" from "aborted at it" — a `rc=1; continue` mutated to `exit 1`
+    // still passes those two. `.claude-gpt` is the FOURTH home, processed
+    // AFTER `.claude-corp` fails; only the per-home `continue` reaches it.
+    expect(fs.existsSync(skill('.claude-gpt', 'SKILL.md'))).toBe(true);
   });
 
   it('never writes outside the homes it was given', () => {
     run(path.join(home, '.claude'));
     for (const d of ['.claude-personal', '.claude-corp', '.claude-gpt']) {
       expect(fs.existsSync(path.join(home, d, 'skills'))).toBe(false);
+    }
+  });
+});
+
+describe('install-coordinator-skill.sh default homes agree with ACCOUNTS.hooksAble, behaviourally', () => {
+  // wrapper-roster-fixture.test.ts pins this by PARSING the installer's
+  // source; this proves the same claim by actually RUNNING it — same shape
+  // as install-session-hooks.test.ts's own behavioural pin (fix-round
+  // finding: the two installers' default-homes fallback is NOT the "cannot
+  // be usefully executed" case that file's header used to claim for both —
+  // this test, and that one, are the disproof). A fixture HOME gets a config
+  // dir for every roster wrapper (hooksAble and not), the installer is
+  // invoked with NO --homes argv at all (its real default), and the skill
+  // must land in exactly the hooksAble ones.
+  const WRAPPERS = Object.keys(ACCOUNTS) as Wrapper[];
+  let rosterHome: string;
+  beforeEach(() => {
+    rosterHome = mkTmp('ccrc-skillinstall-roster-');
+    for (const w of WRAPPERS) fs.mkdirSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix), { recursive: true });
+  });
+  afterEach(() => { fs.rmSync(rosterHome, { recursive: true, force: true }); });
+
+  it("touches exactly the roster's hooksAble config dirs when given no --homes argv", () => {
+    execFileSync('bash', [INSTALLER], { env: { ...process.env, HOME: rosterHome, CCRC_SKILL_SRC: SRC } });
+    for (const w of WRAPPERS) {
+      const got = fs.existsSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix, 'skills', 'ccrc-coordinator', 'SKILL.md'));
+      expect(got, w).toBe(ACCOUNTS[w].hooksAble);
     }
   });
 });

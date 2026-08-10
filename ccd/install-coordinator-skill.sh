@@ -31,7 +31,7 @@ BACKUPS="$HOME/ccrc-backups/$TS"
 
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
-else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt"); fi
+else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt" "$HOME/.claude-dev0"); fi
 
 # Refuse rather than degrade — ccd's own rule for a missing tool
 # (`ccd:2135-2139`: "refusing to run the destructive verb unserialised"). A

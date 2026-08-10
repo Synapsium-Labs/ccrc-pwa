@@ -1263,10 +1263,18 @@ interface AccountDef {
    *  cross-language fixture test, not merely asserted here. */
   ccdValid: boolean;
   /** `install-session-hooks.sh`'s default `homes` array installs
-   *  `session-hook.sh` here. `claude-dev0` is false TODAY — the "silent mail
-   *  hole on the fifth account" the architecture doc's increment 2 closes,
-   *  not this one. The cross-language fixture test pins that this is still
-   *  an ACCURATE description of the bash, not that it is a desirable one. */
+   *  `session-hook.sh` here, AND — since PR J's install lane —
+   *  `install-coordinator-skill.sh`'s own default `homes` array installs the
+   *  coordinator skill here too (same fallback shape, same reason: both
+   *  install lanes derive their homes from this one field). Both installers
+   *  already `continue` past a home whose directory does not exist, so
+   *  `true` for an account with no config dir on a given box is a no-op
+   *  there, never a crash. `claude-dev0` is `true`: the architecture doc's
+   *  increment 2 — "the hooks install lane derives its homes from the
+   *  roster, closing the silent mail hole on the fifth account" — is what
+   *  flipped it, from the `false` it carried before PR J. The cross-language
+   *  fixture test pins BOTH bash arrays against this field, not just the
+   *  session-hooks one. */
   hooksAble: boolean;
 }
 
@@ -1312,7 +1320,7 @@ export const ACCOUNTS: Record<Wrapper, AccountDef> = {
     // what the pre-roster pwa map already fell back to for a wrapper it
     // didn't recognise, so giving it a REAL entry here must not repaint it.
     configDirSuffix: '.claude-dev0', idPrefix: 'claude-dev0-', label: 'claude-dev0',
-    colorVar: '--ink-tertiary', homeAble: false, ccdValid: false, hooksAble: false,
+    colorVar: '--ink-tertiary', homeAble: false, ccdValid: false, hooksAble: true,
   },
 };
 
