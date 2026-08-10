@@ -1,6 +1,6 @@
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
-import { readRegistry } from './registry.js';
+import { readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
@@ -234,8 +234,9 @@ export class SessionStream {
 
   /** Registry record + live state → current uuid, transcript file, and status. */
   private async resolve(): Promise<Resolved | null> {
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
-    const rec = records.find((s) => s.id === this.id);
+    // C0.3: one session's own row, not the whole registry — this stream only
+    // ever asks about `this.id`, every 2 s, for as long as the socket is open.
+    const rec = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
     if (!rec) return null;
     const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
     if (!cfgDir) {

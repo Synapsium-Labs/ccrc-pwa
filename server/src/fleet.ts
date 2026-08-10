@@ -1,7 +1,7 @@
 import type { CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { readRegistry } from './registry.js';
+import { readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
@@ -61,7 +61,11 @@ export function idHomeWrapper(id: string): string {
  * interrupt route, since the --remote-control pane carries no busy marker.
  */
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
-  const rec = (await readRegistry(io, cfg)).find((r) => r.id === id);
+  // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
+  // over the rest of the fleet — so it reads just that id's row rather than
+  // the whole registry (readRegistry's 24-generation sweep, ~409 round trips
+  // on a 24-session fleet in remote mode, for a question about one session).
+  const rec = await readSessionRecord(io, cfg, id);
   if (!rec || !(await tmux.hasSession(id))) return 'dead';
   const pid = await tmux.panePid(id);
   const cfgDir = cfg.wrappers[rec.wrapper];

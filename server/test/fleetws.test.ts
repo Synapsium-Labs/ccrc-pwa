@@ -9,6 +9,7 @@ import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { loadSnapshot } from '../src/fleetstate.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -175,6 +176,120 @@ describe('fleet REST + WS', () => {
 
     expect(await loadSnapshot(cachePath)).toBeNull();
     rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  // C0.4: `fleetState.connected` alone does not mean the read that just
+  // happened was COMPLETE — a wedged-yet-connected agent or a mid-sweep
+  // socket hiccup still leaves `connected: true` while `assembleFleet`
+  // returns fewer rows than last time. Without a guard, that partial tick
+  // overwrites the fuller last-known-good cache — which `/api/fleet`
+  // (server.ts) then serves as `stale: true` for the REST of a subsequent
+  // real outage, not just for this one tick.
+  it('a connected-but-degraded tick does not clobber a fuller last-known-good snapshot', async () => {
+    const cacheDir = mkTmp('ccrc-cache-');
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick(); // both sessions readable — writes a 2-row cache
+    let snap = await loadSnapshot(cachePath);
+    expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+      ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+    );
+
+    // One session's own `workdir` field goes unreadable — the exact shape a
+    // partial/degraded read produces (registry.ts's "incomplete registry
+    // entry" — readRegistry drops the row whole) — while `connected` stays
+    // true throughout.
+    rmSync(path.join(home, '.cc-sessions', 'claude-corp-orchard-api.workdir'));
+    await watcher.tick(); // assembles only 1 row now
+
+    snap = await loadSnapshot(cachePath);
+    // The fuller 2-row snapshot survives; a 1-row assembly must never
+    // clobber it.
+    expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+      ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+    );
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('a tick that GROWS the fleet still overwrites the cache — the guard only refuses a shrink', async () => {
+    const cacheDir = mkTmp('ccrc-cache-');
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick(); // 1 row
+    expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(1);
+
+    seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+    await watcher.tick(); // 2 rows — a growth, not a shrink
+
+    expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('writes the very first snapshot even from an empty fleet — nothing on disk yet to clobber', async () => {
+    const cacheDir = mkTmp('ccrc-cache-');
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    // No seeded session in this fresh home — an empty registry.
+    const emptyHome = mkTmp('ccrc-empty-');
+    const cfg = loadConfig({ CCRC_HOME: emptyHome, CCRC_FLEET: 'remote' });
+    const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick();
+
+    const snap = await loadSnapshot(cachePath);
+    expect(snap?.sessions).toEqual([]);
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  // C0.1: `tick()` had no re-entrancy guard, so a tick still in flight past
+  // the next `intervalMs` edge got a second one stacked on top of it.
+  describe('tick() re-entrancy (C0.1)', () => {
+    it('a second tick() called while the first is still awaiting its registry read returns immediately', async () => {
+      let readdirCalls = 0;
+      let releaseFirst: (() => void) | null = null;
+      const gatedIO: FleetIO = {
+        ...localIO,
+        readdir: async (p) => {
+          readdirCalls++;
+          if (readdirCalls === 1) {
+            await new Promise<void>((resolve) => { releaseFirst = resolve; });
+          }
+          return localIO.readdir(p);
+        },
+      };
+      const deps: Deps = { ...testDeps(home), io: gatedIO };
+      const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+      const tick = (): Promise<void> => (watcher as unknown as { tick: () => Promise<void> }).tick();
+
+      const p1 = tick();
+      await vi.waitFor(() => expect(readdirCalls).toBeGreaterThanOrEqual(1));
+      const callsBeforeSecondTick = readdirCalls;
+
+      const p2 = tick();
+      // The guard must return p2 WITHOUT waiting for the first tick's blocked
+      // read — if it stacked instead, p2 would still be pending 300ms later
+      // (it would be blocked on the SAME unresolved read, or a fresh one).
+      await Promise.race([
+        p2,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('second tick() did not return early — it stacked')), 300)),
+      ]);
+      // And it did no new work: no second readdir was fired.
+      expect(readdirCalls).toBe(callsBeforeSecondTick);
+
+      releaseFirst!();
+      await p1;
+
+      // The guard resets after the in-flight tick finishes: a later tick runs normally.
+      await tick();
+      expect(readdirCalls).toBeGreaterThan(callsBeforeSecondTick);
+    });
   });
 
   // — Task 10: the `runs` WS frame — additive, no FLEET_PROTO bump —

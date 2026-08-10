@@ -1,10 +1,10 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet } from './fleet.js';
-import { readRegistry } from './registry.js';
+import { readRegistry, readSessionRecord } from './registry.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, saveSnapshot } from './fleetstate.js';
+import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
@@ -380,6 +380,15 @@ export class FleetWatcher {
   /** Same watermark discipline as `lastMailNotifyId`, over `run_events.id`
    *  for the `run` NotifyEvent lane. */
   private lastRunNotifyId = 0;
+  /** C0.1: `tick()` had NO re-entrancy guard — `start()` fires it every
+   *  `intervalMs` off a bare `setInterval`, unconditionally, so a tick still
+   *  in flight past the next interval edge (a slow agent-WS registry read, a
+   *  wedged pane capture) got a SECOND tick stacked on top of it: two
+   *  concurrent full registry reads, two concurrent `assembleFleet`s, twice
+   *  the load on exactly the path that was already slow. Mirrors
+   *  `SessionStream.ticking` (`sessionws.ts`) verbatim — same field, same
+   *  set/clear-in-finally discipline, for the identical reason. */
+  private ticking = false;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -439,131 +448,158 @@ export class FleetWatcher {
   }
 
   async tick(): Promise<void> {
-    // Read once, share with the two lanes that would otherwise each read it
-    // again on EVERY tick (detectDialogs, sweepHookStates) — in remote mode
-    // every readRegistry() field is its own agent-WS round trip, so this is
-    // the difference between one registry read and two, every 2s, forever.
-    // sweepTasks/sweepPr below are NOT included: both throttle to their own
-    // slower clock and skip the read entirely on most ticks already.
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
-    // hook states FIRST, dialogs second — the order is load-bearing and there
-    // is a test on it. `detectDialogs` composes the ask push, and the actions
-    // it attaches come from `this.hookStates`; with the old ordering that map
-    // was always one tick behind, so whether a question arrived answerable
-    // from the notification depended on how the 2-second poll happened to
-    // straddle the hook's write. Sweeping first costs nothing (both lanes
-    // share the one `records` read below).
-    //
-    // It NARROWS that window; it does not close it. The sweep reads a
-    // session's hookstate at time s and `detectDialogs` captures its pane at
-    // time c, sequentially, each capture an agent round trip in remote mode —
-    // so for the last session of eight, c-s is a couple of hundred ms of a
-    // 2000 ms tick. A `session-hook.sh` write landing inside (s, c) still
-    // yields a menu with no envelope, and therefore an action-less ask push.
-    // What covers the residue is `actionlessAsks` in `detectDialogs` below:
-    // the latch remembers that push and amends it when the envelope turns up.
-    await this.sweepHookStates(records);
-    const pending = await this.detectDialogs(this.primed, records);
-    await this.sweepTasks();
-    // NEVER awaited: it shells out over the network and `gh` has no
-    // --timeout, so awaiting it would stall the dialog detector and the
-    // busy->idle push behind GitHub's reachability.
-    void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
-    if (this.deps.refreshCaps && Date.now() - this.lastCapsAt >= CAPS_REFRESH_MS) {
-      this.lastCapsAt = Date.now();
-      // NEVER awaited: same reasoning as sweepPr immediately above — caps()
-      // swallows its own failures today, but a wedged-yet-connected agent
-      // must not stall assembleFleet behind an up-to-15s request timeout,
-      // and a future implementation that DOES reject must not become an
-      // unhandled rejection via start()'s `void this.tick()`.
-      void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
-    }
-    // NEVER awaited, same reasoning as sweepPr above and then some: this one
-    // joins the per-session KeyedQueue, which `POST /workspace/reap` can hold
-    // for minutes. Awaiting it would put the dialog detector and the
-    // busy->idle push behind a reap. Overlapping sweeps are harmless — the
-    // attempted-set is written BEFORE the call, so a second sweep's condition 4
-    // refuses the pair the first is still running.
-    void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
-    // NEVER awaited, same reasoning as sweepNames immediately above: this one
-    // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
-    // is ~4.3 s of sleeps per message plus one round trip per line
-    // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
-    // detector and the busy->idle push behind a mail delivery.
-    void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
-    const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
-    // The whole fleet is in scope right here, which is exactly what
-    // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
-    // have on their own clocks — see `activeProjects`'s own comment.
-    const projects = new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.project));
-    // Per-session project, off the SAME fleet assembly — the honest fallback
-    // `pushNewMail` uses for run-less mail (review finding 3): a delivery's
-    // `project` is null whenever the mail has no run, which `mailQueuedSince`'s
-    // own docstring names as a fully supported case, not an edge one, and the
-    // RECIPIENT session's own project (known here, not down in that method's
-    // own scope) is the honest answer — never an empty string.
-    const sessionProjects = new Map(sessions.map((s) => [s.id, s.project]));
-    // Push on a busy→idle finish (a session completed a turn). Skip the priming
-    // tick — otherwise a restart notifies for every currently-idle session.
-    if (this.primed) {
-      for (const s of sessions) {
-        if (this.prevStatus.get(s.id) === 'busy' && s.status === 'idle') {
-          this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
+    // C0.1: a tick already in flight refuses a second one rather than
+    // stacking — see `ticking`'s own docstring above. Mirrors
+    // `SessionStream.tick` (`sessionws.ts`) verbatim.
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      // Read once, share with the two lanes that would otherwise each read it
+      // again on EVERY tick (detectDialogs, sweepHookStates) — in remote mode
+      // every readRegistry() field is its own agent-WS round trip, so this is
+      // the difference between one registry read and two, every 2s, forever.
+      // sweepTasks/sweepPr below are NOT included: both throttle to their own
+      // slower clock and skip the read entirely on most ticks already.
+      const records = await readRegistry(this.deps.io, this.deps.cfg);
+      // hook states FIRST, dialogs second — the order is load-bearing and there
+      // is a test on it. `detectDialogs` composes the ask push, and the actions
+      // it attaches come from `this.hookStates`; with the old ordering that map
+      // was always one tick behind, so whether a question arrived answerable
+      // from the notification depended on how the 2-second poll happened to
+      // straddle the hook's write. Sweeping first costs nothing (both lanes
+      // share the one `records` read below).
+      //
+      // It NARROWS that window; it does not close it. The sweep reads a
+      // session's hookstate at time s and `detectDialogs` captures its pane at
+      // time c, sequentially, each capture an agent round trip in remote mode —
+      // so for the last session of eight, c-s is a couple of hundred ms of a
+      // 2000 ms tick. A `session-hook.sh` write landing inside (s, c) still
+      // yields a menu with no envelope, and therefore an action-less ask push.
+      // What covers the residue is `actionlessAsks` in `detectDialogs` below:
+      // the latch remembers that push and amends it when the envelope turns up.
+      await this.sweepHookStates(records);
+      const pending = await this.detectDialogs(this.primed, records);
+      await this.sweepTasks();
+      // NEVER awaited: it shells out over the network and `gh` has no
+      // --timeout, so awaiting it would stall the dialog detector and the
+      // busy->idle push behind GitHub's reachability.
+      void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
+      if (this.deps.refreshCaps && Date.now() - this.lastCapsAt >= CAPS_REFRESH_MS) {
+        this.lastCapsAt = Date.now();
+        // NEVER awaited: same reasoning as sweepPr immediately above — caps()
+        // swallows its own failures today, but a wedged-yet-connected agent
+        // must not stall assembleFleet behind an up-to-15s request timeout,
+        // and a future implementation that DOES reject must not become an
+        // unhandled rejection via start()'s `void this.tick()`.
+        void this.deps.refreshCaps().catch(() => { /* one bad refresh must not kill the poll */ });
+      }
+      // NEVER awaited, same reasoning as sweepPr above and then some: this one
+      // joins the per-session KeyedQueue, which `POST /workspace/reap` can hold
+      // for minutes. Awaiting it would put the dialog detector and the
+      // busy->idle push behind a reap. Overlapping sweeps are harmless — the
+      // attempted-set is written BEFORE the call, so a second sweep's condition 4
+      // refuses the pair the first is still running.
+      void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as sweepNames immediately above: this one
+      // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
+      // is ~4.3 s of sleeps per message plus one round trip per line
+      // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
+      // detector and the busy->idle push behind a mail delivery.
+      void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
+      // The whole fleet is in scope right here, which is exactly what
+      // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
+      // have on their own clocks — see `activeProjects`'s own comment.
+      const projects = new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.project));
+      // Per-session project, off the SAME fleet assembly — the honest fallback
+      // `pushNewMail` uses for run-less mail (review finding 3): a delivery's
+      // `project` is null whenever the mail has no run, which `mailQueuedSince`'s
+      // own docstring names as a fully supported case, not an edge one, and the
+      // RECIPIENT session's own project (known here, not down in that method's
+      // own scope) is the honest answer — never an empty string.
+      const sessionProjects = new Map(sessions.map((s) => [s.id, s.project]));
+      // Push on a busy→idle finish (a session completed a turn). Skip the priming
+      // tick — otherwise a restart notifies for every currently-idle session.
+      if (this.primed) {
+        for (const s of sessions) {
+          if (this.prevStatus.get(s.id) === 'busy' && s.status === 'idle') {
+            this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
+          }
+        }
+        // Build 7's two new notify kinds ride the SAME primed gate as the
+        // `done` push above, for the identical restart reason. EACH WRAPPED
+        // (review finding 1): both walk straight into `node:sqlite`, which
+        // throws SYNCHRONOUSLY — a full disk (this fleet already ships a 10G
+        // floor check, so it is not hypothetical) or a second connection
+        // holding coord.db's write lock (`BEGIN IMMEDIATE` takes it eagerly,
+        // no busy timeout) is enough. `tick()` is fired by `start()` as `void
+        // this.tick()` with no `unhandledRejection` handler anywhere in this
+        // tree, so an unguarded throw here would kill the whole process over a
+        // fault every NEIGHBOURING lane already survives (sweepPr/sweepNames/
+        // sweepMail's `void …().catch(…)`, saveSnapshot's try/catch below,
+        // readRegistry's swallow-by-construction) — these two were the
+        // exception, not the rule this file otherwise keeps.
+        try { this.pushNewMail(projects, sessionProjects); }
+        catch (err) {
+          console.warn(`ccrc-server: pushNewMail failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+        }
+        try { this.pushNewRuns(projects); }
+        catch (err) {
+          console.warn(`ccrc-server: pushNewRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+        }
+      } else if (this.deps.coord) {
+        // The priming tick seeds both watermarks to "everything that already
+        // exists" rather than 0, so the FIRST primed tick's `WHERE id > ?`
+        // reads see only what changed after this process started — the mail-
+        // lane courtesy spec's restart semantics name, extended here to runs.
+        // Guarded for the identical reason as the two calls above (review
+        // finding 1): a priming-tick SQLite failure must leave both watermarks
+        // at 0, not kill the process — a later primed tick still reads
+        // everything queued since the process actually started, which is the
+        // same "replay a bit more than strictly necessary" cost every other
+        // lane in this file accepts over losing the poll outright.
+        try {
+          this.lastMailNotifyId = this.deps.coord.maxMailDeliveryId();
+          this.lastRunNotifyId = this.deps.coord.maxRunEventId();
+        } catch (err) {
+          console.warn(`ccrc-server: priming the mail/run watermarks failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
         }
       }
-      // Build 7's two new notify kinds ride the SAME primed gate as the
-      // `done` push above, for the identical restart reason. EACH WRAPPED
-      // (review finding 1): both walk straight into `node:sqlite`, which
-      // throws SYNCHRONOUSLY — a full disk (this fleet already ships a 10G
-      // floor check, so it is not hypothetical) or a second connection
-      // holding coord.db's write lock (`BEGIN IMMEDIATE` takes it eagerly,
-      // no busy timeout) is enough. `tick()` is fired by `start()` as `void
-      // this.tick()` with no `unhandledRejection` handler anywhere in this
-      // tree, so an unguarded throw here would kill the whole process over a
-      // fault every NEIGHBOURING lane already survives (sweepPr/sweepNames/
-      // sweepMail's `void …().catch(…)`, saveSnapshot's try/catch below,
-      // readRegistry's swallow-by-construction) — these two were the
-      // exception, not the rule this file otherwise keeps.
-      try { this.pushNewMail(projects, sessionProjects); }
-      catch (err) {
-        console.warn(`ccrc-server: pushNewMail failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      for (const s of sessions) this.prevStatus.set(s.id, s.status);
+      this.activeProjects = projects;
+      this.primed = true;
+      if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
+        // C0.4: `connected` alone is not "this read was complete" — a
+        // wedged-yet-connected agent, a socket hiccup mid-sweep, or a handful of
+        // sessions timing out inside `readRegistry`'s 24-generation loop all
+        // still leave `fleetState.connected` true while `sessions` comes back
+        // short. Without a size check, THAT partial assembly overwrites the
+        // fuller last-known-good snapshot on disk — and `/api/fleet`
+        // (server.ts) serves exactly this file, unconditionally, as `stale:
+        // true` for the whole REST of a subsequent real outage. So a single bad
+        // tick during an otherwise-healthy stretch degrades every request after
+        // it, not just its own. Guard: never let a smaller (or empty) assembly
+        // clobber a fuller one already on disk — implementing the intent this
+        // class's own docstring already states above ("a stretch of
+        // empty/partial reads never clobbers the last known good snapshot").
+        try {
+          const prior = await loadSnapshot(this.cachePath);
+          if (prior === null || sessions.length >= prior.sessions.length) {
+            await saveSnapshot(sessions, this.cachePath);
+          }
+        } catch { /* best-effort cache — never blocks the poll */ }
       }
-      try { this.pushNewRuns(projects); }
-      catch (err) {
-        console.warn(`ccrc-server: pushNewRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
-      }
-    } else if (this.deps.coord) {
-      // The priming tick seeds both watermarks to "everything that already
-      // exists" rather than 0, so the FIRST primed tick's `WHERE id > ?`
-      // reads see only what changed after this process started — the mail-
-      // lane courtesy spec's restart semantics name, extended here to runs.
-      // Guarded for the identical reason as the two calls above (review
-      // finding 1): a priming-tick SQLite failure must leave both watermarks
-      // at 0, not kill the process — a later primed tick still reads
-      // everything queued since the process actually started, which is the
-      // same "replay a bit more than strictly necessary" cost every other
-      // lane in this file accepts over losing the poll outright.
-      try {
-        this.lastMailNotifyId = this.deps.coord.maxMailDeliveryId();
-        this.lastRunNotifyId = this.deps.coord.maxRunEventId();
-      } catch (err) {
-        console.warn(`ccrc-server: priming the mail/run watermarks failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
-      }
+      // Independent of the `fleet` diff below: runs change on a different
+      // clock from sessions, and an unchanged session snapshot must not
+      // suppress a run transition from reaching an already-connected client.
+      this.emitRuns();
+      const json = JSON.stringify(sessions);
+      if (json === this.lastJson) return;
+      this.lastJson = json;
+      this.bus.emit('fleet', sessions);
+    } finally {
+      this.ticking = false;
     }
-    for (const s of sessions) this.prevStatus.set(s.id, s.status);
-    this.activeProjects = projects;
-    this.primed = true;
-    if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
-      try { await saveSnapshot(sessions, this.cachePath); } catch { /* best-effort cache — never blocks the poll */ }
-    }
-    // Independent of the `fleet` diff below: runs change on a different
-    // clock from sessions, and an unchanged session snapshot must not
-    // suppress a run transition from reaching an already-connected client.
-    this.emitRuns();
-    const json = JSON.stringify(sessions);
-    if (json === this.lastJson) return;
-    this.lastJson = json;
-    this.bus.emit('fleet', sessions);
   }
 
   /**
@@ -1431,7 +1467,8 @@ export class FleetWatcher {
    */
   async archiveSafety(id: string): Promise<{ verdict: 'ok' | 'busy' | 'attached' | 'unknown'; held: string | null }> {
     if (this.bus.listenerCount(`session:${id}`) > 0) return { verdict: 'attached', held: null };
-    const rec = (await readRegistry(this.deps.io, this.deps.cfg)).find((r) => r.id === id);
+    // C0.3: one session's own row, not the whole registry.
+    const rec = await readSessionRecord(this.deps.io, this.deps.cfg, id);
     if (!rec) return { verdict: 'unknown', held: null };
     const held = rec.held;
     if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running

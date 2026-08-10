@@ -99,6 +99,66 @@ function manifestBytes(raw: string | null): number | null {
   }
 }
 
+/**
+ * One session's 17-field read plus the `SessionRecord` it builds — the ONE
+ * parser, shared by `readRegistry`'s whole-fleet sweep and
+ * `readSessionRecord`'s single-id read below (C0.3), so there is no second
+ * copy of this shape to drift out of sync with the first. `names` is the
+ * caller's directory listing, passed in rather than re-read here, for the
+ * same "PRESENCE independently of whether the read succeeded" reason the
+ * `held` field below already relies on.
+ *
+ * Returns null for an incomplete registry entry (missing wrapper/workdir/
+ * uuid) — skip, don't crash, same as the inline `continue` this replaced.
+ */
+async function buildRecord(io: FleetIO, cfg: CcrcConfig, names: string[], id: string): Promise<SessionRecord | null> {
+  const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
+    base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw] = await Promise.all([
+    field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
+    field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
+    field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
+    field(io, cfg.registryDir, id, 'pool'), field(io, cfg.registryDir, id, 'lastswap'),
+    field(io, cfg.registryDir, id, 'workspace'), field(io, cfg.registryDir, id, 'branch'),
+    field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
+    field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
+    field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
+    field(io, cfg.registryDir, id, 'hold'),
+  ]);
+  if (!wrapper || !workdir || !uuid) return null;   // incomplete registry entry — skip, don't crash
+  const holdListed = names.includes(`${id}.hold`);
+  return {
+    id, wrapper, project: project ?? id, workdir, uuid,
+    started: started === '1',
+    home, pool: pool ? pool.split(/\s+/).filter(Boolean) : null,
+    lastswap: lastswap ? parseInt(lastswap, 10) : null,
+    workspace, branch,
+    base,
+    // A phase this build does not know degrades to null (= unchecked), never
+    // to a raw string the PWA would switch on and render as nothing.
+    // `isPrPhase`, not `PR_PHASES.includes(x as PrPhase)`: the old form cast
+    // the untrusted value twice, asserting the very thing the check asks
+    // (final review, integration 3). The predicate also rejects a non-string
+    // outright, so a half-written registry entry cannot reach `.includes`
+    // wearing a `PrPhase` annotation.
+    prPhase: isPrPhase(prPhaseRaw) ? prPhaseRaw : null,
+    prNumber: numOrNull(prNumberRaw),
+    prCheckedAt: numOrNull(prCheckedAtRaw),
+    archivedAt: numOrNull(archivedRaw),
+    /** The worktree size ws-archive measured AT ARCHIVE TIME. Null when the
+     *  manifest is absent or half-written — never 0, which would argue
+     *  against a cleanup that would free gigabytes. */
+    archivedBytes: manifestBytes(manifestRaw),
+    // `names` is the directory listing this function opened with, so it
+    // proves PRESENCE independently of whether the read succeeded — the one
+    // piece of evidence `field()` alone does not have. See `HOLD_UNREADABLE`.
+    // An empty read is a hold with nothing to show, which is not the same
+    // fact as an unreadable one — see `HOLD_NO_REASON`.
+    held: holdRaw === null
+      ? (holdListed ? HOLD_UNREADABLE : null)
+      : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
+  };
+}
+
 export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {
   const names = await io.readdir(cfg.registryDir);
   if (names === null) return [];
@@ -108,52 +168,10 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
    *  after the loop by ONE second listing — see below. */
   const holdUnconfirmed = new Set<string>();
   for (const id of ids) {
-    const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
-      base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw] = await Promise.all([
-      field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
-      field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
-      field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
-      field(io, cfg.registryDir, id, 'pool'), field(io, cfg.registryDir, id, 'lastswap'),
-      field(io, cfg.registryDir, id, 'workspace'), field(io, cfg.registryDir, id, 'branch'),
-      field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
-      field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
-      field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
-      field(io, cfg.registryDir, id, 'hold'),
-    ]);
-    if (!wrapper || !workdir || !uuid) continue;   // incomplete registry entry — skip, don't crash
-    const holdListed = names.includes(`${id}.hold`);
-    if (holdRaw === null && holdListed) holdUnconfirmed.add(id);
-    out.push({
-      id, wrapper, project: project ?? id, workdir, uuid,
-      started: started === '1',
-      home, pool: pool ? pool.split(/\s+/).filter(Boolean) : null,
-      lastswap: lastswap ? parseInt(lastswap, 10) : null,
-      workspace, branch,
-      base,
-      // A phase this build does not know degrades to null (= unchecked), never
-      // to a raw string the PWA would switch on and render as nothing.
-      // `isPrPhase`, not `PR_PHASES.includes(x as PrPhase)`: the old form cast
-      // the untrusted value twice, asserting the very thing the check asks
-      // (final review, integration 3). The predicate also rejects a non-string
-      // outright, so a half-written registry entry cannot reach `.includes`
-      // wearing a `PrPhase` annotation.
-      prPhase: isPrPhase(prPhaseRaw) ? prPhaseRaw : null,
-      prNumber: numOrNull(prNumberRaw),
-      prCheckedAt: numOrNull(prCheckedAtRaw),
-      archivedAt: numOrNull(archivedRaw),
-      /** The worktree size ws-archive measured AT ARCHIVE TIME. Null when the
-       *  manifest is absent or half-written — never 0, which would argue
-       *  against a cleanup that would free gigabytes. */
-      archivedBytes: manifestBytes(manifestRaw),
-      // `names` is the directory listing this function opened with, so it
-      // proves PRESENCE independently of whether the read succeeded — the one
-      // piece of evidence `field()` alone does not have. See `HOLD_UNREADABLE`.
-      // An empty read is a hold with nothing to show, which is not the same
-      // fact as an unreadable one — see `HOLD_NO_REASON`.
-      held: holdRaw === null
-        ? (holdListed ? HOLD_UNREADABLE : null)
-        : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
-    });
+    const rec = await buildRecord(io, cfg, names, id);
+    if (rec === null) continue;
+    if (rec.held === HOLD_UNREADABLE) holdUnconfirmed.add(id);
+    out.push(rec);
   }
   // ONE SECOND LISTING, and only when something needs it. `names` was taken
   // before ~17 field reads per session; a `ccd ws-release` that lands anywhere
@@ -178,4 +196,37 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
     }
   }
   return out;
+}
+
+/**
+ * `readRegistry`, narrowed to ONE session (C0.3). One `readdir` plus that
+ * id's 17 field reads — ~18 agent-WS round trips in remote mode, instead of
+ * `readRegistry`'s 24-generation sweep of the whole fleet (~409 round trips
+ * on a 24-session fleet) — for every caller that only ever asked "what does
+ * the registry say about THIS session" and never needed uniqueness or a
+ * subtraction over the rest of the fleet. Built from the SAME `buildRecord`
+ * loop body `readRegistry` uses, so there remains exactly one parser.
+ *
+ * `null` when the id has no `.uuid` in the listing OR its own fields don't
+ * parse into a complete record — the two ways `readRegistry`'s caller-side
+ * `.find(r => r.id === id)` already returned undefined, now collapsed into
+ * one return value at the source instead of two.
+ *
+ * Carries the SAME hold-reconfirm discipline as `readRegistry` (see the
+ * "ONE SECOND LISTING" comment above): a hold that reads `HOLD_UNREADABLE`
+ * gets ONE follow-up listing, because a `ws-release` landing inside this
+ * call's own field-read window is indistinguishable from a failed read at
+ * `field()` alone, exactly as for the whole-fleet sweep.
+ */
+export async function readSessionRecord(io: FleetIO, cfg: CcrcConfig, id: string): Promise<SessionRecord | null> {
+  const names = await io.readdir(cfg.registryDir);
+  if (names === null) return null;
+  if (!names.includes(`${id}.uuid`)) return null;   // not in the registry — no field reads worth making
+  const rec = await buildRecord(io, cfg, names, id);
+  if (rec === null) return null;
+  if (rec.held === HOLD_UNREADABLE) {
+    const again = await io.readdir(cfg.registryDir);
+    if (again !== null && !again.includes(`${id}.hold`)) rec.held = null;
+  }
+  return rec;
 }
