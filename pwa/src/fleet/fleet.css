@@ -1478,3 +1478,57 @@
   color: var(--ink-secondary);
   cursor: pointer;
 }
+
+/* — Build 7: the mail door and the feed —
+   No glow anywhere below: a record is not a living pane (DIRECTION.md's
+   refused list). "Unread" is a rule in the accent on the leading edge, never
+   element opacity over content (DIRECTION.md:80-100) and never a hue that
+   belongs to state. */
+.mail-badge {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  min-width: var(--tap-min); min-height: var(--tap-min);
+  border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-regular) var(--text-base) / 1 var(--font-ui);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.mail-badge:active { transform: scale(0.88); color: var(--ink-primary); }
+.mail-badge[data-unread='true'] { color: var(--ink-primary); }
+.mail-badge-count {
+  background: var(--status-attention-tint); color: var(--status-attention-text);
+  border-radius: var(--r-full); padding: 0 6px;
+  font: var(--weight-semibold) var(--text-2xs) / 1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
+.mail-head { display: flex; align-items: center; gap: var(--sp-2); }
+.mail-back {
+  flex: none; min-width: var(--tap-min); min-height: var(--tap-min);
+  border: none; background: none; border-radius: var(--r-sm);
+  font: var(--weight-regular) 26px / 1 var(--font-ui); color: var(--ink-secondary); cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.mail-back:active { transform: scale(0.88); color: var(--ink-primary); }
+.mail-title { font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono); color: var(--ink-primary); }
+.mail-note { font-size: var(--text-xs); color: var(--ink-secondary); }
+.mail-dropped { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.mail-empty { padding: var(--sp-4); color: var(--ink-secondary); }
+.mail-list { display: grid; gap: var(--sp-1); }
+.mail-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-2); align-items: baseline;
+  padding: var(--sp-2); border-left: 2px solid transparent;
+  background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+}
+.mail-row[data-unseen='true'] { border-left-color: var(--accent); }
+.mail-kind {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  font: var(--weight-medium) var(--text-2xs) / 1.6 var(--font-mono); color: var(--ink-tertiary);
+}
+.mail-row-title { font-family: var(--font-mono); font-size: var(--text-sm); }
+.mail-when {
+  font-family: var(--font-mono); font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+}
+.mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }

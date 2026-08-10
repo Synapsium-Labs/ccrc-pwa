@@ -102,3 +102,12 @@ describe('App block overlay (the dormant handshake, Rider E)', () => {
     expect(document.querySelector('.block-screen')).not.toBeInTheDocument();
   });
 });
+
+describe('App /mail route', () => {
+  it('renders MailScreen and joins [data-view="session"] like every other non-fleet route', () => {
+    navigate('/mail');
+    render(<App />);
+    expect(screen.getByRole('heading', { name: /^mail$/i })).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});

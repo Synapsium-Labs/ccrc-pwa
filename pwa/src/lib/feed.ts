@@ -50,8 +50,13 @@ export function reviveNotifyEvents(raw: unknown): { events: NotifyEvent[]; dropp
  *  in-memory ring (the catch-up tail) and `feed_events` (the durable read) —
  *  so it travels with the record on both paths a client can see it from, and
  *  a `${at}:${seq}` pair is what actually identifies "the same record seen
- *  twice" versus "two different epochs' seq-1 rows". */
-const recordKey = (e: NotifyEvent): string => `${e.at}:${e.seq}`;
+ *  twice" versus "two different epochs' seq-1 rows".
+ *
+ *  Exported: `/mail` (MailScreen.tsx) needs the SAME identity for its list's
+ *  React `key` — `ev.seq` alone would collide across an epoch rotation the
+ *  same way a naive merge would, and reimplementing the pair a second time
+ *  is exactly the drift this module exists to end. */
+export const recordKey = (e: NotifyEvent): string => `${e.at}:${e.seq}`;
 
 /** Union two feed sources on record identity (see `recordKey`), oldest first,
  *  capped from the OLD end. The later argument wins a collision: a re-read is

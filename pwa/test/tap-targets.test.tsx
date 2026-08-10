@@ -24,6 +24,8 @@ import { declValue, norm, ruleIn, stripComments } from './cssRule';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { MailScreen } from '../src/screens/MailScreen';
+import { MailBadge } from '../src/fleet/MailBadge';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -190,18 +192,45 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the six on the token, never a bare 44px literal', () => {
+  it('keeps every one of the eight on the token, never a bare 44px literal', () => {
     // A literal would not follow `--tap-min` if the acceptance criterion ever
-    // moves, and would not be found by the scrapes above either.
+    // moves, and would not be found by the scrapes above either. Build 7 Task
+    // 4 (`.mail-badge`, `.mail-back`) joins the same loop rather than getting
+    // its own — one place where "every floored rule stays on the token" is
+    // checked, not a second copy of the assertion per branch.
     for (const rule of [
       ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
       ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
+      ruleIn(fleetCss, '.mail-badge'), ruleIn(fleetCss, '.mail-back'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
       expect(norm(stripComments(rule))).not.toContain('44px');
       expect(norm(stripComments(rule))).toContain('var(--tap-min)');
     }
+  });
+});
+
+// — Build 7, Task 4: the mail door and its screen's own back control —
+
+describe('.mail-badge — the only door to /mail', () => {
+  it('is at least one tap square, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.mail-badge'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.mail-badge'), 'min-width')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered head control actually carries', () => {
+    render(<MailBadge unread={0} />);
+    expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
+  });
+});
+
+describe('.mail-back — the feed’s back control', () => {
+  it('is at least one tap square, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.mail-back'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered control actually carries', () => {
+    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
+    expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
   });
 });

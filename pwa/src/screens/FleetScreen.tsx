@@ -10,6 +10,7 @@ import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
@@ -19,7 +20,7 @@ import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
-import { ackAll, acksSnapshot, isUnseen, prune, subscribeAcks } from '../lib/seen';
+import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseen, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -199,12 +200,19 @@ export function FleetScreen({
     `${sessions.length} session${sessions.length === 1 ? '' : 's'}` +
     (waiting > 0 ? ` · ${waiting} waiting` : '');
 
+  // The feed's unread count, through the SAME comparison the bucket chips use
+  // (seen.ts's isUnseenAt — see groupFleet.ts:30-44's pre-commitment). `acks`
+  // is already subscribed on this screen, so this costs one filter.
+  const feed = useStore((s) => s.feed);
+  const unreadMail = feed.filter((ev) => isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
+
   return (
     <main className="fleet" data-conn={conn}>
       <header className="fleet-head">
         <span className="wordmark">ccrc</span>
         <div className="fleet-head-right">
           {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
+          <MailBadge unread={unreadMail} />
           <NotificationBell />
         </div>
       </header>
