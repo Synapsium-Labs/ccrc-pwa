@@ -654,14 +654,16 @@ export class FleetWatcher {
    * `recordAlways: true` for the identical reason `pushNewMail` sets it.
    *
    * `closing` is `recordOnly` (review finding 4): `POST /api/runs/:id/close`
-   * commits `advance(id,'closing')` immediately followed by `advance(id,
-   * state)` — two adjacent synchronous statements with nothing between them
-   * that can fail in practice — so the SAME watcher tick always reads both
-   * rows, and every close fired TWO pushes, one naming a state that exists
-   * for microseconds: internal bookkeeping the operator can neither act on
-   * nor ever observe as a resting state. The feed still gets it in full — the
-   * record above is unconditional, same as every other transition — only the
-   * PUSH is suppressed for this one state.
+   * commits `advance(id,'closing')` and `advance(id, state)` inside ONE
+   * transaction, `CoordStore.closeRun` (corrected — this used to describe
+   * two adjacent synchronous route-level statements, true when review
+   * finding 4 was fixed but not since `closeRun` was introduced), so the
+   * SAME watcher tick always reads both rows, and every close fired TWO
+   * pushes, one naming a state that exists for microseconds: internal
+   * bookkeeping the operator can neither act on nor ever observe as a
+   * resting state. The feed still gets it in full — the record above is
+   * unconditional, same as every other transition — only the PUSH is
+   * suppressed for this one state.
    *
    * A transition with no `sessionId` yet (e.g. an early refusal before
    * dispatch ever minted one) is skipped rather than guessed: presence
@@ -1168,12 +1170,34 @@ export class FleetWatcher {
         // tmux session, hookstate not `done`, not idle, on cooldown) is
         // ORDINARY and expected to hold indefinitely for a session that is
         // merely busy, and must never accrue toward a park.
+        //
+        // Fix (scoped-verify): `records` came from `readRegistry`, which
+        // drops a row whose `.uuid` file IS listed when a SIBLING field read
+        // merely fails (`registry.ts:123`, "incomplete registry entry —
+        // skip, don't crash") — transient, not evidence the recipient is
+        // gone. `POST /api/mail`'s own ingress already draws this exact
+        // line, refusing `registry-unmeasurable` rather than guessing
+        // whenever a row's `.uuid` is listed but unreadable (D-37,
+        // `coord/routes.ts`'s `names.includes` checks, pinned at
+        // `mail-routes.test.ts:259`). `listing` — the raw directory read at
+        // the top of THIS sweep, in scope for exactly this reason — carries
+        // the same evidence of presence `names` gives the ingress. Without
+        // this check, one dropped agent-WS round trip on a SINGLE field of a
+        // LIVE session's registry row was indistinguishable from that
+        // session being reaped, and six backoffs (~15 minutes) permanently
+        // parked its mail `rejected('undeliverable')`. "Listed but
+        // unreadable" therefore keeps backing off, unmeasured, forever — the
+        // same as every ordinary gate below — while only a recipient absent
+        // from `listing` too can ever park.
+        const listedButUnreadable = listing.includes(`${d.toId}.uuid`);
         const attempts = d.attempts + 1;
-        if (attempts >= MAIL_MAX_ATTEMPTS) {
+        if (attempts >= MAIL_MAX_ATTEMPTS && !listedButUnreadable) {
           store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
         } else {
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-          store.backOff(d.id, 'recipient not in registry', now + step);
+          store.backOff(d.id,
+            listedButUnreadable ? 'registry row listed but unreadable' : 'recipient not in registry',
+            now + step);
         }
         continue;
       }

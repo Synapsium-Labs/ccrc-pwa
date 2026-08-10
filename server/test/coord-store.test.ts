@@ -506,6 +506,52 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     expect(s.dueDeliveries(dueAt + 1_000, replayMs)).toEqual([]);               // backed off: not due
     expect(s.dueDeliveries(dueAt + 30_000, replayMs).map((x) => x.id)).toEqual([d.id]); // due again
   });
+
+  it('markDelivered/rejectDelivery refuse to reopen an already-parked row — a send in flight when a ' +
+     'close commits the park must not un-park it (scoped-verify R1)', () => {
+    // The interleaving the verifier reproduced: `sweepMail` reads a row
+    // (state='queued'), starts `await sendPrompt(...)`, and — before that
+    // resolves — `POST /api/runs/:id/close` commits in a SEPARATE request,
+    // parking this run's own outstanding mail via `cancelOutstandingDeliveries`
+    // (the same write `closeRun`'s own transaction performs). The in-flight
+    // send then resolves `ok`, and the sweep's own `markDelivered` call lands
+    // AFTER the park. Before this fix, `markDelivered`'s guard was only
+    // `state != 'acked'`, so it overwrote the park unconditionally, leaving
+    // the row self-contradictory (`state='delivered'`, `rejectCode`
+    // non-null) and — via `dueDeliveries`'s replay arm — eligible to replay
+    // wave N's mail into wave N+1's freshly `/clear`-ed context, exactly the
+    // harm `cancelOutstandingDeliveries` exists to prevent.
+    const s = store();
+    const now = 1_000_000_000_000;
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+
+    // The close commits first — the same write `cancelOutstandingDeliveries`
+    // performs from inside `closeRun`'s own transaction.
+    s.cancelOutstandingDeliveries(r.id);
+    const rowAfterClose = () => s.db.prepare(
+      'SELECT state, rejectCode, lastError FROM mail_deliveries WHERE id = ?',
+    ).get(d.id) as { state: string; rejectCode: string | null; lastError: string | null };
+    expect(rowAfterClose()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', lastError: 'run closed' });
+
+    // The in-flight send now resolves `ok` and the sweep calls markDelivered
+    // — the park must survive it, byte for byte.
+    s.markDelivered(d.id, now);
+    expect(rowAfterClose()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', lastError: 'run closed' });
+    // Never re-enters the replay arm — `dueDeliveries` must not select it no
+    // matter how far the clock advances.
+    expect(s.dueDeliveries(now + 10_000_000, 1).map((x) => x.id)).not.toContain(d.id);
+
+    // Symmetric guard on rejectDelivery: a SECOND, later park racing the same
+    // row (e.g. sweepMail's own replay-ceiling or reaped-recipient park,
+    // resolving after this one already landed) must not clobber the FIRST
+    // park's own recorded reason either.
+    s.rejectDelivery(d.id, 'undeliverable', 'replayed without ack past the replay ceiling');
+    expect(rowAfterClose()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', lastError: 'run closed' });
+  });
 });
 
 describe('CoordStore: feed (Task 10)', () => {

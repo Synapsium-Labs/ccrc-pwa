@@ -701,22 +701,32 @@ export class CoordStore {
     ).all() as { id: number; toId: string; deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
-  /** `WHERE state != 'acked'` (fix — review finding 22): `sweepMail` reads
-   *  the row it is about to (re)send BEFORE `await sendPrompt(...)`, and
-   *  writes the outcome AFTER — a window of several seconds to half a minute
-   *  in which `POST /api/mail/:id/ack` can land on the SAME row via
-   *  `markAcked`. Before this guard, a REPLAY's `sendPrompt` resolving `ok`
-   *  after that ack overwrote `state='acked'` back to `state='delivered'`
-   *  unconditionally, leaving the row self-contradictory (`ackedAt` non-null,
-   *  `state='delivered'`) and permanently re-eligible for
-   *  `dueDeliveries`'s replay arm and `unreadMailCount` — an already-acked
-   *  message replayed into the recipient forever. `markAcked` itself already
-   *  reads-before-writing for the identical reason (see its own docstring);
-   *  this mirrors that discipline on the other three writers of this column,
-   *  which never had it. */
+  /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22,
+   *  widened by a scoped-verify fix — a park must not be reopened either):
+   *  `sweepMail` reads the row it is about to (re)send BEFORE
+   *  `await sendPrompt(...)`, and writes the outcome AFTER — a window of
+   *  several seconds to half a minute in which `POST /api/mail/:id/ack` can
+   *  land on the SAME row via `markAcked`, exactly finding 22's race. The
+   *  identical window also lets a PARK land on the row: `POST
+   *  /api/runs/:id/close` -> `cancelOutstandingDeliveries`, or `sweepMail`'s
+   *  own replay-ceiling/reaped-recipient calls to `rejectDelivery` below —
+   *  all write `state='rejected'` from a SEPARATE code path than the one
+   *  whose in-flight send this row belongs to. `!= 'acked'` alone let that
+   *  in-flight send's `ok` resolve AFTER the park committed and overwrite it
+   *  right back to `state='delivered'`, leaving the row self-contradictory
+   *  (`rejectCode` non-null, `state='delivered'`) and — the harm
+   *  `cancelOutstandingDeliveries` exists to prevent — re-eligible for
+   *  `dueDeliveries`'s replay arm again: wave N's mail replaying into wave
+   *  N+1's freshly `/clear`-ed context. `'acked'` and `'rejected'` are this
+   *  build's only two states a send racing a concurrent writer must never
+   *  reopen; every other three-writers-of-this-column guard
+   *  (`rejectDelivery` below) carries the identical `NOT IN` list for the
+   *  same reason. `markAcked` itself already reads-before-writing for the
+   *  identical reason (see its own docstring). */
   markDelivered(id: number, at: number): void {
-    this.db.prepare("UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ? WHERE id = ? AND state != 'acked'")
-      .run(at, id);
+    this.db.prepare(
+      "UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ? WHERE id = ? AND state NOT IN ('acked','rejected')",
+    ).run(at, id);
   }
 
   /**
@@ -768,14 +778,23 @@ export class CoordStore {
     ).run(lastError, nextAttemptAt, id);
   }
 
-  /** `WHERE state != 'acked'` (fix — review finding 22, the same ack-race
-   *  guard `markDelivered` above now carries, applied to this writer's own
-   *  unconditional `state` overwrite): a `sendPrompt` failure resolving after
-   *  a concurrent ack landed on the same row must not turn an ACKED message
-   *  into a `rejected('undeliverable')` one. */
+  /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22, the
+   *  same ack-race guard `markDelivered` above now carries, applied to this
+   *  writer's own unconditional `state` overwrite, and widened for the same
+   *  reason): a `sendPrompt` failure resolving after a concurrent ack landed
+   *  on the same row must not turn an ACKED message into a
+   *  `rejected('undeliverable')` one, and — the scoped-verify addition — two
+   *  parks racing the same row (e.g. `cancelOutstandingDeliveries` on close,
+   *  and this same sweep's own replay-ceiling or reaped-recipient call to
+   *  THIS method, both resolving against a row already parked by the other)
+   *  must not let the SECOND clobber the first's `rejectCode`/`lastError`
+   *  with a different, later reason. `state != 'acked'` alone let that
+   *  second write through unconditionally; a park is terminal exactly the
+   *  way `'acked'` is, so it needs the identical protection. */
   rejectDelivery(id: number, code: MailRejectCode, lastError: string): void {
     this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ? WHERE id = ? AND state != 'acked'",
+      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ? " +
+      "WHERE id = ? AND state NOT IN ('acked','rejected')",
     ).run(code, lastError, id);
   }
 

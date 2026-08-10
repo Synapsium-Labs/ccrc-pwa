@@ -664,6 +664,29 @@ describe('POST /api/runs/:id/close', () => {
     expect(coord.capsUsage().running).toBe(0);
   });
 
+  it('closes state:failed directly from awaiting-review — one call, no bounce through working first ' +
+     '(fix, scoped-verify R3)', async () => {
+    // Before this fix, `RUN_TRANSITIONS['awaiting-review']` had no `closing`
+    // edge (`working` and `merging` both did), so THIS call 409'd
+    // `bad-transition` and an abandon from `awaiting-review` needed a first
+    // `/advance` back to `working` before `/close` would even look at the
+    // fleet act — an undocumented two-call path.
+    const sessionId = `${PROJECT}-close12`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    await postAdvance(app!, id,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    const toReview = await postAdvance(app!, id,
+      { to: 'awaiting-review', fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP } });
+    expect(toReview.statusCode).toBe(200);
+    expect(coord.run(id)!.state).toBe('awaiting-review');
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
+    expect(res.statusCode).toBe(200);
+    expect(coord.run(id)!.state).toBe('failed');
+  });
+
   it('folds real PR lineage read from a real .prhistory file — [] alone cannot discriminate ' +
      'the fold call being dropped (D-50)', async () => {
     const sessionId = `${PROJECT}-close10`;

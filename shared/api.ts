@@ -1443,21 +1443,31 @@ export function isRunState(v: unknown): v is RunState {
  * to or from a state this build cannot name.
  *
  * `dispatched` and `working` both reach `closing` directly (deviation, found
- * in Task 3 review — see the plan's D-9). PR I never writes `awaiting-review`
- * or `merging`: Task 9's dispatch route only ever advances a run to
- * `dispatched`, and its close route immediately does `advance(id,'closing')`
- * next — nothing in this PR walks a run through a review step first.
- * `awaiting-review`/`merging` stay in the table for PR J's
- * `POST /api/runs/:id/advance`, the operator-driven review step spec:126's
- * "every transition records who caused it" anticipates; without the direct
- * edges, every close Task 9 ships would 409 with `bad-transition` the first
- * time it ran.
+ * in Task 3 review — see the plan's D-9); `merging` always has (a merge
+ * succeeding closes it). Corrected (scoped-verify R3; D-9's own text no
+ * longer describes this tree): D-9 also said "PR I never writes
+ * `awaiting-review` or `merging`... `POST /api/runs/:id/advance` [is] PR J's
+ * [route]" — true when D-9 was written, false since `/advance` landed in
+ * this SAME PR (`coord/routes.ts`'s own docstring on that route records the
+ * same correction). `awaiting-review` is therefore genuinely reachable by
+ * ordinary flow now (`dispatch` -> `working` -> `/advance` ->
+ * `awaiting-review`), and gains the identical direct `closing` edge
+ * `working`/`merging` already carry: an operator abandon must be reachable
+ * from every live, non-terminal state in ONE `POST .../close` call, the same
+ * guarantee `working` and `merging` already give, not a two-call
+ * `/advance` back to `working` first — nothing about "a review that sends
+ * work back is the ordinary case, not a failure" (the paragraph above)
+ * argues against closing being reachable too; that paragraph is about REVIEW
+ * OUTCOMES, an orthogonal axis to an administrative abandon. `/advance`
+ * itself still refuses to reach `closing` (`ADVANCE_TARGETS` in
+ * `coord/routes.ts` — that stays `POST .../close`'s own job, fleet act and
+ * all); only `RUN_TRANSITIONS` gates it here.
  */
 export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
   planned:           ['dispatched', 'failed'],
   dispatched:        ['working', 'closing', 'failed'],
   working:           ['awaiting-review', 'closing', 'failed'],
-  'awaiting-review': ['merging', 'working', 'failed'],
+  'awaiting-review': ['merging', 'working', 'closing', 'failed'],
   merging:           ['closing', 'working', 'failed'],
   closing:           ['done', 'failed'],
   done:              [],

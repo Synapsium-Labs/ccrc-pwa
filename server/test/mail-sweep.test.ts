@@ -111,6 +111,16 @@ const onceUnlistableIO = (): { io: FleetIO; failNext: () => void } => {
   return { io, failNext: () => { fail = true; } };
 };
 
+/** A registry whose directory listing is fine but one specific session's
+ *  field read is not — `readRegistry` drops that row entirely
+ *  (`registry.ts:123`) even though its `.uuid` file is still listed. Mirrors
+ *  `mail-routes.test.ts`'s own fixture of the same name for the ingress side
+ *  of this identical distinction (D-37). */
+const withUnreadableField = (id: string, field: string): FleetIO => ({
+  ...localIO,
+  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+});
+
 const queueTestDelivery = (coord: CoordStore, toId: string, envelope: string): { mailId: number; id: number } => {
   const mail = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
     kind: 'finding', subject: 'hi', body: envelope, artifacts: [] });
@@ -796,6 +806,43 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     // said survives the failure to say it."
     const { mailId } = queueTestDelivery(coord, ID, ENVELOPE);   // sanity: table still writable
     expect(mailId).toEqual(expect.any(Number));
+  });
+
+  it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks ' +
+     '(fix, scoped-verify R2 — a regression the fix wave above itself introduced)', async () => {
+    // registry.ts:123 drops a row whose `.uuid` file IS listed when a
+    // sibling field read merely fails — transient, the identical shape
+    // `POST /api/mail`'s own ingress refuses as `registry-unmeasurable`
+    // rather than guessing (D-37, mail-routes.test.ts:259). Before this fix,
+    // sweepMail's reaped-recipient park (the test right above this one)
+    // could not tell that apart from a GENUINELY absent recipient, so this
+    // exact fixture would park a LIVE session's mail `rejected('undeliverable')`
+    // after MAIL_MAX_ATTEMPTS backoffs — about 15 minutes of one dropped
+    // agent-WS round trip on a single field.
+    const h = harness();
+    const io = withUnreadableField(ID, 'wrapper');
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord, { io });
+    seedRegistry(h.home, ID);   // .uuid IS listed; `wrapper` never reads back
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    let row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts).toBe(1);
+    expect(row.lastError).toBe('registry row listed but unreadable');
+
+    // Drive it well past the point that WOULD park a genuinely absent
+    // recipient (MAIL_MAX_ATTEMPTS backoffs, the test above this one) — it
+    // must still be backing off, never rejected.
+    for (let i = 1; i < MAIL_MAX_ATTEMPTS + 4; i++) {
+      row = deliveryRow(coord, id);
+      vi.setSystemTime(row.nextAttemptAt + 1_000);
+      await w.sweepMail();
+    }
+    row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.rejectCode).toBeNull();
   });
 
   it('an ORDINARY gate (busy, on cooldown, no tmux session) never accrues an attempt', async () => {
