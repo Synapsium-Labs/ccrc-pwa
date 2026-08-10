@@ -10,8 +10,25 @@ describe('loadConfig', () => {
     expect(cfg.ccdBin).toBe('/fake/home/.local/bin/ccd');
     expect(cfg.wrappers['claude2']).toBe('/fake/home/.claude-personal');
     expect(cfg.wrappers['gpt']).toBe('/fake/home/.claude-gpt');
+    expect(cfg.wrappers['claude-dev0']).toBe('/fake/home/.claude-dev0');
     expect(cfg.host).toBe('127.0.0.1');
     expect(cfg.port).toBe(7788);
+  });
+
+  it('maps every account wrapper the fleet host can run — an unmapped one is invisible, not loud', () => {
+    // The whole key set, not a spot-check. `sessionws.ts`'s `resolve()` answers
+    // `null` when `wrappers[rec.wrapper]` is missing, and the ONLY thing that
+    // reaches the client is `unknown session <id>` — indistinguishable from a
+    // reaped session. `claude-dev0` was absent here for its entire life, so
+    // chat was dead for every dev0 session and the fleet list still showed them
+    // idle, because `assembleFleet` never consults this map.
+    //
+    // Pinning the SET (not just the members) is what makes adding a 6th account
+    // a deliberate two-line act: `~/.local/bin/claude-dev0` exists on the fleet
+    // host and sets `CLAUDE_CONFIG_DIR`, and nothing else in this repo would
+    // have noticed it was missing.
+    expect(Object.keys(loadConfig({ CCRC_HOME: '/fake/home' }).wrappers).sort())
+      .toEqual(['claude', 'claude-corp', 'claude-dev0', 'claude2', 'gpt']);
   });
 
   it('derives coordDbPath from CCRC_HOME by default, and honours CCRC_COORD_DB as an override', () => {

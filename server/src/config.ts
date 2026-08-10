@@ -51,6 +51,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
       claude2: path.join(home, '.claude-personal'),
       'claude-corp': path.join(home, '.claude-corp'),
       gpt: path.join(home, '.claude-gpt'),
+      // 5th account: ~/.local/bin/claude-dev0 sets CLAUDE_CONFIG_DIR=~/.claude-dev0.
+      // Omitting it made resolve() return null for every dev0 session, which the
+      // client only ever saw as "unknown session" — see sessionws.ts resolve().
+      'claude-dev0': path.join(home, '.claude-dev0'),
     },
     fleetMode: env.CCRC_FLEET === 'remote' ? 'remote' : 'local',
     agentUrl: env.CCRC_AGENT_URL ?? null,

@@ -238,7 +238,21 @@ export class SessionStream {
     const rec = records.find((s) => s.id === this.id);
     if (!rec) return null;
     const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
-    if (!cfgDir) return null;
+    if (!cfgDir) {
+      // The two ways `resolve()` answers null are worlds apart, and the client
+      // sees ONE sentence for both (`unknown session <id>`). A reaped session
+      // is ordinary; a session the registry knows, running under a wrapper this
+      // build has no config dir for, is a deployment gap that breaks chat for
+      // every session on that account while the fleet list still shows them
+      // idle — `assembleFleet` never consults `wrappers`. Say so once per
+      // connect, naming the wrapper, so the next occurrence is a grep and not
+      // an investigation. Not a throw: one unmapped account must not take down
+      // the streams for the mapped ones.
+      console.warn(`ccrc-server: session ${this.id} has wrapper "${rec.wrapper}" with no configured ` +
+        'config dir — chat cannot resolve it (see loadConfig\'s `wrappers`); the client sees only ' +
+        '"unknown session"');
+      return null;
+    }
     let cwd = rec.workdir;
     let status: SessionStatus = 'dead';
     let statusUpdatedAt: number | null = null;
