@@ -52,10 +52,40 @@ function extractToken(raw: string): string | null {
  *  `CoordDbUnmigratable` takes for a 0-byte `coord.db` (Task 2/D-24 is the precedent this mirrors — a
  *  refusal, not a default). NOT what an un-edited `ccrc-mail.token.example`
  *  copy produces — that file ships one placeholder value line specifically
- *  so its SHAPE always extracts (see the file's own comment for why shipping
- *  the placeholder ITSELF is still an operator mistake, just a different,
- *  visible one this class does not catch). */
+ *  so its SHAPE always extracts; see `MailTokenPlaceholderUnedited` below for
+ *  the class that now catches THAT mistake instead (review finding 13 closed
+ *  the "different, visible one this class does not catch" gap this comment
+ *  used to leave open — it was not, in fact, visible anywhere). */
 export class MailTokenFileUnusable extends Error {}
+
+/** The exact placeholder value `deploy/ccrc-mail.token.example` ships on its
+ *  one value line (see that file's own comment). Exported so
+ *  `coord-token.test.ts` can pin it against the shipped example file rather
+ *  than re-typing the string a second time. */
+export const PLACEHOLDER_TOKEN = 'REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32';
+
+/**
+ * Thrown when the token file's one extracted value is, byte for byte, the
+ * placeholder `deploy/ccrc-mail.token.example` ships (review finding 13):
+ * copying the example to `deploy/ccrc-mail.token` without editing it —
+ * `cp deploy/ccrc-mail.token.example deploy/ccrc-mail.token`, the example's
+ * own line 1 — is the ONE mistake that file's comment calls out by name
+ * ("DO NOT SHIP THE PLACEHOLDER BELOW AS-IS"), and until this class existed
+ * nothing in this tree checked for it: the placeholder's SHAPE is
+ * deliberately a normal-looking value line (`extractToken` always resolves
+ * it, by the same file comment's own design), so `readMailToken` accepted it,
+ * `checkMailToken` returned `'ok'` for it, and every observable signal —
+ * boot log, `/api/mail`, `/api/notify` — said the coordination ingress was
+ * authenticated. It was not: that placeholder is committed to a public repo,
+ * so it authenticates nobody. The polarity finding 13 named: a token file
+ * that is EMPTY (`MailTokenFileUnusable` above) is the less dangerous
+ * mistake and already refuses to boot; a token file that is the WRONG,
+ * PUBLISHED value is strictly more dangerous and must refuse at least as
+ * loudly, not more quietly. Deliberately NOT caught anywhere — the same
+ * "index.ts lets it kill the process" stance `MailTokenFileUnusable` takes,
+ * for the same reason: a warning an operator can miss is exactly what let
+ * this ship silently in the first place. */
+export class MailTokenPlaceholderUnedited extends Error {}
 
 /**
  * The box token, off this box's own disk.
@@ -110,6 +140,18 @@ export function readMailToken(tokenPath: string): string | null {
     throw new MailTokenFileUnusable(
       `${tokenPath} exists but carries no usable token (0 bytes, whitespace only, or every line is ` +
       'a #-comment). This is PRESENT but unusable, not "never configured": see coord/token.ts.');
+  }
+  // Review finding 13: the placeholder extracts cleanly — that is the whole
+  // problem — so nothing short of an explicit equality check can tell it
+  // apart from a real secret.
+  if (token === PLACEHOLDER_TOKEN) {
+    throw new MailTokenPlaceholderUnedited(
+      `${tokenPath} still carries deploy/ccrc-mail.token.example's placeholder value, verbatim — the ` +
+      'ONE edit that file itself says is required ("DO NOT SHIP THE PLACEHOLDER BELOW AS-IS"). That ' +
+      'placeholder is committed to this public repo, so it authenticates nobody. Refusing to start ' +
+      'rather than silently opening /api/mail and /api/notify to anything on the tailnet that has ' +
+      'read the source: mint a real value with `openssl rand -hex 32` and put it on this file\'s one ' +
+      'value line.');
   }
   return token;
 }

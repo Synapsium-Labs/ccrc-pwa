@@ -14,7 +14,9 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkMailToken, MailTokenFileUnusable, readMailToken } from '../src/coord/token.js';
+import {
+  checkMailToken, MailTokenFileUnusable, MailTokenPlaceholderUnedited, PLACEHOLDER_TOKEN, readMailToken,
+} from '../src/coord/token.js';
 import { mkTmp } from './tmpHelpers.js';
 
 describe('checkMailToken', () => {
@@ -110,6 +112,38 @@ describe('readMailToken', () => {
     });
 });
 
+// Review finding 13: the placeholder extracts cleanly (that is the whole
+// defect) — so `deploy/ccrc-mail.token.example`'s own unedited content is the
+// realistic fixture, not a hand-typed constant that could drift from it.
+describe('readMailToken THROWS on the unedited placeholder (review finding 13)', () => {
+  const EXAMPLE = readFileSync(path.join(repoRoot, 'deploy', 'ccrc-mail.token.example'), 'utf8');
+
+  it('refuses a token file that is exactly deploy/ccrc-mail.token.example, copied and never edited', () => {
+    const home = mkTmp('ccrc-token-');
+    const p = tokenPathIn(home);
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, EXAMPLE);   // `cp ccrc-mail.token.example ccrc-mail.token`, no further edit
+    expect(() => readMailToken(p)).toThrow(MailTokenPlaceholderUnedited);
+  });
+
+  it('the placeholder constant IS the example file\'s one value line', () => {
+    // Ties `PLACEHOLDER_TOKEN` to the shipped file rather than letting the
+    // two drift: `extractToken`'s own rule (first non-blank, non-#-comment
+    // line) is what a real deploy applies too.
+    const lines = EXAMPLE.split(/\r?\n/).filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+    expect(lines).toEqual([PLACEHOLDER_TOKEN]);
+  });
+
+  it('accepts a value once the placeholder line is actually replaced', () => {
+    const home = mkTmp('ccrc-token-');
+    const p = tokenPathIn(home);
+    mkdirSync(path.dirname(p), { recursive: true });
+    const edited = `${EXAMPLE.split('\n').slice(0, -2).join('\n')}\n${'f'.repeat(64)}\n`;
+    writeFileSync(p, edited);
+    expect(readMailToken(p)).toBe('f'.repeat(64));
+  });
+});
+
 describe('deploy/notify.sh carries the token the way the server expects it', () => {
   const notifyShPath = path.join(repoRoot, 'deploy', 'notify.sh');
   const notifySh = readFileSync(notifyShPath, 'utf8');
@@ -173,7 +207,10 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
       // side's `tr -d '[:space:]'` on both length and bytes.
       ['a value line with an embedded space (adversarial: real tokens never have one)',
         `${'a'.repeat(32)} ${'b'.repeat(32)}\n`],
-      ['the shipped .example, unedited', EXAMPLE],
+      // NOT the shipped .example unedited — `readMailToken` now THROWS on
+      // that content (`MailTokenPlaceholderUnedited`, review finding 13,
+      // pinned in its own describe block below), so it has no "identical
+      // token" to agree with `shellExtract` on any more.
       ['the shipped .example with the placeholder line replaced by a real value',
         `${EXAMPLE.split('\n').slice(0, -2).join('\n')}\n${HEX}\n`],
     ])('%s', (_name, content) => {
