@@ -1837,6 +1837,43 @@ export const MAIL_REJECT_CODES = [
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
+/**
+ * Every way `POST /api/runs`, `POST /api/runs/:id/dispatch`,
+ * `POST /api/runs/:id/close` and `POST /api/runs/:id/advance`
+ * (`server/src/coord/routes.ts`) can refuse a request THAT IS NOT ALREADY A
+ * `MailRejectCode` — the done-authority re-measurement codes
+ * (`stale-tip`/`tip-unmeasurable`/`pr-regressed`/`pr-unmeasurable`/
+ * `no-handoff-commit`) and `unknown-run`/`oversize` are shared verbatim with
+ * the mail routes (`verifyDone` backs both `POST .../close` and
+ * `POST .../advance`, and both re-use `MailRejectCode` for it) and are
+ * DELIBERATELY not repeated here — a run refusal is either a member of this
+ * union or of `MAIL_REJECT_CODES`, never both, so the two are checked
+ * TOGETHER by the scanner below rather than merged into one list.
+ *
+ * `Record<RunRefuseCode, true>` is the `PR_REASON_MAP` idiom (above): it
+ * makes a run route emitting a NINTH code, or this list losing a stale one,
+ * a compile error here rather than a drift a client only discovers by
+ * switching on a string it has never seen.
+ */
+export type RunRefuseCode =
+  | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
+  | 'ambiguous-dispatch' | 'worker-busy' | 'not-dispatched' | 'prhistory-unreadable'
+  | 'bad-transition';
+
+const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
+  'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
+  'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true, 'not-dispatched': true,
+  'prhistory-unreadable': true, 'bad-transition': true,
+};
+export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
+
+/** The validator that goes with the list — `isPrReason`'s own shape and the
+ *  same reason: `unknown` in, so nothing is smuggled past by claiming it is
+ *  already a code, and the CONSTANT is cast rather than the input. */
+export function isRunRefuseCode(v: unknown): v is RunRefuseCode {
+  return typeof v === 'string' && (RUN_REFUSE_CODES as readonly string[]).includes(v);
+}
+
 /** Work-item counts for one run. `items`, never `tasks` (D-7). */
 export interface RunItemTally { done: number; total: number }
 
