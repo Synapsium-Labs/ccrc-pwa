@@ -455,7 +455,11 @@ export interface WsAudit {
    *  refusal that never reached the fetch read "merged … 20669 days ago" —
    *  beside `pr.number` and `proof`, which have said `null` for that same
    *  state since deviation 10. */
-  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number | null };
+  /** `contained` is the fifth proof and the one with no PR beside it: the
+   *  branch was never pushed and its tip is an ancestor of a freshly fetched
+   *  origin/HEAD, so nothing unique exists to lose. `pr.number` is `null` on
+   *  that verdict — the audit claims no merge it did not witness. */
+  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | null; fetchedAt: number | null };
   transcript: string;
   /** The checkouts nested under this workspace's worktree — registered
    *  children ccd created plus any filesystem strays found beside them
@@ -1047,10 +1051,11 @@ const reviveAuditPr = (raw: unknown): AuditPr => {
   };
 };
 
-const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry'];
-type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | null; fetchedAt: number | null };
+const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry', 'contained'];
+type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | null; fetchedAt: number | null };
 /** `WsAudit.merge` — `proof` is a closed vocabulary (the four ways
- *  `_pr_state_one` can corroborate a merge), validated the same way
+ *  `_pr_state_one` can corroborate a merge, plus `contained` — the reap
+ *  ladder's never-pushed-nothing-unique rung), validated the same way
  *  `isPrPhase`/`isPrReason` validate theirs: cast the CONSTANT, never the
  *  input. `fetchedAt` is `null` until Phase C actually fetched — the field's
  *  own docstring on `WsAudit` is why `0` cannot stand in for that. */

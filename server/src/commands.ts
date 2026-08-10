@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import { readRegistry } from './registry.js';
 import { readLiveState } from './livestate.js';
-import { transcriptPath } from './transcript/resolve.js';
+import { resolveTranscriptFile } from './transcript/resolve.js';
 import { configDirFor } from './config.js';
 import type { SlashCommand } from '../../shared/api.js';
 
@@ -62,7 +62,7 @@ export async function sessionCommands(deps: Deps, id: string): Promise<{ builtin
   }
   let skills: SlashCommand[] = [];
   if (cfgDir) {
-    const jsonl = await deps.io.readFile(transcriptPath(cfgDir, cwd, rec.uuid));
+    const jsonl = await deps.io.readFile(await resolveTranscriptFile(deps.io, cfgDir, cwd, rec.uuid));
     if (jsonl !== null) skills = parseSkillListing(lastSkillListing(jsonl));
   }
   return { builtins: BUILTINS, skills };

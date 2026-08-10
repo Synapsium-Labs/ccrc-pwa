@@ -59,6 +59,7 @@ describe('isSafeSessionId and knownId guard every PR-lifecycle route', () => {
     ['POST', '/pr'],
     ['POST', '/archive'],
     ['POST', '/restore'],
+    ['POST', '/forget'],
     ['GET', '/workspace/audit'],
     ['POST', '/workspace/reap'],
   ] as const)('%s .../:id%s 400s an unsafe id before building any argv', async (method, suffix) => {
@@ -76,6 +77,7 @@ describe('isSafeSessionId and knownId guard every PR-lifecycle route', () => {
     ['POST', '/pr'],
     ['POST', '/archive'],
     ['POST', '/restore'],
+    ['POST', '/forget'],
     ['GET', '/workspace/audit'],
     ['POST', '/workspace/reap'],
   ] as const)('%s .../:id%s 404s an unknown session before building any argv', async (method, suffix) => {
@@ -401,6 +403,36 @@ describe('audit and reap', () => {
     const { app: a, calls } = await app('', 0, '', ['start', 'ws-audit']);
     const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/workspace/reap',
       payload: { expect: 'a'.repeat(64) } });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
+    expect(calls).toEqual([]);
+    await a.close();
+  });
+});
+
+describe('POST /api/sessions/:id/forget', () => {
+  it('runs `ccd forget <id>` and answers ok', async () => {
+    const { app: a, calls } = await app('forgot demo-quiet-basin');
+    const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/forget' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(calls).toEqual([['forget', 'demo-quiet-basin']]);
+    await a.close();
+  });
+
+  it("relays ccd's refusal as 502 with the stderr a human can act on", async () => {
+    // The gates live on the box — still running, held, a workspace — and the
+    // server adds nothing to them: whatever ccd said is what the toast shows.
+    const { app: a } = await app('', 1, 'demo-quiet-basin is still running — stop it first: ccd stop demo-quiet-basin');
+    const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/forget' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().stderr).toContain('still running');
+    await a.close();
+  });
+
+  it('501s a fleet whose deployed ccd never advertised the verb', async () => {
+    const { app: a, calls } = await app('', 0, '', ['stop', 'ws-archive']);
+    const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/forget' });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
     expect(calls).toEqual([]);

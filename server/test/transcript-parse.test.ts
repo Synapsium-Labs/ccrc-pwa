@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { transcriptPath } from '../src/transcript/resolve.js';
+import { localIO } from '../src/io.js';
+import { resolveTranscriptFile, transcriptPath } from '../src/transcript/resolve.js';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
 import type { ChatEvent } from '../../shared/api.js';
 
@@ -13,6 +15,73 @@ describe('transcriptPath', () => {
     expect(transcriptPath('/h/.claude', '/data/projects/foo.bar', 'u'.repeat(36))).toBe(
       `/h/.claude/projects/-data-projects-foo-bar/${'u'.repeat(36)}.jsonl`,
     );
+  });
+});
+
+/**
+ * The symlink-munge mismatch, fixed where it bit: Claude Code munges its
+ * PHYSICAL cwd (`process.cwd()` resolves symlinks), while the registry keeps
+ * the path ccd wrote — on the production box `~/projects -> /data/projects ->
+ * /mnt/...`, so a dead session's transcript lived under the `-mnt-…` munge
+ * while the chat looked under `-data-…` and rendered "Can't find this
+ * session's transcript" over a file that existed the whole time. (Live
+ * sessions were saved by the live cwd, which is already physical — which is
+ * exactly why only dead sessions showed the banner.)
+ */
+describe('resolveTranscriptFile', () => {
+  /** A miniature of the production chain: `<root>/data -> <root>/volume`,
+   *  registry workdir through the link, transcript under the physical munge. */
+  const build = (): { root: string; cfg: string; linkDir: string; realDir: string } => {
+    const root = mkdtempSync(path.join(tmpdir(), 'ccrc-resolve-'));
+    const realDir = path.join(root, 'volume', 'projects', 'demo');
+    mkdirSync(realDir, { recursive: true });
+    symlinkSync(path.join(root, 'volume'), path.join(root, 'data'));
+    return { root, cfg: path.join(root, '.claude'), linkDir: path.join(root, 'data', 'projects', 'demo'), realDir };
+  };
+  const plant = (file: string): void => {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, '{}\n');
+  };
+
+  it('finds the transcript behind a symlinked workdir — the munge Claude actually wrote', async () => {
+    const { root, cfg, linkDir, realDir } = build();
+    try {
+      const real = transcriptPath(cfg, realDir, 'u-1');
+      plant(real);
+      expect(await resolveTranscriptFile(localIO, cfg, linkDir, 'u-1')).toBe(real);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('prefers the raw munge whenever the transcript actually lives there', async () => {
+    const { root, cfg, linkDir } = build();
+    try {
+      const raw = transcriptPath(cfg, linkDir, 'u-1');
+      plant(raw);
+      expect(await resolveTranscriptFile(localIO, cfg, linkDir, 'u-1')).toBe(raw);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('resolves through the longest existing prefix when the leaf directory is gone', async () => {
+    // A reaped worktree behind a symlink: the workdir itself no longer exists,
+    // but its parent does and resolves — the transcript is still findable.
+    const { root, cfg } = build();
+    try {
+      const real = transcriptPath(cfg, path.join(root, 'volume', 'projects', 'gone'), 'u-1');
+      plant(real);
+      expect(await resolveTranscriptFile(localIO, cfg, path.join(root, 'data', 'projects', 'gone'), 'u-1')).toBe(real);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('leaves a workdir with no symlink anywhere in it exactly alone', async () => {
+    const raw = transcriptPath('/h/.claude', '/nonexistent-ccrc/projects/x', 'u-1');
+    expect(await resolveTranscriptFile(localIO, '/h/.claude', '/nonexistent-ccrc/projects/x', 'u-1')).toBe(raw);
+  });
+
+  it('keeps the raw path when neither candidate exists — no behavior change for a truly missing transcript', async () => {
+    const { root, cfg, linkDir } = build();
+    try {
+      expect(await resolveTranscriptFile(localIO, cfg, linkDir, 'u-1')).toBe(transcriptPath(cfg, linkDir, 'u-1'));
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

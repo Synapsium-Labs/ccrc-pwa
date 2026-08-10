@@ -2294,3 +2294,42 @@ describe('child teardown (D2/D3)', () => {
     expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb is left exactly as found').toBe('children');
   }, 30000);
 });
+
+/**
+ * THE CONTAINED RUNG, END TO END — a never-pushed branch with nothing origin
+ * lacks audits `reapable` (proof `contained`, no PR bound) and the reap that
+ * consumes its token completes with the same honesty: `pr` is null because no
+ * PR exists, not a placeholder. The CAS branch delete must still see a real
+ * tip — the rung resolves REAP_TIP itself, and this test is what pins that
+ * (an empty old-value turns `update-ref -d` into an unconditional delete).
+ */
+describe('the contained rung end to end', () => {
+  it('reaps a never-pushed workspace origin already holds — pr null, proof contained', () => {
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt');
+    h.git(wt, 'commit', '-m', 'work 1');
+    h.git(main, 'merge', '--ff-only', 'ws/quiet-basin');
+    h.git(main, 'push', 'origin', 'main');
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const tok = tokenOf();
+    const r = reap(tok);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.pr).toBeNull();
+    expect(out.proof).toBe('contained');
+    expect(out.attic).toBeGreaterThan(0);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry entry is purged').toBeNull();
+    // The tombstone records the rung that authorised this, with no invented PR.
+    const tomb = JSON.parse(fs.readFileSync(
+      path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'), 'utf8'));
+    expect(tomb.proof).toBe('contained');
+    expect(tomb.pr).toBeNull();
+  }, 30000);
+});

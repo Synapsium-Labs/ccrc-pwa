@@ -332,3 +332,56 @@ describe('hold and release', () => {
     expect(await screen.findByText(/Couldn't hold — archived — restore first/)).toBeInTheDocument();
   });
 });
+
+describe('forget — the end-of-life a non-workspace session never had', () => {
+  // The exact production shape: a dead wrapper session on a project's main
+  // checkout (`claude-corp-data-internal`), which no other affordance on this
+  // sheet can remove — archive/reap are workspace-only, stop leaves the row.
+  const deadWrapper = (over: Partial<FleetSession> = {}): FleetSession =>
+    s({ id: 'claude-corp-demo', wrapper: 'claude-corp', home: 'claude-corp',
+        workspace: null, status: 'dead', ...over });
+
+  it('offers Forget on a dead non-workspace session only', () => {
+    render(<SessionActionsSheet session={deadWrapper()} open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.getByRole('button', { name: /forget session/i })).toBeInTheDocument();
+  });
+
+  it('hides Forget while the session is alive — stopping is a different act', () => {
+    render(<SessionActionsSheet session={deadWrapper({ status: 'idle' })}
+                                open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByRole('button', { name: /forget session/i })).not.toBeInTheDocument();
+  });
+
+  it('hides Forget on a workspace, dead or not — those go archive → reap', () => {
+    render(<SessionActionsSheet session={s({ status: 'dead' })}
+                                open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByRole('button', { name: /forget session/i })).not.toBeInTheDocument();
+  });
+
+  it('names the consequence before firing, then POSTs /forget and closes', async () => {
+    const onClose = vi.fn();
+    render(<SessionActionsSheet session={deadWrapper()} open onClose={onClose} onReap={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /forget session/i }));
+    // The consequence says what goes AND what is kept — a deletion the sheet
+    // does not name is not one anybody consented to.
+    expect(screen.getByText(/transcript and any pasted images stay/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Forget$/ }));
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/api/sessions/claude-corp-demo/forget'))).toBe(true),
+    );
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("surfaces ccd's refusal — a held session names its holder", async () => {
+    stubFetch({ ok: false, stderr: 'held: program:evals — release first' });
+    render(
+      <>
+        <SessionActionsSheet session={deadWrapper()} open onClose={() => {}} onReap={() => {}} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /forget session/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Forget$/ }));
+    expect(await screen.findByText(/Couldn't forget — held: program:evals/)).toBeInTheDocument();
+  });
+});

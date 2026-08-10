@@ -3,7 +3,7 @@ import type { Bus, Notice } from './bus.js';
 import { configDirFor } from './config.js';
 import { readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
-import { transcriptPath } from './transcript/resolve.js';
+import { resolveTranscriptFile } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
@@ -273,7 +273,7 @@ export class SessionStream {
         }
       }
     }
-    return { uuid: rec.uuid, file: transcriptPath(cfgDir, cwd, rec.uuid), cfgDir, status, statusUpdatedAt };
+    return { uuid: rec.uuid, file: await resolveTranscriptFile(this.deps.io, cfgDir, cwd, rec.uuid), cfgDir, status, statusUpdatedAt };
   }
 
   /**

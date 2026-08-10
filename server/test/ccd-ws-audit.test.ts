@@ -1451,6 +1451,120 @@ describe('the fields a refusal never measured', () => {
 });
 
 /**
+ * THE CONTAINED RUNG — a branch that was never pushed but holds NOTHING origin
+ * does not already have. The ladder's whole job is proving "no unique work
+ * would be destroyed"; when the tip is an ancestor of origin/HEAD that
+ * proposition is directly provable with no upstream and no PR, and refusing it
+ * anyway made every abandoned-but-merged workspace permanently unremovable
+ * from the sheet (four were stuck on this box when this was written). The rung
+ * fetches FIRST — the same doctrine as Phase C, mergedness is never proven
+ * against an unfetched ref — and proves against origin/HEAD, exactly the
+ * definition `_ws_gc_merged` and the per-child ladder already use.
+ */
+describe('the contained rung — never pushed, nothing unique', () => {
+  /** Work happened on the branch and reached origin/main by fast-forward; the
+   *  branch itself was never pushed and no PR ever existed for it. */
+  function containedNeverPushed(): { main: string; wt: string; tip: string } {
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt');
+    h.git(wt, 'commit', '-m', 'work 1');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    h.git(main, 'merge', '--ff-only', 'ws/quiet-basin');
+    h.git(main, 'push', 'origin', 'main');
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    return { main, wt, tip };
+  }
+
+  it('proves a never-pushed branch whose every commit origin already holds', () => {
+    containedNeverPushed();
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('contained');
+    // No PR is claimed, because none exists: the pr object keeps its unbound
+    // shape rather than borrowing plausible values from anywhere.
+    expect(a.pr.number).toBeNull();
+    expect(a.pr.mergeCommit).toBe('');
+    // The proof ran against a FETCHED origin/HEAD, and says when.
+    expect(a.merge.fetchedAt).toBeGreaterThan(0);
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+  }, 30000);
+
+  it('a freshly added workspace that committed nothing is contained too', () => {
+    // The zero-commit case: tip == the base commit makeGhRepo already pushed.
+    // This is the real shape of an abandoned scratch workspace.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('contained');
+    expect(a.pr.number).toBeNull();
+  }, 30000);
+
+  it('still refuses no-upstream when the branch holds work origin lacks', () => {
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'unmerged\n');
+    h.git(wt, 'add', 'f1.txt');
+    h.git(wt, 'commit', '-m', 'work origin never got');
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(refusal(wt).verdict).toBe('no-upstream');
+  }, 30000);
+
+  it('refuses fetch-failed rather than proving against an unfetched origin', () => {
+    const { wt } = containedNeverPushed();
+    fs.rmSync(path.join(h.home, 'origins', 'demo.git'), { recursive: true, force: true });
+    expect(refusal(wt).verdict).toBe('fetch-failed');
+  }, 30000);
+
+  it('re-derives origin/HEAD from the remote — a deleted default cannot authorize', () => {
+    // Adversarial-review finding: `git fetch` neither prunes a deleted remote
+    // branch nor moves the clone-time origin/HEAD symref, so without the
+    // re-derivation the rung proved containment against a FROZEN tracking ref
+    // — "origin already holds every commit on it", said about an origin that
+    // holds none of them. Reshape the bare remote after the merge landed:
+    // default moves to `develop` (cut BEFORE the workspace's work) and the old
+    // default is deleted. The rung must consult the remote's CURRENT default
+    // and refuse, never the local symref's memory of the old one.
+    const { wt, main } = containedNeverPushed();
+    const preWork = h.git(main, 'rev-parse', 'ws/quiet-basin~1');
+    const bare = path.join(h.home, 'origins', 'demo.git');
+    h.git(bare, 'branch', 'develop', preWork);
+    h.git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/develop');
+    h.git(bare, 'branch', '-D', 'main');
+    expect(refusal(wt).verdict).toBe('no-upstream');
+  }, 30000);
+
+  it('refuses when the remote advertises no default branch — nothing to prove against', () => {
+    // A comparison that cannot run is not a comparison that said no: the
+    // verdict is still no-upstream (the branch WAS never pushed), but the
+    // rung must reach it by refusing to compare, never by misreading a
+    // set-head or merge-base failure as "not an ancestor". The remote's HEAD
+    // points at an unborn branch, so `remote set-head origin --auto` has no
+    // answer; deleting the local symref too closes the fallback the old
+    // fixture relied on.
+    const { wt, main } = containedNeverPushed();
+    const bare = path.join(h.home, 'origins', 'demo.git');
+    h.git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/never-born');
+    h.git(main, 'symbolic-ref', '--delete', 'refs/remotes/origin/HEAD');
+    expect(refusal(wt).verdict).toBe('no-upstream');
+  }, 30000);
+
+  it('refuses no-remote when the project has no origin at all', () => {
+    const { wt, main } = containedNeverPushed();
+    h.git(main, 'remote', 'remove', 'origin');
+    expect(refusal(wt).verdict).toBe('no-remote');
+  }, 30000);
+});
+
+/**
  * The plan's own cases leave eleven refusals and the whole fingerprint
  * unpinned: their lines can be deleted with the suite still green, and two of
  * them (`session-busy`, `status-unknown`) are the §5.3 idle gate, evaluated on

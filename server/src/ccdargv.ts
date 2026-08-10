@@ -63,6 +63,10 @@ export const CCD_ARGV = {
   ensure:    (id: string) => argv(['ensure', id]),
   stopId:    (id: string) => argv(['stop', id]),
   stopPair:  (w: string, p: string) => argv(['stop', w, p]),
+  /** Registry-only removal of a DEAD non-workspace session — the end-of-life
+   *  plain sessions never had. ccd re-proves every gate on the box (not a
+   *  workspace, not held, not alive); this argv carries nothing but the id. */
+  forget:    (id: string) => argv(['forget', id]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   wsAdd:     (p: string) => argv(['ws-add', p]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),

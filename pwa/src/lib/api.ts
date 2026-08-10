@@ -202,6 +202,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     archive: (id: string) => post(`${sid(id)}/archive`),
     restore: (id: string) => post(`${sid(id)}/restore`),
+    /** `POST /forget` — registry-only removal of a dead non-workspace session.
+     *  Every gate (not a workspace, not held, not alive) is ccd's, re-proven
+     *  on the box; a refusal comes back as 502 stderr for the toast. */
+    forget: (id: string) => post(`${sid(id)}/forget`),
     /** `POST /hold` — the server's own client-side mirror of ccd's refusal
      *  lives in `SessionActionsSheet` (`HOLD_EMPTY_REASON_TEXT`), so an empty
      *  reason never reaches this call; the server re-checks anyway (400
