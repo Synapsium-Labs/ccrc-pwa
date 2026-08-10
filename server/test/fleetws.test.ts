@@ -9,6 +9,7 @@ import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { loadSnapshot } from '../src/fleetstate.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -175,6 +176,238 @@ describe('fleet REST + WS', () => {
 
     expect(await loadSnapshot(cachePath)).toBeNull();
     rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  // C0.4: `fleetState.connected` alone does not mean the read that just
+  // happened was COMPLETE — a wedged-yet-connected agent or a mid-sweep
+  // socket hiccup still leaves `connected: true` while `assembleFleet`
+  // returns fewer rows than last time. Without a guard, that partial tick
+  // overwrites the fuller last-known-good cache — which `/api/fleet`
+  // (server.ts) then serves as `stale: true` for the REST of a subsequent
+  // real outage, not just for this one tick.
+  it('a connected-but-degraded tick does not clobber a fuller last-known-good snapshot', async () => {
+    const cacheDir = mkTmp('ccrc-cache-');
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick(); // both sessions readable — writes a 2-row cache
+    let snap = await loadSnapshot(cachePath);
+    expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+      ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+    );
+
+    // One session's own `workdir` field goes unreadable — the exact shape a
+    // partial/degraded read produces (registry.ts's "incomplete registry
+    // entry" — readRegistry drops the row whole) — while `connected` stays
+    // true throughout.
+    rmSync(path.join(home, '.cc-sessions', 'claude-corp-orchard-api.workdir'));
+    await watcher.tick(); // assembles only 1 row now
+
+    snap = await loadSnapshot(cachePath);
+    // The fuller 2-row snapshot survives; a 1-row assembly must never
+    // clobber it.
+    expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+      ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+    );
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('a tick that GROWS the fleet still overwrites the cache — the guard only refuses a shrink', async () => {
+    const cacheDir = mkTmp('ccrc-cache-');
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick(); // 1 row
+    expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(1);
+
+    seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+    await watcher.tick(); // 2 rows — a growth, not a shrink
+
+    expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it('writes the very first snapshot even from an empty fleet — nothing on disk yet to clobber', async () => {
+    const cacheDir = mkTmp('ccrc-cache-');
+    const cachePath = path.join(cacheDir, 'state-cache.json');
+    // No seeded session in this fresh home — an empty registry.
+    const emptyHome = mkTmp('ccrc-empty-');
+    const cfg = loadConfig({ CCRC_HOME: emptyHome, CCRC_FLEET: 'remote' });
+    const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+    const watcher = new FleetWatcher(deps, new Bus());
+
+    await watcher.tick();
+
+    const snap = await loadSnapshot(cachePath);
+    expect(snap?.sessions).toEqual([]);
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  // C0.4-FOLLOWUP (blocking review findings 1/2 on the shrink guard above): a
+  // bare length comparison cannot tell "the fleet genuinely shrank" apart
+  // from "this tick's read was partial" — and treating every shrink as the
+  // latter turns one ordinary `ccd` purge (`_reg_purge`, called from
+  // `cmd_ws_rm`/session rm, `ws-reap`, and `ws-gc --prune` alike — routine
+  // teardown, not an edge case) into a PERMANENT freeze: every later tick,
+  // however healthy, still sees fewer sessions than the pre-purge high-water
+  // mark and refuses to write forever, silently.
+  describe('the shrink guard tells a genuine purge from a partial read (C0.4-followup)', () => {
+    const purgeRegistryEntry = (id: string) => {
+      // `_reg_purge`'s own shape (ccd:110): every "$REG/$id.<field>" file for
+      // the id is unlinked, the `.uuid` included — not just one field going
+      // unreadable the way a mid-sweep hiccup would leave it.
+      const reg = path.join(home, '.cc-sessions');
+      for (const field of ['wrapper', 'project', 'workdir', 'uuid', 'started']) {
+        rmSync(path.join(reg, `${id}.${field}`), { force: true });
+      }
+    };
+
+    it('a genuine purge is allowed through immediately, and the cache keeps updating on every tick afterwards', async () => {
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick(); // both sessions readable — writes a 2-row cache
+      let snap = await loadSnapshot(cachePath);
+      expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+        ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+      );
+      const firstSavedAt = snap!.savedAt;
+
+      purgeRegistryEntry('claude-corp-orchard-api');
+      await new Promise((r) => setTimeout(r, 3)); // guarantee Date.now() moves
+
+      await watcher.tick(); // 1 row now — confirmed absent from the listing, not just unreadable
+      snap = await loadSnapshot(cachePath);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      expect(snap!.savedAt).toBeGreaterThan(firstSavedAt);
+      const secondSavedAt = snap!.savedAt;
+
+      // Not a one-tick exception — the survivor keeps getting a fresh
+      // snapshot on every subsequent healthy tick, exactly as an unshrunk
+      // fleet would.
+      await new Promise((r) => setTimeout(r, 3));
+      await watcher.tick();
+      const laterSnap = await loadSnapshot(cachePath);
+      expect(laterSnap!.savedAt).toBeGreaterThan(secondSavedAt);
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+
+    it('reproduces the reported freeze scenario and proves it now heals: 5 healthy ticks after a purge all keep the cache at the true, current size', async () => {
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick();
+      expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
+
+      purgeRegistryEntry('claude-corp-orchard-api');
+
+      // On the OLD guard (`sessions.length >= prior.sessions.length` alone,
+      // re-read from disk every tick) every one of these 5 ticks would still
+      // read back 2 rows and an unchanged `savedAt` — the exact freeze the
+      // review reproduced. The fix must drop to 1 and STAY there on every
+      // single one of them, not just the first.
+      for (let i = 0; i < 5; i++) {
+        await watcher.tick();
+        const snap = await loadSnapshot(cachePath);
+        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      }
+
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+
+    it('a genuinely PARTIAL read (the id stays listed — a failed field read, not a purge) still refuses to shrink the cache, and warns exactly once', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick();
+      expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
+
+      // Only ONE field goes unreadable — `.uuid` (and every sibling field)
+      // stays listed, so the registry directory itself still names this id:
+      // a read failure, never a purge.
+      rmSync(path.join(home, '.cc-sessions', 'claude-corp-orchard-api.workdir'));
+
+      await watcher.tick();
+      await watcher.tick();
+      await watcher.tick();
+
+      const snap = await loadSnapshot(cachePath);
+      expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
+        ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+      );
+      // Warned once across all three refused ticks, not once per tick — the
+      // freeze must be visible in the logs, but not spammed forever.
+      const shrinkWarnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === 'string' && msg.includes('snapshot write skipped'),
+      );
+      expect(shrinkWarnings).toHaveLength(1);
+
+      warnSpy.mockRestore();
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+  });
+
+  // C0.1: `tick()` had no re-entrancy guard, so a tick still in flight past
+  // the next `intervalMs` edge got a second one stacked on top of it.
+  describe('tick() re-entrancy (C0.1)', () => {
+    it('a second tick() called while the first is still awaiting its registry read returns immediately', async () => {
+      let readdirCalls = 0;
+      let releaseFirst: (() => void) | null = null;
+      const gatedIO: FleetIO = {
+        ...localIO,
+        readdir: async (p) => {
+          readdirCalls++;
+          if (readdirCalls === 1) {
+            await new Promise<void>((resolve) => { releaseFirst = resolve; });
+          }
+          return localIO.readdir(p);
+        },
+      };
+      const deps: Deps = { ...testDeps(home), io: gatedIO };
+      const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+      const tick = (): Promise<void> => (watcher as unknown as { tick: () => Promise<void> }).tick();
+
+      const p1 = tick();
+      await vi.waitFor(() => expect(readdirCalls).toBeGreaterThanOrEqual(1));
+      const callsBeforeSecondTick = readdirCalls;
+
+      const p2 = tick();
+      // The guard must return p2 WITHOUT waiting for the first tick's blocked
+      // read — if it stacked instead, p2 would still be pending 300ms later
+      // (it would be blocked on the SAME unresolved read, or a fresh one).
+      await Promise.race([
+        p2,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('second tick() did not return early — it stacked')), 300)),
+      ]);
+      // And it did no new work: no second readdir was fired.
+      expect(readdirCalls).toBe(callsBeforeSecondTick);
+
+      releaseFirst!();
+      await p1;
+
+      // The guard resets after the in-flight tick finishes: a later tick runs normally.
+      await tick();
+      expect(readdirCalls).toBeGreaterThan(callsBeforeSecondTick);
+    });
   });
 
   // — Task 10: the `runs` WS frame — additive, no FLEET_PROTO bump —

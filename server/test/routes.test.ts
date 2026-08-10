@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import type { CcdArgv } from '../src/ccdargv.js';
 import { parseDialog } from '../src/pane/dialog.js';
@@ -100,6 +100,69 @@ describe('write routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hi' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'half-typed thought' });
+    await app.close();
+  });
+
+  // C0.2, the user-visible fix: knownId used to answer via readRegistry,
+  // which drops a session's ENTIRE row when any one of its three
+  // completeness fields (wrapper/workdir/uuid) fails to read — so a single
+  // transient read failure on a LIVE session's own sibling field (not its
+  // identity) used to 404 a prompt typed into that very session. knownId now
+  // answers off one `readdir` + `.uuid` membership alone, which this
+  // unreadable `workdir` cannot touch.
+  it('POST prompt succeeds — no 404 — when the live session\'s own workdir field is unreadable', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const PANE_PID = 4242;
+    const panes = ['scrollback\n❯ \n', 'scrollback\n❯ hello\n', 'scrollback\n❯ \n'];
+    let capIdx = 0;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'capture-pane') {
+        const pane = panes[Math.min(capIdx, panes.length - 1)];
+        capIdx++;
+        return { code: 0, stdout: pane!, stderr: '' };
+      }
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    // The shape `remote/io.ts` produces when one op of the ~17 a session's
+    // readRegistry fires in parallel fails or times out: null, indistinguishable
+    // at field() from a file that is not there (same idiom as hold-gate.test.ts's
+    // `holdUnreadableIO`) — here on `workdir`, one of readRegistry's three
+    // completeness fields, chosen because ITS failure is exactly what used to
+    // drop the whole row.
+    const workdirUnreadableIO: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith(`${ID}.workdir`) ? null : localIO.readFile(p)),
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
+      new Bus(),
+    );
+
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    await app.close();
+  });
+
+  it('POST prompt still 404s a truly unregistered id under the same unreadable-field IO', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const workdirUnreadableIO: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith(`${ID}.workdir`) ? null : localIO.readFile(p)),
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
+      new Bus(),
+    );
+
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/nope/prompt', payload: { text: 'hi' } });
+    expect(res.statusCode).toBe(404);
     await app.close();
   });
 

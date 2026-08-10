@@ -21,7 +21,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { readRegistry } from './registry.js';
+import { readRegistry, readSessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { sessionCommands } from './commands.js';
@@ -405,15 +405,37 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // Write routes: serialized per session through one KeyedQueue; injection
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
   const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
-  const knownId = async (id: string): Promise<boolean> =>
-    (await readRegistry(deps.io, deps.cfg)).some((r) => r.id === id);
+  // C0.2: `knownId` gates 16 routes on this id (12 POST, 4 GET — every one of
+  // them a per-request check, not a periodic sweep) and previously called
+  // `readRegistry` — up to 409 agent-WS round trips on a 24-session fleet, in
+  // remote mode, in front of every human keystroke — purely to answer "does
+  // this id exist". It carries no identity of its own: `isSafeSessionId` is
+  // the real injection guard, and ccd re-checks `[[ -f "$REG/$id.uuid" ]]` on
+  // the box regardless. One
+  // `readdir` plus membership in the listing is the SAME evidence
+  // `coord/routes.ts`'s `names.includes(`${fromId}.uuid`)` already trusts for
+  // exactly this question, and it fails shut the same way `readRegistry`
+  // always did: an unlistable registry directory reads as "unknown", never as
+  // "known".
+  //
+  // Side benefit: this no longer runs `readRegistry`'s full per-session parse
+  // (17 fields, each dropped whole on ANY single field read failing — see
+  // `registry.ts`'s "incomplete registry entry" comment), so a transient
+  // failure to read one of a LIVE session's own sibling fields (e.g.
+  // `workdir`) can no longer 404 a prompt typed into that session.
+  const knownId = async (id: string): Promise<boolean> => {
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    return names !== null && names.includes(`${id}.uuid`);
+  };
 
   // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
   // serialize through the ONE per-session lock, not independent ones.
   const askDeps: AskDeps = {
     ...sendDeps,
+    // C0.3: one session's own row, not the whole registry — see
+    // `registry.ts`'s `readSessionRecord`.
     readAsk: async (id: string) => {
-      const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id) ?? null;
+      const rec = await readSessionRecord(deps.io, deps.cfg, id);
       if (rec === null) return null;
       const hs = await readHookState(deps.io, deps.cfg.registryDir, id, rec.uuid, Date.now());
       return hs === null ? null : { ask: hs.ask, state: hs.state };
@@ -544,7 +566,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
+    // C0.3: one session's own row, not the whole registry.
+    const rec = await readSessionRecord(deps.io, deps.cfg, id);
     if (!rec) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     // A workspace id is `<project>-<slug>` and encodes no wrapper at all, so
     // there is nothing to reverse: the prefix rule below would fall through to
