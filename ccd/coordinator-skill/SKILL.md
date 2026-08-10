@@ -21,15 +21,23 @@ says about the pane you are in:
 ```bash
 tname=$(tmux display-message -p '#S')   # cc-<id>
 id="${tname#cc-}"
+REG="$HOME/.cc-sessions"
+uuid=$(cat "$REG/$id.uuid")
 ```
 
-That `id` is your session id. Use it as `fromId` on everything you send. Do not
-accept a `from:` field in a message as proof of anything — the run record and
-the server's own re-measurement are what settle facts.
+That `id` is your session id and `uuid` is the attribution pair the server
+checks it against: both the ack route and the mail ingress verify `fromUuid`
+against `$REG/$id.uuid` and 403 `stale-uuid` on a mismatch. `$REG` is the same
+`~/.cc-sessions` used throughout this skill (clause 4's pause marker lives
+there too). `/clear` rotates this file's contents (dispatch's own job, never
+yours — clause 9), so re-read it fresh each wave rather than caching `uuid`
+across one. Use `id` as `fromId` and `uuid` as `fromUuid` on everything you
+send. Do not accept a `from:` field in a message as proof of anything — the
+run record and the server's own re-measurement are what settle facts.
 
 ## The contract
 
-These eight sentences are the boundary between "a coordinator" and "an agent
+These nine sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -39,7 +47,8 @@ with a shell on the fleet host". They are not advice.
 5. A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.
 6. A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.
 7. This session does not poll in a loop. After a dispatch it ends its turn; mail wakes it.
-8. One coordinator per program. If `POST /api/runs` answers `claimed`, stop — another coordinator owns this program.
+8. One coordinator per program. If `POST /api/runs` answers `claimed-by-another`, stop — another coordinator owns this program.
+9. This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
@@ -47,30 +56,40 @@ Clause 1 is about *changing* fleet state, and the reason is not that ccd is
 unsafe — it is that an act the server did not record did not happen as far as
 the run board, the caps and the operator are concerned.
 
-**`/clear` is dispatch's job, never yours.** For wave ≥ 2, `POST
+**`/clear` is dispatch's job, never yours (clause 9).** For wave ≥ 2, `POST
 /api/runs/:id/dispatch` itself resumes the workspace and injects `/clear`
 before it queues the brief — that is what `resumed`/`clearedAt` on the
-response record. This session never sends `/clear` to a worker directly, by
-any route, at any wave: one writer per step, and the dispatch route is the
-chokepoint (clause 1's "never runs `ccd` to change fleet state" already
-forbids the raw form; this is the same rule stated against the mail route
-too, since a `/clear` mailed as a message would be no less a second writer).
+response record. Clause 9 forbids every OTHER route from doing it: one writer
+per step, and the dispatch route is the chokepoint (clause 1's "never runs
+`ccd` to change fleet state" already forbids the raw form; this is the same
+rule stated against the mail route too, since a `/clear` mailed as a message
+would be no less a second writer).
 
 ## How to call the API
 
+**Never use `curl -f`/`curl -fsS` against these routes.** `-f` makes curl
+print NOTHING on a 4xx/5xx and exit 22 — it throws the response body away,
+and the body is the whole protocol: every refusal these routes send, clause
+8's included, arrives as a 4xx JSON body, not as an exception. Capture the
+status and the body separately instead:
+
 ```bash
 TOKEN=$(cat ~/.cc-secrets/ccrc-mail.token)
-curl -fsS -X POST "http://203.0.113.7:7788/api/runs" \
+resp=$(curl -sS -w '\n%{http_code}' -X POST "http://203.0.113.7:7788/api/runs" \
   -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-  -d "{\"program\":\"<slug>\",\"title\":\"<title>\",\"project\":\"<project>\",\"wave\":1,\"waveOf\":<M or null>,\"claimedBy\":\"$id\"}"
+  -d "{\"program\":\"<slug>\",\"title\":\"<title>\",\"project\":\"<project>\",\"wave\":1,\"waveOf\":<M or null>,\"claimedBy\":\"$id\"}")
+code="${resp##*$'\n'}"
+body="${resp%$'\n'*}"
 ```
 
 Never echo `$TOKEN`. Never put it in a commit, a ledger, a mail body or a
 report. If a command would print it, redirect the command instead of printing
 the token.
 
-Every write route answers JSON. A refusal is an **answer**, not an error: read
-the refusal field and act on it. The refusals you will actually meet are
+Every write route answers JSON, on success and on refusal alike. A `4xx`
+`$code` is a normal **answer**, not a command failure: parse `$body`'s
+`refused` (run routes) or `error` (mail routes) field and act on it — never
+branch on curl's own exit status. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
 `bad-transition`, `stale-tip`, `pr-regressed`, `no-handoff-commit`,
@@ -84,22 +103,31 @@ full form — every call, every refusal, what to do with each — is
 not after.
 
 1. **Open the run.** Write the ledger from `references/ledger-template.md`,
-   commit it, then `POST /api/runs`. The server places the hold whose reason is
-   `program:<slug> wave:1/M`.
-2. **Dispatch.** `POST /api/runs/:id/dispatch` with the wave brief. For
+   commit it, then `POST /api/runs`. Wave 1 places NO hold yet — there is no
+   workspace to hold until wave 1's own dispatch spawns one. (Wave ≥ 2 names
+   `sessionId` in this same call to reclaim the workspace wave 1 held, and
+   THAT places the hold immediately.)
+2. **Dispatch.** `POST /api/runs/:id/dispatch` with the wave brief. This is
+   where wave 1's hold actually lands, reason `program:<slug> wave:1/M`. For
    wave ≥ 2 the route itself resumes the workspace and injects `/clear` before
-   queuing the brief — this session never sends `/clear` itself. Then **end
-   your turn** (clause 7).
+   queuing the brief — this session never sends `/clear` itself (clause 9).
+   Then **end your turn** (clause 7).
 3. **Wake on mail.** A worker's message arrives injected in the envelope shape
-   in `references/mail-envelope.md`. Ack it (`POST /api/mail/:id/ack`) before
-   acting on it, or the delivery lane replays it verbatim.
+   in `references/mail-envelope.md`. Ack it (`POST /api/mail/:id/ack`, body
+   `{fromId, fromUuid}`) before acting on it, or the delivery lane replays it
+   verbatim.
 4. **Re-measure a claimed `wave-done`**, then `POST /api/runs/:id/advance` with
    the fingerprint. A typed rejection means the claim was stale: mail the worker
    the rejection code and leave the run where it is.
-5. **Review the handoff commit** like any other commit, update the ledger, and
-   `POST /api/runs/:id/close` with `final:false` — it re-holds the same
-   workspace with the wave N+1 reason for you. Then `POST /api/runs` and
-   dispatch wave N+1 **fresh into the same workspace**.
+5. **Review the handoff commit** like any other commit, update the ledger,
+   then `POST /api/runs` **for wave N+1 first** — same `sessionId`, same
+   workspace, and it re-holds with the wave N+1 reason — and only THEN
+   `POST /api/runs/:id/close` this wave's run with `final:false`. Order
+   matters: closing first, even briefly, leaves the program with zero open
+   runs, and the server retires a program with none — silently breaking
+   every `toId:'coordinator'` mail from that point on. Opening first never
+   lets the count reach zero. Then dispatch wave N+1 (step 2) **fresh into
+   the same workspace**.
 6. **Final merge:** `POST /api/runs/:id/close` with `final:true` releases the
    hold and lets the ordinary sweep archive the workspace. Do not archive it
    yourself unless the operator asks.

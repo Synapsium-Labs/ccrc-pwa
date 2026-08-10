@@ -1,8 +1,9 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// eight contract clauses, the routes it names, the envelope it quotes and the
-// template it ships. `wsaudit.test.ts` already established the idiom — harvest
-// tokens out of a source and require the copy to match it in both directions.
+// nine contract clauses, the routes it names, the refusal codes it promises,
+// the envelope it quotes and the template it ships. `wsaudit.test.ts` already
+// established the idiom — harvest tokens out of a source and require the
+// copy to match it in both directions.
 //
 // Reconciliation (plan's "Interfaces assumed from PR I", item 8): the real
 // envelope module is `server/src/coord/envelope.ts` (not `server/src/mail/
@@ -18,6 +19,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
+import { MAIL_REJECT_CODES, isRunRefuseCode } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -51,9 +53,18 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The eight clauses, verbatim. Kept as a literal array rather than a regex per
+// The nine clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
+//
+// Clause 8 reads `claimed-by-another` — the REAL refusal `POST /api/runs`
+// sends (`coord/routes.ts`, `coord/store.ts`) — not the plan-era `claimed`,
+// which is not a member of `RunRefuseCode` and can never arrive; the skill's
+// own worked refusal list (below, and in `references/wave-lifecycle.md`)
+// already used the real code, so the contract clause was the one place left
+// disagreeing with itself. Clause 9 pins the `/clear` rule the reconciliation
+// added (item 6): dispatch is the ONE writer of `/clear`, and nothing else in
+// this file — the SKILL's own prose, in ANY paragraph — may inject it.
 const CONTRACT = [
   'Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.',
   'The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.',
@@ -62,11 +73,12 @@ const CONTRACT = [
   'A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.',
   'A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.',
   'This session does not poll in a loop. After a dispatch it ends its turn; mail wakes it.',
-  'One coordinator per program. If `POST /api/runs` answers `claimed`, stop — another coordinator owns this program.',
+  'One coordinator per program. If `POST /api/runs` answers `claimed-by-another`, stop — another coordinator owns this program.',
+  'This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all eight clauses verbatim', () => {
+  it('carries all nine clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -110,6 +122,34 @@ describe('the coordinator skill: linkage', () => {
     expect(routes.size, 'the skill should name the routes it calls').toBeGreaterThanOrEqual(6);
     const src = serverSources();
     for (const r of routes) expect(src, `no server route registers ${r}`).toContain(`'${r}'`);
+  });
+
+  it('promises only real refusal codes, and explains each one in wave-lifecycle.md', () => {
+    // SKILL.md's "How to call the API" section makes a specific promise: "The
+    // refusals you will actually meet are …". Same kebab-token idiom
+    // `mail-routes.test.ts` uses over server/src, aimed here at that ONE
+    // sentence instead: every code it names must be real (a member of
+    // `RunRefuseCode` or `MailRejectCode` — the two typed vocabularies these
+    // routes actually draw from, never a stale or invented one like the
+    // plan-era `claimed`) AND be explained somewhere in
+    // `references/wave-lifecycle.md` — a code the skill promises but the
+    // reference never defines is exactly as dangerous as one the server can
+    // never send.
+    const marker = 'The refusals you will actually meet are';
+    const start = skill.indexOf(marker);
+    expect(start, 'SKILL.md should carry its refusal-list sentence').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n\n', start);
+    const sentence = skill.slice(start, end === -1 ? undefined : end);
+    const codes = [...sentence.matchAll(/`([a-z]+(?:-[a-z]+)+)`/g)].map((m) => m[1]!);
+    expect(codes.length, 'the harvest should find the codes in the sentence').toBeGreaterThanOrEqual(10);
+    const wl = refs('wave-lifecycle.md');
+    for (const code of codes) {
+      expect((MAIL_REJECT_CODES as readonly string[]).includes(code) || isRunRefuseCode(code),
+        `${code} is not a declared MailRejectCode or RunRefuseCode — the skill promises a refusal ` +
+          'the server can never send').toBe(true);
+      expect(wl, `${code} is named in SKILL.md's refusal list but never explained in wave-lifecycle.md`)
+        .toContain(code);
+    }
   });
 
   it('quotes an envelope byte-identical to what the delivery lane injects', () => {

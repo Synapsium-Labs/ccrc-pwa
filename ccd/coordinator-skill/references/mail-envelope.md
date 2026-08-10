@@ -23,8 +23,13 @@ Wave 3 is on the branch. Handoff commit is the ledger update; PR #591 is green.
 ```
 ````
 
-**Ack before you act.** `POST /api/mail/:id/ack`. Until then the lane replays
-this message verbatim on later sweeps.
+**Ack before you act.** `POST /api/mail/:id/ack`, body `{"fromId":…,"fromUuid":…}`
+(`references/wave-lifecycle.md` §3). Until then the lane replays this message
+verbatim on later sweeps.
 
 **Artifacts are paths, never payloads.** Read the file; do not expect its
-contents in the body.
+contents in the body. The path above is relative because it is quoting
+`renderEnvelope`'s literal output for a fixture message a WORKER already
+sent — when THIS session sends mail of its own (`POST /api/mail`,
+`references/wave-lifecycle.md` §3), its own `artifacts` entries must be
+**absolute paths**; the ingress refuses a relative one `bad-kind`.

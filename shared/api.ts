@@ -1838,10 +1838,10 @@ export const MAIL_REJECT_CODES = [
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
- * Every way `POST /api/runs`, `POST /api/runs/:id/dispatch`,
- * `POST /api/runs/:id/close` and `POST /api/runs/:id/advance`
- * (`server/src/coord/routes.ts`) can refuse a request THAT IS NOT ALREADY A
- * `MailRejectCode` — the done-authority re-measurement codes
+ * Every TYPED run-refusal code declared for `POST /api/runs`,
+ * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
+ * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT
+ * ALREADY A `MailRejectCode` — the done-authority re-measurement codes
  * (`stale-tip`/`tip-unmeasurable`/`pr-regressed`/`pr-unmeasurable`/
  * `no-handoff-commit`) and `unknown-run`/`oversize` are shared verbatim with
  * the mail routes (`verifyDone` backs both `POST .../close` and
@@ -1850,10 +1850,26 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
  * union or of `MAIL_REJECT_CODES`, never both, so the two are checked
  * TOGETHER by the scanner below rather than merged into one list.
  *
- * `Record<RunRefuseCode, true>` is the `PR_REASON_MAP` idiom (above): it
- * makes a run route emitting a NINTH code, or this list losing a stale one,
- * a compile error here rather than a drift a client only discovers by
- * switching on a string it has never seen.
+ * NOT the complete set of ways those four routes can refuse a request: none
+ * of `error:'unsupported'` (501, an unsupported ccd verb), `error:'bad-request'`
+ * (400, a malformed body) or a bare 502 `{ok:false, stderr}` (a failed fleet
+ * act) carries a code from this union, from `MailRejectCode`, or from
+ * anywhere else — those are a separate, untyped refusal shape, and a caller
+ * that assumes every non-2xx response here carries a `RunRefuseCode` is wrong.
+ *
+ * `Record<RunRefuseCode, true>` is the `PR_REASON_MAP` idiom (above), but a
+ * NARROWER guarantee than that idiom's own docstring claims for itself: it
+ * is a compile error HERE for this list to lose a member `RUN_REFUSE_CODE_MAP`
+ * still has, or to gain one it does not. It is NOT a compile error — or any
+ * error — at a call site that actually SENDS a refusal: no route in
+ * `server/src` types its `refused`/`error` field as `RunRefuseCode`, every
+ * one sends a bare inline string literal, so a route emitting a code this
+ * union has never seen is not caught here. The one runtime check on the
+ * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
+ * cannot see a single-word code by construction (it matches only hyphenated
+ * tokens) — `paused`, a member of this very union, is invisible to it. Ten
+ * codes exist below today; the next new one would be the eleventh, not the
+ * ninth.
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'

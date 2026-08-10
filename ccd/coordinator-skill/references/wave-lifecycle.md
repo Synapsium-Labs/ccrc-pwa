@@ -3,7 +3,9 @@
 Every call below is `POST`/`GET` against `http://203.0.113.7:7788` with
 `x-ccrc-mail-token: $(cat ~/.cc-secrets/ccrc-mail.token)`. One **run row per
 wave**: `POST /api/runs` opens a new run for each wave of a program, not one
-row for the whole program.
+row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.md's
+"Learn who you are, first" defines it once and reads `$REG/<id>.uuid` for
+`fromUuid`, the pair every mail call below needs.
 
 ## 1 — Open the run
 
@@ -22,9 +24,15 @@ row for the whole program.
    route this run reuses an existing workspace, so the next dispatch resumes
    it instead of spawning a fresh one.
 
-The server places the hold. Its reason is `program:<slug> wave:1/M`, and it is
-**display-only** — never parse a hold reason to learn what wave you are on. Ask
-`GET /api/runs` and read the run row's own `wave`.
+**The hold, precisely.** When this call names `sessionId` (wave ≥ 2, reclaiming
+an existing workspace), the server places the hold immediately, reason
+`program:<slug> wave:<N>/M`. Wave 1's open has no workspace yet — nothing is
+held until wave 1's own dispatch (§2) places it, same reason, `wave:1/M`. A
+coordinator that checks for a hold between wave 1's open and its dispatch and
+finds none has not found a bug — it has found the exact window before the
+workspace exists. Either way the reason is **display-only** — never parse a
+hold reason to learn what wave you are on. Ask `GET /api/runs` and read the
+run row's own `wave`.
 
 ## 2 — Dispatch a wave
 
@@ -45,12 +53,14 @@ with the run now `dispatched`, or a refusal:
 `GET /api/runs`. `bad-transition` (409) means this run is not `planned` —
 someone already dispatched it, or it is further along than you think.
 
-For wave ≥ 2, this route itself resumes the held workspace and injects
-`/clear` through the send path before it queues the brief — recording
-`resumed`/`clearedAt` on the response. This session never sends `/clear`
-to a worker by any other route; dispatch is the one writer of that step,
-and a coordinator that "helps" by clearing the pane itself is a second
-writer racing the first.
+For wave 1, this call is also where the workspace's hold actually lands
+(reason `program:<slug> wave:1/M` — see §1's own note on this). For wave ≥ 2,
+this route itself resumes the held workspace and injects `/clear` through
+the send path before it queues the brief — recording `resumed`/`clearedAt`
+on the response. This session never sends `/clear` to a worker by any other
+route (clause 9); dispatch is the one writer of that step, and a coordinator
+that "helps" by clearing the pane itself is a second writer racing the
+first.
 
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
@@ -60,12 +70,31 @@ and that injection is your next turn.
 
 Mail arrives as the envelope in `references/mail-envelope.md`. For each one:
 
-1. `POST /api/mail/:id/ack` **first**. Until you ack, the lane replays it
-   verbatim on later sweeps — you will see it again, and a second copy of a
-   message you already acted on is how a wave gets dispatched twice.
+1. `POST /api/mail/:id/ack` **first**, body `{"fromId":"<your id>","fromUuid":"<your
+   uuid>"}` — the exact pair from "Learn who you are, first" ($id, $uuid).
+   Anything else 400s `bad-kind`; a `fromUuid` that does not match
+   `$REG/<your id>.uuid` 403s `stale-uuid` (the file this session's own
+   `/clear` would rotate — re-read it if you have any doubt). Until you ack,
+   the lane replays the message verbatim on later sweeps — you will see it
+   again, and a second copy of a message you already acted on is how a wave
+   gets dispatched twice.
 2. Then act.
 
 To see what is outstanding: `GET /api/mail?to=<your session id>`.
+
+**Sending mail of your own** — a rejection (§4), a question, a status
+update — is `POST /api/mail`, body:
+
+```json
+{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<recipient id>",
+ "runId":<run id or null>,"kind":"answer|question|status|finding|artifact",
+ "subject":"<subject>","body":"<body>","artifacts":["<absolute path>", …]}
+```
+
+Same `fromId`/`fromUuid` pair as the ack, checked the same way. `artifacts`,
+when given, must be **absolute paths** — the ingress refuses a relative one
+`bad-kind` — because the recipient reads the file directly, from whatever
+directory its own turn happens to be in, not from this session's.
 
 ## 4 — Advance the run as the wave progresses
 
@@ -96,25 +125,48 @@ directly from `dispatched` — so the ordinary forward path is two kinds of
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
 
-Mail the code back to the worker (`POST /api/mail`, kind `answer`, subject
-`rejected: <code>`) and leave the run alone. A stale `wave-done` must never
+Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
+`answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
+this run's id — and leave the run alone. A stale `wave-done` must never
 settle a wave. `{"to":"working"}` is also how a review sends work back, or a
 lost merge race is recorded — `RUN_TRANSITIONS` treats both as the ordinary
 case, not a failure, and neither re-measures.
 
-## 5 — The boundary: close this wave's run, open the next
+## 5 — The boundary: open the next wave's run, THEN close this one
+
+**Order is load-bearing here, and it is the opposite of what you might guess.**
+A program is `active` only while it has at least one open (non-`done`,
+non-`failed`) run; the instant its open-run count reaches zero the server
+marks it `done`/`abandoned`, and nothing ever reactivates it. `toId:'coordinator'`
+mail with no explicit `runId` resolves through `resolveCoordinator(null)`,
+which requires exactly one program in state `active`. Closing this wave's run
+before opening the next one, even for the few seconds between the two calls,
+drops this program's open-run count to zero — the program retires right then,
+and from that instant every such message is refused `unknown-recipient`,
+permanently, until a human re-opens something under this program's slug.
+**Open first** — the new run keeps the count above zero the whole time.
 
 1. Review the handoff commit the way you would review any commit.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.
    Commit it.
-3. `POST /api/runs/:id/close` `{"fingerprint":{…},"final":false}` — re-measures
-   the same way `/advance` does (skipped only on an explicit
-   `"state":"failed"` abandon), closes **this wave's** run row as `done`, and
-   the route itself re-holds the same workspace with reason
-   `program:<slug> wave:<N+1>/M`. No separate hold call is needed.
-4. `POST /api/runs` for wave N+1 (step 1, with `sessionId` naming the same
-   session), then dispatch it (step 2) into the **same workspace**.
+3. `POST /api/runs` for wave N+1 (§1, step 2, naming `sessionId` for the SAME
+   session this wave's run has) — this opens wave N+1's run row and re-holds
+   the same workspace with reason `program:<slug> wave:<N+1>/M`. The program
+   now has two open runs (this wave's, still `working`/`awaiting-review`/
+   `merging`, and the new `planned` one) — it can never read as zero from
+   here.
+4. `POST /api/runs/:id/close` `{"fingerprint":{…},"final":false}` on **this
+   wave's** run id — re-measures the same way `/advance` does (skipped only
+   on an explicit `"state":"failed"` abandon), closes this wave's run row as
+   `done`, and places the SAME hold reason again (`program:<slug>
+   wave:<N+1>/M` — idempotent; step 3 already wrote it). Two refusals besides
+   the re-measurement table in §4: `not-dispatched` (this run's `sessionId`
+   is null — it was never dispatched, so there is nothing to re-measure or
+   mail) and `prhistory-unreadable` (`.prhistory` could not be read — the
+   route refuses to close on a ledger it cannot verify; retry once the file
+   is readable again).
+5. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
 
 ## 6 — Final merge
 
