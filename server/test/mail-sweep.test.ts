@@ -111,6 +111,30 @@ const onceUnlistableIO = (): { io: FleetIO; failNext: () => void } => {
   return { io, failNext: () => { fail = true; } };
 };
 
+/**
+ * An `io` whose `readdir` passes through untouched until `arm()` is called,
+ * then ALTERNATES pass/fail on every subsequent call to the registry
+ * directory — the shape a single dropped agent-WS round trip produces on
+ * only the SECOND of `sweepMail`'s own two directory reads (the kill-switch
+ * listing, then `readRegistryMeasured`'s own internal one), sweep after
+ * sweep, without ever tripping the kill-switch itself. Unarmed during
+ * `primedWatcher`'s own priming tick (which fires several unrelated
+ * `readdir` calls of its own, over a registry directory `harness()` creates
+ * empty-but-listable) so those never perturb the parity; a test calls `arm()` once
+ * its fixtures are seeded and it is about to drive `sweepMail()` directly
+ * (blocking review findings 1/5).
+ */
+const alternatingUnlistableIO = (): { io: FleetIO; arm: () => void } => {
+  let armed = false;
+  let n = 0;
+  const io: FleetIO = { ...localIO, readdir: async (p) => {
+    if (!armed) return localIO.readdir(p);
+    n += 1;
+    return n % 2 === 0 ? null : localIO.readdir(p);
+  } };
+  return { io, arm: () => { armed = true; } };
+};
+
 /** A registry whose directory listing is fine but one specific session's
  *  field read is not — `readRegistry` drops that row entirely
  *  (`registry.ts:123`) even though its `.uuid` file is still listed. Mirrors
@@ -142,6 +166,21 @@ interface Harness { home: string; calls: string[][]; run: Runner }
  *  uses). */
 const harness = (opts: { hasSession?: boolean; panes?: (string | null)[] } = {}): Harness => {
   const home = mkTmp('ccrc-mail-sweep-');
+  // Empty, but LISTABLE (blocking review findings 1/3): `primedWatcher`'s
+  // priming tick now takes the typed `readRegistryMeasured` read, and
+  // `io.readdir` cannot distinguish "this directory was never created" from
+  // "this directory could not be listed" (`io.ts`'s `readdir` maps every
+  // `fs` error, ENOENT included, to `null` — a documented, deliberate limit,
+  // see `io.test.ts`'s own pin and `coord-fingerprint.test.ts`'s identical
+  // comment). Left absent, priming would hit `{listed:false}` and `tick()`
+  // would correctly fail shut without ever setting `primed`, and every
+  // `sweepMail()` call in this file would then no-op forever on its own
+  // `if (!this.primed) return`. Created here rather than left to
+  // `seedRegistry` (which runs AFTER priming in every test) — same fix,
+  // same reasoning, as `fleetws.test.ts`'s "writes the very first snapshot"
+  // test and `coord-fingerprint.test.ts`'s `fingerprintDeps`. On a REAL
+  // fleet host `.cc-sessions` always exists once `ccd` has ever run.
+  mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const calls: string[][] = [];
   let capIdx = 0;
   const panes = opts.panes ?? [];
@@ -160,11 +199,13 @@ const harness = (opts: { hasSession?: boolean; panes?: (string | null)[] } = {})
   return { home, calls, run };
 };
 
-/** Primes the watcher against a registry with NOTHING in it yet — `tick()`'s
- *  own `detectDialogs` pass then loops zero times and issues zero
- *  `capture-pane` calls, so it can never misalign a later `sendPrompt`'s
- *  scripted panes. Seed the registry/hookstate/livestate fixtures AFTER
- *  calling this, not before. Returns `deps` too, so a test that needs the
+/** Primes the watcher against a registry with NOTHING in it yet — empty but
+ *  LISTABLE (`harness()` creates `.cc-sessions` before this runs) — so
+ *  `tick()`'s typed registry read sees `{listed: true, records: []}`, not
+ *  `{listed: false}`. `tick()`'s own `detectDialogs` pass then loops zero
+ *  times and issues zero `capture-pane` calls, so it can never misalign a
+ *  later `sendPrompt`'s scripted panes. Seed the registry/hookstate/livestate
+ *  fixtures AFTER calling this, not before. Returns `deps` too, so a test that needs the
  *  SAME `KeyedQueue` the sweep will use (to prove injection actually goes
  *  through it) can reach in. */
 const primedWatcher = async (
@@ -469,6 +510,10 @@ describe('sweepMail: the send', () => {
     // duration: that is precisely what made the old version of this file
     // pass 5/5 in isolation and fail under a loaded 86-file run.
     const home = mkTmp('ccrc-mail-sweep-');
+    // Same empty-but-listable fix as `harness()` above — this test builds its
+    // own `Harness` by hand rather than calling that factory, so it needs the
+    // same `.cc-sessions` directory created before `primedWatcher` primes.
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const calls: string[][] = [];
     let releaseGate!: () => void;
     const gate = new Promise<void>((r) => { releaseGate = r; });
@@ -891,17 +936,19 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(mailId).toEqual(expect.any(Number));
   });
 
-  it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks ' +
-     '(fix, scoped-verify R2 — a regression the fix wave above itself introduced)', async () => {
-    // registry.ts:123 drops a row whose `.uuid` file IS listed when a
-    // sibling field read merely fails — transient, the identical shape
-    // `POST /api/mail`'s own ingress refuses as `registry-unmeasurable`
-    // rather than guessing (D-37, mail-routes.test.ts:259). Before this fix,
-    // sweepMail's reaped-recipient park (the test right above this one)
-    // could not tell that apart from a GENUINELY absent recipient, so this
-    // exact fixture would park a LIVE session's mail `rejected('undeliverable')`
-    // after MAIL_MAX_ATTEMPTS backoffs — about 15 minutes of one dropped
-    // agent-WS round trip on a single field.
+  it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks, and NEVER ' +
+     'ratchets attempts (registry ladder: the row is now DEGRADED, not dropped, and `countsAsAttempt: false`' +
+     ' keeps this branch off the park-eligible counter entirely)', async () => {
+    // registry.ts's identity ladder DEGRADES (never drops) a row whose
+    // `.uuid` file IS listed when a sibling identity field merely fails to
+    // read — transient, the identical shape `POST /api/mail`'s own ingress
+    // refuses as `registry-unmeasurable` rather than guessing (D-37,
+    // mail-routes.test.ts:259). Before the ladder, sweepMail's reaped-
+    // recipient park (the test right above this one) could not tell that
+    // apart from a GENUINELY absent recipient, so this exact fixture would
+    // park a LIVE session's mail `rejected('undeliverable')` after
+    // MAIL_MAX_ATTEMPTS backoffs — about 15 minutes of one dropped agent-WS
+    // round trip on a single field.
     const h = harness();
     const io = withUnreadableField(ID, 'wrapper');
     const coord = store(h.home);
@@ -912,7 +959,13 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     await w.sweepMail();
     let row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
-    expect(row.attempts).toBe(1);
+    // NEVER ratcheted: `store.backOff`'s `countsAsAttempt: false` on this
+    // branch — attempts is SEND-FAILURE budget, and this row was never
+    // attempted at all, only found unmeasurable before any send-eligibility
+    // gate could even run. The mutant this kills: dropping the fourth
+    // argument (or defaulting it to `true`) would make this `1`, exactly
+    // the old (pre-ladder) behaviour this test used to pin.
+    expect(row.attempts).toBe(0);
     // Echoes `registry-unmeasurable` — the ingress route's own typed code
     // for the identical condition — in the free-text `lastError` itself
     // (scoped-verify H6), so a maintainer grepping the ROW for that word
@@ -921,7 +974,8 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
 
     // Drive it well past the point that WOULD park a genuinely absent
     // recipient (MAIL_MAX_ATTEMPTS backoffs, the test above this one) — it
-    // must still be backing off, never rejected.
+    // must still be backing off, never rejected, and attempts must STILL
+    // read 0 — the ladder promises "forever", not merely "longer".
     for (let i = 1; i < MAIL_MAX_ATTEMPTS + 4; i++) {
       row = deliveryRow(coord, id);
       vi.setSystemTime(row.nextAttemptAt + 1_000);
@@ -930,6 +984,54 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
     expect(row.rejectCode).toBeNull();
+    expect(row.attempts).toBe(0);
+  });
+
+  it('does NOT terminally park a listed, live recipient\'s mail when only the SECOND of sweepMail\'s ' +
+     'own two directory reads drops — the kill-switch listing succeeds, readRegistryMeasured\'s own ' +
+     'internal readdir fails, and that whole-fleet collapse must fail SHUT exactly like the kill-' +
+     'switch\'s own read already does, never be read as "recipient not in registry" (blocking review ' +
+     'findings 1/5)', async () => {
+    // MEASURED (blocking review finding 5): before this fix, `sweepMail`
+    // sourced `records` from `readRegistry`'s OLD signature ([] on an
+    // unlistable directory) — the SAME shape "this recipient is not in the
+    // registry" wears below (`rec === undefined`) — so a single dropped
+    // agent-WS round trip on ONLY this second read (the kill-switch's own,
+    // three lines above inside `sweepMail`, succeeded) made every due row
+    // read `unmeasurable = false`, ratchet `attempts`, and terminally
+    // `rejectDelivery(..., 'undeliverable', 'recipient not in registry')` on
+    // the sixth sweep — for a recipient this fixture keeps fully listed and
+    // readable throughout. `alternatingUnlistableIO` reproduces exactly that:
+    // armed AFTER priming/seeding, it passes the kill-switch's own read
+    // (odd call) and fails readRegistryMeasured's own internal one (even
+    // call), every sweep, without ever tripping the kill-switch.
+    const h = harness();
+    const coord = store(h.home);
+    const { io, arm } = alternatingUnlistableIO();
+    const { w } = await primedWatcher(h, coord, { io });
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    arm();
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS; i++) {
+      // Clears both the MAIL_SWEEP_MS lane throttle and (were the bug still
+      // present) every backoff step up to MAIL_BACKOFF_MAX_MS between sweeps.
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+
+    expect(literalSends(h.calls),
+      'never reaches the send it would need to for the row to move any other way').toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'a whole-fleet read failure must never be read as "recipient not in registry"')
+      .toBe('queued');
+    expect(row.rejectCode).toBeNull();
+    // A row this method could never even LIST must never accrue toward the
+    // park ceiling either — the identical rule the per-field-degraded branch
+    // above already keeps, extended to the whole-fleet collapse.
+    expect(row.attempts, 'a whole-fleet read failure must never ratchet attempts').toBe(0);
   });
 
   it('an ORDINARY gate (busy, on cooldown, no tmux session) never accrues an attempt', async () => {

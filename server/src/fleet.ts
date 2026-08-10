@@ -97,9 +97,20 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // over the rest of the fleet — so it reads just that id's row rather than
   // the whole registry (readRegistry's 24-generation sweep, ~409 round trips
   // on a 24-session fleet in remote mode, for a question about one session).
-  const rec = await readSessionRecord(io, cfg, id);
-  if (!rec || !(await tmux.hasSession(id))) return 'dead';
+  const read = await readSessionRecord(io, cfg, id);
+  // A degraded row must never answer 'dead' — the interrupt route's own
+  // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
+  // this read simply could not measure would let it refuse an interrupt on a
+  // plainly busy one. `!read.found` (genuinely absent, or the whole
+  // directory unlistable) is still 'dead': there is no pane to ask about
+  // either way, the same answer this gave before the ladder existed.
+  if (!read.found || !(await tmux.hasSession(id))) return 'dead';
+  const rec = read.record;
   const pid = await tmux.panePid(id);
+  // Unmeasured wrapper => 'idle', via the EXISTING `!cfgDir` fallback: a
+  // degraded `rec.wrapper` is `''`, which `configDirFor` (an unknown wrapper
+  // string) already answers `undefined` for — honest-but-blind, and it fails
+  // TOWARD refusing an interrupt rather than granting one on a guess.
   const cfgDir = configDirFor(cfg.home, rec.wrapper);
   if (!pid || !cfgDir) return 'idle';
   const live = await readLiveState(io, cfgDir, pid);
@@ -140,9 +151,35 @@ export async function assembleFleet(
    *  as `pendingDialogs`: absent on a cold start and in every existing test,
    *  which is exactly why every hook-derived field below defaults to null. */
   hookStates?: Map<string, HookState>,
+  /**
+   * The registry rows this assembly must describe, when the caller has
+   * ALREADY read them — the same `records ?? await readRegistry(...)` idiom
+   * `watch.ts`'s own `sweepTasks`/`archiveMerged` lanes use.
+   *
+   * Load-bearing for correctness, not just for the saved round trips
+   * (bba5c09; restated here — blocking review finding 4 — on its REAL ground,
+   * since the claim this comment used to make, "`FleetSession` carries no
+   * `unmeasured` field", is false as of Task 2: `unmeasured: r.unmeasured` is
+   * assigned into the returned session below). The actual reason a caller
+   * MUST pass its own rows rather than let this function take a second,
+   * independent read: `watch.ts`'s `tick()` derives its evidence — the
+   * `unmeasuredIds` set its busy→idle "✓ Finished" push refuses to fire for —
+   * straight off THIS call's own return value (`sessions[i].unmeasured`), not
+   * off a separately-read set of `SessionRecord`s. If this function took its
+   * OWN read instead of the rows `tick()` already has, that would be a
+   * SEPARATE whole-fleet sweep, ~17 field reads per session, a few hundred ms
+   * after the one `tick()` used for `sweepHookStates`/`detectDialogs` — and a
+   * row that read clean in tick()'s sweep and degraded in THIS one would
+   * still land in `sessions` with `unmeasured` empty (wrong), or vice versa.
+   * Passing the rows in makes every lane inside one tick describe the
+   * IDENTICAL observation, which is the only way they can never disagree —
+   * the same reasoning `tick()`'s own comment states for why it shares this
+   * read with `sweepHookStates`/`detectDialogs` in the first place.
+   */
+  records?: SessionRecord[],
 ): Promise<FleetSession[]> {
-  const [records, limits] = await Promise.all([readRegistry(io, cfg), readLimits(io, cfg, now)]);
-  return Promise.all(records.map(async (r): Promise<FleetSession> => {
+  const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
+  return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     const alive = await tmux.hasSession(r.id);
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
@@ -197,6 +234,13 @@ export async function assembleFleet(
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs),
       subagents: hs?.subagents ?? null,
+      // Carried straight off the record — this IS the evidence `tick()`'s own
+      // `unmeasuredIds` (watch.ts) now derives its Set from directly, one
+      // field of these very rows (one derivation of one fact — blocking
+      // review finding 4), shipped on the wire so the PWA (grey+reason,
+      // SessionLine.tsx) and the offline/state-cache snapshots (Task 2) can
+      // tell a degraded row from a measured one too.
+      unmeasured: r.unmeasured,
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

@@ -10,6 +10,18 @@ export type SessionStatus = 'busy' | 'idle' | 'dead';
 export type SessionBucket =
   | 'attention' | 'working' | 'done' | 'idle' | 'cleanup' | 'archived' | 'dead';
 
+/** The identity triple a registry read either measures or does not:
+ *  `uuid`/`wrapper`/`workdir`, together — the fields `server/src/registry.ts`'s
+ *  `SessionRecord.unmeasured` and `measuredIdentity()` gate on. Lives here,
+ *  not only server-side, because `FleetSession.unmeasured` below carries the
+ *  SAME evidence onto the wire (architecture doc, increment 1's second half,
+ *  Task 2) — the registry ladder's presence/absence/unmeasurable vocabulary
+ *  is exactly the kind of ubiquitous-language artifact `shared/` exists for,
+ *  and the alternative (a second, server-only definition `fleet.ts` casts
+ *  into) is the drift `UNCHECKED_PR`'s own docstring above spends thirty
+ *  lines warning about. */
+export type IdentityField = 'uuid' | 'wrapper' | 'workdir';
+
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
   /** The worktree slug when this session is a workspace; null for a project's
@@ -74,6 +86,51 @@ export interface FleetSession {
    *  every restart and paint the whole fleet as freshly-unseen after a deploy.
    *  Null when no evidence exists. Drives the PWA's unseen watermark. */
   bucketSince: number | null;
+  /** Which of the identity triple THIS assembly could not measure (registry
+   *  ladder — `server/src/registry.ts`'s `SessionRecord.unmeasured`, carried
+   *  onto the wire verbatim by `fleet.ts`'s `assembleFleet`). Empty on every
+   *  fully-measured row, which is every row before this field existed and
+   *  the overwhelming majority after. Non-empty means DEGRADED: `status`,
+   *  `branch`, and every other field this assembly could only derive via
+   *  `configDirFor(wrapper)`/`readLiveState` may be frozen at a fallback
+   *  default rather than freshly read, because the wrapper/uuid/workdir this
+   *  pass needed for that lookup came back unreadable, not absent (THE
+   *  PRINCIPLE: degrade-and-heal for display, never guess and call it fact).
+   *
+   *  Two consumers this field exists for: the PWA renders a degraded row in
+   *  the small, honest `PrKeycap` grey+reason register — never a new banner
+   *  (`pwa/src/fleet/SessionLine.tsx`) — and `pwa/src/lib/offline.ts`'s
+   *  `saveFleetSnapshot` refuses to persist a frame carrying one as
+   *  last-known-good, the same reasoning `lib/seen.ts`'s `prune` already
+   *  states for an empty frame: absent evidence proves nothing, and a guess
+   *  persisted as fact defeats the one thing a last-known-good cache is for. */
+  unmeasured: readonly IdentityField[];
+}
+
+/**
+ * Tolerant read of `FleetSession.unmeasured` for a value that has NOT been
+ * through `reviveFleetSession` — i.e. the live `fleet` WS frame.
+ * `pwa/src/stores/fleet.ts`'s `asFleetMsg` validates only
+ * `Array.isArray(sessions)` and casts (`return m as FleetMsg`); a LIVE frame
+ * never revives. `FLEET_PROTO` stays 1 for this field on purpose (additive,
+ * so an older server keeps talking to a newer client by design), so a row
+ * from a server that predates Task 2 — a rollback, a `dist-pwa` deployed
+ * before the process restarts, a cached client shell reconnecting to an old
+ * process — can genuinely omit the `unmeasured` key at runtime even though
+ * the type says it is required. Reading `.unmeasured.length` directly on
+ * such a row is a hard `TypeError` (blocking review finding 2, MEASURED: it
+ * killed `saveFleetSnapshot` and, via `SessionLine.tsx`, the renderer too).
+ *
+ * This is the one place both call sites (`pwa/src/lib/offline.ts`,
+ * `pwa/src/fleet/SessionLine.tsx`) read the field, so they cannot drift onto
+ * two different fallbacks. Absence reads as measured (`[]`) — the same rule
+ * `optUnmeasured` below already applies on the persisted-snapshot revival
+ * path: every session a pre-Task-2 build ever sent was, by that build's own
+ * registry read, either fully measured or dropped outright, so there is no
+ * history here to be ignorant about.
+ */
+export function unmeasuredFields(s: { unmeasured?: readonly IdentityField[] }): readonly IdentityField[] {
+  return s.unmeasured ?? [];
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -838,6 +895,30 @@ const optSubagents = (o: RawObj, k: string): SubagentEntry[] | null => {
   return (v as unknown[]).map((item, i) => reviveSubagentEntry(item, `${k}[${i}]`));
 };
 
+const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
+
+/** `FleetSession.unmeasured` — split from every OTHER array field above on
+ *  purpose: absent degrades to `[]`, not to `null` (`optSubagents`'s own
+ *  shape), because `[]` here does not mean "no data" — it means MEASURED,
+ *  the honest reading for a field this snapshot predates. Every session a
+ *  pre-Task-2 build ever persisted was, by that build's own registry read,
+ *  either fully measured or dropped outright (the ladder's degrade-instead-
+ *  of-drop behaviour is exactly what this field exists to report), so an
+ *  absent field is not an admission of ignorance the way `subagents: null`
+ *  is — there is no history here to be ignorant ABOUT. Present-but-wrong-
+ *  shaped (not a string array, or a string outside the identity triple)
+ *  rejects the whole snapshot, same as every other array field on this
+ *  record: a value this build cannot parse must never be laundered into
+ *  "measured clean". */
+const optUnmeasured = (o: RawObj, k: string): readonly IdentityField[] => {
+  const v = o[k];
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || (v as unknown[]).some((x) => typeof x !== 'string' || !IDENTITY_FIELDS.includes(x))) {
+    throw new MalformedSnapshot(k);
+  }
+  return v as IdentityField[];
+};
+
 /** One persisted session in today's shape, or null if it cannot be one. */
 export function reviveFleetSession(raw: unknown): FleetSession | null {
   try {
@@ -917,6 +998,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
+      unmeasured: optUnmeasured(o, 'unmeasured'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server

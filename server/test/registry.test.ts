@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { readRegistry, readSessionRecord, HOLD_UNREADABLE } from '../src/registry.js';
+import {
+  readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
+  HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS,
+} from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
@@ -187,12 +190,12 @@ describe('readSessionRecord', () => {
     const whole = await readRegistry(localIO, cfg);
     const single = await readSessionRecord(localIO, cfg, 'claude2-MekWarLive');
 
-    expect(single).toEqual(whole.find((r) => r.id === 'claude2-MekWarLive'));
-    expect(single?.pool).toEqual(['claude', 'claude2']);
-    expect(single?.lastswap).toBe(1784500000);
+    expect(single).toEqual({ found: true, record: whole.find((r) => r.id === 'claude2-MekWarLive') });
+    expect(single.found && single.record.pool).toEqual(['claude', 'claude2']);
+    expect(single.found && single.record.lastswap).toBe(1784500000);
   });
 
-  it('returns null for an id with no .uuid in the registry, without reading any of its fields', async () => {
+  it('answers {found:false, reason:\'absent\'} for an id with no .uuid in the registry, without reading any of its fields', async () => {
     const reg = path.join(home, '.cc-sessions');
     let fieldReads = 0;
     const countingIO: FleetIO = {
@@ -206,22 +209,23 @@ describe('readSessionRecord', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
-    expect(rec).toBeNull();
+    expect(rec).toEqual({ found: false, reason: 'absent' });
     // A miss must not fire the 17-field Promise.all `buildRecord` would — the
     // whole point of checking the listing FIRST.
     expect(fieldReads).toBe(0);
   });
 
-  it('returns null when the registry dir cannot be listed', async () => {
+  it('answers {found:false, reason:\'unlistable\'} when the registry dir cannot be listed', async () => {
     const cfg = loadConfig({ CCRC_HOME: path.join(home, 'nope') });
-    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toBeNull();
+    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'unlistable' });
   });
 
-  it('returns null for an incomplete entry (own field unreadable), same as readRegistry dropping it', async () => {
+  it('answers {found:false, reason:\'absent\'} for an incomplete entry (own field never written, not just ' +
+     'unreadable), same as readRegistry dropping it', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude-demo', { uuid: 'c'.repeat(36), wrapper: 'claude' }); // no workdir
+    seed(reg, 'claude-demo', { uuid: 'c'.repeat(36), wrapper: 'claude' }); // no workdir file at all
     const cfg = loadConfig({ CCRC_HOME: home });
-    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toBeNull();
+    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
   it('costs exactly one readdir plus the one id\'s 17 field reads — never a per-session Promise.all for a sibling', async () => {
@@ -261,6 +265,306 @@ describe('readSessionRecord', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const rec = await readSessionRecord(holdUnreadableIO, cfg, 'demo-quiet-basin');
-    expect(rec?.held).toBe(HOLD_UNREADABLE);
+    expect(rec.found && rec.record.held).toBe(HOLD_UNREADABLE);
+  });
+});
+
+// Architecture doc, increment 1's second half (spec:
+// docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
+// DEGRADE-AND-HEAL for a listed-but-unreadable identity field, narrowed
+// (logged) DROP for a field that is neither readable nor listed, or reads
+// back measured-empty. `registry.ts:123`'s old blanket rule ("missing
+// wrapper/workdir/uuid" -> drop) had NO pin before this file — these tests
+// are written FIRST and confirmed red against that old rule (a triple member
+// null+listed used to drop the whole row; here it must degrade it instead).
+describe('the identity ladder (unmeasured evidence)', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  });
+
+  /** `localIO` with every read of `<id>.<field>` failing — the file is still
+   *  LISTED (a real, present file on disk), only its bytes never come back —
+   *  the shape `remote/io.ts` produces on one dropped agent-WS round trip
+   *  among the ~17 a session's read fires in parallel. */
+  const unreadableField = (id: string, field: string): FleetIO => ({
+    ...localIO,
+    readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+  });
+
+  it('degrades — never drops — a row whose wrapper is listed but unreadable', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const out = await readRegistry(unreadableField('demo-quiet-basin', 'wrapper'), cfg);
+    expect(out).toHaveLength(1);
+    const rec = out[0]!;
+    expect(rec.unmeasured).toEqual(['wrapper']);
+    // A degraded field's OWN value is '' — never null, and never any real
+    // wrapper — so a stray `=== ''` comparison can never be fooled by it,
+    // and every OTHER field (measured) stays exactly what was written.
+    expect(rec.wrapper).toBe('');
+    expect(rec.uuid).toBe('e'.repeat(36));
+    expect(rec.workdir).toBe('/w');
+  });
+
+  it('degrades a row whose uuid is listed but unreadable — the case guaranteed reachable by construction', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const out = await readRegistry(unreadableField('demo-quiet-basin', 'uuid'), cfg);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.unmeasured).toEqual(['uuid']);
+    expect(out[0]!.uuid).toBe('');
+  });
+
+  it('drops (still, now logged) a row whose workdir file was never written at all', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    // No `.workdir` file on disk — genuinely absent, not merely unreadable.
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const out = await readRegistry(localIO, cfg);
+    expect(out).toEqual([]);
+  });
+
+  it('drops (still, now logged) a row whose wrapper reads back measured-empty — a permanent fault, not a read failure', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: '   ', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const out = await readRegistry(localIO, cfg);
+    expect(out).toEqual([]);
+  });
+
+  it('measuredIdentity returns the bundled triple when fully measured, and null the instant any member is degraded', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+
+    const clean = (await readRegistry(localIO, cfg))[0]!;
+    expect(measuredIdentity(clean)).toEqual({ uuid: 'e'.repeat(36), wrapper: 'claude', workdir: '/w' });
+
+    const degraded = (await readRegistry(unreadableField('demo-quiet-basin', 'workdir'), cfg))[0]!;
+    expect(measuredIdentity(degraded)).toBeNull();
+  });
+
+  it('twice-observed absence retires a degraded row within the SAME readRegistry call', async () => {
+    // First listing: `.wrapper` is there but unreadable — degraded. By the
+    // time the second (confirmatory) listing runs, the WHOLE session has
+    // been reaped — `.uuid` itself is gone. That is proof, not a guess: the
+    // row is dropped from the result rather than kept degraded forever.
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const reapedMidRead: FleetIO = {
+      ...localIO,
+      readdir: async (p) => {
+        const names = await localIO.readdir(p);
+        if (names === null) return names;
+        listings += 1;
+        if (listings === 1) return names;
+        return names.filter((n) => !n.startsWith('demo-quiet-basin.'));
+      },
+      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+    };
+    const out = await readRegistry(reapedMidRead, cfg);
+    expect(out).toEqual([]);
+    expect(listings).toBe(2);
+  });
+
+  it('a second listing that FAILS proves nothing and changes nothing — the degraded row stays, fail-shut', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const secondListingFails: FleetIO = {
+      ...localIO,
+      readdir: async (p) => {
+        listings += 1;
+        if (listings === 1) return localIO.readdir(p);
+        return null;
+      },
+      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+    };
+    const out = await readRegistry(secondListingFails, cfg);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.unmeasured).toEqual(['wrapper']);
+    expect(listings).toBe(2);
+  });
+
+  it('readSessionRecord retires a degraded row to {found:false, reason:\'absent\'} on twice-observed absence', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const reapedMidRead: FleetIO = {
+      ...localIO,
+      readdir: async (p) => {
+        const names = await localIO.readdir(p);
+        if (names === null) return names;
+        listings += 1;
+        if (listings === 1) return names;
+        return names.filter((n) => !n.startsWith('demo-quiet-basin.'));
+      },
+      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+    };
+    expect(await readSessionRecord(reapedMidRead, cfg, 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
+  });
+});
+
+describe('readRegistryMeasured / RegistryRead', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  });
+
+  it('answers {listed:true, records} on an ordinary read, and readRegistry unwraps it', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const read = await readRegistryMeasured(localIO, cfg);
+    expect(read.listed).toBe(true);
+    expect(read.listed && read.records.map((r) => r.id)).toEqual(['demo-quiet-basin']);
+    expect(await readRegistry(localIO, cfg)).toEqual(read.listed ? read.records : []);
+  });
+
+  it('answers {listed:false} — the whole-fleet collapse — distinct from a registry that genuinely lists ' +
+     'nobody, and readRegistry\'s old signature still collapses it to []', async () => {
+    const cfg = loadConfig({ CCRC_HOME: path.join(home, 'nope') });
+    const read = await readRegistryMeasured(localIO, cfg);
+    expect(read).toEqual({ listed: false });
+    expect(await readRegistry(localIO, cfg)).toEqual([]);
+  });
+});
+
+describe('observability (warnOnce, escalation, the whole-fleet episode)', () => {
+  let home: string;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    home = mkTmp('ccrc-obs-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  const unreadableField = (id: string, field: string): FleetIO => ({
+    ...localIO,
+    readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+  });
+
+  it('warns once on entry to degraded, and stays silent on an immediate repeat within the cooldown', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'obs-warnonce-a', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const io = unreadableField('obs-warnonce-a', 'wrapper');
+
+    await readRegistry(io, cfg);
+    const afterFirst = warnSpy.mock.calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    await readRegistry(io, cfg);
+    // Still within the 60s cooldown — no NEW warn line for the same id#field.
+    expect(warnSpy.mock.calls.length).toBe(afterFirst);
+  });
+
+  it('warns again once the cooldown has elapsed', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'obs-warnonce-b', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const io = unreadableField('obs-warnonce-b', 'wrapper');
+
+    await readRegistry(io, cfg);
+    const afterFirst = warnSpy.mock.calls.length;
+    vi.setSystemTime(Date.now() + 61_000);
+    await readRegistry(io, cfg);
+    expect(warnSpy.mock.calls.length).toBeGreaterThan(afterFirst);
+  });
+
+  it('escalates to console.error exactly once per stuck episode, after REGISTRY_UNMEASURED_STUCK_MS', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'obs-escalate', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const io = unreadableField('obs-escalate', 'wrapper');
+
+    await readRegistry(io, cfg);
+    expect(errorSpy).not.toHaveBeenCalled();
+    // Short of the ceiling: still just a warn.
+    vi.setSystemTime(Date.now() + REGISTRY_UNMEASURED_STUCK_MS - 1_000);
+    await readRegistry(io, cfg);
+    expect(errorSpy).not.toHaveBeenCalled();
+    // Past the ceiling: exactly one error.
+    vi.setSystemTime(Date.now() + 2_000);
+    await readRegistry(io, cfg);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    // And it does not repeat on the very next read.
+    vi.setSystemTime(Date.now() + 1_000);
+    await readRegistry(io, cfg);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('prunes a degraded id\'s warn state once it is no longer listed at all — a RECYCLED id (`ws-reap` ' +
+     'draws only from free slugs, so the same id can name a wholly different incarnation later) does not ' +
+     'inherit the retired incarnation\'s escalation clock', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    const id = 'obs-prune-recycled';
+    seed(reg, id, { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const io = unreadableField(id, 'wrapper');
+    await readRegistry(io, cfg);   // degrades id#wrapper#degraded, firstAt = T0
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    // The incarnation is torn down — every registry file for `id` removed,
+    // the ordinary shape of a reap.
+    for (const f of ['wrapper', 'project', 'workdir', 'uuid']) {
+      rmSync(path.join(reg, `${id}.${f}`), { force: true });
+    }
+    // A read while `id` is absent from the listing is what prunes its entry
+    // — this call must not itself re-create one (nothing to build for an id
+    // with no `.uuid`).
+    await readRegistry(io, cfg);
+
+    // Time passes well beyond the escalation ceiling, THEN the SAME id is
+    // reused for a wholly unrelated NEW incarnation, ALSO wrapper-degraded.
+    vi.setSystemTime(Date.now() + REGISTRY_UNMEASURED_STUCK_MS + 1_000);
+    seed(reg, id, { wrapper: 'claude', project: 'other-project', workdir: '/w2', uuid: 'g'.repeat(36) });
+    await readRegistry(io, cfg);
+    // Without pruning, the stale entry's `firstAt` (T0) is still on file, and
+    // `now - firstAt` already exceeds the ceiling — this would escalate on
+    // what is, in truth, a BRAND NEW incarnation's very first observation.
+    // Pruned correctly, this degrade starts its own clock and must not.
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs the whole-fleet unlistable episode on entry and exit, never per tick', async () => {
+    const cfg = loadConfig({ CCRC_HOME: home });   // registry dir exists — deleted below
+    const listable = { ...localIO };
+    const unlistable: FleetIO = { ...localIO, readdir: async () => null };
+
+    await readRegistry(listable, cfg);   // baseline: an ordinary, listable read logs nothing about this
+    const before = errorSpy.mock.calls.length;
+
+    await readRegistry(unlistable, cfg);
+    await readRegistry(unlistable, cfg);
+    await readRegistry(unlistable, cfg);
+    // ENTRY: exactly one error, however many ticks stayed unlistable.
+    expect(errorSpy.mock.calls.length).toBe(before + 1);
+
+    const warnsBefore = warnSpy.mock.calls.length;
+    await readRegistry(listable, cfg);
+    // EXIT: exactly one warn.
+    expect(warnSpy.mock.calls.length).toBe(warnsBefore + 1);
+    await readRegistry(listable, cfg);
+    await readRegistry(listable, cfg);
+    // No further exit logging on subsequent, already-recovered reads.
+    expect(warnSpy.mock.calls.length).toBe(warnsBefore + 1);
   });
 });

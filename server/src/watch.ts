@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet } from './fleet.js';
-import { readRegistry, readSessionRecord } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -399,6 +399,13 @@ export class FleetWatcher {
    *  confirmation lasts, while still guaranteeing the freeze this field is
    *  named after can never be silent. */
   private snapshotWriteSkippedWarned = false;
+  /** Same warn-once-per-episode discipline as `snapshotWriteSkippedWarned`
+   *  immediately above, on its OWN flag (Task 2): a shrink-episode and a
+   *  degrade-episode are independent conditions — a tick can trip one, the
+   *  other, both, or neither — and sharing one flag would let whichever
+   *  fires first silence the other's own first warning. Cleared the moment a
+   *  write actually lands with every row measured clean. */
+  private snapshotWriteSkippedDegradedWarned = false;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -470,7 +477,50 @@ export class FleetWatcher {
       // the difference between one registry read and two, every 2s, forever.
       // sweepTasks/sweepPr below are NOT included: both throttle to their own
       // slower clock and skip the read entirely on most ticks already.
-      const records = await readRegistry(this.deps.io, this.deps.cfg);
+      //
+      // `readRegistryMeasured`, not `readRegistry` (blocking review findings
+      // 1/3): the old `[]`-on-unlistable signature made a single dropped
+      // `io.readdir` — the whole-fleet cousin of the per-row ladder, and the
+      // ordinary shape of one lost agent-WS round trip in remote mode — read
+      // as "the fleet is now empty" to every lane below. `sweepHookStates`/
+      // `sweepTasks` would rebuild both maps from zero rows, silently
+      // discarding every entry the retain-don't-erase branch further down
+      // exists to protect (findings 1/2's own harm, at fleet scale instead of
+      // row scale), and the unconditional `bus.emit('fleet', sessions)` at
+      // the bottom of this method would paint "no sessions" on every
+      // connected PWA. Fail shut instead, the same evidence-not-time bound
+      // `sweepMail` already draws three lanes down (`readRegistryMeasured`,
+      // `!registryRead.listed` return) and `registry.ts`'s own docstring
+      // states for this exact read: "a failed second listing proves nothing
+      // and changes nothing".
+      const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+      if (!registryRead.listed) {
+        // Retain, don't erase, at fleet scale: `this.hookStates`/
+        // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
+        // exactly as the prior successful tick set them. Nothing is broadcast
+        // this tick — a stale-but-real fleet on the connected client's screen
+        // is honest; an empty one is a lie. `registry.ts`'s own
+        // `noteWholeFleetListing` already logs this episode's entry and exit
+        // once, not per tick (shared by every caller of `readRegistryMeasured`/
+        // `readSessionRecord`), so nothing further is logged here — a box
+        // that stays unlistable for an hour still gets exactly two log lines.
+        // The other per-tick lanes fall into two groups, and this return skips
+        // them ALL — say so completely, because the second group is easy to
+        // miss. Registry-sourced (`sweepPr`/`sweepNames`/`sweepMail`): each is
+        // void-dispatched with its own slower/independent clock and its own
+        // registry read (`sweepMail` already fails shut the identical way), so
+        // skipping one 2s dispatch costs a few seconds' delay on an
+        // already-rare failure, never data. Coord-DB-sourced (`emitRuns`,
+        // `pushNewMail`/`pushNewRuns`): their data source is SQLite, perfectly
+        // readable while `io.readdir` fails, and they still stall here — a
+        // deliberate trade for one simple early return. Bounded and lossless:
+        // both notify lanes are watermark-based (`lastMailNotifyId`/
+        // `lastRunNotifyId`) and catch up on the next successful tick, and
+        // `emitRuns` is byte-equality guarded so it re-emits the moment it
+        // runs again. Delay, never loss.
+        return;
+      }
+      const records = registryRead.records;
       // hook states FIRST, dialogs second — the order is load-bearing and there
       // is a test on it. `detectDialogs` composes the ask push, and the actions
       // it attaches come from `this.hookStates`; with the old ordering that map
@@ -516,7 +566,29 @@ export class FleetWatcher {
       // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
+      // `records` PASSED IN, never re-read here: `assembleFleet` would
+      // otherwise take its OWN read (`records ?? await readRegistry(...)`),
+      // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
+      // in remote mode, ~17 field reads per session, ~409 round trips on a
+      // 24-session fleet, doubled for no reason. Sharing the read also keeps
+      // `sweepHookStates`/`detectDialogs` (which already consumed `records`
+      // above) and this assembly looking at the identical snapshot, which is
+      // what lets `unmeasuredIds` below be derived FROM `sessions` rather
+      // than computed a second, independent way off `records` — see that
+      // derivation's own comment (blocking review finding 4).
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records);
+      // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
+      // carries the SAME evidence `measuredIdentity(records[i]) === null`
+      // would, one hop from `records[i]` in `sessions[i]` — so this reads it
+      // off the assembled rows directly (one derivation of one fact) rather
+      // than re-deriving it from `records` a second, independent way, which
+      // is exactly the kind of drift `fleet.ts`'s own `records`-parameter
+      // docstring warns a second copy of one shape invites. Names exactly the
+      // rows whose STATUS this tick could not measure: a degraded `r.wrapper`
+      // (`''`) makes `configDirFor` answer `undefined`, so `assembleFleet`
+      // never reaches `readLiveState` and `status` freezes at the `alive`
+      // default of `'idle'` — a session that may be plainly mid-turn.
+      const unmeasuredIds = new Set(sessions.filter((s) => s.unmeasured.length > 0).map((s) => s.id));
       // The whole fleet is in scope right here, which is exactly what
       // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
       // have on their own clocks — see `activeProjects`'s own comment.
@@ -532,6 +604,17 @@ export class FleetWatcher {
       // tick — otherwise a restart notifies for every currently-idle session.
       if (this.primed) {
         for (const s of sessions) {
+          // Blocking review finding 2: never assert a turn completed on a row
+          // this tick could not measure — `status` for a degraded row is a
+          // guess (see `unmeasuredIds`'s own comment above), and a push
+          // "says it happened" (the architecture doc's own words for exactly
+          // this class of surface). `continue`d before the transition check,
+          // not just before the push, so `prevStatus` (line ~590 below) is
+          // ALSO left untouched for this id this tick — the real busy→idle
+          // edge still fires, correctly, once the row heals and a later tick
+          // can actually measure it, rather than being silently lost the
+          // instant `prevStatus` was overwritten to an unmeasured 'idle'.
+          if (unmeasuredIds.has(s.id)) continue;
           if (this.prevStatus.get(s.id) === 'busy' && s.status === 'idle') {
             this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
           }
@@ -575,7 +658,10 @@ export class FleetWatcher {
           console.warn(`ccrc-server: priming the mail/run watermarks failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
         }
       }
-      for (const s of sessions) this.prevStatus.set(s.id, s.status);
+      // Skips the SAME unmeasured ids the push loop above skips — see its own
+      // comment: overwriting `prevStatus` with a guessed 'idle' here would
+      // permanently lose the real busy→idle edge the instant the row heals.
+      for (const s of sessions) { if (!unmeasuredIds.has(s.id)) this.prevStatus.set(s.id, s.status); }
       this.activeProjects = projects;
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
@@ -621,21 +707,46 @@ export class FleetWatcher {
         // case. A failed (or absent) confirmation listing itself proves
         // nothing either way, so it fails shut the same way.
         try {
-          const prior = await loadSnapshot(this.cachePath);
-          if (prior === null || sessions.length >= prior.sessions.length) {
-            await saveSnapshot(sessions, this.cachePath);
-            this.snapshotWriteSkippedWarned = false;
+          // Task 2: the shrink guard above keys ONLY on `sessions.length`,
+          // and a degraded row survives length unchanged — `assembleFleet`
+          // still emits one `FleetSession` per readable-or-degraded record,
+          // it just carries a non-empty `unmeasured`. So a 24-row assembly
+          // with 3 degraded rows sails straight through
+          // `sessions.length >= prior.sessions.length` and would be
+          // persisted as last-known-good: `status` frozen at a guessed
+          // default, `branch`/`workdir` reading stale or empty for reasons
+          // that have nothing to do with the session's real state. The
+          // snapshot's whole purpose is degraded-mode serving (`/api/fleet`
+          // ships it, unconditionally `stale: true`, through a REAL
+          // fleet-host outage) — persisting a guess as THAT snapshot defeats
+          // the one thing it exists for at the exact moment it matters.
+          // Same warn-once-per-episode discipline as the shrink guard below,
+          // on its own flag (`snapshotWriteSkippedDegradedWarned`) so the two
+          // episodes can each report once without silencing the other.
+          const degraded = sessions.filter((s) => s.unmeasured.length > 0);
+          if (degraded.length > 0) {
+            if (!this.snapshotWriteSkippedDegradedWarned) {
+              this.snapshotWriteSkippedDegradedWarned = true;
+              console.warn(`ccrc-server: snapshot write skipped — ${degraded.length}/${sessions.length} assembled sessions carry an unmeasured identity field this tick (${degraded.map((s) => s.id).join(', ')}); the cache would otherwise persist a guess as last-known-good`);
+            }
           } else {
-            const survivingIds = new Set(sessions.map((s) => s.id));
-            const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
-            const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
-            const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
-            if (allGenuinelyPurged) {
+            this.snapshotWriteSkippedDegradedWarned = false;
+            const prior = await loadSnapshot(this.cachePath);
+            if (prior === null || sessions.length >= prior.sessions.length) {
               await saveSnapshot(sessions, this.cachePath);
               this.snapshotWriteSkippedWarned = false;
-            } else if (!this.snapshotWriteSkippedWarned) {
-              this.snapshotWriteSkippedWarned = true;
-              console.warn(`ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears`);
+            } else {
+              const survivingIds = new Set(sessions.map((s) => s.id));
+              const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
+              const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
+              const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
+              if (allGenuinelyPurged) {
+                await saveSnapshot(sessions, this.cachePath);
+                this.snapshotWriteSkippedWarned = false;
+              } else if (!this.snapshotWriteSkippedWarned) {
+                this.snapshotWriteSkippedWarned = true;
+                console.warn(`ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears`);
+              }
             }
           }
         } catch { /* best-effort cache — never blocks the poll */ }
@@ -891,10 +1002,45 @@ export class FleetWatcher {
    */
   private async sweepHookStates(records?: SessionRecord[]): Promise<void> {
     const now = Date.now();
-    const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
+    let recs: SessionRecord[];
+    if (records) {
+      recs = records;
+    } else {
+      // Own read — only exercised when this method is called with no
+      // argument (tests only today; `tick()` always supplies its own
+      // already-listed `records`). Same fail-shut seam as `tick()`'s shared
+      // read and `sweepTasks`' own read below (blocking review findings
+      // 1/3): `readRegistryMeasured`, and `this.hookStates` is left
+      // UNTOUCHED on `{listed:false}` rather than rebuilt from an empty `[]`
+      // — a failed listing must not wipe every retained entry the branch
+      // below exists to protect.
+      const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+      if (!registryRead.listed) return;
+      recs = registryRead.records;
+    }
     const next = new Map<string, HookState>();
     await Promise.all(
       recs.map(async (r) => {
+        // RETAIN, DON'T ERASE (Task 2, the heal side): a degraded row's
+        // `r.uuid` reads `''` (registry ladder), and `readHookState`'s own
+        // identity gate compares that against the hookstate file's REAL
+        // `sessionId` — a comparison that can never match, so a fresh read
+        // here always answers "nothing pending" for a session that may still
+        // be mid-turn. Carry the PREVIOUS sweep's entry forward untouched
+        // instead of letting one transient registry-read failure flicker the
+        // attention bucket / askSummary off and back on. Pruning a
+        // genuinely-reaped id is UNAFFECTED: `next` is rebuilt fresh from
+        // THIS tick's `recs` every sweep, so an id truly gone from the
+        // registry (not merely degraded — absent from `recs` altogether) is
+        // never copied forward and ages out of `this.hookStates` on this
+        // very sweep, exactly as it always has (verified: this map has no
+        // OTHER pruning mechanism, so the full-rebuild-from-current-listing
+        // shape is load-bearing and is preserved here unchanged).
+        if (measuredIdentity(r) === null) {
+          const prev = this.hookStates.get(r.id);
+          if (prev) next.set(r.id, prev);
+          return;
+        }
         const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid, now);
         if (hs) next.set(r.id, hs);
       }),
@@ -911,10 +1057,43 @@ export class FleetWatcher {
     const now = Date.now();
     if (this.lastTaskSweep !== 0 && now - this.lastTaskSweep < TASK_SWEEP_MS) return;
     this.lastTaskSweep = now;
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // Own read, on its own slower clock — never shared with `tick()`'s
+    // (`sweepHookStates` above takes `tick()`'s `records` as a parameter;
+    // this method does not). `readRegistryMeasured`, fail shut on
+    // `{listed:false}` (blocking review findings 1/3): the old `readRegistry`
+    // `[]`-on-unlistable answer made a single dropped `io.readdir` here wipe
+    // `this.taskProgress` for the WHOLE fleet — the same harm the
+    // retain-don't-erase branch two lines down exists to prevent for one
+    // degraded row, at fleet scale, on a clock throttled to fire once per
+    // `TASK_SWEEP_MS` — so a hit here can leave every task tally blank for a
+    // whole sweep interval, exactly the cost this method's own comment names
+    // for a single row. `this.lastTaskSweep` is stamped above regardless
+    // (same ordering `sweepMail`'s own fail-shut kill-switch check uses): a
+    // failed listing still consumes this sweep's slot rather than retrying
+    // every 2 s tick, the same throttle discipline every other sweep here
+    // keeps.
+    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    if (!registryRead.listed) return;
+    const records = registryRead.records;
     const next = new Map<string, TaskProgress>();
     await Promise.all(
       records.map(async (r) => {
+        // RETAIN, DON'T ERASE — same reasoning and same pruning guarantee as
+        // `sweepHookStates` above: a degraded `r.wrapper` (reads `''`) makes
+        // `configDirFor` answer `undefined` even though the session is
+        // plainly still there, and this sweep runs on its OWN slower clock
+        // (`TASK_SWEEP_MS`) — a value dropped here can sit blank for a
+        // whole sweep interval before the next tick even gets a chance to
+        // heal it, longer than the 2 s the hook-state lane risks. Carry the
+        // last-known tally forward instead of blanking it on a guess.
+        // `next` is still rebuilt fresh from THIS sweep's `records` every
+        // time, so a genuinely-reaped id (absent from `records`, not merely
+        // degraded) is never copied forward — pruning is unchanged.
+        if (measuredIdentity(r) === null) {
+          const prev = this.taskProgress.get(r.id);
+          if (prev) next.set(r.id, prev);
+          return;
+        }
         const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
         if (!cfgDir) return;
         const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
@@ -1016,6 +1195,16 @@ export class FleetWatcher {
     // Same reason sweepTasks and sweepPr read the registry themselves.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
+      // SKIP a degraded row before anything else: an unmeasured `uuid`
+      // computes an `incarnation` key (`${r.id}#${identity.uuid}`, below)
+      // belonging to no real incarnation — `''` for every degraded session,
+      // so two unrelated degraded sessions would collide on the SAME
+      // `attemptedRenames`/`nameSweepRetired` budget — and an unmeasured
+      // `.archivedAt` would defeat the archived-exclusion test right below
+      // (a false null there makes an already-archived row look eligible for
+      // a rename it must never receive: `ws-rename` on an archived worktree).
+      const identity = measuredIdentity(r);
+      if (identity === null) continue;
       // `ws-archive` destroys nothing — an archived row is still `workspace
       // !== null` with `branch` still at the born name — so it is excluded
       // here explicitly, the same shape `archiveMerged` below already uses.
@@ -1026,12 +1215,13 @@ export class FleetWatcher {
       // recycled by ws-reap (`ccd:950-951`'s "144 per project, recycled") —
       // `_ws_slug_free` only ever checks live registry rows, which `_reg_purge`
       // deletes on reap, so nothing stops a later `ws-add` drawing the same
-      // slug for an unrelated workspace. `r.uuid` is the Claude Code session
-      // uuid, freshly minted by every `ws-add`, so a recycled id pairs with a
-      // NEW uuid and this key cannot collide with a retired incarnation of the
-      // same id — the same self-healing property `titleProbe` already has by
-      // keying on a transcript PATH that changes with the uuid.
-      const incarnation = `${r.id}#${r.uuid}`;
+      // slug for an unrelated workspace. `identity.uuid` is the Claude Code
+      // session uuid, freshly minted by every `ws-add`, so a recycled id
+      // pairs with a NEW uuid and this key cannot collide with a retired
+      // incarnation of the same id — the same self-healing property
+      // `titleProbe` already has by keying on a transcript PATH that changes
+      // with the uuid.
+      const incarnation = `${r.id}#${identity.uuid}`;
       // The cheapest question in the function, asked before anything that
       // costs a stat or a read: THIS INCARNATION, once retired by a permanent
       // refusal (`has-upstream` and its siblings), never un-retires — but a
@@ -1043,9 +1233,9 @@ export class FleetWatcher {
       // "an unsupported verb records no attempt" true of the stat gate as well
       // as of the attempted set.
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
-      const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
+      const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
       if (!cfgDir) continue;
-      const file = await resolveTranscriptFile(this.deps.io, cfgDir, r.workdir, r.uuid);
+      const file = await resolveTranscriptFile(this.deps.io, cfgDir, identity.workdir, identity.uuid);
       if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
       const title = await readAiTitle(this.deps.io, file);
       if (title === null) continue;
@@ -1194,7 +1384,25 @@ export class FleetWatcher {
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
     if (unacked.length === 0 && dueBefore.length === 0) return;
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
+    // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
+    // "this recipient is not in the registry" wears below (`rec ===
+    // undefined`) — so a single dropped agent-WS round trip on THIS read
+    // alone (the kill-switch listing three lines up already succeeded, and
+    // is a SEPARATE `readdir` call) used to make EVERY due row read as
+    // `unmeasurable = false` (line ~1292's `rec !== undefined`), ratchet
+    // `attempts` toward `MAIL_MAX_ATTEMPTS`, and terminally
+    // `rejectDelivery(..., 'undeliverable', 'recipient not in registry')` a
+    // recipient that is plainly alive and fully listed — the exact
+    // "unlistable read as proven absence" bug this ladder's own comment
+    // three lines below denies happening. `readRegistryMeasured` draws that
+    // line explicitly: `!listed` fails shut, the SAME way the kill-switch's
+    // own unreadable listing already does three lines up, rather than
+    // silently emptying `records` and letting every row downstream mistake
+    // "we could not read the fleet this pass" for "this recipient is gone".
+    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    if (!registryRead.listed) return;
+    const records = registryRead.records;
     const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
     // One hookstate read per SESSION this sweep, shared between the edge
     // sample below and the gate's own read further down — both use this same
@@ -1266,7 +1474,26 @@ export class FleetWatcher {
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < MAIL_COOLDOWN_MS) continue;
         const rec = records.find((r) => r.id === d.toId);
-        if (!rec) {
+        // registry ladder: `records` came from `readRegistryMeasured` above,
+        // with `!listed` already refused (fix — blocking review findings
+        // 1/5) — so by the time this line runs, a whole-fleet read failure
+        // has already returned out of this method entirely, and can no
+        // longer masquerade as "every row is absent" here. `readRegistry`'s
+        // per-row ladder DEGRADES rather than drops a row whose `.uuid` is
+        // listed but a sibling identity field is not (registry.ts's own
+        // ladder) — so `rec` being found-but-degraded and `rec` being
+        // altogether ABSENT are two different facts, evidence read straight
+        // off the row itself (`measuredIdentity(rec)`) rather than the
+        // hand-rolled `listing.includes` probe this block used to run.
+        // `rec === undefined` therefore NARROWS to PROVEN absence: either
+        // never listed, or twice-observed gone within `readRegistryMeasured`'s
+        // own second-listing retirement — never "we just couldn't list the
+        // registry this pass" (that case is refused above, before this loop
+        // is ever reached) and never "we just couldn't read one field this
+        // pass" (that is the degraded branch, not this one).
+        const identity = rec !== undefined ? measuredIdentity(rec) : null;
+        if (identity === null) {
+          const unmeasurable = rec !== undefined;
           // Fix — review finding 30: a row whose recipient's registry row is
           // genuinely ABSENT (reaped, purged) used to `continue` here with
           // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
@@ -1283,24 +1510,31 @@ export class FleetWatcher {
           // ORDINARY and expected to hold indefinitely for a session that is
           // merely busy, and must never accrue toward a park.
           //
-          // Fix (scoped-verify): `records` came from `readRegistry`, which
-          // drops a row whose `.uuid` file IS listed when a SIBLING field read
-          // merely fails (`registry.ts:123`, "incomplete registry entry —
-          // skip, don't crash") — transient, not evidence the recipient is
-          // gone. `POST /api/mail`'s own ingress already draws this exact
-          // line, refusing `registry-unmeasurable` rather than guessing
-          // whenever a row's `.uuid` is listed but unreadable (D-37,
+          // A DEGRADED row (`unmeasurable`) must NEVER park, ever — the
+          // recipient plainly still exists, only this one read could not
+          // measure it — the same line `POST /api/mail`'s own ingress draws,
+          // refusing `registry-unmeasurable` rather than guessing whenever a
+          // row's `.uuid` is listed but a sibling is not (D-37,
           // `coord/routes.ts`'s `names.includes` checks, pinned at
-          // `mail-routes.test.ts:259`). `listing` — the raw directory read at
-          // the top of THIS sweep, in scope for exactly this reason — carries
-          // the same evidence of presence `names` gives the ingress. Without
-          // this check, one dropped agent-WS round trip on a SINGLE field of a
-          // LIVE session's registry row was indistinguishable from that
-          // session being reaped, and six backoffs (~15 minutes) permanently
-          // parked its mail `rejected('undeliverable')`. "Listed but
-          // unreadable" therefore keeps backing off, unmeasured, forever — the
-          // same as every ordinary gate below — while only a recipient absent
-          // from `listing` too can ever park.
+          // `mail-routes.test.ts:259`). Without this, one dropped agent-WS
+          // round trip on a SINGLE field of a LIVE session's registry row was
+          // indistinguishable from that session being reaped, and six
+          // backoffs (~15 minutes) permanently parked its mail
+          // `rejected('undeliverable')`. "Unmeasurable" therefore keeps
+          // backing off forever — the same as every ordinary gate below —
+          // while only a recipient PROVEN absent can ever park.
+          //
+          // `store.backOff`'s `countsAsAttempt: false` on the unmeasurable arm
+          // (checked every reader of the `attempts` column first: the ONLY
+          // other reader is this same file's own `d.attempts + 1` two lines
+          // below and `dueDeliveries`' pass-through select — no ratchet here
+          // means this row's own local `attempts` snapshot never advances
+          // past 1, so its backoff step stays fixed at `MAIL_BACKOFF_BASE_MS`
+          // rather than climbing toward `MAIL_MAX_ATTEMPTS` — the ceiling this
+          // branch must never reach) — attempts is SEND-FAILURE budget
+          // (`MAIL_MAX_ATTEMPTS`'s own docstring), and this row was never
+          // attempted at all, only found unmeasurable before any gate below
+          // could even run.
           //
           // No `MailRejectCode` applies here (scoped-verify H6: a `backOff` is
           // not a reject, so `registry-unmeasurable` — a `refuse(...)` code the
@@ -1310,15 +1544,14 @@ export class FleetWatcher {
           // typed column — so the word itself rides along in the message
           // below, not just in this comment, for whoever greps the ROW rather
           // than the source.
-          const listedButUnreadable = listing.includes(`${d.toId}.uuid`);
           const attempts = d.attempts + 1;
-          if (attempts >= MAIL_MAX_ATTEMPTS && !listedButUnreadable) {
+          if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
             store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
             store.backOff(d.id,
-              listedButUnreadable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
-              now + step);
+              unmeasurable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
+              now + step, !unmeasurable);
           }
           continue;
         }
@@ -1326,7 +1559,7 @@ export class FleetWatcher {
         const hs = await hookStateFor(d.toId);
         if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
         const pid = await this.deps.tmux.panePid(d.toId);
-        const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
+        const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
         if (!pid || !cfgDir) continue;
         const live = await readLiveState(this.deps.io, cfgDir, pid);
         if (!live || liveSessionStatus(live.status) !== 'idle') continue;
@@ -1519,12 +1752,28 @@ export class FleetWatcher {
   async archiveSafety(id: string): Promise<{ verdict: 'ok' | 'busy' | 'attached' | 'unknown'; held: string | null }> {
     if (this.bus.listenerCount(`session:${id}`) > 0) return { verdict: 'attached', held: null };
     // C0.3: one session's own row, not the whole registry.
-    const rec = await readSessionRecord(this.deps.io, this.deps.cfg, id);
-    if (!rec) return { verdict: 'unknown', held: null };
+    const read = await readSessionRecord(this.deps.io, this.deps.cfg, id);
+    if (!read.found) return { verdict: 'unknown', held: null };
+    const rec = read.record;
+    // SKIP (defer): a row with an unmeasured identity field — `measuredIdentity`
+    // answers null — is treated EXACTLY like the previously-dropped row it
+    // used to be before the ladder existed — `readSessionRecord` would have
+    // answered `{found:false}` for this same fixture, and `!read.found` above
+    // already meant `{unknown, held: null}`. `held: null`, not `rec.held`,
+    // to preserve that pre-change shape
+    // exactly, even though `.held` itself is a separate field that COULD
+    // still be readable — the point of this branch is "answer nothing more
+    // than the dropped row used to", not "answer everything we happen to
+    // still have". Preserved explicitly rather than left to fall out of
+    // `cfgDir`'s own failure below (only wrapper degradation would trigger
+    // that) — `workdir`/`uuid` degradation must defer too, even though
+    // neither is read directly in this function.
+    const identity = measuredIdentity(rec);
+    if (identity === null) return { verdict: 'unknown', held: null };
     const held = rec.held;
     if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
     const pid = await this.deps.tmux.panePid(id);
-    const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
+    const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
     if (!pid || !cfgDir) return { verdict: 'unknown', held };
     const live = await readLiveState(this.deps.io, cfgDir, pid);
     if (!live) return { verdict: 'unknown', held };
@@ -1547,6 +1796,14 @@ export class FleetWatcher {
 
   private async archiveMerged(records: SessionRecord[]): Promise<void> {
     for (const r of records) {
+      // SKIP, before ANYTHING else — including the workspace/archivedAt test
+      // right below, which itself becomes UNSAFE on a degraded row: both
+      // fields read null on an unreadable file, and `workspace === null`
+      // would make an actually-active merged workspace look like one with no
+      // workspace at all (harmless), while `archivedAt !== null` reading
+      // false-negative (null) on a row that WAS already archived would make
+      // an already-archived workspace look freshly archive-ELIGIBLE again.
+      if (measuredIdentity(r) === null) continue;
       const pr = this.prStates.get(r.id);
       if (r.workspace === null || r.archivedAt !== null) continue;
       if (pr?.phase !== 'merged') continue;                 // unknown NEVER archives
@@ -1624,6 +1881,18 @@ export class FleetWatcher {
    * `records` is `tick()`'s own registry read, passed in rather than fetched
    * again here (optional, defaulting to its own read, so this stays
    * independently callable) — same sharing as `sweepHookStates` above.
+   *
+   * THE ASYMMETRY (Task 2): `sweepHookStates`/`sweepTasks` above now RETAIN a
+   * degraded row's last-known entry rather than erase it, because both read
+   * something keyed off the identity triple (`r.uuid`, `r.wrapper`) that
+   * reads `''` on a degraded row and would otherwise blank a value that may
+   * still be true. This sweep has no such hazard to guard against: it keys
+   * every read off `r.id` alone (`tmux.capture(r.id)`), which the registry
+   * ladder never degrades — an id this loop iterates is, by construction,
+   * listed. So a degraded row's dialog/statusline detection here is
+   * UNCHANGED and fails stale BY DESIGN by simply running exactly as it
+   * always has, needing no retain-don't-erase logic of its own — the code
+   * makes that visible by NOT mentioning `measuredIdentity` anywhere below.
    */
   private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();

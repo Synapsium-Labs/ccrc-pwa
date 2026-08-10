@@ -19,7 +19,7 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { FleetSession, SessionBucket } from '../../../shared/api';
+import { unmeasuredFields, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { humanBytes } from '../screens/ArchiveScreen';
@@ -211,6 +211,32 @@ export function SessionLine({
             requirement, and this is no longer a grid). */}
         <span className="sess-meta">
           <span className={`sess-state sess-state--${state}`}>{state}</span>
+
+          {/* Registry ladder (architecture doc, increment 1's second half —
+              Task 2): this row's identity triple could not be fully measured
+              this pass, so `status`/`branch`/etc above may be frozen at a
+              fallback rather than freshly read. Same small, honest register
+              as PrKeycap's own `unknown`-phase grey+reason idiom (chat.css's
+              `--pr-dim`) — never a new banner. The reason lives in `title`,
+              verbatim, never parsed, same as `.sess-held` next door; the word
+              itself stays generic ("unreadable") because THIS surface has no
+              per-session detail worth a sentence — the tooltip does. Heals on
+              its own the moment a later sweep measures clean, same as every
+              other degrade-and-heal surface this ladder feeds. */}
+          {/* `unmeasuredFields(session)`, not `session.unmeasured` directly
+              (blocking review finding 2): the live `fleet` frame is cast,
+              not revived (`stores/fleet.ts`'s `asFleetMsg`), so a row from a
+              server that predates this field can lack the key entirely at
+              runtime — see `unmeasuredFields`'s own docstring. */}
+          {unmeasuredFields(session).length > 0 && (
+            <span
+              className="sess-unmeasured"
+              data-unmeasured="true"
+              title={`registry ${unmeasuredFields(session).join('/')} temporarily unreadable — retrying`}
+            >
+              unreadable
+            </span>
+          )}
 
           {/* The program's claim — a workspace-only meta cell, same idiom as
               .sess-acct next door: reuses .sess-ask's ink-tertiary token, so

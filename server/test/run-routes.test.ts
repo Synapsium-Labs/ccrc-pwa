@@ -137,6 +137,15 @@ const getMail = (app: FastifyInstance, to: string, token: string | null = TOKEN)
  *  remote mode, reused from `mail-routes.test.ts`'s own fixture. */
 const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
 
+/** A registry whose directory listing is fine but one specific session's
+ *  field read is not — `withUnreadableField` idiom `mail-routes.test.ts`
+ *  already uses: the file IS listed (a real, present file `seed`/the runner's
+ *  own `ws-add` handler wrote), only its bytes never come back. */
+const withUnreadableField = (id: string, field: string): FleetIO => ({
+  ...localIO,
+  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+});
+
 describe('POST /api/runs', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
@@ -309,6 +318,60 @@ describe('POST /api/runs/:id/dispatch', () => {
       resumed: false, clearedAt: null, state: 'dispatched' });
   });
 
+  // Registry ladder (architecture doc, increment 1's second half): the AFTER
+  // read never tolerates degradation, unlike BEFORE — see the comment at the
+  // call site in coord/routes.ts, written there on purpose because the
+  // design names this exact spot as the most likely target of a future
+  // "simplification" back into a bug. Written FIRST and confirmed red
+  // against the pre-gate code (which used a plain `readRegistry` after-read
+  // and would have bound the degraded row as the winning candidate, since
+  // its `.workspace` still reads a real value even though its identity does
+  // not).
+  describe('the AFTER read never tolerates a same-project unmeasured row (identity-by-subtraction)', () => {
+    it('refuses registry-unmeasurable, binds and holds NOTHING, when the freshly spawned workspace\'s ' +
+       'own identity could not be measured', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+      const io = withUnreadableField('demo-fresh1', 'wrapper');
+      const w = await openApp(home, run, { io }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id);
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      const row = w.coord.run(opened.id);
+      expect(row?.state).toBe('planned');
+      expect(row?.sessionId).toBeNull();
+    });
+
+    it('refuses registry-unmeasurable when the AFTER listing itself cannot be read, even though BEFORE ' +
+       'and the ws-add call both succeeded', async () => {
+      const home = mkTmp('ccrc-runs-');
+      let spawned = false;
+      const { run: baseRun, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+      const run: Runner = async (cmd, args) => {
+        const res = await baseRun(cmd, args);
+        if (args[0] === 'ws-add') spawned = true;
+        return res;
+      };
+      // BEFORE (pre-ws-add) reads succeed; only the AFTER listing fails —
+      // proving this refusal is really about the AFTER read, not a blanket
+      // "the registry is unlistable" pause-style refusal that would also
+      // fire on BEFORE.
+      const io: FleetIO = { ...localIO, readdir: async (p) => (spawned ? null : localIO.readdir(p)) };
+      const w = await openApp(home, run, { io }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id);
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+      expect(calls.some((c) => c[0] === 'ws-add')).toBe(true);   // the spawn itself was never in question
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      const row = w.coord.run(opened.id);
+      expect(row?.state).toBe('planned');
+      expect(row?.sessionId).toBeNull();
+    });
+  });
+
   it('refuses ambiguous-dispatch when two new workspaces appear, and holds NOTHING', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-amb1', 'demo-amb2'] });
@@ -321,6 +384,75 @@ describe('POST /api/runs/:id/dispatch', () => {
     const row = w.coord.run(opened.id);
     expect(row?.state).toBe('planned');
     expect(row?.sessionId).toBeNull();
+  });
+
+  // Registry ladder: the resumed session's identity must be measured before
+  // EITHER the busy gate or `markDispatched` persists workspace/branch —
+  // written FIRST and confirmed red against the pre-gate code, which read
+  // `record.uuid` straight off a (then always-fully-measured-or-absent)
+  // record and would have fed a degraded `''` uuid to `readHookState`,
+  // reading back `null` (not busy) and letting the resume/`/clear` proceed.
+  it('refuses registry-unmeasurable on wave N>=2 when the resumed session\'s identity cannot be measured — ' +
+     'before the busy gate, before /clear, and before persisting workspace/branch onto the run row', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const io = withUnreadableField('demo-existing', 'uuid');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run, { io }); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    // `ensure` already ran (D-1 resumes the SAME workspace unconditionally,
+    // before this gate can even read the fresh record) but the /clear never
+    // fired, and dispatch never committed.
+    expect(calls.some((c) => c[0] === 'ensure' && c[1] === 'demo-existing')).toBe(true);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    const row = w.coord.run(opened.id);
+    expect(row?.state).toBe('planned');
+    expect(row?.workspace).toBeNull();
+    expect(row?.branch).toBeNull();
+  });
+
+  // Blocking review finding 7: the SAME asymmetry the AFTER read above
+  // closes had a twin left open one branch over. Wave N>=2 used to source
+  // `record` from `readRegistry`'s OLD signature ([] on an unlistable
+  // registry) — the SAME shape "record is undefined" (genuinely absent)
+  // wears — so a dropped SECOND directory read (the pause-marker's own read
+  // a moment earlier, at the top of this same route, succeeded) forced
+  // `record` to `undefined`, `hs` to `null`, and skipped the worker-busy
+  // gate entirely: `/clear` would have been injected into a possibly
+  // mid-turn worker. Written FIRST and confirmed red against the pre-fix
+  // code, which answered 200 here (an injected `/clear`) instead of 502.
+  it('refuses registry-unmeasurable on wave N>=2 when the SECOND directory read (the resumed ' +
+     'session\'s own registry listing) fails, even though the pause-marker\'s own read moments ' +
+     'earlier succeeded — the busy gate must fail shut here exactly as hard as the AFTER read does',
+     async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    // Succeeds on the pause-marker's own read (call 1), fails on the very
+    // next one — this route's own registry read for the resumed session
+    // (call 2) — never a third: nothing else in this branch touches
+    // `io.readdir` before either of those two.
+    let n = 0;
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run, { io }); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    // `ensure` already ran (D-1 resumes the SAME workspace unconditionally,
+    // before this gate can even read the fresh record), but the busy gate
+    // and `/clear` must never be reached, and dispatch must never commit.
+    expect(calls.some((c) => c[0] === 'ensure' && c[1] === 'demo-existing')).toBe(true);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    const row = w.coord.run(opened.id);
+    expect(row?.state).toBe('planned');
+    expect(row?.workspace).toBeNull();
+    expect(row?.branch).toBeNull();
   });
 
   it('runs ensure — never start — for wave 2 into the same workspace (D-1)', async () => {

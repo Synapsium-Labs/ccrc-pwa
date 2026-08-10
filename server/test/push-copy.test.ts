@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -110,6 +111,10 @@ function watcher(opts: {
   coord?: boolean;
   sessions: string[];
   pane?: string;
+  /** Blocking review finding 2: lets a test degrade a registry field
+   *  mid-fixture (a row LISTED but unreadable), the same shape every other
+   *  registry-ladder test in this tree uses. */
+  io?: FleetIO;
 }): { tick: () => Promise<void>; markIdle: (id: string) => void; home: string; coord?: CoordStore } {
   const home = mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
@@ -120,6 +125,7 @@ function watcher(opts: {
     presence: opts.presence,
     notifyLog: opts.notifyLog,
     coord,
+    ...(opts.io ? { io: opts.io } : {}),
   };
   const w = new FleetWatcher(deps, new Bus(), 10_000);
   return {
@@ -238,6 +244,119 @@ describe('push copy discipline — project context, presence suppression, log fi
     // Suppressed by presence, so the catch-up must not claim it happened.
     expect(sent).toEqual([]);
     expect(log.seq).toBe(0);
+  });
+});
+
+/** An `io` whose `readFile` passes straight through until `degrade(id, field)`
+ *  is called, after which reads of that one `<id>.<field>` file return null
+ *  while the file stays LISTED — the "listed but unreadable" shape every
+ *  registry-ladder fixture in this tree uses. `heal()` restores normal
+ *  reads, so a test can drive a degrade→heal round trip within one fixture. */
+function toggleableIO(): { io: FleetIO; degrade: (id: string, field: string) => void; heal: () => void } {
+  let bad: { id: string; field: string } | null = null;
+  const io: FleetIO = {
+    ...localIO,
+    readFile: async (p) => (bad !== null && p.endsWith(`${bad.id}.${bad.field}`) ? null : localIO.readFile(p)),
+  };
+  return { io, degrade: (id, field) => { bad = { id, field }; }, heal: () => { bad = null; } };
+}
+
+// Blocking review finding 2: a row the registry ladder DEGRADES rather than
+// drops now reaches `assembleFleet` for the first time ever — and
+// `assembleFleet` has no way to tell a degraded row from a measured one on
+// the wire (`FleetSession` carries no `unmeasured` field). Before the fix,
+// `tick()`'s busy→idle push loop read straight off `s.status`, which
+// `assembleFleet` freezes at its `alive` default of 'idle' for a
+// wrapper-degraded row (`configDirFor(cfg.home, '') === undefined` skips
+// `readLiveState` entirely) — so a session that was genuinely still mid-turn
+// fired a false "✓ Finished" push AND a recorded feed event asserting a turn
+// completed. Written FIRST and confirmed red against the pre-gate code.
+describe('a degraded row must never fire the busy→idle "✓ Finished" push (blocking review finding 2)', () => {
+  it('suppresses the push while the row is unmeasured, and still fires the real edge once it heals', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const { io, degrade, heal } = toggleableIO();
+    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a'], io });
+    await w.tick();                    // priming tick — prevStatus: busy, nothing pushed
+
+    // `.wrapper` goes LISTED-but-unreadable. The live-status file underneath
+    // still reads 'busy' throughout this whole block — nothing about the
+    // SESSION changed, only what this tick could measure about it.
+    degrade('cc-a', 'wrapper');
+    await w.tick();
+    expect(sent, 'a degraded row must never assert a turn completed on a guess').toEqual([]);
+
+    // Still degraded, a second tick: still nothing — `prevStatus` must have
+    // been left untouched rather than overwritten to the guessed 'idle',
+    // or the real edge below would never be able to fire at all.
+    await w.tick();
+    expect(sent).toEqual([]);
+
+    // Heals, AND the session actually finishes: the real busy→idle edge must
+    // still fire exactly once — suppressing the guess must not have
+    // permanently lost the transition it was guessing about.
+    heal();
+    w.markIdle('cc-a');
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✓ Finished');
+  });
+
+  // Blocking review finding 2, SECOND PASS. The test above degrades the field
+  // for the whole tick, so BOTH of the tick's registry reads saw it and the
+  // suppression set agreed with the assembled row by luck of the fixture.
+  // `tick()` used to take TWO independent whole-fleet reads — its own, at the
+  // top, which `unmeasuredIds` is computed from, and `assembleFleet`'s own,
+  // ~17 field reads per session later — and the gate only ever suppressed
+  // rows the FIRST one could not measure. A drop landing in the SECOND
+  // window (the "ordinary shape in remote mode" the ladder exists for) left
+  // `unmeasuredIds` empty while `assembleFleet` emitted a wrapper-degraded
+  // row frozen at its `!cfgDir` default of 'idle' — and the false
+  // "✓ Finished" fired exactly as if no gate had ever been added. MEASURED
+  // against the pre-fix tree: this fixture pushed `✓ Finished` for a session
+  // whose live-status file says 'busy' throughout. The fix is that there is
+  // now only ONE read — `tick()` passes its rows into `assembleFleet` — so
+  // the evidence and the emitted row cannot be two different observations.
+  it('suppresses the push when the degrade lands on the fleet assembly\'s read rather than the tick\'s ' +
+     'own — the suppression set and the assembled rows must be ONE observation', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+
+    let armed = false;
+    let readsThisTick = 0;
+    const io: FleetIO = {
+      ...localIO,
+      readFile: async (p) => {
+        // Once armed, `cc-a.wrapper` reads clean exactly ONCE per tick and
+        // null thereafter. The first read of a tick is `tick()`'s own
+        // top-of-method `readRegistry` (its very first await), so the
+        // suppression set sees a MEASURED row; every later reader in the same
+        // tick — the fleet assembly among them — used to see a degraded one.
+        if (armed && p.endsWith('cc-a.wrapper')) {
+          readsThisTick += 1;
+          if (readsThisTick > 1) return null;
+        }
+        return localIO.readFile(p);
+      },
+    };
+
+    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a'], io });
+    await w.tick();                    // priming tick, fully clean: prevStatus = busy
+    expect(sent).toEqual([]);
+
+    armed = true;
+    readsThisTick = 0;
+    await w.tick();
+    expect(sent, 'a turn that never finished must never be announced as finished').toEqual([]);
+
+    // And the real edge still lands once the session genuinely goes idle,
+    // proving the suppression above did not simply wedge this row shut.
+    readsThisTick = 0;
+    armed = false;
+    w.markIdle('cc-a');
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✓ Finished');
   });
 });
 

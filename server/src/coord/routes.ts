@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
-import { readRegistry } from '../registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookState } from '../hookstate.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
@@ -397,8 +397,30 @@ export function registerCoordRoutes(
         `no registry row for ${fromId}`);
     }
 
-    // 6: attribution — fromUuid === $REG/<id>.uuid, non-empty.
-    if (sender.uuid === '' || sender.uuid !== fromUuid) {
+    // 5.5: unmeasured identity (registry ladder, architecture doc increment
+    // 1's second half) — a sender row IS found (its `.uuid` is listed and
+    // survived `buildRecord`), but one or more of `uuid`/`wrapper`/`workdir`
+    // could not be read this pass. `measuredIdentity` is the one door to the
+    // triple, and it is null here for exactly that reason. Without this
+    // gate, an unmeasured `sender.uuid` reads as `''` (never `null` — see
+    // `SessionRecord.unmeasured`'s own docstring) and check 6 below would
+    // silently downgrade it to `stale-uuid` — a TERMINAL, 403 refusal
+    // recorded against a sender that is plainly still there, for what is
+    // only a transient read failure. `registry-unmeasurable` is the SAME
+    // transient, 502-retryable shape check 5 already answers for a
+    // listed-but-dropped row; this is its sibling for a listed-and-degraded
+    // one.
+    const senderIdentity = measuredIdentity(sender);
+    if (senderIdentity === null) {
+      return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+        `registry row for ${fromId} is listed but its identity could not be measured — ` +
+          'transient, not a fact about the sender');
+    }
+
+    // 6: attribution — fromUuid === $REG/<id>.uuid, non-empty (guaranteed by
+    // `measuredIdentity` above — a MEASURED triple member is never the empty
+    // string, only a DEGRADED one is, and check 5.5 already refused that).
+    if (senderIdentity.uuid !== fromUuid) {
       return refuse(reply, 403, 'stale-uuid', { fromId, fromUuid, toId, kind, subject, runId },
         'fromUuid does not match the registry — stale sender');
     }
@@ -520,7 +542,14 @@ export function registerCoordRoutes(
       }
       return refuse(reply, 403, 'unknown-sender', { fromId }, `no registry row for ${fromId}`);
     }
-    if (sender.uuid === '' || sender.uuid !== fromUuid) {
+    // 5.5: same gate the ingress route carries — see its own comment.
+    const senderIdentity = measuredIdentity(sender);
+    if (senderIdentity === null) {
+      return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+        `registry row for ${fromId} is listed but its identity could not be measured — ` +
+          'transient, not a fact about the sender');
+    }
+    if (senderIdentity.uuid !== fromUuid) {
       return refuse(reply, 403, 'stale-uuid', { fromId, fromUuid },
         'fromUuid does not match the registry — stale sender');
     }
@@ -770,12 +799,35 @@ export function registerCoordRoutes(
       // contract for, and this repo has already paid for one of those. Read
       // the registry before and after; exactly one new `workspace !== null`
       // row for this project is the run's session.
+      // BEFORE tolerates degradation, deliberately — the question it answers
+      // ("which ids already exist") is "does this still exist", and that
+      // question tolerates degradation the same way `readRegistry`'s plain,
+      // old signature always has (a degraded or dropped row just doesn't
+      // count as pre-existing, which is always the SAFE direction to be
+      // wrong in here: at worst a real id gets treated as new and trips
+      // `ambiguous-dispatch` below, never silently misbound).
       const before = await readRegistry(deps.io, deps.cfg);
       const beforeIds = new Set(before.map((r) => r.id));
       const argv = CCD_ARGV.wsAdd(run.project);
       const res = await deps.runCcd(argv);
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-      const after = await readRegistry(deps.io, deps.cfg);
+      // AFTER never tolerates degradation — the question here is "is this
+      // NEW", the identity-by-subtraction this whole block performs, and
+      // THAT one must not guess. Two drops (or, under the ladder, two
+      // degraded same-project rows) could otherwise make an unrelated LIVE
+      // workspace the SOLE "new" candidate below, which this route then
+      // binds, holds and /clear's — a running worker's context destroyed
+      // because of a read failure on a DIFFERENT session entirely. This is
+      // the asymmetry to preserve on any future "simplification" of this
+      // block back to a plain `readRegistry` call: BEFORE answers "does this
+      // still exist" (tolerant); AFTER answers "is this new" (never
+      // tolerant).
+      const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
+      if (!afterRead.listed ||
+          afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
+        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
+      }
+      const after = afterRead.records;
       const candidates = after.filter((r) =>
         !beforeIds.has(r.id) && r.project === run.project && r.workspace !== null);
       if (candidates.length !== 1) {
@@ -817,7 +869,44 @@ export function registerCoordRoutes(
       // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason
       // (see `DoneRun`'s own docstring): the live registry is the fresher
       // source, the run row is what is left when it cannot answer.
-      const record = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === sessionId);
+      //
+      // REFUSE before the busy gate and before EITHER of workspace/branch is
+      // persisted onto the run row below (`coord.markDispatched`) — registry
+      // ladder, and the spot the design names as most likely to get
+      // "simplified" back into a bug, so the reasoning is written at the
+      // call site rather than only in the spec: an unmeasured value
+      // persisted by `markDispatched` STOPS being a transient read and
+      // BECOMES a fact the run row carries forever; and a degraded
+      // `record.uuid` (`''`) fed to `readHookState` below looks up a
+      // hookstate file that matches no real one, reading back `null` —
+      // which the busy gate treats as "not busy" — silently turning a
+      // FAIL-SHUT busy gate FAIL-OPEN on a session this read simply could
+      // not measure, not one this read proved idle.
+      //
+      // Fix (blocking review finding 7): the registry read ITSELF must not
+      // reopen that same fail-open door one level up. `readRegistry`'s old
+      // signature collapses a whole-fleet `io.readdir` failure to `[]` —
+      // exactly the shape "no such session" wears — so `record` used to come
+      // back `undefined` for TWO different facts this route must tell
+      // apart: the session's row is genuinely absent from a LISTABLE
+      // registry (the pre-existing, tolerated "honest stale" case
+      // `DoneRun`'s own docstring names, which keeps falling back to
+      // `run.workspace`/`run.branch` below, same as always), and the
+      // registry directory itself could not be listed at all — which proves
+      // NOTHING about this session and must refuse exactly like the AFTER
+      // read 30-odd lines above already does. `readRegistryMeasured` draws
+      // that line explicitly: `!listed` refuses OUTRIGHT, before `record` is
+      // ever computed, so `record === undefined` past this point means only
+      // the first, tolerated case — never the second.
+      const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
+      if (!registryRead.listed) {
+        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
+      }
+      const record = registryRead.records.find((r) => r.id === sessionId);
+      const recordIdentity = record !== undefined ? measuredIdentity(record) : null;
+      if (record !== undefined && recordIdentity === null) {
+        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
+      }
       workspace = record?.workspace ?? run.workspace;
       branch = record?.branch ?? run.branch;
       // Fix, review finding 12: refuse to `/clear` a session that is
@@ -834,8 +923,8 @@ export function registerCoordRoutes(
       // whose harness has not written one yet — the ordinary shape for a
       // workspace this fresh) is not, by itself, proof of busy-ness and is
       // left to proceed, same as it always has.
-      const hs = record
-        ? await readHookState(deps.io, deps.cfg.registryDir, sessionId, record.uuid, Date.now())
+      const hs = recordIdentity
+        ? await readHookState(deps.io, deps.cfg.registryDir, sessionId, recordIdentity.uuid, Date.now())
         : null;
       if (hs !== null && hs.state !== 'done') {
         return reply.code(409).send({ ok: false, refused: 'worker-busy' });

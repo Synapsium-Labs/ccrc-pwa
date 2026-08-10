@@ -630,6 +630,97 @@ describe('notify ingestion', () => {
 // that guard, because neither verb was granted yet; that made this the one
 // route test whose argv the guard never saw (review finding 1). The grants
 // landed, so the ordinary harness works and covers both new argvs for free.
+// Registry ladder (architecture doc, increment 1's second half): REFUSE, not
+// degrade — `stopPair` below RECOMPUTES a wrapper/project pair from these
+// very fields to kill a tmux session BY NAME, so an unmeasured field must
+// never silently fall through to a guessed value. Had NO pin before this
+// (`registry.ts:123`'s old drop behaviour had never been exercised through
+// this route at all — no test here even named `/stop` until now). Written
+// FIRST and confirmed red against the pre-gate code, which would have
+// answered 404 unknown-session (a LIE: the row is right there, just
+// unmeasured) rather than 503.
+describe('POST /api/sessions/:id/stop', () => {
+  const unreadableField = (id: string, field: string): FleetIO => ({
+    ...localIO,
+    readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+  });
+
+  it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
+     'identity could not be measured', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    await app.close();
+  });
+
+  it('still refuses 404 unknown-session for a session PROVEN absent from the registry', async () => {
+    const home = mkTmp('ccrc-');
+    // Fix (blocking review finding 3, test-fixture half): the registry
+    // DIRECTORY must actually exist and be listable — a real fleet host
+    // always has one once `ccd` has ever run — or this fixture proves
+    // `reason: 'unlistable'`, not `reason: 'absent'`, and would pass by
+    // accident against the pre-fix code that answered 404 for both. With
+    // the directory present but no `<ID>.uuid` file in it, the listing
+    // genuinely names this id absent.
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-session' });
+    await app.close();
+  });
+
+  // Blocking review finding 3: the whole-fleet cousin of the field-degraded
+  // case above must get the SAME 503, never the 404 this route exists to
+  // avoid for exactly this reason — an unlistable registry proves nothing
+  // about whether THIS id exists, the identical fact `readSessionRecord`'s
+  // own `reason: 'unlistable'` already distinguishes from `reason: 'absent'`.
+  // Written FIRST and confirmed red against the pre-fix code, which
+  // collapsed both reasons into one bare `!read.found` check and answered
+  // 404 unknown-session for a registry it could not even list.
+  it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the whole registry directory ' +
+     'cannot be listed at all', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const unlistable: FleetIO = { ...localIO, readdir: async () => null };
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unlistable, queue: new KeyedQueue() },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    await app.close();
+  });
+
+  it('stops normally (200) when the row is fully measured', async () => {
+    const home = mkTmp('ccrc-');
+    seedSession(home, ID, 'claude2');
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+});
+
 describe('POST /api/sessions/:id/hold and /release', () => {
   it('404s an unknown session on both routes, before building any argv', async () => {
     const { app, calls } = await makeApp(['❯ \n']);

@@ -104,6 +104,66 @@ describe('the naming sweep', () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  // Registry ladder (architecture doc, increment 1's second half): SKIP,
+  // before ANYTHING else — an unmeasured `uuid` would compute an
+  // `incarnation` key belonging to no real incarnation (`''` for every
+  // degraded session, so two unrelated degraded sessions collide on the
+  // SAME `attemptedRenames`/`nameSweepRetired` budget), and an unmeasured
+  // `.archivedAt` would defeat the archived-exclusion test. Written FIRST
+  // and confirmed red against the pre-gate code, which read `r.uuid`/
+  // `r.wrapper`/`r.workdir` straight off a row `readRegistry` used to drop
+  // entirely rather than degrade — this row reaches `sweepNames` for the
+  // first time ever under the ladder.
+  it('skips a row with an unmeasured identity field — never renames it, never reads its transcript', async () => {
+    const h = harness();
+    seed(h.home);
+    transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
+    const unreadableWrapper: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith(`${ID}.wrapper`) ? null : localIO.readFile(p)),
+    };
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: unreadableWrapper }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toEqual([]);
+  });
+
+  // Fix (blocking review finding 4): the test above does not, on its own,
+  // kill the guard's deletion — degrading `.wrapper` is ALSO caught by the
+  // pre-existing `configDirFor(home, '')` -> `undefined` -> `continue` two
+  // lines below the guard, so reverting the guard to a plain
+  // `{uuid: r.uuid, wrapper: r.wrapper, workdir: r.workdir}` read still
+  // leaves this fixture asserting `h.calls === []` for that UNRELATED
+  // reason. This one degrades `.workdir` instead — a field the wrapper/
+  // cfgDir gate never looks at — and plants the "ai-title" transcript at
+  // the exact path the GUARD-LESS mutant would resolve to:
+  // `identity.workdir` falls back to the raw (degraded) `''`, and
+  // `mungePath('') === ''` collapses `transcriptPath` to
+  // `<cfgDir>/projects/<uuid>.jsonl`. The guarded code must never even
+  // look there — `measuredIdentity` answers null on the degraded workdir
+  // and the row is skipped before `transcriptPath` is ever computed — so
+  // this file is a TRAP for the mutant, not a fixture the guarded path
+  // reads. Measured: reverting the guard makes this fixture rename the
+  // workspace (`h.calls` non-empty); with the guard in place, `h.calls`
+  // stays `[]`.
+  it('an unmeasured .workdir is the ONLY thing stopping the rename — no unrelated gate does it for ' +
+     'the guard', async () => {
+    const h = harness();
+    seed(h.home);
+    const unreadableWorkdir: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith(`${ID}.workdir`) ? null : localIO.readFile(p)),
+    };
+    const trapDir = path.join(h.home, '.claude', 'projects');
+    mkdirSync(trapDir, { recursive: true });
+    writeFileSync(path.join(trapDir, `${UUID}.jsonl`),
+      TITLE('Brainstorm Helix and slide notes integration') + '\n');
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: unreadableWorkdir }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toEqual([]);
+  });
+
   // Review finding 6: a successful rename used to log nothing at all, so a
   // post-deploy audit had no line anywhere to grep for the sweep's most common
   // outcome. One line, naming the session and both branch names.

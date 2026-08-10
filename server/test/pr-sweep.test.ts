@@ -10,6 +10,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PrState } from '../../shared/api.js';
 import type { PushPayload } from '../src/push.js';
+import { localIO, type FleetIO } from '../src/io.js';
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
@@ -718,6 +719,45 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
     const calls: string[][] = [];
     const w = new FleetWatcher(testDeps(home, runnerFor('', calls)), new Bus(), 10_000);
     await expect(w.archiveSafety('demo-ghost')).resolves.toEqual({ verdict: 'unknown', held: null });
+    w.stop();
+  });
+
+  // Registry ladder (architecture doc, increment 1's second half): a row
+  // that USED to be dropped entirely (readRegistry's old blanket rule) is
+  // now DEGRADED instead — `readSessionRecord` finds it — so `!rec` alone no
+  // longer catches this case. Written FIRST and confirmed red against the
+  // pre-gate code, which would fall through past the (now-added)
+  // `measuredIdentity` check straight to `configDirFor(cfg.home, rec.wrapper)`
+  // — `rec.wrapper` measured fine here, so it would have answered `'ok'`
+  // for a row whose OWN `.workdir`/`.uuid` this read could not confirm at
+  // all, preserving the pre-change behaviour for the previously-dropped row
+  // is exactly what this pins.
+  // Fix (blocking review finding 6): the fixture below is not enough on its
+  // own to kill the guard. `.workdir` is degraded, but this fixture used to
+  // stop at `!live` too (no `<pid>.json` on disk) — `readLiveState` finds
+  // nothing either way, so `{verdict:'unknown', held}` (with `held: null`
+  // anyway) arrives for an entirely unrelated reason, and the guard's own
+  // deletion is undetectable: reverted to a plain
+  // `{uuid: r.uuid, wrapper: r.wrapper, workdir: r.workdir}` read, `identity`
+  // still carries wrapper `'claude'` (untouched — this fixture never
+  // degrades it) and `pid`, and this same fixture reaches
+  // `configDirFor(...)` fine, `readLiveState` fine, and a concrete verdict —
+  // 'ok' or 'busy' — falls out the OTHER end, never 'unknown'. `liveIdle`
+  // below closes that gap: a busy/idle live-state file makes the
+  // guard-LESS path resolve to a real, concrete 'ok', so only the GUARD
+  // itself — not an unrelated `!live` stop — can be what still answers
+  // 'unknown' here.
+  it('a row LISTED but with an unmeasured identity field is unknown, not ok — SKIP, preserving the ' +
+     'previously-dropped row\'s own answer exactly', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const unreadableWorkdir: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith('demo-quiet-basin.workdir') ? null : localIO.readFile(p)),
+    };
+    const calls: string[][] = [];
+    const w = new FleetWatcher({ ...testDeps(home, runnerFor('', calls)), io: unreadableWorkdir }, new Bus(), 10_000);
+    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: null });
     w.stop();
   });
 });
