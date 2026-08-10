@@ -1189,6 +1189,15 @@ export class FleetWatcher {
         // unreadable" therefore keeps backing off, unmeasured, forever — the
         // same as every ordinary gate below — while only a recipient absent
         // from `listing` too can ever park.
+        //
+        // No `MailRejectCode` applies here (scoped-verify H6: a `backOff` is
+        // not a reject, so `registry-unmeasurable` — a `refuse(...)` code the
+        // ingress route returns on the wire — has nowhere typed to land on
+        // this row), but the two are the SAME underlying condition, and
+        // `mail_deliveries.lastError` is free text a maintainer greps, not a
+        // typed column — so the word itself rides along in the message
+        // below, not just in this comment, for whoever greps the ROW rather
+        // than the source.
         const listedButUnreadable = listing.includes(`${d.toId}.uuid`);
         const attempts = d.attempts + 1;
         if (attempts >= MAIL_MAX_ATTEMPTS && !listedButUnreadable) {
@@ -1196,7 +1205,7 @@ export class FleetWatcher {
         } else {
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
           store.backOff(d.id,
-            listedButUnreadable ? 'registry row listed but unreadable' : 'recipient not in registry',
+            listedButUnreadable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
             now + step);
         }
         continue;

@@ -189,7 +189,11 @@ export class CoordStore {
    * mail must not survive its close and replay into the NEXT wave's freshly
    * `/clear`ed context) and the program-retirement check into one `tx()`
    * means a crash between any two of these statements rolls the WHOLE close
-   * back to the run's PRE-close state — still `dispatched`/`working`, legally
+   * back to the run's PRE-close state — still `dispatched`/`working`/
+   * `awaiting-review`/`merging` (widened, scoped-verify H5: the other two
+   * gained their own direct `closing` edge in `RUN_TRANSITIONS` — see that
+   * table's own docstring, "D-9's own text no longer describes this tree" —
+   * so a crash mid-close can now roll back to either of them too), legally
    * retryable — rather than to a state with no way out.
    */
   closeRun(input: {
@@ -759,22 +763,55 @@ export class CoordStore {
     this.db.prepare('UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ?').run(at, id);
   }
 
-  /** false when already acked or absent — an ack is idempotent, but the
-   *  CALLER (the ack route) needs to know whether ITS call was the one that
-   *  landed, so a double-ack answers honestly rather than reporting success
-   *  twice. */
+  /** false when already acked, absent, or PARKED — an ack is idempotent, but
+   *  the CALLER (the ack route) needs to know whether ITS call was the one
+   *  that landed, so a double-ack (or a late ack racing a park) answers
+   *  honestly rather than reporting success twice. `'rejected'` joins
+   *  `'acked'` in the refusal (fix — scoped-verify H2): a park is a DECISION
+   *  that this delivery is done — undeliverable, and terminal — the same
+   *  reason `markDelivered` above and `rejectDelivery` below both refuse to
+   *  reopen a `'rejected'` row; an ack landing after `POST /api/runs/:id/close` ->
+   *  `cancelOutstandingDeliveries` (or a replay-ceiling/reaped-recipient
+   *  park) already committed had no such guard, so it flipped the row to
+   *  `{state:'acked', rejectCode:'undeliverable'}` — self-contradictory, and
+   *  the gap `markDelivered`'s own docstring already claimed shut ("`acked`
+   *  and `rejected` are this build's only two states a concurrent writer
+   *  must never reopen... `markAcked` itself already reads-before-writing
+   *  for the identical reason") before this fix made that claim true here
+   *  too. Harmless for replay either way (`dueDeliveries` selects neither
+   *  `acked` nor `rejected`), but a row is not allowed to claim both an ack
+   *  and a park happened to it. */
   markAcked(id: number, at: number): boolean {
     const row = this.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?')
       .get(id) as { state: string } | undefined;
-    if (!row || row.state === 'acked') return false;
+    if (!row || row.state === 'acked' || row.state === 'rejected') return false;
     this.db.prepare('UPDATE mail_deliveries SET state = ?, ackedAt = ? WHERE id = ?')
       .run('acked', at, id);
     return true;
   }
 
+  /** `WHERE state NOT IN ('acked','rejected')` (fix — scoped-verify H1, the
+   *  same guard `markDelivered`/`rejectDelivery` below carry): this is the
+   *  sweep's own SEND-FAILURE path, resolving on `sendPrompt`'s own delayed
+   *  timeline, so a send that was in flight when a SEPARATE park
+   *  (`cancelOutstandingDeliveries` on close, or this same sweep's own
+   *  replay-ceiling/reaped-recipient `rejectDelivery`) already landed on the
+   *  row could still resolve after it and clobber the park's own
+   *  `lastError` (and bump `attempts`) even though `rejectDelivery`'s guard
+   *  already protects `state`/`rejectCode` from that identical race. Left
+   *  unguarded, that was exactly the gap `rejectDelivery`'s own docstring
+   *  below claims closed for "a second writer" in general — true of
+   *  `rejectDelivery` itself, false of this method until this fix.
+   *  `dueDeliveries` never reads `attempts`/`lastError` on a `rejected` row
+   *  (selected by neither arm), so the harm before this fix was a
+   *  cosmetically wrong `lastError`/`attempts` on an already-closed row,
+   *  never a resurrected replay — guarded anyway, for the same reason every
+   *  other writer of this column is: the row's recorded reason for its own
+   *  terminal state should name the write that actually caused it. */
   backOff(id: number, lastError: string, nextAttemptAt: number): void {
     this.db.prepare(
-      'UPDATE mail_deliveries SET attempts = attempts + 1, lastError = ?, nextAttemptAt = ? WHERE id = ?',
+      'UPDATE mail_deliveries SET attempts = attempts + 1, lastError = ?, nextAttemptAt = ? ' +
+      "WHERE id = ? AND state NOT IN ('acked','rejected')",
     ).run(lastError, nextAttemptAt, id);
   }
 

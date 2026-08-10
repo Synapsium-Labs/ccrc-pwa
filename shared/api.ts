@@ -1453,15 +1453,35 @@ export function isRunState(v: unknown): v is RunState {
  * ordinary flow now (`dispatch` -> `working` -> `/advance` ->
  * `awaiting-review`), and gains the identical direct `closing` edge
  * `working`/`merging` already carry: an operator abandon must be reachable
- * from every live, non-terminal state in ONE `POST .../close` call, the same
- * guarantee `working` and `merging` already give, not a two-call
- * `/advance` back to `working` first — nothing about "a review that sends
- * work back is the ordinary case, not a failure" (the paragraph above)
+ * from every DISPATCHED, live, non-terminal state in ONE `POST .../close`
+ * call, the same guarantee `working` and `merging` already give, not a
+ * two-call `/advance` back to `working` first — nothing about "a review that
+ * sends work back is the ordinary case, not a failure" (the paragraph above)
  * argues against closing being reachable too; that paragraph is about REVIEW
  * OUTCOMES, an orthogonal axis to an administrative abandon. `/advance`
  * itself still refuses to reach `closing` (`ADVANCE_TARGETS` in
  * `coord/routes.ts` — that stays `POST .../close`'s own job, fleet act and
  * all); only `RUN_TRANSITIONS` gates it here.
+ *
+ * `planned` is DELIBERATELY excluded from that "every live, non-terminal
+ * state" guarantee (narrowed, scoped-verify H4 — the prior wording read
+ * "every live, non-terminal state" with no carve-out, which is false of this
+ * state): a `planned` run has never been dispatched, so there is no worker
+ * session for the fleet act to release under the ORDINARY meaning of that
+ * word, and the close route's own first precondition already refuses one
+ * with no `sessionId` at all as `not-dispatched` before it ever reaches this
+ * table. The one live sub-case — `sessionId` set at OPEN time by a wave N>=2
+ * reclaim (`CoordStore.setSession`, D-45), but the run itself never actually
+ * dispatched — the close route's own precondition names BY HAND
+ * (`coord/routes.ts`, "still `planned` (sessionId set at OPEN time for a
+ * wave N>=2 reclaim, but never actually dispatched) — must never reach the
+ * fleet act at all") and 409s `bad-transition` rather than closing: the
+ * plan's own D-48 adaptation lists this exact interleaving as one the
+ * precondition exists to catch, not a gap it left open by accident. Closing
+ * that gap — giving `planned` a `closing` edge so a reclaimed-but-never-
+ * dispatched hold can be released through this route too — is a real,
+ * separate improvement nothing in this build's spec asks for; left alone
+ * here rather than folded into an unrelated correction pass.
  */
 export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
   planned:           ['dispatched', 'failed'],

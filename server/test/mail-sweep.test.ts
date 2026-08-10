@@ -830,7 +830,11 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     let row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
     expect(row.attempts).toBe(1);
-    expect(row.lastError).toBe('registry row listed but unreadable');
+    // Echoes `registry-unmeasurable` — the ingress route's own typed code
+    // for the identical condition — in the free-text `lastError` itself
+    // (scoped-verify H6), so a maintainer grepping the ROW for that word
+    // finds this half of the rule too, not just the source comment.
+    expect(row.lastError).toBe('registry row listed but unreadable (registry-unmeasurable)');
 
     // Drive it well past the point that WOULD park a genuinely absent
     // recipient (MAIL_MAX_ATTEMPTS backoffs, the test above this one) — it

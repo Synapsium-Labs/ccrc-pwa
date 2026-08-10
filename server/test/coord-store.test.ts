@@ -552,6 +552,68 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     s.rejectDelivery(d.id, 'undeliverable', 'replayed without ack past the replay ceiling');
     expect(rowAfterClose()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', lastError: 'run closed' });
   });
+
+  it('backOff refuses to clobber an already-parked row\'s recorded reason — a send failure resolving ' +
+     'after a close-time park must not overwrite it (scoped-verify H1)', () => {
+    // The sibling gap to the R1 test above: `backOff` is the SWEEP's own
+    // send-failure path, on the identical delayed timeline `markDelivered`
+    // races against — before this fix it carried no guard at all
+    // (`WHERE id = ?`), so a `sendPrompt` in flight when a close's own
+    // `cancelOutstandingDeliveries` parked the row could still resolve
+    // `error` afterwards and bump `attempts`/overwrite `lastError` on a row
+    // already terminally `rejected`. `state`/`rejectCode` never move (only
+    // `rejectDelivery` writes them), so the harm is a wrong `lastError` on a
+    // closed row, not a resurrected replay — guarded anyway, for the same
+    // reason every other writer of this column now is.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+
+    s.cancelOutstandingDeliveries(r.id);   // the close-time park, as in R1
+    const row = () => s.db.prepare(
+      'SELECT state, rejectCode, lastError, attempts FROM mail_deliveries WHERE id = ?',
+    ).get(d.id) as { state: string; rejectCode: string | null; lastError: string | null; attempts: number };
+    expect(row()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', lastError: 'run closed', attempts: 0 });
+
+    // The in-flight send now resolves an ERROR and the sweep calls backOff —
+    // the park's own reason and attempt count must survive it, byte for byte.
+    s.backOff(d.id, 'verify-failed', Date.now() + 30_000);
+    expect(row()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', lastError: 'run closed', attempts: 0 });
+  });
+
+  it('markAcked refuses to reopen an already-parked row — a late ack racing a close-time park must not ' +
+     'flip it back to acked (scoped-verify H2)', () => {
+    // `markAcked` read-before-wrote only `state === 'acked'`, so an ack
+    // landing after `cancelOutstandingDeliveries` (or a replay-ceiling/
+    // reaped-recipient park) already committed flipped the row to
+    // `{state:'acked', rejectCode:'undeliverable'}` — self-contradictory,
+    // and the exact case `markDelivered`'s own docstring already claimed
+    // this method covered ("`acked` and `rejected` are this build's only two
+    // states a concurrent writer must never reopen... `markAcked` itself
+    // already reads-before-writing for the identical reason") before this
+    // fix made that claim true.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+
+    s.cancelOutstandingDeliveries(r.id);   // the close-time park
+    const row = () => s.db.prepare(
+      'SELECT state, rejectCode, ackedAt FROM mail_deliveries WHERE id = ?',
+    ).get(d.id) as { state: string; rejectCode: string | null; ackedAt: number | null };
+    expect(row()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', ackedAt: null });
+
+    // The late ack lands after the park — `markAcked` must refuse it and say
+    // so honestly (`landed === false`, the same signal a double-ack gives).
+    const landed = s.markAcked(d.id, Date.now());
+    expect(landed).toBe(false);
+    expect(row()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', ackedAt: null });
+  });
 });
 
 describe('CoordStore: feed (Task 10)', () => {
