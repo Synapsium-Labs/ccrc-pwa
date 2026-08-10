@@ -20,6 +20,7 @@ import { deriveBranch } from './naming.js';
 import { transcriptPath } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import { toRunSummary } from './coord/store.js';
+import { configDirFor } from './config.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -914,7 +915,7 @@ export class FleetWatcher {
     const next = new Map<string, TaskProgress>();
     await Promise.all(
       records.map(async (r) => {
-        const cfgDir = this.deps.cfg.wrappers[r.wrapper];
+        const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
         if (!cfgDir) return;
         const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
         if (p) next.set(r.id, p);
@@ -1042,7 +1043,7 @@ export class FleetWatcher {
       // "an unsupported verb records no attempt" true of the stat gate as well
       // as of the attempted set.
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
-      const cfgDir = this.deps.cfg.wrappers[r.wrapper];
+      const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
       if (!cfgDir) continue;
       const file = transcriptPath(cfgDir, r.workdir, r.uuid);
       if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
@@ -1325,7 +1326,7 @@ export class FleetWatcher {
         const hs = await hookStateFor(d.toId);
         if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
         const pid = await this.deps.tmux.panePid(d.toId);
-        const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
+        const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
         if (!pid || !cfgDir) continue;
         const live = await readLiveState(this.deps.io, cfgDir, pid);
         if (!live || liveSessionStatus(live.status) !== 'idle') continue;
@@ -1523,7 +1524,7 @@ export class FleetWatcher {
     const held = rec.held;
     if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
     const pid = await this.deps.tmux.panePid(id);
-    const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
+    const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
     if (!pid || !cfgDir) return { verdict: 'unknown', held };
     const live = await readLiveState(this.deps.io, cfgDir, pid);
     if (!live) return { verdict: 'unknown', held };

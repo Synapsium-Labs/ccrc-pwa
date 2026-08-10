@@ -24,7 +24,11 @@ export type AccountLimits = { five: number | null; seven: number | null } | null
  *  kill-switch has switched off — they are excluded, because offering a swap
  *  target that cannot take work is worse than offering none. */
 export function pickableWrappers(sessions: FleetSession[], disabled: readonly string[] = []): string[] {
-  const all = [...KNOWN_WRAPPERS];
+  // `string[]`, not the roster's `readonly Wrapper[]`: a live session can
+  // report a wrapper the roster doesn't have an entry for at all (a build
+  // running an older/newer roster than the fleet host), and this list must
+  // still offer it as a swap target rather than reject it at the type level.
+  const all: string[] = [...KNOWN_WRAPPERS];
   for (const s of sessions) {
     if (!all.includes(s.wrapper)) all.push(s.wrapper);
   }

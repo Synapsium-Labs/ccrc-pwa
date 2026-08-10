@@ -1,5 +1,6 @@
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
+import { configDirFor } from './config.js';
 import { readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { transcriptPath } from './transcript/resolve.js';
@@ -238,19 +239,22 @@ export class SessionStream {
     // ever asks about `this.id`, every 2 s, for as long as the socket is open.
     const rec = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
     if (!rec) return null;
-    const cfgDir = this.deps.cfg.wrappers[rec.wrapper];
+    const cfgDir = configDirFor(this.deps.cfg.home, rec.wrapper);
     if (!cfgDir) {
       // The two ways `resolve()` answers null are worlds apart, and the client
       // sees ONE sentence for both (`unknown session <id>`). A reaped session
-      // is ordinary; a session the registry knows, running under a wrapper this
-      // build has no config dir for, is a deployment gap that breaks chat for
-      // every session on that account while the fleet list still shows them
-      // idle — `assembleFleet` never consults `wrappers`. Say so once per
-      // connect, naming the wrapper, so the next occurrence is a grep and not
-      // an investigation. Not a throw: one unmapped account must not take down
-      // the streams for the mapped ones.
+      // is ordinary; a session the registry knows, running under a wrapper
+      // `configDirFor` (server/src/config.ts) does not recognise — `isWrapper`
+      // rejects it, so it is either a typo'd registry write or a wrapper the
+      // `shared/api.ts` `ACCOUNTS` roster has not been taught about yet — is a
+      // deployment gap that breaks chat for every session on that account
+      // while the fleet list still shows them idle — `assembleFleet` never
+      // consults `configDirFor`. Say so once per connect, naming the wrapper,
+      // so the next occurrence is a grep and not an investigation. Not a
+      // throw: one unmapped account must not take down the streams for the
+      // mapped ones.
       console.warn(`ccrc-server: session ${this.id} has wrapper "${rec.wrapper}" with no configured ` +
-        'config dir — chat cannot resolve it (see loadConfig\'s `wrappers`); the client sees only ' +
+        'config dir — chat cannot resolve it (see config.ts\'s `configDirFor`); the client sees only ' +
         '"unknown session"');
       return null;
     }

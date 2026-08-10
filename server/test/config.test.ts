@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { loadConfig } from '../src/config.js';
+import { configDirFor, loadConfig } from '../src/config.js';
 import { mungePath } from '../src/munge.js';
+import { ACCOUNTS } from '../../shared/api.js';
 
 describe('loadConfig', () => {
   it('derives all paths from CCRC_HOME', () => {
@@ -29,6 +30,17 @@ describe('loadConfig', () => {
     // have noticed it was missing.
     expect(Object.keys(loadConfig({ CCRC_HOME: '/fake/home' }).wrappers).sort())
       .toEqual(['claude', 'claude-corp', 'claude-dev0', 'claude2', 'gpt']);
+  });
+
+  // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
+  // `wrappers` is now DERIVED from `shared/api.ts`'s `ACCOUNTS` roster rather
+  // than a second hand-typed literal beside it, so the literal set pinned
+  // above and the roster's own key set can never legally diverge — this is
+  // the test that would catch it if they somehow did (a member added to one
+  // without the other, past a refactor that broke the derivation).
+  it('wraps exactly the ACCOUNTS roster\'s key set — no more, no fewer', () => {
+    expect(Object.keys(loadConfig({ CCRC_HOME: '/fake/home' }).wrappers).sort())
+      .toEqual(Object.keys(ACCOUNTS).sort());
   });
 
   it('derives coordDbPath from CCRC_HOME by default, and honours CCRC_COORD_DB as an override', () => {
@@ -89,6 +101,22 @@ describe('loadConfig', () => {
   it('any CCRC_FLEET value other than "remote" stays local', () => {
     const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_FLEET: 'bogus' });
     expect(cfg.fleetMode).toBe('local');
+  });
+});
+
+describe('configDirFor — the ONE place a wrapper becomes a directory', () => {
+  it('joins a known wrapper\'s configDirSuffix onto the given home', () => {
+    expect(configDirFor('/fake/home', 'claude2')).toBe('/fake/home/.claude-personal');
+    expect(configDirFor('/fake/home', 'claude-dev0')).toBe('/fake/home/.claude-dev0');
+  });
+
+  // `SessionRecord.wrapper` is an untrusted string read off disk (registry
+  // fixtures write `'ghost-wrapper'` on purpose — see pr-sweep.test.ts's
+  // archiveSafety tests) — `configDirFor` must answer `undefined`, not throw
+  // and not silently build a path under a wrapper that doesn't exist.
+  it('answers undefined for a wrapper ACCOUNTS does not have, rather than fabricating a path', () => {
+    expect(configDirFor('/fake/home', 'ghost-wrapper')).toBeUndefined();
+    expect(configDirFor('/fake/home', '')).toBeUndefined();
   });
 });
 

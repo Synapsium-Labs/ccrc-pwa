@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import type { CcrcConfig } from './config.js';
+import { configDirFor, type CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
@@ -34,12 +34,10 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
-  FLEET_PROTO, FLEET_PROTO_MIN,
+  ACCOUNT_ORDER, FLEET_PROTO, FLEET_PROTO_MIN,
   type AccountUsage, type FleetMsg, type FleetSession, type RunSummary, type SessionClientMsg,
   type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
-
-const ACCOUNT_ORDER = ['claude', 'claude2', 'claude-corp', 'gpt'];
 
 /**
  * A client frame off the per-session socket, or null if it isn't one.
@@ -232,7 +230,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // respawns, and swaps. Ordered claude / claude2 / claude-corp / gpt.
   app.get('/api/accounts', async () => {
     const limits = await readLimits(deps.io, deps.cfg);
-    const rank = (w: string) => { const i = ACCOUNT_ORDER.indexOf(w); return i < 0 ? 99 : i; };
+    const rank = (w: string) => { const i = (ACCOUNT_ORDER as readonly string[]).indexOf(w); return i < 0 ? 99 : i; };
     const accounts: AccountUsage[] = Object.entries(limits)
       .map(([wrapper, l]): AccountUsage => ({
         wrapper, five: l.five, seven: l.seven, ts: l.ts,
@@ -654,7 +652,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // route did not, and an id is about to become part of an argv.
   const prTasks = async (id: string): Promise<TaskItem[] | null> => {
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
-    const cfgDir = rec ? deps.cfg.wrappers[rec.wrapper] : undefined;
+    const cfgDir = rec ? configDirFor(deps.cfg.home, rec.wrapper) : undefined;
     return rec && cfgDir ? readTasks(deps.io, cfgDir, rec.uuid) : null;
   };
 

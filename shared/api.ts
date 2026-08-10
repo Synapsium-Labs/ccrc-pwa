@@ -1109,15 +1109,161 @@ export interface FleetHealth {
   downSince: number | null;   // epoch ms since the agent connection dropped
 }
 
+/**
+ * "An account" (the operator's word) and "a wrapper" (ccd's word) are the
+ * same concept — a `CLAUDE_CONFIG_DIR`-scoped Claude Code identity a session
+ * runs under — and until this type existed it had no home and eight
+ * independent enumerations in three languages, no two of them the same set
+ * BY DESIGN (home-able / ccd-valid / hooks-able below are three genuinely
+ * different subsets, not one list copied three ways):
+ *   server/src/config.ts        loadConfig.wrappers   — now derived from `ACCOUNTS`
+ *   server/src/fleet.ts         idHomeWrapper          — now longest-`idPrefix`-wins here
+ *   server/src/server.ts        ACCOUNT_ORDER          — now imported from here
+ *   shared/api.ts                HOME_ABLE_WRAPPERS     — now derived, below
+ *   pwa/src/lib/accounts.ts     ACCOUNTS / KNOWN_WRAPPERS — now a projection of this
+ *   ccd/ccd                      _cfg_dir / _id_wrapper / VALID_WRAPPERS — bash, kept
+ *                                                          honest by a fixture test, not rewired
+ *   ccd/install-session-hooks.sh default `homes`         — bash, same as above
+ *
+ * A missing entry in the FIRST of those killed chat for six of `claude-dev0`'s
+ * 24 sessions, silently, for the account's entire life (`resolve()` in
+ * `sessionws.ts` returned null; the client only ever saw "unknown session" —
+ * indistinguishable from a reaped one). A hand-written, unordered copy in the
+ * SECOND attributed a live session to the wrong account: `idHomeWrapper`
+ * prefix-matched `claude-` before it ever tried `claude-dev0-`, so
+ * `claude-dev0-quiet-basin` came back `claude` (`fleet.test.ts` pins the
+ * corrected answer). Both are the same root defect — a concept enumerated by
+ * hand in N places fails the moment N+1 exists — with one fix: N=1.
+ *
+ * `shared/` imports nothing, not even `node:*` (the architecture doc's L0
+ * rule), so this stores a config-dir SUFFIX rather than a path.
+ * `configDirFor` (`server/src/config.ts` — the ONE place a wrapper becomes a
+ * directory) joins it to a home.
+ */
+export type Wrapper = 'claude' | 'claude2' | 'claude-corp' | 'gpt' | 'claude-dev0';
+
+interface AccountDef {
+  /** Joined to a home by `configDirFor` — never spelled as a path here,
+   *  since `shared/` cannot import `node:path`. */
+  configDirSuffix: string;
+  /** ccd's `_id_wrapper` (ccd:6547) case pattern, minus the trailing `*` —
+   *  the prefix a SESSION ID (not a config dir) is matched against.
+   *  Longest-`idPrefix`-wins over every member is `idHomeWrapper`'s entire
+   *  fix: `'claude-dev0-'` must be tried before the shorter `'claude-'`, or
+   *  `claude-dev0-quiet-basin` matches the wrong account. */
+  idPrefix: string;
+  /** Jargon-free, for a human — the ONLY place a wrapper name is translated
+   *  (plan: "Move to another account", never "swap wrapper"). */
+  label: string;
+  /** A CSS custom-property NAME (`pwa/src/styles/tokens.css`), resolved via
+   *  `var(...)` so both themes flow through it — never a color value here. */
+  colorVar: string;
+  /** A landing spot `ccd`'s `_ws_least_loaded` will choose ON ITS OWN —
+   *  mirrors ccd's `VALID_WRAPPERS` (ccd:14) exactly. Three today, not four
+   *  or five: `gpt` is a 4th, opt-in-only lane a session reaches solely by
+   *  being sent there on purpose, and `claude-dev0` is a 5th account ccd's
+   *  home-swap logic has never heard of. */
+  homeAble: boolean;
+  /** Accepted by ccd's `_is_valid_wrapper` (ccd:104: `VALID_WRAPPERS` plus a
+   *  hardcoded `gpt`) — the set `ccd swap` / `ccd attach` / etc. will act on
+   *  BY NAME. `claude-dev0` is false: it is a bare `CLAUDE_CONFIG_DIR` alias
+   *  (`~/.local/bin/claude-dev0`) that ccd's own case statements (`_cfg_dir`,
+   *  `_id_wrapper`) do not mention at all — confirmed by this file's
+   *  cross-language fixture test, not merely asserted here. */
+  ccdValid: boolean;
+  /** `install-session-hooks.sh`'s default `homes` array installs
+   *  `session-hook.sh` here. `claude-dev0` is false TODAY — the "silent mail
+   *  hole on the fifth account" the architecture doc's increment 2 closes,
+   *  not this one. The cross-language fixture test pins that this is still
+   *  an ACCURATE description of the bash, not that it is a desirable one. */
+  hooksAble: boolean;
+}
+
+/**
+ * THE roster — one entry per account, and the one home the type-level
+ * comment above describes. `Record<Wrapper, AccountDef>` so a member added
+ * to `Wrapper` without an entry here is `TS2739`, missing property, exactly
+ * the `PR_REASON_MAP` idiom this file already proves for `PrReason` above.
+ * Every derived list below (`HOME_ABLE_WRAPPERS`, `ACCOUNT_ORDER`,
+ * `KNOWN_WRAPPERS`, `isWrapper`) is COMPUTED from this rather than a second
+ * hand-typed copy.
+ *
+ * Declaration order is `claude`, `claude2`, `claude-corp` (ccd's own
+ * `VALID_WRAPPERS` order, ccd:14), then `gpt` (ccd's hardcoded 4th lane,
+ * `_is_valid_wrapper`, ccd:104), then `claude-dev0` (the 5th account, known
+ * to this repo and to nothing under `ccd/`). `Object.keys` on a `Record`
+ * keyed by non-numeric strings preserves insertion order, which
+ * `ACCOUNT_ORDER` below relies on for its own order — the same reasoning
+ * `PR_REASONS`' own comment gives for doing this with `Object.keys`.
+ */
+export const ACCOUNTS: Record<Wrapper, AccountDef> = {
+  claude: {
+    configDirSuffix: '.claude', idPrefix: 'claude-', label: 'team·max',
+    colorVar: '--acct-claude', homeAble: true, ccdValid: true, hooksAble: true,
+  },
+  claude2: {
+    configDirSuffix: '.claude-personal', idPrefix: 'claude2-', label: 'alt·max',
+    colorVar: '--acct-claude2', homeAble: true, ccdValid: true, hooksAble: true,
+  },
+  'claude-corp': {
+    configDirSuffix: '.claude-corp', idPrefix: 'claude-corp-', label: 'team·shared',
+    colorVar: '--acct-corp', homeAble: true, ccdValid: true, hooksAble: true,
+  },
+  gpt: {
+    configDirSuffix: '.claude-gpt', idPrefix: 'gpt-', label: 'gpt',
+    colorVar: '--acct-gpt', homeAble: false, ccdValid: true, hooksAble: true,
+  },
+  'claude-dev0': {
+    // The 5th account (see `server/src/config.ts`'s own comment on why it
+    // was added: `~/.local/bin/claude-dev0` sets `CLAUDE_CONFIG_DIR` and
+    // ccd's home-swap/hook-install machinery has never been taught about
+    // it). `label`/`colorVar` are the raw name and neutral ink — exactly
+    // what the pre-roster pwa map already fell back to for a wrapper it
+    // didn't recognise, so giving it a REAL entry here must not repaint it.
+    configDirSuffix: '.claude-dev0', idPrefix: 'claude-dev0-', label: 'claude-dev0',
+    colorVar: '--ink-tertiary', homeAble: false, ccdValid: false, hooksAble: false,
+  },
+};
+
+/** Declaration order of `ACCOUNTS`, as a runtime list — see the roster's own
+ *  comment for why `Object.keys` is safe to derive an order from here. Not
+ *  exported: everything that needs "every wrapper" reads it through one of
+ *  the three derived lists below, or through `isWrapper`. */
+const ALL_WRAPPERS: readonly Wrapper[] = Object.keys(ACCOUNTS) as Wrapper[];
+
+/** The only way to narrow an untrusted string to a `Wrapper` — same shape as
+ *  `isPrReason` above: the CONSTANT is cast, never the input, and the
+ *  parameter is `unknown` so nothing can be smuggled in by claiming it
+ *  already is one. */
+export function isWrapper(v: unknown): v is Wrapper {
+  return typeof v === 'string' && (ALL_WRAPPERS as readonly string[]).includes(v);
+}
+
 /** The three accounts a session may call HOME — mirrors ccd's `VALID_WRAPPERS`
- *  (ccd:14). `gpt` is deliberately absent: it is a 4th, opt-in-only lane a
- *  session reaches solely by being sent there on purpose, never as a landing
- *  spot chosen for it. Single source of truth for `server/src/limits.ts`'s
- *  `projectHome` (which home-able lanes to score) and
- *  `pwa/src/lib/accounts.ts`'s `homeAbleLabelList` (the same three, spelled
- *  out by label) — both used to hand-maintain their own copy of this list,
- *  linked only by a doc comment referencing the other. */
-export const HOME_ABLE_WRAPPERS = ['claude', 'claude2', 'claude-corp'] as const;
+ *  (ccd:14). Derived from `ACCOUNTS`' `homeAble` flag rather than hand-typed,
+ *  so a wrapper that changes home-ability shows up here without a second
+ *  edit. Single source of truth for `server/src/limits.ts`'s `projectHome`
+ *  (which lanes to score) and `pwa/src/lib/accounts.ts`'s
+ *  `homeAbleLabelList` (the same three, spelled out by label). */
+export const HOME_ABLE_WRAPPERS: readonly Wrapper[] = ALL_WRAPPERS.filter((w) => ACCOUNTS[w].homeAble);
+
+/** ccd's rotation order — the wrappers `_is_valid_wrapper` (ccd:104) accepts
+ *  by name, in `ACCOUNTS` declaration order. Ranks `GET /api/accounts`
+ *  (`server/src/server.ts`) so the strip and the accounts screen render in a
+ *  stable, human-chosen order rather than whatever order `.cc-limits/*.json`
+ *  happened to be read in; a wrapper NOT in this list (a live session really
+ *  is running one, `claude-dev0` today) is never hidden by that ranking —
+ *  `rank()`'s unknown-wrapper fallback sorts it last, not off the list. */
+export const ACCOUNT_ORDER: readonly Wrapper[] = ALL_WRAPPERS.filter((w) => ACCOUNTS[w].ccdValid);
+
+/** The same set as `ACCOUNT_ORDER`, under the name `pwa/src/lib/accounts.ts`
+ *  used before this roster existed — one derivation, two names, not two
+ *  definitions. The canonical list for account pickers
+ *  (`pwa/src/fleet/SwapSheet.tsx`'s `pickableWrappers`,
+ *  `pwa/src/screens/AccountsScreen.tsx`'s `rowOrder`); both callers union in
+ *  any extra wrapper a live session actually reports, so a server that grows
+ *  a 6th account still shows it. */
+export const KNOWN_WRAPPERS: readonly Wrapper[] = ACCOUNT_ORDER;
 
 /** One account's usage, read from telemetry (cc-limits) independent of whether a
  *  session is currently on it — so the display survives restarts/respawns/swaps.
