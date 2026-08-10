@@ -35,17 +35,19 @@
 // of that dump — still executed bash, just read back rather than probed input
 // by input.
 //
-// `install-session-hooks.sh`'s default `homes` array and
-// `statusline-command.sh`'s two label maps are the exceptions: neither can be
-// USEFULLY executed in a fixture test (installing hooks needs a `--homes`-less
-// invocation whose only observable effect is which directories it touches,
-// and every one is skipped when it doesn't exist under a fixture HOME, so
-// running it is inert rather than revealing; the statusline script needs a
-// real `CLAUDE_CONFIG_DIR` pointed at by the process IT is the statusline of,
-// plus JSON piped to its stdin, to produce anything at all). Per this
-// project's own instruction ("if a bash copy cannot be executed safely in a
-// test, assert on its parsed source text instead and SAY SO") — both assert
-// on parsed source text, and both comparisons are still bidirectional sets.
+// `install-session-hooks.sh`'s default `homes` array (and, since PR J's
+// install lane, `install-coordinator-skill.sh`'s own — same fallback shape,
+// same reason) and `statusline-command.sh`'s two label maps are the
+// exceptions: neither can be USEFULLY executed in a fixture test (installing
+// hooks/a skill needs a `--homes`-less invocation whose only observable
+// effect is which directories it touches, and every one is skipped when it
+// doesn't exist under a fixture HOME, so running it is inert rather than
+// revealing; the statusline script needs a real `CLAUDE_CONFIG_DIR` pointed
+// at by the process IT is the statusline of, plus JSON piped to its stdin, to
+// produce anything at all). Per this project's own instruction ("if a bash
+// copy cannot be executed safely in a test, assert on its parsed source text
+// instead and SAY SO") — both assert on parsed source text, and both
+// comparisons are still bidirectional sets.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -175,16 +177,36 @@ describe('ccd _id_wrapper agrees with ACCOUNTS.idPrefix, for the wrappers ccd kn
   });
 });
 
+// Architecture doc increment 2: "the hooks install lane derives its homes
+// from the roster" — for a bash `homes=(...)` fallback that means "is pinned
+// against the roster by this fixture test", not "reads ACCOUNTS at runtime"
+// (out of scope, this file's own header). Two scripts now carry that exact
+// fallback shape — install-session-hooks.sh and, since PR J's install lane,
+// install-coordinator-skill.sh — and both are checked here rather than one
+// getting a second, duplicate describe block elsewhere in the tree.
+const parseDefaultHomes = (scriptRelPath: string): string[] => {
+  const src = readFileSync(path.join(ccrcRoot, ...scriptRelPath.split('/')), 'utf8');
+  const m = /else homes=\(([^)]*)\); fi/.exec(src);
+  expect(m, `${scriptRelPath}'s default \`homes=(...)\` fallback line`).not.toBeNull();
+  return [...(m as RegExpExecArray)[1].matchAll(/"\$HOME\/([^"]+)"/g)].map((mm) => mm[1]!);
+};
+const wantHooksAbleHomes = WRAPPERS.filter((w) => ACCOUNTS[w].hooksAble).map((w) => ACCOUNTS[w].configDirSuffix);
+
 describe('install-session-hooks.sh default homes agrees with ACCOUNTS.hooksAble', () => {
   // Not executed — see this file's header. Parses the literal `homes=(...)`
   // array the script falls back to when no `--homes` argv is given.
   it('installs into exactly the hooksAble config dirs, as literal $HOME/<suffix> paths, in ACCOUNTS order', () => {
-    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-session-hooks.sh'), 'utf8');
-    const m = /else homes=\(([^)]*)\); fi/.exec(src);
-    expect(m, 'install-session-hooks.sh\'s default `homes=(...)` fallback line').not.toBeNull();
-    const got = [...(m as RegExpExecArray)[1].matchAll(/"\$HOME\/([^"]+)"/g)].map((mm) => mm[1]);
-    const want = WRAPPERS.filter((w) => ACCOUNTS[w].hooksAble).map((w) => ACCOUNTS[w].configDirSuffix);
-    expect(got).toEqual(want);
+    expect(parseDefaultHomes('ccd/install-session-hooks.sh')).toEqual(wantHooksAbleHomes);
+  });
+});
+
+describe('install-coordinator-skill.sh default homes agrees with ACCOUNTS.hooksAble', () => {
+  // Same fixture, same reason — a sixth account with `hooksAble: true` must
+  // land in BOTH default lists or it silently keeps its session hooks and
+  // loses the coordinator skill (or the reverse), a split nobody would notice
+  // outside this test.
+  it('installs into exactly the hooksAble config dirs, as literal $HOME/<suffix> paths, in ACCOUNTS order', () => {
+    expect(parseDefaultHomes('ccd/install-coordinator-skill.sh')).toEqual(wantHooksAbleHomes);
   });
 });
 

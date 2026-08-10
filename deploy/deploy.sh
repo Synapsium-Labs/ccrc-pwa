@@ -97,6 +97,14 @@ if [ "$TARGET" = "agent" ]; then
   "${SCP[@]}" ccd/session-hook.sh "$BOX":.cc-sessions/session-hook.sh
   "${SCP[@]}" ccd/install-session-hooks.sh "$BOX":.cc-sessions/install-session-hooks.sh
   "${SSH[@]}" "$BOX" 'chmod +x ~/.cc-sessions/session-hook.sh ~/.cc-sessions/install-session-hooks.sh && bash ~/.cc-sessions/install-session-hooks.sh'
+  # The coordinator skill is the FOURTH artifact ccrc ships to the fleet host
+  # (ccd, session-hook.sh, install-session-hooks.sh, and now this). rsync with
+  # --delete so a reference file deleted in git is deleted on the box too — a
+  # stale reference is prose a model will still follow.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/coordinator-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/coordinator-skill/ "$BOX":.cc-sessions/coordinator-skill/
+  "${SCP[@]}" ccd/install-coordinator-skill.sh "$BOX":.cc-sessions/install-coordinator-skill.sh
+  "${SSH[@]}" "$BOX" 'chmod +x ~/.cc-sessions/install-coordinator-skill.sh && bash ~/.cc-sessions/install-coordinator-skill.sh'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
   # post-restart check an agent that throws during ESM evaluation — which
   # `whitelist.ts` does BY DESIGN via `refuseToBoot`, and which is the one

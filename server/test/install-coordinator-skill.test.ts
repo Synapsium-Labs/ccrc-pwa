@@ -1,0 +1,141 @@
+// The skill installer, tested exactly the way install-session-hooks.test.ts
+// tests its sibling: a fixture HOME, never the live one, and the properties
+// that matter are convergence, non-destruction and per-home isolation.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
+
+const INSTALLER = path.resolve(__dirname, '../../ccd/install-coordinator-skill.sh');
+const SRC = path.resolve(__dirname, '../../ccd/coordinator-skill');
+const HOMES = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt'];
+
+let home: string;
+const skill = (d: string, ...rest: string[]): string =>
+  path.join(home, d, 'skills', 'ccrc-coordinator', ...rest);
+
+beforeEach(() => {
+  home = mkTmp('ccrc-skillinstall-');
+  for (const d of HOMES) fs.mkdirSync(path.join(home, d), { recursive: true });
+});
+afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
+
+const run = (...homes: string[]): void => {
+  execFileSync('bash', [INSTALLER, '--homes', ...(homes.length ? homes : HOMES.map((d) => path.join(home, d)))],
+    { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: SRC } });
+};
+
+describe('install-coordinator-skill', () => {
+  it('installs the skill into every home it is given', () => {
+    run();
+    for (const d of HOMES) {
+      expect(fs.readFileSync(skill(d, 'SKILL.md'), 'utf8'))
+        .toBe(fs.readFileSync(path.join(SRC, 'SKILL.md'), 'utf8'));
+      expect(fs.existsSync(skill(d, 'references', 'wave-lifecycle.md'))).toBe(true);
+      expect(fs.existsSync(skill(d, 'references', 'ledger-template.md'))).toBe(true);
+    }
+  });
+
+  it('re-running converges — the second run does not rewrite a converged home', () => {
+    // Byte-level idempotence is what install-session-hooks promises, and the
+    // observable proof here is the inode: a rewrite would replace the file.
+    run();
+    const before = fs.statSync(skill('.claude', 'SKILL.md'));
+    run();
+    const after = fs.statSync(skill('.claude', 'SKILL.md'));
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it('replaces a stale install and backs the old one up first', () => {
+    run();
+    fs.writeFileSync(skill('.claude', 'SKILL.md'), 'an older generation of the skill');
+    run();
+    expect(fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8')).toContain('name: ccrc-coordinator');
+    const backups = fs.readdirSync(path.join(home, 'ccrc-backups'));
+    expect(backups.length).toBeGreaterThan(0);
+    const inside = fs.readdirSync(path.join(home, 'ccrc-backups', backups[0]!));
+    expect(inside.some((n) => n.includes('ccrc-coordinator'))).toBe(true);
+  });
+
+  it('skips a home that does not exist without failing the run', () => {
+    // A box with three of the four wrappers is an ordinary box, not an error.
+    fs.rmSync(path.join(home, '.claude-gpt'), { recursive: true });
+    run();
+    expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);
+  });
+
+  it('refuses the whole run when the source has no SKILL.md, touching nothing', () => {
+    const empty = mkTmp('ccrc-skillsrc-');
+    expect(() => execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude')],
+      { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: empty } })).toThrow();
+    expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(false);
+    fs.rmSync(empty, { recursive: true, force: true });
+  });
+
+  it('reports a failed home in the exit status but still processes the others', () => {
+    // Same rule as the hook installer: one bad home must not silently strand
+    // the account a swap could move the coordinator onto.
+    const blocked = path.join(home, '.claude-corp', 'skills');
+    fs.mkdirSync(blocked, { recursive: true });
+    fs.chmodSync(blocked, 0o500);
+    let threw = false;
+    try { run(); } catch { threw = true; }
+    fs.chmodSync(blocked, 0o700);
+    expect(threw).toBe(true);
+    expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(skill('.claude-personal', 'SKILL.md'))).toBe(true);
+  });
+
+  it('never writes outside the homes it was given', () => {
+    run(path.join(home, '.claude'));
+    for (const d of ['.claude-personal', '.claude-corp', '.claude-gpt']) {
+      expect(fs.existsSync(path.join(home, d, 'skills'))).toBe(false);
+    }
+  });
+});
+
+describe('the deploy ships the skill, agent-side — and PR I’s token lane is there', () => {
+  const repo = (f: string): string => readFileSync(path.resolve(__dirname, '../..', f), 'utf8');
+  const deploy = repo('deploy/deploy.sh');
+  const agentArm = deploy.slice(deploy.indexOf('if [ "$TARGET" = "agent" ]'), deploy.indexOf('\nelse\n'));
+
+  it('installs the skill in the agent arm, after the hook installer', () => {
+    expect(agentArm).toContain('coordinator-skill');
+    expect(agentArm).toContain('install-coordinator-skill.sh');
+    expect(agentArm.indexOf('install-session-hooks.sh'))
+      .toBeLessThan(agentArm.indexOf('install-coordinator-skill.sh'));
+  });
+
+  it('rsyncs the skill with --delete, so a deleted reference dies on the box too', () => {
+    const line = agentArm.split('\n').find((l) => l.includes('coordinator-skill/'))!;
+    expect(line).toContain('--delete');
+  });
+
+  // The three below are assertions about PR I's work, deliberately. The skill
+  // is useless without the token, and a silently absent lane would surface as a
+  // coordinator that cannot authenticate — a long way from here. They check
+  // SHAPE and EXISTENCE only: no test in this repo reads a token, and a token
+  // in a fixture is a token in a CI log.
+  it('the agent arm ships the fleet host’s copy of the box token', () => {
+    expect(agentArm).toContain("ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token");
+  });
+
+  it('notify.sh presents it under the header the server actually checks', () => {
+    expect(repo('deploy/notify.sh')).toContain('x-ccrc-mail-token');
+  });
+
+  it('the token is gitignored and no token is committed', () => {
+    // NOT existsSync: an operator who has minted a real token for actual
+    // deploys leaves it sitting gitignored on disk in THIS repo's own working
+    // tree by design (PR I's own note — "shipped only when the operator has
+    // minted one"), so a raw filesystem check would fail on exactly the box
+    // this project runs on. `git ls-files` is what "committed" means.
+    expect(repo('.gitignore')).toContain('deploy/ccrc-mail.token');
+    const tracked = execFileSync('git', ['ls-files', 'deploy/ccrc-mail.token'],
+      { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8' }).trim();
+    expect(tracked, 'a real token must never be committed to this repo').toBe('');
+  });
+});
