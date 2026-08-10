@@ -158,7 +158,7 @@ describe('the reconnect catch-up', () => {
     const store = createFleetStore({ makeSocket: () => f.ws, catchUp });
     store.getState().connect();
     f.open();
-    await vi.waitFor(() => expect(store.getState().missed).toHaveLength(2));
+    await vi.waitFor(() => expect(store.getState().feed).toHaveLength(2));
     expect(seen).toEqual([['e1', 3]]);
     expect(loadMark()).toEqual({ epoch: 'e1', seq: 5 });
   });
@@ -184,7 +184,7 @@ describe('the reconnect catch-up', () => {
     await vi.waitFor(() => expect(loadMark()).toEqual({ epoch: 'new', seq: 2 }));
     // The events came back, and are deliberately dropped: the server could not
     // prove this device saw everything, so anything shown would be fabricated.
-    expect(store.getState().missed).toEqual([]);
+    expect(store.getState().feed).toEqual([]);
   });
 
   it('asks again on every reconnect — a slept phone is the point', async () => {
@@ -203,14 +203,14 @@ describe('the reconnect catch-up', () => {
     store.getState().connect();
     f.open();
     await vi.waitFor(() => expect(catchUp).toHaveBeenCalled());
-    expect(store.getState().missed).toEqual([]);
+    expect(store.getState().feed).toEqual([]);
     expect(store.getState().conn).toBe('open');
   });
 
   // PR F whole-branch review (triage). A reconnect storm can open the socket
   // again while the first catch-up is still in flight. Unserialised, the second
   // reads the same STALE mark, asks for the same range, and whichever response
-  // lands last is what gets persisted — so `missed` gains duplicates and the
+  // lands last is what gets persisted — so `feed` gains duplicates and the
   // durable mark can go BACKWARDS, which on a one-way advance is the one
   // direction that can lose events for good.
   it('serialises catch-ups, so a reconnect storm cannot re-ask or rewind the mark', async () => {
@@ -239,10 +239,10 @@ describe('the reconnect catch-up', () => {
     // The second request read what the first one WROTE.
     expect(seen[1]).toEqual(['e1', 7]);
     await vi.waitFor(() => expect(loadMark()).toEqual({ epoch: 'e1', seq: 9 }));
-    expect(store.getState().missed.map((e) => e.seq)).toEqual([6, 7]);
+    expect(store.getState().feed.map((e) => e.seq)).toEqual([6, 7]);
   });
 
-  it('clearMissed empties the list', async () => {
+  it('clearFeed empties the list', async () => {
     const catchUp = vi.fn(async () => resp({
       events: [{ seq: 5, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '' }],
     }));
@@ -250,8 +250,8 @@ describe('the reconnect catch-up', () => {
     const store = createFleetStore({ makeSocket: () => f.ws, catchUp });
     store.getState().connect();
     f.open();
-    await vi.waitFor(() => expect(store.getState().missed).toHaveLength(1));
-    store.getState().clearMissed();
-    expect(store.getState().missed).toEqual([]);
+    await vi.waitFor(() => expect(store.getState().feed).toHaveLength(1));
+    store.getState().clearFeed();
+    expect(store.getState().feed).toEqual([]);
   });
 });

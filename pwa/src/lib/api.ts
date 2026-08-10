@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountUsage, CatchUp, FleetHealth, FleetSession, PrView, ProjectedHome, ReapResult, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountUsage, CatchUp, FleetHealth, FleetSession, NotifyEvent, PrView, ProjectedHome, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -243,6 +243,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     submit: (id: string, expect: string) => post(`${sid(id)}/submit`, { expect }),
     catchUp: (epoch: string | null, seq: number) =>
       getJson<CatchUp>(`/api/notifications/catchup?epoch=${encodeURIComponent(epoch ?? '')}&seq=${seq}`),
+    /** Active AND finished runs (the client splits on `closedAt`) — cold start
+     *  and cold deep links for `/runs`, since the `{type:'runs'}` frame only
+     *  arrives after the socket is open. `closed=1` is the archive view;
+     *  omitted here because the board's default read is the active set. */
+    runs: () => getJson<{ runs: RunSummary[] }>('/api/runs'),
+    /** The DURABLE feed. `catchUp` is the live tail and is volatile by
+     *  construction (notifymark.ts advances the mark at receipt); this is the
+     *  read that still has bodies after a deploy. */
+    feed: (limit = 100) => getJson<{ events: NotifyEvent[] }>(`/api/feed?limit=${limit}`),
     interrupt: (id: string) => post(`${sid(id)}/interrupt`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),

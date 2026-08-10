@@ -5,6 +5,7 @@ import { FLEET_PROTO, type FleetMsg, type FleetSession, type NotifyEvent, type R
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
+import { mergeBySeq } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
@@ -25,26 +26,35 @@ export interface FleetState {
    *  (offline-persisted, or a store that never saw a frame) reads as usable. */
   blocked: boolean;
   /**
-   * Notifications the server RECORDED since this device last asked — i.e.
-   * since the previous fleet-socket open, because that is the only moment the
-   * watermark advances.
+   * The durable notification feed, rendered by `/mail` on receipt.
    *
-   * Not "while this device was away", which is what this said and what nothing
-   * here can prove: a phone connected, awake and pushed the whole time gets
-   * exactly the same list, since the mark only moves on connect. Not "what
-   * this device failed to receive" either — the log records what the server
-   * DECIDED to raise, before delivery (`watch.ts`'s `pushOne`), so it can
-   * legitimately name events that were delivered and read.
+   * Formerly `missed`, and the rename is the point: `applyCatchUp` advances
+   * the durable mark ONE-WAY the moment its response lands, so these events
+   * are volatile and can never be asked for again — `notifymark.ts`'s
+   * docstring says whoever renders them first "must not call it missed, and
+   * must render it on receipt". `/mail` ships in the same PR as this rename.
    *
-   * Nothing renders this today. Whatever eventually does must not call it
-   * missed, and must render it on receipt: `applyCatchUp` advances the durable
-   * mark the moment the response lands, one-way, so these events are volatile
-   * and can never be asked for again.
+   * Not "while this device was away": a phone connected, awake and pushed the
+   * whole time gets exactly the same list, since the mark only moves on
+   * connect. Not "what this device failed to receive" either — the log
+   * records what the server DECIDED to raise, before delivery (`watch.ts`'s
+   * `pushOne`), so it can legitimately name events that were delivered and
+   * read.
+   *
+   * Two sources merged on `seq` (`lib/feed.ts`): the catch-up tail on every
+   * socket open, and `GET /api/feed` when `/mail` mounts (so the inbox is not
+   * empty after every deploy — the durable table survives one, the 200-event
+   * in-memory ring never did). Capped at FEED_CAP from the old end.
    *
    * Empty after a resync — see `lib/notifymark.ts` for why nothing is ever
    * surfaced retroactively in that case.
    */
-  missed: NotifyEvent[];
+  feed: NotifyEvent[];
+  /** How many records the last read could not place at all (no seq/at) — the
+   *  one case `reviveNotifyEvents` cannot degrade. Surfaced on the screen
+   *  rather than swallowed: a feed that loses a record silently is the one
+   *  failure this surface exists to prevent. */
+  feedDropped: number;
   /** Build 7's run board reads this. PR I fills it; PR J renders it. Shape-
    *  validated only at the frame level (an array of runs), the same depth
    *  `fleet` is: `reviveFleetSession`-grade revival for runs is PR J's problem
@@ -53,7 +63,12 @@ export interface FleetState {
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
-  clearMissed(): void;
+  /** Union `events` into `feed` by `seq` (later wins a collision) and add
+   *  `dropped` to the running count. The one mutator both the catch-up tail
+   *  and `GET /api/feed` go through, so the two sources can never diverge on
+   *  merge policy. */
+  mergeFeed(events: NotifyEvent[], dropped?: number): void;
+  clearFeed(): void;
 }
 
 const asFleetMsg = (m: unknown): FleetMsg | null => {
@@ -107,7 +122,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       sessions: loadFleetSnapshot()?.sessions ?? [],
       conn: 'connecting',
       notices: [],
-      missed: [],
+      feed: [],
+      feedDropped: 0,
       blocked: false,
       runs: [],
 
@@ -117,15 +133,15 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         // connect, including automatic reconnects — a phone that slept through
         // a question is exactly the case this exists for. Never awaited and
         // never allowed to reject: the fleet stream is the thing that matters,
-        // and a catch-up that fails simply leaves `missed` empty, which is the
-        // honest answer.
+        // and a catch-up that fails simply leaves `feed` unchanged, which is
+        // the honest answer.
         //
         // SERIALISED, because the mark is one value with one owner. A
         // reconnect storm (backoff of 500 ms against a request that has not
         // answered yet) opens the socket again while the first catch-up is
         // still in flight; unchained, the second reads the same STALE mark,
         // asks for the same range, and whichever response lands last is what
-        // gets persisted — so the mark can go BACKWARDS and `missed` can gain
+        // gets persisted — so the mark can go BACKWARDS and `feed` can gain
         // duplicates. Chaining makes the second request read the mark the
         // first one wrote, which is both correct and what it would have asked
         // for anyway. `run` never rejects, so the chain cannot break.
@@ -136,7 +152,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
           return fetchCatchUp(mark?.epoch ?? null, mark?.seq ?? 0)
             .then((r) => {
               const events = applyCatchUp(r);
-              if (events.length > 0) set((s) => ({ missed: [...s.missed, ...events] }));
+              if (events.length > 0) get().mergeFeed(events);
             })
             .catch(() => { /* offline, or an older server with no such route */ });
         };
@@ -192,8 +208,12 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
       },
 
-      clearMissed() {
-        set({ missed: [] });
+      mergeFeed(events, dropped = 0) {
+        set((s) => ({ feed: mergeBySeq(s.feed, events), feedDropped: s.feedDropped + dropped }));
+      },
+
+      clearFeed() {
+        set({ feed: [], feedDropped: 0 });
       },
     };
   });

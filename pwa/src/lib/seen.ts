@@ -144,14 +144,29 @@ function save(acks: Acks): Acks {
   return publish(acks);
 }
 
-/** THE comparison. Every surface that badges unseen calls this one function —
- *  today that is the fleet screen's bucket-bar counts and `groupFleet`'s
- *  per-project `unseen`; a row badge or a bell counter, when either arrives,
- *  calls it too. A second implementation is the drift it exists to end. */
+/** The ack key for the fleet-wide notification feed (`/mail`). NAMESPACED
+ *  with a colon, which ccd's own id regex (`^[A-Za-z0-9._-]+$`, ccd:1671)
+ *  forbids in a session id — so this can never collide with one, and `prune`
+ *  below can tell the two apart by SHAPE, never by an allowlist it would have
+ *  to maintain by hand. */
+export const FEED_ACK_KEY = 'ccrc:feed';
+
+/** THE comparison — moved one level down from `isUnseen` so a thing with no
+ *  bucket (a `NotifyEvent`, which has neither `bucket` nor `bucketSince`) can
+ *  still be counted by it. Every surface that badges unseen — the fleet
+ *  screen's bucket-bar counts, `groupFleet`'s per-project `unseen`, and now
+ *  the feed's own unread count — reaches this SAME `>` against the SAME map.
+ *  A second implementation is the drift it exists to end. */
+export function isUnseenAt(key: string, since: number | null, acks: Acks): boolean {
+  if (since === null) return false;
+  return since > (acks[key] ?? 0);
+}
+
+/** Every surface that badges an unseen SESSION calls this; it is `isUnseenAt`
+ *  with the bucket ladder's own two preconditions in front of it. */
 export function isUnseen(s: FleetSession, acks: Acks): boolean {
   if (!BADGED.has(s.bucket)) return false;
-  if (s.bucketSince === null) return false;
-  return s.bucketSince > (acks[s.id] ?? 0);
+  return isUnseenAt(s.id, s.bucketSince, acks);
 }
 
 /**
@@ -221,7 +236,17 @@ export function prune(live: ReadonlySet<string>): Acks {
   const acks = base();
   if (live.size === 0) return publish(acks);
   let changed = false;
-  for (const id of Object.keys(acks)) if (!live.has(id)) { delete acks[id]; changed = true; }
+  for (const id of Object.keys(acks)) {
+    // A key containing `:` is not a session id (ccd's id regex forbids the
+    // character) — it is a namespaced watermark like FEED_ACK_KEY, and the
+    // fleet's session list says nothing about whether it is still wanted.
+    // Without this the feed's watermark is deleted on the next snapshot AND
+    // the deletion is persisted: the whole feed silently re-badges unread and
+    // the real mark is gone. Same class as the empty-fleet guard above —
+    // absent evidence proves nothing.
+    if (id.includes(':')) continue;
+    if (!live.has(id)) { delete acks[id]; changed = true; }
+  }
   // `publish`, not a bare return, on the unchanged path too: it costs nothing
   // when the map is unchanged (`publish` keeps the existing identity) and it
   // keeps one exit for both paths. It never persists on this path.
