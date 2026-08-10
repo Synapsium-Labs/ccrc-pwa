@@ -331,6 +331,10 @@ describe('the rejection table is total, in both directions', () => {
                                // already uses throughout; not a mail code
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
+      'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
+      'mail-disabled',        // $REG kill-switch marker filename, not a code (review finding 17)
+      'worker-busy',          // dispatch refusal — a live session mid-turn (review finding 12)
+      'awaiting-review',      // a RunState value (advance's own target list), not a mail code
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

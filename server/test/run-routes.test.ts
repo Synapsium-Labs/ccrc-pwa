@@ -18,6 +18,11 @@ import { mkTmp } from './tmpHelpers.js';
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
+// Review findings 3/10/27: the coordinator write routes are now box-token
+// gated, the same gate `mail-routes.test.ts`'s own `TOKEN` constant already
+// drives — every helper below attaches it by default; the auth-specific
+// tests further down override it to `null` to prove the 401 path.
+const TOKEN = 'f'.repeat(64);
 
 const OPEN_BODY = { program: 'build4', title: 'Transcript surface', project: PROJECT,
   wave: 1, waveOf: 3, claimedBy: CLAIMED_BY };
@@ -98,18 +103,35 @@ const openApp = async (
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
-  const app = await buildServer({ ...base, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
+  const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
   return { app, coord };
 };
 
-const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY) =>
-  app.inject({ method: 'POST', url: '/api/runs', payload: body as Record<string, unknown> });
-const postDispatch = (app: FastifyInstance, id: number, body: unknown = { brief: 'do the thing' }) =>
-  app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, payload: body as Record<string, unknown> });
-const postClose = (app: FastifyInstance, id: number, body: unknown) =>
-  app.inject({ method: 'POST', url: `/api/runs/${id}/close`, payload: body as Record<string, unknown> });
+const tokenHeaders = (token: string | null): Record<string, string> =>
+  token === null ? {} : { 'x-ccrc-mail-token': token };
+
+const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
+  app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
+    payload: body as Record<string, unknown> });
+const postDispatch = (
+  app: FastifyInstance, id: number, body: unknown = { brief: 'do the thing' }, token: string | null = TOKEN,
+) =>
+  app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers: tokenHeaders(token),
+    payload: body as Record<string, unknown> });
+const postClose = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
+  app.inject({ method: 'POST', url: `/api/runs/${id}/close`, headers: tokenHeaders(token),
+    payload: body as Record<string, unknown> });
+const postAdvance = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
+  app.inject({ method: 'POST', url: `/api/runs/${id}/advance`, headers: tokenHeaders(token),
+    payload: body as Record<string, unknown> });
+// GET /api/runs stays UNGATED — it is not one of the six routes PR J's
+// contract item 6 names, and this build's GET routes (`/api/runs`,
+// `/api/feed`) carry no token check either before or after review findings
+// 3/10/27's fix.
 const getRuns = (app: FastifyInstance, closed = false) =>
   app.inject({ method: 'GET', url: `/api/runs${closed ? '?closed=1' : ''}` });
+const getMail = (app: FastifyInstance, to: string, token: string | null = TOKEN) =>
+  app.inject({ method: 'GET', url: `/api/mail?to=${encodeURIComponent(to)}`, headers: tokenHeaders(token) });
 
 /** A directory listing that always fails — the ordinary transient shape in
  *  remote mode, reused from `mail-routes.test.ts`'s own fixture. */
@@ -760,5 +782,437 @@ describe('GET /api/runs', () => {
     const res = await getRuns(app);
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ ok: false, error: 'not-configured' });
+  });
+});
+
+// ── review findings 3/10/27: the write routes are now box-token gated ──────
+describe('the coordinator write routes require the box token (review findings 3/10/27)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('refuses POST /api/runs with no token', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, OPEN_BODY, null);
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+    expect(calls).toEqual([]);
+    expect(w.coord.runs({ includeClosed: true })).toEqual([]);   // nothing opened
+  });
+
+  it('refuses POST /api/runs/:id/dispatch with the WRONG token', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-authfail1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postDispatch(app, opened.id, { brief: 'x' }, 'wrong-token-wrong-length-000000000000000000000000');
+    expect(res.statusCode).toBe(401);
+    expect(calls).toEqual([]);
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+  });
+
+  it('refuses POST /api/runs/:id/close with no token', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postClose(app, opened.id, { fingerprint: {}, final: true }, null);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('refuses POST /api/runs/:id/advance with no token', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postAdvance(app, 1, { to: 'working', fingerprint: {} }, null);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('refuses GET /api/mail?to= with no token', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await getMail(app, 'some-session', null);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('an UNCONFIGURED server (no mailToken at all) fails shut on these routes too', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    app = await buildServer({ ...testDeps(home, run), coord });   // NOTE: no mailToken key at all
+    const res = await postOpen(app, OPEN_BODY, TOKEN);   // even the "right-shaped" token is refused
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('dispatch caps the brief the same as /api/mail (review finding 2)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('refuses an oversize brief with 413 before touching the fleet', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-bigbrief'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const hugeBrief = 'a'.repeat(8 * 1024 + 1);
+    const res = await postDispatch(app, opened.id, { brief: hugeBrief });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
+    expect(calls).toEqual([]);   // refused before ws-add, before anything is counted or spawned
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+  });
+});
+
+describe('dispatch refuses to /clear a session it can observe is mid-turn (review finding 12)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const seedHookState = (home: string, id: string, over: Record<string, unknown> = {}): void => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const body = { v: 1, state: 'working', sessionId: `u-${id}`, pid: 1, event: null,
+      updatedAt: Date.now(), ask: null, subagents: [], ...over };
+    writeFileSync(path.join(reg, `${id}.hookstate.json`), JSON.stringify(body));
+  };
+
+  it('refuses dispatch with worker-busy when the hookstate says the session is still working', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-busy1');
+    seedHookState(home, 'demo-busy1', { state: 'working' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-busy1' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'worker-busy' });
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);   // /clear never sent
+    expect(w.coord.run(opened.id)?.state).toBe('planned');   // dispatch never landed
+  });
+
+  it('still proceeds when no hookstate file exists at all — unreadable/absent is not proof of busy', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-busy2');   // no hookstate file written
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-busy2' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(true);
+  });
+});
+
+describe('dispatch honours $REG/mail-disabled, not only $REG/coordinator-paused (review finding 17)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('refuses dispatch while mail-disabled exists, before touching the fleet', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-maildisabled'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    writeFileSync(path.join(home, '.cc-sessions', 'mail-disabled'), '');
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'mail-disabled' });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+  });
+});
+
+describe('dispatch avoids orphaning a spawned workspace on a failed hold (review finding 7)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('a retry after ws-hold fails resumes the ALREADY-SPAWNED workspace instead of spawning a second one', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-orphan1'], fail: new Set(['ws-hold']) });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+
+    const first = await postDispatch(app, opened.id);
+    expect(first.statusCode).toBe(502);
+    // The spawn is already persisted onto the row, even though the hold
+    // failed and the transition never landed — the orphan-avoiding fix.
+    expect(w.coord.run(opened.id)?.sessionId).toBe('demo-orphan1');
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(calls.filter((c) => c[0] === 'ws-add').length).toBe(1);
+
+    const second = await postDispatch(app, opened.id);
+    expect(second.statusCode).toBe(502);   // ws-hold still fails in this fixture
+    // Still only ONE ws-add across both attempts — the retry took the
+    // resume (`ensure`) branch because `run.sessionId` was already set.
+    expect(calls.filter((c) => c[0] === 'ws-add').length).toBe(1);
+    expect(calls.filter((c) => c[0] === 'ensure').length).toBe(1);
+  });
+});
+
+describe('POST /api/runs is idempotent under retry (review findings 19/32)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('a retry naming the same (program, wave, claimedBy) reuses the existing planned run', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = (await postOpen(app)).json() as { id: number };
+    const second = (await postOpen(app)).json() as { id: number };
+    expect(second.id).toBe(first.id);
+    expect(w.coord.runs({ includeClosed: true }).length).toBe(1);   // never a second row
+  });
+
+  it('does NOT reuse a run once it has moved past planned', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-dedupe1'] });
+    const w = await openApp(home, run); app = w.app;
+    const first = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, first.id);
+    const second = (await postOpen(app)).json() as { id: number };
+    expect(second.id).not.toBe(first.id);   // the first is dispatched now — a genuinely new open
+  });
+});
+
+describe('dispatch/close serialise concurrent requests for the same run (review findings 4/11/23/24)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('two dispatch requests fired CONCURRENTLY for the same run never both spawn a workspace', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-race1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+
+    const [a, b] = await Promise.all([postDispatch(app, opened.id), postDispatch(app, opened.id)]);
+    const codes = [a.statusCode, b.statusCode].sort();
+    expect(codes).toEqual([200, 409]);   // exactly one wins, one is refused — never ambiguous-dispatch
+    expect(calls.filter((c) => c[0] === 'ws-add').length).toBe(1);
+    expect(w.coord.run(opened.id)?.state).toBe('dispatched');
+  });
+
+  it('two dispatches for DIFFERENT runs racing a maxConcurrentWorkers=1 cap never both pass the check', async () => {
+    const home = mkTmp('ccrc-runs-');
+    // A stateful ws-add: exactly ONE new session per call (not `makeRunner`'s
+    // own `wsAddCreates`, which seeds its WHOLE list on every single call —
+    // right for proving `ambiguous-dispatch`, wrong here, where each of the
+    // two runs needs its OWN single-candidate spawn).
+    const calls: string[][] = [];
+    const ids = ['demo-cap1', 'demo-cap2'];
+    let spawnIdx = 0;
+    const run: Runner = async (_cmd, args) => {
+      calls.push(args);
+      if (args[0] === 'ws-add') {
+        seed(home, ids[spawnIdx]!); spawnIdx++;
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const w = await openApp(home, run); app = w.app;
+    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    const a = (await postOpen(app, OPEN_BODY)).json() as { id: number };
+    const b = (await postOpen(app, { ...OPEN_BODY, wave: 2 })).json() as { id: number };
+
+    const [ra, rb] = await Promise.all([postDispatch(app, a.id), postDispatch(app, b.id)]);
+    const codes = [ra.statusCode, rb.statusCode].sort();
+    expect(codes).toEqual([200, 409]);
+    expect(calls.filter((c) => c[0] === 'ws-add').length).toBe(1);   // only the winner ever spawned
+  });
+});
+
+describe('close cancels the run\'s own outstanding mail (review findings 8/14/26)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('a queued/delivered-unacked delivery for the closing run is parked rejected(undeliverable)', async () => {
+    const sessionId = `${PROJECT}-mailclose1`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: [sessionId],
+      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' } });
+    const base = testDeps(home, run);
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    // A delivery still outstanding for this run's own mail (e.g. a finding
+    // the worker never acked), queued directly at the store level — the
+    // shape `mail`/`mail_deliveries` always have once `POST /api/mail` or
+    // dispatch's own `wave-brief` has run.
+    const mail = w.coord.insertMail({ fromId: sessionId, fromUuid: 'u', toId: 'coordinator', runId: opened.id,
+      kind: 'finding', subject: 'a finding', body: 'body', artifacts: [] });
+    const delivery = w.coord.queueDelivery(mail.id, sessionId, 'envelope text');
+
+    const res = await postClose(app, opened.id, {
+      fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP }, final: true,
+    });
+    expect(res.statusCode).toBe(200);
+    const row = w.coord.db.prepare('SELECT state, rejectCode FROM mail_deliveries WHERE id = ?')
+      .get(delivery.id) as { state: string; rejectCode: string | null };
+    expect(row.state).toBe('rejected');
+    expect(row.rejectCode).toBe('undeliverable');
+  });
+});
+
+describe('close only writes a shape-valid handoffCommit (review findings 6/18)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('an abandon with a non-SHA handoffCommit closes, but the column stays null', async () => {
+    const sessionId = `${PROJECT}-badsha1`;
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: [sessionId] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const res = await postClose(app, opened.id, {
+      fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: 'n/a' },
+      final: true, state: 'failed',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(opened.id)?.state).toBe('failed');
+    expect(w.coord.run(opened.id)?.handoffCommit).toBeNull();   // never a fabricated value
+  });
+
+  it('an abandon with a genuinely SHA-shaped handoffCommit DOES record it', async () => {
+    const sessionId = `${PROJECT}-goodsha1`;
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: [sessionId] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const res = await postClose(app, opened.id, {
+      fingerprint: { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP },
+      final: true, state: 'failed',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(opened.id)?.handoffCommit).toBe(TIP);
+  });
+});
+
+describe('a retried close does not spam wave-done-rejected mail (review finding 33)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('two identical stale-tip retries queue only ONE outstanding rejection mail', async () => {
+    const sessionId = `${PROJECT}-spam1`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: [sessionId],
+      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+    const base = testDeps(home, run);
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const claim = { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP };
+
+    const first = await postClose(app, opened.id, { fingerprint: claim, final: true });
+    expect(first.statusCode).toBe(409);
+    const second = await postClose(app, opened.id, { fingerprint: claim, final: true });
+    expect(second.statusCode).toBe(409);
+
+    const outstanding = w.coord.db.prepare(
+      "SELECT count(*) AS c FROM mail m JOIN mail_deliveries d ON d.mailId = m.id " +
+      "WHERE m.subject = 'wave-done-rejected' AND d.state IN ('queued','delivered')",
+    ).get() as { c: number };
+    expect(outstanding.c).toBe(1);
+  });
+});
+
+describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('answers 404 reject unknown-run for a run id that does not exist', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postAdvance(app, 4242,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'unknown-run' } });
+  });
+
+  it('refuses an out-of-scope target (dispatch/close own those transitions)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-adv1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const res = await postAdvance(app, opened.id,
+      { to: 'done', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'bad-transition' } });
+  });
+
+  it('dispatched -> working never re-measures (no pr-state call) and needs no real fingerprint', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-adv2'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const callsBefore = calls.length;
+    const res = await postAdvance(app, opened.id,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { run: { state: string } }).run.state).toBe('working');
+    expect(calls.slice(callsBefore).some((c) => c[0] === 'pr-state')).toBe(false);
+    expect(w.coord.run(opened.id)?.state).toBe('working');
+  });
+
+  it('working -> awaiting-review DOES re-measure, and a stale claim is refused (D-6)', async () => {
+    const sessionId = 'demo-adv3';
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: [sessionId],
+      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+    const base = testDeps(home, run);
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    await postAdvance(app, opened.id,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+
+    const staleRes = await postAdvance(app, opened.id,
+      { to: 'awaiting-review', fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP } });
+    expect(staleRes.statusCode).toBe(409);
+    expect(staleRes.json()).toMatchObject({ ok: false, reject: { code: 'stale-tip' } });
+    expect(w.coord.run(opened.id)?.state).toBe('working');   // unchanged
+
+    const goodRes = await postAdvance(app, opened.id,
+      { to: 'awaiting-review', fingerprint: { branchTip: OTHER_TIP, prNumber: 7, prPhase: 'open', handoffCommit: OTHER_TIP } });
+    expect(goodRes.statusCode).toBe(200);
+    expect(w.coord.run(opened.id)?.state).toBe('awaiting-review');
+  });
+});
+
+describe('GET /api/mail?to= (review findings 1/15)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('returns the wave-brief mail queued for the dispatched session', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-getmail1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id, { brief: 'implement the thing' });
+
+    const res = await getMail(app, 'demo-getmail1');
+    expect(res.statusCode).toBe(200);
+    const { mail } = res.json() as { mail: { subject: string; toId: string; kind: string }[] };
+    expect(mail.length).toBe(1);
+    expect(mail[0]).toMatchObject({ subject: 'wave-brief', toId: 'demo-getmail1', kind: 'status' });
+  });
+
+  it('refuses a missing ?to= with 400', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/mail', headers: { 'x-ccrc-mail-token': TOKEN } });
+    expect(res.statusCode).toBe(400);
   });
 });
