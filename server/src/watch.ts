@@ -527,7 +527,20 @@ export class FleetWatcher {
       // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates);
+      // `records` PASSED IN, never re-read here (blocking review finding 2,
+      // second pass): `unmeasuredIds` above is computed off THESE rows, and
+      // the push loop below refuses to assert a finished turn for any id in
+      // that set — but the set only means anything if it describes the very
+      // rows this assembly emits. While `assembleFleet` took its own read,
+      // the two were separate whole-fleet sweeps a few hundred ms apart, so
+      // a row that read clean HERE and degraded THERE was emitted with
+      // `status` frozen at the `!cfgDir` default of 'idle' with nothing in
+      // `unmeasuredIds` to suppress it — the false "✓ Finished" push fired
+      // exactly as before the gate existed. One read, one set of rows, one
+      // verdict. (It also drops a second ~17-reads-per-session registry
+      // sweep from every 2s tick, which is the same read-storm reason this
+      // read is already shared with `sweepHookStates`/`detectDialogs`.)
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records);
       // The whole fleet is in scope right here, which is exactly what
       // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
       // have on their own clocks — see `activeProjects`'s own comment.

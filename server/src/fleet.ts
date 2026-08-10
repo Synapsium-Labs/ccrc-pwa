@@ -151,9 +151,30 @@ export async function assembleFleet(
    *  as `pendingDialogs`: absent on a cold start and in every existing test,
    *  which is exactly why every hook-derived field below defaults to null. */
   hookStates?: Map<string, HookState>,
+  /**
+   * The registry rows this assembly must describe, when the caller has
+   * ALREADY read them — the same `records ?? await readRegistry(...)` idiom
+   * `watch.ts`'s own `sweepTasks`/`archiveMerged` lanes use.
+   *
+   * Load-bearing for correctness, not just for the saved round trips
+   * (blocking review finding 2, second pass): `FleetSession` carries no
+   * `unmeasured` field, so a caller that must tell a DEGRADED row from a
+   * measured one — `tick()`'s busy→idle "✓ Finished" push is the only one —
+   * can only do that off the `SessionRecord`s themselves. When this function
+   * took its OWN read, that caller's evidence came from a DIFFERENT read
+   * than the one that produced these rows: two whole-fleet sweeps, ~17 field
+   * reads per session each, a few hundred ms apart inside one tick. A row
+   * that read clean in the caller's sweep and degraded in THIS one was
+   * therefore emitted with `status` frozen at the `!cfgDir` default of
+   * 'idle' while the caller's `unmeasured` set said nothing was wrong — and
+   * the false "✓ Finished" push fired anyway. Passing the rows in makes the
+   * caller's evidence and this assembly's rows the SAME observation, which
+   * is the only way the two can never disagree.
+   */
+  records?: SessionRecord[],
 ): Promise<FleetSession[]> {
-  const [records, limits] = await Promise.all([readRegistry(io, cfg), readLimits(io, cfg, now)]);
-  return Promise.all(records.map(async (r): Promise<FleetSession> => {
+  const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
+  return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     const alive = await tmux.hasSession(r.id);
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
