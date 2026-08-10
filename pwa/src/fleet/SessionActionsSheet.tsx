@@ -78,6 +78,8 @@ export function SessionActionsSheet({
   // flag: like SwapSheet's `move()`, the confirm tap already WAS the
   // consequence check, so nothing left waits on the request before closing.
   const [releaseConfirmOpen, setReleaseConfirmOpen] = useState(false);
+  // Forget's consequence confirm — same QuickConfirm shape as Release's.
+  const [forgetConfirmOpen, setForgetConfirmOpen] = useState(false);
 
   // A closed sheet forgets Swap (mirrors NewSessionSheet's own reset-on-close
   // effect). FleetScreen now keeps this component mounted across a close
@@ -105,6 +107,7 @@ export function SessionActionsSheet({
     setHoldReason('');
     setHoldError(null);
     setReleaseConfirmOpen(false);
+    setForgetConfirmOpen(false);
   }, [open, session?.id]);
 
   if (!session) return null;
@@ -188,6 +191,23 @@ export function SessionActionsSheet({
         await api.release(session.id);
       } catch (err) {
         toast(`Couldn't release — ${apiErrorText(err)}`, 'error');
+      }
+    })();
+    onClose();
+  };
+
+  // Same fire-and-forget shape as `releaseNow`, for the same reason: the
+  // QuickConfirm tap was the consequence check. On success the sweep drops the
+  // row and FleetScreen's own effect closes anything still pointing at it; a
+  // refusal (held, still running, a workspace) arrives as ccd's stderr in the
+  // toast — the server re-proves every gate on the box, this button decides
+  // nothing.
+  const forgetNow = (): void => {
+    void (async () => {
+      try {
+        await api.forget(session.id);
+      } catch (err) {
+        toast(`Couldn't forget — ${apiErrorText(err)}`, 'error');
       }
     })();
     onClose();
@@ -303,6 +323,20 @@ export function SessionActionsSheet({
             </button>
           )}
 
+          {/* The end-of-life a non-workspace session never had: stop leaves
+              the registry row deliberately, archive/reap are workspace-only,
+              so a dead wrapper session was an immortal fleet line. Dead AND
+              non-workspace, strictly: a live session's removal is a kill and
+              goes through Stop first; a workspace's removal destroys git
+              state and goes through the audited sheet above. ccd re-proves
+              both gates (and the hold) on the box. */}
+          {session.workspace === null && session.status === 'dead' && (
+            <button type="button" className="btn-ghost sess-sheet-remove"
+                    onClick={() => setForgetConfirmOpen(true)}>
+              Forget session…
+            </button>
+          )}
+
           {session.status !== 'dead' && session.wrapper !== session.home && (
             <p className="sess-sheet-note">
               Pinned to {accountLabel(session.home)}, running on{' '}
@@ -337,6 +371,20 @@ export function SessionActionsSheet({
         consequence={RELEASE_CONSEQUENCE}
         confirmLabel="Release"
         onConfirm={releaseNow}
+      />
+
+      {/* What goes AND what is kept, named before the tap — a removal the
+          sheet does not describe is not one anybody consented to. Nothing
+          here is irreversible: the entry can be recreated by starting the
+          session again, and the two things that exist nowhere else are
+          exactly the two this verb refuses to touch. */}
+      <QuickConfirm
+        open={forgetConfirmOpen}
+        onClose={() => setForgetConfirmOpen(false)}
+        title={`Forget ${label}?`}
+        consequence="Its registry entry is removed and the row leaves the fleet. The transcript and any pasted images stay on disk; nothing in git is touched. Starting the session again recreates it."
+        confirmLabel="Forget"
+        onConfirm={forgetNow}
       />
     </>
   );

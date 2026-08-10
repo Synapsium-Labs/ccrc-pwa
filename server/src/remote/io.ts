@@ -16,6 +16,15 @@ function isTailReset(msg: TailData | TailReset): msg is TailReset {
 
 export function createIo(client: FleetClient): FleetIO {
   return {
+    /** No agent op resolves symlinks, and the paths live on the REMOTE box —
+     *  a local node:fs realpath would answer about the wrong disk. Null means
+     *  "cannot resolve", which every caller degrades to the unresolved path,
+     *  i.e. remote mode keeps its pre-realpath behavior until the agent
+     *  protocol grows a resolver op. */
+    async realpath() {
+      return null;
+    },
+
     async readFile(path) {
       try {
         const res = await client.request({ t: 'req', op: 'read', path });

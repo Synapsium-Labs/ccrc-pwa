@@ -1,5 +1,5 @@
 import { createReadStream, watch, type FSWatcher } from 'node:fs';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -14,6 +14,13 @@ export interface FleetIO {
   readFileB64(path: string): Promise<string | null>;      // null = missing; binary-safe
   readdir(path: string): Promise<string[] | null>;
   stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
+  /** Physical path for `path`, or null when it cannot be resolved (missing
+   *  path, permission, or an implementation with no resolver — the remote io
+   *  answers null unconditionally, so callers degrade to the unresolved
+   *  path). Exists for transcript resolution: Claude Code munges its PHYSICAL
+   *  cwd, the registry keeps the path ccd wrote, and on a symlinked projects
+   *  root the two disagree. */
+  realpath(path: string): Promise<string | null>;
   writeFileB64(path: string, dataB64: string): Promise<void>;          // mkdir -p parent
   tailFile(
     path: string,
@@ -67,6 +74,10 @@ export const localIO: FleetIO = {
       const s = await stat(p);
       return { mtimeMs: s.mtimeMs, size: s.size };
     } catch { return null; }
+  },
+
+  async realpath(p) {
+    try { return await realpath(p); } catch { return null; }
   },
 
   async writeFileB64(p, dataB64) {

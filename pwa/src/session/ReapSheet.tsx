@@ -276,7 +276,15 @@ export function ReapSheet({
                     that never reached the PR fetch into "…, 20669 days ago" —
                     a date, on the same line as two fields that were already
                     saying `null` for that state. */}
-                {`${shown.branch} — merged in #${shown.pr.number ?? '?'} (proof: ${shown.merge.proof ?? 'none'}), ${shown.merge.fetchedAt === null ? `merge ${NOT_SCANNED}` : days(shown.merge.fetchedAt)}`}
+                {/* `contained` gets its own sentence because the default one
+                    would lie twice on the same line: "merged in #?" claims a
+                    PR this verdict deliberately binds none of, and a reader
+                    who has learned that `#?` means "not scanned yet" would
+                    read a completed proof as an incomplete one. The date
+                    tail is shared — it is the same fetch fact either way. */}
+                {shown.merge.proof === 'contained'
+                  ? `${shown.branch} — never pushed; origin already holds every commit on it (proof: contained), ${shown.merge.fetchedAt === null ? `merge ${NOT_SCANNED}` : days(shown.merge.fetchedAt)}`
+                  : `${shown.branch} — merged in #${shown.pr.number ?? '?'} (proof: ${shown.merge.proof ?? 'none'}), ${shown.merge.fetchedAt === null ? `merge ${NOT_SCANNED}` : days(shown.merge.fetchedAt)}`}
               </dd>
 
               <dt>worktree</dt>

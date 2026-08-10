@@ -756,6 +756,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcdOr502(reply, argv);
   });
 
+  app.post('/api/sessions/:id/forget', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const argv = CCD_ARGV.forget(id);
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    // Every gate that decides the removal — not a workspace, not held, not
+    // alive — is re-proven by ccd on the box; the server adds nothing to that
+    // judgement. Through the per-session queue like the reap, so a purge
+    // cannot interleave with another write to the same session.
+    const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+  });
+
   app.post('/api/sessions/:id/hold', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });

@@ -82,6 +82,23 @@ describe('the manifest', () => {
     expect(await screen.findByText(/ws\/quiet-basin — merged in #42 \(proof: patch-id\), 6 days ago/)).toBeInTheDocument();
   });
 
+  it('renders the contained verdict without claiming a PR nobody bound', async () => {
+    // The contained rung reaps a never-pushed branch with no PR anywhere, so
+    // "merged in #?" — the copy every other reapable audit gets — would claim
+    // a merge this verdict deliberately rests on no PR for. The line states
+    // the actual proof instead, and the Remove button still renders: this is
+    // a full reapable verdict, not a refusal.
+    auditBody = audit({
+      pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
+      merge: { proof: 'contained', fetchedAt: Math.floor(Date.now() / 1000) },
+    });
+    open();
+    expect(await screen.findByText(
+      /ws\/quiet-basin — never pushed; origin already holds every commit on it \(proof: contained\), today/,
+    )).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Remove quiet-basin/ })).toBeInTheDocument();
+  });
+
   it('shows the worktree path and size, and the uncommitted row', async () => {
     // The path exactly, not /quiet-basin/: the slug appears in the sheet
     // title, the branch row and the button too, and a loose regex would match

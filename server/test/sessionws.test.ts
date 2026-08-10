@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
@@ -831,6 +831,61 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
       ws.close();
     } finally {
       await app.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * THE SYMLINK-MUNGE MISMATCH, pinned at the stream level — the exact shape of
+ * `claude-corp-data-internal` in production. Claude Code munges its PHYSICAL
+ * cwd; the registry keeps the path ccd wrote; when the workdir traverses a
+ * symlink and the session is DEAD (no live cwd to paper over it), the chat
+ * used to look under the registry munge and render "Can't find this session's
+ * transcript" over a transcript that existed the whole time.
+ */
+describe('session WS — dead session behind a symlinked workdir', () => {
+  it('finds the transcript under the physical munge', { timeout: 15_000 }, async () => {
+    const home = mkTmp('ccrc-sws-sym-');
+    // The production chain in miniature: <home>/data-link -> <home>/volume,
+    // registry workdir through the link, transcript under the physical munge.
+    const volumeDir = path.join(home, 'volume', 'projects', 'MekWarLive');
+    mkdirSync(volumeDir, { recursive: true });
+    symlinkSync(path.join(home, 'volume'), path.join(home, 'data-link'));
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = {
+      wrapper: 'claude2', project: 'MekWarLive',
+      workdir: path.join(home, 'data-link', 'projects', 'MekWarLive'),
+      uuid: UUID_A, started: '1',
+    };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const physFile = path.join(home, '.claude-personal', 'projects',
+      volumeDir.replace(/[/._]/g, '-'), `${UUID_A}.jsonl`);
+    mkdirSync(path.dirname(physFile), { recursive: true });
+    writeFileSync(physFile, userLine('u1', 'one'));
+
+    // DEAD is the point: has-session answers 1, so no live cwd can rescue the
+    // resolution the way it always rescued running sessions.
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deadApp = await buildServer(deps, new Bus());
+    await deadApp.listen({ host: '127.0.0.1', port: 0 });
+    const addr = deadApp.server.address();
+    const deadPort = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${deadPort}/ws/session/${ID}`);
+      const next = collect(ws);
+      await opened(ws);
+      const backlog = await next();
+      expect(backlog.type).toBe('backlog');
+      expect(backlog.missing).toBe(false);
+      expect(backlog.file).toBe(physFile);
+      expect(backlog.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1']);
+      ws.close();
+    } finally {
+      await deadApp.close();
       rmSync(home, { recursive: true, force: true });
     }
   });
