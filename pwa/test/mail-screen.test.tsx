@@ -14,7 +14,8 @@ import type { NotifyEvent } from '../../shared/api';
 import { MailScreen } from '../src/screens/MailScreen';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { FEED_ACK_KEY, acksSnapshot, resetAcks } from '../src/lib/seen';
+import { api } from '../src/lib/api';
+import { ack, FEED_ACK_KEY, acksSnapshot, resetAcks } from '../src/lib/seen';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); resetAcks(); });
 
@@ -34,7 +35,7 @@ const makeStore = (): FleetStore => createFleetStore({
 });
 
 describe('the mail feed', () => {
-  it('renders the durable read AND the live tail, newest last, deduped by seq', async () => {
+  it('renders the durable read AND the live tail, deduped by record identity', async () => {
     const store = makeStore();
     // ONE event object for the "seq:2" record, reused at both call sites —
     // lib/feed.ts's `recordKey` identifies a record by `${at}:${seq}`, not
@@ -49,6 +50,28 @@ describe('the mail feed', () => {
     render(<MailScreen store={store} loadFeed={feed} />);
     expect(await screen.findByText('durable')).toBeInTheDocument();
     expect(screen.getAllByText('live')).toHaveLength(1);
+  });
+
+  // Fix round 1, Task 4, finding 2c: the store holds the feed oldest-first
+  // (`mergeBySeq` sorts ascending by `at`), and the screen's own comment says
+  // it renders "newest first on screen" via `.reverse()` — but nothing
+  // asserted an order at all, so dropping `.reverse()` left every other test
+  // green. This picks the screen's stated order and pins it.
+  it('renders newest first on screen, per the screen\'s own stated order', () => {
+    const store = makeStore();
+    const now = Date.now();
+    act(() => {
+      store.setState({
+        feed: [
+          e({ seq: 1, at: now - 120_000, title: 'oldest' }),
+          e({ seq: 2, at: now - 60_000, title: 'middle' }),
+          e({ seq: 3, at: now, title: 'newest' }),
+        ],
+      });
+    });
+    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    const titles = [...document.querySelectorAll('.mail-row-title')].map((el) => el.textContent);
+    expect(titles).toEqual(['newest', 'middle', 'oldest']);
   });
 
   it('says the presence-gate truth in words, permanently', () => {
@@ -85,10 +108,73 @@ describe('the mail feed', () => {
     expect(document.querySelectorAll('[data-unseen="true"]')).toHaveLength(0);
   });
 
+  // Fix round 1, Task 4, finding 4: the test above only ever asserted the
+  // AFTER half — a row that is NEVER marked unread satisfies it trivially,
+  // and a mutant that hardcodes `data-unseen="false"` (deleting the
+  // `isUnseenAt` comparison outright) left the whole suite green. This pins
+  // the BEFORE half: `isUnseenAt` must render `true` for a row whose `at` is
+  // newer than the ack watermark.
+  //
+  // The mount effect floors the watermark to `max(now, newest)` on every
+  // commit that has a non-null `newest` — including this screen's own first
+  // one — so by the time `render()` returns the whole visible feed is
+  // already acked (measured: opening the screen really does self-ack
+  // instantly in this harness, since React flushes the mount effect
+  // synchronously inside `render()`'s own `act()`). A watermark set AFTER
+  // mount is the deterministic way to observe the comparison's TRUE branch:
+  // the ack effect's own dependency is `[newest]` alone, which this does not
+  // touch, so the rollback survives the next render rather than being
+  // immediately re-clobbered.
+  it('marks a row unseen when the ack watermark sits behind it', () => {
+    const store = makeStore();
+    const at = Date.now() - 60_000;
+    act(() => { store.setState({ feed: [e({ seq: 1, at })] }); });
+    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    act(() => { ack(FEED_ACK_KEY, at - 1); });
+    expect(document.querySelectorAll('[data-unseen="true"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-unseen="false"]')).toHaveLength(0);
+  });
+
   it('has a back control at the tap floor and an empty state that is not a blank screen', () => {
     render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
     expect(screen.getByText(/nothing yet/i)).toBeInTheDocument();
+  });
+
+  // Fix round 1, Task 4, findings 1 and 3: the shipped default was an inline
+  // arrow used as a DEFAULT PARAMETER (`loadFeed = () => api.feed(100)`) — a
+  // fresh identity on every render — sitting in the effect's own dependency
+  // array. The cycle closed through the store: `mergeFeed` -> `mergeBySeq`
+  // (lib/feed.ts) allocates a fresh `feed` array even for a no-op merge, so
+  // every merge re-rendered this screen, re-minted the default, and re-fired
+  // the effect — an unbounded `GET /api/feed` loop with no test anywhere on
+  // the DEFAULT path (every shipped test passed its own stable `loadFeed`).
+  //
+  // Every call past the first is left permanently unresolved rather than
+  // answered: a real regression would refire the effect synchronously,
+  // inside the SAME microtask chain, for as long as something keeps handing
+  // it a freshly-resolved promise — an unbounded, ever-growing chain that
+  // starves the event loop rather than erroring (measured elsewhere: an
+  // unbounded probe of this exact shape ran long enough to OOM the worker
+  // before any timer-based assertion ever got scheduled). A promise that
+  // never settles cannot feed that chain a second link, so a regression here
+  // fails fast — as a call count greater than 1 — instead of hanging the
+  // suite.
+  it('reads the default loader exactly once per mount — a merge-induced re-render must not refire it', async () => {
+    const store = makeStore();
+    let calls = 0;
+    const feedSpy = vi.spyOn(api, 'feed').mockImplementation(() => {
+      calls += 1;
+      return calls === 1 ? Promise.resolve({ events: [] }) : new Promise<never>(() => {});
+    });
+    render(<MailScreen store={store} />); // no `loadFeed` prop — the shipping default
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(feedSpy).toHaveBeenCalledTimes(1);
+    // Drive the exact identity churn `mergeFeed` produces even on a no-op
+    // merge — the trigger that used to restart the effect.
+    act(() => { store.getState().mergeFeed([]); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(feedSpy).toHaveBeenCalledTimes(1);
   });
 });
 

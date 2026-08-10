@@ -11,7 +11,7 @@
 // Opening this screen IS the ack, the same rule SessionScreen's mount ack
 // follows. One watermark for the whole feed (FEED_ACK_KEY), because "have I
 // read my mail" is one question, not one per sender.
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { NotifyEvent } from '../../../shared/api';
 import { recordKey, reviveNotifyEvents } from '../lib/feed';
@@ -22,6 +22,20 @@ import { useNow } from '../lib/useNow';
 import { formatAge } from '../fleet/formatReset';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
+
+/** The shipping default — `GET /api/feed?limit=100` — hoisted to MODULE
+ *  scope rather than an inline arrow used as a default PARAMETER value. A
+ *  default parameter is re-evaluated on every call to the function
+ *  component, so an inline `() => api.feed(100)` is a fresh identity on
+ *  every render, not a stable one. That identity used to sit in the effect
+ *  below's own dependency array, and `mergeFeed` -> `mergeBySeq`
+ *  (`lib/feed.ts`) allocates a fresh `feed` array even for a no-op merge —
+ *  so every render re-minted this default, the effect's deps compared
+ *  unequal, and it tore down and re-fired: an unbounded `GET /api/feed` loop
+ *  for as long as this screen stayed mounted. (Fix round 1, Task 4, findings
+ *  1 and 3 — reachable only on the real default path, which is why no
+ *  shipped test caught it: every one supplied its own stable `loadFeed`.) */
+const loadFeedDefault = (): Promise<{ events: NotifyEvent[] }> => api.feed(100);
 
 /** The feed's own small vocabulary. Deliberately NOT NotifyEvent['kind']
  *  rendered raw: `merged` is a git word, `run` is a noun the board owns, and
@@ -35,7 +49,7 @@ const KIND_GLYPH: Record<NotifyEvent['kind'], string> = {
 
 export function MailScreen({
   store = useFleetStore,
-  loadFeed = () => api.feed(100),
+  loadFeed = loadFeedDefault,
 }: {
   store?: FleetStore;
   loadFeed?: () => Promise<{ events: NotifyEvent[] }>;
@@ -45,13 +59,25 @@ export function MailScreen({
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const now = useNow(30_000);
 
-  // The durable read, once per mount. Revived rather than trusted: `CatchUp`
-  // has been consumed by a bare getJson since it shipped, and a kind from a
-  // newer server reaching an old client typed as one of three things it is not
-  // is exactly what that bareness costs.
+  // Held in a ref, not the effect's own dependency array below: "once per
+  // mount" has to hold regardless of the CALLER's identity discipline, not
+  // only the hoisted default's — a prop minted fresh on every render (an
+  // inline arrow passed by a future caller, say) must not be able to restart
+  // this either. The ref always reads the LATEST `loadFeed` without ever
+  // being a reason for the effect to re-run.
+  const loadFeedRef = useRef(loadFeed);
+  loadFeedRef.current = loadFeed;
+
+  // The durable read, once per mount — now actually once: keyed on `[store]`
+  // alone, so a merge-induced re-render (mergeFeed -> mergeBySeq always
+  // allocates a fresh `feed` array, even for a no-op merge) cannot restart
+  // it. Revived rather than trusted: `CatchUp` has been consumed by a bare
+  // getJson since it shipped, and a kind from a newer server reaching an old
+  // client typed as one of three things it is not is exactly what that
+  // bareness costs.
   useEffect(() => {
     let live = true;
-    void loadFeed()
+    void loadFeedRef.current()
       .then((r) => {
         if (!live) return;
         const { events, dropped: d } = reviveNotifyEvents(r.events);
@@ -59,7 +85,7 @@ export function MailScreen({
       })
       .catch(() => { /* offline, or an older server with no such route */ });
     return () => { live = false; };
-  }, [store, loadFeed]);
+  }, [store]);
 
   // Opening the screen is the ack. Floored to the newest record's own instant
   // (seen.ts's `stampFor`) so a device behind the fleet host's clock does not
