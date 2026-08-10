@@ -19,7 +19,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   version: null, model: null, effort: null, ultracode: false, branch: null,
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null,
-  bucket: 'idle', bucketSince: null, ...over,
+  bucket: 'idle', bucketSince: null, unmeasured: [], ...over,
 });
 
 describe('label', () => {
@@ -544,6 +544,36 @@ describe('held chip', () => {
     const chip = document.querySelector('[data-held]');
     expect(chip).not.toBeNull();
     expect(chip).toHaveAttribute('title', 'program:x wave:2/4');
+  });
+});
+
+// Registry ladder (Task 2): a degraded row's small, honest note — the
+// `PrKeycap` grey+reason idiom, never a new banner. Same `data-*`/`title`
+// pattern as the held chip above.
+describe('degraded (unmeasured identity) note', () => {
+  it('shows no note on a fully-measured row — the wire default, not a state to render', () => {
+    render(<SessionLine session={s({ unmeasured: [] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('unreadable')).toBeNull();
+    expect(document.querySelector('[data-unmeasured]')).toBeNull();
+  });
+
+  it('shows the note when the row carries an unmeasured identity field', () => {
+    render(<SessionLine session={s({ unmeasured: ['uuid'] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('unreadable')).toBeInTheDocument();
+  });
+
+  it('marks the note data-unmeasured for tests, and carries which field(s) as a title', () => {
+    render(<SessionLine session={s({ unmeasured: ['wrapper', 'workdir'] })} onOpen={() => {}} onActions={() => {}} />);
+    const note = document.querySelector('[data-unmeasured]');
+    expect(note).not.toBeNull();
+    expect(note).toHaveAttribute('title', 'registry wrapper/workdir temporarily unreadable — retrying');
+  });
+
+  it('a degraded row still renders its OTHER fields normally — this is a note, not a takeover of the row', () => {
+    render(<SessionLine session={s({ unmeasured: ['uuid'], held: 'program:x wave:1/4' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('unreadable')).toBeInTheDocument();
+    expect(screen.getByText('program:x wave:1/4')).toBeInTheDocument();
   });
 });
 

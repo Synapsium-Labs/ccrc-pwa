@@ -399,6 +399,13 @@ export class FleetWatcher {
    *  confirmation lasts, while still guaranteeing the freeze this field is
    *  named after can never be silent. */
   private snapshotWriteSkippedWarned = false;
+  /** Same warn-once-per-episode discipline as `snapshotWriteSkippedWarned`
+   *  immediately above, on its OWN flag (Task 2): a shrink-episode and a
+   *  degrade-episode are independent conditions — a tick can trip one, the
+   *  other, both, or neither — and sharing one flag would let whichever
+   *  fires first silence the other's own first warning. Cleared the moment a
+   *  write actually lands with every row measured clean. */
+  private snapshotWriteSkippedDegradedWarned = false;
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
@@ -659,21 +666,46 @@ export class FleetWatcher {
         // case. A failed (or absent) confirmation listing itself proves
         // nothing either way, so it fails shut the same way.
         try {
-          const prior = await loadSnapshot(this.cachePath);
-          if (prior === null || sessions.length >= prior.sessions.length) {
-            await saveSnapshot(sessions, this.cachePath);
-            this.snapshotWriteSkippedWarned = false;
+          // Task 2: the shrink guard above keys ONLY on `sessions.length`,
+          // and a degraded row survives length unchanged — `assembleFleet`
+          // still emits one `FleetSession` per readable-or-degraded record,
+          // it just carries a non-empty `unmeasured`. So a 24-row assembly
+          // with 3 degraded rows sails straight through
+          // `sessions.length >= prior.sessions.length` and would be
+          // persisted as last-known-good: `status` frozen at a guessed
+          // default, `branch`/`workdir` reading stale or empty for reasons
+          // that have nothing to do with the session's real state. The
+          // snapshot's whole purpose is degraded-mode serving (`/api/fleet`
+          // ships it, unconditionally `stale: true`, through a REAL
+          // fleet-host outage) — persisting a guess as THAT snapshot defeats
+          // the one thing it exists for at the exact moment it matters.
+          // Same warn-once-per-episode discipline as the shrink guard below,
+          // on its own flag (`snapshotWriteSkippedDegradedWarned`) so the two
+          // episodes can each report once without silencing the other.
+          const degraded = sessions.filter((s) => s.unmeasured.length > 0);
+          if (degraded.length > 0) {
+            if (!this.snapshotWriteSkippedDegradedWarned) {
+              this.snapshotWriteSkippedDegradedWarned = true;
+              console.warn(`ccrc-server: snapshot write skipped — ${degraded.length}/${sessions.length} assembled sessions carry an unmeasured identity field this tick (${degraded.map((s) => s.id).join(', ')}); the cache would otherwise persist a guess as last-known-good`);
+            }
           } else {
-            const survivingIds = new Set(sessions.map((s) => s.id));
-            const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
-            const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
-            const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
-            if (allGenuinelyPurged) {
+            this.snapshotWriteSkippedDegradedWarned = false;
+            const prior = await loadSnapshot(this.cachePath);
+            if (prior === null || sessions.length >= prior.sessions.length) {
               await saveSnapshot(sessions, this.cachePath);
               this.snapshotWriteSkippedWarned = false;
-            } else if (!this.snapshotWriteSkippedWarned) {
-              this.snapshotWriteSkippedWarned = true;
-              console.warn(`ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears`);
+            } else {
+              const survivingIds = new Set(sessions.map((s) => s.id));
+              const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
+              const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
+              const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
+              if (allGenuinelyPurged) {
+                await saveSnapshot(sessions, this.cachePath);
+                this.snapshotWriteSkippedWarned = false;
+              } else if (!this.snapshotWriteSkippedWarned) {
+                this.snapshotWriteSkippedWarned = true;
+                console.warn(`ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears`);
+              }
             }
           }
         } catch { /* best-effort cache — never blocks the poll */ }
@@ -933,6 +965,26 @@ export class FleetWatcher {
     const next = new Map<string, HookState>();
     await Promise.all(
       recs.map(async (r) => {
+        // RETAIN, DON'T ERASE (Task 2, the heal side): a degraded row's
+        // `r.uuid` reads `''` (registry ladder), and `readHookState`'s own
+        // identity gate compares that against the hookstate file's REAL
+        // `sessionId` — a comparison that can never match, so a fresh read
+        // here always answers "nothing pending" for a session that may still
+        // be mid-turn. Carry the PREVIOUS sweep's entry forward untouched
+        // instead of letting one transient registry-read failure flicker the
+        // attention bucket / askSummary off and back on. Pruning a
+        // genuinely-reaped id is UNAFFECTED: `next` is rebuilt fresh from
+        // THIS tick's `recs` every sweep, so an id truly gone from the
+        // registry (not merely degraded — absent from `recs` altogether) is
+        // never copied forward and ages out of `this.hookStates` on this
+        // very sweep, exactly as it always has (verified: this map has no
+        // OTHER pruning mechanism, so the full-rebuild-from-current-listing
+        // shape is load-bearing and is preserved here unchanged).
+        if (measuredIdentity(r) === null) {
+          const prev = this.hookStates.get(r.id);
+          if (prev) next.set(r.id, prev);
+          return;
+        }
         const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid, now);
         if (hs) next.set(r.id, hs);
       }),
@@ -953,6 +1005,22 @@ export class FleetWatcher {
     const next = new Map<string, TaskProgress>();
     await Promise.all(
       records.map(async (r) => {
+        // RETAIN, DON'T ERASE — same reasoning and same pruning guarantee as
+        // `sweepHookStates` above: a degraded `r.wrapper` (reads `''`) makes
+        // `configDirFor` answer `undefined` even though the session is
+        // plainly still there, and this sweep runs on its OWN slower clock
+        // (`TASK_SWEEP_MS`) — a value dropped here can sit blank for a
+        // whole sweep interval before the next tick even gets a chance to
+        // heal it, longer than the 2 s the hook-state lane risks. Carry the
+        // last-known tally forward instead of blanking it on a guess.
+        // `next` is still rebuilt fresh from THIS sweep's `records` every
+        // time, so a genuinely-reaped id (absent from `records`, not merely
+        // degraded) is never copied forward — pruning is unchanged.
+        if (measuredIdentity(r) === null) {
+          const prev = this.taskProgress.get(r.id);
+          if (prev) next.set(r.id, prev);
+          return;
+        }
         const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
         if (!cfgDir) return;
         const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
@@ -1740,6 +1808,18 @@ export class FleetWatcher {
    * `records` is `tick()`'s own registry read, passed in rather than fetched
    * again here (optional, defaulting to its own read, so this stays
    * independently callable) — same sharing as `sweepHookStates` above.
+   *
+   * THE ASYMMETRY (Task 2): `sweepHookStates`/`sweepTasks` above now RETAIN a
+   * degraded row's last-known entry rather than erase it, because both read
+   * something keyed off the identity triple (`r.uuid`, `r.wrapper`) that
+   * reads `''` on a degraded row and would otherwise blank a value that may
+   * still be true. This sweep has no such hazard to guard against: it keys
+   * every read off `r.id` alone (`tmux.capture(r.id)`), which the registry
+   * ladder never degrades — an id this loop iterates is, by construction,
+   * listed. So a degraded row's dialog/statusline detection here is
+   * UNCHANGED and fails stale BY DESIGN by simply running exactly as it
+   * always has, needing no retain-don't-erase logic of its own — the code
+   * makes that visible by NOT mentioning `measuredIdentity` anywhere below.
    */
   private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();

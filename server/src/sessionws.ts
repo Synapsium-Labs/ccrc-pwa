@@ -24,6 +24,26 @@ interface Resolved {
 }
 
 /**
+ * `resolve()`'s own three-way (registry ladder, Task 2) — same `ok`+`reason`
+ * shape `SingleRead` (registry.ts) already draws, deliberately not a new
+ * vocabulary. `ok: false, reason: 'unmeasurable'` covers BOTH of
+ * `SingleRead`'s own `unlistable` (the whole-directory collapse — the LARGER
+ * cousin of a degraded row, and just as much not proof this session is
+ * gone) and a listed-but-degraded identity triple (`measuredIdentity`
+ * answering null): in either case this read simply could not say, so the
+ * client is told to wait, never that the session is unknown.
+ * `ok: false, reason: 'absent'` covers a PROVEN absence (`SingleRead`'s own
+ * `absent`) and the wrapper/config-dir mapping gap this function has always
+ * folded into the same answer (see its own comment below) — neither is
+ * registry-unmeasurable, so retrying this same 2 s poll can never heal
+ * either one.
+ */
+type Resolution =
+  | { ok: true; data: Resolved }
+  | { ok: false; reason: 'unmeasurable' }
+  | { ok: false; reason: 'absent' };
+
+/**
  * One per-session websocket connection: sends the transcript backlog (or tails
  * from a `since` offset on resume), streams appended events, follows uuid
  * rotation (clear/compact/swap), reports status flips, and forwards bus
@@ -90,26 +110,40 @@ export class SessionStream {
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
     const r = await this.resolve();
     if (this.stopped) return;
-    if (r) {
-      this.uuid = r.uuid;
-      this.status = r.status;
-      if (this.since && this.since.uuid === r.uuid) {
-        this.startTailer(r.file, r.uuid, this.since.offset); // resume — no backlog
+    if (r.ok) {
+      this.uuid = r.data.uuid;
+      this.status = r.data.status;
+      if (this.since && this.since.uuid === r.data.uuid) {
+        this.startTailer(r.data.file, r.data.uuid, this.since.offset); // resume — no backlog
       } else {
-        await this.sendBacklogAndTail(r);
+        await this.sendBacklogAndTail(r.data);
       }
+    } else if (r.reason === 'unmeasurable') {
+      // DISTINCT from "unknown session" below (registry ladder, Task 2): the
+      // registry proved nothing either way this pass, so the honest word is
+      // "retrying", not "gone".
+      this.send({ type: 'notice', message: `session ${this.id} is temporarily unreadable — retrying` });
     } else {
       this.send({ type: 'notice', message: `unknown session ${this.id}` });
     }
     if (this.stopped) return;
-    await this.checkDialog(r?.file ?? null); // deliver an already-pending dialog on connect
+    await this.checkDialog(r.ok ? r.data.file : null); // deliver an already-pending dialog on connect
     if (this.stopped) return;
-    if (r) await this.checkTasks(r.cfgDir, r.uuid); // and the plan as it stands
+    if (r.ok) await this.checkTasks(r.data.cfgDir, r.data.uuid); // and the plan as it stands
     if (this.stopped) return;
-    if (r) await this.checkHookAsk(r.uuid); // and any hook ask already waiting
+    if (r.ok) await this.checkHookAsk(r.data.uuid); // and any hook ask already waiting
     if (this.stopped) return;
-    this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
-    this.poll.unref();
+    // `absent` is terminal for this connection: a proven-gone session id
+    // does not un-absent itself by polling, and installing the retry timer
+    // anyway would poll a dead end for the socket's whole lifetime. `ok` and
+    // `unmeasurable` both keep polling — for `unmeasurable` that IS the
+    // point of degrade-and-heal, and it is what lets `tick()`'s own
+    // appeared-branch heal a stream that started life unable to prove the
+    // session existed at all (`this.uuid` is still null on that first tick).
+    if (r.ok || r.reason === 'unmeasurable') {
+      this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
+      this.poll.unref();
+    }
   }
 
   /** Capture the pane; send `dialog` when a menu appears/changes or first comes
@@ -234,39 +268,50 @@ export class SessionStream {
   }
 
   /** Registry record + live state → current uuid, transcript file, and status. */
-  private async resolve(): Promise<Resolved | null> {
+  private async resolve(): Promise<Resolution> {
     // C0.3: one session's own row, not the whole registry — this stream only
     // ever asks about `this.id`, every 2 s, for as long as the socket is open.
     const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
-    if (!read.found) return null;
+    if (!read.found) {
+      // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own
+      // `listed: false` types elsewhere in this build — it proves nothing
+      // about whether THIS id exists, only that this read could not say.
+      // Only a proven `absent` earns the terminal "unknown session".
+      return read.reason === 'unlistable' ? { ok: false, reason: 'unmeasurable' } : { ok: false, reason: 'absent' };
+    }
     // Display/connectivity — DEGRADE-AND-HEAL, not a refusal: a degraded
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
     // that names nothing real, rather than this session's actual transcript.
     // `measuredIdentity` — the one door to the triple — is null the instant
-    // ANY of the three is unmeasured; answering null here is the SAME
-    // "unknown session" the client already renders for a reaped one, and
-    // this poll re-runs every 2 s, so a transient field read heals itself on
-    // the very next tick with no special-casing beyond this early return.
+    // ANY of the three is unmeasured; this poll re-runs every 2 s, so a
+    // transient field read heals itself on the very next tick with no
+    // special-casing beyond this early return. HONEST LIMIT: there is no
+    // half-measure here — when `uuid` itself is unmeasured there is no
+    // transcript path left to name, so this answers `unmeasurable` rather
+    // than reaching for a REMEMBERED uuid (`this.uuid`, still holding the
+    // last value this stream resolved) combined with a freshly-read cwd:
+    // that path was never proven to belong to the same incarnation as the
+    // uuid it would be built from, and is a guess wearing a real address.
     const identity = measuredIdentity(read.record);
-    if (identity === null) return null;
+    if (identity === null) return { ok: false, reason: 'unmeasurable' };
     const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
     if (!cfgDir) {
-      // The two ways `resolve()` answers null are worlds apart, and the client
-      // sees ONE sentence for both (`unknown session <id>`). A reaped session
-      // is ordinary; a session the registry knows, running under a wrapper
-      // `configDirFor` (server/src/config.ts) does not recognise — `isWrapper`
-      // rejects it, so it is either a typo'd registry write or a wrapper the
-      // `shared/api.ts` `ACCOUNTS` roster has not been taught about yet — is a
-      // deployment gap that breaks chat for every session on that account
-      // while the fleet list still shows them idle — `assembleFleet` never
-      // consults `configDirFor`. Say so once per connect, naming the wrapper,
-      // so the next occurrence is a grep and not an investigation. Not a
-      // throw: one unmapped account must not take down the streams for the
-      // mapped ones.
+      // A deployment gap, not a registry-read failure: the registry's own
+      // identity triple measured CLEAN, `configDirFor` (server/src/config.ts)
+      // just does not recognise this wrapper — a typo'd registry write, or a
+      // wrapper `shared/api.ts`'s `ACCOUNTS` roster has not been taught about
+      // yet. Retrying this same poll can never heal it without a redeploy, so
+      // this is `absent`, not `unmeasurable`, even though identity itself was
+      // fully measured — a session the registry knows, running under a
+      // wrapper this build cannot map, while the fleet list still shows it
+      // idle (`assembleFleet` never consults `configDirFor`). Say so once per
+      // connect, naming the wrapper, so the next occurrence is a grep and not
+      // an investigation. Not a throw: one unmapped account must not take
+      // down the streams for the mapped ones.
       console.warn(`ccrc-server: session ${this.id} has wrapper "${identity.wrapper}" with no configured ` +
         'config dir — chat cannot resolve it (see config.ts\'s `configDirFor`); the client sees only ' +
         '"unknown session"');
-      return null;
+      return { ok: false, reason: 'absent' };
     }
     let cwd = identity.workdir;
     let status: SessionStatus = 'dead';
@@ -283,7 +328,10 @@ export class SessionStream {
         }
       }
     }
-    return { uuid: identity.uuid, file: transcriptPath(cfgDir, cwd, identity.uuid), cfgDir, status, statusUpdatedAt };
+    return {
+      ok: true,
+      data: { uuid: identity.uuid, file: transcriptPath(cfgDir, cwd, identity.uuid), cfgDir, status, statusUpdatedAt },
+    };
   }
 
   /**
@@ -311,14 +359,18 @@ export class SessionStream {
     t.start();
   }
 
-  /** The tailed file shrank under us: treat as rotation — re-resolve, resend backlog. */
+  /** The tailed file shrank under us: treat as rotation — re-resolve, resend backlog.
+   *  An unmeasurable or absent re-resolve here (rare — the file just rotated,
+   *  so the registry read a moment ago plainly succeeded) leaves the OLD
+   *  tailer alone rather than tearing it down on a guess; the next 2 s tick
+   *  retries. */
   private async onFileShrunk(): Promise<void> {
     if (this.stopped) return;
     const r = await this.resolve();
-    if (this.stopped || !r) return;
-    this.uuid = r.uuid;
-    this.send({ type: 'rotated', uuid: r.uuid });
-    await this.sendBacklogAndTail(r);
+    if (this.stopped || !r.ok) return;
+    this.uuid = r.data.uuid;
+    this.send({ type: 'rotated', uuid: r.data.uuid });
+    await this.sendBacklogAndTail(r.data);
   }
 
   /** 2 s poll: uuid change → rotated + fresh backlog; status change → status msg. */
@@ -327,24 +379,39 @@ export class SessionStream {
     this.ticking = true;
     try {
       const r = await this.resolve();
-      if (this.stopped || !r) return;
-      if (r.uuid !== this.uuid) {
-        const appeared = this.uuid === null; // record was unknown at start
-        this.uuid = r.uuid;
-        if (!appeared) this.send({ type: 'rotated', uuid: r.uuid });
-        await this.sendBacklogAndTail(r);
+      // Registry ladder, Task 2: `unmeasurable` returns EARLY, touching
+      // NEITHER `this.uuid` NOR the tailer NOR `status` — the open tail keeps
+      // streaming, no `rotated` frame fires, and a mid-stream blip is
+      // invisible to the operator rather than announced as a rotation or a
+      // status flip that never really happened. `absent` gets the identical
+      // treatment (this was already true before this type existed: a null
+      // `resolve()` was always a silent early return here) — a session that
+      // was streaming and got reaped keeps its last frames on screen rather
+      // than being yanked mid-read, and one that never resolved at all stays
+      // quiet and keeps retrying via this same poll. HONEST LIMIT: neither
+      // branch reaches for `this.uuid` to rebuild a transcript path — a
+      // remembered uuid paired with whatever this pass DID manage to read is
+      // not proven to be the same incarnation, and is a guess wearing a real
+      // address (see `resolve()`'s own comment).
+      if (this.stopped || !r.ok) return;
+      const data = r.data;
+      if (data.uuid !== this.uuid) {
+        const appeared = this.uuid === null; // record was unknown/unmeasurable at start
+        this.uuid = data.uuid;
+        if (!appeared) this.send({ type: 'rotated', uuid: data.uuid });
+        await this.sendBacklogAndTail(data);
       }
       if (this.stopped) return;
-      if (r.status !== this.status) {
-        this.status = r.status;
-        this.send({ type: 'status', status: r.status, statusUpdatedAt: r.statusUpdatedAt });
+      if (data.status !== this.status) {
+        this.status = data.status;
+        this.send({ type: 'status', status: data.status, statusUpdatedAt: data.statusUpdatedAt });
       }
       if (this.stopped) return;
-      await this.checkDialog(r.file);
+      await this.checkDialog(data.file);
       if (this.stopped) return;
-      await this.checkTasks(r.cfgDir, r.uuid);
+      await this.checkTasks(data.cfgDir, data.uuid);
       if (this.stopped) return;
-      await this.checkHookAsk(r.uuid);
+      await this.checkHookAsk(data.uuid);
     } finally {
       this.ticking = false;
     }

@@ -21,7 +21,7 @@ const session = (id: string): FleetSession => ({
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
+  version: '2.1.0', hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [],
 });
 
 /** Scripted WebSocket stand-in (same shape the store tests use). */
@@ -79,6 +79,40 @@ describe('fleet snapshot (lib/offline)', () => {
   });
 });
 
+// Registry ladder (Task 2): `saveFleetSnapshot` refuses two frame shapes
+// before ever touching storage — same reasoning `lib/seen.ts`'s `prune`
+// already states for an empty set (seen.ts:198-208): absent evidence proves
+// nothing, so a frame this shape must never overwrite a fuller prior one.
+describe('saveFleetSnapshot refuses an empty or degraded frame (Task 2)', () => {
+  it('an empty frame never overwrites a real prior snapshot', () => {
+    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([]); // e.g. a transient readdir failure broadcast as `[]`
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
+  });
+
+  it('an empty frame writes nothing on a cold start either — no snapshot is the honest answer, not an empty one', () => {
+    saveFleetSnapshot([]);
+    expect(loadFleetSnapshot()).toBeNull();
+  });
+
+  it('a frame carrying even one degraded (unmeasured) row never overwrites a real prior snapshot', () => {
+    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([
+      session('claude:OpenClawHetzner'),
+      { ...session('claude2:mekwarlive'), unmeasured: ['workdir'] },
+    ]);
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
+  });
+
+  it('a fully-measured frame writes normally — the guard is specific to the two refused shapes, not a blanket freeze', () => {
+    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:OpenClawHetzner'), session('claude2:mekwarlive')]);
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id).sort()).toEqual(
+      ['claude:OpenClawHetzner', 'claude2:mekwarlive'].sort(),
+    );
+  });
+});
+
 describe('fleet store hydration + persistence', () => {
   it('hydrates sessions from the snapshot at boot, still connecting', () => {
     saveFleetSnapshot([session('claude:OpenClawHetzner')]);
@@ -96,6 +130,31 @@ describe('fleet store hydration + persistence', () => {
 
     expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
     expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    store.getState().disconnect();
+  });
+
+  // Task 2: the store's own `onMessage` calls `saveFleetSnapshot` unguarded
+  // on every `fleet` frame (stores/fleet.ts) — the refusal has to live INSIDE
+  // that function for a live socket message to inherit it too, not just a
+  // direct call site.
+  it('a LIVE fleet frame carrying a degraded row still updates the in-memory store (the socket is still ' +
+     'authoritative) but does NOT overwrite the offline snapshot', () => {
+    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
+    store.getState().connect();
+    const sock = FakeSocket.instances[0]!;
+    sock.open();
+    sock.message(JSON.stringify({
+      type: 'fleet',
+      sessions: [{ ...session('claude2:mekwarlive'), unmeasured: ['workdir'] }],
+    }));
+
+    // The live view still reflects the fresh frame — degrade-and-heal is a
+    // DISPLAY concern (SessionLine's own grey+reason note), not a reason to
+    // hide the row from the connected client.
+    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    // The offline cache, by contrast, keeps the last FULLY-measured snapshot.
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
     store.getState().disconnect();
   });
 });

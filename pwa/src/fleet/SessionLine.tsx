@@ -212,6 +212,27 @@ export function SessionLine({
         <span className="sess-meta">
           <span className={`sess-state sess-state--${state}`}>{state}</span>
 
+          {/* Registry ladder (architecture doc, increment 1's second half —
+              Task 2): this row's identity triple could not be fully measured
+              this pass, so `status`/`branch`/etc above may be frozen at a
+              fallback rather than freshly read. Same small, honest register
+              as PrKeycap's own `unknown`-phase grey+reason idiom (chat.css's
+              `--pr-dim`) — never a new banner. The reason lives in `title`,
+              verbatim, never parsed, same as `.sess-held` next door; the word
+              itself stays generic ("unreadable") because THIS surface has no
+              per-session detail worth a sentence — the tooltip does. Heals on
+              its own the moment a later sweep measures clean, same as every
+              other degrade-and-heal surface this ladder feeds. */}
+          {session.unmeasured.length > 0 && (
+            <span
+              className="sess-unmeasured"
+              data-unmeasured="true"
+              title={`registry ${session.unmeasured.join('/')} temporarily unreadable — retrying`}
+            >
+              unreadable
+            </span>
+          )}
+
           {/* The program's claim — a workspace-only meta cell, same idiom as
               .sess-acct next door: reuses .sess-ask's ink-tertiary token, so
               no new contrast pair. THE REASON STRING IS THE DISPLAY

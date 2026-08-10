@@ -366,6 +366,115 @@ describe('fleet REST + WS', () => {
     });
   });
 
+  // Task 2 (registry ladder, the heal side): a DEGRADED row (listed, but one
+  // identity field's BYTES came back null — `.workdir` etc STAYS in the
+  // directory listing, unlike the "genuinely partial read" tests above, which
+  // delete the field's file outright and so DROP the row instead) survives
+  // `sessions.length` unchanged — `assembleFleet` still emits one
+  // `FleetSession` per degraded record, carrying `unmeasured` non-empty. The
+  // shrink guard above has nothing to say about it (no shrink occurred), so
+  // it needs its own gate: never persist a degraded row as last-known-good.
+  describe('a degraded row is never persisted as last-known-good, even at an unchanged length (Task 2)', () => {
+    /** One specific field's BYTES come back null while the directory listing
+     *  still names the file — the degrade shape, never the drop shape (see
+     *  the block comment above). `degrade` is a closure flag, not a second
+     *  `Deps`/`FleetWatcher`: the watcher instance (and its warn-once flags)
+     *  must be the SAME one across ticks for the warn-once-per-episode
+     *  assertions below to mean anything. */
+    const degradableIO = (id: string, field: string): { io: FleetIO; setDegraded: (v: boolean) => void } => {
+      let degrade = false;
+      const io: FleetIO = { ...localIO, readFile: async (p) => (degrade && p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)) };
+      return { io, setDegraded: (v) => { degrade = v; } };
+    };
+
+    it('skips the write on a degraded row and warns once — the fuller PRIOR snapshot (pre-degrade) survives untouched', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
+      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick(); // clean read — writes a 1-row cache
+      let snap = await loadSnapshot(cachePath);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      expect(snap?.sessions[0]?.unmeasured).toEqual([]);
+      const firstSavedAt = snap!.savedAt;
+
+      // Same length as before — this row DEGRADES, it is never dropped: the
+      // file stays listed, only its content comes back null.
+      setDegraded(true);
+      await watcher.tick();
+
+      snap = await loadSnapshot(cachePath);
+      // The write was SKIPPED: the cache is still the pre-degrade snapshot,
+      // byte for byte (same savedAt), never a fresh write of the guess.
+      expect(snap?.savedAt).toBe(firstSavedAt);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+
+      const skipWarnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === 'string' && msg.includes('snapshot write skipped') && msg.includes('unmeasured identity field'),
+      );
+      expect(skipWarnings).toHaveLength(1);
+
+      warnSpy.mockRestore();
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+
+    it('resumes writing, with no further warning, the moment the row measures clean again', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
+      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick();
+      const firstSavedAt = (await loadSnapshot(cachePath))!.savedAt;
+
+      setDegraded(true);
+      await watcher.tick(); // skipped
+      expect((await loadSnapshot(cachePath))!.savedAt).toBe(firstSavedAt);
+
+      await new Promise((r) => setTimeout(r, 3)); // guarantee Date.now() moves
+      setDegraded(false); // healed
+      await watcher.tick();
+      const healedSnap = await loadSnapshot(cachePath);
+      expect(healedSnap!.savedAt).toBeGreaterThan(firstSavedAt);
+      expect(healedSnap?.sessions[0]?.unmeasured).toEqual([]);
+
+      // One more degrade/heal cycle, to prove the warn-once flag actually
+      // reset rather than staying permanently spent.
+      setDegraded(true);
+      await watcher.tick();
+
+      const skipWarnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === 'string' && msg.includes('snapshot write skipped') && msg.includes('unmeasured identity field'),
+      );
+      expect(skipWarnings).toHaveLength(2); // one per episode, not one total and not one per tick
+
+      warnSpy.mockRestore();
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+
+    it('the very FIRST tick, with nothing on disk yet, also refuses to write a degraded assembly — there is no last-known-good to prefer over silence', async () => {
+      const cacheDir = mkTmp('ccrc-cache-');
+      const cachePath = path.join(cacheDir, 'state-cache.json');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
+      setDegraded(true);
+      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };
+      const watcher = new FleetWatcher(deps, new Bus());
+
+      await watcher.tick();
+
+      expect(await loadSnapshot(cachePath)).toBeNull();
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+  });
+
   // C0.1: `tick()` had no re-entrancy guard, so a tick still in flight past
   // the next `intervalMs` edge got a second one stacked on top of it.
   describe('tick() re-entrancy (C0.1)', () => {

@@ -1063,6 +1063,16 @@
 
 .sess-warn { color: var(--status-dead-text); flex: none; }
 
+/* Registry ladder degrade note (Task 2) — same quiet ink-tertiary register as
+   .sess-held next door, PrKeycap's own `unknown`-phase grey. No colour of its
+   own beyond that: this is a "wait, not gone" note, not a warning, so it
+   never borrows .sess-warn's dead-red. The reason lives in `title`, never
+   rendered here. */
+.sess-unmeasured {
+  color: var(--ink-tertiary);
+  flex: none;
+}
+
 /* The program's claim, as its own meta cell — reuses .sess-ask's
    ink-tertiary token (below), so it needs no new contrast pair. Truncates
    like .sess-acct next door; the reason can run long ("program:x wave:2/4")

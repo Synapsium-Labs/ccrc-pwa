@@ -646,3 +646,192 @@ describe('session WS', () => {
     ws.close();
   });
 });
+
+// Registry ladder (architecture doc, increment 1's second half — Task 2, the
+// heal side): `resolve()`'s three-way, off `SingleRead`. Direct
+// `SessionStream` instantiation (no HTTP/WS layer) for the `start()`/poll
+// assertions below — fast and deterministic, and this file's own `pollOnce`
+// already establishes that pattern for `tick()`.
+
+/** A directory listing that always fails — the ordinary transient shape in
+ *  remote mode (one dropped agent-WS round trip), same helper shape as
+ *  `mail-routes.test.ts`'s `unlistableIO`. */
+const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
+
+/** A registry whose directory listing is fine but one specific session's
+ *  field read is not — the LISTED-but-unreadable shape `measuredIdentity`
+ *  degrades rather than drops. Same helper shape as `mail-routes.test.ts`'s
+ *  `withUnreadableField`, reimplemented here rather than imported: these are
+ *  two independent test files and the shape is three lines. */
+const withUnreadableField = (id: string, field: string): FleetIO => ({
+  ...localIO,
+  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+});
+
+const mkLadderDeps = (home: string, io: FleetIO): Deps => {
+  const run: Runner = async (_cmd, args) => {
+    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const cfg = loadConfig({ CCRC_HOME: home });
+  return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+};
+
+/** Private-field peeks, same discipline as this file's own `pollOnce` (a cast
+ *  through `unknown`, not a public API this class needs for production). */
+const pollTimer = (s: SessionStream): unknown => (s as unknown as { poll: unknown }).poll;
+const streamUuid = (s: SessionStream): string | null => (s as unknown as { uuid: string | null }).uuid;
+const streamTailer = (s: SessionStream): unknown => (s as unknown as { tailer: unknown }).tailer;
+
+describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task 2)', () => {
+  it('start() sends a DISTINCT notice for unmeasurable (listed, unreadable uuid) — RED against the old ' +
+     'code, which sent the identical "unknown session" sentence for both', async () => {
+    const home = mkTmp('ccrc-ladder-');
+    seed(home);
+    const deps = mkLadderDeps(home, withUnreadableField(ID, 'uuid'));
+    const frames: { type: string; message?: string }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }));
+    try {
+      await stream.start();
+      expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
+      // degrade-and-heal keeps polling — see the next test for the absent contrast.
+      expect(pollTimer(stream)).not.toBeNull();
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('start() also answers unmeasurable, with the SAME retry, when the WHOLE registry directory cannot be ' +
+     'listed — the larger cousin of a degraded row, never conflated with a proven absence', async () => {
+    const home = mkTmp('ccrc-ladder-');
+    seed(home);
+    const deps = mkLadderDeps(home, unlistableIO);
+    const frames: { type: string; message?: string }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }));
+    try {
+      await stream.start();
+      expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
+      expect(pollTimer(stream)).not.toBeNull();
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('start() sends the truthful "unknown session" AND installs NO retry poll for a genuinely absent id — ' +
+     'RED against the old code, which always installed the poll regardless', async () => {
+    const home = mkTmp('ccrc-ladder-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); // listable, but names nobody
+    const deps = mkLadderDeps(home, localIO);
+    const frames: { type: string; message?: string }[] = [];
+    const stream = new SessionStream(deps, new Bus(), 'no-such-session', (m) => frames.push(m as { type: string; message?: string }));
+    try {
+      await stream.start();
+      expect(frames[0]).toEqual({ type: 'notice', message: 'unknown session no-such-session' });
+      expect(pollTimer(stream)).toBeNull();
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('an unmeasurable session at CONNECT time still heals through the existing appeared-branch once the ' +
+     'registry clears — no spurious "rotated" frame for what is really a first resolve', async () => {
+    const home = mkTmp('ccrc-ladder-');
+    seed(home);
+    let broken = true;
+    const io: FleetIO = { ...localIO, readFile: async (p) => (broken && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
+    const deps = mkLadderDeps(home, io);
+    const frames: { type: string; message?: string; uuid?: string }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string; uuid?: string }), { uuid: UUID_A, offset: 0 });
+    try {
+      await stream.start();
+      expect(streamUuid(stream)).toBeNull(); // never resolved yet — the honest starting point
+      frames.length = 0;
+
+      broken = false; // heals
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+
+      expect(streamUuid(stream)).toBe(UUID_A);
+      // appeared === true (uuid was null at the top of this tick): a plain
+      // backlog/tail, never a 'rotated' frame — this is this stream's FIRST
+      // real resolve, not a rotation of an already-known session.
+      expect(frames.some((f) => f.type === 'rotated')).toBe(false);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('tick() on an unmeasurable read touches NEITHER uuid NOR the tailer NOR status — a mid-stream blip is ' +
+     'invisible to the operator, the open tail is left running exactly as it was', async () => {
+    const home = mkTmp('ccrc-ladder-');
+    seed(home);
+    let broken = false;
+    const io: FleetIO = { ...localIO, readFile: async (p) => (broken && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
+    const deps = mkLadderDeps(home, io);
+    const frames: { type: string }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string }));
+    try {
+      await stream.start(); // clean resolve — installs the real tailer
+      const uuidBefore = streamUuid(stream);
+      const tailerBefore = streamTailer(stream);
+      expect(uuidBefore).toBe(UUID_A);
+      expect(tailerBefore).not.toBeNull();
+      frames.length = 0;
+
+      broken = true; // now listed but unreadable
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+
+      expect(streamUuid(stream)).toBe(uuidBefore);       // untouched
+      expect(streamTailer(stream)).toBe(tailerBefore);   // SAME instance — never torn down/rebuilt
+      expect(frames).toEqual([]);                          // no rotated, no status, nothing guessed
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('registry ladder: a mid-stream degrade never interrupts the open tail (Task 2, end to end)', () => {
+  it('events keep arriving over the SAME tail while every registry read degrades — no rotated frame, no ' +
+     'notice, the transcript stream is simply unaffected', { timeout: 20_000 }, async () => {
+    const home = mkTmp('ccrc-sws-ladder-');
+    seed(home);
+    const fileA = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    let degrade = false;
+    const io: FleetIO = { ...localIO, readFile: async (p) => (degrade && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const app = await buildServer(deps, new Bus());
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+      const next = collect(ws);
+      await opened(ws);
+
+      const backlog = await next();
+      expect(backlog.type).toBe('backlog');
+
+      degrade = true; // every registry read for this id degrades from here on
+      appendFileSync(fileA, userLine('u9', 'during a degrade'));
+      const ev = await nextIgnoringAsk(next, 8000);
+      expect(ev.type).toBe('events'); // arrived over the SAME open tail
+      expect(ev.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u9']);
+
+      ws.close();
+    } finally {
+      await app.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

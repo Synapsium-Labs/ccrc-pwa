@@ -1,13 +1,17 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { isPrPhase, type PrPhase } from '../../shared/api.js';
+import { isPrPhase, type IdentityField, type PrPhase } from '../../shared/api.js';
 
-/** The identity triple (architecture doc, increment 1's second half, and its
- *  orchestrator amendment). `SessionRecord.unmeasured` names which of these
- *  three could not be read this pass; `measuredIdentity` is the one door a
- *  consumer outside this file may use to reach them at all. */
-export type IdentityField = 'uuid' | 'wrapper' | 'workdir';
+// `IdentityField` moved to shared/api.ts (Task 2): `FleetSession.unmeasured`
+// carries the SAME evidence onto the wire, and a second, server-only
+// definition here is exactly the drift `shared/api.ts`'s `UNCHECKED_PR`
+// docstring spends thirty lines warning about. Re-exported (never imported
+// from here today, but every OTHER type this file exports is) so a future
+// consumer that wants "the type `SessionRecord.unmeasured` holds" finds it
+// one hop from the field itself, rather than having to know it lives in
+// `shared/` instead.
+export type { IdentityField };
 
 export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;

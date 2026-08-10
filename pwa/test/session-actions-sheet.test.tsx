@@ -13,7 +13,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   version: null, model: null, effort: null, ultracode: false, branch: null,
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null,
-  bucket: 'idle', bucketSince: null, ...over,
+  bucket: 'idle', bucketSince: null, unmeasured: [], ...over,
 });
 
 /** The REAL server failure shape: runCcd routes answer 502 with `stderr` and

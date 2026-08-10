@@ -229,6 +229,12 @@ export async function assembleFleet(
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs),
       subagents: hs?.subagents ?? null,
+      // Carried straight off the record — this IS the evidence `tick()`'s own
+      // `unmeasuredIds` (watch.ts) computes independently off the same
+      // `records`, now also shipped on the wire so the PWA (grey+reason,
+      // SessionLine.tsx) and the offline/state-cache snapshots (Task 2) can
+      // tell a degraded row from a measured one too.
+      unmeasured: r.unmeasured,
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

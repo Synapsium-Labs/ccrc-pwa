@@ -16,6 +16,7 @@ const session = (id: string): FleetSession => ({
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
+  unmeasured: [],
 });
 
 describe('fleetstate', () => {
@@ -243,6 +244,31 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: true }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: { reason: 'x' } }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `unmeasured` — absent degrades to [] (MEASURED, not "we don\'t know"), a valid array survives, ' +
+     'a malformed one rejects the whole session (Task 2)', async () => {
+    // Split from every OTHER array field's revival (`subagents`, above):
+    // absent here means "predates degrade-tracking entirely", and every
+    // session a pre-Task-2 build ever persisted was, by that build's OWN
+    // registry read, either fully measured or dropped outright — so `[]`
+    // (measured clean) is the honest degrade, never `null` (no data).
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.unmeasured).toEqual([]);
+    expect(Object.keys(absent ?? {})).toContain('unmeasured');
+
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), unmeasured: ['wrapper', 'workdir'] }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.unmeasured).toEqual(['wrapper', 'workdir']);
+
+    // Not laundered into [] (measured) and not a dropped field: the WHOLE
+    // snapshot goes, same stance `held`/`subagents` take two tests up —
+    // a value this build cannot parse must never read as "measured clean".
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), unmeasured: 'uuid' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), unmeasured: ['uuid', 'not-a-real-field'] }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
 
