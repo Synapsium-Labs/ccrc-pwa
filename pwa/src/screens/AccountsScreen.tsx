@@ -50,7 +50,10 @@ function useAccountsPoll(): AccountsPoll {
  *  that ccd doesn't know about — the same union SwapSheet's pickableWrappers
  *  uses, so a fifth account never goes missing from either surface. */
 function rowOrder(accounts: readonly AccountUsage[]): string[] {
-  const order = [...KNOWN_WRAPPERS];
+  // `string[]`, not the roster's `readonly Wrapper[]` — same reasoning as
+  // SwapSheet's `pickableWrappers`: a reported account outside the roster
+  // must still get a row, not a type error.
+  const order: string[] = [...KNOWN_WRAPPERS];
   for (const a of accounts) if (!order.includes(a.wrapper)) order.push(a.wrapper);
   return order;
 }

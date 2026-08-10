@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PR_REASONS, isPrReason } from '../../shared/api.js';
+import { PR_REASONS, isPrReason, ACCOUNTS } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -278,6 +278,97 @@ describe('Build 7 nouns', () => {
       const src = readFileSync(f, 'utf8');
       expect(/\b(?:interface|type)\s+(?:RunTask|ProgramTask|CoordTask)\b/.test(src),
         `${rel(f)} names a work item a Task — see the plan's D-7`).toBe(false);
+    }
+  });
+});
+
+// Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
+// "an account" / "a wrapper" was the one domain concept in this system with no
+// type and no home, enumerated by hand in eight places across three languages.
+// `shared/api.ts`'s `ACCOUNTS` is now the one TypeScript home for it.
+describe('the account roster — one ACCOUNTS map, shared/api.ts', () => {
+  // Derived from the roster itself, NOT hand-typed — a hand-typed copy here
+  // would be the scanner that exists to prevent hand-typed copies being
+  // itself one: a 6th account added to `ACCOUNTS` (say `claude-dev1`) and
+  // then restated as `['claude-dev1', 'claude2']` somewhere under the four
+  // roots must score a hit, and a scanner still matching against a five-name
+  // literal frozen at write time would stay green while that drift reopened.
+  const WRAPPER_NAMES = Object.keys(ACCOUNTS);
+
+  // The fingerprint every historical copy shared: two or more wrapper names
+  // quoted inside the SAME `[...]` array literal — fleet.ts's old
+  // `idHomeWrapper` prefix list, server.ts's old `ACCOUNT_ORDER`, pwa's old
+  // `KNOWN_WRAPPERS`, shared/api.ts's own old `HOME_ABLE_WRAPPERS`.
+  // `ACCOUNTS`' own keys never trip this: they are bare object-literal
+  // property names (`claude: {`), never inside square brackets, and a
+  // roster entry's `idPrefix`/`configDirSuffix` VALUES are single strings,
+  // never two wrapper names in the same literal.
+  const enumeratesAsArray = (src: string): boolean => {
+    for (const m of src.matchAll(/\[[^\]]*\]/gs)) {
+      const hits = WRAPPER_NAMES.filter((w) => new RegExp(`['"]${w}['"]`).test(m[0]));
+      if (hits.length >= 2) return true;
+    }
+    return false;
+  };
+
+  it('no source file under the four roots restates the roster as an array literal', () => {
+    const holders = ALL.filter((f) => enumeratesAsArray(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual([]);
+  });
+
+  it('ACCOUNTS is defined in exactly one file, and that file is shared/api.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export const ACCOUNTS\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('HOME_ABLE_WRAPPERS, ACCOUNT_ORDER and KNOWN_WRAPPERS are derived from ACCOUNTS, not hand-typed', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(src).toMatch(/export const HOME_ABLE_WRAPPERS: readonly Wrapper\[\] = ALL_WRAPPERS\.filter/);
+    expect(src).toMatch(/export const ACCOUNT_ORDER: readonly Wrapper\[\] = ALL_WRAPPERS\.filter/);
+    expect(src).toMatch(/export const KNOWN_WRAPPERS: readonly Wrapper\[\] = ACCOUNT_ORDER/);
+  });
+
+  it('is what the four former copy sites (plus limits.ts\'s fifth) now import', () => {
+    const importsFrom = (f: string, name: string): boolean =>
+      new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)*shared/api(?:\\.js)?'`)
+        .test(readFileSync(path.join(ccrcRoot, f), 'utf8'));
+    // server.ts's old ACCOUNT_ORDER literal, and limits.ts's old
+    // `[...HOME_ABLE_WRAPPERS, 'gpt']` — both now import the roster's own
+    // ACCOUNT_ORDER instead of restating (or half-restating) it.
+    for (const f of ['server/src/server.ts', 'server/src/limits.ts']) {
+      expect(importsFrom(f, 'ACCOUNT_ORDER'), f).toBe(true);
+    }
+    // pwa's old KNOWN_WRAPPERS literal — same set, kept under its old name
+    // (shared/api.ts's own `KNOWN_WRAPPERS` docstring explains why).
+    expect(importsFrom('pwa/src/lib/accounts.ts', 'KNOWN_WRAPPERS')).toBe(true);
+    // fleet.ts's old idHomeWrapper prefix list, and pwa's old hand-typed
+    // label/colour map — both now read the roster's per-account fields
+    // directly.
+    for (const f of ['server/src/fleet.ts', 'pwa/src/lib/accounts.ts']) {
+      expect(importsFrom(f, 'ACCOUNTS'), f).toBe(true);
+    }
+  });
+});
+
+describe('the account roster — config dir is data, joined in one place', () => {
+  it('no source file under the four roots indexes cfg.wrappers[...] directly', () => {
+    // `configDirFor` (server/src/config.ts) is the one place a wrapper
+    // becomes a directory, and it maps straight from `ACCOUNTS` + `home`
+    // rather than through `cfg.wrappers` at all — so the rule ("no
+    // cfg.wrappers[x] indexing outside configDirFor", architecture doc,
+    // cross-cutting (a)) is satisfied by there being no such indexing
+    // anywhere, not by confining it to one function. Nine call sites did
+    // this before fleet.ts (x2), server.ts, commands.ts, watch.ts (x4) and
+    // sessionws.ts all switched to `configDirFor(cfg.home, wrapper)`.
+    const holders = ALL.filter((f) => /\.wrappers\[/.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual([]);
+  });
+
+  it('configDirFor is what those nine former call sites use now', () => {
+    for (const f of ['server/src/fleet.ts', 'server/src/server.ts', 'server/src/commands.ts',
+      'server/src/watch.ts', 'server/src/sessionws.ts']) {
+      const src = readFileSync(path.join(ccrcRoot, f), 'utf8');
+      expect(src, f).toMatch(/configDirFor\(/);
     }
   });
 });

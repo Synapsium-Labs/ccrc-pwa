@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
+import { ACCOUNTS, isWrapper, type Wrapper } from '../../shared/api.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -14,7 +15,13 @@ export interface CcrcConfig {
   uploadsDir: string;
   ccdBin: string;
   projectsRoot: string;
-  wrappers: Record<string, string>;
+  /** One entry per `shared/api.ts` `ACCOUNTS` member — built by `loadConfig`
+   *  from `configDirFor`, below, so a wrapper cannot be added to the roster
+   *  without also gaining a config dir here. Index it through `configDirFor`
+   *  (an untrusted `SessionRecord.wrapper` needs the `undefined` case this
+   *  gives; a known `Wrapper` never does) rather than `wrappers[x]` — see
+   *  `single-definition.test.ts`. */
+  wrappers: Record<Wrapper, string>;
   /** 'remote' drives the fleet through ccrc-agent instead of local node:fs/exec — see server/src/remote/. */
   fleetMode: FleetMode;
   agentUrl: string | null;
@@ -34,6 +41,22 @@ export interface CcrcConfig {
   mailTokenPath: string;
 }
 
+/**
+ * THE ONE place a wrapper becomes a directory — every other reader of an
+ * account's config dir (`fleet.ts`, `server.ts`, `commands.ts`, `watch.ts`,
+ * `sessionws.ts`) calls this instead of indexing the `wrappers` map on
+ * `CcrcConfig` directly by wrapper name (`single-definition.test.ts`
+ * enforces it). `undefined` for anything `isWrapper` rejects — a
+ * `SessionRecord.wrapper` read off disk is an untrusted string (a stale
+ * build, a hand-edited registry file, or the
+ * `'ghost-wrapper'` fixture `pr-sweep.test.ts` writes on purpose), and the
+ * whole point of this function existing is that callers get one `undefined`
+ * to check rather than a bare index into a map that might not have the key.
+ */
+export function configDirFor(home: string, wrapper: string): string | undefined {
+  return isWrapper(wrapper) ? path.join(home, ACCOUNTS[wrapper].configDirSuffix) : undefined;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
   return {
@@ -46,16 +69,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     uploadsDir: path.join(home, '.cc-clips', 'uploads'),
     ccdBin: path.join(home, '.local', 'bin', 'ccd'),
     projectsRoot: env.CCRC_PROJECTS_ROOT ?? '/data/projects',
-    wrappers: {
-      claude: path.join(home, '.claude'),
-      claude2: path.join(home, '.claude-personal'),
-      'claude-corp': path.join(home, '.claude-corp'),
-      gpt: path.join(home, '.claude-gpt'),
-      // 5th account: ~/.local/bin/claude-dev0 sets CLAUDE_CONFIG_DIR=~/.claude-dev0.
-      // Omitting it made resolve() return null for every dev0 session, which the
-      // client only ever saw as "unknown session" — see sessionws.ts resolve().
-      'claude-dev0': path.join(home, '.claude-dev0'),
-    },
+    // Every `ACCOUNTS` member gets an entry, DERIVED — the 5th account
+    // (`claude-dev0`) was missing here for its entire life (see the git
+    // history of this line) because this used to be a hand-typed literal
+    // beside the roster instead of built from it; that class of bug is what
+    // `configDirFor(home, w) as string` closes: `w` ranges over
+    // `Object.keys(ACCOUNTS)`, so a member added to the roster gets a
+    // config dir here with no second edit, and none can be silently
+    // skipped the way a hand-typed object literal could be.
+    wrappers: Object.fromEntries(
+      (Object.keys(ACCOUNTS) as Wrapper[]).map((w) => [w, configDirFor(home, w) as string]),
+    ) as Record<Wrapper, string>,
     fleetMode: env.CCRC_FLEET === 'remote' ? 'remote' : 'local',
     agentUrl: env.CCRC_AGENT_URL ?? null,
     agentToken: env.CCRC_AGENT_TOKEN ?? null,

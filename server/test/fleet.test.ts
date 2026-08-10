@@ -27,6 +27,22 @@ describe('idHomeWrapper', () => {
     expect(idHomeWrapper('claude-synapsium-platform')).toBe('claude');
     expect(idHomeWrapper('gpt-foo')).toBe('gpt');
   });
+
+  // Prophylactic pin, not a record of an observed misattribution — see
+  // `idHomeWrapper`'s own docstring in `fleet.ts` for why `claude-dev0-*`
+  // cannot appear in the registry today (`ACCOUNTS['claude-dev0'].ccdValid`
+  // is `false`). The old prefix list (`['claude-corp', 'claude2', 'claude',
+  // 'gpt']`) never even MENTIONED `claude-dev0`, so `claude-dev0-quiet-basin`
+  // fell through to the bare `'claude-'` branch — this assertion was GREEN
+  // with the WRONG answer before the fix (confirmed against the exact
+  // pre-fix source: it returned `'claude'`). Longest-`idPrefix`-wins over the
+  // `ACCOUNTS` roster is the fix: `'claude-dev0-'` (12 chars) is tried before
+  // `'claude-'` (7 chars) — and is what keeps the answer correct if
+  // `claude-dev0` (or a future wrapper shaped like it) ever becomes
+  // ccd-valid.
+  it('resolves claude-dev0 sessions to claude-dev0, not to claude', () => {
+    expect(idHomeWrapper('claude-dev0-quiet-basin')).toBe('claude-dev0');
+  });
 });
 
 describe('assembleFleet', () => {

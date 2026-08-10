@@ -1,4 +1,4 @@
-import type { CcrcConfig } from './config.js';
+import { configDirFor, type CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistry, readSessionRecord } from './registry.js';
@@ -7,10 +7,10 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, PrState, SessionStatus, TaskProgress, Wrapper } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket } from '../../shared/api.js';
+import { ACCOUNTS, sessionBucket } from '../../shared/api.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
@@ -50,8 +50,40 @@ export function hookAskSummary(hs: HookState | null): string | null {
   return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
 }
 
-export function idHomeWrapper(id: string): string {
-  for (const w of ['claude-corp', 'claude2', 'claude', 'gpt']) if (id.startsWith(`${w}-`)) return w;
+/** `ACCOUNTS`' wrappers, longest `idPrefix` first — computed once, since
+ *  `ACCOUNTS` is static. `idHomeWrapper` walks this order so a prefix that is
+ *  itself a prefix of a longer one (`'claude-'` inside `'claude-dev0-'` and
+ *  `'claude-corp-'`) never wins first. */
+const BY_ID_PREFIX_LENGTH_DESC: readonly Wrapper[] =
+  (Object.keys(ACCOUNTS) as Wrapper[]).slice().sort((a, b) => ACCOUNTS[b].idPrefix.length - ACCOUNTS[a].idPrefix.length);
+
+/**
+ * Which account a session id belongs to, from the id alone — the fallback
+ * `assembleFleet` uses when the registry has no explicit `home` written
+ * (older sessions; ccd only started writing `home` recently).
+ *
+ * Longest-`idPrefix`-wins over `ACCOUNTS`, in `BY_ID_PREFIX_LENGTH_DESC`
+ * order, replaces a hand-typed, unordered prefix array that did not even
+ * MENTION `claude-dev0`, under which `claude-dev0-quiet-basin` would have
+ * fallen through to the bare `'claude-'` branch and come back `claude` — a
+ * session attributed to the wrong account.
+ *
+ * Prophylactic, not a fix for an observed misattribution: `claude-dev0-*`
+ * cannot appear in the registry today. `ACCOUNTS['claude-dev0'].ccdValid`
+ * is `false`, and the cross-language fixture test
+ * (`wrapper-roster-fixture.test.ts`) pins that ccd's own `_is_valid_wrapper`
+ * rejects `claude-dev0` — so nothing under `ccd/` can mint an id with that
+ * prefix. What this ordering keeps true is that IF `claude-dev0` (or any
+ * future wrapper whose `idPrefix` is a strict extension of another member's)
+ * ever becomes ccd-valid, the longest match still wins rather than silently
+ * reproducing the old bug. `fleet.test.ts:40` pins the corrected answer as a
+ * regression guard, not as a record of a live incident.
+ *
+ * Falls back to `'claude'` for an id with no wrapper prefix at all — a main
+ * checkout's id is the bare project name, never `<wrapper>-<slug>`.
+ */
+export function idHomeWrapper(id: string): Wrapper {
+  for (const w of BY_ID_PREFIX_LENGTH_DESC) if (id.startsWith(ACCOUNTS[w].idPrefix)) return w;
   return 'claude';
 }
 
@@ -68,7 +100,7 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   const rec = await readSessionRecord(io, cfg, id);
   if (!rec || !(await tmux.hasSession(id))) return 'dead';
   const pid = await tmux.panePid(id);
-  const cfgDir = cfg.wrappers[rec.wrapper];
+  const cfgDir = configDirFor(cfg.home, rec.wrapper);
   if (!pid || !cfgDir) return 'idle';
   const live = await readLiveState(io, cfgDir, pid);
   return live ? liveSessionStatus(live.status) : 'idle';
@@ -117,7 +149,7 @@ export async function assembleFleet(
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
-      const cfgDir = cfg.wrappers[r.wrapper];
+      const cfgDir = configDirFor(cfg.home, r.wrapper);
       if (pid && cfgDir) {
         const live = await readLiveState(io, cfgDir, pid);
         if (live) {

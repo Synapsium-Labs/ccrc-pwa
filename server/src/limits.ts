@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { HOME_ABLE_WRAPPERS, type ProjectedHome } from '../../shared/api.js';
+import { ACCOUNT_ORDER, HOME_ABLE_WRAPPERS, type ProjectedHome } from '../../shared/api.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -22,13 +22,15 @@ const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-/** Every wrapper this server will ever fabricate an account row for — mirrors
- *  ccd's `_is_valid_wrapper` (`VALID_WRAPPERS` + `gpt`, ccd:14,99). The
- *  registry dir holds `<name>-disabled` markers that are NOT accounts at all
+/** Every wrapper this server will ever fabricate an account row for — the
+ *  same `ACCOUNT_ORDER` (`shared/api.ts`) that mirrors ccd's
+ *  `_is_valid_wrapper` (`VALID_WRAPPERS` + `gpt`, ccd:14,104), used below
+ *  as a membership check rather than for its order. The registry dir holds
+ *  `<name>-disabled` markers that are NOT accounts at all
  *  (`autocompact-disabled` is a fleet-wide proactive-/compact kill switch,
  *  ccd:22) — bounding the backfill below to this set is what stops one of
  *  those from turning into a phantom "autocompact" row on GET /api/accounts. */
-const KNOWN_WRAPPERS: readonly string[] = [...HOME_ABLE_WRAPPERS, 'gpt'];
+const isKnownWrapper = (w: string): boolean => (ACCOUNT_ORDER as readonly string[]).includes(w);
 
 /**
  * The account a new workspace would land on, and its pressure score.
@@ -136,7 +138,7 @@ export async function readLimits(
   // place that would otherwise turn one of those into a fabricated row.
   for (const wrapper of disabledLanes) {
     if (wrapper in out) continue;
-    if (!KNOWN_WRAPPERS.includes(wrapper)) continue;
+    if (!isKnownWrapper(wrapper)) continue;
     out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                      sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
                      disabled: true };

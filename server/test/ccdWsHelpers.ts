@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { mkTmp } from './tmpHelpers.js';
+import { HOME_ABLE_WRAPPERS } from '../../shared/api.js';
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
@@ -76,7 +77,13 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp']) {
+  // ccd's VALID_WRAPPERS — the wrappers a bare binary on $PATH must exist
+  // for (`_spawn`'s `command -v "$w"` check) — is exactly ACCOUNTS' home-able
+  // set (see wrapper-roster-fixture.test.ts). Derived here, not hand-typed,
+  // for the same reason single-definition.test.ts's own scanner is: a copy
+  // frozen at write time stops tracking the roster the moment a 4th
+  // home-able account exists.
+  for (const w of HOME_ABLE_WRAPPERS) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
 

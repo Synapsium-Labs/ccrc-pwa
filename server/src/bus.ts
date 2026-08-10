@@ -12,6 +12,21 @@ export type SessionEventName = `session:${string}`;
  * Build 7 — see `FleetWatcher.emitRuns`), 'session:<id>' (SessionStreamMsg).
  */
 export class Bus extends EventEmitter {
+  constructor() {
+    super();
+    // EventEmitter's default cap (10) is a leak HEURISTIC sized for a
+    // handful of subscribers per emitter — not for "one `notice` listener per
+    // concurrent viewer", which is this bus's actual, by-design fan-out:
+    // every open per-session stream (`sessionws.ts`'s `SessionStream`) and
+    // every open `/ws/fleet` connection (`server.ts`) adds one. Past 10
+    // simultaneous viewers this logged "Possible EventEmitter memory leak
+    // detected" on the live server, even though every listener IS removed on
+    // close (`sessionws.ts`'s `stop()`, `server.ts`'s socket `'close'`) — a
+    // wrong default, not a leak, so the fix is a higher explicit cap rather
+    // than chasing a listener that was never actually left behind.
+    this.setMaxListeners(100);
+  }
+
   override emit(event: 'fleet', sessions: FleetSession[]): boolean;
   override emit(event: 'notice', notice: Notice): boolean;
   override emit(event: 'runs', runs: RunSummary[]): boolean;
