@@ -158,9 +158,16 @@ if [ "$TARGET" = "agent" ]; then
   # the fleet host showed only `agent deploy shared`, so `AGENT_BUILD_CMD`
   # failed at that exact `cp` with "No such file or directory" (deploy-verify's
   # general ~/ccrc/<dir> reachability test, this task). This is a SEPARATE
-  # tree from the `ccd/coordinator-skill/` rsync below, whose destination is
-  # `.cc-sessions/coordinator-skill/`, not under `~/ccrc/ccd/` — the two
-  # `--delete` runs cannot step on each other.
+  # tree from the coordinator skill rsync below, whose destination sits under
+  # `.cc-sessions`, not under `~/ccrc/ccd` — the two `--delete` runs cannot
+  # step on each other.
+  #
+  # That sentence deliberately does NOT spell the skill's directory name with
+  # a trailing slash. install-coordinator-skill.test.ts locates its rsync by
+  # scanning this file for the FIRST line containing that exact spelling, so
+  # any COMMENT carrying it shadows the real invocation and fails the suite.
+  # Measured twice: once when CI caught this fix's first push, and again when
+  # this very note quoted the token while trying to explain it.
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     --exclude 'ccrc-mail.token' \
     agent shared deploy ccd "$BOX":ccrc/
