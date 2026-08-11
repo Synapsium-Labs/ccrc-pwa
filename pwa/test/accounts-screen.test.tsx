@@ -223,10 +223,10 @@ describe('AccountsScreen — the projection line', () => {
     expect(await screen.findByText(/next workspace lands on team·max/i)).toBeInTheDocument();
   });
 
-  it('falls back to naming the three HOME_ABLE lanes individually — never "all accounts" — when every one is disabled', async () => {
+  it('falls back to naming the four HOME_ABLE lanes individually — never "all accounts" — when every one is disabled', async () => {
     stubAccounts([acct({ wrapper: 'claude', disabled: true })], null);
     render(<AccountsScreen />);
-    expect(await screen.findByText('Next workspace: team·max, alt·max and team·shared all disabled — nothing can take it'))
+    expect(await screen.findByText('Next workspace: team·max, alt·max, team·shared and lab·dev0 all disabled — nothing can take it'))
       .toBeInTheDocument();
   });
 });

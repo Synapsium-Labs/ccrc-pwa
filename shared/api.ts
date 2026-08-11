@@ -1311,8 +1311,8 @@ export const ACCOUNTS: Record<Wrapper, AccountDef> = {
     // it). `label`/`colorVar` are the raw name and neutral ink — exactly
     // what the pre-roster pwa map already fell back to for a wrapper it
     // didn't recognise, so giving it a REAL entry here must not repaint it.
-    configDirSuffix: '.claude-dev0', idPrefix: 'claude-dev0-', label: 'claude-dev0',
-    colorVar: '--ink-tertiary', homeAble: false, ccdValid: false, hooksAble: false,
+    configDirSuffix: '.claude-dev0', idPrefix: 'claude-dev0-', label: 'lab·dev0',
+    colorVar: '--ink-tertiary', homeAble: true, ccdValid: true, hooksAble: true,
   },
 };
 

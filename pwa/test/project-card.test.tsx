@@ -156,10 +156,10 @@ describe('the + is icon-only', () => {
   // Only `null` earns this copy; see the comment above addLabel in
   // ProjectCard. The button itself stays enabled either way (asserted in
   // 'the + button' above).
-  it('names the three HOME_ABLE lanes individually when the server projects nothing — never "all accounts" (gpt is never consulted for this fact but renders as an account row on the same screen)', () => {
+  it('names the four HOME_ABLE lanes individually when the server projects nothing — never "all accounts" (gpt is never consulted for this fact but renders as an account row on the same screen)', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={null} />);
-    expect(screen.getByLabelText('New workspace on demo — team·max, alt·max and team·shared all disabled'))
+    expect(screen.getByLabelText('New workspace on demo — team·max, alt·max, team·shared and lab·dev0 all disabled'))
       .toBeInTheDocument();
   });
 });

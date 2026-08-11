@@ -32,7 +32,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp', 'gpt']) {
+  for (const w of ['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
 });

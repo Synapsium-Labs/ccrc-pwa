@@ -11,7 +11,7 @@ WRAPPER_DIR="$HOME/.local/bin"
 # Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
 PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
 WORKTREES_ROOT="$HOME/worktrees"
-VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (home-able)
+VALID_WRAPPERS=(claude claude2 claude-corp claude-dev0)   # canonical Anthropic accounts (home-able)
 # `gpt` is a 4th lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend), OPT-IN only
 # since 2026-07-26: a session reaches it solely by having gpt as its HOME (`ccd prefer <id>
 # gpt`), never as general overflow — its 272k window and unofficial-client risk are not
@@ -6528,6 +6528,7 @@ _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
     claude)      echo "$HOME/.claude" ;;
     claude2)     echo "$HOME/.claude-personal" ;;
     claude-corp) echo "$HOME/.claude-corp" ;;
+    claude-dev0) echo "$HOME/.claude-dev0" ;;
     gpt)         echo "$HOME/.claude-gpt" ;;
   esac
 }
@@ -6657,6 +6658,7 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly u
 _id_wrapper() {   # id -> the wrapper encoded in the id prefix (longest match wins)
   case "$1" in
     claude-corp-*) echo claude-corp ;;
+    claude-dev0-*) echo claude-dev0 ;;
     claude2-*)     echo claude2 ;;
     claude-*)      echo claude ;;
     gpt-*)         echo gpt ;;

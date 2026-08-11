@@ -108,11 +108,11 @@ const PROJECTS = {
 // — NewSessionSheet —
 
 describe('NewSessionSheet', () => {
-  it('renders all four account rows with labels and the fleet-store limits', () => {
+  it('renders all five account rows with labels and the fleet-store limits', () => {
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
 
-    for (const label of ['team·max', 'alt·max', 'team·shared', 'gpt']) {
+    for (const label of ['team·max', 'alt·max', 'team·shared', 'gpt', 'lab·dev0']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
     // Live limits ride the rows that have a session on that account…
@@ -121,7 +121,7 @@ describe('NewSessionSheet', () => {
     expect(screen.getByText('8%')).toBeInTheDocument();
     expect(screen.getByText('22%')).toBeInTheDocument();
     // …and the accounts without one say so instead of faking a gauge.
-    expect(screen.getAllByText(/limits unknown/)).toHaveLength(2);
+    expect(screen.getAllByText(/limits unknown/)).toHaveLength(3);
   });
 
   it('selecting account + project arms the confirm, which posts the exact body', async () => {
@@ -429,7 +429,7 @@ describe('SwapSheet', () => {
   });
 
   it('keeps every account when none is disabled', () => {
-    expect(pickableWrappers([], [])).toEqual(['claude', 'claude2', 'claude-corp', 'gpt']);
+    expect(pickableWrappers([], [])).toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
   });
 
   it('does not offer a disabled account in the rendered picker', async () => {

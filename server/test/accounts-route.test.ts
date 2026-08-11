@@ -87,6 +87,7 @@ describe('GET /api/accounts', () => {
       ({ five, seven, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 });
     const home = seedLimits({
       claude: fresh(80, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95),
+      'claude-dev0': fresh(85, 45),
     });
 
     const { projected } = await getPayload(home);
@@ -101,19 +102,22 @@ describe('GET /api/accounts', () => {
       ({ five, seven, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 });
     const home = seedLimits({
       claude: pinned(100, 100), claude2: pinned(99, 100), 'claude-corp': pinned(98, 99),
+      'claude-dev0': pinned(100, 100),
     });
 
     const { projected } = await getPayload(home);
     expect(projected).toEqual({ wrapper: 'claude-corp', score: 99 });
   });
 
-  it('orders accounts claude, claude2, claude-corp, gpt', async () => {
+  it('orders accounts claude, claude2, claude-corp, gpt, claude-dev0', async () => {
     const t = now();
     const body = { five: 1, seven: 1, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 };
-    const home = seedLimits({ gpt: body, 'claude-corp': body, claude2: body, claude: body });
+    const home = seedLimits({
+      gpt: body, 'claude-corp': body, claude2: body, claude: body, 'claude-dev0': body,
+    });
 
     const accounts = await getAccounts(home);
-    expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude2', 'claude-corp', 'gpt']);
+    expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
   });
 
   // The handler rebuilds each AccountUsage field by field, so a field it forgets
