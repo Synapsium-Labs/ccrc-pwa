@@ -6,6 +6,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { configDirFor, type CcrcConfig } from './config.js';
+import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
@@ -70,6 +71,10 @@ const CLIP_MIME: Record<string, string> = {
 
 export interface Deps {
   cfg: CcrcConfig;
+  /** The deploy's build stamp (buildinfo.ts, read once at boot from
+   *  `cfg.buildInfoPath`). `null` on a dev checkout or an unstamped box;
+   *  absent has the same meaning — `/health` treats both as null. */
+  build?: BuildInfo | null;
   /** The ONLY path to `ccd`. There is deliberately no raw `run` here: with one,
    *  "every ccd argv is built in ccdargv.ts" is enforceable only by scanning
    *  source text, which was defeated four times in four rounds. The parameter
@@ -147,7 +152,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   deps.presence ??= new Presence();
   const presence = deps.presence;
 
-  app.get('/health', async () => ({ ok: true }));
+  app.get('/health', async () => ({ ok: true, build: deps.build ?? null }));
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
 
