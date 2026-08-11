@@ -1,7 +1,10 @@
 # Build 4 — the conversation surface tells the truth, and the run board grows hands
 
-**Status:** design, 2026-08-11 — **awaiting operator review before any
-execution.** Read-only scouting on `main`; every claim below was measured at
+**Status:** APPROVED 2026-08-11 ("spec looks good") — the five open questions'
+embedded recommendations are ratified as written: sheet-hosted live-ask answering;
+coordinator-written items via `POST /api/runs/:id/items`; the `coord-pause` verb is
+minted; start-a-program is composition over existing routes; abandon releases, never
+archives. Read-only scouting on `main`; every claim below was measured at
 a file and line, not inherited from a plan.
 
 **Inherits:** the 2026-08-05 Orca analysis's UI/UX item 2 ("the conversation
