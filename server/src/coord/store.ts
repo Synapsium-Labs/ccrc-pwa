@@ -78,6 +78,36 @@ const RUN_ROW_COLUMNS =
  */
 const OUTSTANDING_STATES_SQL = "('queued','delivered')";
 
+/**
+ * The READ-side "still needs a human's attention" predicate (fix, review
+ * finding 2) — `OUTSTANDING_STATES_SQL` above, unioned with a `rejected`
+ * delivery THIS BUILD gave up retrying before anyone ever acted on it: the
+ * replay-ceiling park (`watch.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
+ * that never sent at all past `MAIL_MAX_ATTEMPTS`, or a recipient the
+ * registry no longer lists. `renderEnvelope`'s own ack line promises
+ * replay "until you ack" — true only up to that ceiling, never past it —
+ * and before this fix, the moment a park landed, the row vanished from
+ * every reader built on `OUTSTANDING_STATES_SQL` alone: `RunSummary.unreadMail`
+ * silently dropped to 0, `MailStrip` unmounted itself, and only a full
+ * `?all=1` history read still knew. A message that was never acked and
+ * never acted on does not stop being a fact worth surfacing just because
+ * the lane stopped trying to hand it over.
+ *
+ * DELIBERATELY EXCLUDES `cancelOutstandingDeliveries`'s own park
+ * (`lastError = 'run closed'`): that one is not abandonment, it is the run
+ * closing making the delivery moot BY DESIGN — surfacing it as "still needs
+ * attention" would be exactly the false alarm this predicate exists to
+ * avoid on the other end. And DELIBERATELY NOT threaded through
+ * `hasOutstandingMail` (the dedupe guard on `queueSystemMail`'s own retry
+ * loop) or `dueDeliveries`/`markDelivered`/`rejectDelivery`'s own
+ * `NOT IN ('acked','rejected')` write-guards — this predicate answers "is
+ * this worth a human's attention", a UI-facing question, not "should the
+ * delivery lane act on this again", which stays exactly `'rejected'`-is-
+ * terminal (bounded context 5) for every one of those.
+ */
+const OUTSTANDING_OR_ABANDONED_SQL =
+  `(d.state IN ${OUTSTANDING_STATES_SQL} OR (d.state = 'rejected' AND d.lastError != 'run closed'))`;
+
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns. */
 const MAIL_ROW_COLUMNS =
@@ -364,11 +394,43 @@ export class CoordStore {
     return row ? this.hydrateRun(row) : null;
   }
 
-  runs(opts: { includeClosed?: boolean } = {}): RunRow[] {
-    const where = opts.includeClosed ? '' : "WHERE r.state NOT IN ('done','failed')";
+  /**
+   * `includeClosed` (fix, review finding 24): the archive half was the one
+   * read on this whole branch with no clamp on either side — `?closed=1`
+   * walked the entire `runs` table, forever, with no LIMIT and no
+   * retention, unlike every sibling read this build added or touched
+   * (`feedEvents` clamps into `FEED_RETENTION`; `mailForRecipient`/
+   * `outstandingMailFor` clamp at `clampMailLimit`'s 500). After a year of
+   * programs this was every run ever recorded, rendered into one unbounded
+   * DOM list, plus a per-row `unreadMailCount` subquery apiece.
+   *
+   * The clamp is asymmetric ON PURPOSE: an ACTIVE run (`state NOT IN
+   * ('done','failed')`) is never dropped by it, however old — the live
+   * board's whole job is showing every run still moving, and a program that
+   * has been open for a year is exactly the one an operator most needs to
+   * see, not the one to hide behind a LIMIT. Only the FINISHED half — which
+   * grows without bound and is read-once-per-mount archive material, not a
+   * live signal — is capped, to the newest `closedLimit` rows by id (a
+   * closed run's id only ever moves forward). `runsFrameSeen`+the live
+   * `{type:'runs'}` frame is what proves an active run "still there" isn't
+   * silently truncated: this method's own `includeClosed:false` branch
+   * (used by that frame) carries no LIMIT at all, clamped or otherwise.
+   */
+  runs(opts: { includeClosed?: boolean; closedLimit?: number } = {}): RunRow[] {
+    if (!opts.includeClosed) {
+      const rows = this.db.prepare(
+        `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
+        "WHERE r.state NOT IN ('done','failed') ORDER BY r.id",
+      ).all() as unknown as RunRowDb[];
+      return rows.map((row) => this.hydrateRun(row));
+    }
+    const n = clampMailLimit(opts.closedLimit ?? 500);
     const rows = this.db.prepare(
-      `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ${where} ORDER BY r.id`,
-    ).all() as unknown as RunRowDb[];
+      `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
+      "WHERE r.state NOT IN ('done','failed') OR r.id IN " +
+      "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?) " +
+      'ORDER BY r.id',
+    ).all(n) as unknown as RunRowDb[];
     return rows.map((row) => this.hydrateRun(row));
   }
 
@@ -464,7 +526,7 @@ export class CoordStore {
     if (sessionId === null) return 0;
     return (this.db.prepare(
       'SELECT count(*) AS c FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
-      `WHERE m.runId = ? AND d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL}`,
+      `WHERE m.runId = ? AND d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
     ).get(runId, sessionId) as { c: number }).c;
   }
 
@@ -613,23 +675,33 @@ export class CoordStore {
   }
 
   /**
-   * Every OUTSTANDING (`queued` or `delivered`, unacked) delivery addressed
-   * to `toId`, newest first — `checkMail`'s (`sessionws.ts`) only caller,
-   * and the fix for findings 2/4 (fix round 1): unlike `mailForRecipient`,
-   * the state predicate is in the WHERE clause, so `limit` bounds
-   * OUTSTANDING rows rather than history. Before this method existed,
-   * `checkMail` filtered `mailForRecipient`'s own 100-row history window in
-   * JS, AFTER the cap — a delivery that was still genuinely queued, but
-   * older than the newest 100 deliveries to that recipient, silently fell
-   * out of the window the session mail strip watches. The coordinator
-   * session is the run-of-the-mill victim: every worker's mail resolves to
-   * it (`resolveCoordinator`) across every wave of a program.
+   * Every delivery addressed to `toId` that still needs a human's attention,
+   * newest first — `checkMail`'s (`sessionws.ts`) only caller, and the fix
+   * for findings 2/4 (fix round 1): unlike `mailForRecipient`, the state
+   * predicate is in the WHERE clause, so `limit` bounds these rows rather
+   * than history. Before this method existed, `checkMail` filtered
+   * `mailForRecipient`'s own 100-row history window in JS, AFTER the cap —
+   * a delivery that was still genuinely queued, but older than the newest
+   * 100 deliveries to that recipient, silently fell out of the window the
+   * session mail strip watches. The coordinator session is the run-of-the-
+   * mill victim: every worker's mail resolves to it (`resolveCoordinator`)
+   * across every wave of a program.
+   *
+   * `OUTSTANDING_OR_ABANDONED_SQL`, not the narrower `OUTSTANDING_STATES_SQL`
+   * (fix, review finding 2): a delivery the lane gave up retrying past its
+   * own replay/attempt ceiling is `state:'rejected'` on the wire, distinct
+   * from `'queued'`/`'delivered'` — a reader that cares can tell the
+   * difference — but it stays in THIS list rather than disappearing from it,
+   * because it was never acked and never acted on. Excludes only the one
+   * `'rejected'` shape that is not abandonment: `cancelOutstandingDeliveries`'s
+   * `lastError:'run closed'` park, which is the run closing making the
+   * delivery moot on purpose.
    */
   outstandingMailFor(toId: string, limit = 100): MailSummary[] {
     const n = clampMailLimit(limit);
     const rows = this.db.prepare(
       `SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +
-      `WHERE d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL} ORDER BY d.id DESC LIMIT ?`,
+      `WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id DESC LIMIT ?`,
     ).all(toId, n) as unknown as MailRowDb[];
     return this.hydrateMail(rows);
   }

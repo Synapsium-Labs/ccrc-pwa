@@ -577,18 +577,38 @@ export function registerCoordRoutes(
    * other coordinator routes (contract item 6): unlike the ingress and ack
    * routes, this is a read with no attribution to check — the box token
    * alone is the gate.
+   *
+   * Default state predicate (fix, review findings 4/21): this docstring has
+   * called it "outstanding mail" since it was written, but until now the
+   * query underneath was `mailForRecipient` — full history, every state,
+   * `queued`/`delivered`/`acked`/`rejected` alike, with no state predicate at
+   * all. `wave-lifecycle.md:83` tells the coordinator "to see what is
+   * outstanding" this is the call to make; a coordinator that took that
+   * literally got back every delivery it had already acked and acted on too,
+   * indistinguishable from new work. `outstandingMailFor` (`queued`/
+   * `delivered`, plus a delivery the lane gave up retrying before anyone
+   * ever acted on it — `OUTSTANDING_OR_ABANDONED_SQL`, fix, review finding
+   * 2) is the definition this build already gave `MailStrip`'s own frame
+   * (`store.ts`) — this route now answers with the SAME definition by
+   * default, so there is exactly one meaning of "outstanding" in the tree.
+   * `?all=1` opts back into the unfiltered
+   * history read for a caller that genuinely wants it (a debugging session,
+   * an operator inspecting `/mail`) — `mailForRecipient` is not deleted, only
+   * no longer the default a doc calls "outstanding".
    */
   app.get('/api/mail', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'GET /api/mail')) return;
     const coord = deps.coord;
 
-    const q = req.query as { to?: unknown; limit?: unknown };
+    const q = req.query as { to?: unknown; limit?: unknown; all?: unknown };
     if (typeof q.to !== 'string' || q.to.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const limit = typeof q.limit === 'string' ? Number(q.limit) : undefined;
-    return reply.code(200).send({ ok: true, mail: coord.mailForRecipient(q.to, limit) });
+    const all = q.all === '1' || q.all === 'true';
+    const mail = all ? coord.mailForRecipient(q.to, limit) : coord.outstandingMailFor(q.to, limit);
+    return reply.code(200).send({ ok: true, mail });
   });
 
   // ── runs (Task 9) ──────────────────────────────────────────────────────

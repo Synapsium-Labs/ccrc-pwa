@@ -71,13 +71,18 @@ describe('renderEnvelope: the header', () => {
     expect(lines).toContain('  /b/two.log');
   });
 
-  it('carries the three-line ack instruction, naming THIS id — deleting any one of the three lines is a live mutant otherwise', () => {
+  it('carries the four-line ack instruction, naming THIS id — deleting any one of the four lines is a live mutant otherwise', () => {
     const env = renderEnvelope({ ...BASE, id: 99 });
     expect(env).toContain('ack: POST /api/mail/99/ack with header x-ccrc-mail-token');
     expect(env).toContain('~/.cc-secrets/ccrc-mail.token');
     expect(env).toContain('"fromId":"<your ccd id>"');
     expect(env).toContain('"fromUuid":"<your uuid>"');
-    expect(env).toContain('Until you ack, this message will be delivered to you again.');
+    // Review finding 2: this used to promise unconditional replay-until-ack —
+    // false past `watch.ts`'s own `MAIL_REPLAY_MAX_ATTEMPTS` — so the wording
+    // now names the bound instead of a promise the lane cannot keep.
+    expect(env).toContain('Until you ack, this message is redelivered on later sweeps, up to a bounded number of');
+    expect(env).toContain('attempts — after that the lane gives up and marks it undeliverable. Ack it promptly.');
+    expect(env).not.toContain('this message will be delivered to you again');
   });
 
   it('carries the body verbatim, after the header', () => {

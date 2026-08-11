@@ -290,12 +290,25 @@ export class SessionStream {
    * read AFTER its `LIMIT` — the earlier shape let an old unacked delivery
    * fall outside the newest-100-deliveries window and read as gone here
    * while `GET /api/runs`' `unreadMail` (store.ts's own `unreadMailCount`,
-   * no `LIMIT` at all) still counted it. "Outstanding = queued|delivered" is
-   * the store's rule now, in one place, not this caller's.
+   * no `LIMIT` at all) still counted it. "Outstanding = queued|delivered, or
+   * a replay-ceiling park nobody ever acked" (fix, review finding 2 —
+   * `OUTSTANDING_OR_ABANDONED_SQL`) is the store's rule now, in one place,
+   * not this caller's.
+   *
+   * `500`, not the bare default of 100 (fix, review finding 25): the default
+   * is sized for a route argument nobody controls, but this caller is
+   * in-process and every worker's mail resolves to the coordinator session
+   * across every wave of a program (store.ts's own `outstandingMailFor`
+   * docstring) — the run-of-the-mill victim of exactly this cap, and
+   * `MailStrip.tsx` prints `mail.length` as its headline COUNT, not a
+   * capped page of one, so a silent 100-row ceiling reads as a cap wearing
+   * the clothes of a fact. `500` is `clampMailLimit`'s own hard ceiling
+   * (store.ts) — the most this call could ever widen to, so this is "as
+   * wide as the store allows," not an arbitrary bigger number.
    */
   private async checkMail(): Promise<void> {
     if (this.stopped || !this.deps.coord) return;
-    const outstanding = this.deps.coord.outstandingMailFor(this.id);
+    const outstanding = this.deps.coord.outstandingMailFor(this.id, 500);
     const json = JSON.stringify(outstanding);
     if (json === this.lastMailJson) return;
     this.lastMailJson = json;

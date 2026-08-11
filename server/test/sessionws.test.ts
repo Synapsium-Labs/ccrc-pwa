@@ -986,12 +986,20 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     }
   });
 
-  it('excludes acked and rejected mail — never queues, delivers or acks itself', async () => {
+  it('excludes acked mail and a run-closed cancellation, includes an abandoned park (review finding 2) — never queues, delivers or acks itself', async () => {
     const ackedId = queueTo(ID, 'acked already');
     coord.markDelivered(ackedId, Date.now());
     coord.markAcked(ackedId, Date.now());
-    const rejectedId = queueTo(ID, 'rejected already');
-    coord.rejectDelivery(rejectedId, 'stale-uuid', 'gone');
+    // A run-closed cancellation is moot by design, not abandonment — stays
+    // excluded (`cancelOutstandingDeliveries`'s own shape).
+    const runClosedId = queueTo(ID, 'run closed already');
+    coord.rejectDelivery(runClosedId, 'undeliverable', 'run closed');
+    // A genuine abandonment — the lane gave up before anyone acted on it —
+    // stays visible here (fix, review finding 2): never acked, never acted
+    // on, so it must not vanish from the strip the moment the lane stops
+    // retrying it.
+    const abandonedId = queueTo(ID, 'abandoned already');
+    coord.rejectDelivery(abandonedId, 'undeliverable', 'replayed without ack past the replay ceiling');
     queueTo(ID, 'still outstanding');
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
@@ -1004,8 +1012,34 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
       if (m.type === 'mail') mailFrame = m;
     }
     expect(mailFrame).toBeDefined();
-    expect(mailFrame!.mail).toHaveLength(1);
-    expect(mailFrame!.mail[0]!.subject).toBe('still outstanding');
+    const subjects = mailFrame!.mail.map((m) => m.subject).sort();
+    expect(subjects).toEqual(['abandoned already', 'still outstanding']);
+    ws.close();
+  });
+
+  it('carries more than 100 genuinely outstanding deliveries (fix, review finding 25)', async () => {
+    // `outstandingMailFor`'s bare default (100) is sized for a route
+    // argument nobody controls; this caller is in-process, and every
+    // worker's mail resolves to the coordinator session across every wave
+    // of a program (store.ts's own docstring) — the run-of-the-mill victim
+    // of exactly this cap. `MailStrip.tsx` prints `mail.length` as its
+    // headline COUNT, not a page indicator, so a silent 100-row ceiling
+    // used to read as a cap wearing the clothes of a fact. 105 queued
+    // deliveries, oldest first, must ALL arrive.
+    const N = 105;
+    for (let i = 0; i < N; i++) queueTo(ID, `mail ${i}`);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    let mailFrame: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail).toHaveLength(N);
     ws.close();
   });
 

@@ -733,7 +733,7 @@ describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
     }
   });
 
-  it('excludes acked and rejected mail, includes queued and delivered, same as `mailForRecipient`\'s own callers expect', () => {
+  it('excludes acked mail and a run-closed cancellation, includes queued/delivered and an abandoned park (review finding 2)', () => {
     const s = store();
     const toId = 'ccrc-pwa-clear-cove';
     const queuedId = queue(s, toId, 'queued');
@@ -742,11 +742,23 @@ describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
     const ackedId = queue(s, toId, 'acked');
     s.markDelivered(ackedId, Date.now());
     s.markAcked(ackedId, Date.now());
-    const rejectedId = queue(s, toId, 'rejected');
-    s.rejectDelivery(rejectedId, 'stale-uuid', 'gone');
+    // A genuine abandonment — the lane gave up (a replay-ceiling park, or any
+    // other `rejectDelivery` the delivery lane itself performs) before anyone
+    // ever acted on the message. Fix, review finding 2: this must STAY
+    // outstanding — never acked, never acted on — distinguishable by its own
+    // `state:'rejected'`, not simply invisible.
+    const abandonedId = queue(s, toId, 'rejected (abandoned)');
+    s.rejectDelivery(abandonedId, 'undeliverable', 'replayed without ack past the replay ceiling');
+    // A run-closed cancellation is NOT abandonment — the run itself is done,
+    // so the message is moot BY DESIGN (`cancelOutstandingDeliveries`'s own
+    // `lastError:'run closed'`). This one stays excluded.
+    const runClosedId = queue(s, toId, 'rejected (run closed)');
+    s.rejectDelivery(runClosedId, 'undeliverable', 'run closed');
 
-    expect(s.outstandingMailFor(toId).map((m) => m.id).sort((a, b) => a - b))
-      .toEqual([queuedId, deliveredId].sort((a, b) => a - b));
+    const ids = s.outstandingMailFor(toId).map((m) => m.id).sort((a, b) => a - b);
+    expect(ids).toEqual([queuedId, deliveredId, abandonedId].sort((a, b) => a - b));
+    expect(ids).not.toContain(ackedId);
+    expect(ids).not.toContain(runClosedId);
   });
 
   it('never crosses recipients — mail addressed to a different session is invisible here', () => {
