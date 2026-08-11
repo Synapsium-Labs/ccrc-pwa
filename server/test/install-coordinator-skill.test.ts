@@ -146,8 +146,15 @@ describe('the deploy ships the skill, agent-side — and PR I’s token lane is 
   it('installs the skill in the agent arm, after the hook installer', () => {
     expect(agentArm).toContain('coordinator-skill');
     expect(agentArm).toContain('install-coordinator-skill.sh');
-    expect(agentArm.indexOf('install-session-hooks.sh'))
-      .toBeLessThan(agentArm.indexOf('install-coordinator-skill.sh'));
+    // Anchored on the actual RUN lines (`bash ~/.cc-sessions/…`), not a bare
+    // substring: the coordinator-skill block's own explanatory comment names
+    // "install-session-hooks.sh" in prose ("ccd, session-hook.sh,
+    // install-session-hooks.sh, and now this") — a bare `indexOf` finds that
+    // mention regardless of where the block sits, so a mutant that actually
+    // swaps the two INVOCATION blocks survived this assertion untouched
+    // (mutation sweep, Task 8: measured, not assumed).
+    expect(agentArm.indexOf('bash ~/.cc-sessions/install-session-hooks.sh'))
+      .toBeLessThan(agentArm.indexOf('bash ~/.cc-sessions/install-coordinator-skill.sh'));
   });
 
   it('rsyncs the skill with --delete, so a deleted reference dies on the box too', () => {

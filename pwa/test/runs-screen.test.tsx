@@ -76,6 +76,30 @@ describe('the run board', () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it('never asks REST on an interval — one cold read per mount, never a poll (mutation sweep, Task 8)', async () => {
+    // The file's own header states the reason: "Polling would be a fourth
+    // cadence for data that changes on human timescales; this reads it once
+    // and lets the socket carry updates." `toHaveBeenCalledTimes(1)` above
+    // proves the FIRST call is unconditional but says nothing about a SECOND
+    // one arriving later on a timer. `useNow(30_000)` legitimately runs its
+    // own unrelated `setInterval` for the relative-time readout, so a bare
+    // "setInterval was never called" spy is a false positive on the REAL
+    // component — this drives fake time forward with
+    // `advanceTimersByTimeAsync` (which also flushes the promise microtask
+    // queue between ticks) and counts `loadRuns` calls directly instead.
+    vi.useFakeTimers();
+    try {
+      const store = makeStore();
+      act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+      const load = vi.fn().mockResolvedValue({ runs: [] });
+      render(<RunsScreen store={store} loadRuns={load} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cold-starts from GET /api/runs when no frame has landed', async () => {
     // The deep-link case, and the older-server case: /ws/fleet may never send
     // a runs frame at all, and a blank board would be a lie about the program.

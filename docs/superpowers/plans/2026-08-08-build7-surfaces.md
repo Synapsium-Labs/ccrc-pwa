@@ -2874,6 +2874,53 @@ One literal mutant per added construct, full suite per mutant, sha256-verified r
 
 A survivor is a finding, not a pass.
 
+**Amendment (Task 8 execution, 2026-08-11): all 34 constructs the table above names were actually re-measured** —
+edited the real construct, ran the FULL relevant suite (`server`: 92 files/1953 tests; `pwa`: 53 files/1298-1299
+tests), confirmed the named test (or an equally on-point one, where the tree had moved past the table's literal
+wording — nine contract clauses and five install homes ship today, not the table's eight/four) went red, then
+restored via `git checkout --` and diffed clean. No row was credited by inspection alone. Two adaptations and two
+genuine survivors, closed rather than left as gaps:
+
+- The table's clause-3/route/home-count rows were written against the plan's pre-reconciliation shapes (8 clauses,
+  `claimed`, four homes). The tree today carries Task 7's nine clauses (`claimed-by-another`, clause 9's `/clear`
+  rule) and the roster-derived five-entry default `homes` fallback (`.claude-dev0` now `hooksAble:true`). Each
+  mutant was re-aimed at the real construct — soften clause 3, mis-route `/api/runs/:id/advnace`, drop
+  `.claude-dev0` from the default array — and killed by the CURRENT test with the CURRENT wording
+  (`coordinator-skill.test.ts`'s nine-clause array; `wrapper-roster-fixture.test.ts` and
+  `install-coordinator-skill.test.ts`'s "touches exactly the roster's hooksAble config dirs" case).
+- `feed.ts: unknown kind → 'mail'`: `feed.ts` has no kind-mapping logic of its own — it delegates to the
+  pre-existing `reviveNotifyEvent`/`isNotifyKind` (`shared/api.ts`), unchanged by this branch. The mutant was
+  applied to that shared fallback instead (`isNotifyKind(kindRaw) ? kindRaw : 'mail'`) to prove `feed.test.ts`'s
+  new "lands a kind from a NEWER build on `unknown`" case actually discriminates a fault in the dependency it
+  relies on — which it does (and so does the pre-existing `notifymark.test.ts`, confirming no regression in shared
+  coverage either).
+
+**Survivor 1 — `RunsScreen: poll GET /api/runs on an interval`.** Adding a real `setInterval` re-fetch inside the
+cold-read effect left the FULL `pwa` suite green: `runs-screen.test.tsx`'s only related assertion
+(`toHaveBeenCalledTimes(1)`) checks the call count at the point `render()` returns, before any timer has fired, and
+nothing in the file drives fake time forward. Closed with a new case, `'never asks REST on an interval — one cold
+read per mount, never a poll'`, using `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(5 * 60_000)` (which also
+drains the promise microtask queue between ticks) and counting `loadRuns` calls directly — a bare
+`setInterval`-was-never-called spy was tried first and produces a FALSE positive against the real component,
+because `useNow(30_000)` legitimately runs its own unrelated interval for the relative-time readout. The new test
+passes on the shipped code and fails (11 calls, not 1) against the interval mutant. `pwa/test/runs-screen.test.tsx`.
+
+**Survivor 2 — `deploy.sh: move the skill install ABOVE the hook installer`.** Swapping the two invocation blocks
+left the FULL `server` suite green: `install-coordinator-skill.test.ts`'s ordering check was a bare
+`agentArm.indexOf('install-session-hooks.sh')` vs `indexOf('install-coordinator-skill.sh')`, and the
+coordinator-skill block's OWN explanatory comment — *"(ccd, session-hook.sh, install-session-hooks.sh, and now
+this)"* — mentions the string `install-session-hooks.sh` in prose, earlier in the text than either block's actual
+code once the code was moved. The bare substring search found the comment, not the invocation. Closed by anchoring
+both `indexOf` calls on the real RUN lines (`bash ~/.cc-sessions/install-session-hooks.sh` /
+`bash ~/.cc-sessions/install-coordinator-skill.sh`), which the comment does not contain. The fixed assertion passes
+on the shipped `deploy.sh` and fails (3412 vs 2894) against the swap mutant. `server/test/install-coordinator-skill.test.ts`.
+
+One CSS-only mutant (`fleet.css`: glow on `.run-row`) was confirmed killed with the targeted `fleet-css.test.ts`
+file rather than the full `pwa` suite — vitest runs with `css: false` (the plan's own Design-gates constraint), so
+no other test file parses computed style and a stylesheet-only edit cannot affect any other suite's outcome; this
+is the one deviation from "full suite per mutant" in the sweep, and it is a lower-risk substitution, not a skipped
+measurement.
+
 - [ ] **Step 6: Deploy, agent first**
 
 This ships fleet-host artifacts, so the order is not optional — and this time the agent arm also installs a skill and (if minted) a secret:
