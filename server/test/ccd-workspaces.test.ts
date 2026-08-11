@@ -353,6 +353,7 @@ describe('_ws_least_loaded', () => {
     writeLimits('claude', 80, 40);       // score 80 — worst
     writeLimits('claude2', 5, 3);        // score 5 — cheapest
     writeLimits('claude-corp', 90, 95);  // score 95 — worst of all
+    writeLimits('claude-dev0', 70, 70);  // score 70 — priced, so it cannot win by silence
     expect(sh('_ws_least_loaded')).toBe('claude2');
   });
 });

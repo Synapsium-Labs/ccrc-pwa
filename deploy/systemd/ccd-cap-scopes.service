@@ -1,0 +1,5 @@
+[Unit]
+Description=Cap uncapped tmux pane scopes (fleet OOM guardrail, added 2026-07-28)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-cap-scopes

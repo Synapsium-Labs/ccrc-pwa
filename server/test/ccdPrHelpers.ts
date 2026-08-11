@@ -81,6 +81,7 @@ export function makePrHarness(prefix: string): PrHarness {
 export const CFG_DIR: Record<string, string> = {
   claude: '.claude', claude2: '.claude-personal',
   'claude-corp': '.claude-corp', gpt: '.claude-gpt',
+  'claude-dev0': '.claude-dev0',
 };
 
 /** A gh row for a PR on `head`, merged into `base` by `mergeOid`, whose head

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# ccd-cap-scopes — cap tmux pane scopes. Install to ~/.local/bin, drive from
+# ccd-cap-scopes.timer (OnUnitActiveSec=60s). Idempotent and silent: only
+# touches scopes that are still uncapped.
+#
+# Why: Ubuntu tmux is built with systemd support and puts every pane in its own
+# transient tmux-spawn-<uuid>.scope. Those scopes are born uncapped and tmux
+# offers no way to set properties at creation, so this enforcer caps any it
+# finds. Added 2026-07-28 after a MekWarLive jest run (15 workers) drove one
+# pane scope to a 24G peak, exhausting 30G RAM + 8G swap and stalling the whole
+# fleet for ~25 min.
+#
+# 2026-08-10 — THE ORIGINAL VERSION OF THIS SCRIPT NEVER CAPPED ANYTHING.
+# It located each scope's cgroup by string-building a path:
+#
+#   BASE=/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service
+#   cur=$(cat "$BASE/$s/memory.max" 2>/dev/null || echo missing)
+#   [ "$cur" = "max" ] || continue
+#
+# That assumed panes sit DIRECTLY under user@1000.service. They do not — ccd
+# launches sessions into a slice, so the real path is
+#
+#   user@1000.service/app.slice/app-claude\x2dsession.slice/tmux-spawn-*.scope
+#
+# so every `cat` missed, `cur` became "missing", and the `continue` skipped
+# every scope. `capped` stayed 0, nothing was printed, and the unit exited 0 —
+# so the timer logged "Finished ccd-cap-scopes.service" every 60 seconds while
+# enforcing nothing. The failure was invisible for 13 days, until a runaway
+# `ugrep` in an uncapped pane reached 14.8G RSS, pushed user@1000 past its
+# MemoryHigh, and put the whole fleet into reclaim throttling (load 57, every
+# session stalled, no OOM kill and no reboot to signal it).
+#
+# The fix is to stop guessing the path. `systemctl --user show` reports the
+# effective property regardless of where in the cgroup tree the scope lives,
+# and prints "infinity" when uncapped — so this stays correct if ccd ever moves
+# sessions into a different slice again. That relocation is exactly what broke
+# the original, so the detection must not depend on the layout.
+#
+# Note the asymmetry that made this silent: set-property is addressed by UNIT
+# NAME (layout-independent, always worked), while detection was addressed by
+# PATH (layout-dependent, always failed). Only detection needed fixing.
+set -u
+
+capped=0
+for s in $(systemctl --user list-units --no-legend "tmux-spawn-*.scope" 2>/dev/null | awk '{print $1}'); do
+  # "infinity" = uncapped. Anything else means we (or someone) already set it.
+  # An empty result means the unit vanished between list and show — skip it
+  # rather than treating the blank as uncapped and racing a dead scope.
+  cur=$(systemctl --user show "$s" -p MemoryMax --value 2>/dev/null || true)
+  [ "$cur" = "infinity" ] || continue
+  systemctl --user set-property --runtime "$s" \
+    MemoryHigh=8G MemoryMax=12G MemorySwapMax=2G TasksMax=4096 2>/dev/null && capped=$((capped+1))
+done
+[ "$capped" -gt 0 ] && echo "capped $capped new pane scope(s)"
+exit 0

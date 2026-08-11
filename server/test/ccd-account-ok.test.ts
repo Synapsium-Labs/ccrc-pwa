@@ -53,8 +53,10 @@ describe('_ws_least_loaded skips excluded lanes', () => {
     writeLimits('claude', 90, 90);       // worst score, but the only enabled lane
     writeLimits('claude2', 5, 5);
     writeLimits('claude-corp', 5, 5);
+    writeLimits('claude-dev0', 5, 5);
     disable('claude2');
     disable('claude-corp');
+    disable('claude-dev0');
     expect(sh('_ws_least_loaded')).toBe('claude');
   });
 
@@ -62,6 +64,7 @@ describe('_ws_least_loaded skips excluded lanes', () => {
     writeLimits('claude', 50, 50);
     writeLimits('claude2', 5, 5);        // best score, but no executable
     writeLimits('claude-corp', 40, 40);
+    writeLimits('claude-dev0', 60, 60);
     fs.rmSync(path.join(home, '.local', 'bin', 'claude2'));
     expect(sh('_ws_least_loaded')).toBe('claude-corp');
   });
@@ -91,6 +94,7 @@ describe('_swap_target: disabled excludes a lane as a DESTINATION, never evacuat
     writeLimits('claude', 99, 99);       // cur==home, over SWAP_CEILING: must leave
     writeLimits('claude-corp', 5, 5);    // best score, but disabled
     writeLimits('claude2', 50, 50);      // worse score, the only eligible candidate
+    writeLimits('claude-dev0', 60, 60);  // worse still, so claude2 remains the pick
     disable('claude-corp');
     expect(sh('_swap_target claude-demo claude claude')).toBe('claude2');
   });
@@ -100,6 +104,7 @@ describe('_swap_target: disabled excludes a lane as a DESTINATION, never evacuat
     // pre-existing pressure gate (_avail) the loop already had.
     writeLimits('claude', 99, 99);       // cur==home, over SWAP_CEILING: must leave
     writeLimits('claude2', 99, 99);      // account_ok is fine, but also over the ceiling
+    writeLimits('claude-dev0', 99, 99);  // likewise over the ceiling, so no lane qualifies
     disable('claude-corp');              // excluded a different way, to isolate the avail check
     // No candidate qualifies, so the function's own exit code is non-zero
     // (the trailing `[[ -n "$best" ]] && echo` never runs) — `|| true` is the
@@ -129,7 +134,7 @@ describe('_gpt_enabled re-expressed as _account_ok gpt', () => {
 describe('cmd_ws_add preflight — all-excluded refuses before anything exists', () => {
   it('dies and creates no worktree, no branch, no registry entry', () => {
     makeRepo('demo');
-    disable('claude'); disable('claude2'); disable('claude-corp');
+    disable('claude'); disable('claude2'); disable('claude-corp'); disable('claude-dev0');
     expect(() => sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`)).toThrow();
     expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
@@ -143,7 +148,7 @@ describe('cmd_ws_add preflight — all-excluded refuses before anything exists',
 
   it('names each wrapper with its reason — disabled and missing both appear', () => {
     makeRepo('demo');
-    disable('claude'); disable('claude-corp');
+    disable('claude'); disable('claude-corp'); disable('claude-dev0');
     fs.rmSync(path.join(home, '.local', 'bin', 'claude2'));
     let stderr = '';
     try {
@@ -154,6 +159,7 @@ describe('cmd_ws_add preflight — all-excluded refuses before anything exists',
     expect(stderr).toContain('claude:disabled');
     expect(stderr).toContain('claude2:missing');
     expect(stderr).toContain('claude-corp:disabled');
+    expect(stderr).toContain('claude-dev0:disabled');
     expect(stderr).toContain('nothing was touched');
   });
 
@@ -164,7 +170,8 @@ describe('cmd_ws_add preflight — all-excluded refuses before anything exists',
     writeLimits('claude', 5, 5);
     writeLimits('claude2', 5, 5);
     writeLimits('claude-corp', 90, 90);
-    disable('claude'); disable('claude2');
+    writeLimits('claude-dev0', 5, 5);
+    disable('claude'); disable('claude2'); disable('claude-dev0');
     sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     expect(reg('demo-quiet-mesa', 'wrapper')).toBe('claude-corp');
   });

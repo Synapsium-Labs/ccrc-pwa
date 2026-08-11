@@ -1,5 +1,6 @@
 import { buildServer, type Deps } from './server.js';
 import { loadConfig } from './config.js';
+import { readBuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
 import { localIO } from './io.js';
@@ -18,6 +19,10 @@ import { CoordStore } from './coord/store.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
+
+// Read once at boot: what THIS box's deploy stamped it as, or null on a dev
+// checkout / never-stamped box. See buildinfo.ts — never a throw.
+const build = readBuildInfo(cfg.buildInfoPath);
 
 // Web Push is optional — only wired when a VAPID keypair is configured.
 const push = cfg.vapidPublic && cfg.vapidPrivate
@@ -76,13 +81,13 @@ if (cfg.fleetMode === 'remote') {
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
-    cfg, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
+    cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
     spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
   deps = {
-    cfg, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
+    cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
   };
 }

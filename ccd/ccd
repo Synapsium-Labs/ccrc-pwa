@@ -11,7 +11,7 @@ WRAPPER_DIR="$HOME/.local/bin"
 # Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
 PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
 WORKTREES_ROOT="$HOME/worktrees"
-VALID_WRAPPERS=(claude claude2 claude-corp)   # canonical Anthropic accounts (home-able)
+VALID_WRAPPERS=(claude claude2 claude-corp claude-dev0)   # canonical Anthropic accounts (home-able)
 # `gpt` is a 4th lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend), OPT-IN only
 # since 2026-07-26: a session reaches it solely by having gpt as its HOME (`ccd prefer <id>
 # gpt`), never as general overflow — its 272k window and unofficial-client risk are not
@@ -1646,8 +1646,33 @@ ws-release
 ws-rename
 ws-restore
 ws-rm
+version
 ls
 EOF
+}
+
+cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
+  # ~/.ccrc/build.json is written by deploy.sh's stamp_build (temp + rename,
+  # so no torn reads). No stamp = a dev checkout or a box no deploy touched:
+  # "unstamped" at exit 0 is the honest ANSWER there, not an error. A stamp
+  # that exists but does not parse is different — something wrote garbage
+  # where the deploy writes facts — and that refuses loudly instead of
+  # printing a version nobody measured.
+  [[ $# -eq 0 ]] || die "usage: ccd version"
+  local stamp="$HOME/.ccrc/build.json"
+  if [[ ! -f "$stamp" ]]; then
+    echo "ccd unstamped (no ~/.ccrc/build.json — not deployed by deploy.sh)"
+    return 0
+  fi
+  python3 - "$stamp" <<'PY' || die "build stamp unreadable: $stamp"
+import json, sys
+try:
+    o = json.load(open(sys.argv[1]))
+    sha, ref, built, dirty = o["sha"], o["ref"], o["builtAt"], o["dirty"]
+except Exception:
+    sys.exit(1)
+print(f"ccd {sha} ({ref}, built {built}{', dirty' if dirty else ''})")
+PY
 }
 
 cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
@@ -6503,6 +6528,7 @@ _cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
     claude)      echo "$HOME/.claude" ;;
     claude2)     echo "$HOME/.claude-personal" ;;
     claude-corp) echo "$HOME/.claude-corp" ;;
+    claude-dev0) echo "$HOME/.claude-dev0" ;;
     gpt)         echo "$HOME/.claude-gpt" ;;
   esac
 }
@@ -6629,9 +6655,18 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly u
 # ── home-account affinity ──────────────────────────────────────────────
 # Each session has a HOME account; it stays there and only leaves when home is at the rate ceiling
 # (no included-usage headroom left), returning home the instant it has room again.
-_id_wrapper() {   # id -> the wrapper encoded in the id prefix (longest match wins)
+_id_wrapper() {   # id -> the wrapper encoded in the id prefix (FIRST match wins — bash `case`, not longest-prefix)
+  # Arm ORDER is load-bearing, not cosmetic: `claude-corp-*` and `claude-dev0-*`
+  # must both precede the shorter `claude-*`, or every corp/dev0 id falls
+  # through to the `claude` arm instead. For dev0 specifically that means
+  # `_home_for` silently resolves to `claude`, and `_swap_target`'s "home
+  # recovered" branch permanently evacuates dev0 sessions with no error
+  # printed anywhere (I6, final review — this comment used to say "longest
+  # match wins", which would mislead a maintainer into moving `claude-dev0-*`
+  # below `claude-*` and making it dead code).
   case "$1" in
     claude-corp-*) echo claude-corp ;;
+    claude-dev0-*) echo claude-dev0 ;;
     claude2-*)     echo claude2 ;;
     claude-*)      echo claude ;;
     gpt-*)         echo gpt ;;
@@ -7227,6 +7262,7 @@ case "${1:-}" in
   ws-release) shift; cmd_ws_release "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state} <args>" >&2; exit 1 ;;
+  version)   shift; cmd_version "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi

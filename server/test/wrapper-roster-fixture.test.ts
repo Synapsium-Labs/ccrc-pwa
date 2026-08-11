@@ -172,18 +172,21 @@ describe('ccd _id_wrapper agrees with ACCOUNTS.idPrefix, for the wrappers ccd kn
   });
 
   // The bash-side twin of the exact bug `idHomeWrapper` (server/src/fleet.ts)
-  // guards against: ccd's own `_id_wrapper` case statement has no
-  // `claude-dev0-*` branch, so an id under that prefix falls through to the
-  // shorter `claude-*` branch and comes back `claude` — still true today,
-  // BY DESIGN of this increment (constraint D: the bash is not touched).
-  // Pinning it here, rather than leaving it an unverified assumption, is
-  // what turns a future ccd fix — or an accidental regression the other
-  // direction — into a red test instead of a silent divergence from
-  // `ACCOUNTS['claude-dev0'].ccdValid === false`.
-  it('is silent on claude-dev0 — the one wrapper ACCOUNTS knows and ccd does not', () => {
-    expect(ACCOUNTS['claude-dev0'].ccdValid).toBe(false);
+  // guards against. `claude-dev0-` is a strict extension of `claude-`, and a
+  // bash `case` takes the FIRST arm that matches, not the longest — so the
+  // `claude-dev0-*)` arm only works while it sits ABOVE `claude-*)`. Move it
+  // below and every dev0 id silently comes back `claude`, re-attributing a
+  // whole account's sessions with no error anywhere.
+  //
+  // This case used to assert the opposite (ccd was silent on claude-dev0, and
+  // an id under that prefix resolved to `claude`) and was written to go red
+  // the day ccd learned the account. That day has come: dev0 is home-able and
+  // ccd-valid, so ccd mints `claude-dev0-*` ids for real and this pins the
+  // ARM ORDER that keeps them attributed correctly.
+  it('matches claude-dev0-* before the shorter claude-*, never attributing a dev0 id to claude', () => {
+    expect(ACCOUNTS['claude-dev0'].ccdValid).toBe(true);
     const id = `${ACCOUNTS['claude-dev0'].idPrefix}fixture-slug`;
-    expect(h.sh(`_id_wrapper '${id}'`)).toBe('claude');
+    expect(h.sh(`_id_wrapper '${id}'`)).toBe('claude-dev0');
   });
 });
 

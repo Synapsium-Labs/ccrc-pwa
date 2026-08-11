@@ -39,6 +39,8 @@ export interface CcrcConfig {
    *  neither box can read the other's, which is why there are two copies of
    *  one secret and not one copy read twice. */
   mailTokenPath: string;
+  /** The deploy's build stamp (deploy.sh stamp_build). Absent = dev boot. */
+  buildInfoPath: string;
 }
 
 /**
@@ -93,5 +95,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     // silently opens a different (or brand-new, empty) database in the other.
     coordDbPath: env.CCRC_COORD_DB ?? defaultCoordDbPath(home),
     mailTokenPath: env.CCRC_MAIL_TOKEN_PATH ?? path.join(home, '.ccrc', 'mail.token'),
+    buildInfoPath: path.join(home, '.ccrc', 'build.json'),
   };
 }

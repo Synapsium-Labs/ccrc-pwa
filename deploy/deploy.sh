@@ -13,13 +13,22 @@ CCRC_SSH_KEY="${CCRC_SSH_KEY:-$HOME/.ssh/your-key-a}"
 CCRC_SSH_PORT="${CCRC_SSH_PORT:-2222}"
 SSH=(ssh -p "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
 SCP=(scp -P "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
-HEALTH_URL="${CCRC_HEALTH_URL:-http://203.0.113.7:7788/health}"
 
 # Usage: deploy.sh [server|agent] [host]
 #   deploy.sh                 -> deploy server to $CCRC_BOX (default)
 #   deploy.sh agent <host>    -> deploy ccrc-agent to <host> (falls back to $CCRC_BOX if omitted)
 TARGET="${1:-server}"
 [ "$TARGET" = "agent" ] && BOX="${2:-$BOX}"
+
+# Derived from the RESOLVED $BOX — i.e. AFTER the agent-target override just
+# above, so it tracks $2 — never a literal. A literal here meant
+# `CCRC_BOX=newbox bash deploy/deploy.sh` still curled the OLD box: if both
+# boxes happened to sit at the same sha (a re-deploy, a rollback), the sha
+# grep at the bottom of the server branch would pass WITHOUT EVER CONTACTING
+# THE TARGET (I4, final review). `${BOX#*@}` strips the `user@` prefix BOX
+# always carries. CCRC_HEALTH_URL remains the explicit override for a box
+# whose health route isn't at the tailnet-IP:7788 shape.
+HEALTH_URL="${CCRC_HEALTH_URL:-http://${BOX#*@}:7788/health}"
 
 # One timestamp per run: every backup this run takes lands under the same
 # ~/ccrc-backups/<ts>/ on the target, so a rollback is one directory, not a hunt.
@@ -63,6 +72,26 @@ prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped
       | sort | head -n -$keep | xargs -r rm -rf --"
 }
 
+# The build stamp: what a box is RUNNING, stated by the box itself. Computed
+# from the LOCAL checkout — the rsynced ~/ccrc tree on the target is not a git
+# repository, so `git rev-parse` must run here, before anything ships. A dirty
+# tree deploys (stage 1 does not forbid it; stage 4's release pipeline will)
+# but the stamp SAYS so: sha + "-dirty" is a fact, a clean sha nobody measured
+# is the forgery class this repo bans by name. Shipped via install_atomic so
+# no reader ever sees a torn stamp.
+BUILD_SHA="$(git rev-parse HEAD)"
+git diff --quiet && git diff --cached --quiet && BUILD_DIRTY=false || BUILD_DIRTY=true
+BUILD_REF="$(git rev-parse --abbrev-ref HEAD)"
+stamp_build() {
+  local stamp
+  stamp="$(mktemp)"
+  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s}\n' \
+    "$BUILD_SHA" "$BUILD_REF" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BUILD_DIRTY" > "$stamp"
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
+  install_atomic "$stamp" .ccrc/build.json 644
+  rm -f "$stamp"
+}
+
 # Ship a local, gitignored, real-token env file to the box if one exists.
 # Only the committed *.env.example templates are ever in git.
 ship_env() {
@@ -104,11 +133,17 @@ if [ "$TARGET" = "agent" ]; then
   # `[ ! -e X ] || cp` and NOT `[ -e X ] && cp || true`: absent-source is the
   # only skippable case — a cp that FAILS must abort the deploy before
   # --delete destroys the very state it failed to save.
+  # The two unit files join the set here (I2, final review): AGENT_CMD below
+  # `cp`s straight over ~/.config/systemd/user/{ccrc-agent,claude-session@}.service
+  # with no backup ever taken, so a bad unit had no on-box restore path —
+  # unlike agent-dist/ccd/notify.sh/session-hook.sh, which always did.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS ~/.local/bin ~/.cc-sessions \
     && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
-    && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; }"
+    && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
+    && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
+    && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: the token lives at `deploy/ccrc-mail.token`
   # (gitignored) exactly when `ship_secret` below is about to fire, and this
   # rsync ships the whole `deploy/` directory. `--exclude '*.env'` is here for
@@ -126,8 +161,8 @@ if [ "$TARGET" = "agent" ]; then
   # `ccd caps` at boot (the 113-second lesson), so an agent restarted against
   # yesterday's ccd pins yesterday's verb set until someone restarts it again.
   # notify.sh is the ccd swap hook and lives outside the rsync tree.
-  # All four go through install_atomic — see its comment for why a plain scp
-  # over these exact files is a live correctness bug, not a style choice.
+  # All executables go through install_atomic — see its comment for why a
+  # plain scp over these exact files is a live correctness bug.
   install_atomic ccd/ccd .local/bin/ccd 755
   install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
   # session-hook.sh + its installer ship every deploy too — the installer is
@@ -135,6 +170,43 @@ if [ "$TARGET" = "agent" ]; then
   # safe to re-run against homes it already converged.
   install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh 755
   install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh 755
+  # Stage 1: the artifacts the fleet host runs but no deploy ever shipped.
+  # The cap-scopes enforcer is the OOM guardrail (see its own header for the
+  # 13-days-silently-broken postmortem); tmux.conf is how truecolor survives
+  # to the attaching client; statusline is what writes ~/.cc-limits telemetry.
+  install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
+  install_atomic ccd/tmux.conf .tmux.conf 644
+  install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
+  # The supervisor unit and every drop-in land BEFORE daemon-reload so the
+  # sweep below restarts supervisors under the new unit set. The slice
+  # drop-in's target dir carries systemd's \x2d escape — the repo source dir
+  # is plainly named, the DESTINATION must be the escaped name or systemd
+  # never reads it. Inside this single-quoted block, "\x2d" sits in remote
+  # double quotes, where bash preserves the backslash.
+  AGENT_BUILD_CMD='cd ~/ccrc/agent && npm ci && npm run build \
+    && mkdir -p ~/.config/systemd/user \
+    && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
+    && cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/ \
+    && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
+    && cp ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/ \
+    && cp ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/" \
+    && cp ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/ \
+    && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/'
+  "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
+  # STAMP HERE — after the build that can fail, before the restart that makes
+  # it live (I1, final review). Stamping earlier (this chain's shape until
+  # now) let a failed remote `npm ci && npm run build` — a registry hiccup,
+  # the common case — abort the deploy with build.json already claiming the
+  # NEW sha while the box's dist/ was never rebuilt to match: the box's own
+  # version read (checked below, against the box's own ccd) lies
+  # immediately, and /health lies the moment Restart=always next cycles the
+  # unit onto that untouched dist/. That is exactly the measurement-forgery
+  # class stamp_build's own header above bans by name. Do not "simplify"
+  # this back to before the build chain — the whole point of splitting
+  # AGENT_BUILD_CMD from AGENT_CMD is to give the stamp a place to sit that
+  # only a SUCCESSFUL build reaches. `set -euo pipefail` plus the ssh above
+  # means this line is never reached if the build failed.
+  stamp_build
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
   # The coordinator skill is the FIFTH artifact ccrc ships to the fleet host
   # (ccd, notify.sh, session-hook.sh + its installer, and now this). The TREE
@@ -164,10 +236,9 @@ if [ "$TARGET" = "agent" ]; then
   # check. Because it is the last link of an `&&` chain, its exit status is
   # the ssh exit status, and `set -e` at the top of this file aborts the
   # deploy on it.
-  AGENT_CMD='cd ~/ccrc/agent && npm ci && npm run build \
-    && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
-    && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
+  AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
+    && systemctl --user enable --now ccd-cap-scopes.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"
@@ -195,8 +266,40 @@ if [ "$TARGET" = "agent" ]; then
     && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}"); do \
          bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1; done'
   "${SSH[@]}" "$BOX" "$SWEEP_CMD"
+  # The box's own statement of what it now runs, compared to what this run
+  # shipped. `ccd version` reads ~/.ccrc/build.json (stamp_build, above);
+  # a mismatch means the atomic install or the stamp itself went sideways —
+  # fail the deploy, loudly, with both values in view.
+  # Capture, THEN test — no pipe (I7, final review): `tee /dev/stderr | grep
+  # -qF` races `grep -q`'s early exit on a match against `tee`'s write of the
+  # REMAINING lines, and under `set -o pipefail` a `tee` killed by SIGPIPE
+  # after `grep` already matched turns a successful deploy into a reported
+  # FAILURE. Measured on this exact shape: 0/1500 false failures at 1 output
+  # line, climbing with line count. `ccd version` is one line today, so this
+  # was latent, not live — but spec §3 plans to grow this surface, and a
+  # failing ssh inside `$( )` still aborts the script under `set -e`, which is
+  # the behaviour we want.
+  ccd_version_out="$("${SSH[@]}" "$BOX" '~/.local/bin/ccd version')"
+  printf '%s\n' "$ccd_version_out" >&2
+  printf '%s' "$ccd_version_out" | grep -qF "$BUILD_SHA" \
+    || { echo "deploy: FAILED — the box's ccd version does not carry the shipped sha $BUILD_SHA" >&2; exit 1; }
   prune_backups || echo "deploy: warning: backup prune failed on $BOX (the deploy itself succeeded)" >&2
 else
+  # `ship_env` below silently no-ops when deploy/ccrc.env is absent, and the
+  # unit's `EnvironmentFile=-%h/.ccrc/ccrc.env` tolerates a missing file too
+  # — so nothing stopped a deploy with neither from landing a unit with
+  # NOTHING to configure it, and config.ts's `host` then defaults to
+  # 127.0.0.1. The live `tailscale serve` proxies to the tailnet IP
+  # LITERALLY, so a loopback bind takes the PWA dark on every device, and
+  # verify-service.sh still passes (the PROCESS is up) — only the health curl
+  # at the bottom of this branch would catch it, AFTER the unit is already
+  # replaced and restarted. Refuse before touching anything (I2, final
+  # review): a config already on the box is fine, an absent one on both ends
+  # is not.
+  if [ ! -f deploy/ccrc.env ]; then
+    "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/ccrc.env ]' \
+      || { echo "deploy: FAILED — no deploy/ccrc.env locally and no ~/.ccrc/ccrc.env already on $BOX; refusing to ship a config-less unit" >&2; exit 1; }
+  fi
   # The server serves whatever server/dist-pwa holds, and rsync's
   # `--exclude dist` never matched dist-pwa — which is how a green deploy
   # shipped a stale bundle twice. Build the PWA HERE, in this run, and refuse
@@ -218,9 +321,13 @@ else
   # backup cannot depend on a previous deploy having landed the tool — and
   # guarded the same way as dist-pwa: only a MISSING coord.db is skippable, a
   # failed snapshot aborts before rsync touches anything.
+  # The unit file joins the set here too (I2, final review): REMOTE_CMD below
+  # `cp`s straight over ~/.config/systemd/user/ccrc.service with no backup
+  # ever taken, unlike dist-pwa and coord.db beside it.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"
   "${SCP[@]}" deploy/backup-coord.mjs "$BOX":ccrc-backups/backup-coord.mjs
   "${SSH[@]}" "$BOX" "{ [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; } \
+    && { [ ! -f ~/.config/systemd/user/ccrc.service ] || cp -a ~/.config/systemd/user/ccrc.service ~/ccrc-backups/$TS/ccrc.service; } \
     && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }"
   # See the agent path's identical exclude, above, for why: this rsync also
   # ships `deploy/` whole, and without the exclude the token rides along a
@@ -230,6 +337,20 @@ else
     server shared deploy "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
   ship_secret ccrc-mail.token '~/.ccrc' mail.token
+  REMOTE_BUILD_CMD='cd ~/ccrc/server && npm ci && npm run build \
+    && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/'
+  "${SSH[@]}" "$BOX" "$REMOTE_BUILD_CMD"
+  # STAMP HERE — after the build that can fail, before the restart that makes
+  # it live (I1, final review; see the agent chain's identical comment above
+  # for the full failure mode). Stamping before a remote `npm ci && npm run
+  # build` that can fail let build.json claim a sha the box's dist/ was never
+  # rebuilt to run — /health then lies the moment Restart=always next cycles
+  # ccrc.service onto the untouched dist/, the exact measurement-forgery
+  # class stamp_build's own header bans by name. Do not "simplify" this back
+  # to before REMOTE_BUILD_CMD: the split exists so only a successful build
+  # reaches this line. `set -euo pipefail` plus the ssh above means this line
+  # is never reached if the build failed.
+  stamp_build
   # verify-service.sh here closes the same crash-loop gap it closes on the
   # agent path above (see that chain's comment) — a restart that "succeeds"
   # the moment systemd forks, then dies every RestartSec. The curl AFTER it
@@ -238,13 +359,24 @@ else
   # questions, both cheap here because (unlike the agent) this unit has an
   # HTTP route to ask. agent/test/deploy-verify.test.ts pins both the
   # ordering (restart -> verify -> curl) and that neither call is dropped.
-  REMOTE_CMD='cd ~/ccrc/server && npm ci && npm run build \
-    && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ \
-    && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
+  REMOTE_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc.service \
     && systemctl --user restart ccrc.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc.service \
     && curl -fsS '"$HEALTH_URL"
   "${SSH[@]}" "$BOX" "$REMOTE_CMD"
+  # /health's build stamp must equal what this run shipped. The curl inside
+  # REMOTE_CMD proved "something answers"; this proves it answers AS the
+  # build we deployed — the assertion the 2026-08-10 stale-binary afternoon
+  # was missing. -f on a fresh curl: a dead server here is also a failure.
+  # Capture, THEN test — same shape as the agent branch's ccd-version
+  # assertion above, for the same reason (I7, final review): a bare `curl |
+  # grep -qF` pipe can report failure after a successful deploy if `grep -q`
+  # exits on an early match while `curl` is still writing. `set -e` still
+  # aborts on a failing curl inside `$( )`.
+  health_out="$(curl -fsS "$HEALTH_URL")"
+  printf '%s\n' "$health_out" >&2
+  printf '%s' "$health_out" | grep -qF "\"sha\":\"$BUILD_SHA\"" \
+    || { echo "deploy: FAILED — /health does not report the shipped sha $BUILD_SHA" >&2; exit 1; }
   prune_backups || echo "deploy: warning: backup prune failed on $BOX (the deploy itself succeeded)" >&2
 fi

@@ -51,6 +51,7 @@ case "$cfg" in
   "$HOME/.claude")          acct="${CYAN}team·max${RESET}" ;;
   "$HOME/.claude-personal") acct="${MAGENTA}alt·max${RESET}" ;;
   "$HOME/.claude-corp")     acct="${BLUE}team·shared${RESET}" ;;
+  "$HOME/.claude-dev0")     acct="${GREEN}lab·dev0${RESET}" ;;
   *)                        acct="$(basename "$cfg")" ;;
 esac
 segments+=("👤 ${acct}")
@@ -155,6 +156,7 @@ case "$cfg" in
   "$HOME/.claude")          lbl="claude" ;;
   "$HOME/.claude-personal") lbl="claude2" ;;
   "$HOME/.claude-corp")     lbl="claude-corp" ;;
+  "$HOME/.claude-dev0")     lbl="claude-dev0" ;;
   *)                        lbl="" ;;
 esac
 if [ -n "$lbl" ] && [ -n "${five_int:-}" ]; then

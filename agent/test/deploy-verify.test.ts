@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -306,6 +306,76 @@ describe('the verification is actually wired into the deploy, and can observe a 
     }
   });
 
+  it('the agent deploy installs every systemd artifact the fleet host actually runs', () => {
+    // Stage 1 (OSS infra spec §"repo can rebuild a box"). These five artifacts
+    // existed ONLY on the live host — the guardrail drop-ins whose own comments
+    // call them "the guardrail that actually contains a runaway", the
+    // cap-scopes enforcer pair, and two repo files nothing installed
+    // (claude-session@.service, tmux.conf). A repo that cannot reproduce its
+    // own box is the root defect the whole stage exists to close.
+    for (const f of [
+      'systemd/claude-session@.service.d/limits.conf',
+      'systemd/app-claude-session.slice.d/limits.conf',
+      'systemd/ccrc-agent.service.d/protect.conf',
+      'systemd/ccd-cap-scopes.service',
+      'systemd/ccd-cap-scopes.timer',
+    ]) {
+      expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
+    }
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-cap-scopes')),
+      'the cap-scopes enforcer script is not in the repo').toBe(true);
+
+    // I1, final review: the installs live in AGENT_BUILD_CMD (the build half —
+    // npm ci/build plus every unit-file install) — NOT in AGENT_CMD, which is
+    // now the restart-only half run in a SEPARATE ssh, after stamp_build.
+    // "Before daemon-reload" is therefore no longer a same-chain text-position
+    // check: it is guaranteed structurally, because AGENT_BUILD_CMD's ssh must
+    // exit 0 (set -euo pipefail) before AGENT_CMD's ssh — where daemon-reload
+    // lives — ever runs. Pin both halves plus that structural ordering.
+    const buildCmd = /AGENT_BUILD_CMD='([\s\S]*?)'/.exec(deploySh);
+    expect(buildCmd, 'the agent build command is no longer a single quoted block').toBeTruthy();
+    const buildLinks = buildCmd![1]!.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    for (const needle of [
+      'cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/',
+      'claude-session@.service.d',
+      'app-claude\\x2dsession.slice.d',
+      'ccrc-agent.service.d',
+      'cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/',
+    ]) {
+      const at = buildLinks.findIndex((l) => l.includes(needle));
+      expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
+    }
+    expect(buildCmd![1], 'daemon-reload must not run in the build half — it belongs to the restart half')
+      .not.toContain('daemon-reload');
+
+    // The restart half: daemon-reload, then the cap-scopes timer enable (it
+    // needs daemon-reload to have already picked up the unit AGENT_BUILD_CMD
+    // just installed), then the agent restart, then verify-service.sh.
+    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
+    const restartLinks = agentCmd.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    const reloadAt = restartLinks.findIndex((l) => l.includes('daemon-reload'));
+    const timerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-cap-scopes.timer'));
+    expect(reloadAt, 'AGENT_CMD no longer reloads the daemon').toBeGreaterThan(-1);
+    expect(timerAt, 'the cap-scopes timer is never enabled').toBeGreaterThan(reloadAt);
+
+    // And structurally: the build ssh runs, THEN stamp_build, THEN the
+    // restart ssh — three sequential top-level statements under
+    // `set -euo pipefail`, which is what actually makes "installs precede
+    // daemon-reload" true (a stronger guarantee than same-string ordering:
+    // AGENT_CMD's ssh cannot even START until AGENT_BUILD_CMD's ssh exits 0).
+    const agentBranchStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
+    const buildExecAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"');
+    const stampAt = deploySh.indexOf('stamp_build', agentBranchStart);
+    const restartExecAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
+    expect(buildExecAt, 'AGENT_BUILD_CMD is defined but never executed').toBeGreaterThan(-1);
+    expect(stampAt, 'agent branch never stamps').toBeGreaterThan(buildExecAt);
+    expect(restartExecAt, 'AGENT_CMD is defined but never executed').toBeGreaterThan(stampAt);
+
+    expect(deploySh).toContain('install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755');
+    expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
+    expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
+  });
+
   it('after a new ccd lands, every claude-session@ supervisor is restarted onto it — and re-verified', () => {
     // Stage 0, finding 1's second half. `claude-session@.service` runs `ccd
     // supervise` as a LONG-LIVED bash process, so even an atomic install
@@ -471,5 +541,221 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(block, `rsync invocation is missing --exclude 'ccrc-mail.token':\n${block}`)
         .toContain("--exclude 'ccrc-mail.token'");
     }
+  });
+
+  it("ccrc.service reads ~/.ccrc/ccrc.env and bakes NOTHING — the env file deploy.sh ships is finally read", () => {
+    // Survey blocker #1 by depth: deploy.sh faithfully shipped ccrc.env to
+    // ~/.ccrc/ for weeks while the unit read nothing, and the live box's real
+    // config accreted in a hand-made drop-in the repo cannot see. The `-`
+    // prefix keeps a fresh box bootable with no env file at all (local mode,
+    // loopback defaults from config.ts).
+    const unit = readFileSync(path.join(deployDir, 'ccrc.service'), 'utf8');
+    expect(unit).toContain('EnvironmentFile=-%h/.ccrc/ccrc.env');
+    expect(/^Environment=/m.test(unit),
+      'baked Environment= literals are back in ccrc.service').toBe(false);
+
+    // And the example documents every variable the LIVE box actually needs —
+    // the three VAPID vars were real config with no documentation anywhere.
+    const example = readFileSync(path.join(deployDir, 'ccrc.env.example'), 'utf8');
+    for (const v of ['CCRC_HOST', 'CCRC_PORT', 'CCRC_VAPID_PUBLIC',
+      'CCRC_VAPID_PRIVATE', 'CCRC_VAPID_SUBJECT', 'CCRC_PROJECTS_ROOT']) {
+      expect(example, `ccrc.env.example does not document ${v}`).toContain(v);
+    }
+  });
+
+  it('every deploy stamps ~/.ccrc/build.json on the target — from the LOCAL git tree, AFTER the remote build succeeds and BEFORE the restart that makes it live', () => {
+    // Stage 1's central artifact: the "from" and "to" that update/skew
+    // detection needs. Computed locally (the rsynced ~/ccrc tree on the box
+    // is NOT a git repo), shipped like every other file (install_atomic:
+    // temp + rename, so a reader never sees a torn stamp).
+    const fn = /stamp_build\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no stamp_build() helper').toBeTruthy();
+    const body = fn![1]!;
+    // The sha/ref/dirty facts are computed at top level (they serve BOTH
+    // branches and Task 8's assertions); the helper's job is the shipping.
+    expect(deploySh).toContain('BUILD_SHA="$(git rev-parse HEAD)"');
+    expect(deploySh, 'the stamp must state dirtiness, not hide it').toContain('git diff --quiet');
+    expect(body).toContain('"$BUILD_SHA"');
+    expect(body).toContain('install_atomic');
+    expect(body).toContain('.ccrc/build.json');
+
+    // I1, final review: stamping BEFORE the remote build let a failed
+    // `npm ci && npm run build` (a registry hiccup — the common case) abort
+    // the deploy with build.json already claiming the NEW sha while the
+    // box's dist/ was never rebuilt to match — `ccd version` lies
+    // immediately, and /health lies the moment Restart=always next cycles
+    // the unit onto that untouched dist/. Exactly the measurement-forgery
+    // class this file's own stamp_build comment bans by name. The fix splits
+    // each remote chain into a BUILD half (npm ci/build + unit-file
+    // installs, which can fail harmlessly) and a RESTART half
+    // (daemon-reload/enable/restart/verify[/curl]), with the stamp
+    // sandwiched between them. Pin all three positions — build, stamp,
+    // restart — not just "stamp precedes restart": that alone is satisfied
+    // by the OLD, buggy ordering too (stamp before EVERYTHING), so it never
+    // would have caught this regression.
+    const agentBranchStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
+    const elseAt = deploySh.indexOf('\nelse');
+
+    const agentBuildAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"');
+    const agentStamp = deploySh.indexOf('stamp_build', agentBranchStart);
+    const agentRestartAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
+    expect(agentBuildAt, 'agent branch never runs its build chain').toBeGreaterThan(agentBranchStart);
+    expect(agentStamp, 'agent branch never stamps').toBeGreaterThan(agentBranchStart);
+    expect(agentRestartAt, 'agent branch never runs its restart chain').toBeGreaterThan(-1);
+    expect(agentStamp, 'the stamp must run AFTER the remote build — a build that never ran must never be stamped')
+      .toBeGreaterThan(agentBuildAt);
+    expect(agentStamp, 'the stamp must run BEFORE the restart that makes it live')
+      .toBeLessThan(agentRestartAt);
+    expect(agentStamp).toBeLessThan(elseAt);
+
+    const serverBuildAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$REMOTE_BUILD_CMD"');
+    const serverStamp = deploySh.indexOf('stamp_build', elseAt);
+    const serverRestartAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$REMOTE_CMD"');
+    expect(serverBuildAt, 'server branch never runs its build chain').toBeGreaterThan(elseAt);
+    expect(serverStamp, 'server branch never stamps').toBeGreaterThan(elseAt);
+    expect(serverRestartAt, 'server branch never runs its restart chain').toBeGreaterThan(-1);
+    expect(serverStamp, 'the stamp must run AFTER the remote build — a build that never ran must never be stamped')
+      .toBeGreaterThan(serverBuildAt);
+    expect(serverStamp, 'the stamp must run BEFORE the restart that makes it live')
+      .toBeLessThan(serverRestartAt);
+  });
+
+  it('the deploy proves the box now RUNS what it shipped — sha equality, not just 200 OK', () => {
+    // The 2026-08-10 failure class, closed at the mechanism level: a green
+    // deploy that proves only "something answers" lets a stale binary hide
+    // behind an {ok:true}. The server branch greps /health for the exact sha
+    // it stamped; the agent branch asks the box's own ccd. Both AFTER their
+    // chains, so they interrogate the restarted services.
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    // NB the deploy.sh line escapes its quotes for the shell — \"sha\":\"$BUILD_SHA\" —
+    // so the needle here carries the backslashes too.
+    const healthAssertAt = serverBranch.indexOf('\\"sha\\":\\"$BUILD_SHA\\"');
+    expect(healthAssertAt, 'the server branch never checks /health against the shipped sha')
+      .toBeGreaterThan(-1);
+    expect(healthAssertAt).toBeGreaterThan(serverBranch.indexOf('"$REMOTE_CMD"'));
+
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const ccdAssertAt = agentBranch.indexOf('ccd version');
+    expect(ccdAssertAt, 'the agent branch never checks ccd version against the shipped sha')
+      .toBeGreaterThan(-1);
+    expect(ccdAssertAt).toBeGreaterThan(agentBranch.indexOf('"$AGENT_CMD"'));
+    expect(agentBranch.indexOf('grep -qF "$BUILD_SHA"', ccdAssertAt),
+      'the ccd version output is not compared to the shipped sha')
+      .toBeGreaterThan(-1);
+  });
+
+  it('the server branch refuses to deploy without a real ccrc.env on either end — I2', () => {
+    // `ship_env` no-ops when deploy/ccrc.env is absent, and the unit's `-`
+    // prefixed EnvironmentFile= tolerates a missing file too — so nothing
+    // stopped a deploy with NEITHER from landing a unit config.ts binds to
+    // 127.0.0.1 by default. The live tailscale serve proxies to the tailnet
+    // IP LITERALLY, so a loopback bind takes the PWA dark on every device,
+    // and verify-service.sh still passes (the process IS up) — only the
+    // health curl at the very end would catch it, after the unit is already
+    // replaced and restarted (I2, final review).
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    const guardAt = serverBranch.indexOf('[ ! -f deploy/ccrc.env ]');
+    expect(guardAt, 'the server branch never checks for a local deploy/ccrc.env').toBeGreaterThan(-1);
+    expect(serverBranch, 'the guard must fall back to checking the box for an already-provisioned ccrc.env')
+      .toContain('~/.ccrc/ccrc.env');
+    expect(serverBranch, 'a missing config on both sides must abort the deploy with a clear message')
+      .toMatch(/deploy: FAILED[^\n]*ccrc\.env/);
+    // Before touching anything: ahead of the PWA build and every mutation below.
+    const buildAt = serverBranch.indexOf('(cd pwa && npm ci && npm run build)');
+    const rsyncAt = serverBranch.indexOf('rsync -az');
+    const backupMkdirAt = serverBranch.indexOf('mkdir -p ~/ccrc-backups/$TS');
+    expect(buildAt, 'the PWA build line was not found').toBeGreaterThan(-1);
+    expect(guardAt, 'the guard must run before the PWA build, not after').toBeLessThan(buildAt);
+    expect(guardAt, 'the guard must run before rsync --delete touches the box').toBeLessThan(rsyncAt);
+    expect(guardAt, 'the guard must run before the box is touched at all')
+      .toBeLessThan(backupMkdirAt);
+  });
+
+  it('every unit file a deploy overwrites is backed up first, absent-source-skippable — I2', () => {
+    // dist-pwa and coord.db were backed up already; the *.service files
+    // AGENT_CMD/REMOTE_CMD `cp` straight over ~/.config/systemd/user/ never
+    // were, so a bad unit (a broken EnvironmentFile= line, or anything else)
+    // had no on-box restore path (I2, final review).
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    for (const [branch, label, unit] of [
+      [agentBranch, 'agent', '~/.config/systemd/user/ccrc-agent.service'],
+      [agentBranch, 'agent', '~/.config/systemd/user/claude-session@.service'],
+      [serverBranch, 'server', '~/.config/systemd/user/ccrc.service'],
+    ] as const) {
+      const guardIdx = branch.indexOf(`[ ! -f ${unit} ]`);
+      expect(guardIdx, `${label} branch never backs up ${unit} (absent-source-skippable guard missing)`)
+        .toBeGreaterThan(-1);
+      expect(branch.indexOf('cp -a', guardIdx), `${label} branch's ${unit} backup does not cp -a`)
+        .toBeGreaterThan(guardIdx);
+    }
+  });
+
+  it("HEALTH_URL is derived from the resolved \$BOX, not a hardcoded literal — I4", () => {
+    // A `CCRC_BOX` override must also move HEALTH_URL, or a same-sha
+    // re-deploy/rollback to a DIFFERENT box would pass the sha-assertion
+    // WITHOUT EVER CONTACTING THE TARGET (final review). Extract the actual
+    // variable-resolution header (BOX -> TARGET/agent-host override ->
+    // HEALTH_URL) and EXECUTE it for real — this proves the runtime
+    // expansion, not merely that some substring exists in the file.
+    const start = deploySh.indexOf('BOX="${CCRC_BOX:-');
+    const healthLine = /HEALTH_URL="\$\{CCRC_HEALTH_URL:-[^\n]*\n/.exec(deploySh);
+    expect(start, 'BOX default assignment not found').toBeGreaterThan(-1);
+    expect(healthLine, 'HEALTH_URL default assignment not found').toBeTruthy();
+    const targetOverrideAt = deploySh.indexOf('[ "$TARGET" = "agent" ]');
+    expect(healthLine!.index!,
+      'HEALTH_URL must be resolved AFTER the agent-target BOX override, not before')
+      .toBeGreaterThan(targetOverrideAt);
+    const header = deploySh.slice(start, healthLine!.index! + healthLine![0].length);
+
+    const run = (args: string[], env: Record<string, string> = {}): string => {
+      const r = spawnSync('bash', ['-c', `${header}\nprintf '%s' "$HEALTH_URL"`, '_', ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, CCRC_BOX: '', CCRC_HEALTH_URL: '', ...env },
+      });
+      expect(r.status, `header exited nonzero: ${r.stderr}`).toBe(0);
+      return r.stdout;
+    };
+
+    expect(run([]), 'the no-override default must still hit the known server box')
+      .toBe('http://203.0.113.7:7788/health');
+    expect(run([], { CCRC_BOX: 'user@10.0.0.9' }),
+      'CCRC_BOX must move HEALTH_URL, not leave it pointed at the old box')
+      .toBe('http://10.0.0.9:7788/health');
+    expect(run(['agent', 'user@10.0.0.5']),
+      "the agent target's host argument must also drive HEALTH_URL")
+      .toBe('http://10.0.0.5:7788/health');
+    expect(run([], { CCRC_HEALTH_URL: 'http://example:9999/health' }),
+      'CCRC_HEALTH_URL must still override everything')
+      .toBe('http://example:9999/health');
+  });
+
+  it('the sha assertions capture-then-test — no pipe into grep -q, which races SIGPIPE under pipefail — I7', () => {
+    // `producer | grep -qF pattern` under `set -o pipefail`: if grep -q finds
+    // its match and exits before the producer finishes writing, the producer
+    // can be killed by SIGPIPE, and ITS nonzero exit becomes the pipeline's
+    // reported status — a FAILURE after grep already matched. Measured on
+    // this exact shape (deploy.sh's own comment cites 553/1500 false
+    // failures at 50 output lines). The fix captures into a variable first,
+    // then tests the capture — no pipe left for grep to race.
+    expect(deploySh, 'a tee/grep pipe into the sha assertion is back — capture-then-test was removed')
+      .not.toMatch(/\|\s*tee\s+\/dev\/stderr\s*\|\s*grep/);
+    expect(deploySh, 'a bare curl | grep -qF pipe is back on the health assertion')
+      .not.toMatch(/curl -fsS "\$HEALTH_URL" \|\s*grep/);
+
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    expect(agentBranch, 'ccd version must be captured into a variable before testing it')
+      .toContain('ccd_version_out="$("${SSH[@]}" "$BOX" \'~/.local/bin/ccd version\')"');
+    expect(agentBranch, 'the capture must be tested via printf | grep -qF, not re-piped from ssh')
+      .toContain('printf \'%s\' "$ccd_version_out" | grep -qF "$BUILD_SHA"');
+
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    expect(serverBranch, 'the health response must be captured into a variable before testing it')
+      .toContain('health_out="$(curl -fsS "$HEALTH_URL")"');
+    expect(serverBranch, 'the capture must be tested via printf | grep -qF, not re-piped from curl')
+      .toContain('printf \'%s\' "$health_out" | grep -qF "\\"sha\\":\\"$BUILD_SHA\\""');
   });
 });
