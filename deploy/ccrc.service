@@ -3,8 +3,13 @@ Description=ccrc — self-hosted remote control for Claude Code sessions
 After=network-online.target
 
 [Service]
-Environment=CCRC_HOST=203.0.113.7
-Environment=CCRC_PORT=7788
+# ALL machine configuration lives in ~/.ccrc/ccrc.env (spec §2: one env file
+# per box, read by everything). The `-` makes it optional: a fresh box with no
+# env file boots in local mode on config.ts defaults (127.0.0.1:7788). The
+# baked Environment= literals this replaces were one operator's tailnet IP —
+# and the live box's real config rode an unmanaged drop-in this line retires
+# (see the 2026-08-11 stage-1 plan, Task 9, for the migration).
+EnvironmentFile=-%h/.ccrc/ccrc.env
 ExecStart=/usr/bin/env node %h/ccrc/server/dist/server/src/index.js
 Restart=always
 RestartSec=3

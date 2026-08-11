@@ -502,4 +502,24 @@ describe('the verification is actually wired into the deploy, and can observe a 
         .toContain("--exclude 'ccrc-mail.token'");
     }
   });
+
+  it("ccrc.service reads ~/.ccrc/ccrc.env and bakes NOTHING — the env file deploy.sh ships is finally read", () => {
+    // Survey blocker #1 by depth: deploy.sh faithfully shipped ccrc.env to
+    // ~/.ccrc/ for weeks while the unit read nothing, and the live box's real
+    // config accreted in a hand-made drop-in the repo cannot see. The `-`
+    // prefix keeps a fresh box bootable with no env file at all (local mode,
+    // loopback defaults from config.ts).
+    const unit = readFileSync(path.join(deployDir, 'ccrc.service'), 'utf8');
+    expect(unit).toContain('EnvironmentFile=-%h/.ccrc/ccrc.env');
+    expect(/^Environment=/m.test(unit),
+      'baked Environment= literals are back in ccrc.service').toBe(false);
+
+    // And the example documents every variable the LIVE box actually needs —
+    // the three VAPID vars were real config with no documentation anywhere.
+    const example = readFileSync(path.join(deployDir, 'ccrc.env.example'), 'utf8');
+    for (const v of ['CCRC_HOST', 'CCRC_PORT', 'CCRC_VAPID_PUBLIC',
+      'CCRC_VAPID_PRIVATE', 'CCRC_VAPID_SUBJECT', 'CCRC_PROJECTS_ROOT']) {
+      expect(example, `ccrc.env.example does not document ${v}`).toContain(v);
+    }
+  });
 });
