@@ -127,11 +127,38 @@ Two aliases must be read before editing rather than swept: `--acct-active` /
 `--acct-active-tint` (the rebinding mechanism components actually style
 against) and `--pr-merged`, which deliberately aliases the violet hue.
 
-**`telemetry`** (`anthropic` | `none`) exists because `gpt` reports no 5h/7d
-usage. This closes a real bug logged at the end of stage 1: `limits.ts` scores
-a no-telemetry account as 0% used, making it a magnet for placement, currently
-mitigated only by a last-position tie-break. With the roster carrying the
-fact, that becomes a fix rather than luck.
+**`telemetry`** (`anthropic` | `none`) exists because `limits.ts` conflates
+*unmeasured* with *zero used*, and an account scored 0 wins every placement.
+Both halves are mechanically confirmed against the current tree:
+`projectHome({claude:5, claude2:6, 'claude-corp':7})` returns
+`{wrapper:'claude-dev0', score:0}` — an account with no telemetry row at all —
+and an account shaped like `{five: null, seven: 0}` behaves identically.
+
+Two corrections to the earlier framing of this bug. `gpt` **does** write
+`~/.cc-limits/gpt.json`; its content is `{"five": null, "seven": 0, …}`, so the
+distinguishing fact is a permanently null `five`, not an absent file. And
+nothing is misplaced in production today: `claude-dev0` reports real telemetry
+(12/4 at the time of writing), so it is scored honestly, and the only
+structurally-unmeasurable account, `gpt`, is kept out of scoring by
+`homeAble: false` rather than by anything to do with telemetry.
+
+The fix therefore has two parts, and the second one matters more than the
+first:
+
+1. An account with `telemetry: 'none'` is never scored.
+2. An `anthropic` account with no measurement must rank as **unknown**, not as
+   zero — the distinction `pwa/src/fleet/SwapSheet.tsx:72-73` already draws,
+   and which `limits.ts` and ccd's `_ws_least_loaded` (ccd:1005,
+   `[[ -z "$sc" ]] && sc=0`) both currently collapse.
+
+**Unknown must not mean unplaceable.** On a fresh install no account has
+telemetry yet, so excluding unmeasured accounts outright would leave
+`projectHome` returning null and the PWA reporting that nothing can take a new
+workspace — breaking the exact first-run path this workstream exists to make
+work. The rule is: prefer measured accounts; if none are measured, fall back to
+the first home-able account in roster order. ccd's `_ws_least_loaded` gets the
+same treatment in the same commit, since `server/test/projected-home.test.ts`
+asserts the two implementations agree per fixture.
 
 ### 4. Validation and failure posture
 
@@ -222,9 +249,24 @@ invariant a property of the generator rather than of a maintainer's care.
 
 This replaces four hardcoded ccd surfaces — `VALID_WRAPPERS` (ccd:14),
 `_is_valid_wrapper` (ccd:104, which also hardcodes `gpt`), `_cfg_dir`
-(ccd:6526) and `_id_wrapper` (ccd:6659) — plus the hardcoded `homes=(…)`
-defaults in `install-session-hooks.sh:25` and
+(ccd:6526-6534) and `_id_wrapper` (ccd:6658-6674) — plus the hardcoded
+`homes=(…)` defaults in `install-session-hooks.sh:25` and
 `install-coordinator-skill.sh:34`.
+
+`VALID_WRAPPERS` has **more consumers than those four**, and all of them move
+in the same commit: `_ws_least_loaded` (ccd:1003), `cmd_ws_add`'s
+all-excluded preflight (ccd:1053), and `_default_pool` (ccd:6558), which uses
+`"${VALID_WRAPPERS[*]}"` — a space-joined *string* consumed by `_swap_target`
+(ccd:6709) through an unquoted `for cand in $(_pool_for "$id")`. Free-form ids
+are safe there only because the id charset excludes whitespace; that is now a
+load-bearing reason for the charset rule in §4, not merely a tidiness one.
+
+Today's `_id_wrapper` arms are **not** strictly length-descending —
+`claude-corp-` and `claude-dev0-` are both 12 characters, and `claude2-` (8)
+precedes `claude-` (7) by hand-authoring luck. The order is correct but by a
+weaker accident than "sorted". A golden-file comparison against today's text
+would therefore fail against a correctly-sorted generator: the test must assert
+*behaviour*, never the literal arm order.
 
 **The path is derived from `$HOME` with no env override**, matching ccd's
 existing discipline (its own header comment: `$HOME` is the single isolation
@@ -249,8 +291,11 @@ The agent does not reference the roster at all. The blast radius is five
 TypeScript files, three bash files and one stylesheet.
 
 - **`shared/api.ts`** — keeps `Wrapper` (widened to a documented `string`
-  alias, so ~40 call sites and the type's substantial docstring stay put) and
-  `AccountDef`; gains a **pure** `parseRoster(json)` (pure because `shared/`
+  alias, so the type's 35-line docstring stays put; the identifier occurs 34
+  times but in *type position* in only three non-test files — `shared/api.ts`,
+  `server/src/config.ts`, `server/src/fleet.ts`) and **exports** `AccountDef`,
+  which is a bare `interface` today and must gain `export` for `parseRoster`'s
+  return type; gains a **pure** `parseRoster(json)` (pure because `shared/`
   may not import `node:*`, so the caller reads the file); loses `ACCOUNTS`,
   `ALL_WRAPPERS`, `HOME_ABLE_WRAPPERS`, `ACCOUNT_ORDER` and `KNOWN_WRAPPERS`,
   which become functions of a roster.
@@ -282,7 +327,32 @@ raw name for the label, `--ink-tertiary` for the color — mean an
 asynchronously-arriving roster degrades gracefully rather than flashing wrong
 values.
 
-### 10. `adopt` versus the migration — two different things
+### 10. The roster in two-box (remote) mode
+
+In `fleetMode: 'remote'` the server runs on one box and the accounts live on
+another — server-box has no Claude accounts at all, while openclaw has five. But
+`GET /api/accounts` serves labels, hues and ordering, which are facts about the
+*fleet host*.
+
+**`deploy.sh` writes `accounts.json` to both boxes in the same run**, from the
+same operator machine, exactly as it already does for ccd, the units and
+`ccrc.env`. There is one source of truth — the operator's file — and two
+deployed copies kept equal by the thing that writes both. `ccrc doctor` (2b)
+compares them and goes red on divergence.
+
+Rejected: having the server fetch the roster from the agent. It is
+conceptually cleaner, but it costs a protocol change inside the stage already
+widening a core type, plus a degraded mode — the server must still render
+labels and hues while the agent is down, which is exactly when the UI most
+needs to stay readable. Stage 4's version-skew handshake can carry the roster
+later at no extra cost.
+
+Consequence for `loadConfig`: it reads `accounts.json` from the **local** box
+unconditionally, in both fleet modes, via `readFileSync`. It must stay
+synchronous — `server/src/index.ts:21` calls `loadConfig()` at module top level
+with no await.
+
+### 11. `adopt` versus the migration — two different things
 
 Conflating these would cost the reference installation its labels.
 
