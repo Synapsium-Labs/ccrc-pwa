@@ -8,15 +8,16 @@
 //
 //   * the reconstruction procedure below lives HERE and ships nowhere. The
 //     ledger is "for humans and parsed by nothing" (spec §7), and
-//     single-definition.test.ts now enforces that no file under server/src
-//     mentions docs/superpowers/programs at all.
-//   * what it CANNOT recover is asserted by name, so nobody can read this as a
-//     claim that the DB is redundant.
+//     single-definition.test.ts enforces that no non-comment line under
+//     server/src reads it off disk.
+//   * what it CANNOT recover is asserted by name, against reconstruct()'s own
+//     OUTPUT, so nobody can read this as a claim that the DB is redundant.
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, cpSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, cpSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import type { RunSummary } from '../../shared/api.js';
 
 const fx = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/reconstruct');
 
@@ -26,6 +27,18 @@ function copyFixtureWithout(dir: string, relPath: string): string {
   const out = mkTmp('ccrc-reconstruct-');
   cpSync(dir, out, { recursive: true });
   rmSync(path.join(out, relPath), { force: true });
+  return out;
+}
+
+/** A copy of the fixture tree with one file's content replaced — the shape a
+ *  stale hold left behind (registry.ts:27: display-only, and PR I's own
+ *  close path rewrites it under the NEXT wave's reason before the ledger
+ *  catches up, so disagreement between hold and ledger is an ordinary,
+ *  expected state, not a corrupted one). `mkTmp` owns cleanup. */
+function copyFixtureWith(dir: string, relPath: string, content: string): string {
+  const out = mkTmp('ccrc-reconstruct-');
+  cpSync(dir, out, { recursive: true });
+  writeFileSync(path.join(out, relPath), content);
   return out;
 }
 
@@ -53,12 +66,21 @@ function reconstruct(dir: string): Reconstructed {
     prs: [...m[2]!.matchAll(/#(\d+)/g)].map((p) => Number(p[1])),
     state: m[3]!.trim(),
   }));
+  // The ledger's own answer for "where are we" — computed unconditionally, so
+  // it is available both as the ledger-only result AND as the value the hold
+  // (below) is corroborated against, never trusted in place of it.
+  const ledgerCurrentWave = perWave.filter((w) => w.state === 'merged').length + 1;
+  const ledgerWaves = perWave.length;
 
   // 3. The registry says where the work physically is, and — while the hold is
   //    still on — which wave the program had reached. The hold reason is
   //    display-only by contract (registry.ts:27); reading it HERE is a
-  //    disaster-recovery act by a human, not a parser in the running system,
-  //    and it is corroborated against the ledger below rather than trusted.
+  //    disaster-recovery act by a human, not a parser in the running system.
+  //    It is corroborated against the ledger rather than trusted: PR I's own
+  //    close path re-holds a workspace under the NEXT wave's reason before
+  //    the ledger for that wave necessarily exists, so a hold that disagrees
+  //    with the ledger is an ordinary state at a wave boundary, not proof of
+  //    corruption — and 'hold-corroborated' must not be the label for it.
   const reg = (field: string): string | null => {
     const f = path.join(dir, 'registry', `${sessionId}.${field}`);
     return readdirSync(path.join(dir, 'registry')).includes(path.basename(f))
@@ -66,23 +88,43 @@ function reconstruct(dir: string): Reconstructed {
   };
   const hold = reg('hold');
   const m = hold === null ? null : /wave:(\d+)\/(\d+)/.exec(hold);
+  const holdAgrees = m !== null && Number(m[1]) === ledgerCurrentWave && Number(m[2]) === ledgerWaves;
 
-  // 4. `.prhistory` is the PR lineage the archive manifest would otherwise
-  //    carry — the corroboration for the ledger's PR column.
+  // 4. `.prhistory` is append-only, and ccd writes to it only when a NEW pr
+  //    number SUPERSEDES an old one for this workspace (ccd:865-866),
+  //    recording the OUTGOING pr and its phase — so the CURRENT pr for a
+  //    workspace is never in `.prhistory`; it lives in the registry's
+  //    `.prnumber`/`.prphase` instead. Both are corroborated against the
+  //    ledger's PR column: `.prhistory`'s entries (the pr lineage) and the
+  //    registry's live pr (the one open right now, which is the thing an
+  //    operator actually needs to know after a DB loss).
   const prs = readFileSync(path.join(dir, 'prhistory.jsonl'), 'utf8')
     .split('\n').filter(Boolean).map((l) => JSON.parse(l) as { pr: number });
   const ledgerPrs = perWave.flatMap((w) => w.prs);
   for (const { pr } of prs) {
     expect(ledgerPrs, `#${pr} is in .prhistory but not in the ledger`).toContain(pr);
   }
+  const currentPr = reg('prnumber');
+  if (currentPr !== null) {
+    const num = Number(currentPr);
+    expect(ledgerPrs, `the registry's current PR #${num} is not in the ledger`).toContain(num);
+    const currentPhase = reg('prphase');
+    if (currentPhase !== null) {
+      const row = perWave.find((w) => w.prs.includes(num));
+      expect(
+        row?.state,
+        `#${num}'s ledger state disagrees with the registry's .prphase (${currentPhase})`,
+      ).toBe(currentPhase);
+    }
+  }
 
   return {
     program, sessionId,
     workspace: reg('workspace')!, branch: reg('branch')!, project: reg('project')!,
-    currentWave: m ? Number(m[1]) : perWave.filter((w) => w.state === 'merged').length + 1,
-    waves: m ? Number(m[2]) : perWave.length,
+    currentWave: ledgerCurrentWave,
+    waves: ledgerWaves,
     perWave,
-    confidence: m ? 'hold-corroborated' : 'ledger-only',
+    confidence: holdAgrees ? 'hold-corroborated' : 'ledger-only',
   };
 }
 
@@ -116,30 +158,66 @@ describe('the reconstruction drill', () => {
     expect(r.confidence).toBe('ledger-only');
   });
 
+  it('downgrades to ledger-only when the hold disagrees with the ledger, rather than trusting a stale display string', () => {
+    // MEASURED against the unpatched drill in fix-round review: this exact
+    // hold against this exact (unchanged) 3-wave ledger returned
+    // {currentWave: 9, waves: 12, confidence: 'hold-corroborated'} — no
+    // throw, no downgrade. The hold is display-only (registry.ts:27) and PR
+    // I's close path rewrites it under the NEXT wave's reason as part of an
+    // ordinary close, so disagreement is the expected shape at a wave
+    // boundary — the committed ledger must win, and the label must say so.
+    const dir = copyFixtureWith(
+      fx,
+      'registry/ccrc-pwa-clear-cove.hold',
+      'program:build4-transcript-surface wave:9/12',
+    );
+    const r = reconstruct(dir);
+    expect(r.currentWave).toBe(3);
+    expect(r.waves).toBe(3);
+    expect(r.confidence).toBe('ledger-only');
+  });
+
   it('names exactly what CANNOT be reconstructed, so this is never read as "the DB is redundant"', () => {
-    // These are the RunSummary/work-item fields no artifact carries. Every one
-    // of them is a timing or a granularity the ledger deliberately does not
-    // record — which is the case for having a database, stated as a test rather
-    // than as a paragraph nobody re-reads.
+    // Every named-field entry below is a `RunSummary` (shared/api.ts) field
+    // no artifact carries, and the assertion is against reconstruct()'s own
+    // OUTPUT, not the ledger's prose: "cannot be reconstructed" is a property
+    // of what the procedure actually produces, so this goes red the day
+    // someone quietly starts deriving e.g. closedAt from .prhistory's
+    // recordedAt (which the drill already reads) rather than staying green
+    // forever by construction. The last four entries are finer-grained than
+    // any single RunSummary field (per-work-item and per-mail-row detail)
+    // and are named for the record, not checked against a key that could
+    // never literally appear.
     const UNRECOVERABLE = [
       'dispatchedAt', 'closedAt',        // wall-clock instants; the ledger keeps order, not time
+      'resumed', 'clearedAt',            // the /clear proof (D-1); no artifact stamps it
+      'openedAt',                        // same class of wall-clock instant as dispatchedAt/closedAt
+      'handoffCommit',                   // the worker's claimed commit sha; nothing persists it outside the DB
+      'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
+      'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
       'coordinator caps counters',
     ] as const;
-    // The whole phrase, not its first word: the ledger's own legitimate prose
-    // ("Workspace:", the wave-3 scope "mail in the transcript") shares a
-    // first word with two of these labels ('work', 'mail') without meaning
-    // the same thing, so a first-word substring check would fail on the
-    // fixture's own honest content. The full label is still a real
-    // assertion — a ledger that started literally spelling out
-    // "work item ids and their blockedBy DAG" would still trip this.
-    const ledger = readFileSync(path.join(fx, 'ledger.md'), 'utf8');
+    // Compile-time half of the same claim: if PR I adds or removes a
+    // RunSummary field, this object satisfies-fails before any test runs —
+    // the mapping below has to be revisited, not silently stale. (Type-only
+    // import — no runtime module, no parser: D-4's "the drill imports no
+    // production module" survives this, since `import type` is erased.)
+    const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
+      id: true, program: true, programTitle: true, wave: true, waveOf: true,
+      project: true, sessionId: true, workspace: true, branch: true, state: true,
+      resumed: true, clearedAt: true, openedAt: true, dispatchedAt: true,
+      closedAt: true, handoffCommit: true, items: true, unreadMail: true,
+    };
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(18);
+
+    const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
-      expect(ledger.toLowerCase()).not.toContain(field.toLowerCase());
+      expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(6);
+    expect(UNRECOVERABLE.length).toBe(12);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

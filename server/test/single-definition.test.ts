@@ -374,25 +374,51 @@ describe('the account roster — config dir is data, joined in one place', () =>
 });
 
 describe('the program ledger is parsed by nothing', () => {
-  // Spec §7 says the ledger is "for humans and parsed by nothing," and that is
-  // why the reconstruction drill's parser lives only in
-  // reconstruction-drill.test.ts, never under server/src. The server DOES
-  // legitimately name the ledger's path — `POST /api/runs`'s response tells a
-  // coordinator where to commit it (coord/routes.ts), and several docstrings
-  // explain the convention (coord/db.ts, coord/fingerprint.ts, coord/store.ts,
-  // shared/api.ts) — and naming a path is not parsing a file: the moment the
-  // running system reads this file's CONTENT, it stops being prose for humans
-  // and becomes a format with a compatibility surface. So the mechanism below
-  // is narrower than "never mentions the path": it fails on the one thing that
-  // would actually make the ledger a parsed format — a filesystem read whose
-  // target names it.
+  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4's
+  // actual mechanism is "no file under server/src mentions
+  // docs/superpowers/programs" — narrowed only as far as the shipped tree
+  // forces: nine mentions exist today, and every one but three is a comment
+  // explaining the convention (coord/db.ts's own migration-rule docstring,
+  // coord/fingerprint.ts, coord/store.ts, coord/routes.ts's docstrings,
+  // shared/api.ts). The three non-comment mentions are STRING VALUES the
+  // running system emits or throws — never a value it reads back off disk —
+  // and are named below, exactly, rather than pattern-matched: a
+  // `readFile(Sync)?(` check on the same line catches only the single-line
+  // literal form and waves through the ordinary two-line one
+  //   const p = path.join(root, 'docs/superpowers/programs', slug + '.md');
+  //   return readFileSync(p, 'utf8');
+  // which is how a real ledger parser gets written. This guard instead
+  // allows comment lines plus this exact 3-line allowlist and fails on any
+  // OTHER non-comment mention, on any number of lines — the actual signal,
+  // and not one a split read can dodge.
+  const ALLOWED_NON_COMMENT = [
+    // coord/db.ts:144 and :221 — the 0-byte-file refusal and the
+    // migration-failure refusal, the same sentence told to the operator
+    // twice. Each throws a message; neither reads a byte off either path.
+    "'program history from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the ' +",
+    "'(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +",
+    // coord/routes.ts:692 — POST /api/runs's response names where a
+    // coordinator should commit the ledger; the route never opens it.
+    'ledgerPath: `docs/superpowers/programs/${program}.md`,',
+  ];
+
+  const isCommentLine = (line: string): boolean => {
+    const t = line.trim();
+    return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+  };
+
   it('no shipped source reads the program ledger off disk', () => {
-    const readsIt = ALL
-      .filter((f) => !rel(f).startsWith('server/test/'))
-      .filter((f) => readFileSync(f, 'utf8')
-        .split('\n')
-        .some((line) => /readFile(?:Sync)?\(/.test(line) && line.includes('programs')))
-      .map(rel);
-    expect(readsIt).toEqual([]);
+    const violations: string[] = [];
+    for (const f of ALL) {
+      if (rel(f).startsWith('server/test/')) continue;
+      const lines = readFileSync(f, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        if (!line.includes('docs/superpowers/programs')) return;
+        if (isCommentLine(line)) return;
+        if (ALLOWED_NON_COMMENT.some((allowed) => line.trim() === allowed)) return;
+        violations.push(`${rel(f)}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(violations).toEqual([]);
   });
 });
