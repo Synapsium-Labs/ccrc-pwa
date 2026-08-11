@@ -59,7 +59,7 @@
 // source text, no subprocess — not a substitute for one a fixture cannot
 // make revealing.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCOUNTS, type Wrapper } from '../../shared/api.js';
@@ -217,6 +217,35 @@ describe('install-coordinator-skill.sh default homes agrees with ACCOUNTS.hooksA
   // outside this test.
   it('installs into exactly the hooksAble config dirs, as literal $HOME/<suffix> paths, in ACCOUNTS order', () => {
     expect(parseDefaultHomes('ccd/install-coordinator-skill.sh')).toEqual(wantHooksAbleHomes);
+  });
+});
+
+// I8: `REQUIRED_REFS` (install-coordinator-skill.sh) is the OTHER hardcoded
+// literal this installer carries, and it exists for exactly the failure mode
+// this file's own header describes for `homes=(...)` — a literal array is a
+// PROJECTION of something real that a future change can silently drift away
+// from, and "a comment asking a future author to keep them in sync" is not a
+// mechanism. Here the real thing is not `ACCOUNTS` but the filesystem itself:
+// `REQUIRED_REFS` names the `references/*.md` files a partial rsync (the
+// specific hazard its own script comment names — SKILL.md sorts before
+// `references/`, so an interrupted `rsync -az --delete` can land SKILL.md
+// with an incomplete or absent `references/`) must NOT be allowed to ship
+// without. A fifth reference file landing under `references/` with no
+// matching `REQUIRED_REFS` entry would make the guard silently optional for
+// it — exactly the half-installed shape the guard exists to refuse — and
+// nothing before this test would have noticed.
+describe('install-coordinator-skill.sh REQUIRED_REFS agrees with the real references/ directory (I8)', () => {
+  it('names exactly the .md files that live under ccd/coordinator-skill/references/ today', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-coordinator-skill.sh'), 'utf8');
+    const m = /REQUIRED_REFS=\(([^)]*)\)/.exec(src);
+    expect(m, "install-coordinator-skill.sh's REQUIRED_REFS=(...) line").not.toBeNull();
+    const declared = sortedSet((m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean));
+    const actual = sortedSet(
+      readdirSync(path.join(ccrcRoot, 'ccd', 'coordinator-skill', 'references'))
+        .filter((n) => n.endsWith('.md')),
+    );
+    expect(actual.length).toBeGreaterThan(0); // the parse itself must find something, or this vacuously passes
+    expect(declared).toEqual(actual);
   });
 });
 
