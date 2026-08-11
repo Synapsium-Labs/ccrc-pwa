@@ -37,6 +37,21 @@ each cut from main after the previous merged.
   worker's first Stop wrote hookstate and the lane then delivered the brief verbatim.
   FIX CANDIDATE (wave 2 amendment or Build 5): session-hook.sh's SessionStart handler
   writes state=done — a just-started session is definitionally at an idle boundary.
+- F3 — BUG #21 REPRODUCED LIVE ON THE MAIL PATH (typed-but-unsent self-block).
+  After F1's nudge, the delivery lane typed the 2.8KB brief into the worker's box
+  but the Enter did not land; the text sat as an unsent draft; the lane then read
+  its OWN un-submitted injection as `draft-present` and refused to redeliver,
+  backing off to 5 attempts / ~7min out. The draft guard doing its job (never type
+  over a human mid-sentence) is what made the self-block sticky. Recovered by the
+  operator via POST /api/sessions/:id/submit with the exact box-prefix as `expect`
+  (the box-mismatch safety check itself worked — refused my first wrong guess).
+  FIX: this is task #21; the mail delivery path needs the same submit-proof the
+  interactive send path has, so a mail injection whose Enter is lost is retried as
+  ITS OWN pending delivery rather than abandoned as someone else's draft.
+- F4 — VISUAL NESTING GAP (operator-raised). Worker workspaces do not visually nest
+  under their program on the fleet screen; the data exists (hold reason
+  `program:<slug> wave:N/M`) but the fleet list groups flat by project. Proposed as
+  a fast-follow — see task.
 - F2 — THE DRAFT GUARD HELD UNDER RACE. The kickoff nudge and the brief delivery
   raced; the sweep answered draft-present twice, backed off, and delivered cleanly
   once the box emptied. The design behaved exactly as specified; recorded as a pass.
