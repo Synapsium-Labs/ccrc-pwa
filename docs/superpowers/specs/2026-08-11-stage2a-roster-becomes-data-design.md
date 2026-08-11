@@ -180,12 +180,16 @@ yield a silently-empty roster.
 
 ### 5. Ownership — how a writer avoids doing damage
 
-2a ships the ownership **mechanism** — the marker format, the classifier and
-the manifest writer — not the installer that will lean on it hardest. In 2a
-the only writers are `deploy.sh` and the migration, and the only newly
-generated file is `accounts.sh` (with `ccd` gaining a marker, since deploy.sh
-already installs it). 2b's installer brings the generated wrappers, units and
-drop-ins under the same rules without inventing a second policy.
+2a ships the **marker format** and its verifier. It does **not** ship the path
+classifier or the manifest writer: 2a's only writer is `deploy.sh`, which is
+bash, so those two would be code with no caller until 2b's installer exists.
+They land in 2b alongside the thing that calls them. (Revised during planning —
+the earlier version of this section put all three in 2a.)
+
+In 2a the only newly generated file is `accounts.sh`, with `ccd` gaining a
+marker since deploy.sh already installs it. 2b's installer brings the generated
+wrappers, units and drop-ins under the same rules without inventing a second
+policy.
 
 One rule underneath everything: **a writer writes, skips, or refuses. It never
 deletes.** Deletion requires a rollback story, which arrives in stage 4 with
@@ -220,10 +224,11 @@ already built.
 
 ### 6. `~/.ccrc/manifest.json`
 
-Records every path a ccrc writer touched, its ownership class, its hash, and —
-for `settings.json` — the exact entries ccrc added. In 2a it is written by
-`deploy.sh` and the migration; 2b's installer becomes its main author.
-**Nothing in 2a reads it.**
+**Deferred to 2b** (revised during planning). The manifest records every path a
+ccrc writer touched, its ownership class, its hash, and — for `settings.json` —
+the exact entries ccrc added. Its author is the installer, which does not exist
+until 2b; 2a's only writer is bash. The reasoning for having it at all is
+unchanged and still applies at 2b:
 It is written anyway because provenance is free at the moment you have it and
 unreconstructable afterwards, and because the parent spec names the exact
 failure it prevents: today a declined trial leaves every Claude session
