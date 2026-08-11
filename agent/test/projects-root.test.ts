@@ -29,3 +29,49 @@ describe('resolveProjectsRoot', () => {
       .toBe(path.join(os.homedir(), 'projects'));
   });
 });
+
+// Review finding (Important, task-4 fix loop): before this task, production's
+// projectsRoot was a hardcoded literal that could never coincide with $HOME —
+// structurally impossible. This task made it operator-configurable, and
+// whitelist.ts's checkPath grants READS under it with a plain prefix check.
+// Setting CCRC_PROJECTS_ROOT to $HOME itself (or any ancestor of it, e.g. '/'
+// or '/home') — an easy mistake — folds ~/.ssh, ~/.ccrc/agent.env (which
+// holds CCRC_AGENT_TOKEN) and every dotfile into the read whitelist. The
+// agent's existing posture for invalid security config is refuse to boot
+// (whitelist.ts's auditExecWhitelist), so resolveProjectsRoot throws instead
+// of warning and continuing. Roots UNDER $HOME — including the $HOME/projects
+// default — are unaffected.
+describe('resolveProjectsRoot — refuses a dangerous root', () => {
+  const home = os.homedir();
+
+  it('throws when an explicit option equals $HOME', () => {
+    expect(() => resolveProjectsRoot(home, {})).toThrow(/refus/i);
+  });
+
+  it('throws when CCRC_PROJECTS_ROOT equals $HOME', () => {
+    expect(() => resolveProjectsRoot(undefined, { CCRC_PROJECTS_ROOT: home })).toThrow(/refus/i);
+  });
+
+  it('throws when the root is the filesystem root (an ancestor of everything)', () => {
+    expect(() => resolveProjectsRoot('/', {})).toThrow(/refus/i);
+  });
+
+  it('throws when the root is an ancestor directory of $HOME', () => {
+    const ancestor = path.dirname(home);
+    expect(() => resolveProjectsRoot(ancestor, {})).toThrow(/refus/i);
+  });
+
+  it('throws when the root is not an absolute path', () => {
+    expect(() => resolveProjectsRoot('relative/projects', {})).toThrow(/absolute/i);
+  });
+
+  it('stays fine for $HOME/projects — the default itself', () => {
+    const root = path.join(home, 'projects');
+    expect(resolveProjectsRoot(root, {})).toBe(root);
+  });
+
+  it('stays fine for a directory nested deeper under $HOME', () => {
+    const deep = path.join(home, 'projects', 'some-repo', 'nested');
+    expect(resolveProjectsRoot(deep, {})).toBe(deep);
+  });
+});

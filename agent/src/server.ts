@@ -56,21 +56,71 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10_000;
 const MAX_EXEC_TIMEOUT_MS = 300_000;
 const EXEC_MAX_BUFFER = 8 * 1024 * 1024;
 const AUTH_CLOSE_CODE = 4401;
+/** `root === home`, or `root` is a path-segment-aligned ancestor directory of
+ *  `home` (e.g. '/', '/home' when home is '/home/x'). Deliberately NOT the
+ *  `target.startsWith(base + path.sep)` check whitelist.ts's own `isUnder`
+ *  uses — that check happens to treat a root of '/' as unreachable only
+ *  because no real path starts with '//', a technicality this guard must not
+ *  depend on staying true. `path.resolve` first so a trailing slash on
+ *  either side (e.g. CCRC_PROJECTS_ROOT=/home/x/) can't slip past either
+ *  branch. */
+function isHomeOrAncestorOfHome(root: string, home: string): boolean {
+  const r = path.resolve(root);
+  const h = path.resolve(home);
+  if (r === h) return true;
+  const prefix = r === path.sep ? path.sep : r + path.sep;
+  return h.startsWith(prefix);
+}
+
+/**
+ * Refuses a projects root that would silently widen the READ whitelist onto
+ * $HOME's own dotfiles. Before this task `projectsRoot` was a hardcoded
+ * literal ('/srv/projects') that could never coincide
+ * with $HOME — structurally impossible. This task made it
+ * operator-configurable via CCRC_PROJECTS_ROOT, and whitelist.ts's
+ * `checkPath` grants reads under whatever root it's given with a plain
+ * prefix check: pointing it at $HOME itself, or any ancestor of $HOME (e.g.
+ * '/', '/home') — an easy typo — folds ~/.ssh, ~/.ccrc/agent.env (which
+ * holds CCRC_AGENT_TOKEN) and every other dotfile into the agent's read
+ * whitelist. Same posture as whitelist.ts's `auditExecWhitelist`: refuse to
+ * boot rather than serve a silently widened whitelist (verify-service.sh
+ * exists to catch exactly this class of boot refusal). Roots UNDER $HOME —
+ * including the $HOME/projects default — are unaffected and stay valid.
+ */
+function assertProjectsRootIsSafe(root: string): void {
+  if (!path.isAbsolute(root)) {
+    throw new Error(`ccrc-agent: projects root '${root}' is not an absolute path. Refusing to start.`);
+  }
+  const home = os.homedir();
+  if (isHomeOrAncestorOfHome(root, home)) {
+    throw new Error(
+      `ccrc-agent: projects root '${root}' is $HOME (${home}) or an ancestor of it, which would ` +
+      'fold ~/.ssh, ~/.ccrc/agent.env and every other dotfile into the read whitelist. Refusing to start.',
+    );
+  }
+}
+
 /** Resolution order for the whitelist's projects root: explicit option
  *  (tests, embedders) > CCRC_PROJECTS_ROOT (production — set in
  *  ~/.ccrc/agent.env) > $HOME/projects (spec §2's cross-component default).
  *  The old export was one operator's literal Hetzner volume id
  *  ('/srv/projects'), compiled in with no override —
  *  every OTHER machine's agent silently whitelisted a directory that does
- *  not exist. An empty env var counts as absent, never as a root of "". */
+ *  not exist. An empty env var counts as absent, never as a root of "".
+ *  Throws (refuses to boot) if the resolved root is $HOME, an ancestor of
+ *  $HOME, or not absolute — see `assertProjectsRootIsSafe`. */
 export function resolveProjectsRoot(
   rawRoot: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  if (rawRoot !== undefined && rawRoot !== '') return rawRoot;
-  const fromEnv = env.CCRC_PROJECTS_ROOT;
-  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
-  return path.join(os.homedir(), 'projects');
+  const root = (() => {
+    if (rawRoot !== undefined && rawRoot !== '') return rawRoot;
+    const fromEnv = env.CCRC_PROJECTS_ROOT;
+    if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+    return path.join(os.homedir(), 'projects');
+  })();
+  assertProjectsRootIsSafe(root);
+  return root;
 }
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | { t: 'ready'; v: 1; ccdVerbs: string[] };
