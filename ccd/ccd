@@ -1646,8 +1646,33 @@ ws-release
 ws-rename
 ws-restore
 ws-rm
+version
 ls
 EOF
+}
+
+cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
+  # ~/.ccrc/build.json is written by deploy.sh's stamp_build (temp + rename,
+  # so no torn reads). No stamp = a dev checkout or a box no deploy touched:
+  # "unstamped" at exit 0 is the honest ANSWER there, not an error. A stamp
+  # that exists but does not parse is different — something wrote garbage
+  # where the deploy writes facts — and that refuses loudly instead of
+  # printing a version nobody measured.
+  [[ $# -eq 0 ]] || die "usage: ccd version"
+  local stamp="$HOME/.ccrc/build.json"
+  if [[ ! -f "$stamp" ]]; then
+    echo "ccd unstamped (no ~/.ccrc/build.json — not deployed by deploy.sh)"
+    return 0
+  fi
+  python3 - "$stamp" <<'PY' || die "build stamp unreadable: $stamp"
+import json, sys
+try:
+    o = json.load(open(sys.argv[1]))
+    sha, ref, built, dirty = o["sha"], o["ref"], o["builtAt"], o["dirty"]
+except Exception:
+    sys.exit(1)
+print(f"ccd {sha} ({ref}, built {built}{', dirty' if dirty else ''})")
+PY
 }
 
 cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
@@ -7227,6 +7252,7 @@ case "${1:-}" in
   ws-release) shift; cmd_ws_release "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state} <args>" >&2; exit 1 ;;
+  version)   shift; cmd_version "$@" ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi
