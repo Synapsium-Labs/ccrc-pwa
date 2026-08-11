@@ -363,7 +363,7 @@ describe('runs are not living panes', () => {
     // DIRECTION.md's refused list, by name: "glow on non-living things". A run
     // row is a record of a lifecycle position; the pane it names may be alive,
     // and THAT row (the fleet line) is where the lamp belongs.
-    for (const sel of ['.run-row', '.run-glyph', '.run-state', '.runs-group', '.fleet-runs-row']) {
+    for (const sel of ['.run-row', '.run-row .run-glyph', '.run-row .run-state', '.runs-group', '.fleet-runs-row']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');

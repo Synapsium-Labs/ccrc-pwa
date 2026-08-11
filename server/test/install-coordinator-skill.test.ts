@@ -153,6 +153,15 @@ describe('the deploy ships the skill, agent-side — and PR I’s token lane is 
     // mention regardless of where the block sits, so a mutant that actually
     // swaps the two INVOCATION blocks survived this assertion untouched
     // (mutation sweep, Task 8: measured, not assumed).
+    //
+    // Task 8 fix round 1, finding 4: `indexOf` returns -1 for a missing
+    // anchor, and `-1 < <any index>` is true — so this comparison alone
+    // ALSO passed on a mutant that deleted the hook-installer invocation
+    // outright (agent arm ships the installer, never runs it), the same
+    // defect class the anchoring above was written to close. `toContain`
+    // guards each anchor's EXISTENCE before the ordering is even asked.
+    expect(agentArm).toContain('bash ~/.cc-sessions/install-session-hooks.sh');
+    expect(agentArm).toContain('bash ~/.cc-sessions/install-coordinator-skill.sh');
     expect(agentArm.indexOf('bash ~/.cc-sessions/install-session-hooks.sh'))
       .toBeLessThan(agentArm.indexOf('bash ~/.cc-sessions/install-coordinator-skill.sh'));
   });

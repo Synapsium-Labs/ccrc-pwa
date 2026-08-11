@@ -16,7 +16,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import type { AskQuestion, Dialog } from '../../shared/api.js';
+import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ID = 'claude2-MekWarLive';
@@ -955,6 +955,37 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     ws.close();
   });
 
+  // Task 8 fix round 1, finding 1: the test above waits up to 36 s across six
+  // messages — plenty of time for the first 2 s poll tick's OWN checkMail()
+  // call (`tick()`) to deliver the identical frame, so it cannot actually
+  // tell `start()`'s own call site (`if (r.ok) await this.checkMail();`)
+  // apart from the tick's. Constructing the stream directly and reading
+  // `frames` the instant `start()` resolves — never calling `tick()` at all
+  // — pins that call site specifically: deleting it (leaving the tick's call
+  // untouched) makes this red while leaving every timing-tolerant test above
+  // green.
+  it("start()'s own checkMail call puts mail on the wire before any poll tick could", async () => {
+    queueTo(ID, 'on connect, not on a tick');
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    const frames: SessionStreamMsg[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start(); // no tick() called — real timer never fires inside a sync test
+      const mailFrame = frames.find((f) => f.type === 'mail') as { mail: { subject: string }[] } | undefined;
+      expect(mailFrame).toBeDefined();
+      expect(mailFrame!.mail).toHaveLength(1);
+      expect(mailFrame!.mail[0]!.subject).toBe('on connect, not on a tick');
+    } finally {
+      stream.stop();
+    }
+  });
+
   it('excludes acked and rejected mail — never queues, delivers or acks itself', async () => {
     const ackedId = queueTo(ID, 'acked already');
     coord.markDelivered(ackedId, Date.now());
@@ -1071,6 +1102,49 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     expect(mailFrame).toBeDefined();
     expect(mailFrame!.mail).toHaveLength(1);
     expect(mailFrame!.mail[0]!.subject).toBe('fresh mail after connect');
+    ws.close();
+  });
+
+  // Task 8 fix round 1, finding 1: the sibling `ask` gate has exactly this
+  // case pinned ('does not resend when the hookstate file is rewritten with
+  // an unchanged ask' — hook ask envelope frames, line 295); `checkMail`'s
+  // own change gate (`if (json === this.lastMailJson) return;`) never had
+  // one. Undetected, deleting that gate would put a `mail` frame on the wire
+  // every ~2 s poll tick, for the life of every session socket, whether or
+  // not anything changed.
+  it('does not resend an unchanged mail list on a later poll tick', { timeout: 15_000 }, async () => {
+    queueTo(ID, 'steady state');
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+    await nextIgnoringAsk(next, 6000); // backlog
+
+    let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame?.mail).toHaveLength(1);
+
+    // The store is untouched from here on — collect everything that arrives
+    // over two more real poll ticks (POLL_MS = 2 s in sessionws.ts) and
+    // confirm no second `mail` frame is among it. A deleted change gate
+    // fails this deterministically (one extra frame per tick), unlike the
+    // pre-existing 'pushes freshly queued mail' test, which only proves a
+    // CHANGE gets sent and says nothing about an UNCHANGED one.
+    const deadline = Date.now() + 5000;
+    const extra: { type: string }[] = [];
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      try {
+        extra.push(await next(remaining));
+      } catch {
+        break; // timed out waiting — nothing else arrived in the window
+      }
+    }
+    expect(extra.filter((m) => m.type === 'mail')).toHaveLength(0);
     ws.close();
   });
 

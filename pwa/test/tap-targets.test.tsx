@@ -225,8 +225,8 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
       ruleIn(fleetCss, '.mail-badge'), ruleIn(fleetCss, '.mail-back'),
       ruleIn(fleetCss, '.fleet-runs-row'), ruleIn(fleetCss, '.runs-back'),
-      ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-open'),
-      ruleIn(chatCss, '.mail-strip-head'),
+      ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
+      ruleIn(chatCss, '.mail-strip .mail-strip-head'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -288,7 +288,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
     expect(declValue(ruleIn(fleetCss, '.run-row'), 'min-height')).toBe('var(--tap-min)');
   });
   it('.run-open is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.run-open'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.run-row .run-open'), 'min-height')).toBe('var(--tap-min)');
   });
   it('.run-open is the class the rendered row’s own button actually carries', () => {
     const store = makeStore();
@@ -302,7 +302,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
 
 describe('.mail-strip-head — the session mail strip’s door to its rows', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(chatCss, '.mail-strip-head'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(chatCss, '.mail-strip .mail-strip-head'), 'min-height')).toBe('var(--tap-min)');
   });
   it('is the class the rendered head control actually carries', () => {
     render(<MailStrip mail={[mailItem()]} />);

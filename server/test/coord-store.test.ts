@@ -725,4 +725,65 @@ describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
     queue(s, 'some-other-session', 'not for you');
     expect(s.outstandingMailFor('ccrc-pwa-clear-cove')).toEqual([]);
   });
+
+  // Task 8 fix round 1, finding 1: `hydrateMail` (the row-shaping helper
+  // `outstandingMailFor` and `mailForRecipient` both delegate to, never
+  // reimplementing it) degrades a `mail.kind` this build does not recognise
+  // to `'unknown'` — the exact same discipline `feedEvents`' own "reads a
+  // kind token this build does not know" test pins for the feed, and
+  // `delivery()`'s own state-degrade test pins for `mail_deliveries.state`
+  // two describes up. Nothing pinned the MAIL side of that same guard.
+  it('reads a mail.kind token this build does not know as `unknown`, never as a raw string', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
+      kind: 'question', subject: 'from a newer build', body: 'body', artifacts: [] });
+    s.queueDelivery(mail.id, toId, 'envelope');
+    s.db.prepare('UPDATE mail SET kind = ? WHERE id = ?').run('escalation', mail.id);
+    expect(s.outstandingMailFor(toId).map((m) => m.kind)).toEqual(['unknown']);
+  });
+
+  // `hydrateMail`'s SIBLING guard, same file, same helper — `delivery()`'s
+  // own state-degrade test (two describes up) pins a completely different
+  // read path (`delivery()` reads one row by id, never through
+  // `hydrateMail`), so it does not reach this one. A state this build does
+  // not recognise cannot be read through `outstandingMailFor` itself — its
+  // own WHERE clause (`OUTSTANDING_STATES_SQL`) would just exclude the row —
+  // so this goes through `mailForRecipient`, the sibling `hydrateMail`
+  // caller with no state filter, which is exactly why the shared helper
+  // exists rather than two copies of the guard.
+  it('reads a mail_deliveries.state token this build does not know as `unknown` via `mailForRecipient` too, not just `delivery()`', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
+      kind: 'question', subject: 'from a newer build', body: 'body', artifacts: [] });
+    const d = s.queueDelivery(mail.id, toId, 'envelope');
+    s.db.prepare('UPDATE mail_deliveries SET state = ? WHERE id = ?').run('archiving', d.id);
+    expect(s.mailForRecipient(toId).map((m) => m.state)).toEqual(['unknown']);
+  });
+
+  // Task 8 fix round 1, finding 1: `clampMailLimit` (shared by
+  // `outstandingMailFor` and `mailForRecipient`) had no test at either call
+  // site — neither the 100-row default for a non-positive/non-finite ask,
+  // nor the 500-row ceiling, nor that the ceiling still keeps the NEWEST
+  // rows rather than an arbitrary 500. 510 outstanding rows is the minimum
+  // that can discriminate the ceiling from a smaller one.
+  it('clamps a non-positive or non-finite limit to the 100 default, and anything above 500 to the 500 ceiling — keeping the newest rows either way', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const ids: number[] = [];
+    for (let i = 0; i < 510; i++) ids.push(queue(s, toId, `m${i}`));
+
+    expect(s.outstandingMailFor(toId, 0)).toHaveLength(100);
+    expect(s.outstandingMailFor(toId, -5)).toHaveLength(100);
+    expect(s.outstandingMailFor(toId, NaN)).toHaveLength(100);
+
+    const ceiling = s.outstandingMailFor(toId, 10_000);
+    expect(ceiling).toHaveLength(500);
+    // Newest-first still holds under the ceiling: ids[509]..ids[10], not an
+    // arbitrary 500 — a mutant clamping from the wrong end would still pass
+    // the length assertions above and fail only here.
+    expect(ceiling[0]!.id).toBe(ids[ids.length - 1]);
+    expect(ceiling[ceiling.length - 1]!.id).toBe(ids[ids.length - 500]);
+  }, 20_000);
 });

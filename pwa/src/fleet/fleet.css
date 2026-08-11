@@ -1522,16 +1522,23 @@
   background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
 }
 .mail-row[data-unseen='true'] { border-left-color: var(--accent); }
-.mail-kind {
+/* Scoped under `.mail-row` (self-grounded, above) rather than bare —
+   Task 8 fix round 1, finding 2: the audit's route 2b (named-ancestor
+   descendants, `design/audit.mjs`) reads the ground off a selector that
+   NAMES a self-grounded ancestor, so a rule whose only ground IS its row
+   gets measured for free once its selector says so. No visual change: the
+   descendant combinator matches these classes at any depth under `.mail-row`,
+   exactly where MailScreen.tsx already renders them. */
+.mail-row .mail-kind {
   display: inline-flex; align-items: baseline; gap: var(--sp-1);
   font: var(--weight-medium) var(--text-2xs) / 1.6 var(--font-mono); color: var(--ink-tertiary);
 }
 .mail-row-title { font-family: var(--font-mono); font-size: var(--text-sm); }
-.mail-when {
+.mail-row .mail-when {
   font-family: var(--font-mono); font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
-.mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }
+.mail-row .mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }
 
 /* — Build 7: the run board. Machine voice throughout (ids, slugs, waves and
    tallies are all things the fleet says, not things a person wrote), and NO
@@ -1570,15 +1577,22 @@
   background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
   font-family: var(--font-mono); font-size: var(--text-sm);
 }
-.run-open {
+/* Scoped under `.run-row` (self-grounded, above) — same route-2b credit as
+   the mail row's own descendants a few rules up (Task 8 fix round 1, finding
+   2). `.run-open` is either a direct child of `.run-row` or IS the row's
+   inert `<li>` itself (RunsScreen.tsx); either way the descendant combinator
+   still finds it, and the rest sit inside `.run-open` when a session backs
+   the row, or directly in `.run-row` when it does not — both still under
+   `.run-row`. */
+.run-row .run-open {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
   width: 100%; min-height: var(--tap-min); padding: 0;
   background: none; border: 0; cursor: pointer; text-align: left;
   color: var(--ink-primary); font: inherit;
 }
-.run-glyph { color: var(--ink-tertiary); }
-.run-state { font-size: var(--text-xs); color: var(--ink-secondary); }
+.run-row .run-glyph { color: var(--ink-tertiary); }
+.run-row .run-state { font-size: var(--text-xs); color: var(--ink-secondary); }
 .run-ws { font-size: var(--text-sm); }
-.run-tally, .run-when {
+.run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }

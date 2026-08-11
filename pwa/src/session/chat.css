@@ -563,12 +563,20 @@ button.metachip:active {
  *  plan. Same tokens as .task-strip above (well, radius, head height) *
  *  so the two strips read as one stack rather than two designs.       *
  * ------------------------------------------------------------------ */
+/* `color` here is load-bearing for the contrast audit, not the rendering — no
+   child renders a direct text node of `.mail-strip` itself, every one below
+   sets its own explicit colour. It makes `.mail-strip` self-grounded
+   (background + colour together, `design/audit.mjs` route 1), which is what
+   lets its descendants below be scoped `.mail-strip .foo` and measured
+   through route 2b (named-ancestor descendants) rather than sitting in the
+   uncovered census (Task 8 fix round 1, finding 2). */
 .mail-strip {
   flex: none;
   margin: 0 var(--sp-4) var(--sp-2);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   background: var(--bg-surface);
+  color: var(--ink-primary);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -578,7 +586,7 @@ button.metachip:active {
   border-color: var(--edge-strong);
 }
 
-.mail-strip-head {
+.mail-strip .mail-strip-head {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -595,7 +603,7 @@ button.metachip:active {
   background: var(--bg-raised);
 }
 
-.mail-strip-mark {
+.mail-strip .mail-strip-mark {
   flex: none;
   font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
   color: var(--ink-tertiary);
@@ -618,13 +626,13 @@ button.metachip:active {
   border-radius: var(--r-full);
   padding: var(--sp-1) 9px;
 }
-.mail-strip-chevron {
+.mail-strip .mail-strip-chevron {
   flex: none;
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   color: var(--ink-tertiary);
 }
 
-.mail-strip-summary {
+.mail-strip .mail-strip-summary {
   padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
   font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -651,21 +659,21 @@ button.metachip:active {
 .mail-strip-row + .mail-strip-row {
   border-top: 1px solid var(--edge-subtle);
 }
-.mail-strip-from {
+.mail-strip .mail-strip-from {
   font-weight: var(--weight-semibold);
   color: var(--ink-primary);
 }
-.mail-strip-kind {
+.mail-strip .mail-strip-kind {
   font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-tertiary);
 }
-.mail-strip-subject {
+.mail-strip .mail-strip-subject {
   flex-basis: 100%;
   color: var(--ink-secondary);
 }
-.mail-strip-artifacts {
+.mail-strip .mail-strip-artifacts {
   flex-basis: 100%;
   margin: 0;
   padding: 0 0 0 var(--sp-4);
