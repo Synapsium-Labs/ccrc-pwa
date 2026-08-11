@@ -727,10 +727,10 @@ export function registerCoordRoutes(
     const id = Number(idParam);
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue };
-    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief));
+    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items));
     return sendDispatchOutcome(reply, outcome);
   });
 

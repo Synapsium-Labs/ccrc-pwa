@@ -1817,6 +1817,23 @@ export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
 /**
+ * The declared ledger's two caps (Build 4, spec §3.1). BYTES for the title,
+ * for `MAIL_SUBJECT_MAX_BYTES`'s own reason one block up: a title is one line
+ * an operator reads on a phone-width board, and a character count is not what
+ * bounds the width of an emoji- or CJK-bearing one. The same cap value, too —
+ * a work-item title and a mail subject are the same KIND of thing (one line
+ * naming one unit of work), and two different numbers for that would be a
+ * distinction nothing downstream makes.
+ *
+ * 32 items, because a wave with more than 32 declared items is a wave that
+ * should have been two — the ledger is fixed at dispatch (spec §3.1's last
+ * paragraph: no route adds an item to a dispatched run), so the cap is also
+ * the honest statement of how much work one wave brief can carry.
+ */
+export const WORK_ITEM_TITLE_MAX = 200;
+export const WORK_ITEM_MAX = 32;
+
+/**
  * Every way the coordination layer can say no, enumerated in one place.
  * PINNED IN BOTH DIRECTIONS by `mail-routes.test.ts`, WITH ONE NAMED
  * EXCEPTION (D-38): `undeliverable` is emitted by `watch.ts`'s mail-sweep

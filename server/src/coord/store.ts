@@ -280,6 +280,42 @@ export class CoordStore {
   }
 
   /**
+   * The WHOLE dispatch commit, as ONE transaction (D-B4-4). Before this, the
+   * dispatch route ran `markDispatched`, `setClearedAt` and `advance` as three
+   * independent `tx()`s — the identical split `closeRun` below was created to
+   * close (review finding 25). The work items make it load-bearing rather than
+   * merely tidy: spec §3.1 requires that "a refused or failed dispatch leaves
+   * no orphan rows", and rows inserted by a fourth independent statement after
+   * a crashed third are exactly such orphans — a `planned` run carrying a
+   * ledger nothing ever dispatched.
+   *
+   * Items are inserted AFTER the transition succeeds and INSIDE the same
+   * transaction: `advanceInner`'s write is visible to the reads that follow it
+   * within one `tx()`, and a refused transition returns before any INSERT
+   * runs. What the ONE transaction buys over four independent ones is the
+   * THROW case, not the refusal case (both shapes return early on a refused
+   * transition): a `node:sqlite` write failure part-way through the ledger
+   * rolls the session binding and the `dispatched` state back with it, so the
+   * coordinator's retry gets a genuinely fresh dispatch rather than a
+   * dispatched run carrying half a ledger. `run-routes.test.ts`'s "rolls the
+   * WHOLE dispatch back when an item INSERT throws" is the test that can see
+   * the difference; the refusal-shaped cases cannot, and do not claim to.
+   */
+  dispatchRun(input: {
+    runId: number; sessionId: string; workspace: string | null; branch: string | null;
+    resumed: boolean; clearedAt: number | null; items: readonly string[]; detail?: string;
+  }): AdvanceResult {
+    return tx(this.db, () => {
+      this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
+      if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
+      const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
+      if (!adv.ok) return adv;
+      for (const title of input.items) this.addWorkItem(input.runId, title, []);
+      return adv;
+    });
+  }
+
+  /**
    * The WHOLE close-time commit, as ONE transaction (fix — review finding 25,
    * D-25's wedge reached through a different door than the one D-25 itself
    * closed): the close route used to run `advance(id,'closing')` and

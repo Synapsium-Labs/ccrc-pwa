@@ -15,6 +15,7 @@ import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -1426,5 +1427,194 @@ describe('GET /api/mail?to= (review findings 1/15)', () => {
     expect(allIds).toEqual(
       [queuedId, ackedId, abandonedLiveId, abandonedClosedId].sort((a, b) => a - b),
     );
+  });
+});
+
+// ── Build 4, Task 1: the dispatch body declares the ledger ──────────────────
+// Spec §3.1 and D-B4-4. The BRIEF stays opaque prose parsed by nothing; the
+// coordinator declares the item titles beside it, as a structured field, and
+// the whole dispatch commit — `markDispatched`, `setClearedAt`, the transition
+// and the item INSERTs — becomes ONE transaction.
+
+/** The rows themselves, in insertion order. Read through raw SQL rather than
+ *  through a store method on purpose: this suite is Task 1's, and pinning the
+ *  INSERTs against the TABLE keeps the assertion honest if a later task
+ *  reshapes the reader (`CoordStore.workItems`, Task 2) that would otherwise
+ *  sit between the test and the fact. */
+const itemRows = (coord: CoordStore, runId: number) =>
+  coord.db.prepare('SELECT id, title, state, claimedBy, blockedBy FROM work_items WHERE runId = ? ORDER BY id')
+    .all(runId) as { id: number; title: string; state: string; claimedBy: string | null; blockedBy: string }[];
+
+describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('inserts one pending work item per title, in body order', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postDispatch(app, opened.id,
+      { brief: 'do the thing', items: ['write the reader', 'review it', 'ship it'] });
+    expect(res.statusCode).toBe(200);
+    const rows = itemRows(w.coord, opened.id);
+    expect(rows.map((r) => r.title)).toEqual(['write the reader', 'review it', 'ship it']);
+    expect(rows.every((r) => r.state === 'pending')).toBe(true);
+    expect(rows.every((r) => r.claimedBy === null)).toBe(true);
+    expect(rows.every((r) => r.blockedBy === '[]')).toBe(true);
+    expect(w.coord.itemTally(opened.id)).toEqual({ done: 0, total: 3 });
+  });
+
+  it('treats an absent items field and [] identically: the run has no declared ledger', async () => {
+    // One fixture per dispatch, deliberately: the runner's `ws-add` fabricates
+    // a FIXED id, so two successful wave-1 spawns inside one registry are two
+    // spawns of the same id — `ambiguous-dispatch`, a fact about the fixture
+    // rather than about `items`.
+    const dispatched = async (body: unknown) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run } = makeRunner(home);
+      const w = await openApp(home, run);
+      try {
+        const opened = (await postOpen(w.app)).json() as { id: number };
+        expect((await postDispatch(w.app, opened.id, body)).statusCode).toBe(200);
+        return { tally: w.coord.itemTally(opened.id), rows: itemRows(w.coord, opened.id) };
+      } finally {
+        await w.app.close();
+      }
+    };
+    expect(await dispatched({ brief: 'no ledger' })).toEqual({ tally: { done: 0, total: 0 }, rows: [] });
+    expect(await dispatched({ brief: 'no ledger', items: [] }))
+      .toEqual({ tally: { done: 0, total: 0 }, rows: [] });
+  });
+
+  it('refuses bad-request on a non-array, a non-string entry, or an empty/whitespace title', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    for (const items of ['write it', 42, {}, ['ok', 7], ['ok', null], ['ok', ''], ['ok', '   ']]) {
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', items });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    }
+    // A malformed body is the cheapest refusal and D-46's ordering rule puts
+    // it first: nothing spawned, nothing held, the run untouched.
+    expect(calls).toEqual([]);
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(itemRows(w.coord, opened.id)).toEqual([]);
+  });
+
+  it('refuses bad-request past WORK_ITEM_MAX entries, and accepts exactly WORK_ITEM_MAX', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const over = (await postOpen(app)).json() as { id: number };
+    const titles = (n: number) => Array.from({ length: n }, (_, i) => `item ${i + 1}`);
+    const refused = await postDispatch(app, over.id,
+      { brief: 'do the thing', items: titles(WORK_ITEM_MAX + 1) });
+    expect(refused.statusCode).toBe(400);
+    expect(itemRows(w.coord, over.id)).toEqual([]);
+    // The ACCEPT half is what kills the `>` -> `>=` mutant: a refusal at 33
+    // alone reads identically under both bounds.
+    const at = (await postOpen(app, { ...OPEN_BODY, wave: 2 })).json() as { id: number };
+    const ok = await postDispatch(app, at.id, { brief: 'do the thing', items: titles(WORK_ITEM_MAX) });
+    expect(ok.statusCode).toBe(200);
+    expect(w.coord.itemTally(at.id)).toEqual({ done: 0, total: WORK_ITEM_MAX });
+  });
+
+  it('refuses bad-request on a title over WORK_ITEM_TITLE_MAX BYTES, measured in utf-8', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const over = (await postOpen(app)).json() as { id: number };
+    // 101 characters, 202 BYTES: under the cap read as a string length, over
+    // it read as UTF-8 — the one fixture that can tell `Buffer.byteLength`
+    // from `.length`.
+    const multibyte = 'é'.repeat(101);
+    expect(multibyte.length).toBeLessThanOrEqual(WORK_ITEM_TITLE_MAX);
+    expect(Buffer.byteLength(multibyte, 'utf8')).toBeGreaterThan(WORK_ITEM_TITLE_MAX);
+    const refused = await postDispatch(app, over.id, { brief: 'do the thing', items: [multibyte] });
+    expect(refused.statusCode).toBe(400);
+    expect(itemRows(w.coord, over.id)).toEqual([]);
+    // Exactly at the cap is legal — the boundary is `>`, not `>=`.
+    const at = (await postOpen(app, { ...OPEN_BODY, wave: 2 })).json() as { id: number };
+    const exact = 'a'.repeat(WORK_ITEM_TITLE_MAX);
+    expect((await postDispatch(app, at.id, { brief: 'do the thing', items: [exact] })).statusCode).toBe(200);
+    expect(itemRows(w.coord, at.id).map((r) => r.title)).toEqual([exact]);
+  });
+
+  it('leaves NO work_items rows behind when the transition is refused', async () => {
+    // D-B4-4, at the store: the items are inserted AFTER the transition and
+    // inside its own transaction, so a refused `advanceInner` returns before
+    // any INSERT runs. Driven through `CoordStore.dispatchRun` directly
+    // because the route can no longer reach this arm — `dispatchRun`'s own
+    // precondition (`run.state !== 'planned'`) answers first, behind
+    // `CoordMutex`; the store method is what must hold the line anyway.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    expect(w.coord.advance(opened.id, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
+
+    const adv = w.coord.dispatchRun({ runId: opened.id, sessionId: 'demo-x', workspace: 'demo-x',
+      branch: 'ws/demo-x', resumed: false, clearedAt: null, items: ['one', 'two'] });
+    expect(adv).toMatchObject({ ok: false, error: 'bad-transition', from: 'dispatched', to: 'dispatched' });
+    expect(itemRows(w.coord, opened.id)).toEqual([]);
+  });
+
+  it('rolls the WHOLE dispatch back when an item INSERT throws — one transaction, not four', async () => {
+    // The `split dispatchRun back into three tx()s` mutant: a refused
+    // transition cannot discriminate it (both shapes return before any
+    // INSERT), and neither can a failed hold (it runs two steps earlier). A
+    // THROW inside the item loop is what tells them apart — one transaction
+    // rolls `markDispatched` and the `dispatched` state back with the rows;
+    // four independent ones leave a dispatched run carrying half a ledger.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const real = w.coord.addWorkItem.bind(w.coord);
+    let n = 0;
+    w.coord.addWorkItem = (runId, title, blockedBy) => {
+      if (++n === 2) throw new Error('disk full mid-ledger');
+      return real(runId, title, blockedBy);
+    };
+    try {
+      expect(() => w.coord.dispatchRun({ runId: opened.id, sessionId: 'demo-x', workspace: 'demo-x',
+        branch: 'ws/demo-x', resumed: false, clearedAt: 123, items: ['one', 'two', 'three'] }))
+        .toThrow('disk full mid-ledger');
+    } finally {
+      w.coord.addWorkItem = real;
+    }
+    const row = w.coord.run(opened.id);
+    expect(row).toMatchObject({ state: 'planned', sessionId: null, workspace: null, branch: null,
+      clearedAt: null });
+    expect(itemRows(w.coord, opened.id)).toEqual([]);
+    expect(w.coord.runEvents(opened.id)).toEqual([]);
+  });
+
+  it('leaves NO work_items rows behind when the hold fails 502 before the commit', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { fail: new Set(['ws-hold']) });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postDispatch(app, opened.id, { brief: 'do the thing', items: ['one', 'two'] });
+    expect(res.statusCode).toBe(502);
+    expect(itemRows(w.coord, opened.id)).toEqual([]);
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+  });
+
+  it('needs no dedupe key: RUN_TRANSITIONS.dispatched has no self-edge, so a second dispatch 409s', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const first = await postDispatch(app, opened.id, { brief: 'do the thing', items: ['one', 'two'] });
+    expect(first.statusCode).toBe(200);
+    const second = await postDispatch(app, opened.id, { brief: 'do the thing', items: ['one', 'two'] });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ ok: false, error: 'bad-transition' });
+    // The ledger is fixed at dispatch: still two rows, not four.
+    expect(itemRows(w.coord, opened.id).map((r) => r.title)).toEqual(['one', 'two']);
   });
 });
