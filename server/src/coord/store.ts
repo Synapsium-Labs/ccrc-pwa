@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import {
-  isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, RUN_TRANSITIONS,
+  isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
+  RUN_TRANSITIONS,
   type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type MailSummary,
   type NotifyEvent, type ProgramState, type RunItemTally, type RunState, type RunSummary,
   type WorkItemState,
@@ -43,6 +44,32 @@ export type AdvanceResult =
   | { ok: true; from: RunState; to: RunState }
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; error: 'unknown-run' };
+
+/** The three terminal members, ONCE (spec §3.2). The SQL literal in
+ *  `setWorkItemState`'s `WHERE` is BUILT from this list and `settleItems`'
+ *  pre-pass READS it, so the guard and the precheck cannot drift — and
+ *  `single-definition.test.ts` pins that this is the only place the trio is
+ *  spelled as one adjacent list under any of the four roots. */
+export const TERMINAL_ITEM_STATES = ['done', 'failed', 'abandoned'] as const satisfies
+  readonly WorkItemState[];
+
+/** `setWorkItemState` stops returning `void` — the exact defect
+ *  `architecture:25-30` names for `markDelivered`. A refusal that the caller
+ *  cannot see is a refusal that reads as a success. */
+export type SetWorkItemResult =
+  | { ok: true; state: WorkItemState }
+  | { ok: false; why: 'unknown-item' }
+  | { ok: false; why: 'terminal'; state: WorkItemState };
+
+export interface SettleItem { id: number; state: WorkItemState; claimedBy: string | null }
+
+/** A batch is all-or-nothing, so its refusal names WHICH id refused it —
+ *  "partial success on a ledger write is how tallies drift" (spec §3.2), and
+ *  a caller told only that something in its body was bad cannot fix it. */
+export type SettleItemsResult =
+  | { ok: true; items: RunItemTally }
+  | { ok: false; itemId: number; why: 'unknown-item' }
+  | { ok: false; itemId: number; why: 'terminal'; state: WorkItemState };
 
 /** The raw row shape common to `run(id)` and `runs()` — named columns only
  *  (no `SELECT *` anywhere in this file), joined once against `programs` for
@@ -662,8 +689,110 @@ export class CoordStore {
     return { id: Number(res.lastInsertRowid) };
   }
 
-  setWorkItemState(id: number, state: WorkItemState, claimedBy: string | null): void {
-    this.db.prepare('UPDATE work_items SET state = ?, claimedBy = ? WHERE id = ?').run(state, claimedBy, id);
+  /** Work items have ONE invariant — `done`/`failed`/`abandoned` are terminal —
+   *  and per `architecture:145-147` it gets one enforcement point rather than a
+   *  `WORK_ITEM_TRANSITIONS` table (`RUN_TRANSITIONS` earns its place by
+   *  encoding ~15 edges clients read as refusals; this encodes one).
+   *
+   *  THE GUARD IS IN THE `WHERE`, not in a read above it. A read-then-write
+   *  would answer `ok` for a row a concurrent writer settled between the two
+   *  statements — and, worse under a careless edit, would MOVE the row and then
+   *  report the refusal. `changes === 0` past a successful lookup means exactly
+   *  one thing: the row was already terminal. Mutant duty: deleting the
+   *  `state NOT IN` clause, and moving the guard after the UPDATE, each go red
+   *  (`coord-store.test.ts`'s two `setWorkItemState` refusal cases, which call
+   *  this method DIRECTLY — `settleItems` below refuses earlier, so only a
+   *  direct call can discriminate this clause).
+   *
+   *  RUN-SCOPED (D-B4-5): `unknown-item` is spec §3.2's "an item id that is not
+   *  THIS RUN's", so `runId` is part of both statements and an item of another
+   *  run is unknown here, never moved. */
+  private static readonly TERMINAL_SQL = `('${TERMINAL_ITEM_STATES.join("','")}')`;
+
+  setWorkItemState(runId: number, id: number, state: WorkItemState,
+                   claimedBy: string | null): SetWorkItemResult {
+    const row = this.db.prepare('SELECT state FROM work_items WHERE id = ? AND runId = ?')
+      .get(id, runId) as { state: string } | undefined;
+    if (!row) return { ok: false, why: 'unknown-item' };
+    const res = this.db.prepare(
+      'UPDATE work_items SET state = ?, claimedBy = ? WHERE id = ? AND runId = ? ' +
+      `AND state NOT IN ${CoordStore.TERMINAL_SQL}`,
+    ).run(state, claimedBy, id, runId);
+    if (Number(res.changes) === 0) {
+      return { ok: false, why: 'terminal', state: isWorkItemState(row.state) ? row.state : 'unknown' };
+    }
+    return { ok: true, state };
+  }
+
+  /**
+   * The settle batch, as ONE transaction (D-B4-16) — the third member of the
+   * family `dispatchRun` and `closeRun` already belong to (D-B4-4, review
+   * finding 25), and here for the same reason plus one more: spec §3.2
+   * requires that "a body naming one bad id settles nothing", because
+   * "partial success on a ledger write is how tallies drift".
+   *
+   * WHY THE PRE-PASS AND NOT A THROW. `tx` rolls back on a throw and only on a
+   * throw (`db.ts`), so an in-flight refusal would otherwise need a private
+   * sentinel class to travel out — in an L1 file that has no business holding
+   * this handle at all (D-B4-16). It does not need one HERE: `tx` takes the
+   * write lock at `BEGIN IMMEDIATE` and `DatabaseSync` never yields the event
+   * loop mid-transaction (`db.ts`'s own `tx` docstring: "no route, sweep or
+   * socket can interleave inside one"), so a read taken in the pre-pass cannot
+   * be overtaken before the writes below it. A refusal therefore returns
+   * BEFORE anything is written, and there is nothing to roll back.
+   *
+   * The pre-pass carries the batch's OWN effect forward in `effective`: a body
+   * naming the same id twice sees the first settle, so a second write onto a
+   * now-terminal row is refused — the refusal it would earn from the `WHERE`
+   * clause anyway, reached before the first write instead of after it.
+   *
+   * `setWorkItemState`'s `WHERE` guard stays exactly where it is and is still
+   * the invariant's one home. This pass is a PRECHECK, not a second guard, and
+   * it reads `TERMINAL_ITEM_STATES` — the same list the SQL literal is built
+   * from — so the two cannot drift. If they somehow do, the write loop throws
+   * rather than half-writing, and `tx` rolls the whole batch back.
+   */
+  settleItems(runId: number, items: readonly SettleItem[]): SettleItemsResult {
+    return tx(this.db, () => {
+      const effective = new Map<number, string>();
+      for (const it of items) {
+        const current = effective.get(it.id) ?? (this.db
+          .prepare('SELECT state FROM work_items WHERE id = ? AND runId = ?')
+          .get(it.id, runId) as { state: string } | undefined)?.state;
+        if (current === undefined) return { ok: false as const, itemId: it.id, why: 'unknown-item' as const };
+        if ((TERMINAL_ITEM_STATES as readonly string[]).includes(current)) {
+          return { ok: false as const, itemId: it.id, why: 'terminal' as const,
+            state: isWorkItemState(current) ? current : 'unknown' };
+        }
+        effective.set(it.id, it.state);
+      }
+      for (const it of items) {
+        const res = this.setWorkItemState(runId, it.id, it.state, it.claimedBy);
+        if (!res.ok) {
+          throw new Error(
+            `settleItems: item ${it.id} refused '${res.why}' inside its own transaction — ` +
+            'the pre-pass and the WHERE guard disagree, which is a bug, not a refusal',
+          );
+        }
+      }
+      return { ok: true as const, items: this.itemTally(runId) };
+    });
+  }
+
+  /** One run's ledger, in insertion order. Every enum read through
+   *  `isWorkItemState`, never a cast — `hydrateRun`'s rule a few hundred lines
+   *  up, and for its reason: a token this build does not know (a newer
+   *  server's, a rolled-back binary's) reads as the designated `unknown`
+   *  member rather than as a raw string nothing downstream can narrow. */
+  workItems(runId: number): { id: number; title: string; state: WorkItemState; claimedBy: string | null }[] {
+    const rows = this.db.prepare(
+      'SELECT id, title, state, claimedBy FROM work_items WHERE runId = ? ORDER BY id',
+    ).all(runId) as { id: number; title: string; state: string; claimedBy: string | null }[];
+    return rows.map((r) => ({
+      id: Number(r.id), title: r.title,
+      state: isWorkItemState(r.state) ? r.state : 'unknown',
+      claimedBy: r.claimedBy,
+    }));
   }
 
   itemTally(runId: number): RunItemTally {
