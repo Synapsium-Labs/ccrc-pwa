@@ -205,6 +205,87 @@ promising a sweep that will never come. See
 [`docs/superpowers/programs/TEMPLATE.md`](docs/superpowers/programs/TEMPLATE.md)
 for the wave-handoff ledger a program keeps beside its hold.
 
+## Fleet coordination — programs, runs and mail
+
+A **program** is a long-horizon effort with a slug and a markdown ledger
+(`docs/superpowers/programs/<slug>.md`, in the project's own repo, committed,
+and parsed by nothing). A **run** is one wave of it in one workspace. A
+**coordinator** is an ordinary fleet session running the `ccrc-coordinator`
+skill, placed by `_ws_least_loaded` like any other session.
+
+**The coordinator acts through the server's HTTP API, never raw ccd.** That is
+a contract in its skill, not a mechanism: every session on the fleet host runs
+as one UNIX user and can already run any verb. What the contract buys is that
+every act is *recorded* on the run, caps are *enforced* at one place, and the
+PWA sees all of it. The skill's eight contract clauses are pinned by
+`server/test/coordinator-skill.test.ts`, so softening one is a red suite.
+
+**`ws-reap` stays human-only by convention plus a speed bump, and that is
+stated rather than dressed up.** The skill excludes reap; the coordinator holds
+every workspace it owns, so any reap needs a deliberate release first; and reap
+consent stays the PWA's ceremony. Nothing here makes reap mechanically
+impossible for a process with a shell.
+
+**Pause is a file.** `touch ~/.cc-sessions/coordinator-paused` and the next
+dispatch refuses; `rm` it to resume. It is read before every dispatch, shown as
+a banner, and the coordinator has no route, verb or instruction that would let
+it remove the file itself.
+
+**The skill ships to all four account homes.** Skills resolve per
+`CLAUDE_CONFIG_DIR`, and a session's account drifts on swap — so
+`ccd/install-coordinator-skill.sh` installs into `~/.claude`,
+`~/.claude-personal`, `~/.claude-corp` and `~/.claude-gpt` on every agent
+deploy, idempotently, backing up anything it replaces. That lane is what makes
+"place the coordinator like any other session" safe.
+
+**The box token.** It authenticates *the box* — the honest unit, since every
+session on it shares one uid. Mint it once into the single local file
+`deploy/ccrc-mail.token` (gitignored; see `deploy/ccrc-mail.token.example`), and
+`deploy.sh` ships that one file to **both** boxes: `~/.cc-secrets/ccrc-mail.token`
+on the fleet host, which `notify.sh` and every session present as
+`x-ccrc-mail-token`, and `~/.ccrc/mail.token` on the server box, read at boot.
+Two copies of one secret, equal by construction rather than by someone
+remembering. Per-session identity rides as attribution (`fromId`/`fromUuid`,
+checked against the registry's current uuid): freshness, not
+forgery-proofness.
+
+**Three surfaces.** `/runs` is the board — runs grouped by program, with their
+own status words (a run is a lifecycle position, not an attention state, so it
+borrows none of the bucket vocabulary and nothing on it glows). `/mail` is the
+durable feed, reached from the ✉ beside the bell. Every session's own
+outstanding mail sits above the composer, one row above the task strip.
+
+**Records land in the feed whether or not you were watching.** Only the *push*
+is presence-gated: a notification for a session you already have open is noise,
+but a record of an agent-to-agent message is a fact about the fleet, and it is
+kept either way.
+
+**If the database is lost**, a program is reconstructible from its ledger, the
+registry and `.prhistory` — `server/test/reconstruction-drill.test.ts` is that
+procedure, executed against fixtures, and it names the fields no artifact
+carries (wall-clock dispatch/close instants, work-item ids and their
+`blockedBy`, per-item fingerprints, mail bodies and delivery state, caps
+counters) rather than implying there are none. See "Fleet coordination" below
+for the run lifecycle, the routes and the box token in full.
+
+### Dogfood: Build 4 is the first coordinated program
+
+By decision (spec §9), the first program run through the coordinator is Build 4,
+the transcript surface. Before starting it:
+
+1. The token is on both boxes: `ls -l ~/.cc-secrets/ccrc-mail.token` on the
+   fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
+   `cat` either one.
+2. `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` lists four paths.
+3. `~/.cc-sessions/coordinator-paused` does **not** exist.
+4. The ledger exists and is committed: copy `docs/superpowers/programs/TEMPLATE.md`
+   to `docs/superpowers/programs/build4-transcript-surface.md`, fill the header
+   and wave 1, commit.
+5. Open the run, then dispatch. Watch `/runs`; read `/mail`.
+
+Success is a program that completes with human pauses only at review points,
+and an audit trail that reads true.
+
 ## Attention, notifications and answering
 
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it

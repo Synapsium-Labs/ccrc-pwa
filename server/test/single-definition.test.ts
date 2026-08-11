@@ -372,3 +372,27 @@ describe('the account roster — config dir is data, joined in one place', () =>
     }
   });
 });
+
+describe('the program ledger is parsed by nothing', () => {
+  // Spec §7 says the ledger is "for humans and parsed by nothing," and that is
+  // why the reconstruction drill's parser lives only in
+  // reconstruction-drill.test.ts, never under server/src. The server DOES
+  // legitimately name the ledger's path — `POST /api/runs`'s response tells a
+  // coordinator where to commit it (coord/routes.ts), and several docstrings
+  // explain the convention (coord/db.ts, coord/fingerprint.ts, coord/store.ts,
+  // shared/api.ts) — and naming a path is not parsing a file: the moment the
+  // running system reads this file's CONTENT, it stops being prose for humans
+  // and becomes a format with a compatibility surface. So the mechanism below
+  // is narrower than "never mentions the path": it fails on the one thing that
+  // would actually make the ledger a parsed format — a filesystem read whose
+  // target names it.
+  it('no shipped source reads the program ledger off disk', () => {
+    const readsIt = ALL
+      .filter((f) => !rel(f).startsWith('server/test/'))
+      .filter((f) => readFileSync(f, 'utf8')
+        .split('\n')
+        .some((line) => /readFile(?:Sync)?\(/.test(line) && line.includes('programs')))
+      .map(rel);
+    expect(readsIt).toEqual([]);
+  });
+});
