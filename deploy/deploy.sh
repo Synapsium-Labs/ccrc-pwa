@@ -152,9 +152,18 @@ if [ "$TARGET" = "agent" ]; then
   # machine (0644 under a plain umask), a second, unmanaged copy sitting
   # right next to the one `ship_secret` deliberately lands at 0600 under a
   # 0700 directory three lines down, re-shipped on every `--delete` run.
+  # `ccd` joins the source list here: AGENT_BUILD_CMD below `cp`s
+  # `~/ccrc/ccd/claude-session@.service` into place, and until this line that
+  # directory never reached the box at all — confirmed live, `ls ~/ccrc/` on
+  # the fleet host showed only `agent deploy shared`, so `AGENT_BUILD_CMD`
+  # failed at that exact `cp` with "No such file or directory" (deploy-verify's
+  # general ~/ccrc/<dir> reachability test, this task). This is a SEPARATE
+  # tree from the `ccd/coordinator-skill/` rsync below, whose destination is
+  # `.cc-sessions/coordinator-skill/`, not under `~/ccrc/ccd/` — the two
+  # `--delete` runs cannot step on each other.
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
     --exclude 'ccrc-mail.token' \
-    agent shared deploy "$BOX":ccrc/
+    agent shared deploy ccd "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
   ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token
   # ccd installs BEFORE the agent restart, never after: the agent caches
