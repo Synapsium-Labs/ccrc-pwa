@@ -26,6 +26,41 @@
    follows, making ALL tool scratch S-pattern by construction; collected at reap and by a
    boot sweep. Until that ships (Build 5), the >6h `/tmp/cdk.out*` sweep continues manually
    under the existing precedent.
+5a. **Foreign worktrees — EXECUTED 2026-08-11**: 47 clean worktrees older than 3 days removed
+   via `git worktree remove` (no `--force`, so git itself refused anything dirty), ~32G freed,
+   disk 90%→80%. Six kept: two fresh (`converse-loop`, `board-phase-1`), four dirty. Every
+   removal logged with branch + head sha; all committed work survives on branches in each
+   project's shared `.git`.
+
+5b. **The strategy for folding Claude Code's worktrees into ccd visibility (operator question,
+   answered as policy):** the principle "ccd removes only what it created" survives by evolving
+   into **"ccd collects only what the policy governs, on evidence"** — ownership-by-creation
+   becomes governance-by-declared-root. Three levels, in order:
+
+   - **Level 1 — visibility now (Build 5).** `ws-gc` already sees and classifies these worktrees
+     (`foreign`, with per-worktree size and idle age) — the detection shipped and works; nothing
+     runs it. The drift audit runs it on a schedule and the PWA gains a storage surface: foreign
+     worktrees listed with age, dirtiness, and bytes, exactly like today's manual scan. No new
+     mutation authority — seeing is not touching.
+   - **Level 2 — governed collection (Build 5).** `<project>/.claude/worktrees/` becomes a
+     DECLARED ROOT in the lifecycle manifest with the W-pattern rule this cleanup just proved by
+     hand: **clean + idle > 7 days ⇒ collectable** (committed work provably survives on branches;
+     `git worktree remove` without `--force` structurally refuses dirty trees). Collection is a
+     new audited `ws-gc` arm — Tier B: automatic behind the same kill-switch file as auto-reap,
+     logging every removal with branch + head sha, refusing dirty/fresh/unprovable. The 7-day
+     bound deliberately matches the archived→reaped horizon so "a week of idleness" means one
+     thing fleet-wide.
+   - **Level 3 — attribution forward (Build 5/6, cheap).** The harness already names its
+     worktrees by creator (`agent-<id>`, `wf_<runid>-N`); the registry can record
+     session→worktree edges as they appear, giving the audit "created by session X, which was
+     reaped on date Y" instead of just "idle N days". Attribution sharpens reporting; the
+     collection rule above never depends on it, so untraceable worktrees (the pre-policy stock)
+     are governed identically.
+
+   What this rejects: ccd force-adopting the worktrees as its own (breaks the audit story), and
+   a separate second collector (two collectors, two kill-switches, one filesystem — the D-36
+   lesson). One manifest, one evidence rule, one audited collector arm.
+
 5. **Foreign worktrees: one-time cleanup approved in principle**; detail requested and delivered
    (see the session record) — execution list awaiting confirmation because two are visibly
    live-dirty including one modified today, and committed branches survive worktree removal
