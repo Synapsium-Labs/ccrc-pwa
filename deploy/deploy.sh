@@ -25,6 +25,44 @@ TARGET="${1:-server}"
 # ~/ccrc-backups/<ts>/ on the target, so a rollback is one directory, not a hunt.
 TS="$(date +%Y%m%d-%H%M%S)"
 
+# scp writes the destination INODE in place, and bash executes scripts lazily
+# from a saved byte offset — so overwriting a script that a process is
+# executing makes that process resume inside the NEW bytes at the OLD offset.
+# Measured on ccd: a verb prints its correct result, then exits 2 on a syntax
+# error, which lifecycle.ts maps to ok:false — a 409 for a destructive action
+# that already completed. And ccd is never idle here: every claude-session@
+# supervisor IS a long-running invocation of it.
+#
+# `mv -f` replaces the DIRECTORY ENTRY instead (rename(2), atomic): running
+# readers keep the old inode to EOF, new invocations get the new file. chmod
+# runs before the mv so the file is never live at its final name without its
+# final mode — a supervisor exec'ing ccd in that window would get EACCES and
+# systemd's Restart=always would turn it into a crash loop.
+install_atomic() {   # <local src> <HOME-relative dest> <mode>
+  local src="$1" dest="$2" mode="$3"
+  "${SCP[@]}" "$src" "$BOX:$dest.incoming-$TS"
+  # The trailing rm sweeps strays that ABORTED runs left (deploy died between
+  # scp and mv): by the time it runs, THIS run's temp has already been renamed
+  # away, so the glob can only match leftovers — which are executable (scp
+  # copies source mode) and, for ccd, sit on PATH. Review finding, reproduced.
+  "${SSH[@]}" "$BOX" "chmod $mode $dest.incoming-$TS && mv -f $dest.incoming-$TS $dest && rm -f $dest.incoming-*"
+}
+
+# ~/ccrc-backups grows without bound otherwise (18MB/13 dirs measured on the
+# server box before this existed), and it sits OUTSIDE the only disk guard,
+# which watches WORKTREES_ROOT alone. Timestamped dirs only: the directory
+# also holds hand-made siblings (a real `pre-flip-agent-dist` exists on the
+# fleet host today) that a bare `ls | head` sweep would silently destroy.
+# Callers append `|| echo …` rather than letting set -e abort: by the time
+# this runs the deploy has verifiably succeeded, and a nonzero exit here
+# would report failure for services that are live and green.
+prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped backups
+  local keep="${CCRC_BACKUP_KEEP:-10}"
+  "${SSH[@]}" "$BOX" "cd ~/ccrc-backups 2>/dev/null || exit 0
+    ls -d [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
+      | sort | head -n -$keep | xargs -r rm -rf --"
+}
+
 # Ship a local, gitignored, real-token env file to the box if one exists.
 # Only the committed *.env.example templates are ever in git.
 ship_env() {
@@ -88,23 +126,29 @@ if [ "$TARGET" = "agent" ]; then
   # `ccd caps` at boot (the 113-second lesson), so an agent restarted against
   # yesterday's ccd pins yesterday's verb set until someone restarts it again.
   # notify.sh is the ccd swap hook and lives outside the rsync tree.
-  "${SCP[@]}" ccd/ccd "$BOX":.local/bin/ccd
-  "${SCP[@]}" deploy/notify.sh "$BOX":.cc-sessions/notify.sh
-  "${SSH[@]}" "$BOX" 'chmod +x ~/.local/bin/ccd ~/.cc-sessions/notify.sh'
+  # All four go through install_atomic — see its comment for why a plain scp
+  # over these exact files is a live correctness bug, not a style choice.
+  install_atomic ccd/ccd .local/bin/ccd 755
+  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
   # session-hook.sh + its installer ship every deploy too — the installer is
   # idempotent (it backs up settings.json itself before touching it) and
   # safe to re-run against homes it already converged.
-  "${SCP[@]}" ccd/session-hook.sh "$BOX":.cc-sessions/session-hook.sh
-  "${SCP[@]}" ccd/install-session-hooks.sh "$BOX":.cc-sessions/install-session-hooks.sh
-  "${SSH[@]}" "$BOX" 'chmod +x ~/.cc-sessions/session-hook.sh ~/.cc-sessions/install-session-hooks.sh && bash ~/.cc-sessions/install-session-hooks.sh'
-  # The coordinator skill is the FOURTH artifact ccrc ships to the fleet host
-  # (ccd, session-hook.sh, install-session-hooks.sh, and now this). rsync with
-  # --delete so a reference file deleted in git is deleted on the box too — a
-  # stale reference is prose a model will still follow.
+  install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh 755
+  install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
+  # The coordinator skill is the FIFTH artifact ccrc ships to the fleet host
+  # (ccd, notify.sh, session-hook.sh + its installer, and now this). The TREE
+  # rides rsync --delete so a reference file deleted in git is deleted on the
+  # box too — a stale reference is prose a model will still follow, and prose
+  # is read whole on the next open, so tree-level atomicity is not load-bearing
+  # for it. The INSTALLER is different: it gets EXECUTED, which is exactly the
+  # class install_atomic exists for — a deploy dying between scp and chmod must
+  # not leave a half-written script that the next deploy (or a curious
+  # operator) runs.
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/coordinator-skill'
   rsync -az --delete -e "${SSH[*]}" ccd/coordinator-skill/ "$BOX":.cc-sessions/coordinator-skill/
-  "${SCP[@]}" ccd/install-coordinator-skill.sh "$BOX":.cc-sessions/install-coordinator-skill.sh
-  "${SSH[@]}" "$BOX" 'chmod +x ~/.cc-sessions/install-coordinator-skill.sh && bash ~/.cc-sessions/install-coordinator-skill.sh'
+  install_atomic ccd/install-coordinator-skill.sh .cc-sessions/install-coordinator-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-coordinator-skill.sh'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
   # post-restart check an agent that throws during ESM evaluation — which
   # `whitelist.ts` does BY DESIGN via `refuseToBoot`, and which is the one
@@ -127,6 +171,31 @@ if [ "$TARGET" = "agent" ]; then
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"
+  # THE SUPERVISOR SWEEP. Every claude-session@ unit is a LONG-LIVED `ccd
+  # supervise` — even after the atomic install above, each live supervisor
+  # keeps executing the PRE-deploy ccd (the old inode) until restarted, so
+  # auto-swap, auto-compact and uuid-sync run yesterday's logic for days, and
+  # the agent's `ccd caps` cache (which stats the file on disk) is
+  # structurally blind to it. The unit is built for exactly this:
+  # KillMode=process keeps the tmux substrate — the sessions themselves —
+  # alive across the restart, and `cmd_supervise` re-enters via `cmd_ensure`,
+  # which ATTACHES to a live session rather than spawning a second one.
+  # try-restart touches only units that are already active (a fresh box with
+  # zero sessions is a no-op), and each restarted supervisor is then held to
+  # the same standard as the agent itself: verify-service.sh, per unit —
+  # after the agent chain, so a broken agent fails the deploy before any
+  # supervisor is touched.
+  # The export is NOT decorative: this is a FRESH ssh session (AGENT_CMD's own
+  # export died with its shell), and `systemctl --user` without
+  # XDG_RUNTIME_DIR fails "Failed to connect to bus" on any box where
+  # pam_systemd doesn't populate it — the same contingency both sibling
+  # chains carry the export for. Review finding.
+  SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
+    && systemctl --user try-restart "claude-session@*" \
+    && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}"); do \
+         bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1; done'
+  "${SSH[@]}" "$BOX" "$SWEEP_CMD"
+  prune_backups || echo "deploy: warning: backup prune failed on $BOX (the deploy itself succeeded)" >&2
 else
   # The server serves whatever server/dist-pwa holds, and rsync's
   # `--exclude dist` never matched dist-pwa — which is how a green deploy
@@ -141,8 +210,18 @@ else
     || { echo "deploy: server/dist-pwa/index.html predates this run — refusing to ship a stale bundle" >&2; exit 1; }
   # Back up the served bundle before rsync --delete replaces it. Same rule as
   # the agent path: only an ABSENT source is skippable, a failed cp aborts.
-  "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS \
-    && { [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; }"
+  #
+  # coord.db joins the set — it is the one artifact on either box whose loss
+  # is not free, and it was the one file no deploy ever backed up. The
+  # snapshot is VACUUM INTO via backup-coord.mjs (see its header for why cp
+  # of a WAL database is worse than nothing), shipped fresh THIS run — the
+  # backup cannot depend on a previous deploy having landed the tool — and
+  # guarded the same way as dist-pwa: only a MISSING coord.db is skippable, a
+  # failed snapshot aborts before rsync touches anything.
+  "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"
+  "${SCP[@]}" deploy/backup-coord.mjs "$BOX":ccrc-backups/backup-coord.mjs
+  "${SSH[@]}" "$BOX" "{ [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; } \
+    && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }"
   # See the agent path's identical exclude, above, for why: this rsync also
   # ships `deploy/` whole, and without the exclude the token rides along a
   # second time, unhardened, next to `ship_secret`'s 0600 copy three lines down.
@@ -167,4 +246,5 @@ else
     && bash ~/ccrc/deploy/verify-service.sh ccrc.service \
     && curl -fsS '"$HEALTH_URL"
   "${SSH[@]}" "$BOX" "$REMOTE_CMD"
+  prune_backups || echo "deploy: warning: backup prune failed on $BOX (the deploy itself succeeded)" >&2
 fi
