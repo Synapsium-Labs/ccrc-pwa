@@ -1,6 +1,39 @@
 # Artifact lifecycle policy — every generated artifact has a declared lifecycle
 
-**Status:** DRAFT — awaiting operator rulings on the open questions below.
+**Status:** RULINGS PARTIALLY IN (2026-08-11) — see below; remaining questions still open.
+
+## Operator rulings, 2026-08-11
+
+1. **Specs and plans are forever** — and already are: they live in `docs/superpowers/` in git,
+   committed and pushed with PRs. No new mechanism needed; the ruling confirms the status quo.
+   The 7G transcript pool is CONVERSATION transcripts (Claude Code session `.jsonl` logs), a
+   separate class — retention ruling still pending, with a proposed horizon below.
+2. **Archived→reaped horizon: seven days at most.** Tier B (automatic behind an operator-visible
+   kill-switch). This overrules ccd:6386-6389's "no timer, no grace window" stance for the
+   fleet-scale case, by explicit operator decision. Auto-reap keeps every existing safety: the
+   `--expect` audit token is minted by the sweep itself, the attic refs still pin the branch's
+   object graph, and the sweep logs each reap and refuses anything it cannot prove archived+idle.
+3. **coord.db: compact is OK.** Byte-identical mail replay is NOT a forever guarantee — it holds
+   only while a delivery is outstanding. Old envelopes may be nulled at a horizon with the
+   delivery row, states and timestamps preserved. A VACUUM path must ship with the first
+   compaction (nothing checkpoints the live db today).
+4. **cdk.out: CONTAIN.** Writer identified: `aws-cdk-lib`'s `App` defaults its outdir to
+   `mkdtemp(os.tmpdir() + '/cdk.out')` — every CDK **unit test** (`Template.fromStack` /
+   `new App()` with no `outdir`) leaks one dir per App, bundled assets included. Confirmed
+   writers: intake-platform's BoardStack tests (active today), three custom-tools projects.
+   Containment design: ccd's session launch exports `TMPDIR=$HOME/.cc-tmp/<session-id>` — a
+   ccd-declared, per-session root that `os.tmpdir()` (and every other well-behaved mktemp user)
+   follows, making ALL tool scratch S-pattern by construction; collected at reap and by a
+   boot sweep. Until that ships (Build 5), the >6h `/tmp/cdk.out*` sweep continues manually
+   under the existing precedent.
+5. **Foreign worktrees: one-time cleanup approved in principle**; detail requested and delivered
+   (see the session record) — execution list awaiting confirmation because two are visibly
+   live-dirty including one modified today, and committed branches survive worktree removal
+   in the shared `.git` regardless.
+
+---
+
+**Original draft status:** awaiting operator rulings on the open questions below.
 **Operator directive (2026-08-11, verbatim):** "cleanup as a strategy and policy to have
 defined lifecycle of all generated artefacts by agents/workspaces/etc."
 
