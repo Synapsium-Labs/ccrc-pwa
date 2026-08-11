@@ -177,6 +177,35 @@ if [ "$TARGET" = "agent" ]; then
   install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
+  # The supervisor unit and every drop-in land BEFORE daemon-reload so the
+  # sweep below restarts supervisors under the new unit set. The slice
+  # drop-in's target dir carries systemd's \x2d escape — the repo source dir
+  # is plainly named, the DESTINATION must be the escaped name or systemd
+  # never reads it. Inside this single-quoted block, "\x2d" sits in remote
+  # double quotes, where bash preserves the backslash.
+  AGENT_BUILD_CMD='cd ~/ccrc/agent && npm ci && npm run build \
+    && mkdir -p ~/.config/systemd/user \
+    && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
+    && cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/ \
+    && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
+    && cp ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/ \
+    && cp ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/" \
+    && cp ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/ \
+    && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/'
+  "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
+  # STAMP HERE — after the build that can fail, before the restart that makes
+  # it live (I1, final review). Stamping earlier (this chain's shape until
+  # now) let a failed remote `npm ci && npm run build` — a registry hiccup,
+  # the common case — abort the deploy with build.json already claiming the
+  # NEW sha while the box's dist/ was never rebuilt to match: the box's own
+  # version read (checked below, against the box's own ccd) lies
+  # immediately, and /health lies the moment Restart=always next cycles the
+  # unit onto that untouched dist/. That is exactly the measurement-forgery
+  # class stamp_build's own header above bans by name. Do not "simplify"
+  # this back to before the build chain — the whole point of splitting
+  # AGENT_BUILD_CMD from AGENT_CMD is to give the stamp a place to sit that
+  # only a SUCCESSFUL build reaches. `set -euo pipefail` plus the ssh above
+  # means this line is never reached if the build failed.
   stamp_build
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
@@ -194,22 +223,7 @@ if [ "$TARGET" = "agent" ]; then
   # check. Because it is the last link of an `&&` chain, its exit status is
   # the ssh exit status, and `set -e` at the top of this file aborts the
   # deploy on it.
-  # The supervisor unit and every drop-in land BEFORE daemon-reload so the
-  # sweep below restarts supervisors under the new unit set. The slice
-  # drop-in's target dir carries systemd's \x2d escape — the repo source dir
-  # is plainly named, the DESTINATION must be the escaped name or systemd
-  # never reads it. Inside this single-quoted block, "\x2d" sits in remote
-  # double quotes, where bash preserves the backslash.
-  AGENT_CMD='cd ~/ccrc/agent && npm ci && npm run build \
-    && mkdir -p ~/.config/systemd/user \
-    && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
-    && cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/ \
-    && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
-    && cp ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/ \
-    && cp ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/" \
-    && cp ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/ \
-    && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ \
-    && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
+  AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
     && systemctl --user restart ccrc-agent.service \
@@ -309,8 +323,21 @@ else
     --exclude 'ccrc-mail.token' \
     server shared deploy "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
-  stamp_build
   ship_secret ccrc-mail.token '~/.ccrc' mail.token
+  REMOTE_BUILD_CMD='cd ~/ccrc/server && npm ci && npm run build \
+    && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/'
+  "${SSH[@]}" "$BOX" "$REMOTE_BUILD_CMD"
+  # STAMP HERE — after the build that can fail, before the restart that makes
+  # it live (I1, final review; see the agent chain's identical comment above
+  # for the full failure mode). Stamping before a remote `npm ci && npm run
+  # build` that can fail let build.json claim a sha the box's dist/ was never
+  # rebuilt to run — /health then lies the moment Restart=always next cycles
+  # ccrc.service onto the untouched dist/, the exact measurement-forgery
+  # class stamp_build's own header bans by name. Do not "simplify" this back
+  # to before REMOTE_BUILD_CMD: the split exists so only a successful build
+  # reaches this line. `set -euo pipefail` plus the ssh above means this line
+  # is never reached if the build failed.
+  stamp_build
   # verify-service.sh here closes the same crash-loop gap it closes on the
   # agent path above (see that chain's comment) — a restart that "succeeds"
   # the moment systemd forks, then dies every RestartSec. The curl AFTER it
@@ -319,9 +346,7 @@ else
   # questions, both cheap here because (unlike the agent) this unit has an
   # HTTP route to ask. agent/test/deploy-verify.test.ts pins both the
   # ordering (restart -> verify -> curl) and that neither call is dropped.
-  REMOTE_CMD='cd ~/ccrc/server && npm ci && npm run build \
-    && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ \
-    && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
+  REMOTE_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc.service \
     && systemctl --user restart ccrc.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc.service \

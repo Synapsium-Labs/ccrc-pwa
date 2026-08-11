@@ -325,12 +325,16 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-cap-scopes')),
       'the cap-scopes enforcer script is not in the repo').toBe(true);
 
-    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
-    const links = agentCmd.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
-    // The supervisor unit and every drop-in land BEFORE daemon-reload, so the
-    // sweep later in the branch restarts supervisors under the NEW unit set.
-    const reloadAt = links.findIndex((l) => l.includes('daemon-reload'));
-    expect(reloadAt).toBeGreaterThan(-1);
+    // I1, final review: the installs live in AGENT_BUILD_CMD (the build half —
+    // npm ci/build plus every unit-file install) — NOT in AGENT_CMD, which is
+    // now the restart-only half run in a SEPARATE ssh, after stamp_build.
+    // "Before daemon-reload" is therefore no longer a same-chain text-position
+    // check: it is guaranteed structurally, because AGENT_BUILD_CMD's ssh must
+    // exit 0 (set -euo pipefail) before AGENT_CMD's ssh — where daemon-reload
+    // lives — ever runs. Pin both halves plus that structural ordering.
+    const buildCmd = /AGENT_BUILD_CMD='([\s\S]*?)'/.exec(deploySh);
+    expect(buildCmd, 'the agent build command is no longer a single quoted block').toBeTruthy();
+    const buildLinks = buildCmd![1]!.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
     for (const needle of [
       'cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/',
       'claude-session@.service.d',
@@ -338,14 +342,35 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'ccrc-agent.service.d',
       'cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/',
     ]) {
-      const at = links.findIndex((l) => l.includes(needle));
-      expect(at, `AGENT_CMD does not install: ${needle}`).toBeGreaterThan(-1);
-      expect(at, `${needle} must land before daemon-reload`).toBeLessThan(reloadAt);
+      const at = buildLinks.findIndex((l) => l.includes(needle));
+      expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
     }
-    // The timer is enabled after daemon-reload; the enforcer script goes
-    // through install_atomic like every other executable.
-    const timerAt = links.findIndex((l) => l.includes('enable --now ccd-cap-scopes.timer'));
+    expect(buildCmd![1], 'daemon-reload must not run in the build half — it belongs to the restart half')
+      .not.toContain('daemon-reload');
+
+    // The restart half: daemon-reload, then the cap-scopes timer enable (it
+    // needs daemon-reload to have already picked up the unit AGENT_BUILD_CMD
+    // just installed), then the agent restart, then verify-service.sh.
+    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
+    const restartLinks = agentCmd.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    const reloadAt = restartLinks.findIndex((l) => l.includes('daemon-reload'));
+    const timerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-cap-scopes.timer'));
+    expect(reloadAt, 'AGENT_CMD no longer reloads the daemon').toBeGreaterThan(-1);
     expect(timerAt, 'the cap-scopes timer is never enabled').toBeGreaterThan(reloadAt);
+
+    // And structurally: the build ssh runs, THEN stamp_build, THEN the
+    // restart ssh — three sequential top-level statements under
+    // `set -euo pipefail`, which is what actually makes "installs precede
+    // daemon-reload" true (a stronger guarantee than same-string ordering:
+    // AGENT_CMD's ssh cannot even START until AGENT_BUILD_CMD's ssh exits 0).
+    const agentBranchStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
+    const buildExecAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"');
+    const stampAt = deploySh.indexOf('stamp_build', agentBranchStart);
+    const restartExecAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
+    expect(buildExecAt, 'AGENT_BUILD_CMD is defined but never executed').toBeGreaterThan(-1);
+    expect(stampAt, 'agent branch never stamps').toBeGreaterThan(buildExecAt);
+    expect(restartExecAt, 'AGENT_CMD is defined but never executed').toBeGreaterThan(stampAt);
+
     expect(deploySh).toContain('install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
@@ -523,7 +548,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     }
   });
 
-  it('every deploy stamps ~/.ccrc/build.json on the target — from the LOCAL git tree, before services restart', () => {
+  it('every deploy stamps ~/.ccrc/build.json on the target — from the LOCAL git tree, AFTER the remote build succeeds and BEFORE the restart that makes it live', () => {
     // Stage 1's central artifact: the "from" and "to" that update/skew
     // detection needs. Computed locally (the rsynced ~/ccrc tree on the box
     // is NOT a git repo), shipped like every other file (install_atomic:
@@ -539,17 +564,45 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(body).toContain('install_atomic');
     expect(body).toContain('.ccrc/build.json');
 
-    // Called on BOTH branches, before each branch's remote build+restart
-    // chain executes.
+    // I1, final review: stamping BEFORE the remote build let a failed
+    // `npm ci && npm run build` (a registry hiccup — the common case) abort
+    // the deploy with build.json already claiming the NEW sha while the
+    // box's dist/ was never rebuilt to match — `ccd version` lies
+    // immediately, and /health lies the moment Restart=always next cycles
+    // the unit onto that untouched dist/. Exactly the measurement-forgery
+    // class this file's own stamp_build comment bans by name. The fix splits
+    // each remote chain into a BUILD half (npm ci/build + unit-file
+    // installs, which can fail harmlessly) and a RESTART half
+    // (daemon-reload/enable/restart/verify[/curl]), with the stamp
+    // sandwiched between them. Pin all three positions — build, stamp,
+    // restart — not just "stamp precedes restart": that alone is satisfied
+    // by the OLD, buggy ordering too (stamp before EVERYTHING), so it never
+    // would have caught this regression.
     const agentBranchStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
     const elseAt = deploySh.indexOf('\nelse');
+
+    const agentBuildAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"');
     const agentStamp = deploySh.indexOf('stamp_build', agentBranchStart);
+    const agentRestartAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
+    expect(agentBuildAt, 'agent branch never runs its build chain').toBeGreaterThan(agentBranchStart);
     expect(agentStamp, 'agent branch never stamps').toBeGreaterThan(agentBranchStart);
-    expect(agentStamp).toBeLessThan(deploySh.indexOf('"$AGENT_CMD"'));
+    expect(agentRestartAt, 'agent branch never runs its restart chain').toBeGreaterThan(-1);
+    expect(agentStamp, 'the stamp must run AFTER the remote build — a build that never ran must never be stamped')
+      .toBeGreaterThan(agentBuildAt);
+    expect(agentStamp, 'the stamp must run BEFORE the restart that makes it live')
+      .toBeLessThan(agentRestartAt);
     expect(agentStamp).toBeLessThan(elseAt);
+
+    const serverBuildAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$REMOTE_BUILD_CMD"');
     const serverStamp = deploySh.indexOf('stamp_build', elseAt);
+    const serverRestartAt = deploySh.indexOf('"${SSH[@]}" "$BOX" "$REMOTE_CMD"');
+    expect(serverBuildAt, 'server branch never runs its build chain').toBeGreaterThan(elseAt);
     expect(serverStamp, 'server branch never stamps').toBeGreaterThan(elseAt);
-    expect(serverStamp).toBeLessThan(deploySh.indexOf('"$REMOTE_CMD"'));
+    expect(serverRestartAt, 'server branch never runs its restart chain').toBeGreaterThan(-1);
+    expect(serverStamp, 'the stamp must run AFTER the remote build — a build that never ran must never be stamped')
+      .toBeGreaterThan(serverBuildAt);
+    expect(serverStamp, 'the stamp must run BEFORE the restart that makes it live')
+      .toBeLessThan(serverRestartAt);
   });
 
   it('the deploy proves the box now RUNS what it shipped — sha equality, not just 200 OK', () => {
