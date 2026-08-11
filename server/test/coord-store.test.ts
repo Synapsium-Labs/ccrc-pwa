@@ -704,6 +704,35 @@ describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
     expect(outstanding[0]!.state).toBe('queued');
   });
 
+  // MAIL_ROW_COLUMNS (store.ts) had two literal columns with zero coverage
+  // anywhere in server/test: `m.at AS at` and `m.runId AS runId` — mutating
+  // either to a constant (`0 AS at` / `NULL AS runId`) left the full suite
+  // green. `at` is not cosmetic: pwa/src/session/MailStrip.tsx:47 picks the
+  // strip's headline with `[...mail].sort((a,b) => b.at - a.at)[0]`, so a
+  // broken `at` column silently shows an arbitrary subject. `runId` is read
+  // straight off `MailSummary` on the `mail` WS frame (shared/api.ts) with
+  // no consumer today, but the row is addressed BY a runId
+  // (`insertMail({..., runId: r.id})`) and must read back the one that was
+  // actually written, not `null`, through both read paths that share
+  // `hydrateMail`.
+  it('reads `at` and `runId` back off the row exactly as written, through both mailForRecipient and outstandingMailFor', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const toId = 'ccrc-pwa-clear-cove';
+    const before = Date.now();
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: r.id,
+      kind: 'question', subject: 'attributed to a run', body: 'body', artifacts: [] });
+    const after = Date.now();
+    s.queueDelivery(mail.id, toId, 'envelope');
+
+    for (const rows of [s.outstandingMailFor(toId), s.mailForRecipient(toId)]) {
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.runId).toBe(r.id);
+      expect(rows[0]!.at).toBeGreaterThanOrEqual(before);
+      expect(rows[0]!.at).toBeLessThanOrEqual(after);
+    }
+  });
+
   it('excludes acked and rejected mail, includes queued and delivered, same as `mailForRecipient`\'s own callers expect', () => {
     const s = store();
     const toId = 'ccrc-pwa-clear-cove';

@@ -47,6 +47,12 @@ interface Reconstructed {
   currentWave: number; waves: number;
   perWave: { wave: number; prs: number[]; state: string }[];
   confidence: 'hold-corroborated' | 'ledger-only';
+  // The registry's live PR (the one open right now) and its phase, once
+  // corroborated against the ledger below — reconstruct()'s answer to
+  // "which PR is open right now", the question finding 6's own fix round
+  // said this step exists to check. `null` when the registry carries no
+  // `.prnumber` at all (e.g. the workspace was already cleared).
+  currentPr: { number: number; phase: string | null } | null;
 }
 
 /** The written procedure, executed. Read it as prose: this is what a human, or
@@ -104,18 +110,32 @@ function reconstruct(dir: string): Reconstructed {
   for (const { pr } of prs) {
     expect(ledgerPrs, `#${pr} is in .prhistory but not in the ledger`).toContain(pr);
   }
-  const currentPr = reg('prnumber');
-  if (currentPr !== null) {
-    const num = Number(currentPr);
+  const currentPrField = reg('prnumber');
+  let currentPr: { number: number; phase: string | null } | null = null;
+  if (currentPrField !== null) {
+    const num = Number(currentPrField);
     expect(ledgerPrs, `the registry's current PR #${num} is not in the ledger`).toContain(num);
     const currentPhase = reg('prphase');
-    if (currentPhase !== null) {
+    // `.prphase` (shared/api.ts's PrPhase: 'unchecked'|'none'|'no-commits'|
+    // 'open'|'draft'|'merged'|'closed'|'unknown') and the ledger's own
+    // `state` column (TEMPLATE.md prescribes no vocabulary for it — this
+    // fixture's own wave 3 reads 'in flight') are NOT the same vocabulary,
+    // so they cannot be compared for equality — only 'merged' is a word
+    // both sides can say, and it is the one direction that matters for a
+    // disaster-recovery drill: if the registry says the current PR already
+    // merged, the committed ledger for that PR must agree, or the ledger
+    // is the stale artifact. Any other `.prphase` (open, draft, ...) is the
+    // ordinary mid-flight state the drill exists to be run during, and is
+    // corroborated only by the unconditional "PR appears in the ledger"
+    // check above.
+    if (currentPhase === 'merged') {
       const row = perWave.find((w) => w.prs.includes(num));
       expect(
         row?.state,
-        `#${num}'s ledger state disagrees with the registry's .prphase (${currentPhase})`,
-      ).toBe(currentPhase);
+        `#${num}'s ledger row says '${row?.state}', but the registry's .prphase says merged`,
+      ).toBe('merged');
     }
+    currentPr = { number: num, phase: currentPhase };
   }
 
   return {
@@ -125,6 +145,7 @@ function reconstruct(dir: string): Reconstructed {
     waves: ledgerWaves,
     perWave,
     confidence: holdAgrees ? 'hold-corroborated' : 'ledger-only',
+    currentPr,
   };
 }
 
@@ -140,12 +161,52 @@ describe('the reconstruction drill', () => {
       currentWave: 3,
       waves: 3,
       confidence: 'hold-corroborated',
+      currentPr: { number: 583, phase: 'merged' },
     });
     expect(r.perWave).toEqual([
       { wave: 1, prs: [577], state: 'merged' },
       { wave: 2, prs: [583], state: 'merged' },
       { wave: 3, prs: [], state: 'in flight' },
     ]);
+  });
+
+  // The ledger's `state` column and the registry's `.prphase` are not the
+  // same vocabulary (see reconstruct()'s own comment); 'merged' is the one
+  // word both sides can say, and it is the direction that must be checked —
+  // a registry claiming a PR already merged while the committed ledger
+  // still shows it in flight is a real, catchable disagreement, not a wave-
+  // boundary artifact. MEASURED: with the corroboration block deleted
+  // entirely (or downgraded to "any disagreement, not just merged"), this
+  // case does NOT throw — a stale/false 'merged' registry would read as an
+  // ordinary reconstruction.
+  it('throws when the registry says the current PR already merged but the committed ledger still shows it in flight', () => {
+    const ledger = readFileSync(path.join(fx, 'ledger.md'), 'utf8').replace(
+      '| 3 | mail in the transcript, and the jump-to-latest pill | — | in flight |',
+      '| 3 | mail in the transcript, and the jump-to-latest pill | #590 | in flight |',
+    );
+    const withLedger = copyFixtureWith(fx, 'ledger.md', ledger);
+    // .prphase is already 'merged' in the base fixture — only .prnumber
+    // needs to move onto the newly in-flight PR to produce the disagreement.
+    const dir = copyFixtureWith(withLedger, 'registry/ccrc-pwa-clear-cove.prnumber', '590');
+    expect(() => reconstruct(dir)).toThrow(/disagrees|says.*merged/);
+  });
+
+  // Same edited ledger, but the registry's phase is the ordinary mid-flight
+  // value ('open') rather than 'merged' — the case finding 25's fix round
+  // regressed on: comparing the two vocabularies for bare equality made
+  // this throw on the state a disaster-recovery drill exists to be run
+  // during. It must reconstruct cleanly and report the live PR honestly.
+  it('does not throw on an ordinary mid-flight .prphase that has no matching word in the ledger\'s vocabulary', () => {
+    const ledger = readFileSync(path.join(fx, 'ledger.md'), 'utf8').replace(
+      '| 3 | mail in the transcript, and the jump-to-latest pill | — | in flight |',
+      '| 3 | mail in the transcript, and the jump-to-latest pill | #590 | in flight |',
+    );
+    const withLedger = copyFixtureWith(fx, 'ledger.md', ledger);
+    const withPr = copyFixtureWith(withLedger, 'registry/ccrc-pwa-clear-cove.prnumber', '590');
+    const dir = copyFixtureWith(withPr, 'registry/ccrc-pwa-clear-cove.prphase', 'open');
+    const r = reconstruct(dir);
+    expect(r.currentPr).toEqual({ number: 590, phase: 'open' });
+    expect(r.perWave[2]).toEqual({ wave: 3, prs: [590], state: 'in flight' });
   });
 
   it('still recovers the program with the hold released, and SAYS the confidence dropped', () => {

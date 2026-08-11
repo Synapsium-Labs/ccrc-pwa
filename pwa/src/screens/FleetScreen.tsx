@@ -16,6 +16,7 @@ import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
+import { runClosedAt } from '../fleet/runWords';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
@@ -146,8 +147,10 @@ export function FleetScreen({
   const archived = archivedSummary(sessions);
   // Build 7's run board footer. `closedAt === null` is "IS finished"'s own
   // negation (RunSummary's own docstring on that field) — the same split
-  // RunsScreen itself uses to separate its active/finished groups.
-  const activeRuns = useStore((s) => s.runs).filter((r) => r.closedAt === null).length;
+  // RunsScreen itself uses to separate its active/finished groups, through
+  // the same `runClosedAt` tolerance helper (a row that OMITS `closedAt`
+  // reads as active here too, not undercounted by a bare `=== null`).
+  const activeRuns = useStore((s) => s.runs).filter((r) => runClosedAt(r) === null).length;
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();

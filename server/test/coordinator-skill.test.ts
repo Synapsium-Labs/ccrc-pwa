@@ -135,13 +135,21 @@ describe('the coordinator skill: linkage', () => {
     // `references/wave-lifecycle.md` — a code the skill promises but the
     // reference never defines is exactly as dangerous as one the server can
     // never send.
+    //
+    // MEASURED SURVIVOR, fixed here: the harvest regex used to require a
+    // hyphen (`[a-z]+(?:-[a-z]+)+`), so a single-word code was invisible to
+    // it — replacing `claimed-by-another` with the plan-era `claimed` right
+    // here in SKILL.md's own sentence left this suite green. `paused` is a
+    // real member of the list today and is equally single-word, so the
+    // hyphen group is now OPTIONAL (`(?:-[a-z]+)*`) — every backticked
+    // lowercase token in the sentence is harvested, single word or not.
     const marker = 'The refusals you will actually meet are';
     const start = skill.indexOf(marker);
     expect(start, 'SKILL.md should carry its refusal-list sentence').toBeGreaterThanOrEqual(0);
     const end = skill.indexOf('\n\n', start);
     const sentence = skill.slice(start, end === -1 ? undefined : end);
-    const codes = [...sentence.matchAll(/`([a-z]+(?:-[a-z]+)+)`/g)].map((m) => m[1]!);
-    expect(codes.length, 'the harvest should find the codes in the sentence').toBeGreaterThanOrEqual(10);
+    const codes = [...sentence.matchAll(/`([a-z]+(?:-[a-z]+)*)`/g)].map((m) => m[1]!);
+    expect(codes.length, 'the harvest should find the codes in the sentence').toBeGreaterThanOrEqual(14);
     const wl = refs('wave-lifecycle.md');
     for (const code of codes) {
       expect((MAIL_REJECT_CODES as readonly string[]).includes(code) || isRunRefuseCode(code),

@@ -1509,7 +1509,7 @@ export type SessionStreamMsg =
   | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
-   *  `checkMail`). Read directly off `CoordStore.mailForRecipient` in-process,
+   *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
    *  the same way `tasks` reads `readTasks` — NOT a client of the
    *  box-token-gated `GET /api/mail?to=` (`coord/routes.ts`'s
    *  `requireMailToken`): that route authenticates the anonymous box->server

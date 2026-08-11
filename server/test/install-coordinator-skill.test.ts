@@ -62,7 +62,7 @@ describe('install-coordinator-skill', () => {
   });
 
   it('skips a home that does not exist without failing the run', () => {
-    // A box with three of the four wrappers is an ordinary box, not an error.
+    // A box missing one of its wrapper homes is an ordinary box, not an error.
     fs.rmSync(path.join(home, '.claude-gpt'), { recursive: true });
     run();
     expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);

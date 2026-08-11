@@ -221,7 +221,9 @@ describe('install-coordinator-skill.sh default homes agrees with ACCOUNTS.hooksA
 });
 
 describe('ccd statusline-command.sh label maps agree with ACCOUNTS', () => {
-  // Not executed — same reason as install-session-hooks.sh above: the script
+  // Not executed — this file's own header names it (not the two installers
+  // above, which DO get a real subprocess pin now) as the one genuine
+  // "cannot be usefully executed in a fixture test" case: the script
   // needs a real CLAUDE_CONFIG_DIR (it reads its OWN process's env, not an
   // argv) plus a JSON stdin payload to produce anything at all. Parses the
   // two `case "$cfg" in ... esac` blocks instead — one picks the human-facing
