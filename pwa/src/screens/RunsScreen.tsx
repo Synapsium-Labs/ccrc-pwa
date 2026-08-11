@@ -158,8 +158,25 @@ export function RunsScreen({
   // Never fires a `set*` after this instance has unmounted — shared by the
   // mount-time read below and the transition-triggered re-read (finding 22),
   // the one this screen fires on its own initiative, mid-lifetime.
+  //
+  // RE-ARMED as the effect's OWN first statement, not left to the `useRef(true)`
+  // initialiser alone (I1, regression, measured): React 18 StrictMode (dev
+  // only) runs every effect as mount -> cleanup -> mount, on the SAME
+  // component instance, so `aliveRef` survives the whole sequence rather than
+  // being re-created. With no re-arm, the simulated cleanup's `= false` was
+  // never undone by the simulated second mount — `aliveRef.current` stayed
+  // `false` for the rest of the component's real life, so every `loadCold()`
+  // below (`if (aliveRef.current) { setCold(...); setColdState(...) }`)
+  // silently dropped its own resolution and the board hung on "Loading…"
+  // forever under StrictMode. Setting it `true` here, every time the effect
+  // body runs (both the StrictMode-simulated second mount and the one real
+  // mount in production, where this effect only ever runs once), is what
+  // makes the ref correct across both.
   const aliveRef = useRef(true);
-  useEffect(() => () => { aliveRef.current = false; }, []);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
 
   const loadCold = (): Promise<void> =>
     loadRunsRef.current()
@@ -240,6 +257,18 @@ export function RunsScreen({
   // all, and must say so rather than rendering the ordinary empty state.
   const noSignalYet = !runsFrameSeen && coldState !== 'ok';
   const hasAny = active.length > 0 || finished.length > 0;
+  // I6 (residual): `coldState === 'error'` is a fact about the FINISHED half
+  // specifically — `active` can be fully answered by the live frame alone
+  // (`runsFrameSeen`) even while the cold read that is `finished`'s only
+  // source has failed outright. Before this, a failed cold read with
+  // `runsFrameSeen` already true skipped `noSignalYet` entirely (that guard
+  // reads `!runsFrameSeen`, and it IS seen) and fell straight through to
+  // `!hasAny`'s ordinary "No runs." the moment no run was active either — a
+  // POSITIVE claim about the program's whole history a failed archive read
+  // has no standing to make, the exact thing `noSignalYet`'s own comment
+  // above already refuses to do for the "never asked yet" case. Read below
+  // for the second half: active rows present, finished's own read failed.
+  const coldFailed = coldState === 'error';
 
   const rowFor = (run: RunSummary): ReactNode => (
     <RunRow
@@ -282,7 +311,20 @@ export function RunsScreen({
             : 'Loading…'}
         </p>
       ) : !hasAny ? (
-        <p className="runs-empty" data-state="ok">No runs. A program starts when a coordinator opens one.</p>
+        // I6: `noSignalYet` above only covers the "nothing has answered at
+        // all" window — once the live frame has said `runsFrameSeen`, this
+        // arm is reached even with `active` honestly empty AND the cold
+        // read (finished's only source) having FAILED. That is not "No
+        // runs" either: it is "no active runs, and the archive could not be
+        // read", which must say so rather than claim the program's whole
+        // history is empty.
+        coldFailed ? (
+          <p className="runs-empty" data-state="error">
+            Could not reach the server — runs may exist that are not shown.
+          </p>
+        ) : (
+          <p className="runs-empty" data-state="ok">No runs. A program starts when a coordinator opens one.</p>
+        )
       ) : (
         <>
           {runsByProgram(active).map(({ program, runs: list }) => {
@@ -308,14 +350,29 @@ export function RunsScreen({
             );
           })}
 
-          {finished.length > 0 && (
+          {finished.length > 0 ? (
             <div className="runs-group" role="group" aria-label={`finished (${finished.length})`}>
               <p className="runs-group-head"><span className="runs-program">Finished</span></p>
               <ul className="runs-list">
                 {finished.map(rowFor)}
               </ul>
             </div>
-          )}
+          ) : coldFailed ? (
+            // I6, second half: at least one run is active (this branch is
+            // only reached via `hasAny`), so the board is not empty — but
+            // `finished` is empty ONLY because its one source, the cold
+            // read, failed, never because the archive is honestly empty
+            // (`coldState==='ok'` with zero rows renders nothing here, on
+            // purpose — that IS an answered, empty Finished group). Silently
+            // omitting the whole group here reads as "nothing has ever
+            // finished", which the board has no standing to claim.
+            <div className="runs-group" role="group" aria-label="finished, unknown">
+              <p className="runs-group-head"><span className="runs-program">Finished</span></p>
+              <p className="runs-empty" data-state="error">
+                Could not reach the server — finished runs may exist that are not shown.
+              </p>
+            </div>
+          ) : null}
         </>
       )}
     </div>

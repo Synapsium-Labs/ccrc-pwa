@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { RUN_STATES, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
@@ -106,6 +107,28 @@ describe('the run board', () => {
     const store = makeStore();
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+  });
+
+  it('resolves loadCold and populates Finished under React StrictMode — the aliveRef guard must RE-ARM, not just latch false once (I1, regression, measured)', async () => {
+    // StrictMode (dev-only) runs every effect mount -> cleanup -> mount, on
+    // the SAME component instance, before the app ever gets a "real" mount.
+    // `aliveRef`'s cleanup sets `.current = false`; without re-arming it as
+    // the effect's own first statement, that `false` survives the simulated
+    // remount and the guard on every `loadCold()` resolution
+    // (`if (aliveRef.current) { setCold(...); setColdState(...) }`) then
+    // silently drops every real state update for the rest of the component's
+    // life — the board hangs on "Loading…" forever. This is measured: it
+    // fails against the pre-fix `useRef(true)` + bodyless-cleanup shape.
+    const store = makeStore();
+    const finishedRun = r({ id: 9, wave: 1, state: 'done', closedAt: Date.now() });
+    render(
+      <StrictMode>
+        <RunsScreen store={store} loadRuns={async () => ({ runs: [finishedRun] })} />
+      </StrictMode>,
+    );
+    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
+    expect(screen.getByText('clear-cove')).toBeInTheDocument();
+    expect(screen.queryByText(/loading/i)).toBeNull();
   });
 
   it('groups by program, and the group is a role=group — not a landmark', () => {
@@ -325,5 +348,37 @@ describe('the run board', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => { throw new Error('offline'); }} />);
     expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
     expect(screen.queryByText(/^no runs\./i)).toBeNull();
+  });
+
+  it('says it could not read, not "No runs", when a live frame HAS landed (honestly empty) but the archive read failed (I6, residual)', async () => {
+    // The gap the finding 19 fix above did not close: `noSignalYet` reads
+    // `!runsFrameSeen`, so the instant the live frame has said ANYTHING —
+    // including a true, honest `[]` — that guard stands down even though
+    // `finished`'s only source, the cold read, never answered at all. Before
+    // this fix `!hasAny` fell straight through to the ordinary "No runs.",
+    // a positive claim about the WHOLE program history a failed archive
+    // read has no standing to make.
+    const store = makeStore();
+    render(<RunsScreen store={store} loadRuns={async () => { throw new Error('offline'); }} />);
+    // The live frame lands separately, honestly reporting no active runs —
+    // it says nothing at all about the archive.
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^no runs\./i)).toBeNull();
+  });
+
+  it('surfaces the Finished half\'s OWN failure when active rows already make the board non-empty (I6, residual)', async () => {
+    // `hasAny` is true here purely off the live frame's active row — the
+    // pre-fix board rendered that group fine and simply omitted Finished
+    // entirely, with nothing on screen distinguishing "the archive is
+    // genuinely empty" from "the archive could not be read".
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => { throw new Error('offline'); }} />);
+    // The active group renders as normal — this is not the whole-board
+    // failure state, only the Finished half's own.
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    const finishedGroup = await screen.findByRole('group', { name: /finished/i });
+    expect(finishedGroup).toHaveTextContent(/could not reach the server/i);
   });
 });
