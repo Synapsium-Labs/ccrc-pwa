@@ -551,4 +551,29 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(serverStamp, 'server branch never stamps').toBeGreaterThan(elseAt);
     expect(serverStamp).toBeLessThan(deploySh.indexOf('"$REMOTE_CMD"'));
   });
+
+  it('the deploy proves the box now RUNS what it shipped — sha equality, not just 200 OK', () => {
+    // The 2026-08-10 failure class, closed at the mechanism level: a green
+    // deploy that proves only "something answers" lets a stale binary hide
+    // behind an {ok:true}. The server branch greps /health for the exact sha
+    // it stamped; the agent branch asks the box's own ccd. Both AFTER their
+    // chains, so they interrogate the restarted services.
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    // NB the deploy.sh line escapes its quotes for the shell — \"sha\":\"$BUILD_SHA\" —
+    // so the needle here carries the backslashes too.
+    const healthAssertAt = serverBranch.indexOf('\\"sha\\":\\"$BUILD_SHA\\"');
+    expect(healthAssertAt, 'the server branch never checks /health against the shipped sha')
+      .toBeGreaterThan(-1);
+    expect(healthAssertAt).toBeGreaterThan(serverBranch.indexOf('"$REMOTE_CMD"'));
+
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const ccdAssertAt = agentBranch.indexOf('ccd version');
+    expect(ccdAssertAt, 'the agent branch never checks ccd version against the shipped sha')
+      .toBeGreaterThan(-1);
+    expect(ccdAssertAt).toBeGreaterThan(agentBranch.indexOf('"$AGENT_CMD"'));
+    expect(agentBranch.indexOf('grep -qF "$BUILD_SHA"', ccdAssertAt),
+      'the ccd version output is not compared to the shipped sha')
+      .toBeGreaterThan(-1);
+  });
 });

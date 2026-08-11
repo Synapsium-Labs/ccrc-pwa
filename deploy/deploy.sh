@@ -224,6 +224,12 @@ if [ "$TARGET" = "agent" ]; then
     && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}"); do \
          bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1; done'
   "${SSH[@]}" "$BOX" "$SWEEP_CMD"
+  # The box's own statement of what it now runs, compared to what this run
+  # shipped. `ccd version` reads ~/.ccrc/build.json (stamp_build, above);
+  # a mismatch means the atomic install or the stamp itself went sideways —
+  # fail the deploy, loudly, with both values in view.
+  "${SSH[@]}" "$BOX" '~/.local/bin/ccd version' | tee /dev/stderr | grep -qF "$BUILD_SHA" \
+    || { echo "deploy: FAILED — the box's ccd version does not carry the shipped sha $BUILD_SHA" >&2; exit 1; }
   prune_backups || echo "deploy: warning: backup prune failed on $BOX (the deploy itself succeeded)" >&2
 else
   # The server serves whatever server/dist-pwa holds, and rsync's
@@ -276,5 +282,11 @@ else
     && bash ~/ccrc/deploy/verify-service.sh ccrc.service \
     && curl -fsS '"$HEALTH_URL"
   "${SSH[@]}" "$BOX" "$REMOTE_CMD"
+  # /health's build stamp must equal what this run shipped. The curl inside
+  # REMOTE_CMD proved "something answers"; this proves it answers AS the
+  # build we deployed — the assertion the 2026-08-10 stale-binary afternoon
+  # was missing. -f on a fresh curl: a dead server here is also a failure.
+  curl -fsS "$HEALTH_URL" | grep -qF "\"sha\":\"$BUILD_SHA\"" \
+    || { echo "deploy: FAILED — /health does not report the shipped sha $BUILD_SHA" >&2; exit 1; }
   prune_backups || echo "deploy: warning: backup prune failed on $BOX (the deploy itself succeeded)" >&2
 fi
