@@ -214,7 +214,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .not.toContain('curl');
   });
 
-  it('the observation window is longer than EITHER unit\'s RestartSec, or it cannot see a loop', () => {
+  it('the observation window is longer than EVERY unit\'s RestartSec, or it cannot see a loop', () => {
     // A cross-file invariant, because the two numbers live in different files
     // and only one of them looks like it matters. If RestartSec were raised to
     // 10 on either unit and the window left at 5, every crash loop on that
@@ -223,17 +223,216 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // units, so the invariant has to hold against both RestartSec values, not
     // just the agent's — a `ccrc.service` RestartSec raised on its own, with
     // nothing agent-side to trip, used to pass this suite.
+    //
+    // Stage 0 widened the set: the supervisor sweep below runs verify-service.sh
+    // against every claude-session@ unit, so ITS RestartSec joins the invariant
+    // — it lives under ccd/, not deploy/, which is exactly how it would have
+    // been missed.
     const verifySrc = readFileSync(VERIFY, 'utf8');
     const window = Number(/CCRC_VERIFY_WINDOW:-(\d+)/.exec(verifySrc)?.[1]);
     expect(Number.isFinite(window), 'CCRC_VERIFY_WINDOW default not found').toBe(true);
 
-    for (const unitFile of ['ccrc-agent.service', 'ccrc.service']) {
-      const unitSrc = readFileSync(path.join(deployDir, unitFile), 'utf8');
+    const units = [
+      path.join(deployDir, 'ccrc-agent.service'),
+      path.join(deployDir, 'ccrc.service'),
+      path.join(deployDir, '..', 'ccd', 'claude-session@.service'),
+    ];
+    for (const unitFile of units) {
+      const unitSrc = readFileSync(unitFile, 'utf8');
       const restartSec = Number(/^RestartSec=(\d+)/m.exec(unitSrc)?.[1]);
       expect(Number.isFinite(restartSec), `RestartSec not found in ${unitFile}`).toBe(true);
-      expect(window, `observation window ${window}s must exceed ${unitFile}'s RestartSec ${restartSec}s`)
+      expect(window, `observation window ${window}s must exceed ${path.basename(unitFile)}'s RestartSec ${restartSec}s`)
         .toBeGreaterThan(restartSec);
     }
+  });
+
+  it('every hand-copied script lands via scp-to-temp + mv, never an in-place overwrite', () => {
+    // Stage 0, finding 1 — a live correctness bug, not a hardening nicety.
+    // `scp` writes the DESTINATION INODE in place, and bash executes scripts
+    // lazily from a saved byte offset: a `ccd` invocation that is mid-flight
+    // while the deploy overwrites it resumes inside the NEW bytes at the OLD
+    // offset. Reproduced: a verb prints its correct result, then exits 2 on a
+    // syntax error — which lifecycle.ts maps to ok:false and the routes turn
+    // into a 409 for a destructive action that already completed. `mv -f`
+    // replaces the directory entry instead (rename(2), atomic): running
+    // readers keep the old inode to EOF, new invocations get the new file.
+    const fn = /install_atomic\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no install_atomic() helper').toBeTruthy();
+    const body = fn![1]!;
+    const scpAt = body.indexOf('.incoming-$TS');
+    const chmodAt = body.indexOf('chmod');
+    const mvAt = body.indexOf('mv -f');
+    expect(scpAt, 'install_atomic must scp to a .incoming-$TS temp name').toBeGreaterThan(-1);
+    expect(chmodAt, 'install_atomic must chmod the temp file').toBeGreaterThan(-1);
+    expect(mvAt, 'install_atomic must finish with mv -f').toBeGreaterThan(-1);
+    // chmod BEFORE mv: the file must never be live at its final name without
+    // its final mode — a session that execs ccd in that window gets EACCES,
+    // which systemd Restart=always turns into a crash loop.
+    expect(chmodAt, 'chmod must happen before the mv, not after the file is live')
+      .toBeLessThan(mvAt);
+    // Aborted-run strays (review finding): a deploy that dies between scp and
+    // mv leaves an executable `<dest>.incoming-<ts>` beside the live binary —
+    // on PATH, in ccd's case — forever. The successful path cleans prior
+    // strays AFTER its own mv (by then the current temp has been renamed
+    // away, so the glob can only match leftovers from dead runs).
+    const strayRmAt = body.indexOf('rm -f $dest.incoming-');
+    expect(strayRmAt, 'install_atomic must sweep strays from aborted runs').toBeGreaterThan(-1);
+    expect(strayRmAt, 'the stray sweep must run after the mv, or it deletes the file it just shipped')
+      .toBeGreaterThan(mvAt);
+
+    // And the four artifacts all go THROUGH it. The direct-scp spellings are
+    // asserted absent one by one: any of them coming back is this exact bug
+    // coming back, whatever else the file looks like by then. BOTH scp dest
+    // spellings are banned — `"$BOX":dest` (the old code's) and `"$BOX:dest"`
+    // (install_atomic's own, which the first regex draft missed: a call site
+    // "fixed" by switching quote style would have sailed through).
+    for (const dest of [
+      '.local/bin/ccd', '.cc-sessions/notify.sh',
+      '.cc-sessions/session-hook.sh', '.cc-sessions/install-session-hooks.sh',
+    ]) {
+      const escaped = dest.replace(/[./]/g, '\\$&');
+      const direct = new RegExp(
+        `"\\$\\{SCP\\[@\\]\\}"\\s+\\S+\\s+("\\$BOX":|"\\$BOX:)${escaped}"?(?!\\.incoming)(\\s|$)`, 'm');
+      expect(direct.test(deploySh),
+        `${dest} is scp'd directly to its final name — the in-place overwrite is back`).toBe(false);
+    }
+    for (const call of [
+      'install_atomic ccd/ccd .local/bin/ccd',
+      'install_atomic deploy/notify.sh .cc-sessions/notify.sh',
+      'install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh',
+      'install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh',
+    ]) {
+      expect(deploySh, `missing atomic install call: ${call}`).toContain(call);
+    }
+  });
+
+  it('after a new ccd lands, every claude-session@ supervisor is restarted onto it — and re-verified', () => {
+    // Stage 0, finding 1's second half. `claude-session@.service` runs `ccd
+    // supervise` as a LONG-LIVED bash process, so even an atomic install
+    // leaves every live supervisor executing the pre-deploy ccd (the old
+    // inode) for days — auto-swap, auto-compact and uuid-sync all keep
+    // running yesterday's logic, and the agent's `ccd caps` cache stats the
+    // file on disk, structurally blind to what the supervisors execute.
+    // The unit is BUILT for this sweep: KillMode=process, with a comment that
+    // the tmux substrate must survive a supervisor restart, and
+    // `cmd_supervise` re-enters via `cmd_ensure`, which attaches to a live
+    // session rather than spawning a second one.
+    const agentBranch = deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('else'));
+    expect(agentBranch, 'the agent branch no longer try-restarts claude-session@*')
+      .toContain('try-restart "claude-session@*"');
+    // After the agent chain, so a broken agent fails the deploy before any
+    // supervisor is touched…
+    const sweepAt = agentBranch.indexOf('try-restart "claude-session@*"');
+    const agentCmdAt = agentBranch.indexOf('"$AGENT_CMD"');
+    expect(agentCmdAt).toBeGreaterThan(-1);
+    expect(sweepAt, 'the sweep must run after the agent chain, not before it')
+      .toBeGreaterThan(agentCmdAt);
+    // …and each restarted supervisor is then held to the same standard as the
+    // agent itself: verify-service.sh, per unit, not a fire-and-forget signal.
+    const verifyLoopAt = agentBranch.indexOf('verify-service.sh "$u"');
+    expect(verifyLoopAt, 'each restarted supervisor must be re-verified via verify-service.sh')
+      .toBeGreaterThan(sweepAt);
+    // The sweep runs in a FRESH ssh session — AGENT_CMD's export does not
+    // carry over, and `systemctl --user` without XDG_RUNTIME_DIR fails
+    // 'Failed to connect to bus' on any box where pam_systemd doesn't
+    // populate it (the exact contingency both sibling chains carry the
+    // export for). Measured: today's boxes populate it; the export is for
+    // the box that doesn't.
+    const exportAt = agentBranch.indexOf('export XDG_RUNTIME_DIR', agentCmdAt);
+    expect(exportAt, 'SWEEP_CMD must export XDG_RUNTIME_DIR like its sibling chains')
+      .toBeGreaterThan(-1);
+    expect(exportAt).toBeLessThan(sweepAt);
+    // DEFINING the sweep is not RUNNING it (review finding: deleting the ssh
+    // invocation left this whole suite green). The execution line itself is
+    // the pin, after the agent chain's own execution.
+    const sweepExecAt = agentBranch.indexOf('"${SSH[@]}" "$BOX" "$SWEEP_CMD"');
+    expect(sweepExecAt, 'SWEEP_CMD is defined but never executed').toBeGreaterThan(-1);
+    expect(sweepExecAt).toBeGreaterThan(agentBranch.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"'));
+  });
+
+  it('coord.db is snapshotted (WAL folded in) into the backup set before the server rsync', () => {
+    // Stage 0, finding: coord.db is the one artifact whose loss is not free
+    // and the one file the deploy never backed up. A bare `cp coord.db` would
+    // be WORSE than nothing: the DB runs in WAL mode and the WAL has been
+    // measured holding 10x the main file — a cp of the main file alone is a
+    // plausible-looking backup missing nearly everything recent. VACUUM INTO
+    // through node:sqlite (proven against the live box; no sqlite3 CLI there)
+    // folds the WAL into one consistent snapshot, from a readOnly connection.
+    const mjs = readFileSync(path.join(deployDir, 'backup-coord.mjs'), 'utf8');
+    expect(mjs).toContain("'VACUUM INTO ?'");
+    expect(mjs).toContain('readOnly: true');
+    // Interrupted-snapshot discipline (review finding, reproduced with a
+    // SIGKILL mid-VACUUM): writing straight to the final name leaves a
+    // plausible-looking partial backup — the exact artifact this tool's own
+    // header calls worse than nothing. VACUUM INTO a .tmp sibling, rename
+    // into place only on success; pre-clean the tmp AND its -journal so a
+    // prior abort can neither fail the fresh VACUUM (dest-exists) nor roll a
+    // stale hot journal into it.
+    expect(mjs, 'snapshot must build at a temp name').toContain(".tmp");
+    expect(mjs, 'snapshot must be renamed into place only on success').toContain('renameSync(');
+    expect(mjs, 'a stale tmp journal must be cleared before VACUUM').toContain("-journal");
+    // The CALL site, not the import line the first draft of this probe hit.
+    expect(mjs.lastIndexOf('renameSync('), 'rename must follow the VACUUM, not precede it')
+      .toBeGreaterThan(mjs.indexOf("'VACUUM INTO ?'"));
+
+    const serverBranch = deploySh.slice(deploySh.indexOf('else'));
+    // The INVOCATION is pinned, not just the guard (review finding: replacing
+    // the node call with `|| true` while a comment mentioned the tool's name
+    // left the suite green).
+    expect(serverBranch, 'the snapshot must actually be invoked via node')
+      .toMatch(/node --no-warnings ~\/ccrc-backups\/backup-coord\.mjs ~\/\.ccrc\/coord\.db/);
+    // Shipped fresh each run — the deploy cannot depend on a previous deploy
+    // having landed it — and invoked under the same absent-source-skippable
+    // guard the dist-pwa backup uses: only a MISSING coord.db is skippable,
+    // a failed snapshot must abort before rsync --delete touches anything.
+    expect(serverBranch).toContain('backup-coord.mjs');
+    const guardAt = serverBranch.indexOf('[ ! -f ~/.ccrc/coord.db ]');
+    expect(guardAt, 'the coord.db snapshot must be absent-source-skippable, never failure-skippable')
+      .toBeGreaterThan(-1);
+    const rsyncAt = serverBranch.indexOf('rsync -az');
+    expect(rsyncAt).toBeGreaterThan(-1);
+    expect(guardAt, 'the snapshot must be taken BEFORE rsync rewrites the tree')
+      .toBeLessThan(rsyncAt);
+    expect(/cp[^\n]*coord\.db/.test(deploySh),
+      'coord.db must never be backed up with cp — a WAL database cp is a silent partial backup')
+      .toBe(false);
+  });
+
+  it('both branches prune timestamped backups to a bounded set, without failing a completed deploy', () => {
+    // Stage 0, finding: ~/ccrc-backups grows without bound on both boxes and
+    // sits outside the only disk guard (which watches WORKTREES_ROOT alone).
+    const fn = /prune_backups\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no prune_backups() helper').toBeTruthy();
+    const body = fn![1]!;
+    // Timestamped dirs ONLY: ~/ccrc-backups also holds hand-made dirs (a real
+    // `pre-flip-agent-dist` exists on the fleet host today) that a bare
+    // `ls | head` sweep would silently destroy.
+    expect(body, 'prune must match only YYYYMMDD-HHMMSS dirs, never hand-made ones')
+      .toContain('[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]');
+    expect(body).toContain('head -n -');
+    expect(body).toContain('xargs -r rm -rf');
+
+    // Called on BOTH branches, after each branch's own verification — and a
+    // prune failure WARNS rather than failing the run: by that point the
+    // deploy has verifiably succeeded, and a nonzero exit would report
+    // failure for services that are live and green (the same lie class,
+    // pointing the other way, as the 409-after-completion this PR fixes).
+    const pruneCalls = [...deploySh.matchAll(/prune_backups\s*\|\|\s*echo[^\n]*>&2/g)];
+    expect(pruneCalls.length, 'both branches must prune, and a prune failure must warn, not abort')
+      .toBe(2);
+    // ONE PER BRANCH, not two anywhere (review finding: count+order alone
+    // passed with both calls in the server branch). The `else` splits the
+    // file; each branch's prune must live on its own side, after its own
+    // chain's execution.
+    const elseAt = deploySh.indexOf('\nelse');
+    const agentCmdAt = deploySh.indexOf('"$AGENT_CMD"');
+    const remoteCmdAt = deploySh.indexOf('"$REMOTE_CMD"');
+    const firstPrune = deploySh.indexOf('prune_backups ||');
+    const lastPrune = deploySh.lastIndexOf('prune_backups ||');
+    expect(firstPrune, 'agent-branch prune must follow the verified chain').toBeGreaterThan(agentCmdAt);
+    expect(firstPrune, 'the first prune call must be in the AGENT branch').toBeLessThan(elseAt);
+    expect(lastPrune, 'server-branch prune must follow the verified chain').toBeGreaterThan(remoteCmdAt);
+    expect(lastPrune, 'the second prune call must be in the SERVER branch').toBeGreaterThan(elseAt);
   });
 
   it('both rsync lines exclude the mail token, so `ship_secret`\'s hardening is not undone by a plain copy', () => {
