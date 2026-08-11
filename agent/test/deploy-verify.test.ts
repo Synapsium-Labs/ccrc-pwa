@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -304,6 +304,51 @@ describe('the verification is actually wired into the deploy, and can observe a 
     ]) {
       expect(deploySh, `missing atomic install call: ${call}`).toContain(call);
     }
+  });
+
+  it('the agent deploy installs every systemd artifact the fleet host actually runs', () => {
+    // Stage 1 (OSS infra spec §"repo can rebuild a box"). These five artifacts
+    // existed ONLY on the live host — the guardrail drop-ins whose own comments
+    // call them "the guardrail that actually contains a runaway", the
+    // cap-scopes enforcer pair, and two repo files nothing installed
+    // (claude-session@.service, tmux.conf). A repo that cannot reproduce its
+    // own box is the root defect the whole stage exists to close.
+    for (const f of [
+      'systemd/claude-session@.service.d/limits.conf',
+      'systemd/app-claude-session.slice.d/limits.conf',
+      'systemd/ccrc-agent.service.d/protect.conf',
+      'systemd/ccd-cap-scopes.service',
+      'systemd/ccd-cap-scopes.timer',
+    ]) {
+      expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
+    }
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-cap-scopes')),
+      'the cap-scopes enforcer script is not in the repo').toBe(true);
+
+    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
+    const links = agentCmd.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    // The supervisor unit and every drop-in land BEFORE daemon-reload, so the
+    // sweep later in the branch restarts supervisors under the NEW unit set.
+    const reloadAt = links.findIndex((l) => l.includes('daemon-reload'));
+    expect(reloadAt).toBeGreaterThan(-1);
+    for (const needle of [
+      'cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/',
+      'claude-session@.service.d',
+      'app-claude\\x2dsession.slice.d',
+      'ccrc-agent.service.d',
+      'cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/',
+    ]) {
+      const at = links.findIndex((l) => l.includes(needle));
+      expect(at, `AGENT_CMD does not install: ${needle}`).toBeGreaterThan(-1);
+      expect(at, `${needle} must land before daemon-reload`).toBeLessThan(reloadAt);
+    }
+    // The timer is enabled after daemon-reload; the enforcer script goes
+    // through install_atomic like every other executable.
+    const timerAt = links.findIndex((l) => l.includes('enable --now ccd-cap-scopes.timer'));
+    expect(timerAt, 'the cap-scopes timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(deploySh).toContain('install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755');
+    expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
+    expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });
 
   it('after a new ccd lands, every claude-session@ supervisor is restarted onto it — and re-verified', () => {

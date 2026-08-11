@@ -126,8 +126,8 @@ if [ "$TARGET" = "agent" ]; then
   # `ccd caps` at boot (the 113-second lesson), so an agent restarted against
   # yesterday's ccd pins yesterday's verb set until someone restarts it again.
   # notify.sh is the ccd swap hook and lives outside the rsync tree.
-  # All four go through install_atomic — see its comment for why a plain scp
-  # over these exact files is a live correctness bug, not a style choice.
+  # All executables go through install_atomic — see its comment for why a
+  # plain scp over these exact files is a live correctness bug.
   install_atomic ccd/ccd .local/bin/ccd 755
   install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
   # session-hook.sh + its installer ship every deploy too — the installer is
@@ -135,6 +135,13 @@ if [ "$TARGET" = "agent" ]; then
   # safe to re-run against homes it already converged.
   install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh 755
   install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh 755
+  # Stage 1: the artifacts the fleet host runs but no deploy ever shipped.
+  # The cap-scopes enforcer is the OOM guardrail (see its own header for the
+  # 13-days-silently-broken postmortem); tmux.conf is how truecolor survives
+  # to the attaching client; statusline is what writes ~/.cc-limits telemetry.
+  install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
+  install_atomic ccd/tmux.conf .tmux.conf 644
+  install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
   # post-restart check an agent that throws during ESM evaluation — which
@@ -151,10 +158,24 @@ if [ "$TARGET" = "agent" ]; then
   # check. Because it is the last link of an `&&` chain, its exit status is
   # the ssh exit status, and `set -e` at the top of this file aborts the
   # deploy on it.
+  # The supervisor unit and every drop-in land BEFORE daemon-reload so the
+  # sweep below restarts supervisors under the new unit set. The slice
+  # drop-in's target dir carries systemd's \x2d escape — the repo source dir
+  # is plainly named, the DESTINATION must be the escaped name or systemd
+  # never reads it. Inside this single-quoted block, "\x2d" sits in remote
+  # double quotes, where bash preserves the backslash.
   AGENT_CMD='cd ~/ccrc/agent && npm ci && npm run build \
-    && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
+    && mkdir -p ~/.config/systemd/user \
+    && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
+    && cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/ \
+    && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
+    && cp ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/ \
+    && cp ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/" \
+    && cp ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/ \
+    && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ \
     && export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
+    && systemctl --user enable --now ccd-cap-scopes.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"
