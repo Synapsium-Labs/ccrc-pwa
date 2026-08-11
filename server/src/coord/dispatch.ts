@@ -84,10 +84,16 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
   if (typeof brief !== 'string' || brief.trim() === '') {
     return { ok: false, kind: 'bad-request' };
   }
-  // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on its
-  // own `body`, applied to the brief — `queueSystemMail` below is a SECOND
-  // producer of `mail`/`mail_deliveries` rows that used to bypass every cap
-  // the envelope's own cost model depends on.
+  // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
+  // its own `body`, applied to the brief — `queueSystemMail` below is a
+  // SECOND producer of `mail`/`mail_deliveries` rows that used to bypass
+  // every cap the envelope's own cost model depends on (`envelope.ts`'s
+  // COST paragraph: the caps exist "precisely so this paragraph's 'a few
+  // hundred' [round trips] stays the true worst case"). `server.ts` builds
+  // Fastify with no `bodyLimit` override, so without this the ceiling was
+  // Fastify's default 1 MiB — a whole plan document pasted as a wave brief
+  // types as tens of thousands of `sendPrompt` round trips, one per line,
+  // inside this session's single `KeyedQueue` slot.
   if (Buffer.byteLength(brief, 'utf8') > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES };
   }
@@ -126,17 +132,35 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
   let resumed: boolean; let clearedAt: number | null = null; let clearError: string | null = null;
 
   if (run.sessionId === null) {
-    // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never by
-    // parsing ccd's own echoed sentence — a prose line nobody wrote a
-    // contract for. BEFORE tolerates degradation (the question it answers,
-    // "which ids already exist", always tolerates degradation in the SAFE
-    // direction); AFTER never does — see the call site's own long-standing
-    // comment in the route history for why the asymmetry is the design.
+    // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
+    // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
+    // <path> (branch …)`, `ccd/ccd:1116`) — a prose line nobody wrote a
+    // contract for, and this repo has already paid for one of those. Read
+    // the registry before and after; exactly one new `workspace !== null`
+    // row for this project is the run's session.
+    // BEFORE tolerates degradation, deliberately — the question it answers
+    // ("which ids already exist") is "does this still exist", and that
+    // question tolerates degradation the same way `readRegistry`'s plain,
+    // old signature always has (a degraded or dropped row just doesn't
+    // count as pre-existing, which is always the SAFE direction to be
+    // wrong in here: at worst a real id gets treated as new and trips
+    // `ambiguous-dispatch` below, never silently misbound).
     const before = await readRegistry(deps.io, deps.cfg);
     const beforeIds = new Set(before.map((r) => r.id));
     const argv = CCD_ARGV.wsAdd(run.project);
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+    // AFTER never tolerates degradation — the question here is "is this
+    // NEW", the identity-by-subtraction this whole block performs, and
+    // THAT one must not guess. Two drops (or, under the ladder, two
+    // degraded same-project rows) could otherwise make an unrelated LIVE
+    // workspace the SOLE "new" candidate below, which this function then
+    // binds, holds and /clear's — a running worker's context destroyed
+    // because of a read failure on a DIFFERENT session entirely. This is
+    // the asymmetry to preserve on any future "simplification" of this
+    // block back to a plain `readRegistry` call: BEFORE answers "does this
+    // still exist" (tolerant); AFTER answers "is this new" (never
+    // tolerant).
     const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!afterRead.listed ||
         afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
@@ -166,7 +190,38 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
     resumed = true;
     // The live registry, falling back to the run row — the identical
-    // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason.
+    // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason
+    // (see `DoneRun`'s own docstring): the live registry is the fresher
+    // source, the run row is what is left when it cannot answer.
+    //
+    // REFUSE before the busy gate and before EITHER of workspace/branch is
+    // persisted onto the run row below (`coord.markDispatched`) — registry
+    // ladder, and the spot the design names as most likely to get
+    // "simplified" back into a bug, so the reasoning is written at the
+    // call site rather than only in the spec: an unmeasured value
+    // persisted by `markDispatched` STOPS being a transient read and
+    // BECOMES a fact the run row carries forever; and a degraded
+    // `record.uuid` (`''`) fed to `readHookState` below looks up a
+    // hookstate file that matches no real one, reading back `null` —
+    // which the busy gate treats as "not busy" — silently turning a
+    // FAIL-SHUT busy gate FAIL-OPEN on a session this read simply could
+    // not measure, not one this read proved idle.
+    //
+    // Fix (blocking review finding 7): the registry read ITSELF must not
+    // reopen that same fail-open door one level up. `readRegistry`'s old
+    // signature collapses a whole-fleet `io.readdir` failure to `[]` —
+    // exactly the shape "no such session" wears — so `record` used to come
+    // back `undefined` for TWO different facts this function must tell
+    // apart: the session's row is genuinely absent from a LISTABLE
+    // registry (the pre-existing, tolerated "honest stale" case
+    // `DoneRun`'s own docstring names, which keeps falling back to
+    // `run.workspace`/`run.branch` below, same as always), and the
+    // registry directory itself could not be listed at all — which proves
+    // NOTHING about this session and must refuse exactly like the AFTER
+    // read some 40-odd lines above already does. `readRegistryMeasured`
+    // draws that line explicitly: `!listed` refuses OUTRIGHT, before
+    // `record` is ever computed, so `record === undefined` past this point
+    // means only the first, tolerated case — never the second.
     const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!registryRead.listed) {
       return { ok: false, kind: 'registry-unmeasurable' };
@@ -179,7 +234,19 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
     workspace = record?.workspace ?? run.workspace;
     branch = record?.branch ?? run.branch;
     // Fix, review finding 12: refuse to `/clear` a session that is
-    // OBSERVABLY mid-turn.
+    // OBSERVABLY mid-turn. `sendPrompt`'s `ok:true` can mean only "the
+    // text left the input box" — `watch.ts`'s own mail-sweep comment and
+    // `hookstate.ts`'s own docstring both say so in as many words: Claude
+    // Code silently QUEUES a prompt sent mid-turn, so "the box reads
+    // empty" is not "nothing is pending", and a `clearedAt` stamped from
+    // `sendPrompt`'s return alone would assert a measurement the server
+    // never made. This reads the SAME hookstate the mail lane's own gate
+    // reads; when it is present and says the session is still working, the
+    // dispatch is refused OUTRIGHT rather than risking exactly that false
+    // record. An UNREADABLE/absent hookstate (no prior turn, or a session
+    // whose harness has not written one yet — the ordinary shape for a
+    // workspace this fresh) is not, by itself, proof of busy-ness and is
+    // left to proceed, same as it always has.
     const hs = recordIdentity
       ? await readHookState(deps.io, deps.cfg.registryDir, sessionId, recordIdentity.uuid, Date.now())
       : null;
@@ -187,9 +254,14 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
       return { ok: false, kind: 'refused', code: 'worker-busy' };
     }
     const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
-    // A refused `/clear` is not fatal to dispatch itself — the run still
-    // lands in `dispatched` below, with `clearedAt` left null as the honest
-    // record that the second step has not run yet.
+    // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
+    // not fatal to dispatch itself — the run still lands in `dispatched`
+    // below, with `clearedAt` left null as the honest record that the
+    // second step has not run yet; a coordinator that notices retries it
+    // like any other failed step (D-1, orchestrator amendment). What
+    // "recorded" and "retried" actually need — the refusal CODE, and never
+    // queuing a brief into a context D-1's own "genuinely fresh" guarantee
+    // was never met for — is deviation D-47 below.
     clearedAt = clearRes.ok ? Date.now() : null;
     clearError = clearRes.ok ? null : clearRes.error;
   }
@@ -204,19 +276,35 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
   if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
 
   // 6: one call each, so the `run_events` row happens and is independently
-  // attributable from the dispatch write. A `/clear` refusal is RECORDED
-  // (deviation D-47): `run_events.detail` carries the typed `sendPrompt`
-  // error code an operator can otherwise only guess at.
+  // attributable from the dispatch write (`markDispatched`'s own
+  // docstring). A `/clear` refusal is now RECORDED (deviation D-47, found
+  // in Task 9 review) — D-1's own amended text promises "the refusal
+  // recorded" and nothing did: `run_events.detail` carries the typed
+  // `sendPrompt` error code (`dialog-open`/`draft-present`/`verify-failed`/
+  // `enter-ignored`/…) an operator (or Task 11's own record) can otherwise
+  // only guess at.
   coord.markDispatched(id, sessionId, workspace, branch, resumed);
   if (clearedAt !== null) coord.setClearedAt(id, clearedAt);
   const adv = coord.advance(id, 'dispatched', 'coordinator',
     clearError !== null ? `clear-refused:${clearError}` : undefined);
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
 
-  // 7: the brief, as MAIL — never injected directly, and (deviation D-47)
-  // queued ONLY when the worker's context is one it can actually land in:
-  // wave 1 has never had anything else written into it, and wave N>=2's
-  // `/clear` must have actually VERIFIED.
+  // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
+  // injected directly, and (deviation D-47) queued ONLY when the worker's
+  // context is one it can actually land in: wave 1 has never had anything
+  // else written into it, and wave N>=2's `/clear` must have actually
+  // VERIFIED. Queuing unconditionally, as before, meant a refused `/clear`
+  // still queued a brief into the resumed, un-cleared context — the exact
+  // hazard D-1's "genuinely fresh context" sentence exists to make
+  // mechanical rather than hopeful. Concretely, on `enter-ignored` the
+  // literal text `/clear` is left sitting in the worker's own input box
+  // (`send.ts`'s own `draft` return); the delivery lane's very next sweep
+  // calls `sendPrompt` with no `replaceDraft`, so it would hit
+  // `draft-present` immediately and keep hitting it — parking the brief
+  // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS`, with nothing
+  // surfacing WHY. `clearError` (this outcome's own field) is the signal a
+  // coordinator needs to decide what to do next; `POST /api/mail` stays
+  // open to send the brief directly once the context is actually fresh.
   const briefQueued = !resumed || clearedAt !== null;
   if (briefQueued) {
     queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body: brief });

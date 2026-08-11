@@ -73,6 +73,22 @@ class CoordMutex {
  * below is byte-identical to what the route used to build inline, field for
  * field, so the response contract this suite pins did not move even though
  * the decision that produces it did.
+ *
+ * TOTALITY (fix round 1, finding 1/3): `server/tsconfig.json` sets neither
+ * `noImplicitReturns` nor anything else that would make a `switch` with no
+ * `default` a compile error, and this was — measured — the first
+ * union->status switch in the tree: adding a member to `DispatchOutcome` and
+ * handling it nowhere typechecked clean (`npx tsc --noEmit` exit 0), and at
+ * runtime the switch falls off its end, this function returns `undefined`,
+ * and an async Fastify handler resolving to `undefined` with `reply.send()`
+ * never called answers `FST_ERR_PROMISE_NOT_FULFILLED` — a 500 on exactly
+ * the path this typed union promised was total. The `default` arm below
+ * makes that a TYPE error instead: `r` is narrowed to `never` by every case
+ * above being exhaustive, so a future variant with no arm here fails
+ * `const _exhaustive: never = r` at compile time, before it ever reaches a
+ * request. The runtime 500 is the fallback for the one case the type system
+ * cannot prevent — a built artefact running against a `DispatchOutcome`
+ * shape newer than itself.
  */
 function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
   if (r.ok) {
@@ -99,12 +115,17 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+    }
   }
 }
 
 /** `closeRun`'s typed result union -> HTTP status + body. Same discipline as
  *  `sendDispatchOutcome` just above: byte-identical to the shapes the route
- *  used to build inline. */
+ *  used to build inline, and the same totality guard (fix round 1,
+ *  finding 1/3) — see that function's own docstring for the measurement. */
 function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
   if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state });
   switch (r.kind) {
@@ -117,6 +138,10 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+    }
   }
 }
 

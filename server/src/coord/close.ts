@@ -66,10 +66,18 @@ export async function closeRun(deps: CloseRunDeps, id: number, body: unknown): P
     // re-measure against and no worker to mail a rejection back to.
     return { ok: false, kind: 'refused', code: 'not-dispatched' };
   }
-  // A second precondition, read-only, checked BEFORE the fleet act (D-48,
-  // the close-route half of D-46's same ordering fix for dispatch): a run
-  // that cannot legally reach `closing` from its CURRENT state must never
-  // reach the fleet act at all.
+  // A second precondition, read-only, checked BEFORE the fleet act (fix,
+  // found in Task 9 review — D-48, the close-route half of D-46's same
+  // ordering fix for dispatch): a run that cannot legally reach `closing`
+  // from its CURRENT state — already `done`/`failed` (a second close), or
+  // still `planned` (sessionId set at OPEN time for a wave N>=2 reclaim,
+  // but never actually dispatched) — must never reach the fleet act at
+  // all. Without this, moving the fleet act ahead of the transition commit
+  // below would have made a double-close run `ws-release`/`ws-hold`/
+  // `ws-archive` a SECOND time before discovering the transition was
+  // always going to be refused — trading one wedge for another.
+  // `advance()` below still re-checks the live row and is still the only
+  // WRITER of `state`.
   if (!RUN_TRANSITIONS[run.state].includes('closing')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'closing' };
   }
@@ -145,8 +153,19 @@ export async function closeRun(deps: CloseRunDeps, id: number, body: unknown): P
 
   // 4: the transition, the handoff commit, the outstanding-delivery
   // cancellation and the program-retirement check — as ONE transaction
-  // (`CoordStore.closeRun`'s own docstring has the full reasoning). Only a
-  // SHAPE-VALID handoff commit is ever passed through to be written.
+  // now (fix, review finding 25: `closeRun` below replaces two
+  // INDEPENDENT `advance()` calls that used to let a crash, a full-disk
+  // write failure, or a SIGTERM landing between them wedge the run in
+  // `closing` PERMANENTLY — see `CoordStore.closeRun`'s own docstring for
+  // the full reasoning, including why it also folds in review findings
+  // 8/14's delivery cancellation and D-51's program retirement). Only a
+  // SHAPE-VALID handoff commit is ever passed through to be written (fix,
+  // review findings 6/18): `verifyDone` is skipped entirely on an
+  // abandon (`state:'failed'`, D-49), so its own 40-hex `SHA` check never
+  // ran over `claim.handoffCommit` on that path — checking it again here,
+  // independent of whether `verifyDone` ran, closes the gap without
+  // reintroducing a re-measurement an abandon has nothing left to
+  // re-measure against.
   const handoffCommit = HANDOFF_SHA.test(claim.handoffCommit) ? claim.handoffCommit : null;
   const closed = coord.closeRun({
     runId: id, finalState: state, causedBy: 'coordinator', handoffCommit, program: run.program,
