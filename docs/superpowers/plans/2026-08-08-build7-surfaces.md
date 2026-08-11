@@ -2845,7 +2845,8 @@ Expected: PASS, and every new rule appears in the measured census. **Nothing new
 **Amendment (Task 8 fix round 1, 2026-08-11): the census half was never actually checked — measured now.** The
 original execution verified only that `pwa/design/` had an empty diff against `a6b75757` (true, and still the right
 basis for "nothing new registered") and, on that basis alone, called the whole step "trivial (no CSS changed by this
-branch)" — false: `fleet.css` +104, `chat.css` +115. Nobody ran `contrast-check.mjs --uncovered` and looked at what
+branch)" — false: `fleet.css` +118, `chat.css` +123 as of the residual sweep (measured +104/+115 at Task 8 fix
+round 1; later rounds grew both). Nobody ran `contrast-check.mjs --uncovered` and looked at what
 this branch actually added. Measured: pre-branch (`a6b75757`) is `ALL 300 PASS`, 207 uncovered; the tree as handed
 over was `ALL 310 PASS` (the five new self-grounded rules — `.mail-badge-count`, `.mail-row`, `.runs-group-head`,
 `.run-row`, `.mail-strip-count` — × 2 themes), 237 uncovered, of which exactly 30 are this branch's own (`comm -13`
@@ -2972,7 +2973,8 @@ and is false. Eleven `pwa` test files read `fleet.css`/`chat.css` as TEXT (`rule
 specifically scrapes `min-height` off the sheet and bans a bare `44px` literal, so a stylesheet-only edit absolutely
 can change a non-CSS-gate suite's outcome. The same false premise appeared twice more, as a flat factual error: the
 implementer's report called Step 3 "trivial (no CSS changed by this branch)" and the commit message said "no CSS
-changed on this branch" — `git diff --stat a6b75757..HEAD -- '*.css'` is `fleet.css +104, chat.css +115`, 219 lines.
+changed on this branch" — `git diff --stat a6b75757..HEAD -- '*.css'` is `fleet.css +118, chat.css +123`, 241 lines
+as of the residual sweep (+104/+115, 219 when first measured at Task 8 fix round 1).
 What is actually unchanged is `pwa/design/` (GROUNDS/INHERITED_GROUNDS/SELF_GROUNDED_EXEMPT), which is the correct,
 narrower basis for "nothing new registered" — the conclusion held, the reason given did not.
 
