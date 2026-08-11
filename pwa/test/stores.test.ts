@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatEvent, Dialog, FleetSession, HookAsk, SessionStreamMsg } from '../../shared/api';
+import type { ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
@@ -53,11 +53,17 @@ const emptySnap = (): SessionSnapshot => ({
   dialog: null,
   ask: null,
   tasks: [],
+  mail: [],
   missingFile: null,
 });
 
 const askFixture: HookAsk = {
   questions: [{ question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }],
+};
+
+const mailFixture: MailSummary = {
+  id: 1, at: 1_754_000_000_000, fromId: 'coordinator', toId: 's1', runId: 3,
+  kind: 'question', subject: 'rebase before you start?', artifacts: [], state: 'delivered',
 };
 
 /** Minimal scripted WebSocket stand-in for store connect() tests. */
@@ -254,6 +260,22 @@ describe('session store optimistic send', () => {
 
     store.getState().disconnect();
     expect(store.getState().ask).toBeNull();
+  });
+
+  // Fix round 1, finding 3's named residual: `sessionws.ts`'s own
+  // per-connection sentinel now states the mail truth explicitly on every
+  // fresh connect (including an empty one), which is the primary fix — this
+  // pins the client's own belt-and-braces for the one corner that sentinel
+  // cannot reach, a box whose coordination database is absent entirely
+  // (`checkMail`'s `!this.deps.coord` early return sends no frame at all,
+  // ever, on that server process).
+  it('disconnect() clears outstanding mail, the same belt-and-braces `ask` already gets', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'mail', mail: [mailFixture] });
+    expect(store.getState().mail).toEqual([mailFixture]);
+
+    store.getState().disconnect();
+    expect(store.getState().mail).toEqual([]);
   });
 
   it('disconnect() leaves the scraped dialog untouched — that channel is re-scraped fresh every poll', () => {
@@ -484,9 +506,14 @@ describe('fleet store', () => {
       store.getState().connect();
       lastSocket().open();
 
+      expect(store.getState().runsFrameSeen).toBe(false);
       const runs = [runSummary(1, 'working')];
       lastSocket().message(JSON.stringify({ type: 'runs', runs }));
       expect(store.getState().runs).toEqual(runs);
+      // `RunsScreen` (fix round 1, task 5, findings 1/3) reads this to tell
+      // "the frame genuinely said nothing" apart from "no frame has arrived
+      // yet" — a well-formed frame must flip it, even one carrying `[]`.
+      expect(store.getState().runsFrameSeen).toBe(true);
       store.getState().disconnect();
     });
 
@@ -501,7 +528,115 @@ describe('fleet store', () => {
       // it explicitly here so nobody "helpfully" makes the parser throw.
       expect(() => lastSocket().message(JSON.stringify({ type: 'runs' }))).not.toThrow();
       expect(store.getState().runs).toEqual([]);
+      // Dropped, not accepted — a malformed frame must not flip the "the
+      // socket has genuinely spoken" flag either.
+      expect(store.getState().runsFrameSeen).toBe(false);
       store.getState().disconnect();
+    });
+
+    it('a well-formed frame carrying `[]` still flips `runsFrameSeen` — an honest empty roster is not silence', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'runs', runs: [] }));
+      expect(store.getState().runs).toEqual([]);
+      expect(store.getState().runsFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+  });
+
+  // Review finding 18: `feed` used to have exactly two producers — the
+  // catch-up tail (volatile: the mark it reads advances one-way at receipt,
+  // so a reload landing after the tail already ran sees nothing left to ask
+  // for) and `GET /api/feed` on `/mail`'s own mount (which most sessions
+  // never open). The unread-mail BADGE (FleetScreen) is computed off `feed`
+  // and is mounted for the app's whole lifetime — nothing durable ever
+  // hydrated it at boot, so a reload or a PWA eviction between the tail's
+  // last advance and now made real unread mail read as zero.
+  describe('the durable feed read on connect (fix, review finding 18)', () => {
+    it('asks GET /api/feed once on the first successful connect, and merges it into `feed`', async () => {
+      const fetchFeed = vi.fn(async () => ({
+        events: [
+          { at: 1, seq: 1, kind: 'mail' as const, title: 'from the durable read', body: '', sessionId: 's1' },
+        ],
+      }));
+      const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
+      store.getState().connect();
+      lastSocket().open();
+
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(store.getState().feed.map((e) => e.title)).toEqual(['from the durable read']));
+      store.getState().disconnect();
+    });
+
+    it('does not ask again on a later reconnect once the first read has already succeeded', async () => {
+      const fetchFeed = vi.fn(async () => ({ events: [] }));
+      const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
+      store.getState().connect();
+      lastSocket().open();
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(1));
+
+      // A reconnect (server bounce, backoff) re-fires `onOpen` — the durable
+      // read must not repeat once it has already landed successfully.
+      lastSocket().open();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchFeed).toHaveBeenCalledTimes(1);
+      store.getState().disconnect();
+    });
+
+    it('retries on the NEXT reconnect if the first attempt failed (offline at boot)', async () => {
+      let calls = 0;
+      const fetchFeed = vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('offline');
+        return { events: [{ at: 1, seq: 1, kind: 'mail' as const, title: 'landed on retry', body: '', sessionId: 's1' }] };
+      });
+      const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
+      store.getState().connect();
+      lastSocket().open();
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(1));
+
+      lastSocket().open(); // reconnect
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(store.getState().feed.map((e) => e.title)).toEqual(['landed on retry']));
+      store.getState().disconnect();
+    });
+  });
+
+  describe('feedDropped', () => {
+    // feedDropped's own docstring: "how many records the LAST read could not
+    // place at all" — not a running total. `/mail`'s mount effect calls
+    // `mergeFeed(events, d)` against `GET /api/feed`, an IDEMPOTENT re-read;
+    // mounting the screen twice against the same three permanently-unreadable
+    // rows must report "3" both times, not "3" then "6".
+    it('reports the LAST mergeFeed call\'s drop count, not the sum across calls', () => {
+      const store = createFleetStore();
+      store.getState().mergeFeed([], 3);
+      expect(store.getState().feedDropped).toBe(3);
+      store.getState().mergeFeed([], 3); // same re-read, same three unreadable rows
+      expect(store.getState().feedDropped).toBe(3); // NOT 6
+    });
+
+    it('clearFeed resets it to 0', () => {
+      const store = createFleetStore();
+      store.getState().mergeFeed([], 2);
+      store.getState().clearFeed();
+      expect(store.getState().feedDropped).toBe(0);
+    });
+
+    // The catch-up tail (`connect()`'s `askCatchUp`) calls `mergeFeed` with NO
+    // dropped argument — `applyCatchUp` never counts what it silently drops,
+    // so it has no honest number to give. A `dropped = 0` DEFAULT would read
+    // that silence as "confirmed nothing lost" and stomp a real count
+    // `/mail`'s mount had just set from `GET /api/feed`. Omitting the argument
+    // must leave `feedDropped` untouched, never reset it to 0.
+    it('a call with no dropped argument (the catch-up tail) never clobbers a real count with a fabricated 0', () => {
+      const store = createFleetStore();
+      store.getState().mergeFeed([], 3); // GET /api/feed: 3 rows this build could not read
+      expect(store.getState().feedDropped).toBe(3);
+      store.getState().mergeFeed([]); // a later catch-up tail — no idea how many, if any
+      expect(store.getState().feedDropped).toBe(3); // NOT 0
     });
   });
 

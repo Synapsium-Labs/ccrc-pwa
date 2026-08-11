@@ -1263,10 +1263,18 @@ interface AccountDef {
    *  cross-language fixture test, not merely asserted here. */
   ccdValid: boolean;
   /** `install-session-hooks.sh`'s default `homes` array installs
-   *  `session-hook.sh` here. `claude-dev0` is false TODAY — the "silent mail
-   *  hole on the fifth account" the architecture doc's increment 2 closes,
-   *  not this one. The cross-language fixture test pins that this is still
-   *  an ACCURATE description of the bash, not that it is a desirable one. */
+   *  `session-hook.sh` here, AND — since PR J's install lane —
+   *  `install-coordinator-skill.sh`'s own default `homes` array installs the
+   *  coordinator skill here too (same fallback shape, same reason: both
+   *  install lanes derive their homes from this one field). Both installers
+   *  already `continue` past a home whose directory does not exist, so
+   *  `true` for an account with no config dir on a given box is a no-op
+   *  there, never a crash. `claude-dev0` is `true`: the architecture doc's
+   *  increment 2 — "the hooks install lane derives its homes from the
+   *  roster, closing the silent mail hole on the fifth account" — is what
+   *  flipped it, from the `false` it carried before PR J. The cross-language
+   *  fixture test pins BOTH bash arrays against this field, not just the
+   *  session-hooks one. */
   hooksAble: boolean;
 }
 
@@ -1312,7 +1320,7 @@ export const ACCOUNTS: Record<Wrapper, AccountDef> = {
     // what the pre-roster pwa map already fell back to for a wrapper it
     // didn't recognise, so giving it a REAL entry here must not repaint it.
     configDirSuffix: '.claude-dev0', idPrefix: 'claude-dev0-', label: 'claude-dev0',
-    colorVar: '--ink-tertiary', homeAble: false, ccdValid: false, hooksAble: false,
+    colorVar: '--ink-tertiary', homeAble: false, ccdValid: false, hooksAble: true,
   },
 };
 
@@ -1499,6 +1507,15 @@ export type SessionStreamMsg =
   | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
   | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
+  /** This session's own OUTSTANDING mail — `state` restricted server-side to
+   *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
+   *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
+   *  the same way `tasks` reads `readTasks` — NOT a client of the
+   *  box-token-gated `GET /api/mail?to=` (`coord/routes.ts`'s
+   *  `requireMailToken`): that route authenticates the anonymous box->server
+   *  ingress and a browser has no business holding that secret. Replaced
+   *  wholesale, like `tasks`, because it is a statement about the present. */
+  | { type: 'mail'; mail: MailSummary[] }
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
   | { type: 'notice'; message: string };
 
@@ -1836,6 +1853,59 @@ export const MAIL_REJECT_CODES = [
   'stale-tip', 'tip-unmeasurable', 'pr-regressed', 'pr-unmeasurable', 'no-handoff-commit',
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
+
+/**
+ * Every TYPED run-refusal code declared for `POST /api/runs`,
+ * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
+ * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT
+ * ALREADY A `MailRejectCode` — the done-authority re-measurement codes
+ * (`stale-tip`/`tip-unmeasurable`/`pr-regressed`/`pr-unmeasurable`/
+ * `no-handoff-commit`) and `unknown-run`/`oversize` are shared verbatim with
+ * the mail routes (`verifyDone` backs both `POST .../close` and
+ * `POST .../advance`, and both re-use `MailRejectCode` for it) and are
+ * DELIBERATELY not repeated here — a run refusal is either a member of this
+ * union or of `MAIL_REJECT_CODES`, never both, so the two are checked
+ * TOGETHER by the scanner below rather than merged into one list.
+ *
+ * NOT the complete set of ways those four routes can refuse a request: none
+ * of `error:'unsupported'` (501, an unsupported ccd verb), `error:'bad-request'`
+ * (400, a malformed body) or a bare 502 `{ok:false, stderr}` (a failed fleet
+ * act) carries a code from this union, from `MailRejectCode`, or from
+ * anywhere else — those are a separate, untyped refusal shape, and a caller
+ * that assumes every non-2xx response here carries a `RunRefuseCode` is wrong.
+ *
+ * `Record<RunRefuseCode, true>` is the `PR_REASON_MAP` idiom (above), but a
+ * NARROWER guarantee than that idiom's own docstring claims for itself: it
+ * is a compile error HERE for this list to lose a member `RUN_REFUSE_CODE_MAP`
+ * still has, or to gain one it does not. It is NOT a compile error — or any
+ * error — at a call site that actually SENDS a refusal: no route in
+ * `server/src` types its `refused`/`error` field as `RunRefuseCode`, every
+ * one sends a bare inline string literal, so a route emitting a code this
+ * union has never seen is not caught here. The one runtime check on the
+ * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
+ * cannot see a single-word code by construction (it matches only hyphenated
+ * tokens) — `paused`, a member of this very union, is invisible to it. Ten
+ * codes exist below today; the next new one would be the eleventh, not the
+ * ninth.
+ */
+export type RunRefuseCode =
+  | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
+  | 'ambiguous-dispatch' | 'worker-busy' | 'not-dispatched' | 'prhistory-unreadable'
+  | 'bad-transition';
+
+const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
+  'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
+  'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true, 'not-dispatched': true,
+  'prhistory-unreadable': true, 'bad-transition': true,
+};
+export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
+
+/** The validator that goes with the list — `isPrReason`'s own shape and the
+ *  same reason: `unknown` in, so nothing is smuggled past by claiming it is
+ *  already a code, and the CONSTANT is cast rather than the input. */
+export function isRunRefuseCode(v: unknown): v is RunRefuseCode {
+  return typeof v === 'string' && (RUN_REFUSE_CODES as readonly string[]).includes(v);
+}
 
 /** Work-item counts for one run. `items`, never `tasks` (D-7). */
 export interface RunItemTally { done: number; total: number }

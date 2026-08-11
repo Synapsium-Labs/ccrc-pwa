@@ -3,108 +3,20 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
-import { readHookState } from '../hookstate.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
-import { sendPrompt } from '../inject/send.js';
 import { tx } from './db.js';
-import { toRunSummary, type CoordStore, type RunRow } from './store.js';
+import { toRunSummary, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
-import { readPrHistory } from './prhistory.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
+import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
+import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   isRunState, isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, RUN_TRANSITIONS, type MailKind, type MailRejectCode, type RunState,
+  MAIL_SUBJECT_MAX_BYTES, RUN_TRANSITIONS, type MailRejectCode, type RunState,
   type RunSummary,
 } from '../../../shared/api.js';
-
-/** The 40-hex `SHA` shape check `fingerprint.ts`'s `verifyDone` runs on a
- *  done claim — mirrored here (fix, review findings 6/18), NOT imported,
- *  because `verifyDone` is deliberately SKIPPED on an explicit abandon
- *  (`state:'failed'`, D-49) and `runs.handoffCommit` had exactly ONE writer
- *  either way that ran the check: before this fix, an abandon's own
- *  `claim.handoffCommit` reached `coord.setHandoffCommit` with no shape
- *  validation at all — the 40-hex test and the `handoffCommit === branchTip`
- *  correspondence rule lived in exactly the one place (`verifyDone`) the
- *  abandon path bypasses. Correspondence is NOT re-checked here on purpose:
- *  an abandon has no re-measured `branchTip` to correspond against (that is
- *  what D-49 skips), so this route only ever asserts the SHAPE, never the
- *  match. */
-const HANDOFF_SHA = /^[0-9a-f]{40}$/;
-
-/** `$REG/mail-disabled` — the SAME kill-switch `watch.ts`'s `sweepMail`
- *  already gates on (its own `MAIL_DISABLED_MARKER`), read a second time
- *  here rather than imported (fix, review finding 17): dispatch's own
- *  registry listing already covers `COORDINATOR_PAUSE_MARKER` below, and a
- *  second literal is lower-risk than an import into a file `watch.ts`
- *  itself does not depend on. Before this fix, dispatch consulted ONLY the
- *  coordinator-pause marker: an operator who `touch`ed this one to silence
- *  injection mid-debugging still got `ccd ensure` + an injected `/clear`
- *  wiping the worker's context, with the wave brief queued but held by the
- *  very kill-switch the operator raised — the worker sat in an EMPTY,
- *  `/clear`ed context for as long as the marker stood, invisible to
- *  anything short of reading the pane. */
-const MAIL_DISABLED_MARKER = 'mail-disabled';
-
-/** `$REG/coordinator-paused` — spec:199-205: "no verb, no route, no way for
- *  the coordinator to unpause itself." Deliberately not `-disabled`-suffixed
- *  like `mail-disabled`: `limits.ts:134-142` filters `<name>-disabled`
- *  markers out of `/api/accounts` as candidate wrapper names, and this is not
- *  a lane kill-switch — it must not read as one there. */
-const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
-
-/** The standing hold-reason convention (`registry.ts:26-46`, spec:120-123):
- *  DISPLAY-ONLY, never parsed back anywhere in this tree — the run row's own
- *  `program`/`wave`/`waveOf` columns are what every route and the store
- *  actually read. Shared by the open route's immediate hold, dispatch's own
- *  hold, and close's hold-reason update to the next wave, so the three
- *  places this string is built can never drift apart from one another. */
-const holdReason = (program: string, wave: number, waveOf: number | null): string =>
-  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}`;
-
-/**
- * The coordinator's OWN mail — the wave brief (dispatch) and a done-claim
- * rejection mailed back (close) — queued DIRECTLY rather than through
- * `POST /api/mail`'s ingress. The ingress exists to police attribution for a
- * message this server did not originate (spec:136-148: a box token
- * authenticates the box, `{fromId,fromUuid}` is verified against the
- * registry); a message the SERVER itself is sending has no sender session to
- * be stale about, so re-entering that gate would be checking a fact that
- * cannot fail against itself. `'coordinator'` is used as both `fromId` and
- * `fromUuid` — a fixed ROLE identity, not a registry row, the same role
- * `resolveCoordinator`'s own docstring already treats `toId:'coordinator'`
- * as. Mirrors the ingress route's own tx shape exactly (insert mail, insert
- * delivery so its own id exists, render the envelope AGAINST THE DELIVERY ID,
- * land it) — see that route's comment on `setDeliveryEnvelope` for why the
- * two ids cannot be assumed to walk together.
- */
-function queueSystemMail(
-  coord: CoordStore,
-  run: Pick<RunRow, 'program' | 'wave' | 'waveOf'>,
-  m: { toId: string; runId: number; kind: MailKind; subject: string; body: string },
-): void {
-  // Review finding 33: don't requeue an identical outstanding system mail.
-  // The two calls in this file — `wave-brief` (dispatch) and
-  // `wave-done-rejected` (close, on a re-measurement refusal) — each have
-  // at most ONE outstanding instance in flight per run by construction; a
-  // retry landing here again (the coordinator's own retry loop, or a few
-  // taps of a PWA button) is restating a fact the recipient has already
-  // been told, not a new one, and previously inserted a fresh `mail` +
-  // `mail_deliveries` row — a fresh, non-collapsing push (spec:236-237) and
-  // a fresh `feed_events` row — on EVERY retry, unbounded. `recordRejection`
-  // (the close route's own audit log) is unaffected: this only guards the
-  // MAIL queue, never the record of the refusal itself.
-  if (coord.hasOutstandingMail(m.runId, m.toId, m.subject)) return;
-  tx(coord.db, () => {
-    const inserted = coord.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: m.toId,
-      runId: m.runId, kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    const delivery = coord.queueDelivery(inserted.id, m.toId, '');
-    const envelope = renderEnvelope({ id: delivery.id, fromId: 'coordinator', toId: m.toId, runId: m.runId,
-      program: run.program, wave: run.wave, waveOf: run.waveOf,
-      kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    coord.setDeliveryEnvelope(delivery.id, envelope);
-  });
-}
 
 /**
  * One coordinator-wide async mutex, serialising the WRITE routes' bodies
@@ -155,6 +67,85 @@ class CoordMutex {
 }
 
 /**
+ * `dispatchRun`'s typed result union -> HTTP status + body (architecture doc
+ * increment 4: "the routes become union->status maps"). The ONLY place in
+ * this file that turns a `DispatchOutcome` into wire JSON — every shape
+ * below is byte-identical to what the route used to build inline, field for
+ * field, so the response contract this suite pins did not move even though
+ * the decision that produces it did.
+ *
+ * TOTALITY (fix round 1, finding 1/3): `server/tsconfig.json` sets neither
+ * `noImplicitReturns` nor anything else that would make a `switch` with no
+ * `default` a compile error, and this was — measured — the first
+ * union->status switch in the tree: adding a member to `DispatchOutcome` and
+ * handling it nowhere typechecked clean (`npx tsc --noEmit` exit 0), and at
+ * runtime the switch falls off its end, this function returns `undefined`,
+ * and an async Fastify handler resolving to `undefined` with `reply.send()`
+ * never called answers `FST_ERR_PROMISE_NOT_FULFILLED` — a 500 on exactly
+ * the path this typed union promised was total. The `default` arm below
+ * makes that a TYPE error instead: `r` is narrowed to `never` by every case
+ * above being exhaustive, so a future variant with no arm here fails
+ * `const _exhaustive: never = r` at compile time, before it ever reaches a
+ * request. The runtime 500 is the fallback for the one case the type system
+ * cannot prevent — a built artefact running against a `DispatchOutcome`
+ * shape newer than itself.
+ */
+function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
+  if (r.ok) {
+    return reply.code(200).send({
+      ok: true, id: r.id, sessionId: r.sessionId, resumed: r.resumed, clearedAt: r.clearedAt,
+      briefQueued: r.briefQueued, ...(r.clearError !== null ? { clearError: r.clearError } : {}),
+    });
+  }
+  switch (r.kind) {
+    case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    case 'bad-transition':
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
+    case 'oversize': return reply.code(413).send({ ok: false, error: 'oversize', limit: r.limit });
+    case 'refused': {
+      const extra: Record<string, number> = {};
+      if (r.limit !== undefined) extra.limit = r.limit;
+      if (r.running !== undefined) extra.running = r.running;
+      if (r.used !== undefined) extra.used = r.used;
+      if (r.candidates !== undefined) extra.candidates = r.candidates;
+      return reply.code(409).send({ ok: false, refused: r.code, ...extra });
+    }
+    case 'registry-unmeasurable': return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
+    case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
+    case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
+    case 'advanceFailed': return reply.code(409).send(r.adv);
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+    }
+  }
+}
+
+/** `closeRun`'s typed result union -> HTTP status + body. Same discipline as
+ *  `sendDispatchOutcome` just above: byte-identical to the shapes the route
+ *  used to build inline, and the same totality guard (fix round 1,
+ *  finding 1/3) — see that function's own docstring for the measurement. */
+function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state });
+  switch (r.kind) {
+    case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    case 'bad-transition':
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
+    case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
+    case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
+    case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
+    case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
+    case 'advanceFailed': return reply.code(409).send(r.adv);
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+    }
+  }
+}
+
+/**
  * The coordination routes. Registered from `buildServer` rather than declared
  * there, because `server.ts` is already the file whose whole discipline is not
  * holding a second copy of a contract, and six more routes inline would be six
@@ -167,6 +158,9 @@ class CoordMutex {
  *
  * MAIL LIVES HERE; RUN ROUTES ARE TASK 9's, in this same file — both share the
  * token+attribution gate, and splitting it would be two copies of that gate.
+ * Dispatch's and close's own DECISIONS live in `dispatch.ts`/`close.ts`
+ * (architecture doc increment 4); this file keeps the token gate, the
+ * `CoordMutex` and the union->status maps.
  */
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
@@ -583,18 +577,38 @@ export function registerCoordRoutes(
    * other coordinator routes (contract item 6): unlike the ingress and ack
    * routes, this is a read with no attribution to check — the box token
    * alone is the gate.
+   *
+   * Default state predicate (fix, review findings 4/21): this docstring has
+   * called it "outstanding mail" since it was written, but until now the
+   * query underneath was `mailForRecipient` — full history, every state,
+   * `queued`/`delivered`/`acked`/`rejected` alike, with no state predicate at
+   * all. `wave-lifecycle.md:83` tells the coordinator "to see what is
+   * outstanding" this is the call to make; a coordinator that took that
+   * literally got back every delivery it had already acked and acted on too,
+   * indistinguishable from new work. `outstandingMailFor` (`queued`/
+   * `delivered`, plus a delivery the lane gave up retrying before anyone
+   * ever acted on it — `OUTSTANDING_OR_ABANDONED_SQL`, fix, review finding
+   * 2) is the definition this build already gave `MailStrip`'s own frame
+   * (`store.ts`) — this route now answers with the SAME definition by
+   * default, so there is exactly one meaning of "outstanding" in the tree.
+   * `?all=1` opts back into the unfiltered
+   * history read for a caller that genuinely wants it (a debugging session,
+   * an operator inspecting `/mail`) — `mailForRecipient` is not deleted, only
+   * no longer the default a doc calls "outstanding".
    */
   app.get('/api/mail', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'GET /api/mail')) return;
     const coord = deps.coord;
 
-    const q = req.query as { to?: unknown; limit?: unknown };
+    const q = req.query as { to?: unknown; limit?: unknown; all?: unknown };
     if (typeof q.to !== 'string' || q.to.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const limit = typeof q.limit === 'string' ? Number(q.limit) : undefined;
-    return reply.code(200).send({ ok: true, mail: coord.mailForRecipient(q.to, limit) });
+    const all = q.all === '1' || q.all === 'true';
+    const mail = all ? coord.mailForRecipient(q.to, limit) : coord.outstandingMailFor(q.to, limit);
+    return reply.code(200).send({ ok: true, mail });
   });
 
   // ── runs (Task 9) ──────────────────────────────────────────────────────
@@ -695,12 +709,14 @@ export function registerCoordRoutes(
   });
 
   /**
-   * Dispatch a run: pause and caps checked FIRST, then either a fresh
-   * workspace (wave 1) or a resumed one with an injected `/clear` (wave N>=2,
-   * deviation D-1), then the hold, then the transition, then the brief — as
-   * MAIL, never injected directly (a fresh pane is `working` for its first
-   * seconds, and the delivery lane's own gate is exactly the thing that knows
-   * when it is not).
+   * Dispatch a run. THE DECISION — pause/caps preconditions, the fresh-spawn
+   * vs resume+/clear branch (D-1), the hold, the transition and the brief —
+   * lives in `dispatch.ts`'s `dispatchRun` (architecture doc increment 4,
+   * "deciding split from acting"). This route is now a union->status map:
+   * parse `:id` and the body, run the decision behind the SAME `coordMutex`
+   * that used to wrap the whole closure (unmoved — see that class's own
+   * docstring above), and translate its typed result onto a status code and
+   * body (`sendDispatchOutcome`, just above `registerCoordRoutes`).
    */
   app.post('/api/runs/:id/dispatch', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -711,306 +727,21 @@ export function registerCoordRoutes(
     const id = Number(idParam);
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    return coordMutex.run(async () => {
-    // Read again, INSIDE the mutex (fix, review findings 4/11/23/24): a
-    // second `POST .../dispatch` for the SAME run now only ever starts
-    // running its body after the FIRST one has fully committed (or failed)
-    // — `coordMutex` above queues the whole route body, so this read is no
-    // longer separated from the write that settles it by the several
-    // `await`s over live fleet acts that used to let a retried request
-    // read a still-`planned` row and run `ccd ensure`/`/clear` a SECOND
-    // time into a worker the first request had already resumed and briefed.
-    const run = coord.run(id);
-    if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
-    // Precondition (D-46; now genuinely a CLAIM rather than a stale read —
-    // see the mutex comment just above): `RUN_TRANSITIONS.dispatched` has no
-    // self-edge (`dispatched -> dispatched` is illegal). `advance()` below
-    // still re-checks the live row and is still the only WRITER of `state`;
-    // this only answers the question early enough that `ccd ensure`/
-    // `/clear`/`ws-add`/`ws-hold` never fire for a transition that was
-    // always going to be refused.
-    if (run.state !== 'planned') {
-      return reply.code(409).send({ ok: false, error: 'bad-transition', from: run.state, to: 'dispatched' });
-    }
-
     const body = (req.body ?? {}) as { brief?: unknown };
-    if (typeof body.brief !== 'string' || body.brief.trim() === '') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
-    // its own `body`, applied to the brief — `queueSystemMail` below is a
-    // SECOND producer of `mail`/`mail_deliveries` rows that used to bypass
-    // every cap the envelope's own cost model depends on (`envelope.ts`'s
-    // COST paragraph: the caps exist "precisely so this paragraph's 'a few
-    // hundred' [round trips] stays the true worst case"). `server.ts` builds
-    // Fastify with no `bodyLimit` override, so without this the ceiling was
-    // Fastify's default 1 MiB — a whole plan document pasted as a wave brief
-    // types as tens of thousands of `sendPrompt` round trips, one per line,
-    // inside this session's single `KeyedQueue` slot.
-    if (Buffer.byteLength(body.brief, 'utf8') > MAIL_BODY_MAX_BYTES) {
-      return reply.code(413).send({ ok: false, error: 'oversize', limit: MAIL_BODY_MAX_BYTES });
-    }
-    const brief = body.brief;
-
-    // 1: PAUSE / KILL-SWITCH FIRST, before anything is counted or spawned. A
-    // directory we cannot list is a pause we cannot rule out — fail-shut,
-    // the identical idiom `watch.ts`'s mail sweep uses for its own
-    // `mail-disabled` kill-switch marker, and for the same reason.
-    // spec:201-205: "no verb, no route, no way for the coordinator to
-    // unpause itself" — there is deliberately no
-    // `POST /api/coordinator/resume` anywhere in this build.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null || names.includes(COORDINATOR_PAUSE_MARKER)) {
-      return reply.code(409).send({ ok: false, refused: 'paused' });
-    }
-    // Fix, review finding 17: dispatch used to consult ONLY the pause
-    // marker, so an operator who raised `mail-disabled` to silence
-    // injection mid-debugging still got `ccd ensure` + an injected `/clear`
-    // wiping the worker's context — the wave brief then queued but held by
-    // the very kill-switch the operator raised, leaving the worker sitting
-    // in an EMPTY, `/clear`ed context with no instructions and nothing
-    // surfacing why. Refusing outright (rather than merely skipping the
-    // `/clear`) means the run stays `planned` and the retry, once the
-    // operator lifts the marker, gets a genuinely fresh dispatch.
-    if (names.includes(MAIL_DISABLED_MARKER)) {
-      return reply.code(409).send({ ok: false, refused: 'mail-disabled' });
-    }
-
-    // 2: caps. The refusal carries the numbers — a cap that refuses without
-    // saying what it is is indistinguishable from a bug.
-    const caps = coord.caps();
-    const usage = coord.capsUsage();
-    if (usage.running >= caps.maxConcurrentWorkers) {
-      return reply.code(409).send({ ok: false, refused: 'cap-concurrency',
-        limit: caps.maxConcurrentWorkers, running: usage.running });
-    }
-    if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
-      return reply.code(409).send({ ok: false, refused: 'cap-daily',
-        limit: caps.maxSessionsPerDay, used: usage.dispatchedIn24h });
-    }
-
-    let sessionId: string; let workspace: string | null; let branch: string | null;
-    let resumed: boolean; let clearedAt: number | null = null; let clearError: string | null = null;
-
-    if (run.sessionId === null) {
-      // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
-      // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
-      // <path> (branch …)`, `ccd/ccd:1116`) — a prose line nobody wrote a
-      // contract for, and this repo has already paid for one of those. Read
-      // the registry before and after; exactly one new `workspace !== null`
-      // row for this project is the run's session.
-      // BEFORE tolerates degradation, deliberately — the question it answers
-      // ("which ids already exist") is "does this still exist", and that
-      // question tolerates degradation the same way `readRegistry`'s plain,
-      // old signature always has (a degraded or dropped row just doesn't
-      // count as pre-existing, which is always the SAFE direction to be
-      // wrong in here: at worst a real id gets treated as new and trips
-      // `ambiguous-dispatch` below, never silently misbound).
-      const before = await readRegistry(deps.io, deps.cfg);
-      const beforeIds = new Set(before.map((r) => r.id));
-      const argv = CCD_ARGV.wsAdd(run.project);
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-      // AFTER never tolerates degradation — the question here is "is this
-      // NEW", the identity-by-subtraction this whole block performs, and
-      // THAT one must not guess. Two drops (or, under the ladder, two
-      // degraded same-project rows) could otherwise make an unrelated LIVE
-      // workspace the SOLE "new" candidate below, which this route then
-      // binds, holds and /clear's — a running worker's context destroyed
-      // because of a read failure on a DIFFERENT session entirely. This is
-      // the asymmetry to preserve on any future "simplification" of this
-      // block back to a plain `readRegistry` call: BEFORE answers "does this
-      // still exist" (tolerant); AFTER answers "is this new" (never
-      // tolerant).
-      const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
-      if (!afterRead.listed ||
-          afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
-        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
-      }
-      const after = afterRead.records;
-      const candidates = after.filter((r) =>
-        !beforeIds.has(r.id) && r.project === run.project && r.workspace !== null);
-      if (candidates.length !== 1) {
-        // Nothing claimed on a guess: the run stays `planned`, no hold placed
-        // — the operator resolves it.
-        return reply.code(409).send({ ok: false, refused: 'ambiguous-dispatch', candidates: candidates.length });
-      }
-      const winner = candidates[0]!;
-      sessionId = winner.id; workspace = winner.workspace; branch = winner.branch;
-      resumed = false;
-      // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY
-      // — before the hold, which can still 501/502 two steps below. Without
-      // this, a workspace `ws-add` just spawned was invisible to
-      // `capsUsage()` (keyed on `dispatchedAt`, still null) and to the run
-      // row (`sessionId` still null) until `markDispatched` at the very end
-      // — so a failed hold left an ORPHAN workspace that no row, cap or
-      // route knew about, and a retry (now reading `run.sessionId === null`
-      // again) spawned a SECOND one. `CoordStore.setSession` already existed
-      // for the open route's own wave-N>=2 reclaim; this is the same write,
-      // moved earlier on the wave-1 path.
-      coord.setSession(id, sessionId);
-    } else {
-      // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
-      // spawn fresh into an existing one), then discard the resumed context
-      // with an injected `/clear` through `sendPrompt`'s full proof
-      // discipline (echo verified, draft-present refused, dialog-open
-      // refused) inside the session's own `KeyedQueue` slot — the exact move
-      // ccd itself makes with `/compact` from `_auto_compact_check`, upgraded
-      // from blind send-keys to the verified path. `/clear` rotates the
-      // harness uuid (`_sync_uuid` refreshes the registry copy within one
-      // supervise tick), so mail attribution re-arms itself in a genuinely
-      // fresh context.
-      sessionId = run.sessionId;
-      const argv = CCD_ARGV.ensure(sessionId);
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-      resumed = true;
-      // The live registry, falling back to the run row — the identical
-      // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason
-      // (see `DoneRun`'s own docstring): the live registry is the fresher
-      // source, the run row is what is left when it cannot answer.
-      //
-      // REFUSE before the busy gate and before EITHER of workspace/branch is
-      // persisted onto the run row below (`coord.markDispatched`) — registry
-      // ladder, and the spot the design names as most likely to get
-      // "simplified" back into a bug, so the reasoning is written at the
-      // call site rather than only in the spec: an unmeasured value
-      // persisted by `markDispatched` STOPS being a transient read and
-      // BECOMES a fact the run row carries forever; and a degraded
-      // `record.uuid` (`''`) fed to `readHookState` below looks up a
-      // hookstate file that matches no real one, reading back `null` —
-      // which the busy gate treats as "not busy" — silently turning a
-      // FAIL-SHUT busy gate FAIL-OPEN on a session this read simply could
-      // not measure, not one this read proved idle.
-      //
-      // Fix (blocking review finding 7): the registry read ITSELF must not
-      // reopen that same fail-open door one level up. `readRegistry`'s old
-      // signature collapses a whole-fleet `io.readdir` failure to `[]` —
-      // exactly the shape "no such session" wears — so `record` used to come
-      // back `undefined` for TWO different facts this route must tell
-      // apart: the session's row is genuinely absent from a LISTABLE
-      // registry (the pre-existing, tolerated "honest stale" case
-      // `DoneRun`'s own docstring names, which keeps falling back to
-      // `run.workspace`/`run.branch` below, same as always), and the
-      // registry directory itself could not be listed at all — which proves
-      // NOTHING about this session and must refuse exactly like the AFTER
-      // read 30-odd lines above already does. `readRegistryMeasured` draws
-      // that line explicitly: `!listed` refuses OUTRIGHT, before `record` is
-      // ever computed, so `record === undefined` past this point means only
-      // the first, tolerated case — never the second.
-      const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
-      if (!registryRead.listed) {
-        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
-      }
-      const record = registryRead.records.find((r) => r.id === sessionId);
-      const recordIdentity = record !== undefined ? measuredIdentity(record) : null;
-      if (record !== undefined && recordIdentity === null) {
-        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
-      }
-      workspace = record?.workspace ?? run.workspace;
-      branch = record?.branch ?? run.branch;
-      // Fix, review finding 12: refuse to `/clear` a session that is
-      // OBSERVABLY mid-turn. `sendPrompt`'s `ok:true` can mean only "the
-      // text left the input box" — `watch.ts`'s own mail-sweep comment and
-      // `hookstate.ts`'s own docstring both say so in as many words: Claude
-      // Code silently QUEUES a prompt sent mid-turn, so "the box reads
-      // empty" is not "nothing is pending", and a `clearedAt` stamped from
-      // `sendPrompt`'s return alone would assert a measurement the server
-      // never made. This reads the SAME hookstate the mail lane's own gate
-      // reads; when it is present and says the session is still working, the
-      // dispatch is refused OUTRIGHT rather than risking exactly that false
-      // record. An UNREADABLE/absent hookstate (no prior turn, or a session
-      // whose harness has not written one yet — the ordinary shape for a
-      // workspace this fresh) is not, by itself, proof of busy-ness and is
-      // left to proceed, same as it always has.
-      const hs = recordIdentity
-        ? await readHookState(deps.io, deps.cfg.registryDir, sessionId, recordIdentity.uuid, Date.now())
-        : null;
-      if (hs !== null && hs.state !== 'done') {
-        return reply.code(409).send({ ok: false, refused: 'worker-busy' });
-      }
-      const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
-      // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
-      // not fatal to dispatch itself — the run still lands in `dispatched`
-      // below, with `clearedAt` left null as the honest record that the
-      // second step has not run yet; a coordinator that notices retries it
-      // like any other failed step (D-1, orchestrator amendment). What
-      // "recorded" and "retried" actually need — the refusal CODE, and never
-      // queuing a brief into a context D-1's own "genuinely fresh" guarantee
-      // was never met for — is deviation D-47 below.
-      clearedAt = clearRes.ok ? Date.now() : null;
-      clearError = clearRes.ok ? null : clearRes.error;
-    }
-
-    // 5: hold, behind `verbSupported` — the standing convention reason
-    // string, DISPLAY-ONLY and never parsed back (`registry.ts:26-46`).
-    const holdArgv = CCD_ARGV.wsHold(sessionId, holdReason(run.program, run.wave, run.waveOf));
-    if (!verbSupported(deps.fleetState, holdArgv)) {
-      return reply.code(501).send({ ok: false, error: 'unsupported' });
-    }
-    const holdRes = await deps.runCcd(holdArgv);
-    if (!holdRes.ok) return reply.code(502).send({ ok: false, stderr: holdRes.stderr });
-
-    // 6: one call each, so the `run_events` row happens and is independently
-    // attributable from the dispatch write (`markDispatched`'s own
-    // docstring). A `/clear` refusal is now RECORDED (deviation D-47, found
-    // in Task 9 review) — D-1's own amended text promises "the refusal
-    // recorded" and nothing did: `run_events.detail` carries the typed
-    // `sendPrompt` error code (`dialog-open`/`draft-present`/`verify-failed`/
-    // `enter-ignored`/…) an operator (or Task 11's own record) can otherwise
-    // only guess at.
-    coord.markDispatched(id, sessionId, workspace, branch, resumed);
-    if (clearedAt !== null) coord.setClearedAt(id, clearedAt);
-    const adv = coord.advance(id, 'dispatched', 'coordinator',
-      clearError !== null ? `clear-refused:${clearError}` : undefined);
-    if (!adv.ok) return reply.code(409).send(adv);
-
-    // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
-    // injected directly, and (deviation D-47) queued ONLY when the worker's
-    // context is one it can actually land in: wave 1 has never had anything
-    // else written into it, and wave N>=2's `/clear` must have actually
-    // VERIFIED. Queuing unconditionally, as before, meant a refused `/clear`
-    // still queued a brief into the resumed, un-cleared context — the exact
-    // hazard D-1's "genuinely fresh context" sentence exists to make
-    // mechanical rather than hopeful. Concretely, on `enter-ignored` the
-    // literal text `/clear` is left sitting in the worker's own input box
-    // (`send.ts`'s own `draft` return); the delivery lane's very next sweep
-    // calls `sendPrompt` with no `replaceDraft`, so it would hit
-    // `draft-present` immediately and keep hitting it — parking the brief
-    // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS`, with nothing
-    // surfacing WHY. `clearError` (this response's own field) is the signal
-    // a coordinator needs to decide what to do next; `POST /api/mail` stays
-    // open to send the brief directly once the context is actually fresh.
-    const briefQueued = !resumed || clearedAt !== null;
-    if (briefQueued) {
-      queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body: brief });
-    }
-
-    return reply.code(200).send({
-      ok: true, id, sessionId, resumed, clearedAt, briefQueued,
-      ...(clearError !== null ? { clearError } : {}),
-    });
-    });
+    const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
+      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue };
+    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief));
+    return sendDispatchOutcome(reply, outcome);
   });
 
   /**
-   * Close a run: re-measure the done claim (never believe it) — UNLESS the
-   * operator is explicitly ABANDONING the run (`state:'failed'`, deviation
-   * D-49): that is not a done-claim at all, so there is nothing to
-   * re-measure, and gating an abandon on the same re-measurement a done
-   * claim gets left a run whose branch tip becomes genuinely unmeasurable
-   * (a deleted branch, a reaped worktree) permanently unclosable — wedging
-   * `capsUsage().running` forever with no route in this PR able to free it.
-   * Then fold `.prhistory` (refusing to close on an unreadable ledger — a run
-   * record saying "retired no PRs" because a file could not be read is the
-   * forgery `ccd/ccd:2018-2035` names), then the FLEET ACT, then — only once
-   * it has actually succeeded — the transition (deviation D-48: the fleet
-   * act used to run AFTER the transition committed, so a 501/502 on
-   * `ws-release` wedged a run terminally `done`/`failed` with its hold never
-   * released and `RUN_TRANSITIONS.done = []`/`.failed = []` giving no retry
-   * at all). The fleet act is a RELEASE (deviation D-5), never an autonomous
-   * archive: `FleetWatcher.archiveMerged` does that on its own clock, through
-   * its own `archiveSafety` gate.
+   * Close a run. THE DECISION — re-measure the done claim (skipped on an
+   * explicit abandon, D-49), fold `.prhistory`, the FLEET ACT, then only once
+   * it succeeds the transition (D-48: the fleet act runs AHEAD of the commit,
+   * so a failed `ws-release` leaves the run retryable, never wedged terminal)
+   * — lives in `close.ts`'s `closeRun` (architecture doc increment 4). This
+   * route is a union->status map, the same shape as dispatch's
+   * (`sendCloseOutcome`, just above `registerCoordRoutes`).
    */
   app.post('/api/runs/:id/close', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -1021,142 +752,10 @@ export function registerCoordRoutes(
     const id = Number(idParam);
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    return coordMutex.run(async () => {
-    // Read INSIDE the mutex (fix, review findings 4/25): a second, concurrent
-    // close for the SAME run now only starts after the first has fully
-    // committed (or failed) — see the dispatch route's identical comment on
-    // `coordMutex` above.
-    const run = coord.run(id);
-    if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
-    if (run.sessionId === null) {
-      // Never dispatched: there is no worker session for `verifyDone` to
-      // re-measure against and no worker to mail a rejection back to. Not one
-      // of D-3's typed `MailRejectCode`s (this is not a mail refusal) or of
-      // `AdvanceResult`'s (this is not a transition refusal either) — its own
-      // local, honest shape, on the same `refused` convention dispatch's own
-      // `ambiguous-dispatch`/`paused`/`cap-*` refusals already use.
-      return reply.code(409).send({ ok: false, refused: 'not-dispatched' });
-    }
-    // A second precondition, read-only, checked BEFORE the fleet act (fix,
-    // found in Task 9 review — D-48, the close-route half of D-46's same
-    // ordering fix for dispatch): a run that cannot legally reach `closing`
-    // from its CURRENT state — already `done`/`failed` (a second close), or
-    // still `planned` (sessionId set at OPEN time for a wave N>=2 reclaim,
-    // but never actually dispatched) — must never reach the fleet act at
-    // all. Without this, moving the fleet act ahead of the transition commit
-    // below would have made a double-close run `ws-release`/`ws-hold`/
-    // `ws-archive` a SECOND time before discovering the transition was
-    // always going to be refused — trading one wedge for another.
-    // `advance()` below still re-checks the live row and is still the only
-    // WRITER of `state`.
-    if (!RUN_TRANSITIONS[run.state].includes('closing')) {
-      return reply.code(409).send({ ok: false, error: 'bad-transition', from: run.state, to: 'closing' });
-    }
-
-    const body = (req.body ?? {}) as
-      { fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
-        final?: unknown; state?: unknown; archive?: unknown };
-    const fp = body.fingerprint;
-    if (typeof fp !== 'object' || fp === null ||
-        typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
-        typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number') ||
-        typeof body.final !== 'boolean' ||
-        (body.state !== undefined && body.state !== 'done' && body.state !== 'failed') ||
-        (body.archive !== undefined && typeof body.archive !== 'boolean')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // The claim is UNTRUSTED off the wire (`DoneClaim`'s own docstring):
-    // `verifyDone` re-validates `branchTip`/`handoffCommit`/`prPhase`/
-    // `prNumber` itself, on the strength of nothing this route asserts — when
-    // it runs at all (see D-49, step 1 below).
-    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
-      prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
-    const final = body.final;
-    const state: 'done' | 'failed' = body.state === 'failed' ? 'failed' : 'done';
-    const archive = body.archive === true;
-
-    // 1: verifyDone re-measures a DONE CLAIM (spec:127-129, "never believe a
-    // done claim"). `state:'failed'` is an explicit operator ABANDON, not a
-    // claim of doneness — there is nothing here to re-measure against
-    // (deviation D-49) — so it skips this step entirely rather than being
-    // permanently refused the moment the branch/worktree it would measure
-    // against stops existing. The run is NOT touched here either way
-    // (`fingerprint.ts`'s own docstring); this route decides.
-    if (state !== 'failed') {
-      const verdict = await verifyDone(
-        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
-        claim,
-      );
-      if (!verdict.ok) {
-        // The run state is UNCHANGED. The rejection is recorded (spec:147-148's
-        // "a rejected message is a fact about the fleet" — done-authority
-        // rejections get the identical courtesy), and a `status` mail carrying
-        // the code and detail is mailed back to the worker (spec:129-131).
-        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-        queueSystemMail(coord, run, { toId: run.sessionId, runId: id, kind: 'status',
-          subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
-        return reply.code(409).send({ ok: false, error: verdict.code, detail: verdict.detail });
-      }
-    }
-
-    // 2: `.prhistory` — refuse to close on an unreadable ledger; nothing
-    // closes.
-    const history = await readPrHistory(deps.io, deps.cfg.registryDir, run.sessionId);
-    if (!history.ok) {
-      return reply.code(409).send({ ok: false, refused: 'prhistory-unreadable' });
-    }
-    coord.foldPrLineage(id, history.entries);
-
-    // 3: the fleet act — moved ahead of the transition commit (deviation
-    // D-48). It is a RELEASE (D-5), never an autonomous archive.
-    // `state:'failed'` with `archive:true` is the ONE explicit `wsArchive`
-    // call in the whole coordination lane, mirroring
-    // `POST /api/sessions/:id/archive` including its 501 — a claim this
-    // route can now actually keep: a 501/502 here leaves `run.state`
-    // untouched, exactly like that route's own precondition-first shape,
-    // rather than arriving after the run was already committed terminal.
-    if (state === 'failed' && archive) {
-      const argv = CCD_ARGV.wsArchive(run.sessionId);
-      if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-    } else if (final) {
-      const argv = CCD_ARGV.wsRelease(run.sessionId);
-      if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-    } else {
-      const nextReason = holdReason(run.program, run.wave + 1, run.waveOf);
-      const argv = CCD_ARGV.wsHold(run.sessionId, nextReason);
-      if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-    }
-
-    // 4: the transition, the handoff commit, the outstanding-delivery
-    // cancellation and the program-retirement check — as ONE transaction
-    // now (fix, review finding 25: `closeRun` below replaces two
-    // INDEPENDENT `advance()` calls that used to let a crash, a full-disk
-    // write failure, or a SIGTERM landing between them wedge the run in
-    // `closing` PERMANENTLY — see `CoordStore.closeRun`'s own docstring for
-    // the full reasoning, including why it also folds in review findings
-    // 8/14's delivery cancellation and D-51's program retirement). Only a
-    // SHAPE-VALID handoff commit is ever passed through to be written (fix,
-    // review findings 6/18): `verifyDone` is skipped entirely on an
-    // abandon (`state:'failed'`, D-49), so its own 40-hex `SHA` check never
-    // ran over `claim.handoffCommit` on that path — checking it again here,
-    // independent of whether `verifyDone` ran, closes the gap without
-    // reintroducing a re-measurement an abandon has nothing left to
-    // re-measure against.
-    const handoffCommit = HANDOFF_SHA.test(claim.handoffCommit) ? claim.handoffCommit : null;
-    const closed = coord.closeRun({
-      runId: id, finalState: state, causedBy: 'coordinator', handoffCommit, program: run.program,
-    });
-    if (!closed.ok) return reply.code(409).send(closed);
-
-    return reply.code(200).send({ ok: true, id, state });
-    });
+    const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
+      fleetState: deps.fleetState };
+    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body));
+    return sendCloseOutcome(reply, outcome);
   });
 
   /**

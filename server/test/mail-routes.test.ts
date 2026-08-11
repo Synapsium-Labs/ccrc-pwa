@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -376,39 +376,44 @@ describe('the rejection table is total, in both directions', () => {
     }
   });
 
+  it('every declared RunRefuseCode (run-route refusals) is emitted somewhere in server/src/coord', () => {
+    // The reverse of the scan below, for `RunRefuseCode` specifically — the
+    // same both-directions discipline `MAIL_REJECT_CODES` gets above,
+    // required now that a run refusal has its own typed union (orchestrator
+    // amendment, architecture increment 3) rather than living only as an
+    // untyped string a route happened to send.
+    const src = sources();
+    for (const code of RUN_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+  });
+
   it('every quoted kebab token in server/src/coord that looks like a code is declared', () => {
     // Deliberately over-broad, then filtered by an explicit allowlist of
-    // NON-code kebab literals, so a new code cannot slip in unnamed.
+    // NON-code kebab literals, so a new code cannot slip in unnamed. A token
+    // is accepted if it is a MAIL_REJECT_CODES member OR a RunRefuseCode
+    // member (orchestrator amendment) — the two unions are checked TOGETHER,
+    // never merged into one, because a run refusal and a mail refusal are
+    // different vocabularies that happen to share this one scanner.
     const NOT_CODES = new Set([
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
       'packed-refs',         // coord/gitref.ts — a git filename
-      'bad-transition',      // coord/store.ts — AdvanceResult, not a mail code
-      'claimed-by-another',  // coord/store.ts — OpenRunResult, not a mail code
-      // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`
-      // vocabulary for `POST /api/runs*`, deliberately not `MailRejectCode`
-      // members: these refuse a fleet ACT (dispatch/close), never a mail.
+      // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
+      // `reject.code` vocabulary for `POST /api/runs*`, now typed as
+      // `RunRefuseCode` above and so no longer hand-allowlisted here.
       'coordinator-paused',   // $REG marker filename, not a code
-      'cap-concurrency',      // dispatch refusal — coordinator_state caps
-      'cap-daily',            // dispatch refusal — coordinator_state caps
-      'ambiguous-dispatch',   // dispatch refusal — zero or >1 new workspace
-      'not-dispatched',       // close refusal — no session to re-measure
-      'prhistory-unreadable', // close refusal — D-14's ladder, reused
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
-      'mail-disabled',        // $REG kill-switch marker filename, not a code (review finding 17)
-      'worker-busy',          // dispatch refusal — a live session mid-turn (review finding 12)
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
-      expect((MAIL_REJECT_CODES as readonly string[]).includes(tok), `${tok} is not a declared code`)
-        .toBe(true);
+      expect((MAIL_REJECT_CODES as readonly string[]).includes(tok) || isRunRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode or RunRefuseCode`).toBe(true);
     }
   });
 });

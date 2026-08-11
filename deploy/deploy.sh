@@ -136,6 +136,19 @@ if [ "$TARGET" = "agent" ]; then
   install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh 755
   install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
+  # The coordinator skill is the FIFTH artifact ccrc ships to the fleet host
+  # (ccd, notify.sh, session-hook.sh + its installer, and now this). The TREE
+  # rides rsync --delete so a reference file deleted in git is deleted on the
+  # box too — a stale reference is prose a model will still follow, and prose
+  # is read whole on the next open, so tree-level atomicity is not load-bearing
+  # for it. The INSTALLER is different: it gets EXECUTED, which is exactly the
+  # class install_atomic exists for — a deploy dying between scp and chmod must
+  # not leave a half-written script that the next deploy (or a curious
+  # operator) runs.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/coordinator-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/coordinator-skill/ "$BOX":.cc-sessions/coordinator-skill/
+  install_atomic ccd/install-coordinator-skill.sh .cc-sessions/install-coordinator-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-coordinator-skill.sh'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
   # post-restart check an agent that throws during ESM evaluation — which
   # `whitelist.ts` does BY DESIGN via `refuseToBoot`, and which is the one

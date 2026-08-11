@@ -130,8 +130,11 @@ const postAdvance = (app: FastifyInstance, id: number, body: unknown, token: str
 // 3/10/27's fix.
 const getRuns = (app: FastifyInstance, closed = false) =>
   app.inject({ method: 'GET', url: `/api/runs${closed ? '?closed=1' : ''}` });
-const getMail = (app: FastifyInstance, to: string, token: string | null = TOKEN) =>
-  app.inject({ method: 'GET', url: `/api/mail?to=${encodeURIComponent(to)}`, headers: tokenHeaders(token) });
+const getMail = (
+  app: FastifyInstance, to: string, token: string | null = TOKEN, extraQuery = '',
+) =>
+  app.inject({ method: 'GET', url: `/api/mail?to=${encodeURIComponent(to)}${extraQuery}`,
+    headers: tokenHeaders(token) });
 
 /** A directory listing that always fails — the ordinary transient shape in
  *  remote mode, reused from `mail-routes.test.ts`'s own fixture. */
@@ -1369,5 +1372,59 @@ describe('GET /api/mail?to= (review findings 1/15)', () => {
     const w = await openApp(home, run); app = w.app;
     const res = await app.inject({ method: 'GET', url: '/api/mail', headers: { 'x-ccrc-mail-token': TOKEN } });
     expect(res.statusCode).toBe(400);
+  });
+
+  // Test gap, I5 (measured): reverting this route to `mailForRecipient` left
+  // 194 tests green — nothing in the tree pinned the DEFAULT read as
+  // outstanding-only rather than full history. Four rows, four different
+  // fates: `queued` (in either read), `acked` (default-excluded, `?all=1`-
+  // included), a replay-ceiling park on a run that is STILL LIVE
+  // (default-included — orchestrator ruling I2's own "no path to clear it"
+  // failure mode, still outstanding until acked or its run closes), and the
+  // identical park on a run that has since closed (default-excluded by I2(a)'s
+  // derivation, `?all=1`-included regardless — history is history).
+  it('answers outstanding-only by DEFAULT — acked and a parked-with-closed-run row excluded, a parked-with-LIVE-run row included; ?all=1 answers full history (test gap, I5)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seed(home, 'demo-getmail2');
+    const toId = 'demo-getmail2';
+
+    const queueTo = (subject: string, runId: number | null): number => {
+      const mail = w.coord.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId, runId,
+        kind: 'status', subject, body: 'b', artifacts: [] });
+      return w.coord.queueDelivery(mail.id, toId, `<mail>${subject}</mail>`).id;
+    };
+
+    const queuedId = queueTo('still queued', null);
+
+    const ackedId = queueTo('acked', null);
+    w.coord.markDelivered(ackedId, Date.now());
+    w.coord.markAcked(ackedId, Date.now());
+
+    const liveRun = w.coord.openRun({ program: 'p-live', title: 'live', project: PROJECT,
+      wave: 1, waveOf: 1, claimedBy: CLAIMED_BY }) as { id: number };
+    const abandonedLiveId = queueTo('abandoned, run still live', liveRun.id);
+    w.coord.rejectDelivery(abandonedLiveId, 'undeliverable', 'replayed without ack past the replay ceiling');
+
+    const closedRun = w.coord.openRun({ program: 'p-closed', title: 'closed', project: PROJECT,
+      wave: 1, waveOf: 1, claimedBy: CLAIMED_BY }) as { id: number };
+    const abandonedClosedId = queueTo('abandoned, run now closed', closedRun.id);
+    w.coord.rejectDelivery(abandonedClosedId, 'undeliverable', 'replayed without ack past the replay ceiling');
+    w.coord.advance(closedRun.id, 'failed', 'coordinator');   // planned -> failed directly
+
+    const byDefault = await getMail(app, toId);
+    expect(byDefault.statusCode).toBe(200);
+    const defaultIds = (byDefault.json() as { mail: { id: number }[] }).mail
+      .map((m) => m.id).sort((a, b) => a - b);
+    expect(defaultIds).toEqual([queuedId, abandonedLiveId].sort((a, b) => a - b));
+
+    const everything = await getMail(app, toId, TOKEN, '&all=1');
+    expect(everything.statusCode).toBe(200);
+    const allIds = (everything.json() as { mail: { id: number }[] }).mail
+      .map((m) => m.id).sort((a, b) => a - b);
+    expect(allIds).toEqual(
+      [queuedId, ackedId, abandonedLiveId, abandonedClosedId].sort((a, b) => a - b),
+    );
   });
 });

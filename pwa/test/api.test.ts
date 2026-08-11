@@ -60,6 +60,33 @@ describe('api client', () => {
   });
 });
 
+// PR-I reconciliation item 5: `GET /api/runs` defaults to active-only
+// (`includeClosed: false`), and the archive view is `?closed=1`. Without a
+// parameter on the client method there is no data path to the archive at
+// all — the board's "split on closedAt" contract has nothing to split.
+describe('runs (active vs archive)', () => {
+  it('defaults to the active set — no query string at all', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { runs: [] }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.runs();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url] = fetchImpl.mock.calls[0] as [string];
+    expect(url).toBe('/api/runs');
+  });
+
+  it('passing true reads the archive via ?closed=1', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { runs: [] }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.runs(true);
+
+    const [url] = fetchImpl.mock.calls[0] as [string];
+    expect(url).toBe('/api/runs?closed=1');
+  });
+});
+
 describe('attachments', () => {
   it('returns where an upload landed', async () => {
     const clip = { path: '/home/u/.cc-clips/s/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };

@@ -75,7 +75,8 @@ export function renderEnvelope(m: EnvelopeInput): string {
   lines.push(
     `ack: POST /api/mail/${m.id}/ack with header x-ccrc-mail-token (the value in`,
     '  ~/.cc-secrets/ccrc-mail.token) and body {"fromId":"<your ccd id>","fromUuid":"<your uuid>"}.',
-    '  Until you ack, this message will be delivered to you again.',
+    '  Until you ack, this message is redelivered on later sweeps, up to a bounded number of',
+    '  attempts — after that the lane gives up and marks it undeliverable. Ack it promptly.',
     '--',
   );
   const head = lines.join('\n');

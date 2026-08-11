@@ -14,7 +14,9 @@ import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { KeyedQueue } from '../src/inject/queue.js';
-import type { AskQuestion, Dialog } from '../../shared/api.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ID = 'claude2-MekWarLive';
@@ -887,6 +889,321 @@ describe('session WS — dead session behind a symlinked workdir', () => {
     } finally {
       await deadApp.close();
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// Build 7, Task 6: the session's own outstanding mail, pushed the same way
+// `tasks` is — read directly off `CoordStore`, never through the box-token
+// gated `GET /api/mail?to=` (see `checkMail`'s own docstring in sessionws.ts
+// for why that route is not this stream's caller).
+describe('outstanding mail push (Build 7 Task 6)', () => {
+  let home: string;
+  let app: FastifyInstance | undefined;
+  let port: number;
+  let coord: CoordStore;
+
+  beforeEach(async () => {
+    home = mkTmp('ccrc-sws-mail-');
+    seed(home);
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    app = await buildServer(deps, new Bus());
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+  });
+
+  afterEach(async () => {
+    if (app) await app.close();
+    app = undefined;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  /** Queue a mail row + a `queued`-state delivery addressed to `toId`, the
+   *  same two-insert shape `POST /api/mail`'s own ingress runs. Returns the
+   *  DELIVERY id (`markDelivered`/`markAcked`/`rejectDelivery` all key on it). */
+  const queueTo = (toId: string, subject: string): number => {
+    const inserted = coord.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId, runId: null,
+      kind: 'question', subject, body: 'body text', artifacts: [] });
+    return coord.queueDelivery(inserted.id, toId, 'envelope').id;
+  };
+
+  it("sends this session's own outstanding (queued/delivered) mail on connect", async () => {
+    queueTo(ID, 'rebase before you start?');
+    const deliveredId = queueTo(ID, 'wave-brief');
+    coord.markDelivered(deliveredId, Date.now());
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    let mailFrame: { type: string; mail: { subject: string; state: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail.map((m) => m.subject).sort()).toEqual(['rebase before you start?', 'wave-brief']);
+    expect(mailFrame!.mail.map((m) => m.state).sort()).toEqual(['delivered', 'queued']);
+    ws.close();
+  });
+
+  // Task 8 fix round 1, finding 1: the test above waits up to 36 s across six
+  // messages — plenty of time for the first 2 s poll tick's OWN checkMail()
+  // call (`tick()`) to deliver the identical frame, so it cannot actually
+  // tell `start()`'s own call site (`if (r.ok) await this.checkMail();`)
+  // apart from the tick's. Constructing the stream directly and reading
+  // `frames` the instant `start()` resolves — never calling `tick()` at all
+  // — pins that call site specifically: deleting it (leaving the tick's call
+  // untouched) makes this red while leaving every timing-tolerant test above
+  // green.
+  it("start()'s own checkMail call puts mail on the wire before any poll tick could", async () => {
+    queueTo(ID, 'on connect, not on a tick');
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    const frames: SessionStreamMsg[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start(); // no tick() called — real timer never fires inside a sync test
+      const mailFrame = frames.find((f) => f.type === 'mail') as { mail: { subject: string }[] } | undefined;
+      expect(mailFrame).toBeDefined();
+      expect(mailFrame!.mail).toHaveLength(1);
+      expect(mailFrame!.mail[0]!.subject).toBe('on connect, not on a tick');
+    } finally {
+      stream.stop();
+    }
+  });
+
+  it('excludes acked mail and a run-closed cancellation, includes an abandoned park (review finding 2) — never queues, delivers or acks itself', async () => {
+    const ackedId = queueTo(ID, 'acked already');
+    coord.markDelivered(ackedId, Date.now());
+    coord.markAcked(ackedId, Date.now());
+    // A run-closed cancellation is moot by design, not abandonment — stays
+    // excluded (`cancelOutstandingDeliveries`'s own shape).
+    const runClosedId = queueTo(ID, 'run closed already');
+    coord.rejectDelivery(runClosedId, 'undeliverable', 'run closed');
+    // A genuine abandonment — the lane gave up before anyone acted on it —
+    // stays visible here (fix, review finding 2): never acked, never acted
+    // on, so it must not vanish from the strip the moment the lane stops
+    // retrying it.
+    const abandonedId = queueTo(ID, 'abandoned already');
+    coord.rejectDelivery(abandonedId, 'undeliverable', 'replayed without ack past the replay ceiling');
+    queueTo(ID, 'still outstanding');
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    const subjects = mailFrame!.mail.map((m) => m.subject).sort();
+    expect(subjects).toEqual(['abandoned already', 'still outstanding']);
+    ws.close();
+  });
+
+  it('carries more than 100 genuinely outstanding deliveries (fix, review finding 25)', async () => {
+    // `outstandingMailFor`'s bare default (100) is sized for a route
+    // argument nobody controls; this caller is in-process, and every
+    // worker's mail resolves to the coordinator session across every wave
+    // of a program (store.ts's own docstring) — the run-of-the-mill victim
+    // of exactly this cap. `MailStrip.tsx` prints `mail.length` as its
+    // headline COUNT, not a page indicator, so a silent 100-row ceiling
+    // used to read as a cap wearing the clothes of a fact. 105 queued
+    // deliveries, oldest first, must ALL arrive.
+    const N = 105;
+    for (let i = 0; i < N; i++) queueTo(ID, `mail ${i}`);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    let mailFrame: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail).toHaveLength(N);
+    ws.close();
+  });
+
+  // Fix round 1 (findings 1/3): this INVERTS what the test used to pin. A
+  // fresh connection with nothing outstanding used to be swallowed silently
+  // by the same `lastMailJson === null` first-read gate `checkTasks` still
+  // has — exactly the bug `lastAskJson`'s `undefined` sentinel exists to
+  // rule out for `ask` (see that field's own comment). Every fresh connect
+  // must now state the mail truth explicitly, even when it is empty, the
+  // same discipline `ask_cleared` already had — a possibly-stale client can
+  // only be corrected by an explicit answer, never by silence.
+  it('states the mail truth explicitly on every fresh connect, even when it is empty', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    const first = await nextIgnoringAsk(next, 6000);
+    expect(first.type).toBe('backlog');
+    let mailFrame: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail).toEqual([]);
+    ws.close();
+  });
+
+  // MEASURED, not inferred (fix round 1, finding 3): a fresh `SessionStream`
+  // — literally what every reconnect is, automatic or explicit (`start()`) —
+  // must not go on asserting mail the recipient already acked while the
+  // socket was down. Before this fix, `lastMailJson` started at `null`, so a
+  // fresh connection whose own first read was already `[]` (the delivery
+  // had been acked while nobody was listening) matched the swallow and sent
+  // NOTHING — the client kept whatever stale list an earlier connection had
+  // shown it.
+  it('a reconnect after an ack while the socket was down states the truth, not the stale list', { timeout: 15_000 }, async () => {
+    const deliveryId = queueTo(ID, 'stale after ack');
+
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next1 = collect(ws1);
+    await opened(ws1);
+    let firstMail: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !firstMail; i++) {
+      const m = await next1(6000);
+      if (m.type === 'mail') firstMail = m;
+    }
+    expect(firstMail?.mail).toHaveLength(1);
+    expect(firstMail!.mail[0]!.subject).toBe('stale after ack');
+    ws1.close();
+
+    // Acked WHILE THE SOCKET IS DOWN — the exact failure scenario: a
+    // ReconnectingSocket reconnect never runs the PWA's own disconnect(),
+    // and even disconnect() never touched `mail` before this fix round.
+    coord.markDelivered(deliveryId, Date.now());
+    coord.markAcked(deliveryId, Date.now());
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next2 = collect(ws2);
+    await opened(ws2);
+    let secondMail: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !secondMail; i++) {
+      const m = await next2(6000);
+      if (m.type === 'mail') secondMail = m;
+    }
+    expect(secondMail).toBeDefined();
+    expect(secondMail!.mail).toEqual([]);
+    ws2.close();
+  });
+
+  it('pushes freshly queued mail on the next poll tick', { timeout: 15_000 }, async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+    await nextIgnoringAsk(next, 6000); // backlog — nothing outstanding yet
+
+    // Drain the initial explicit empty `mail` frame this fix now always
+    // sends on first check (finding 3) before asserting on the one the poll
+    // tick pushes — otherwise this loop would catch that first empty frame
+    // and never see the one `queueTo` below actually produces.
+    let initialMail: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !initialMail; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') initialMail = m;
+    }
+    expect(initialMail?.mail).toEqual([]);
+
+    queueTo(ID, 'fresh mail after connect');
+    let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail).toHaveLength(1);
+    expect(mailFrame!.mail[0]!.subject).toBe('fresh mail after connect');
+    ws.close();
+  });
+
+  // Task 8 fix round 1, finding 1: the sibling `ask` gate has exactly this
+  // case pinned ('does not resend when the hookstate file is rewritten with
+  // an unchanged ask' — hook ask envelope frames, line 295); `checkMail`'s
+  // own change gate (`if (json === this.lastMailJson) return;`) never had
+  // one. Undetected, deleting that gate would put a `mail` frame on the wire
+  // every ~2 s poll tick, for the life of every session socket, whether or
+  // not anything changed.
+  it('does not resend an unchanged mail list on a later poll tick', { timeout: 15_000 }, async () => {
+    queueTo(ID, 'steady state');
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+    await nextIgnoringAsk(next, 6000); // backlog
+
+    let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame?.mail).toHaveLength(1);
+
+    // The store is untouched from here on — collect everything that arrives
+    // over two more real poll ticks (POLL_MS = 2 s in sessionws.ts) and
+    // confirm no second `mail` frame is among it. A deleted change gate
+    // fails this deterministically (one extra frame per tick), unlike the
+    // pre-existing 'pushes freshly queued mail' test, which only proves a
+    // CHANGE gets sent and says nothing about an UNCHANGED one.
+    const deadline = Date.now() + 5000;
+    const extra: { type: string }[] = [];
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      try {
+        extra.push(await next(remaining));
+      } catch {
+        break; // timed out waiting — nothing else arrived in the window
+      }
+    }
+    expect(extra.filter((m) => m.type === 'mail')).toHaveLength(0);
+    ws.close();
+  });
+
+  it('sends no mail frame at all with no coord configured — the same absent-store silence every coord route answers', async () => {
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const noCoordApp = await buildServer(deps, new Bus());
+    await noCoordApp.listen({ host: '127.0.0.1', port: 0 });
+    const addr = noCoordApp.server.address();
+    const noCoordPort = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${noCoordPort}/ws/session/${ID}`);
+      const next = collect(ws);
+      await opened(ws);
+      const first = await nextIgnoringAsk(next, 6000);
+      expect(first.type).toBe('backlog');
+      await expect(nextIgnoringAsk(next, 300)).rejects.toThrow();
+      ws.close();
+    } finally {
+      await noCoordApp.close();
     }
   });
 });

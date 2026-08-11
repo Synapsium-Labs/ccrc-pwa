@@ -5,6 +5,7 @@ import { FLEET_PROTO, type FleetMsg, type FleetSession, type NotifyEvent, type R
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
+import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
@@ -25,35 +26,78 @@ export interface FleetState {
    *  (offline-persisted, or a store that never saw a frame) reads as usable. */
   blocked: boolean;
   /**
-   * Notifications the server RECORDED since this device last asked — i.e.
-   * since the previous fleet-socket open, because that is the only moment the
-   * watermark advances.
+   * The durable notification feed, rendered by `/mail` on receipt.
    *
-   * Not "while this device was away", which is what this said and what nothing
-   * here can prove: a phone connected, awake and pushed the whole time gets
-   * exactly the same list, since the mark only moves on connect. Not "what
-   * this device failed to receive" either — the log records what the server
-   * DECIDED to raise, before delivery (`watch.ts`'s `pushOne`), so it can
-   * legitimately name events that were delivered and read.
+   * Formerly `missed`, and the rename is the point: `applyCatchUp` advances
+   * the durable mark ONE-WAY the moment its response lands, so these events
+   * are volatile and can never be asked for again — `notifymark.ts`'s
+   * docstring says whoever renders them first "must not call it missed, and
+   * must render it on receipt". `/mail` ships in the same PR as this rename.
    *
-   * Nothing renders this today. Whatever eventually does must not call it
-   * missed, and must render it on receipt: `applyCatchUp` advances the durable
-   * mark the moment the response lands, one-way, so these events are volatile
-   * and can never be asked for again.
+   * Not "while this device was away": a phone connected, awake and pushed the
+   * whole time gets exactly the same list, since the mark only moves on
+   * connect. Not "what this device failed to receive" either — the log
+   * records what the server DECIDED to raise, before delivery (`watch.ts`'s
+   * `pushOne`), so it can legitimately name events that were delivered and
+   * read.
+   *
+   * Two sources merged by record identity, not by `seq` alone (`lib/feed.ts`):
+   * the catch-up tail on every socket open, and `GET /api/feed` when `/mail`
+   * mounts (so the inbox is not empty after every deploy — the durable table
+   * survives one, the 200-event in-memory ring never did). Capped at
+   * FEED_CAP from the old end.
    *
    * Empty after a resync — see `lib/notifymark.ts` for why nothing is ever
    * surfaced retroactively in that case.
    */
-  missed: NotifyEvent[];
+  feed: NotifyEvent[];
+  /** How many records the last read could not place at all (no seq/at) — the
+   *  one case `reviveNotifyEvents` cannot degrade. Surfaced on the screen
+   *  rather than swallowed: a feed that loses a record silently is the one
+   *  failure this surface exists to prevent. */
+  feedDropped: number;
   /** Build 7's run board reads this. PR I fills it; PR J renders it. Shape-
    *  validated only at the frame level (an array of runs), the same depth
-   *  `fleet` is: `reviveFleetSession`-grade revival for runs is PR J's problem
-   *  when it has a renderer to protect. */
+   *  `fleet` is — per-row tolerance (a state this build's vocabulary has no
+   *  key for, a row with no `items`) is the renderer's job now that one
+   *  exists to protect: `pwa/src/fleet/runWords.ts`'s `runState`/`runItems`,
+   *  never a cast at this boundary (fix round 1, task 5, finding 2). */
   runs: RunSummary[];
+  /** Has `/ws/fleet` ever actually sent a `{type:'runs'}` frame THIS store
+   *  instance's lifetime — never reset, including across a reconnect, the
+   *  same "sticky until replaced" stance `runs`/`sessions` themselves take.
+   *  `runs.length > 0` cannot answer this: an active-only frame legitimately
+   *  broadcasts `[]` the moment the fleet's last open run closes, and that
+   *  empty array is indistinguishable from "nothing has arrived yet" by
+   *  content alone. `RunsScreen` needs the distinction to know whether `runs`
+   *  is CURRENT truth (trust it, including empty) or simply unset (fall back
+   *  to the cold `GET /api/runs` read instead) — without this flag, a run
+   *  that closes gets resurrected by a stale cold snapshot the moment the
+   *  live frame it should have deferred to says `[]` (fix round 1, task 5,
+   *  findings 1 and 3). */
+  runsFrameSeen: boolean;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
-  clearMissed(): void;
+  /** Union `events` into `feed` by record identity (`lib/feed.ts`'s
+   *  `${at}:${seq}`, never `seq` alone — `seq` resets to 0 on an epoch
+   *  rotation, so two different records can share one) — later wins a
+   *  collision — and, WHEN `dropped` is supplied, set `feedDropped` to it:
+   *  the LAST read's count (its own docstring: not a running total; each
+   *  read, including a re-mount of `/mail`, reports for itself).
+   *
+   *  `dropped` is OPTIONAL, not defaulted to 0, on purpose. The catch-up tail
+   *  (`connect()`'s `askCatchUp`) calls this with events only — `applyCatchUp`
+   *  silently drops unrevivable events without counting them, so it has no
+   *  honest number to give, and 0 would assert "nothing was dropped" when the
+   *  truth is "this source cannot say". Omitting the argument leaves
+   *  `feedDropped` exactly as a prior `GET /api/feed` read left it, so a
+   *  reconnect's catch-up can never fabricate a false all-clear over a real
+   *  count `/mail`'s mount already surfaced. The one mutator both the
+   *  catch-up tail and `GET /api/feed` go through, so the two sources can
+   *  never diverge on merge policy. */
+  mergeFeed(events: NotifyEvent[], dropped?: number): void;
+  clearFeed(): void;
 }
 
 const asFleetMsg = (m: unknown): FleetMsg | null => {
@@ -85,6 +129,9 @@ export interface FleetStoreDeps {
   makeSocket?: (url: string) => WebSocket;
   /** Injectable so a test can drive the catch-up without a server. */
   catchUp?: (epoch: string | null, seq: number) => Promise<import('../../../shared/api').CatchUp>;
+  /** Injectable so a test can drive the durable feed read without a server —
+   *  same reason `catchUp` above is. Defaults to `api.feed`. */
+  fetchFeed?: (limit: number) => Promise<{ events: import('../../../shared/api').NotifyEvent[] }>;
 }
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
@@ -107,9 +154,11 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       sessions: loadFleetSnapshot()?.sessions ?? [],
       conn: 'connecting',
       notices: [],
-      missed: [],
+      feed: [],
+      feedDropped: 0,
       blocked: false,
       runs: [],
+      runsFrameSeen: false,
 
       connect() {
         if (socket) return;
@@ -117,15 +166,15 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         // connect, including automatic reconnects — a phone that slept through
         // a question is exactly the case this exists for. Never awaited and
         // never allowed to reject: the fleet stream is the thing that matters,
-        // and a catch-up that fails simply leaves `missed` empty, which is the
-        // honest answer.
+        // and a catch-up that fails simply leaves `feed` unchanged, which is
+        // the honest answer.
         //
         // SERIALISED, because the mark is one value with one owner. A
         // reconnect storm (backoff of 500 ms against a request that has not
         // answered yet) opens the socket again while the first catch-up is
         // still in flight; unchained, the second reads the same STALE mark,
         // asks for the same range, and whichever response lands last is what
-        // gets persisted — so the mark can go BACKWARDS and `missed` can gain
+        // gets persisted — so the mark can go BACKWARDS and `feed` can gain
         // duplicates. Chaining makes the second request read the mark the
         // first one wrote, which is both correct and what it would have asked
         // for anyway. `run` never rejects, so the chain cannot break.
@@ -136,11 +185,41 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
           return fetchCatchUp(mark?.epoch ?? null, mark?.seq ?? 0)
             .then((r) => {
               const events = applyCatchUp(r);
-              if (events.length > 0) set((s) => ({ missed: [...s.missed, ...events] }));
+              if (events.length > 0) get().mergeFeed(events);
             })
             .catch(() => { /* offline, or an older server with no such route */ });
         };
         const askCatchUp = (): void => { chain = chain.then(run); };
+
+        // The durable half of the unread-mail count (fix, review finding
+        // 18): `feed` had exactly two producers before this — the catch-up
+        // tail above, which is VOLATILE (the mark it reads advances one-way
+        // at receipt, so a reload that lands after the tail already ran sees
+        // nothing left to ask for), and `GET /api/feed` on `/mail`'s own
+        // mount, which most sessions never open. Nothing hydrated `feed` at
+        // boot, so a badge computed off it read real unread mail as "0" the
+        // moment a reload or a PWA eviction intervened between the mark's
+        // last advance and now — the ack watermark (`ccrc:feed`, durable,
+        // localStorage) still knew better, but nothing asked the one OTHER
+        // durable source that agrees with it. One `GET /api/feed` read, on
+        // the FIRST successful connect only (`done` flips true only on
+        // success, so a connect that opens offline still gets one on the
+        // next reconnect) — `mergeFeed` (`lib/feed.ts`'s `mergeBySeq`) dedupes
+        // it against the catch-up tail by record identity, so this can never
+        // double-count.
+        let durableFeedDone = false;
+        const askDurableFeed = (): void => {
+          if (durableFeedDone) return;
+          const fetchFeed = deps.fetchFeed ?? ((n: number) => api.feed(n));
+          void fetchFeed(100)
+            .then((r) => {
+              durableFeedDone = true;
+              const { events, dropped } = reviveNotifyEvents(r.events);
+              get().mergeFeed(events, dropped);
+            })
+            .catch(() => { /* offline, or an older server with no such route — retry next reconnect */ });
+        };
+
         socket = new ReconnectingSocket({
           url: () => wsUrl('/ws/fleet'),
           onMessage: (m) => {
@@ -166,14 +245,15 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               set({ blocked });
             } else if (msg.type === 'runs') {
               // Shape-validated only at the frame level (`asFleetMsg`'s own
-              // `Array.isArray` check) — PR J's renderer is what needs
-              // `reviveFleetSession`-grade per-row revival, once it exists to
-              // protect.
-              set({ runs: msg.runs });
+              // `Array.isArray` check) — RunsScreen's own `runWords.ts`
+              // (`runState`/`runItems`) is where a malformed ROW degrades.
+              // `runsFrameSeen` flips once and stays flipped: the frame has
+              // now genuinely spoken, even the FIRST time it says `[]`.
+              set({ runs: msg.runs, runsFrameSeen: true });
             }
           },
           onState: (conn) => set({ conn }),
-          onOpen: askCatchUp,
+          onOpen: () => { askCatchUp(); askDurableFeed(); },
           makeSocket: deps.makeSocket,
         });
         socket.start();
@@ -192,8 +272,32 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
       },
 
-      clearMissed() {
-        set({ missed: [] });
+      mergeFeed(events, dropped) {
+        // NOT `s.feedDropped + dropped`: `feedDropped`'s own docstring says
+        // "the last read", not a running total. `GET /api/feed` is an
+        // idempotent, whole-source re-read — `/mail` calls this on every
+        // mount — so re-reading the SAME permanently-unreadable rows on a
+        // second visit must report the SAME count, not double it. Accumulating
+        // here made three permanently-dropped rows read as "3" on the first
+        // visit, "6" on the second, "9" on the third: a fabricated, ever-
+        // growing loss count on the one screen whose job is to be a truthful
+        // record.
+        //
+        // AND not a bare `dropped = 0` default either: the catch-up tail calls
+        // this with no second argument at all, because `applyCatchUp` never
+        // counts what it silently drops. Treating that omission as "0" would
+        // fabricate an all-clear the moment a reconnect's catch-up landed,
+        // overwriting whatever real count `GET /api/feed` had just reported.
+        // `dropped === undefined` is the caller saying "I don't know" — the
+        // only honest answer is to leave the field exactly as it was.
+        set((s) => ({
+          feed: mergeBySeq(s.feed, events),
+          feedDropped: dropped === undefined ? s.feedDropped : dropped,
+        }));
+      },
+
+      clearFeed() {
+        set({ feed: [], feedDropped: 0 });
       },
     };
   });
