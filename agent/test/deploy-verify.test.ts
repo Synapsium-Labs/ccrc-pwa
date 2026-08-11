@@ -522,4 +522,33 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(example, `ccrc.env.example does not document ${v}`).toContain(v);
     }
   });
+
+  it('every deploy stamps ~/.ccrc/build.json on the target — from the LOCAL git tree, before services restart', () => {
+    // Stage 1's central artifact: the "from" and "to" that update/skew
+    // detection needs. Computed locally (the rsynced ~/ccrc tree on the box
+    // is NOT a git repo), shipped like every other file (install_atomic:
+    // temp + rename, so a reader never sees a torn stamp).
+    const fn = /stamp_build\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no stamp_build() helper').toBeTruthy();
+    const body = fn![1]!;
+    // The sha/ref/dirty facts are computed at top level (they serve BOTH
+    // branches and Task 8's assertions); the helper's job is the shipping.
+    expect(deploySh).toContain('BUILD_SHA="$(git rev-parse HEAD)"');
+    expect(deploySh, 'the stamp must state dirtiness, not hide it').toContain('git diff --quiet');
+    expect(body).toContain('"$BUILD_SHA"');
+    expect(body).toContain('install_atomic');
+    expect(body).toContain('.ccrc/build.json');
+
+    // Called on BOTH branches, before each branch's remote build+restart
+    // chain executes.
+    const agentBranchStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
+    const elseAt = deploySh.indexOf('\nelse');
+    const agentStamp = deploySh.indexOf('stamp_build', agentBranchStart);
+    expect(agentStamp, 'agent branch never stamps').toBeGreaterThan(agentBranchStart);
+    expect(agentStamp).toBeLessThan(deploySh.indexOf('"$AGENT_CMD"'));
+    expect(agentStamp).toBeLessThan(elseAt);
+    const serverStamp = deploySh.indexOf('stamp_build', elseAt);
+    expect(serverStamp, 'server branch never stamps').toBeGreaterThan(elseAt);
+    expect(serverStamp).toBeLessThan(deploySh.indexOf('"$REMOTE_CMD"'));
+  });
 });

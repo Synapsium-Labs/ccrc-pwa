@@ -63,6 +63,26 @@ prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped
       | sort | head -n -$keep | xargs -r rm -rf --"
 }
 
+# The build stamp: what a box is RUNNING, stated by the box itself. Computed
+# from the LOCAL checkout — the rsynced ~/ccrc tree on the target is not a git
+# repository, so `git rev-parse` must run here, before anything ships. A dirty
+# tree deploys (stage 1 does not forbid it; stage 4's release pipeline will)
+# but the stamp SAYS so: sha + "-dirty" is a fact, a clean sha nobody measured
+# is the forgery class this repo bans by name. Shipped via install_atomic so
+# no reader ever sees a torn stamp.
+BUILD_SHA="$(git rev-parse HEAD)"
+git diff --quiet && git diff --cached --quiet && BUILD_DIRTY=false || BUILD_DIRTY=true
+BUILD_REF="$(git rev-parse --abbrev-ref HEAD)"
+stamp_build() {
+  local stamp
+  stamp="$(mktemp)"
+  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s}\n' \
+    "$BUILD_SHA" "$BUILD_REF" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BUILD_DIRTY" > "$stamp"
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
+  install_atomic "$stamp" .ccrc/build.json 644
+  rm -f "$stamp"
+}
+
 # Ship a local, gitignored, real-token env file to the box if one exists.
 # Only the committed *.env.example templates are ever in git.
 ship_env() {
@@ -142,6 +162,7 @@ if [ "$TARGET" = "agent" ]; then
   install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
+  stamp_build
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
   # post-restart check an agent that throws during ESM evaluation — which
@@ -237,6 +258,7 @@ else
     --exclude 'ccrc-mail.token' \
     server shared deploy "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
+  stamp_build
   ship_secret ccrc-mail.token '~/.ccrc' mail.token
   # verify-service.sh here closes the same crash-loop gap it closes on the
   # agent path above (see that chain's comment) — a restart that "succeeds"
