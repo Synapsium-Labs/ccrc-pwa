@@ -83,6 +83,51 @@ describe('install-coordinator-skill', () => {
     fs.rmSync(empty, { recursive: true, force: true });
   });
 
+  // Fix, review finding 14: SKILL.md alone used to be the WHOLE guard, even
+  // though the same comment two lines above it names the property this is
+  // for ("a half-installed skill is worse than none"). A partial source
+  // (SKILL.md present, `references/` incomplete or absent — exactly the
+  // shape an interrupted `rsync -az --delete` leaves, since SKILL.md sorts
+  // before `references/`) used to install cleanly: exit 0, no stderr, a home
+  // left with `SKILL.md` alone even though that very file tells a live
+  // coordinator to read three files under `references/` "before the first
+  // dispatch of a program".
+  it('refuses the whole run when the source is missing a references/ file, touching nothing', () => {
+    const partial = mkTmp('ccrc-skillsrc-partial-');
+    fs.mkdirSync(path.join(partial, 'references'), { recursive: true });
+    fs.writeFileSync(path.join(partial, 'SKILL.md'), fs.readFileSync(path.join(SRC, 'SKILL.md')));
+    // wave-lifecycle.md and mail-envelope.md are both missing — ledger-
+    // template.md alone is not enough to look "complete".
+    fs.writeFileSync(path.join(partial, 'references', 'ledger-template.md'),
+      fs.readFileSync(path.join(SRC, 'references', 'ledger-template.md')));
+    expect(() => execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude')],
+      { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: partial } })).toThrow();
+    expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(false);
+    fs.rmSync(partial, { recursive: true, force: true });
+  });
+
+  it('never replaces a previously-good install with a partial source (the dangerous direction, review finding 14)', () => {
+    // The MEASURED failure mode the finding names: `diff -r -q` sees a
+    // partial SRC as "differs" from a converged good install and REPLACES
+    // it — a stale-but-complete skill is safer than a fresh-but-broken one,
+    // so this direction matters more than the fresh-home case above.
+    run(path.join(home, '.claude'));
+    const goodWaveLifecycle = fs.readFileSync(skill('.claude', 'references', 'wave-lifecycle.md'), 'utf8');
+    expect(goodWaveLifecycle.length).toBeGreaterThan(0);
+
+    const partial = mkTmp('ccrc-skillsrc-partial2-');
+    fs.mkdirSync(path.join(partial, 'references'), { recursive: true });
+    fs.writeFileSync(path.join(partial, 'SKILL.md'), 'a newer generation, shipped without its references');
+    expect(() => execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude')],
+      { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: partial } })).toThrow();
+
+    // The good install must survive, byte for byte — not silently
+    // downgraded to the fragment.
+    expect(fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8')).toContain('name: ccrc-coordinator');
+    expect(fs.readFileSync(skill('.claude', 'references', 'wave-lifecycle.md'), 'utf8')).toBe(goodWaveLifecycle);
+    fs.rmSync(partial, { recursive: true, force: true });
+  });
+
   it('reports a failed home in the exit status but still processes the others', () => {
     // Same rule as the hook installer: one bad home must not silently strand
     // the account a swap could move the coordinator onto.

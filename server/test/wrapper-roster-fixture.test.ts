@@ -220,6 +220,33 @@ describe('install-coordinator-skill.sh default homes agrees with ACCOUNTS.hooksA
   });
 });
 
+// Fix, review finding 15: the two pins directly above (and the behavioural
+// one in install-coordinator-skill.test.ts) all key on `hooksAble`, because
+// that is the field the installer's `homes=(...)` fallback is actually
+// derived from — bash cannot import `ACCOUNTS` at runtime, so this literal
+// array is the projection. But the SAFETY property Build 7's operator
+// ruling 2 actually depends on ("place the coordinator like any other
+// session, no pinned account") is about `ccdValid`: that is the set ccd's
+// own `_ws_least_loaded` can ACTUALLY land a session on. Nothing before this
+// test asserted `ccdValid ⊆ hooksAble` — the two sets only coincide today
+// because every wrapper in the roster happens to carry `hooksAble: true`.
+// Add a wrapper with `ccdValid: true, hooksAble: false` (a plausible
+// combination — e.g. a managed/corporate profile whose `settings.json` must
+// not be touched) and every pin above stays green, because all of them read
+// `hooksAble`; `_ws_least_loaded` can still land the coordinator there, on a
+// home with no `skills/ccrc-coordinator` at all — no contract, no clause 3
+// reap prohibition, no clause 9 `/clear` prohibition.
+describe('ACCOUNTS: ccdValid is a subset of hooksAble (Build 7 operator ruling 2\'s own precondition)', () => {
+  it('every wrapper ccd can place a session on also gets the coordinator skill installed', () => {
+    for (const w of WRAPPERS) {
+      if (!ACCOUNTS[w].ccdValid) continue;
+      expect(ACCOUNTS[w].hooksAble,
+        `${w} is ccdValid (a placement target) but hooksAble is false — ` +
+          '_ws_least_loaded could place the coordinator on a home with no skill installed').toBe(true);
+    }
+  });
+});
+
 describe('ccd statusline-command.sh label maps agree with ACCOUNTS', () => {
   // Not executed — this file's own header names it (not the two installers
   // above, which DO get a real subprocess pin now) as the one genuine

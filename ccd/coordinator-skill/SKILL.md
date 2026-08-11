@@ -12,6 +12,18 @@ server, and in the workspace's hold. If you die mid-wave the operator starts a
 fresh you, and it resumes from those three things. Write accordingly: never
 carry a decision only in your own context.
 
+**One real constraint on that resumability:** `POST /api/runs`'s `claimedBy`
+is your tmux-derived session id (below), and the server refuses any later
+call for this program whose `claimedBy` differs from whichever session first
+opened it (`claimed-by-another` — clause 8). A fresh coordinator resumes
+cleanly ONLY if the operator restarts it into the SAME workspace the first
+one held — same workspace, same id. Placed into a DIFFERENT workspace (the
+operator's own placement rule may pick any least-loaded home), the fresh
+session's id differs, and every `POST /api/runs` call for this program then
+answers `claimed-by-another` naming a session that may no longer even exist —
+permanently, since nothing in the HTTP API ever rewrites `claimedBy`. That is
+an operator/DB recovery, not something this session can fix by retrying.
+
 ## Learn who you are, first
 
 The fleet's identity is attribution, not authentication (every session runs as
@@ -104,7 +116,33 @@ curl's own exit status. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
 `bad-transition`, `stale-tip`, `pr-regressed`, `no-handoff-commit`,
-`unknown-run`. Their meanings are in `references/wave-lifecycle.md`.
+`unknown-run`, `registry-unmeasurable`. Their meanings are in
+`references/wave-lifecycle.md`.
+
+**That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
+`/:id/advance`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a
+disjoint vocabulary, all on `error`: `unauthenticated`, `bad-kind`,
+`oversize`, `registry-unmeasurable`, `unknown-sender`, `stale-uuid`,
+`unknown-recipient`, `unknown-run`. §3 of `references/wave-lifecycle.md`
+covers the ones you can actually cause by acking or sending mail wrong
+(`bad-kind`, `stale-uuid`); the rest are there for completeness.
+
+**Not every non-2xx body carries a code at all.** `error:'bad-request'` (400,
+a malformed request body — including the fingerprint SHAPE `POST
+/api/runs/:id/advance` requires on every call, `references/wave-
+lifecycle.md` §4), `error:'unsupported'` (501, this ccd build lacks a verb a
+route needs) and a bare `{"ok":false,"stderr":"<text>"}` (502, an underlying
+`ccd` call failed, no `refused`/`error`/`reject.code` populated at all) are
+real answers the run routes can send that are NOT in the list above and are
+NOT typed refusal codes (`shared/api.ts`'s own `RunRefuseCode` docstring says
+so explicitly — "a caller that assumes every non-2xx response here carries a
+`RunRefuseCode` is wrong"). Your documented field-check
+(`$body.refused ?? $body.error ?? $body.reject?.code`) reads `undefined` for
+the bare-502 shape; treat `undefined` the same as any refusal you do not have
+a specific rule for — **stop and report**, never retry blindly. A retry after
+`registry-unmeasurable` specifically can ORPHAN a workspace `ccd ws-add`
+already spawned before the refusal landed — see the table in
+`references/wave-lifecycle.md` §2.
 
 ## The wave lifecycle
 

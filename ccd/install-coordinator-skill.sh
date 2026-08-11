@@ -37,7 +37,23 @@ else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME
 # (`ccd:2135-2139`: "refusing to run the destructive verb unserialised"). A
 # half-installed skill is worse than none: the model would follow whatever
 # fragment landed.
+#
+# SKILL.md is not enough on its own (fix, review finding 14): the guard used
+# to check only that file, and the convergence check three lines below
+# (`diff -r -q "$SRC" "$dest"`) treats a partial SRC as "differs" from a
+# previously-good install — so a source that lost its references/ mid-rsync
+# (`deploy/deploy.sh`'s `rsync -az --delete`, interrupted; SKILL.md sorts
+# before `references/`) does not fail closed, it REPLACES a good install with
+# the fragment, exit 0, no stderr. SKILL.md's own text points a live
+# coordinator at all three of these by name ("Read it before the first
+# dispatch of a program") — every one of them missing is exactly the
+# half-installed shape the comment above already says is worse than none.
+REQUIRED_REFS=(ledger-template.md mail-envelope.md wave-lifecycle.md)
 [[ -f "$SRC/SKILL.md" ]] || { echo "install-coordinator-skill: no SKILL.md under $SRC — refusing" >&2; exit 1; }
+for ref in "${REQUIRED_REFS[@]}"; do
+  [[ -f "$SRC/references/$ref" ]] \
+    || { echo "install-coordinator-skill: no references/$ref under $SRC — refusing (partial source)" >&2; exit 1; }
+done
 command -v diff >/dev/null 2>&1 \
   || { echo "install-coordinator-skill: diff (diffutils) is unavailable — refusing rather than rewriting blind" >&2; exit 1; }
 

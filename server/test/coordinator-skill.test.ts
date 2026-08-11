@@ -19,7 +19,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
-import { MAIL_REJECT_CODES, isRunRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -111,17 +111,68 @@ describe('the coordinator skill: its contract', () => {
 });
 
 describe('the coordinator skill: linkage', () => {
-  it('names no route the server does not register', () => {
-    // fastify spells params `:id` and so does the skill, so the match is
-    // character for character — the same trick that makes wsaudit's harvest a
-    // two-line assertion instead of an allowlist.
+  // fastify spells params `:id` and so does the skill, so the match is
+  // character for character — the same trick that makes wsaudit's harvest a
+  // two-line assertion instead of an allowlist. METHOD included on both
+  // sides (fix, review finding 9): the pre-fix harvest matched the PATH
+  // alone, so `GET /api/mail/:id/ack` (the wrong verb — that route is a
+  // POST) would have passed on the string appearing ANYWHERE in server
+  // sources, method unchecked.
+  const skillRoutes = (): Set<string> => {
     const routes = new Set<string>();
-    for (const m of routeSkillText.matchAll(/\b(?:GET|POST) (\/api\/[A-Za-z0-9/:._-]+)/g)) {
-      routes.add(m[1]!.replace(/[.,)]+$/, ''));
+    for (const m of routeSkillText.matchAll(/\b(GET|POST) (\/api\/[A-Za-z0-9/:._-]+)/g)) {
+      routes.add(`${m[1]} ${m[2]!.replace(/[.,)]+$/, '')}`);
     }
+    return routes;
+  };
+
+  // `coord/routes.ts` ONLY (fix, review finding 9) — not the whole server
+  // tree `serverSources()` walks: that file is the coordinator's entire
+  // domain by its own docstring ("MAIL LIVES HERE; RUN ROUTES ARE TASK 9's,
+  // in this same file"), so it is the one place a route this skill OUGHT to
+  // name can be added, renamed or deleted. Scoping the reverse direction to
+  // the whole server would also flag every unrelated PWA route (`/api/
+  // accounts`, `/api/notify`, …) that the coordinator has no business
+  // knowing about.
+  const registeredCoordRoutes = (): Set<string> => {
+    const src = readFileSync(path.join(root, 'server/src/coord/routes.ts'), 'utf8');
+    const routes = new Set<string>();
+    for (const m of src.matchAll(/app\.(get|post)\(\s*'([^']+)'/g)) {
+      routes.add(`${m[1]!.toUpperCase()} ${m[2]}`);
+    }
+    return routes;
+  };
+
+  it('names no route the server does not register', () => {
+    const routes = skillRoutes();
     expect(routes.size, 'the skill should name the routes it calls').toBeGreaterThanOrEqual(6);
     const src = serverSources();
-    for (const r of routes) expect(src, `no server route registers ${r}`).toContain(`'${r}'`);
+    for (const r of routes) {
+      const [method, p] = r.split(' ') as [string, string];
+      expect(src, `no server route registers ${r}`).toContain(`'${p}'`);
+      expect(registeredCoordRoutes().has(r), `${p} is not registered as ${method}`).toBe(true);
+    }
+  });
+
+  it('names every coordinator-domain route the server registers, method included (fix, review finding 9)', () => {
+    // The idiom's OTHER direction, missing before this fix: the prior test
+    // proved the skill invents nothing; nothing proved the skill OMITS
+    // nothing. Deleting `GET /api/mail` or `POST /api/runs/:id/close` from
+    // the docs — finding 9's own named example — left the suite green,
+    // because completeness was asserted only as `routes.size >= 6`, a floor
+    // any six mentions clear regardless of which six.
+    const EXEMPT: ReadonlySet<string> = new Set([
+      // The PWA's own /mail screen reads this (MailScreen.tsx) — not part
+      // of the coordinator's protocol; the skill has no reason to call it
+      // and naming it would be clutter, not linkage.
+      'GET /api/feed',
+    ]);
+    const named = skillRoutes();
+    for (const r of registeredCoordRoutes()) {
+      if (EXEMPT.has(r)) continue;
+      expect(named.has(r), `${r} is registered in coord/routes.ts but never named anywhere ` +
+        'in SKILL.md or references/wave-lifecycle.md').toBe(true);
+    }
   });
 
   it('promises only real refusal codes, and explains each one in wave-lifecycle.md', () => {
@@ -160,13 +211,64 @@ describe('the coordinator skill: linkage', () => {
     }
   });
 
+  it('mentions every declared MailRejectCode and RunRefuseCode SOMEWHERE in the skill (fix, review finding 9)', () => {
+    // The prior test's own idiom is one-directional by its own admission —
+    // it proves every code the ONE sentence NAMES is real, never that every
+    // code a route can actually emit is named anywhere. That asymmetry is
+    // what let finding 7's whole missing family (every `POST /api/mail`
+    // code — `unknown-sender`, `unknown-recipient`, `oversize`,
+    // `registry-unmeasurable`, `unauthenticated`) survive undetected: none
+    // of the five ever needed to appear in SKILL.md's one pinned sentence,
+    // because that sentence documents the RUN routes only.
+    //
+    // This test does not care WHERE a code is explained — SKILL.md's own
+    // sentence, its new mail-routes paragraph, or wave-lifecycle.md's
+    // tables and prose all count — only that it is explained SOMEWHERE in
+    // the corpus a coordinator actually reads. `undeliverable` is excluded:
+    // it is a DELIVERY-lane code (`watch.ts`, outside `server/src/coord`
+    // entirely, by `MailRejectCode`'s own docstring) that only ever shows up
+    // as a `MailSummary.state`/`rejectCode` value, never as a refusal a
+    // coordinator's own API call receives — nothing in the skill's protocol
+    // needs to name it as a call outcome.
+    const NOT_A_CALL_REFUSAL: ReadonlySet<string> = new Set(['undeliverable']);
+    for (const code of MAIL_REJECT_CODES) {
+      if (NOT_A_CALL_REFUSAL.has(code)) continue;
+      expect(allSkillText, `${code} is a real MailRejectCode but is named nowhere in the skill`)
+        .toContain(code);
+    }
+    for (const code of RUN_REFUSE_CODES) {
+      expect(allSkillText, `${code} is a real RunRefuseCode but is named nowhere in the skill`)
+        .toContain(code);
+    }
+  });
+
+  it('names the untyped shapes a run route can also answer — bad-request, unsupported, and the bare-502 no-code case (fix, review finding 9/17)', () => {
+    // `shared/api.ts`'s own `RunRefuseCode` docstring: `error:'unsupported'`,
+    // `error:'bad-request'` and a bare `{ok:false,stderr}` are real, are not
+    // members of ANY typed vocabulary, and are consequently invisible to
+    // both directions of the two tests above — this is the completeness
+    // check for exactly the codes those two cannot see by construction.
+    for (const token of ['bad-request', 'unsupported', 'stderr']) {
+      expect(allSkillText, `${token} is a real untyped refusal shape but is named nowhere in the skill`)
+        .toContain(token);
+    }
+  });
+
   it('quotes an envelope byte-identical to what the delivery lane injects', () => {
+    // `toId`/`artifacts` (fix, review finding 12): the shipped ingress always
+    // resolves `toId` to the RECIPIENT'S REAL session id before this ever
+    // renders (`routes.ts`'s `resolvedToId`) — no real envelope ever reads
+    // `to: coordinator`, the literal role — and refuses any relative
+    // `artifacts` entry `bad-kind` (`routes.ts` check 2) — no real envelope
+    // this worker could actually have SENT carries a relative path either.
+    // The old fixture quoted both, self-contradicting the very paragraph
+    // below it that called this "a fixture message a WORKER already sent".
     const fixture: EnvelopeInput = {
-      id: 7, fromId: 'ccrc-pwa-clear-cove', toId: 'coordinator',
+      id: 7, fromId: 'ccrc-pwa-clear-cove', toId: 'ccrc-pwa-still-water',
       runId: 3, program: 'build4-transcript-surface', wave: 3, waveOf: null,
       kind: 'status', subject: 'wave-done',
       body: 'Wave 3 is on the branch. Handoff commit is the ledger update; PR #591 is green.',
-      artifacts: ['docs/superpowers/programs/build4-transcript-surface.md'],
+      artifacts: ['/w/clear-cove/docs/superpowers/programs/build4-transcript-surface.md'],
     };
     const rendered = renderEnvelope(fixture);
     expect(refs('mail-envelope.md'),

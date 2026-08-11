@@ -53,6 +53,20 @@ with the run now `dispatched`, or a refusal:
 `GET /api/runs`. `bad-transition` (409) means this run is not `planned` —
 someone already dispatched it, or it is further along than you think.
 
+**Answers that do NOT ride `refused`.** The table above is what SKILL.md
+calls "the refusals you will actually meet" — but this route (and `POST
+/api/runs/:id/close`) can answer three other shapes, and blindly retrying any
+of them is how a workspace gets orphaned:
+
+| shape | meaning | what you do |
+|---|---|---|
+| `error:'registry-unmeasurable'` (502) | the fleet's registry directory could not be listed — and this can land AFTER `ccd ws-add` already ran, before the run row records the new workspace | **stop and report; the operator resolves it** — exactly like `ambiguous-dispatch`, never a blind retry. A retry's `before` snapshot now includes the orphaned workspace, so the retry binds a SECOND one and strands the first, unheld and unrecorded, on the fleet |
+| `error:'unsupported'` (501) | this ccd build does not support a verb this route needs | stop and report — an operator/fleet-host issue, not a retryable one |
+| a bare `{"ok":false,"stderr":"<text>"}`, no `refused`/`error`/`reject.code` field at all (502) | the underlying `ccd` call itself failed for one of its ordinary reasons | stop and report — the SAME as the two rows above, even though none of the three fields SKILL.md's own check reads is populated. This shape is not evidence anything partially happened (it is returned before any run-row mutation), so the run stays `planned` and a LATER retry, once the underlying cause is fixed, is safe — but only after confirming no partially-spawned workspace was left behind by an earlier attempt |
+
+`error:'bad-request'` (400) is also possible — a malformed request body —
+covered where it actually bites on the ordinary path, §4 below.
+
 For wave 1, this call is also where the workspace's hold actually lands
 (reason `program:<slug> wave:1/M` — see §1's own note on this). For wave ≥ 2,
 this route itself resumes the held workspace and injects `/clear` through
@@ -77,10 +91,24 @@ Mail arrives as the envelope in `references/mail-envelope.md`. For each one:
    `/clear` would rotate — re-read it if you have any doubt). Until you ack,
    the lane replays the message verbatim on later sweeps — you will see it
    again, and a second copy of a message you already acted on is how a wave
-   gets dispatched twice.
+   gets dispatched twice. This is bounded, not forever: past a bounded number
+   of replay attempts the lane gives up and marks the delivery undeliverable
+   (`state:"rejected"` — it stays visible on the read below, since it was
+   never acked and never acted on). If you see the SAME `id` injected several
+   times, that is a signal to ack (or act on) it now, not a promise it will
+   keep arriving indefinitely.
 2. Then act.
 
-To see what is outstanding: `GET /api/mail?to=<your session id>`.
+To see what is outstanding: `GET /api/mail?to=<your session id>`. This
+returns only OUTSTANDING mail — `queued`/`delivered` (unacked), plus a
+delivery the lane gave up retrying before anyone acted on it
+(`state:"rejected"`, distinguishable by that field) — never a row you have
+already acked. Add `&all=1` to read the full history instead (every state,
+including `acked`), which is what you want for a human-facing "what happened"
+question, never for "what do I still owe an answer to" — reading history for
+the latter is how a wave gets dispatched twice (a stale copy of a `wave-done`
+you already acted on reads identically to new work unless you separately
+filter on `state`, which the unfiltered history does not do for you).
 
 **Sending mail of your own** — a rejection (§4), a question, a status
 update — is `POST /api/mail`, body:
@@ -98,19 +126,41 @@ directory its own turn happens to be in, not from this session's.
 
 ## 4 — Advance the run as the wave progresses
 
-`RunState` only reaches `awaiting-review`/`merging` from `working`, never
-directly from `dispatched` — so the ordinary forward path is two kinds of
-`POST /api/runs/:id/advance` call, both `{"to":"<state>","fingerprint":{…}}`:
+`RunState` reaches `awaiting-review` only from `working`, and `merging` only
+from `awaiting-review` — there is NO `working` → `merging` edge
+(`RUN_TRANSITIONS`, `shared/api.ts`), even for a wave whose PR is already
+approved when `wave-done` lands. Send `{"to":"merging"}` straight from
+`working` and the server 409s `bad-transition`; the accurate sequence always
+passes through `awaiting-review`. Every call is `POST /api/runs/:id/advance`,
+body `{"to":"<state>","fingerprint":{branchTip,prNumber,prPhase,handoffCommit}}`
+— **the `fingerprint` object is REQUIRED on every call, including
+`{"to":"working"}`**, even though that step does not re-measure it: a request
+missing it, or with any field of the wrong shape (`branchTip`/`handoffCommit`/
+`prPhase` not a string, or `prNumber` not a number-or-null), 400s
+`{"ok":false,"error":"bad-request"}` before the run row is even looked at —
+this one code rides `error`, not `reject.code`, unlike everything else this
+route sends (see SKILL.md's field-check rule). For `{"to":"working"}`, where
+there is nothing yet to claim, send the empty-claim shape:
+`{"branchTip":"","prNumber":null,"prPhase":"none","handoffCommit":""}`.
 
 - **`{"to":"working"}`** — no re-measurement (this is a status marker, not a
-  doneness claim). Send it once the worker is genuinely underway.
-- **`{"to":"awaiting-review"}`** or **`{"to":"merging"}`** — re-measured. Send
-  it when a `status`/`wave-done` mail carries a claimed fingerprint
-  (`{branchTip, prNumber, prPhase, handoffCommit}`). Re-measure each fact
-  yourself first (read-only ccd is fine here: `ccd pr-state --session
-  <worker id>`, and `git -C <worktree> rev-parse` for the tip) — then submit
-  it and **believe the server's own re-measurement over yours** (contract
-  clause 6). A mismatch answers
+  doneness claim; the fingerprint above only satisfies the shape check and is
+  never read). Send it once the worker is genuinely underway, and ALSO to
+  send work back from `awaiting-review`, or to record a lost merge race from
+  `merging` — `RUN_TRANSITIONS` treats both as the ordinary case, not a
+  failure, and neither re-measures.
+- **`{"to":"awaiting-review"}`** (from `working`) or **`{"to":"merging"}`**
+  (from `awaiting-review` ONLY — see above) — re-measured. Send it when a
+  `status`/`wave-done` mail carries a claimed fingerprint (`{branchTip,
+  prNumber, prPhase, handoffCommit}`). Submit that fingerprint **exactly as
+  the worker reported it** — never rebuild it by pairing a freshly re-measured
+  `branchTip` with the mail's ORIGINAL `handoffCommit`; see the
+  `no-handoff-commit` row below for what that specific mix produces. Re-
+  measuring locally first (read-only ccd is fine here: `ccd pr-state
+  --session <worker id>`, and `git -C <worktree> rev-parse` for the tip) is a
+  sanity check on the claim before you spend a round trip on it — never a
+  source for half the submission — and either way **believe the server's own
+  re-measurement over yours** (contract clause 6). A mismatch answers
   `{"ok":false,"reject":{"code":"<code>","detail":"<why>"}}` and leaves the
   run state untouched:
 
@@ -119,18 +169,31 @@ directly from `dispatched` — so the ordinary forward path is two kinds of
 | `stale-tip` | the branch moved after the claim was written |
 | `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way) |
 | `pr-regressed` | the PR is not in the phase the claim asserted |
-| `pr-unmeasurable` | the PR state could not be re-read (not evidence either way) |
-| `no-handoff-commit` | the last commit is not the ledger-updating handoff |
+| `pr-unmeasurable` | the PR state could not be re-read (not evidence either way) — but see below: this is ALSO what a malformed submission of your own gets, before any I/O runs |
+| `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays your ordinary review, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
 | `unknown-run` | the run id is wrong |
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
 
+**`pr-unmeasurable` has two causes, and they need different responses.** The
+server returns it both for a transient re-read failure (`detail` reads like
+`"pr-state answered …"` or names a stderr) AND, before any I/O runs at all,
+for a malformed submission of your own: an omitted `prPhase`, or one spelled
+outside its eight-value vocabulary — `unchecked | none | no-commits | open |
+draft | merged | closed | unknown` (`PrPhase`, `shared/api.ts`) — refuses this
+SAME code (`fingerprint.ts`'s claim-shape check runs before any registry or
+`pr-state` read). A natural-language `prPhase` (the kind a `wave-done` body
+prose like "PR #591 is green" might tempt you to invent, rather than one of
+the eight values above) hits this every time. Read `detail`, not just for the
+human-facing report: `"prPhase must be a recognised PrPhase…"` means fix the
+field and resubmit now; anything else means a transient fleet problem, worth
+a retry. Retrying a malformed claim without reading `detail` first repeats
+the same refusal forever.
+
 Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
 `answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
 this run's id — and leave the run alone. A stale `wave-done` must never
-settle a wave. `{"to":"working"}` is also how a review sends work back, or a
-lost merge race is recorded — `RUN_TRANSITIONS` treats both as the ordinary
-case, not a failure, and neither re-measures.
+settle a wave.
 
 ## 5 — The boundary: open the next wave's run, THEN close this one
 
