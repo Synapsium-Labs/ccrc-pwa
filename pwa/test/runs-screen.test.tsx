@@ -190,6 +190,22 @@ describe('the run board', () => {
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
   });
 
+  it('a reconstructed run (state:done, closedAt:null) lands in Finished, not nowhere (finding 3)', async () => {
+    // `CoordStore.reconstruct` (the disaster-recovery rebuild) never writes
+    // `closedAt` — pinned server-side as one of the facts the drill cannot
+    // recover — so a rebuilt program's finished waves carry `state:'done'`
+    // with `closedAt:null` forever. Splitting on `closedAt` filed a row like
+    // this in NEITHER group; splitting on `state` (what `CoordStore.runs()`
+    // itself uses) finds it correctly.
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({
+      runs: [r({ id: 1, wave: 1, state: 'done', closedAt: null })],
+    })} />);
+    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
+    expect(screen.getByText('clear-cove')).toBeInTheDocument();
+  });
+
   it('a run that closes stops being active the instant the live frame says so — never resurrected by a stale cold snapshot (finding 3, failure A)', async () => {
     const store = makeStore();
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r({ id: 7 })] })} />);
@@ -203,6 +219,34 @@ describe('the run board', () => {
     act(() => { store.setState({ runs: [] }); });
     expect(screen.queryByText('clear-cove')).toBeNull();
     expect(screen.getByText(/no runs/i)).toBeInTheDocument();
+  });
+
+  it('a run that closes while this screen is open joins Finished, not vanishes (finding 22)', async () => {
+    // Without the fix, `cold` stays frozen at its mount-time snapshot for
+    // the rest of the screen's life — the live frame can drop the row (it
+    // just did, previous test), but nothing ever asks the archive again, so
+    // the newly-closed run is never seen as `done` and never lands in
+    // Finished either. `loadRuns` here answers differently on its SECOND
+    // call, the way the real `?closed=1` route would once the close has
+    // actually landed server-side.
+    const store = makeStore();
+    let calls = 0;
+    const loadRuns = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? { runs: [r({ id: 7 })] }
+        : { runs: [r({ id: 7, state: 'done', closedAt: Date.now() })] };
+    });
+    render(<RunsScreen store={store} loadRuns={loadRuns} />);
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
+    expect(screen.getByText('clear-cove')).toBeInTheDocument();
+    // The run closes: the live active-only frame drops it — this is the
+    // exact trigger the fix watches for.
+    act(() => { store.setState({ runs: [] }); });
+    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
+    expect(screen.getByText('clear-cove')).toBeInTheDocument();
+    expect(loadRuns).toHaveBeenCalledTimes(2);
   });
 
   it('the Finished group survives a new active run landing — it never re-reads from `live` (finding 3, failure B)', async () => {
@@ -264,9 +308,22 @@ describe('the run board', () => {
     expect(note).toHaveAttribute('title', 'registry workdir temporarily unreadable — retrying');
   });
 
-  it('has a back control at the tap floor, and an empty state that explains itself', () => {
+  it('has a back control at the tap floor, and an empty state that explains itself', async () => {
+    // `getByText` synchronously, before the cold read resolves, would now hit
+    // the loading render (finding 19: "loading" and "confirmed empty" are no
+    // longer the same state) — `findByText` waits for the real answer, which
+    // is what a live app would show.
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('runs-back');
-    expect(screen.getByText(/no runs/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
+  });
+
+  it('says it could not read, not "No runs", when the cold read fails and no live frame has landed', async () => {
+    // Review finding 19's own failure scenario: phone offline, or the server
+    // mid-restart, with a program in flight — this must not assert the
+    // program never existed.
+    render(<RunsScreen store={makeStore()} loadRuns={async () => { throw new Error('offline'); }} />);
+    expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^no runs\./i)).toBeNull();
   });
 });

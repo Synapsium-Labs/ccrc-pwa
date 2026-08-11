@@ -11,7 +11,7 @@
 // Opening this screen IS the ack, the same rule SessionScreen's mount ack
 // follows. One watermark for the whole feed (FEED_ACK_KEY), because "have I
 // read my mail" is one question, not one per sender.
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { NotifyEvent } from '../../../shared/api';
 import { recordKey, reviveNotifyEvents } from '../lib/feed';
@@ -58,6 +58,14 @@ export function MailScreen({
   const dropped = store((s) => s.feedDropped);
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const now = useNow(30_000);
+  // Review finding 19: this screen's own read failing must not render as
+  // "Nothing yet." — a positive claim about the fleet's record — when the
+  // truth is "could not read". `feed` itself can already be non-empty on
+  // mount now (`stores/fleet.ts`'s own durable connect-time read, fix
+  // finding 18), so the distinction only matters for the empty-list render
+  // below; a non-empty `feed` always renders its rows regardless of this
+  // screen's own read outcome.
+  const [readState, setReadState] = useState<'loading' | 'ok' | 'error'>('loading');
 
   // Held in a ref, not the effect's own dependency array below: "once per
   // mount" has to hold regardless of the CALLER's identity discipline, not
@@ -82,8 +90,9 @@ export function MailScreen({
         if (!live) return;
         const { events, dropped: d } = reviveNotifyEvents(r.events);
         store.getState().mergeFeed(events, d);
+        setReadState('ok');
       })
-      .catch(() => { /* offline, or an older server with no such route */ });
+      .catch(() => { if (live) setReadState('error'); });
     return () => { live = false; };
   }, [store]);
 
@@ -121,8 +130,16 @@ export function MailScreen({
         </p>
       )}
 
-      {rows.length === 0 ? (
-        <p className="mail-empty">Nothing yet.</p>
+      {rows.length === 0 && readState !== 'ok' ? (
+        // Review finding 19: "loading" and "every attempt has failed" get
+        // their own honest render — `readState === 'error'` only fires once
+        // this screen's own read has actually failed, never merely because
+        // it has not resolved yet.
+        <p className="mail-empty" data-state={readState === 'error' ? 'error' : 'loading'}>
+          {readState === 'error' ? 'Could not reach the server — mail may exist that is not shown.' : 'Loading…'}
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="mail-empty" data-state="ok">Nothing yet.</p>
       ) : (
         <ul className="mail-list">
           {rows.map((ev) => (

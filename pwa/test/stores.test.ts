@@ -546,6 +546,64 @@ describe('fleet store', () => {
     });
   });
 
+  // Review finding 18: `feed` used to have exactly two producers — the
+  // catch-up tail (volatile: the mark it reads advances one-way at receipt,
+  // so a reload landing after the tail already ran sees nothing left to ask
+  // for) and `GET /api/feed` on `/mail`'s own mount (which most sessions
+  // never open). The unread-mail BADGE (FleetScreen) is computed off `feed`
+  // and is mounted for the app's whole lifetime — nothing durable ever
+  // hydrated it at boot, so a reload or a PWA eviction between the tail's
+  // last advance and now made real unread mail read as zero.
+  describe('the durable feed read on connect (fix, review finding 18)', () => {
+    it('asks GET /api/feed once on the first successful connect, and merges it into `feed`', async () => {
+      const fetchFeed = vi.fn(async () => ({
+        events: [
+          { at: 1, seq: 1, kind: 'mail' as const, title: 'from the durable read', body: '', sessionId: 's1' },
+        ],
+      }));
+      const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
+      store.getState().connect();
+      lastSocket().open();
+
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(store.getState().feed.map((e) => e.title)).toEqual(['from the durable read']));
+      store.getState().disconnect();
+    });
+
+    it('does not ask again on a later reconnect once the first read has already succeeded', async () => {
+      const fetchFeed = vi.fn(async () => ({ events: [] }));
+      const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
+      store.getState().connect();
+      lastSocket().open();
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(1));
+
+      // A reconnect (server bounce, backoff) re-fires `onOpen` — the durable
+      // read must not repeat once it has already landed successfully.
+      lastSocket().open();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchFeed).toHaveBeenCalledTimes(1);
+      store.getState().disconnect();
+    });
+
+    it('retries on the NEXT reconnect if the first attempt failed (offline at boot)', async () => {
+      let calls = 0;
+      const fetchFeed = vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('offline');
+        return { events: [{ at: 1, seq: 1, kind: 'mail' as const, title: 'landed on retry', body: '', sessionId: 's1' }] };
+      });
+      const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
+      store.getState().connect();
+      lastSocket().open();
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(1));
+
+      lastSocket().open(); // reconnect
+      await vi.waitFor(() => expect(fetchFeed).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(store.getState().feed.map((e) => e.title)).toEqual(['landed on retry']));
+      store.getState().disconnect();
+    });
+  });
+
   describe('feedDropped', () => {
     // feedDropped's own docstring: "how many records the LAST read could not
     // place at all" — not a running total. `/mail`'s mount effect calls

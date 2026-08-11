@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { RUN_GLYPH, RUN_WORD, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { RUN_GLYPH, RUN_WORD, isRunClosed, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { formatAge } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -133,7 +133,17 @@ export function RunsScreen({
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
   const sessions = store((s) => s.sessions);
+  const conn = store((s) => s.conn);
   const [cold, setCold] = useState<RunSummary[] | null>(null);
+  // Review finding 19: `cold`'s own `null` used to mean BOTH "still loading"
+  // and "every attempt has failed" — the same collapse `MailScreen`'s `feed`
+  // had, and the one `AccountsScreen`'s `!accounts` branch was written
+  // specifically to avoid ("'never asked' reads as 'never landed' to whoever
+  // is looking"). A three-state read, so a read failure can render its own
+  // honest message instead of falling through to "No runs." — a POSITIVE
+  // claim about the program's whole history that a failed read has no
+  // standing to make.
+  const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
 
@@ -145,6 +155,17 @@ export function RunsScreen({
   const loadRunsRef = useRef(loadRuns);
   loadRunsRef.current = loadRuns;
 
+  // Never fires a `set*` after this instance has unmounted — shared by the
+  // mount-time read below and the transition-triggered re-read (finding 22),
+  // the one this screen fires on its own initiative, mid-lifetime.
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
+
+  const loadCold = (): Promise<void> =>
+    loadRunsRef.current()
+      .then((r) => { if (aliveRef.current) { setCold(r.runs); setColdState('ok'); } })
+      .catch(() => { if (aliveRef.current) setColdState('error'); });
+
   useEffect(() => {
     // UNCONDITIONAL — the earlier gate (`if (store.getState().runs.length >
     // 0) return`) meant this only ever ran when the live slice was already
@@ -155,10 +176,31 @@ export function RunsScreen({
     // returns active AND finished rows, but only its FINISHED half is ever
     // read below; the active half never races `live` for the same answer
     // because the two feed separate slices, not one.
-    let alive = true;
-    void loadRunsRef.current().then((r) => { if (alive) setCold(r.runs); }).catch(() => {});
-    return () => { alive = false; };
+    void loadCold();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store]);
+
+  // Review finding 22: a run that closes while this screen is already open
+  // must not simply vanish. The live frame is active-only BY CONSTRUCTION
+  // (see the file header) — it can never itself carry the now-closed row —
+  // so the only way `finished` learns about it is a fresh archive read,
+  // fired exactly when a run id that WAS in the live active set stops being
+  // there (a close, or a run leaving this box's view some other way). Not a
+  // poll: a diff against the PREVIOUS live frame, so it fires only on a real
+  // transition, never on an unrelated re-render.
+  const prevLiveIdsRef = useRef<Set<number> | null>(null);
+  useEffect(() => {
+    if (!runsFrameSeen) return;
+    const ids = new Set(live.map((r) => r.id));
+    const prev = prevLiveIdsRef.current;
+    if (prev !== null) {
+      let vanished = false;
+      for (const id of prev) if (!ids.has(id)) { vanished = true; break; }
+      if (vanished) void loadCold();
+    }
+    prevLiveIdsRef.current = ids;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, runsFrameSeen]);
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // ACTIVE reads `live` the instant the socket has said anything at all
@@ -171,16 +213,32 @@ export function RunsScreen({
   // indefinitely (finding 3, failure A). Before any frame has ever landed
   // (a cold deep link, or a server too old to send the frame), `cold`'s own
   // active-filtered rows are the best available answer.
+  //
+  // `isRunClosed` (state), never `runClosedAt` (fix, review findings 3/22):
+  // `closedAt` is written by exactly one path outside `reconstruct`, and
+  // `reconstruct` — the disaster-recovery rebuild — never writes it at all
+  // (pinned by `reconstruction-drill.test.ts` as one of the twelve facts the
+  // drill cannot recover). A rebuilt program's finished waves carry
+  // `state:'done'`/`'failed'` with `closedAt:null` forever; splitting on
+  // `closedAt` filed those rows in NEITHER group the instant a live frame
+  // excluded them by state, or in BOTH depending on which slice happened to
+  // answer first. `state` is the same line `CoordStore.runs()` itself draws.
   const active = (runsFrameSeen ? live : cold ?? live)
-    .filter((r) => runClosedAt(r) === null);
+    .filter((r) => !isRunClosed(r));
   // FINISHED reads ONLY `cold` — never `live`, which cannot carry a closed
   // run by construction (see the file header). Reading it from the same
   // `runs` slice `active` used (the pre-fix shape) meant the Finished group
   // vanished the instant anything went active, because `live` winning that
   // switch discarded whatever `cold` had found (finding 3, failure B).
   const finished = (cold ?? [])
-    .filter((r) => runClosedAt(r) !== null)
+    .filter((r) => isRunClosed(r))
     .sort((a, b) => (runClosedAt(b) ?? 0) - (runClosedAt(a) ?? 0));
+  // Review finding 19: neither half is trustworthy enough to assert "there
+  // are none of these" until IT has a real answer — `runsFrameSeen` for
+  // active, `coldState === 'ok'` for finished (finished has no other
+  // source). When NEITHER has ever answered, this screen knows nothing at
+  // all, and must say so rather than rendering the ordinary empty state.
+  const noSignalYet = !runsFrameSeen && coldState !== 'ok';
   const hasAny = active.length > 0 || finished.length > 0;
 
   const rowFor = (run: RunSummary): ReactNode => (
@@ -193,7 +251,7 @@ export function RunsScreen({
   );
 
   return (
-    <div className="runs-screen">
+    <div className="runs-screen" data-conn={conn}>
       <header className="runs-head">
         <button type="button" className="runs-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
@@ -201,8 +259,30 @@ export function RunsScreen({
         <h1 className="runs-title">Runs</h1>
       </header>
 
-      {!hasAny ? (
-        <p className="runs-empty">No runs. A program starts when a coordinator opens one.</p>
+      {/* Review finding 26: `runs`/`runsFrameSeen` are sticky across a socket
+          loss (`stores/fleet.ts`, "sticky until replaced") — without this,
+          the board keeps rendering ages that tick upward with nothing on
+          screen saying the socket is down. Text, not an opacity fade —
+          `fleet.css`'s own note by `.fleet-list` documents, with contrast
+          numbers, why that idiom was tried here first and removed. */}
+      {conn === 'down' && (
+        <div className="offline-banner" role="status">
+          Reconnecting…
+        </div>
+      )}
+
+      {noSignalYet ? (
+        // Review finding 19: neither source has answered yet, so this is not
+        // "no runs" — it is "no answer". `coldState === 'error'` only after
+        // the cold read has actually failed; until then this is the ordinary
+        // in-flight window every mount passes through.
+        <p className="runs-empty" data-state={coldState === 'error' ? 'error' : 'loading'}>
+          {coldState === 'error'
+            ? 'Could not reach the server — runs may exist that are not shown.'
+            : 'Loading…'}
+        </p>
+      ) : !hasAny ? (
+        <p className="runs-empty" data-state="ok">No runs. A program starts when a coordinator opens one.</p>
       ) : (
         <>
           {runsByProgram(active).map(({ program, runs: list }) => {

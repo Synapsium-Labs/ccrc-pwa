@@ -673,6 +673,16 @@ button.metachip:active {
   flex-basis: 100%;
   color: var(--ink-secondary);
 }
+/* Review finding 2: a delivery the lane gave up retrying, past its own
+   replay ceiling, never acked — distinct from an ordinary pending row so it
+   does not read as "still being delivered". */
+.mail-strip .mail-strip-abandoned {
+  flex-basis: 100%;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--status-attention-text);
+}
 .mail-strip .mail-strip-artifacts {
   flex-basis: 100%;
   margin: 0;

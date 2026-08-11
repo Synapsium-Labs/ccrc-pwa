@@ -265,11 +265,33 @@ describe('.fleet-runs-row — the only door to /runs', () => {
   it('is at least one tap tall, off the shared token', () => {
     expect(declValue(ruleIn(fleetCss, '.fleet-runs-row'), 'min-height')).toBe('var(--tap-min)');
   });
-  it('is the class the rendered footer row actually carries', () => {
+  it('is the class the rendered footer row actually carries, once a runs frame has landed', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    act(() => { store.setState({ conn: 'open', sessions: [sess()], runs: [], runsFrameSeen: true }); });
+    expect(screen.getByRole('button', { name: /runs · none active/i })).toHaveClass('fleet-runs-row');
+  });
+  // Review finding 11/23: before any `{type:'runs'}` frame has landed, the
+  // row must not assert "none active" as fact — `runsFrameSeen` distinguishes
+  // "genuinely none" from "hasn't said yet", the same way `RunsScreen` itself
+  // already reads the flag.
+  it('reads unknown, not "none active", before runsFrameSeen', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [sess()] }); });
-    expect(screen.getByRole('button', { name: /runs · none active/i })).toHaveClass('fleet-runs-row');
+    expect(screen.queryByRole('button', { name: /runs · none active/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /runs · —/i })).toHaveClass('fleet-runs-row');
+  });
+  // Review finding 20: this is the only door to /runs, so it must render in
+  // EVERY arm of the `sessions.length` ternary, not only the populated one —
+  // including spec §8's "fleet host unreachable" case, which renders the
+  // first-run panel (an honest `sessions: []`, `conn: 'open'`).
+  it('renders in the first-run (zero-session) arm, not only the populated one', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    act(() => { store.setState({ conn: 'open', sessions: [] }); });
+    expect(screen.getByText('No sessions yet')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /runs ·/i })).toHaveClass('fleet-runs-row');
   });
 });
 
@@ -292,7 +314,11 @@ describe('.run-row and .run-open — every row on the run board', () => {
   });
   it('.run-open is the class the rendered row’s own button actually carries', () => {
     const store = makeStore();
-    act(() => { store.setState({ runs: [run()] }); });
+    // `runsFrameSeen: true` alongside `runs` — the real store only ever sets
+    // these together (`onMessage`'s `{type:'runs'}` arm, stores/fleet.ts), so
+    // this is what makes the row trustworthy enough to render immediately
+    // rather than the "no answer yet" loading state (review finding 19).
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByRole('button', { name: /clear-cove/i })).toHaveClass('run-open');
   });

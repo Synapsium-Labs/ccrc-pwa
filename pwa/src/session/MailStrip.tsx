@@ -60,10 +60,21 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
       {open && (
         <ol className="mail-strip-rows">
           {mail.map((item) => (
-            <li key={item.id} className="mail-strip-row">
+            <li key={item.id} className="mail-strip-row" data-state={item.state}>
               <span className="mail-strip-from">{item.fromId}</span>
               <span className="mail-strip-kind">{item.kind}</span>
               <span className="mail-strip-subject">{item.subject}</span>
+              {/* Review finding 2: `outstandingMailFor` now also carries a
+                  delivery the lane gave up retrying past its own replay
+                  ceiling, never acked, never acted on — a distinct
+                  `state:'rejected'` row that must not read as an ordinary
+                  pending message, or a coordinator would keep waiting for a
+                  reply the lane has already stopped attempting to deliver. */}
+              {item.state === 'rejected' && (
+                <span className="mail-strip-abandoned" title="The delivery lane gave up retrying this before it was acked.">
+                  undeliverable — act on it directly
+                </span>
+              )}
               {/* Artifacts are PATHS, never payloads (spec §1) — so they render
                   as paths, in the machine's voice, and nothing here fetches
                   one. */}

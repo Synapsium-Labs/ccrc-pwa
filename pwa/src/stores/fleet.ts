@@ -5,7 +5,7 @@ import { FLEET_PROTO, type FleetMsg, type FleetSession, type NotifyEvent, type R
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
-import { mergeBySeq } from '../lib/feed';
+import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 
@@ -129,6 +129,9 @@ export interface FleetStoreDeps {
   makeSocket?: (url: string) => WebSocket;
   /** Injectable so a test can drive the catch-up without a server. */
   catchUp?: (epoch: string | null, seq: number) => Promise<import('../../../shared/api').CatchUp>;
+  /** Injectable so a test can drive the durable feed read without a server —
+   *  same reason `catchUp` above is. Defaults to `api.feed`. */
+  fetchFeed?: (limit: number) => Promise<{ events: import('../../../shared/api').NotifyEvent[] }>;
 }
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
@@ -187,6 +190,36 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             .catch(() => { /* offline, or an older server with no such route */ });
         };
         const askCatchUp = (): void => { chain = chain.then(run); };
+
+        // The durable half of the unread-mail count (fix, review finding
+        // 18): `feed` had exactly two producers before this — the catch-up
+        // tail above, which is VOLATILE (the mark it reads advances one-way
+        // at receipt, so a reload that lands after the tail already ran sees
+        // nothing left to ask for), and `GET /api/feed` on `/mail`'s own
+        // mount, which most sessions never open. Nothing hydrated `feed` at
+        // boot, so a badge computed off it read real unread mail as "0" the
+        // moment a reload or a PWA eviction intervened between the mark's
+        // last advance and now — the ack watermark (`ccrc:feed`, durable,
+        // localStorage) still knew better, but nothing asked the one OTHER
+        // durable source that agrees with it. One `GET /api/feed` read, on
+        // the FIRST successful connect only (`done` flips true only on
+        // success, so a connect that opens offline still gets one on the
+        // next reconnect) — `mergeFeed` (`lib/feed.ts`'s `mergeBySeq`) dedupes
+        // it against the catch-up tail by record identity, so this can never
+        // double-count.
+        let durableFeedDone = false;
+        const askDurableFeed = (): void => {
+          if (durableFeedDone) return;
+          const fetchFeed = deps.fetchFeed ?? ((n: number) => api.feed(n));
+          void fetchFeed(100)
+            .then((r) => {
+              durableFeedDone = true;
+              const { events, dropped } = reviveNotifyEvents(r.events);
+              get().mergeFeed(events, dropped);
+            })
+            .catch(() => { /* offline, or an older server with no such route — retry next reconnect */ });
+        };
+
         socket = new ReconnectingSocket({
           url: () => wsUrl('/ws/fleet'),
           onMessage: (m) => {
@@ -220,7 +253,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             }
           },
           onState: (conn) => set({ conn }),
-          onOpen: askCatchUp,
+          onOpen: () => { askCatchUp(); askDurableFeed(); },
           makeSocket: deps.makeSocket,
         });
         socket.start();

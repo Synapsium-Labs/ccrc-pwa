@@ -57,6 +57,18 @@ describe('the session mail strip', () => {
     }
   });
 
+  it('flags a delivery the lane abandoned, distinct from an ordinary pending row (review finding 2)', () => {
+    // `outstandingMailFor` now also carries a `state:'rejected'` delivery the
+    // lane gave up retrying past its own replay ceiling — never acked, never
+    // acted on, so it must not read as an ordinary in-flight message.
+    render(<MailStrip mail={[m({ state: 'rejected' }), m({ id: 2, state: 'delivered' })]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText(/undeliverable/i)).toBeInTheDocument();
+    // Only ONE of the two rows is flagged — the ordinary `delivered` one is
+    // not.
+    expect(screen.getAllByText(/undeliverable/i)).toHaveLength(1);
+  });
+
   it('summarizes by kind, dropping the zero clauses', () => {
     // PLURAL walks MailKind's own declared order (shared/api.ts: finding,
     // question, answer, status, artifact, unknown) rather than inventing a

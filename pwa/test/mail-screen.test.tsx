@@ -135,10 +135,19 @@ describe('the mail feed', () => {
     expect(document.querySelectorAll('[data-unseen="false"]')).toHaveLength(0);
   });
 
-  it('has a back control at the tap floor and an empty state that is not a blank screen', () => {
+  it('has a back control at the tap floor and an empty state that is not a blank screen', async () => {
+    // `findByText`, not `getByText`: before this screen's own read resolves,
+    // "loading" and "confirmed empty" are no longer the same render (review
+    // finding 19) — a synchronous assertion would hit the loading state.
     render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
-    expect(screen.getByText(/nothing yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/nothing yet/i)).toBeInTheDocument();
+  });
+
+  it('says it could not read, not "Nothing yet", when the read fails (review finding 19)', async () => {
+    render(<MailScreen store={makeStore()} loadFeed={async () => { throw new Error('offline'); }} />);
+    expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^nothing yet\.?$/i)).toBeNull();
   });
 
   // Fix round 1, Task 4, findings 1 and 3: the shipped default was an inline

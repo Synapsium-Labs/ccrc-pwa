@@ -16,7 +16,7 @@ import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
-import { runClosedAt } from '../fleet/runWords';
+import { isRunClosed } from '../fleet/runWords';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
@@ -145,12 +145,20 @@ export function FleetScreen({
   // Once, not three times in one interpolation: the footer's count and its
   // size must describe the same pass over the same list.
   const archived = archivedSummary(sessions);
-  // Build 7's run board footer. `closedAt === null` is "IS finished"'s own
-  // negation (RunSummary's own docstring on that field) — the same split
-  // RunsScreen itself uses to separate its active/finished groups, through
-  // the same `runClosedAt` tolerance helper (a row that OMITS `closedAt`
-  // reads as active here too, not undercounted by a bare `=== null`).
-  const activeRuns = useStore((s) => s.runs).filter((r) => runClosedAt(r) === null).length;
+  // Build 7's run board footer (fix, review findings 11/23): `state`, never
+  // `closedAt` — `isRunClosed` is the same split `RunsScreen` itself now uses
+  // (its own docstring explains why `closedAt` alone is wrong: a
+  // reconstructed run never gets one). And `runsFrameSeen`, which this row
+  // used to skip reading entirely: `runs` starts `[]` and stays `[]` until a
+  // `{type:'runs'}` frame lands (cold start, a socket still connecting, a
+  // server built without `deps.coord`), which is indistinguishable from "no
+  // runs" by content alone — the store's own docstring on the flag says so.
+  // Without this, the footer asserted "Runs · none active" as fact, aria-
+  // label included, while /runs one tap away could be showing three runs
+  // this row had simply not heard about yet.
+  const runsFrameSeen = useStore((s) => s.runsFrameSeen);
+  const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r)).length;
+  const runsLabel = !runsFrameSeen ? '—' : activeRuns > 0 ? `${activeRuns} active` : 'none active';
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
@@ -261,6 +269,24 @@ export function FleetScreen({
           rendered no accounts strip at all — the app's only door to
           /accounts, gone in the exact state a new operator hits first. */}
       {showAccounts && <AccountsStrip />}
+
+      {/* The only door to /runs (fix, review finding 20) — moved OUT of the
+          populated arm for the identical reason `AccountsStrip` was, three
+          lines above, and the comment there already tells the story: it used
+          to render only when `sessions.length > 0`, so the loading skeleton
+          and the first-run panel — spec §8's named "fleet host unreachable,
+          runs go honest-stale" case renders as the first-run panel, since a
+          `readRegistry` failure still ships an honest `sessions: []` — had
+          no door to the one surface that would show the operator their runs
+          going stale. D-2's rule: the only door must never render nothing. */}
+      <button
+        type="button"
+        className="fleet-runs-row"
+        aria-label={`Runs · ${runsLabel}`}
+        onClick={() => navigate('/runs')}
+      >
+        Runs · {runsLabel}
+      </button>
 
       {sessions.length === 0 && conn !== 'open' ? (
         <div className="fleet-list" data-loading="true">
@@ -383,18 +409,6 @@ export function FleetScreen({
               />
             ))}
           </div>
-          {/* The only door to /runs, so it renders whenever this arm does —
-              including with nothing running. `.fleet-archived-row` may come and go
-              with its own count because /archive has a second route in from every
-              project card's sub-fold; this one has no second route. */}
-          <button
-            type="button"
-            className="fleet-runs-row"
-            aria-label={activeRuns > 0 ? `Runs · ${activeRuns} active` : 'Runs · none active'}
-            onClick={() => navigate('/runs')}
-          >
-            Runs · {activeRuns > 0 ? `${activeRuns} active` : 'none active'}
-          </button>
           {archived.count > 0 && (
             /* Folded, never hidden — and never a place that DELETES anything:
                this routes to a list, and every removal still goes through the
