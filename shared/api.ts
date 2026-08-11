@@ -1901,19 +1901,23 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
  * union has never seen is not caught here. The one runtime check on the
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
- * tokens) — `paused`, a member of this very union, is invisible to it. Ten
- * codes exist below today; the next new one would be the eleventh, not the
+ * tokens) — `paused`, a member of this very union, is invisible to it. Twelve
+ * codes exist below today; the next new one would be the thirteenth, not the
  * ninth.
+ *
+ * The last two are the ledger's (Build 4, spec §3.2): `unknown-item` — "an
+ * item id that is not THIS RUN's", 404 — and `item-terminal` — the item
+ * already settled, 409, refused rather than silently applied.
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'not-dispatched' | 'prhistory-unreadable'
-  | 'bad-transition';
+  | 'bad-transition' | 'unknown-item' | 'item-terminal';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
   'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true, 'not-dispatched': true,
-  'prhistory-unreadable': true, 'bad-transition': true,
+  'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 

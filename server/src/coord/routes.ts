@@ -11,6 +11,7 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   isRunState, isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
@@ -138,6 +139,29 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+    }
+  }
+}
+
+/** `settleItems`' typed result union -> HTTP status + body (Build 4, Task 3).
+ *  Same discipline and the same totality guard as the two maps above. The two
+ *  refusals split on the code rather than on a third union member because
+ *  they are one KIND of answer — "this write names an item it may not move" —
+ *  told apart only by which HTTP status says so: `unknown-item` is a 404 (this
+ *  run has no such item) and `item-terminal` a 409 (it has one, already
+ *  settled). `state` rides along only on the second, which is the only one
+ *  that has one. */
+function sendSettleItemsOutcome(reply: FastifyReply, r: SettleItemsOutcome) {
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, items: r.items });
+  switch (r.kind) {
+    case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
+    case 'refused':
+      return reply.code(r.code === 'unknown-item' ? 404 : 409)
+        .send({ ok: false, refused: r.code, itemId: r.itemId, ...(r.state ? { state: r.state } : {}) });
     default: {
       const _exhaustive: never = r;
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
@@ -847,6 +871,39 @@ export function registerCoordRoutes(
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
     return reply.code(200).send({ ok: true, run: toRunSummary(coord.run(id)!) });
     });
+  });
+
+  /**
+   * `POST /api/runs/:id/items` (Build 4, spec §3.2) — the coordinator settles
+   * the ledger it declared at dispatch. THE DECISION is `items.ts`'s
+   * `settleItems` (architecture increment 4), which validates and maps; the
+   * all-or-nothing COMMIT is `CoordStore.settleItems`, in the ring that holds
+   * the database handle (D-B4-16). This route is the union->status map.
+   *
+   * Box-token gated like every other coordination write route. It is the
+   * COORDINATOR's write, made AFTER `POST .../advance` (or `/close`)
+   * re-measured the worker's claim — "which is the moment ccrc is allowed to
+   * believe a worker". Nothing here re-measures anything: done-authority is a
+   * fingerprint, and the fingerprint was checked one call earlier. The mail
+   * bus is not taught to route on `subject` for this, deliberately (spec
+   * §3.2's own argument): a tally that flips to 5/5 off an unverified worker
+   * mail is a lie on the console, and the console is the product.
+   *
+   * Behind the SAME `coordMutex` as the other write routes, for the ordinary
+   * reason — a settle and a close racing on one run would otherwise interleave
+   * a ledger write with the transition that closes it.
+   */
+  app.post('/api/runs/:id/items', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/runs/:id/items')) return;
+    const coord = deps.coord;
+
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+
+    const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
+    return sendSettleItemsOutcome(reply, outcome);
   });
 
   /** `GET /api/runs?closed=1` — cold start, and the archive of finished runs
