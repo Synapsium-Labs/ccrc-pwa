@@ -121,11 +121,18 @@ curl's own exit status. The refusals you will actually meet are
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
 `/:id/advance`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a
-disjoint vocabulary, all on `error`: `unauthenticated`, `bad-kind`,
+mostly disjoint vocabulary, all on `error`: `unauthenticated`, `bad-kind`,
 `oversize`, `registry-unmeasurable`, `unknown-sender`, `stale-uuid`,
 `unknown-recipient`, `unknown-run`. §3 of `references/wave-lifecycle.md`
 covers the ones you can actually cause by acking or sending mail wrong
 (`bad-kind`, `stale-uuid`); the rest are there for completeness.
+
+**`oversize` is not mail-exclusive.** `POST /api/runs/:id/dispatch` sends the
+identical `error:'oversize'` (413) when the wave brief itself is too long —
+a RUN-route answer, checked before anything on the run is touched. Its own
+meaning and recovery rule (trim the brief and resend; the run is untouched)
+are in the dispatch table, `references/wave-lifecycle.md` §2 — not repeated
+here, so there is exactly one place this code's dispatch-side meaning lives.
 
 **Not every non-2xx body carries a code at all.** `error:'bad-request'` (400,
 a malformed request body — including the fingerprint SHAPE `POST
@@ -143,6 +150,12 @@ a specific rule for — **stop and report**, never retry blindly. A retry after
 `registry-unmeasurable` specifically can ORPHAN a workspace `ccd ws-add`
 already spawned before the refusal landed — see the table in
 `references/wave-lifecycle.md` §2.
+
+One more untyped shape, and it is not run-route-specific: `error:'not-configured'`
+(501) is what EVERY coordination route — the mail pair and all four run
+routes alike — answers when this box's server has no coordination database
+wired in at all. It is not a per-call failure to retry; it is a fact about
+the box, the same as `unsupported`: stop and report it to the operator.
 
 ## The wave lifecycle
 

@@ -242,13 +242,17 @@ describe('the coordinator skill: linkage', () => {
     }
   });
 
-  it('names the untyped shapes a run route can also answer — bad-request, unsupported, and the bare-502 no-code case (fix, review finding 9/17)', () => {
+  it('names the untyped shapes a run route can also answer — bad-request, unsupported, not-configured, and the bare-502 no-code case (fix, review finding 9/17; I9)', () => {
     // `shared/api.ts`'s own `RunRefuseCode` docstring: `error:'unsupported'`,
-    // `error:'bad-request'` and a bare `{ok:false,stderr}` are real, are not
-    // members of ANY typed vocabulary, and are consequently invisible to
-    // both directions of the two tests above — this is the completeness
-    // check for exactly the codes those two cannot see by construction.
-    for (const token of ['bad-request', 'unsupported', 'stderr']) {
+    // `error:'bad-request'`, `error:'not-configured'` and a bare
+    // `{ok:false,stderr}` are real, are not members of ANY typed vocabulary,
+    // and are consequently invisible to both directions of the two tests
+    // above — this is the completeness check for exactly the codes those two
+    // cannot see by construction. `not-configured` (I9) is EVERY coordination
+    // route's own answer with no store wired in (`routes.ts:172`) — not
+    // run-route-specific like the other three, but untyped the same way and
+    // just as absent from the skill before this fix.
+    for (const token of ['bad-request', 'unsupported', 'not-configured', 'stderr']) {
       expect(allSkillText, `${token} is a real untyped refusal shape but is named nowhere in the skill`)
         .toContain(token);
     }
