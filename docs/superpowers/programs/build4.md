@@ -2,7 +2,7 @@
 
 Spec: docs/superpowers/specs/2026-08-11-build4-conversation-and-controls-design.md
 Plan: docs/superpowers/plans/2026-08-11-build4-conversation-and-controls.md
-Workspace: (spawned at wave-1 dispatch; recorded after)
+Workspace: ccrc-pwa-amber-harbor (spawned by wave-1 dispatch, 2026-08-11; run id 1)
 Coordinator: claude-ccrc-pwa (Fable tier — first-ever coordinated program, contract under test;
 tier re-evaluated at each wave boundary per the model-selection policy)
 
@@ -14,7 +14,7 @@ each cut from main after the previous merged.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Coordination: the writer (Tasks 1–5 — items on dispatch, dispatchRun tx, settleItems, POST /api/runs/:id/items, skill docs) | — | dispatching |
+| 1 | Coordination: the writer (Tasks 1–5 — items on dispatch, dispatchRun tx, settleItems, POST /api/runs/:id/items, skill docs) | — | dispatched (run 1, worker ccrc-pwa-amber-harbor, brief 2793B queued) |
 | 2 | Fleet Mutation + run-control substrate (Tasks 6–10 — coord-pause verb+grant, coord frame, abandon route) | — | pending |
 | 3 | PWA: the console's hands (Tasks 11–14 — banner, abandon sheet, start-program sheet) | — | pending |
 | 4 | Session Conversation: the transcript (Tasks 15–19 — envelope parser, mail ChatItem, ask card) | — | pending |
