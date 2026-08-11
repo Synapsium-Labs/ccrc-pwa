@@ -28,6 +28,19 @@ each cut from main after the previous merged.
 - Waves 3 and 4 are file-disjoint and could run in parallel; run sequentially unless the
   coordinator judges the calendar needs it (parallelism only across proven-disjoint workspaces).
 
+## Dogfood findings (live, wave 1)
+
+- F1 — A FRESHLY SPAWNED WORKER CANNOT RECEIVE ITS FIRST BRIEF. The delivery gate
+  requires hookstate evidence of a completed turn (hs === null -> skip, correctly
+  fail-shut), but a virgin session has never spoken. The brief sat queued ~40min.
+  Interim: the coordinator sent a kickoff prompt via the ordinary prompt route; the
+  worker's first Stop wrote hookstate and the lane then delivered the brief verbatim.
+  FIX CANDIDATE (wave 2 amendment or Build 5): session-hook.sh's SessionStart handler
+  writes state=done — a just-started session is definitionally at an idle boundary.
+- F2 — THE DRAFT GUARD HELD UNDER RACE. The kickoff nudge and the brief delivery
+  raced; the sweep answered draft-present twice, backed off, and delivered cleanly
+  once the box emptied. The design behaved exactly as specified; recorded as a pass.
+
 ## Carried constraints
 
 - The wave-1 run's own tally reads `—` (no items exist until wave 1 ships the writer and a
