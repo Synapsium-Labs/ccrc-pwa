@@ -36,7 +36,8 @@ run row's own `wave`.
 
 ## 2 — Dispatch a wave
 
-`POST /api/runs/:id/dispatch` `{"brief":"<the wave brief, prose>"}`
+`POST /api/runs/:id/dispatch`
+`{"brief":"<the wave brief, prose>","items":["<title>", …]}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
 
@@ -48,6 +49,24 @@ with the run now `dispatched`, or a refusal:
 | `cap-daily` | `maxSessionsPerDay` is used up | stop, name the cap, wait |
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
+
+**`items` — the wave's declared ledger.** `"items"` is the machine-readable
+half of the wave plan whose other half is the brief: one title per unit of
+work, at most **32** of them, each at most **200 UTF-8 bytes** (bytes, not
+characters — a title of emoji or CJK hits the cap sooner than its length
+suggests). The brief stays prose the server never reads; these titles are what
+the run board counts, so **the two must agree** — a brief that names five
+units of work beside three items renders a tally that lies. A malformed
+`items` (not an array, an entry that is not a non-empty string, past either
+cap) answers `error:'bad-request'` (400) before anything is listed, spawned or
+held: the run is untouched, still `planned`. Omitting `items`, or sending
+`[]`, is legal and means this wave declared no ledger — the board renders `—`
+rather than `0/0`.
+
+**The ledger is fixed at dispatch.** No route adds an item to a dispatched
+run, so `total` never grows and the tally can never move backwards. Work
+discovered mid-wave is a note in the wave-done mail and an item in the NEXT
+wave's brief — that is what waves are for.
 
 `unknown-run` (404) means the run id is wrong or the DB was rebuilt — re-read
 `GET /api/runs`. `bad-transition` (409) means this run is not `planned` —
@@ -195,6 +214,39 @@ Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
 `answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
 this run's id — and leave the run alone. A stale `wave-done` must never
 settle a wave.
+
+### 4b — Settle the work items, AFTER the advance answers `ok`
+
+`POST /api/runs/:id/items`
+`{"items":[{"id":<item id>,"state":"done","claimedBy":"<worker id>"}, …]}`
+→ `{"ok":true,"id":<run id>,"items":{"done":<n>,"total":<n>}}` — the fresh
+tally, which is what the board renders.
+
+**Order is the authorisation.** Send this only once `POST /api/runs/:id/advance`
+has answered `ok` for the same claim. That answer is the server's own
+re-measurement, and it is the moment ccrc is allowed to believe a worker
+(contract clause 6). Settling never off the worker's claim alone: a tally that
+flips to `5/5` because a mail said so is a lie on the console, and the console
+is the product. Nothing re-measures here — this route performs no fleet act at
+all — precisely because the re-measurement already happened one call earlier.
+
+`state` is one of `pending` / `claimed` / `done` / `failed` / `abandoned`.
+`unknown` is a READ-side value the board uses for a token it does not
+recognise; a writer may not name it (400 `bad-request`). `claimedBy` is
+optional and defaults to `null`. Item ids come from the run row's own ledger —
+`GET /api/runs` carries the tally, and the ids are the ones the dispatch
+declared, in body order.
+
+A batch is **all-or-nothing**, inside one transaction: a body naming one bad
+id settles NOTHING, and the earlier ids in the same body are untouched.
+Partial success on a ledger write is how tallies drift.
+
+| shape | meaning | what you do |
+|---|---|---|
+| `refused:'unknown-item'` (404), with `itemId` | that id is not THIS run's item (another run's, or none) | **stop and report** — do not retry with a guessed id. Re-read the run's ledger first |
+| `refused:'item-terminal'` (409), with `itemId` and `state` | the item already settled (`done`/`failed`/`abandoned` are terminal) and the write was refused, not silently applied | **stop and report** — a tally that moved backwards is a lie on the console. If the item genuinely needs a different outcome, that is an operator decision, not a retry |
+| `error:'unknown-run'` (404) | the run id is wrong or the DB was rebuilt | re-read `GET /api/runs` |
+| `error:'bad-request'` (400) | shape: no `items` array, an empty one, a non-integer id, a `state` outside the vocabulary, or past 32 entries | fix the body; nothing was written |
 
 ## 5 — The boundary: open the next wave's run, THEN close this one
 

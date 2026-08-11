@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { RUN_GLYPH, RUN_WORD, isRunClosed, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { RUN_GLYPH, RUN_WORD, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { formatAge } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -94,7 +94,7 @@ function RunRow({
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
       <span className="run-state">{RUN_WORD[state]}</span>
       <span className="run-ws">{run.workspace ?? run.branch ?? String(run.id)}</span>
-      <span className="run-tally">{items.done}/{items.total}</span>
+      <span className="run-tally">{itemTallyLabel(items)}</span>
       <span className="run-when">
         {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
       </span>

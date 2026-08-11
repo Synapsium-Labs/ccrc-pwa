@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { RUN_STATES, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { RUN_ORDER, RUN_WORD, programWave } from '../src/fleet/runWords';
+import { RUN_ORDER, RUN_WORD, itemTallyLabel, programWave, runItems } from '../src/fleet/runWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -155,6 +155,51 @@ describe('the run board', () => {
     // no failed/blocked columns exist anywhere (reconciliation item 1).
   });
 
+  it('renders an em dash, never 0/0, for a run that declared no ledger', () => {
+    // Spec §3.3 / D-B4-15: a wave that declared no ledger must not read as a
+    // wave that has done nothing — `summarize()`'s own rule ("drop zero-count
+    // clauses rather than print `0 X`") applied to the one place it was not.
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(document.querySelector('.run-tally')?.textContent).toBe('—');
+    expect(screen.queryByText('0/0')).toBeNull();
+  });
+
+  it('renders 3/7 for a run that declared seven', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(document.querySelector('.run-tally')?.textContent).toBe('3/7');
+  });
+
+  it('renders 0/7 for a declared ledger nothing has settled yet — only total 0 is the dash', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ items: { done: 0, total: 7 } })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(document.querySelector('.run-tally')?.textContent).toBe('0/7');
+  });
+
+  it('gives the tally no glyph — it is a count, not a state', () => {
+    // Two-cue discipline applies to STATES. A tally is a count and gets no
+    // second cue invented for it (spec §3.3).
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const tally = document.querySelector('.run-tally');
+    expect(tally?.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(tally?.getAttribute('title')).toBeNull();
+  });
+
+  it('itemTallyLabel is the one place the rule lives, and it is total-based', () => {
+    expect(itemTallyLabel({ done: 0, total: 0 })).toBe('—');
+    expect(itemTallyLabel({ done: 0, total: 1 })).toBe('0/1');
+    expect(itemTallyLabel({ done: 3, total: 7 })).toBe('3/7');
+    // A row that reached a renderer without `items` at all reads as no
+    // declared ledger, not as a crash — `runItems`' own tolerance, composed.
+    expect(itemTallyLabel(runItems({}))).toBe('—');
+  });
+
   it('carries BOTH cues — a word and a glyph — for every state', () => {
     // StatusDot's discipline: "no state the user has to interpret from a status
     // dot alone". A run board that colour-coded alone would fail the same rule.
@@ -186,7 +231,12 @@ describe('the run board', () => {
     const bad = noItems as unknown as RunSummary;
     act(() => { store.setState({ runs: [bad], runsFrameSeen: true }); });
     expect(() => render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />)).not.toThrow();
-    expect(screen.getByText('0/0')).toBeInTheDocument();
+    // `runItems`' `{done:0,total:0}` default, rendered through
+    // `itemTallyLabel`: a row that reached this renderer without a tally
+    // reads as "no declared ledger" (spec §3.3's em dash), never as `0/0` —
+    // which would be a claim that a ledger exists and nothing in it is done.
+    expect(document.querySelector('.run-tally')?.textContent).toBe('—');
+    expect(screen.queryByText('0/0')).toBeNull();
   });
 
   it('a row with no `closedAt` lands in Active, never silently in Finished (finding 2)', () => {
