@@ -19,6 +19,7 @@ const agent = await startAgent({
   host: process.env.CCRC_AGENT_HOST,
   port: process.env.CCRC_AGENT_PORT ? Number(process.env.CCRC_AGENT_PORT) : undefined,
   token,
+  projectsRoot: process.env.CCRC_PROJECTS_ROOT,
 });
 
 console.log(`ccrc-agent on ${process.env.CCRC_AGENT_HOST ?? '127.0.0.1'}:${agent.port}`);

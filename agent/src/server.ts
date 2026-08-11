@@ -56,7 +56,22 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10_000;
 const MAX_EXEC_TIMEOUT_MS = 300_000;
 const EXEC_MAX_BUFFER = 8 * 1024 * 1024;
 const AUTH_CLOSE_CODE = 4401;
-export const DEFAULT_PROJECTS_ROOT = '/srv/projects';
+/** Resolution order for the whitelist's projects root: explicit option
+ *  (tests, embedders) > CCRC_PROJECTS_ROOT (production — set in
+ *  ~/.ccrc/agent.env) > $HOME/projects (spec §2's cross-component default).
+ *  The old export was one operator's literal Hetzner volume id
+ *  ('/srv/projects'), compiled in with no override —
+ *  every OTHER machine's agent silently whitelisted a directory that does
+ *  not exist. An empty env var counts as absent, never as a root of "". */
+export function resolveProjectsRoot(
+  rawRoot: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (rawRoot !== undefined && rawRoot !== '') return rawRoot;
+  const fromEnv = env.CCRC_PROJECTS_ROOT;
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+  return path.join(os.homedir(), 'projects');
+}
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | { t: 'ready'; v: 1; ccdVerbs: string[] };
 
@@ -457,7 +472,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     port: rawOpts.port ?? 7789,
     token: rawOpts.token,
     home: rawOpts.home ?? os.homedir(),
-    projectsRoot: rawOpts.projectsRoot ?? DEFAULT_PROJECTS_ROOT,
+    projectsRoot: resolveProjectsRoot(rawOpts.projectsRoot),
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
