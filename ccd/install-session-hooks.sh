@@ -22,7 +22,7 @@ BACKUPS="$HOME/ccrc-backups/$TS"
 
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
-else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt"); fi
+else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt" "$HOME/.claude-dev0"); fi
 
 # Sweep every managed entry (filename match, so stale paths get replaced
 # too), then insert exactly one managed entry per event — PreToolUse with
