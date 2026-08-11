@@ -418,7 +418,18 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // leftover from before the drop. `dialog` is untouched — the scraped
         // channel has no analogous "was this fleet host still writing while
         // we were gone" gap, since the pane is re-scraped fresh every poll.
-        set({ ask: null });
+        //
+        // `mail` gets the identical belt-and-braces (fix round 1, finding 3's
+        // named residual): `sessionws.ts`'s own per-connection sentinel now
+        // sends an explicit `{type:'mail', mail:[]}` on every fresh connect
+        // when nothing is outstanding, the same discipline `checkHookAsk`
+        // already had — but only while `deps.coord` exists on that server
+        // process. A box that starts without a coordination database sends
+        // no `mail` frame at all, ever, on any connection; clearing here
+        // means an explicit teardown can never leave a stale list on screen
+        // even in that corner, the same way `ask: null` covers `checkHookAsk`'s
+        // corner.
+        set({ ask: null, mail: [] });
       },
 
       async send(text, opts = {}) {

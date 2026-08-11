@@ -978,16 +978,71 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     ws.close();
   });
 
-  it('sends no mail frame at all when nothing is outstanding — the same first-read swallow `tasks` gets', async () => {
+  // Fix round 1 (findings 1/3): this INVERTS what the test used to pin. A
+  // fresh connection with nothing outstanding used to be swallowed silently
+  // by the same `lastMailJson === null` first-read gate `checkTasks` still
+  // has — exactly the bug `lastAskJson`'s `undefined` sentinel exists to
+  // rule out for `ask` (see that field's own comment). Every fresh connect
+  // must now state the mail truth explicitly, even when it is empty, the
+  // same discipline `ask_cleared` already had — a possibly-stale client can
+  // only be corrected by an explicit answer, never by silence.
+  it('states the mail truth explicitly on every fresh connect, even when it is empty', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
     const next = collect(ws);
     await opened(ws);
 
     const first = await nextIgnoringAsk(next, 6000);
     expect(first.type).toBe('backlog');
-    // Nothing else arrives promptly: no mail frame rides along with an empty list.
-    await expect(nextIgnoringAsk(next, 300)).rejects.toThrow();
+    let mailFrame: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail).toEqual([]);
     ws.close();
+  });
+
+  // MEASURED, not inferred (fix round 1, finding 3): a fresh `SessionStream`
+  // — literally what every reconnect is, automatic or explicit (`start()`) —
+  // must not go on asserting mail the recipient already acked while the
+  // socket was down. Before this fix, `lastMailJson` started at `null`, so a
+  // fresh connection whose own first read was already `[]` (the delivery
+  // had been acked while nobody was listening) matched the swallow and sent
+  // NOTHING — the client kept whatever stale list an earlier connection had
+  // shown it.
+  it('a reconnect after an ack while the socket was down states the truth, not the stale list', { timeout: 15_000 }, async () => {
+    const deliveryId = queueTo(ID, 'stale after ack');
+
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next1 = collect(ws1);
+    await opened(ws1);
+    let firstMail: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !firstMail; i++) {
+      const m = await next1(6000);
+      if (m.type === 'mail') firstMail = m;
+    }
+    expect(firstMail?.mail).toHaveLength(1);
+    expect(firstMail!.mail[0]!.subject).toBe('stale after ack');
+    ws1.close();
+
+    // Acked WHILE THE SOCKET IS DOWN — the exact failure scenario: a
+    // ReconnectingSocket reconnect never runs the PWA's own disconnect(),
+    // and even disconnect() never touched `mail` before this fix round.
+    coord.markDelivered(deliveryId, Date.now());
+    coord.markAcked(deliveryId, Date.now());
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next2 = collect(ws2);
+    await opened(ws2);
+    let secondMail: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !secondMail; i++) {
+      const m = await next2(6000);
+      if (m.type === 'mail') secondMail = m;
+    }
+    expect(secondMail).toBeDefined();
+    expect(secondMail!.mail).toEqual([]);
+    ws2.close();
   });
 
   it('pushes freshly queued mail on the next poll tick', { timeout: 15_000 }, async () => {
@@ -995,6 +1050,17 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     const next = collect(ws);
     await opened(ws);
     await nextIgnoringAsk(next, 6000); // backlog — nothing outstanding yet
+
+    // Drain the initial explicit empty `mail` frame this fix now always
+    // sends on first check (finding 3) before asserting on the one the poll
+    // tick pushes — otherwise this loop would catch that first empty frame
+    // and never see the one `queueTo` below actually produces.
+    let initialMail: { type: string; mail: unknown[] } | undefined;
+    for (let i = 0; i < 6 && !initialMail; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') initialMail = m;
+    }
+    expect(initialMail?.mail).toEqual([]);
 
     queueTo(ID, 'fresh mail after connect');
     let mailFrame: { type: string; mail: { subject: string }[] } | undefined;

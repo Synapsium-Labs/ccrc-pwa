@@ -668,3 +668,61 @@ describe('CoordStore: feed (Task 10)', () => {
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
   });
 });
+
+// Fix round 1, findings 2/4: `mailForRecipient`'s LIMIT used to be applied
+// over ALL deliveries (any state), and the `queued`/`delivered` filter ran
+// AFTER — in `sessionws.ts`'s `checkMail`, outside the store entirely. An
+// outstanding delivery older than the newest N deliveries to that recipient
+// therefore fell out of the window and vanished, even though it was still
+// genuinely queued. `outstandingMailFor` puts the state predicate IN the
+// WHERE clause, so `limit` bounds outstanding rows, never history.
+describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
+  const FROM_ID = 'coordinator';
+  const FROM_UUID = 'c'.repeat(36);
+  const queue = (s: CoordStore, toId: string, subject: string): number => {
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
+      kind: 'question', subject, body: 'body', artifacts: [] });
+    return s.queueDelivery(mail.id, toId, 'envelope').id;
+  };
+
+  it('a LIMIT of N still surfaces an outstanding delivery older than N newer, acked ones', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    // The oldest delivery (smallest id) is the one that stays outstanding.
+    const staleId = queue(s, toId, 'still outstanding');
+    // Three newer deliveries, all acked — under the OLD "limit-then-filter"
+    // shape, a `limit` of 3 would return exactly these three (newest-first)
+    // and the filter would have nothing outstanding left to keep.
+    for (let i = 0; i < 3; i++) {
+      const id = queue(s, toId, `acked #${i}`);
+      s.markDelivered(id, Date.now());
+      s.markAcked(id, Date.now());
+    }
+    const outstanding = s.outstandingMailFor(toId, 3);
+    expect(outstanding.map((m) => m.id)).toEqual([staleId]);
+    expect(outstanding[0]!.subject).toBe('still outstanding');
+    expect(outstanding[0]!.state).toBe('queued');
+  });
+
+  it('excludes acked and rejected mail, includes queued and delivered, same as `mailForRecipient`\'s own callers expect', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const queuedId = queue(s, toId, 'queued');
+    const deliveredId = queue(s, toId, 'delivered');
+    s.markDelivered(deliveredId, Date.now());
+    const ackedId = queue(s, toId, 'acked');
+    s.markDelivered(ackedId, Date.now());
+    s.markAcked(ackedId, Date.now());
+    const rejectedId = queue(s, toId, 'rejected');
+    s.rejectDelivery(rejectedId, 'stale-uuid', 'gone');
+
+    expect(s.outstandingMailFor(toId).map((m) => m.id).sort((a, b) => a - b))
+      .toEqual([queuedId, deliveredId].sort((a, b) => a - b));
+  });
+
+  it('never crosses recipients — mail addressed to a different session is invisible here', () => {
+    const s = store();
+    queue(s, 'some-other-session', 'not for you');
+    expect(s.outstandingMailFor('ccrc-pwa-clear-cove')).toEqual([]);
+  });
+});

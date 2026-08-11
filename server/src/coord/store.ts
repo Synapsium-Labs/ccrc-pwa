@@ -61,6 +61,42 @@ const RUN_ROW_COLUMNS =
   'r.handoffCommit, r.prLineage';
 
 /**
+ * Coordination's own terminal-state rule, spelled ONCE (bounded context 5:
+ * "acked and rejected are terminal" — `docs/superpowers/specs/2026-08-10-
+ * architecture-ddd-clean-solid.md`): the states a delivery sits in while it
+ * is still "outstanding". Before fix round 1 (findings 2/4) this predicate
+ * was spelled independently, in SQL, at three call sites in this file
+ * (`cancelOutstandingDeliveries`, `unreadMailCount`, `hasOutstandingMail`) —
+ * and a FOURTH copy, re-implemented as a JS `.filter()`, lived outside the
+ * store entirely, in `sessionws.ts`'s `checkMail`, on the wrong side of
+ * `mailForRecipient`'s own `LIMIT`: applied to a 100-row *history* window
+ * rather than to the query that produces it, so an old unacked delivery
+ * could fall out of that window and read as gone while still genuinely
+ * queued. `outstandingMailFor` below is the store-side fix; this constant is
+ * what lets every "is this delivery outstanding" query converge on one
+ * fragment instead of independently agreeing four times.
+ */
+const OUTSTANDING_STATES_SQL = "('queued','delivered')";
+
+/** The joined row shape `mailForRecipient` and `outstandingMailFor` both
+ *  read — they differ only in their WHERE clause, never in these columns. */
+const MAIL_ROW_COLUMNS =
+  'm.id AS id, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
+  'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state';
+
+interface MailRowDb {
+  id: number; at: number; fromId: string; toId: string; runId: number | null;
+  kind: string; subject: string; artifacts: string; state: string;
+}
+
+/** A route argument can never ask either mail read to walk more history (or
+ *  more outstanding rows) than is reasonable to JSON-stringify into one
+ *  response — the same clamp `mailForRecipient` has always applied, now
+ *  shared with `outstandingMailFor`. */
+const clampMailLimit = (limit: number): number =>
+  Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 500) : 100;
+
+/**
  * Every read and every write of the coordination database, in one class, and
  * SYNCHRONOUS throughout — `DatabaseSync` has no async surface, so a whole
  * transaction runs without yielding the event loop and nothing can interleave
@@ -238,7 +274,7 @@ export class CoordStore {
   cancelOutstandingDeliveries(runId: number): void {
     this.db.prepare(
       "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
-      "lastError = 'run closed' WHERE state IN ('queued','delivered') " +
+      `lastError = 'run closed' WHERE state IN ${OUTSTANDING_STATES_SQL} ` +
       'AND mailId IN (SELECT id FROM mail WHERE runId = ?)',
     ).run(runId);
   }
@@ -427,8 +463,8 @@ export class CoordStore {
   private unreadMailCount(runId: number, sessionId: string | null): number {
     if (sessionId === null) return 0;
     return (this.db.prepare(
-      "SELECT count(*) AS c FROM mail_deliveries d JOIN mail m ON m.id = d.mailId " +
-      "WHERE m.runId = ? AND d.toId = ? AND d.state IN ('queued','delivered')",
+      'SELECT count(*) AS c FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      `WHERE m.runId = ? AND d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL}`,
     ).get(runId, sessionId) as { c: number }).c;
   }
 
@@ -568,14 +604,41 @@ export class CoordStore {
    * reasonable to JSON-stringify into one response.
    */
   mailForRecipient(toId: string, limit = 100): MailSummary[] {
-    const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 500) : 100;
+    const n = clampMailLimit(limit);
     const rows = this.db.prepare(
-      'SELECT m.id AS id, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
-      'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state ' +
-      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      `SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +
       'WHERE d.toId = ? ORDER BY d.id DESC LIMIT ?',
-    ).all(toId, n) as { id: number; at: number; fromId: string; toId: string; runId: number | null;
-                         kind: string; subject: string; artifacts: string; state: string }[];
+    ).all(toId, n) as unknown as MailRowDb[];
+    return this.hydrateMail(rows);
+  }
+
+  /**
+   * Every OUTSTANDING (`queued` or `delivered`, unacked) delivery addressed
+   * to `toId`, newest first — `checkMail`'s (`sessionws.ts`) only caller,
+   * and the fix for findings 2/4 (fix round 1): unlike `mailForRecipient`,
+   * the state predicate is in the WHERE clause, so `limit` bounds
+   * OUTSTANDING rows rather than history. Before this method existed,
+   * `checkMail` filtered `mailForRecipient`'s own 100-row history window in
+   * JS, AFTER the cap — a delivery that was still genuinely queued, but
+   * older than the newest 100 deliveries to that recipient, silently fell
+   * out of the window the session mail strip watches. The coordinator
+   * session is the run-of-the-mill victim: every worker's mail resolves to
+   * it (`resolveCoordinator`) across every wave of a program.
+   */
+  outstandingMailFor(toId: string, limit = 100): MailSummary[] {
+    const n = clampMailLimit(limit);
+    const rows = this.db.prepare(
+      `SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +
+      `WHERE d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL} ORDER BY d.id DESC LIMIT ?`,
+    ).all(toId, n) as unknown as MailRowDb[];
+    return this.hydrateMail(rows);
+  }
+
+  /** `MailRowDb` -> `MailSummary`: the one place a raw joined mail/delivery
+   *  row becomes the typed shape, shared by `mailForRecipient` and
+   *  `outstandingMailFor` — they differ only in their WHERE clause, never in
+   *  how a row is read. */
+  private hydrateMail(rows: readonly MailRowDb[]): MailSummary[] {
     return rows.map((r) => ({
       id: r.id, at: r.at, fromId: r.fromId, toId: r.toId, runId: r.runId,
       kind: isMailKind(r.kind) ? r.kind : 'unknown', subject: r.subject,
@@ -594,8 +657,8 @@ export class CoordStore {
    *  `queueSystemMail`'s own call sites are the only callers. */
   hasOutstandingMail(runId: number, toId: string, subject: string): boolean {
     const row = this.db.prepare(
-      "SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id " +
-      "WHERE m.runId = ? AND d.toId = ? AND m.subject = ? AND d.state IN ('queued','delivered') LIMIT 1",
+      'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      `WHERE m.runId = ? AND d.toId = ? AND m.subject = ? AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
     ).get(runId, toId, subject);
     return row !== undefined;
   }

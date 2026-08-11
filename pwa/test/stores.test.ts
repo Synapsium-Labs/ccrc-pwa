@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatEvent, Dialog, FleetSession, HookAsk, SessionStreamMsg } from '../../shared/api';
+import type { ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
@@ -59,6 +59,11 @@ const emptySnap = (): SessionSnapshot => ({
 
 const askFixture: HookAsk = {
   questions: [{ question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }],
+};
+
+const mailFixture: MailSummary = {
+  id: 1, at: 1_754_000_000_000, fromId: 'coordinator', toId: 's1', runId: 3,
+  kind: 'question', subject: 'rebase before you start?', artifacts: [], state: 'delivered',
 };
 
 /** Minimal scripted WebSocket stand-in for store connect() tests. */
@@ -255,6 +260,22 @@ describe('session store optimistic send', () => {
 
     store.getState().disconnect();
     expect(store.getState().ask).toBeNull();
+  });
+
+  // Fix round 1, finding 3's named residual: `sessionws.ts`'s own
+  // per-connection sentinel now states the mail truth explicitly on every
+  // fresh connect (including an empty one), which is the primary fix — this
+  // pins the client's own belt-and-braces for the one corner that sentinel
+  // cannot reach, a box whose coordination database is absent entirely
+  // (`checkMail`'s `!this.deps.coord` early return sends no frame at all,
+  // ever, on that server process).
+  it('disconnect() clears outstanding mail, the same belt-and-braces `ask` already gets', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'mail', mail: [mailFixture] });
+    expect(store.getState().mail).toEqual([mailFixture]);
+
+    store.getState().disconnect();
+    expect(store.getState().mail).toEqual([]);
   });
 
   it('disconnect() leaves the scraped dialog untouched — that channel is re-scraped fresh every poll', () => {

@@ -64,8 +64,26 @@ export class SessionStream {
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
   /** Serialized last-sent outstanding-mail list — the change gate for the
-   *  `mail` frame, the identical shape `lastTasksJson` uses for `tasks`. */
-  private lastMailJson: string | null = null;
+   *  `mail` frame. `undefined` (not `null`) until the first read, for the
+   *  EXACT reason `lastAskJson` below is `undefined`: this instance is per
+   *  CONNECTION, and a client can arrive already holding a stale `mail` list
+   *  from before a drop — an automatic `ReconnectingSocket` reconnect never
+   *  runs the PWA's own `disconnect()`, and even `disconnect()` never
+   *  touched `mail` in the first place (fix round 1, findings 1/3). The
+   *  scenario the old `null` sentinel missed: a client is shown one item,
+   *  the socket drops, the session acks that delivery while the client is
+   *  away, then a fresh `SessionStream` connects and its own first read is
+   *  ALREADY `[]` — with the old `null` sentinel and its first-read-empty
+   *  swallow (mirroring `checkTasks`'s own swallow), `null === null` never
+   *  held (the JSON is `'[]'`, not `null`), but the SWALLOW clause itself
+   *  (`lastMailJson === null && outstanding.length === 0`) matched and ate
+   *  the send — the reconnecting client's stale one-item list was never
+   *  corrected. `undefined` guarantees the first check always sends
+   *  something explicit: an empty `{type:'mail', mail: []}` frame costs
+   *  exactly what `ask_cleared` already costs on every connect, and it is
+   *  the only way to confirm to a possibly-stale client that there is truly
+   *  nothing outstanding. */
+  private lastMailJson: string | null | undefined = undefined;
   /** Serialized last-sent hook ask envelope — the change gate for `ask` /
    *  `ask_cleared`. See `checkHookAsk`. `undefined` (not `null`) until the
    *  first read: this instance is per CONNECTION, and a client can arrive
@@ -247,9 +265,10 @@ export class SessionStream {
 
   /**
    * This session's own outstanding mail (Build 7 Task 6, PR J) — read
-   * directly off `CoordStore.mailForRecipient`, the SAME in-process call
+   * directly off `CoordStore.outstandingMailFor`, the SAME in-process call
    * `readTasks` above is to the filesystem, and sent when it differs from
-   * what this client last saw, the SAME change gate `checkTasks` uses.
+   * what this client last saw (see `lastMailJson`'s own comment for why the
+   * gate is `undefined`, not `null`).
    *
    * Deliberately NOT a client of `GET /api/mail?to=` (`coord/routes.ts`):
    * that route is gated on the box token (`requireMailToken`) because it
@@ -265,22 +284,20 @@ export class SessionStream {
    * sends no `mail` frame at all, the same silent absence every route in
    * `coord/routes.ts` answers with 501 `not-configured`.
    *
-   * Filtered to `queued`/`delivered` here, not in the store: `mailForRecipient`
-   * is a general-purpose read (the coordinator's own `GET /api/mail?to=` uses
-   * it unfiltered, to show acked/rejected history too) — "outstanding" is
-   * THIS caller's own policy, spec:236-237's own wording ("acked and rejected
-   * are excluded server-side").
+   * `outstandingMailFor` puts the `queued`/`delivered` predicate in the
+   * store's own WHERE clause (fix round 1, findings 2/4) rather than this
+   * caller filtering `mailForRecipient`'s general-purpose, history-bounded
+   * read AFTER its `LIMIT` — the earlier shape let an old unacked delivery
+   * fall outside the newest-100-deliveries window and read as gone here
+   * while `GET /api/runs`' `unreadMail` (store.ts's own `unreadMailCount`,
+   * no `LIMIT` at all) still counted it. "Outstanding = queued|delivered" is
+   * the store's rule now, in one place, not this caller's.
    */
   private async checkMail(): Promise<void> {
     if (this.stopped || !this.deps.coord) return;
-    const outstanding = this.deps.coord.mailForRecipient(this.id)
-      .filter((m) => m.state === 'queued' || m.state === 'delivered');
+    const outstanding = this.deps.coord.outstandingMailFor(this.id);
     const json = JSON.stringify(outstanding);
     if (json === this.lastMailJson) return;
-    if (this.lastMailJson === null && outstanding.length === 0) {
-      this.lastMailJson = json;
-      return;
-    }
     this.lastMailJson = json;
     this.send({ type: 'mail', mail: outstanding });
   }
