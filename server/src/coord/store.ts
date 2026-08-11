@@ -78,6 +78,14 @@ const RUN_ROW_COLUMNS =
  */
 const OUTSTANDING_STATES_SQL = "('queued','delivered')";
 
+/** The replay-ceiling park's own `lastError`, written by exactly one call
+ *  site (`watch.ts`'s `sweepMail`, `store.rejectDelivery(d.id, 'undeliverable',
+ *  MAIL_REPLAY_CEILING_ERROR)`) and read back by exactly one other
+ *  (`markAcked` below, deviation D-67-b / orchestrator ruling I2): a shared
+ *  constant rather than the same string literal typed twice, so the two can
+ *  never drift apart and silently stop recognising each other's writes. */
+export const MAIL_REPLAY_CEILING_ERROR = 'replayed without ack past the replay ceiling';
+
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
  * finding 2) — `OUTSTANDING_STATES_SQL` above, unioned with a `rejected`
@@ -97,16 +105,48 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  * (`lastError = 'run closed'`): that one is not abandonment, it is the run
  * closing making the delivery moot BY DESIGN — surfacing it as "still needs
  * attention" would be exactly the false alarm this predicate exists to
- * avoid on the other end. And DELIBERATELY NOT threaded through
- * `hasOutstandingMail` (the dedupe guard on `queueSystemMail`'s own retry
- * loop) or `dueDeliveries`/`markDelivered`/`rejectDelivery`'s own
- * `NOT IN ('acked','rejected')` write-guards — this predicate answers "is
- * this worth a human's attention", a UI-facing question, not "should the
- * delivery lane act on this again", which stays exactly `'rejected'`-is-
- * terminal (bounded context 5) for every one of those.
+ * avoid on the other end. `COALESCE(d.lastError, '')` (nit I7): SQLite's `!=`
+ * is NULL, not true, against a NULL `lastError` (a delivery rejected for a
+ * reason that never wrote one), and NULL is FALSY in a `WHERE` — the bare
+ * comparison silently dropped exactly that row out of the whole OR chain
+ * instead of counting it as abandoned.
+ *
+ * ALSO EXCLUDES an abandoned row whose OWN run has since reached a terminal
+ * state (orchestrator ruling I2, part (a) — "run close clears by
+ * derivation, not mutation"): before this clause, an abandoned delivery
+ * (parked at the replay ceiling, `MAIL_REPLAY_CEILING_ERROR` above) was
+ * permanently outstanding — `cancelOutstandingDeliveries` only ever matches
+ * `queued`/`delivered` rows, so a run's close never touches a delivery that
+ * was already `rejected` for a DIFFERENT reason, and `markAcked` refused
+ * every `rejected` row outright. The MailStrip row and `unreadMail` count
+ * survived both acking and run close, forever. Rather than teach a writer to
+ * chase this (another mutation, another race with the same close-time park
+ * this file's other comments spend so many words guarding against), the
+ * READ derives it: `rr.state` (via the `LEFT JOIN runs rr ON rr.id =
+ * m.runId` every caller of this fragment now carries) is checked directly,
+ * and `COALESCE(rr.state, '')` — not a bare `rr.state NOT IN (...)` — is
+ * deliberate: SQLite's `IN` against a NULL `rr.state` (no run named at all,
+ * `m.runId IS NULL`, or a runId the `runs` table has no row for) is NULL,
+ * and `NOT NULL` is NULL, not TRUE, which would silently exclude a
+ * NULL-runId abandoned row instead of leaving it visible until acked —
+ * exactly the outcome the ruling's own text calls out. Written entirely as
+ * a `LEFT JOIN` in this one SQL definition: no writer touched, no park
+ * restamped, every existing park-immutability guard in this file (`markDelivered`/
+ * `backOff`/`rejectDelivery`'s own `NOT IN ('acked','rejected')` guards)
+ * unchanged.
+ *
+ * DELIBERATELY NOT threaded through `hasOutstandingMail` (the dedupe guard
+ * on `queueSystemMail`'s own retry loop) or `dueDeliveries`/`markDelivered`/
+ * `rejectDelivery`'s own `NOT IN ('acked','rejected')` write-guards — this
+ * predicate answers "is this worth a human's attention", a UI-facing
+ * question, not "should the delivery lane act on this again", which stays
+ * exactly `'rejected'`-is-terminal (bounded context 5) for every one of
+ * those.
  */
 const OUTSTANDING_OR_ABANDONED_SQL =
-  `(d.state IN ${OUTSTANDING_STATES_SQL} OR (d.state = 'rejected' AND d.lastError != 'run closed'))`;
+  `(d.state IN ${OUTSTANDING_STATES_SQL} OR (d.state = 'rejected' ` +
+  "AND COALESCE(d.lastError, '') != 'run closed' " +
+  "AND COALESCE(rr.state, '') NOT IN ('done','failed')))";
 
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns. */
@@ -526,6 +566,7 @@ export class CoordStore {
     if (sessionId === null) return 0;
     return (this.db.prepare(
       'SELECT count(*) AS c FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'LEFT JOIN runs rr ON rr.id = m.runId ' +
       `WHERE m.runId = ? AND d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
     ).get(runId, sessionId) as { c: number }).c;
   }
@@ -692,15 +733,19 @@ export class CoordStore {
    * own replay/attempt ceiling is `state:'rejected'` on the wire, distinct
    * from `'queued'`/`'delivered'` — a reader that cares can tell the
    * difference — but it stays in THIS list rather than disappearing from it,
-   * because it was never acked and never acted on. Excludes only the one
-   * `'rejected'` shape that is not abandonment: `cancelOutstandingDeliveries`'s
-   * `lastError:'run closed'` park, which is the run closing making the
-   * delivery moot on purpose.
+   * because it was never acked and never acted on. Excludes the one
+   * `'rejected'` shape that is not abandonment (`cancelOutstandingDeliveries`'s
+   * `lastError:'run closed'` park, the run closing making the delivery moot
+   * on purpose) AND, since orchestrator ruling I2(a), an abandoned row whose
+   * OWN run has since reached a terminal state — see the predicate's own
+   * docstring for why that is derived here, in the `LEFT JOIN runs rr` below,
+   * rather than written by any mutation.
    */
   outstandingMailFor(toId: string, limit = 100): MailSummary[] {
     const n = clampMailLimit(limit);
     const rows = this.db.prepare(
       `SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +
+      'LEFT JOIN runs rr ON rr.id = m.runId ' +
       `WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id DESC LIMIT ?`,
     ).all(toId, n) as unknown as MailRowDb[];
     return this.hydrateMail(rows);
@@ -915,11 +960,30 @@ export class CoordStore {
    *  for the identical reason") before this fix made that claim true here
    *  too. Harmless for replay either way (`dueDeliveries` selects neither
    *  `acked` nor `rejected`), but a row is not allowed to claim both an ack
-   *  and a park happened to it. */
+   *  and a park happened to it.
+   *
+   *  ONE NAMED EXCEPTION (orchestrator ruling I2, part (b)): a row whose
+   *  rejection is EXACTLY the replay-ceiling park — `rejectCode:'undeliverable'`
+   *  and `lastError:MAIL_REPLAY_CEILING_ERROR`, the two columns
+   *  `watch.ts`'s `sweepMail` writes together and only there — may still be
+   *  acked. D-67/H2 above refuse a LATE ack racing a park so a
+   *  self-contradictory row can never appear silently; this is a DIFFERENT
+   *  act, requested explicitly, well after the park already committed and
+   *  nothing is racing it: the recipient FINALLY SEEING an abandoned message
+   *  is exactly what "acked" means, and the resulting row — `state:'acked'`,
+   *  its park still readable in `lastError` — is the honest record of both
+   *  things that happened to it, in order. The match is narrow and exact
+   *  (both columns, not merely `state='rejected'`) so no OTHER park —
+   *  `cancelOutstandingDeliveries`'s `'run closed'`, the never-delivered
+   *  `MAIL_MAX_ATTEMPTS` park, an `enter-ignored` park — is ever let back in
+   *  through this door; every one of those stays refused, unchanged. */
   markAcked(id: number, at: number): boolean {
-    const row = this.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?')
-      .get(id) as { state: string } | undefined;
-    if (!row || row.state === 'acked' || row.state === 'rejected') return false;
+    const row = this.db.prepare('SELECT state, rejectCode, lastError FROM mail_deliveries WHERE id = ?')
+      .get(id) as { state: string; rejectCode: string | null; lastError: string | null } | undefined;
+    if (!row || row.state === 'acked') return false;
+    const isAbandonedReplayPark = row.state === 'rejected'
+      && row.rejectCode === 'undeliverable' && row.lastError === MAIL_REPLAY_CEILING_ERROR;
+    if (row.state === 'rejected' && !isAbandonedReplayPark) return false;
     this.db.prepare('UPDATE mail_deliveries SET state = ?, ackedAt = ? WHERE id = ?')
       .run('acked', at, id);
     return true;
