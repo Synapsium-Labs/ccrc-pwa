@@ -543,6 +543,56 @@ describe('the verification is actually wired into the deploy, and can observe a 
     }
   });
 
+  it("every ~/ccrc/<dir>/... path a branch's remote commands reach into is actually shipped by that branch's rsync", () => {
+    // The class of bug, not one instance of it: `AGENT_BUILD_CMD` (or any other
+    // remote command in a branch) can `cp`/`cd` into `~/ccrc/<dir>/...` for a
+    // <dir> the branch's OWN rsync never sends — rsync ships whole top-level
+    // repo directories, not individual files, so referencing a file inside a
+    // directory nobody shipped is a live "No such file or directory" on a
+    // fresh box, invisible until the exact deploy that needs it runs. Caught
+    // live: AGENT_BUILD_CMD's `cp ~/ccrc/ccd/claude-session@.service ...`
+    // against an agent rsync source list of `agent shared deploy` — `ccd`
+    // never reached the box. A hardcoded `expect(...).toContain('ccd')` would
+    // only catch THIS directory going missing again; this test instead parses
+    // every `~/ccrc/<dir>/` reference out of each branch's own text and checks
+    // it against that branch's own rsync source list, so the next directory
+    // this happens to is caught the same way.
+    //
+    // `~/ccrc/<dir>/` (note the trailing slash the regex requires) is what
+    // this test looks for — it must NOT match `~/ccrc-backups/...` (no slash
+    // between "ccrc" and what follows) or `~/.ccrc/...` (a different, dotted
+    // directory the deploy uses for config/state, never rsynced as a tree).
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+
+    const rsyncSources = (branch: string, label: string): string[] => {
+      // Anchored the same way the mail-token exclude test anchors, and for the
+      // identical reason: a bare `rsync -az[\s\S]*?ccrc\//` would also match
+      // the coordinator-skill lane, which ships to `.cc-sessions/`, not
+      // `~/ccrc/`, and carries no `--exclude node_modules`.
+      const m = /rsync -az --delete -e "\$\{SSH\[\*\]\}" --exclude node_modules[\s\S]*?"\$BOX":ccrc\//.exec(branch);
+      expect(m, `${label} branch has no rsync shipping a tree into ~/ccrc/`).toBeTruthy();
+      const sourceLine = m![0].trim().split('\n').pop()!;
+      return sourceLine.replace(/"\$BOX":ccrc\/\s*$/, '').trim().split(/\s+/);
+    };
+
+    const referencedDirs = (branch: string): Set<string> => {
+      const dirs = new Set<string>();
+      for (const ref of branch.matchAll(/~\/ccrc\/([A-Za-z0-9_.-]+)\//g)) dirs.add(ref[1]!);
+      return dirs;
+    };
+
+    for (const [label, branch] of [['agent', agentBranch], ['server', serverBranch]] as const) {
+      const sources = rsyncSources(branch, label);
+      for (const dir of referencedDirs(branch)) {
+        expect(sources,
+          `${label} branch's remote commands reference ~/ccrc/${dir}/... but its rsync ships only [${sources.join(', ')}] — ~/ccrc/${dir} will not exist on a fresh box`)
+          .toContain(dir);
+      }
+    }
+  });
+
   it("ccrc.service reads ~/.ccrc/ccrc.env and bakes NOTHING — the env file deploy.sh ships is finally read", () => {
     // Survey blocker #1 by depth: deploy.sh faithfully shipped ccrc.env to
     // ~/.ccrc/ for weeks while the unit read nothing, and the live box's real
