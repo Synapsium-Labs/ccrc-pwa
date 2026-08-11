@@ -53,6 +53,7 @@ const emptySnap = (): SessionSnapshot => ({
   dialog: null,
   ask: null,
   tasks: [],
+  mail: [],
   missingFile: null,
 });
 

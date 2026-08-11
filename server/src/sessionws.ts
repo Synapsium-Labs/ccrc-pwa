@@ -63,6 +63,9 @@ export class SessionStream {
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
+  /** Serialized last-sent outstanding-mail list — the change gate for the
+   *  `mail` frame, the identical shape `lastTasksJson` uses for `tasks`. */
+  private lastMailJson: string | null = null;
   /** Serialized last-sent hook ask envelope — the change gate for `ask` /
    *  `ask_cleared`. See `checkHookAsk`. `undefined` (not `null`) until the
    *  first read: this instance is per CONNECTION, and a client can arrive
@@ -132,6 +135,8 @@ export class SessionStream {
     if (r.ok) await this.checkTasks(r.data.cfgDir, r.data.uuid); // and the plan as it stands
     if (this.stopped) return;
     if (r.ok) await this.checkHookAsk(r.data.uuid); // and any hook ask already waiting
+    if (this.stopped) return;
+    if (r.ok) await this.checkMail(); // and any outstanding mail addressed to this session
     if (this.stopped) return;
     // `absent` is terminal for this connection: a proven-gone session id
     // does not un-absent itself by polling, and installing the retry timer
@@ -238,6 +243,46 @@ export class SessionStream {
     }
     this.lastTasksJson = json;
     this.send({ type: 'tasks', tasks });
+  }
+
+  /**
+   * This session's own outstanding mail (Build 7 Task 6, PR J) — read
+   * directly off `CoordStore.mailForRecipient`, the SAME in-process call
+   * `readTasks` above is to the filesystem, and sent when it differs from
+   * what this client last saw, the SAME change gate `checkTasks` uses.
+   *
+   * Deliberately NOT a client of `GET /api/mail?to=` (`coord/routes.ts`):
+   * that route is gated on the box token (`requireMailToken`) because it
+   * answers the anonymous box->server ingress — a fleet-host coordinator
+   * script authenticating itself, never a browser. This stream already
+   * knows exactly which one client it is serving (`this.id`, the session the
+   * socket was opened for), so there is no attribution left to check and no
+   * token to hold: the same reasoning `queueSystemMail` gives for bypassing
+   * `POST /api/mail`'s own ingress gate on the write side.
+   *
+   * `deps.coord` is optional exactly like every other coord-gated surface
+   * (`server.ts`'s own `Deps.coord?`): a box with no coordination database
+   * sends no `mail` frame at all, the same silent absence every route in
+   * `coord/routes.ts` answers with 501 `not-configured`.
+   *
+   * Filtered to `queued`/`delivered` here, not in the store: `mailForRecipient`
+   * is a general-purpose read (the coordinator's own `GET /api/mail?to=` uses
+   * it unfiltered, to show acked/rejected history too) — "outstanding" is
+   * THIS caller's own policy, spec:236-237's own wording ("acked and rejected
+   * are excluded server-side").
+   */
+  private async checkMail(): Promise<void> {
+    if (this.stopped || !this.deps.coord) return;
+    const outstanding = this.deps.coord.mailForRecipient(this.id)
+      .filter((m) => m.state === 'queued' || m.state === 'delivered');
+    const json = JSON.stringify(outstanding);
+    if (json === this.lastMailJson) return;
+    if (this.lastMailJson === null && outstanding.length === 0) {
+      this.lastMailJson = json;
+      return;
+    }
+    this.lastMailJson = json;
+    this.send({ type: 'mail', mail: outstanding });
   }
 
   /** Read this session's hookstate and send `ask` / `ask_cleared` when the
@@ -412,6 +457,8 @@ export class SessionStream {
       await this.checkTasks(data.cfgDir, data.uuid);
       if (this.stopped) return;
       await this.checkHookAsk(data.uuid);
+      if (this.stopped) return;
+      await this.checkMail();
     } finally {
       this.ticking = false;
     }

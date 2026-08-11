@@ -559,6 +559,121 @@ button.metachip:active {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Mail strip — outstanding mail for THIS session, one row above the  *
+ *  plan. Same tokens as .task-strip above (well, radius, head height) *
+ *  so the two strips read as one stack rather than two designs.       *
+ * ------------------------------------------------------------------ */
+.mail-strip {
+  flex: none;
+  margin: 0 var(--sp-4) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: min(40vh, 320px);
+}
+.mail-strip--open {
+  border-color: var(--edge-strong);
+}
+
+.mail-strip-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--ink-primary);
+  cursor: pointer;
+}
+.mail-strip-head:active {
+  background: var(--bg-raised);
+}
+
+.mail-strip-mark {
+  flex: none;
+  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+
+.mail-strip-headline {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
+}
+.mail-strip-count {
+  flex: none;
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+  background: var(--bg-raised);
+  border-radius: var(--r-full);
+  padding: var(--sp-1) 9px;
+}
+.mail-strip-chevron {
+  flex: none;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+
+.mail-strip-summary {
+  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+
+.mail-strip-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 var(--sp-2);
+  border-top: 1px solid var(--edge-subtle);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+.mail-strip-row {
+  padding: var(--sp-2) var(--sp-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+}
+.mail-strip-row + .mail-strip-row {
+  border-top: 1px solid var(--edge-subtle);
+}
+.mail-strip-from {
+  font-weight: var(--weight-semibold);
+  color: var(--ink-primary);
+}
+.mail-strip-kind {
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-tertiary);
+}
+.mail-strip-subject {
+  flex-basis: 100%;
+  color: var(--ink-secondary);
+}
+.mail-strip-artifacts {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 0 0 0 var(--sp-4);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary);
+}
+
+/* ------------------------------------------------------------------ *
  *  List region — Virtuoso owns the scroll; the shell never does.      *
  * ------------------------------------------------------------------ */
 .chat-body {

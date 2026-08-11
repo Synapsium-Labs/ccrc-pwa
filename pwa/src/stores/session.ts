@@ -9,6 +9,7 @@ import {
   type ChatEvent,
   type Dialog,
   type HookAsk,
+  type MailSummary,
   type SessionStatus,
   type SessionStreamMsg,
   type TaskItem,
@@ -61,6 +62,11 @@ export interface SessionState {
    *  `dialog` above. */
   ask: HookAsk | null;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
+  /** Outstanding mail for THIS session — queued or delivered, never acked or
+   *  rejected (the server filters, `sessionws.ts`'s `checkMail`). Replaced
+   *  wholesale like `tasks`, because the frame is a statement about the
+   *  present and these streams never queue (`lib/ws.ts:12-17`). */
+  mail: MailSummary[];
   missingFile: string | null; // backlog missing:true → the attempted transcript path
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
@@ -77,7 +83,7 @@ export interface SessionState {
 
 export type SessionSnapshot = Pick<
   SessionState,
-  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks'
+  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'mail'
 > & { missingFile: string | null };
 
 // Locally minted system dividers (rotation markers, notices) — uuid-prefixed so
@@ -145,6 +151,11 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       return { ...s, dialog: null };
     case 'tasks':
       return { ...s, tasks: msg.tasks };
+    // Build 7 Task 6: the session's own outstanding mail, one row above the
+    // plan (`session/MailStrip.tsx`). Same replace-wholesale rule as `tasks`
+    // just above.
+    case 'mail':
+      return { ...s, mail: msg.mail };
     // The hook-sourced envelope (Task 8, PR C). It resets the exact same way
     // `dialog` does above: only its own `_cleared` message (and the store's
     // initial state) null it out — `rotated` below touches events/uuid/offset
@@ -187,6 +198,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   dialog: s.dialog,
   ask: s.ask,
   tasks: s.tasks,
+  mail: s.mail,
   missingFile: s.missingFile,
 });
 
@@ -347,6 +359,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       dialog: null,
       ask: null,
       tasks: [],
+      mail: [],
       missingFile: null,
       pending: [],
       conn: 'connecting',

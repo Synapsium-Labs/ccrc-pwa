@@ -14,6 +14,8 @@ import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { KeyedQueue } from '../src/inject/queue.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import type { AskQuestion, Dialog } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -887,6 +889,147 @@ describe('session WS — dead session behind a symlinked workdir', () => {
     } finally {
       await deadApp.close();
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// Build 7, Task 6: the session's own outstanding mail, pushed the same way
+// `tasks` is — read directly off `CoordStore`, never through the box-token
+// gated `GET /api/mail?to=` (see `checkMail`'s own docstring in sessionws.ts
+// for why that route is not this stream's caller).
+describe('outstanding mail push (Build 7 Task 6)', () => {
+  let home: string;
+  let app: FastifyInstance | undefined;
+  let port: number;
+  let coord: CoordStore;
+
+  beforeEach(async () => {
+    home = mkTmp('ccrc-sws-mail-');
+    seed(home);
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    app = await buildServer(deps, new Bus());
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+  });
+
+  afterEach(async () => {
+    if (app) await app.close();
+    app = undefined;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  /** Queue a mail row + a `queued`-state delivery addressed to `toId`, the
+   *  same two-insert shape `POST /api/mail`'s own ingress runs. Returns the
+   *  DELIVERY id (`markDelivered`/`markAcked`/`rejectDelivery` all key on it). */
+  const queueTo = (toId: string, subject: string): number => {
+    const inserted = coord.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId, runId: null,
+      kind: 'question', subject, body: 'body text', artifacts: [] });
+    return coord.queueDelivery(inserted.id, toId, 'envelope').id;
+  };
+
+  it("sends this session's own outstanding (queued/delivered) mail on connect", async () => {
+    queueTo(ID, 'rebase before you start?');
+    const deliveredId = queueTo(ID, 'wave-brief');
+    coord.markDelivered(deliveredId, Date.now());
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    let mailFrame: { type: string; mail: { subject: string; state: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail.map((m) => m.subject).sort()).toEqual(['rebase before you start?', 'wave-brief']);
+    expect(mailFrame!.mail.map((m) => m.state).sort()).toEqual(['delivered', 'queued']);
+    ws.close();
+  });
+
+  it('excludes acked and rejected mail — never queues, delivers or acks itself', async () => {
+    const ackedId = queueTo(ID, 'acked already');
+    coord.markDelivered(ackedId, Date.now());
+    coord.markAcked(ackedId, Date.now());
+    const rejectedId = queueTo(ID, 'rejected already');
+    coord.rejectDelivery(rejectedId, 'stale-uuid', 'gone');
+    queueTo(ID, 'still outstanding');
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail).toHaveLength(1);
+    expect(mailFrame!.mail[0]!.subject).toBe('still outstanding');
+    ws.close();
+  });
+
+  it('sends no mail frame at all when nothing is outstanding — the same first-read swallow `tasks` gets', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+
+    const first = await nextIgnoringAsk(next, 6000);
+    expect(first.type).toBe('backlog');
+    // Nothing else arrives promptly: no mail frame rides along with an empty list.
+    await expect(nextIgnoringAsk(next, 300)).rejects.toThrow();
+    ws.close();
+  });
+
+  it('pushes freshly queued mail on the next poll tick', { timeout: 15_000 }, async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+    const next = collect(ws);
+    await opened(ws);
+    await nextIgnoringAsk(next, 6000); // backlog — nothing outstanding yet
+
+    queueTo(ID, 'fresh mail after connect');
+    let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
+    for (let i = 0; i < 6 && !mailFrame; i++) {
+      const m = await next(6000);
+      if (m.type === 'mail') mailFrame = m;
+    }
+    expect(mailFrame).toBeDefined();
+    expect(mailFrame!.mail).toHaveLength(1);
+    expect(mailFrame!.mail[0]!.subject).toBe('fresh mail after connect');
+    ws.close();
+  });
+
+  it('sends no mail frame at all with no coord configured — the same absent-store silence every coord route answers', async () => {
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const noCoordApp = await buildServer(deps, new Bus());
+    await noCoordApp.listen({ host: '127.0.0.1', port: 0 });
+    const addr = noCoordApp.server.address();
+    const noCoordPort = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${noCoordPort}/ws/session/${ID}`);
+      const next = collect(ws);
+      await opened(ws);
+      const first = await nextIgnoringAsk(next, 6000);
+      expect(first.type).toBe('backlog');
+      await expect(nextIgnoringAsk(next, 300)).rejects.toThrow();
+      ws.close();
+    } finally {
+      await noCoordApp.close();
     }
   });
 });

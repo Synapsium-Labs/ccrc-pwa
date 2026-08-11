@@ -1507,6 +1507,15 @@ export type SessionStreamMsg =
   | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
   | { type: 'tasks'; tasks: TaskItem[] }          // the session's task list changed (or first read)
+  /** This session's own OUTSTANDING mail — `state` restricted server-side to
+   *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
+   *  `checkMail`). Read directly off `CoordStore.mailForRecipient` in-process,
+   *  the same way `tasks` reads `readTasks` — NOT a client of the
+   *  box-token-gated `GET /api/mail?to=` (`coord/routes.ts`'s
+   *  `requireMailToken`): that route authenticates the anonymous box->server
+   *  ingress and a browser has no business holding that secret. Replaced
+   *  wholesale, like `tasks`, because it is a statement about the present. */
+  | { type: 'mail'; mail: MailSummary[] }
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
   | { type: 'notice'; message: string };
 
