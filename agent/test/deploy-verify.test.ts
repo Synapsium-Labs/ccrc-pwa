@@ -576,4 +576,118 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the ccd version output is not compared to the shipped sha')
       .toBeGreaterThan(-1);
   });
+
+  it('the server branch refuses to deploy without a real ccrc.env on either end — I2', () => {
+    // `ship_env` no-ops when deploy/ccrc.env is absent, and the unit's `-`
+    // prefixed EnvironmentFile= tolerates a missing file too — so nothing
+    // stopped a deploy with NEITHER from landing a unit config.ts binds to
+    // 127.0.0.1 by default. The live tailscale serve proxies to the tailnet
+    // IP LITERALLY, so a loopback bind takes the PWA dark on every device,
+    // and verify-service.sh still passes (the process IS up) — only the
+    // health curl at the very end would catch it, after the unit is already
+    // replaced and restarted (I2, final review).
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    const guardAt = serverBranch.indexOf('[ ! -f deploy/ccrc.env ]');
+    expect(guardAt, 'the server branch never checks for a local deploy/ccrc.env').toBeGreaterThan(-1);
+    expect(serverBranch, 'the guard must fall back to checking the box for an already-provisioned ccrc.env')
+      .toContain('~/.ccrc/ccrc.env');
+    expect(serverBranch, 'a missing config on both sides must abort the deploy with a clear message')
+      .toMatch(/deploy: FAILED[^\n]*ccrc\.env/);
+    // Before touching anything: ahead of the PWA build and every mutation below.
+    const buildAt = serverBranch.indexOf('(cd pwa && npm ci && npm run build)');
+    const rsyncAt = serverBranch.indexOf('rsync -az');
+    const backupMkdirAt = serverBranch.indexOf('mkdir -p ~/ccrc-backups/$TS');
+    expect(buildAt, 'the PWA build line was not found').toBeGreaterThan(-1);
+    expect(guardAt, 'the guard must run before the PWA build, not after').toBeLessThan(buildAt);
+    expect(guardAt, 'the guard must run before rsync --delete touches the box').toBeLessThan(rsyncAt);
+    expect(guardAt, 'the guard must run before the box is touched at all')
+      .toBeLessThan(backupMkdirAt);
+  });
+
+  it('every unit file a deploy overwrites is backed up first, absent-source-skippable — I2', () => {
+    // dist-pwa and coord.db were backed up already; the *.service files
+    // AGENT_CMD/REMOTE_CMD `cp` straight over ~/.config/systemd/user/ never
+    // were, so a bad unit (a broken EnvironmentFile= line, or anything else)
+    // had no on-box restore path (I2, final review).
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    for (const [branch, label, unit] of [
+      [agentBranch, 'agent', '~/.config/systemd/user/ccrc-agent.service'],
+      [agentBranch, 'agent', '~/.config/systemd/user/claude-session@.service'],
+      [serverBranch, 'server', '~/.config/systemd/user/ccrc.service'],
+    ] as const) {
+      const guardIdx = branch.indexOf(`[ ! -f ${unit} ]`);
+      expect(guardIdx, `${label} branch never backs up ${unit} (absent-source-skippable guard missing)`)
+        .toBeGreaterThan(-1);
+      expect(branch.indexOf('cp -a', guardIdx), `${label} branch's ${unit} backup does not cp -a`)
+        .toBeGreaterThan(guardIdx);
+    }
+  });
+
+  it("HEALTH_URL is derived from the resolved \$BOX, not a hardcoded literal — I4", () => {
+    // A `CCRC_BOX` override must also move HEALTH_URL, or a same-sha
+    // re-deploy/rollback to a DIFFERENT box would pass the sha-assertion
+    // WITHOUT EVER CONTACTING THE TARGET (final review). Extract the actual
+    // variable-resolution header (BOX -> TARGET/agent-host override ->
+    // HEALTH_URL) and EXECUTE it for real — this proves the runtime
+    // expansion, not merely that some substring exists in the file.
+    const start = deploySh.indexOf('BOX="${CCRC_BOX:-');
+    const healthLine = /HEALTH_URL="\$\{CCRC_HEALTH_URL:-[^\n]*\n/.exec(deploySh);
+    expect(start, 'BOX default assignment not found').toBeGreaterThan(-1);
+    expect(healthLine, 'HEALTH_URL default assignment not found').toBeTruthy();
+    const targetOverrideAt = deploySh.indexOf('[ "$TARGET" = "agent" ]');
+    expect(healthLine!.index!,
+      'HEALTH_URL must be resolved AFTER the agent-target BOX override, not before')
+      .toBeGreaterThan(targetOverrideAt);
+    const header = deploySh.slice(start, healthLine!.index! + healthLine![0].length);
+
+    const run = (args: string[], env: Record<string, string> = {}): string => {
+      const r = spawnSync('bash', ['-c', `${header}\nprintf '%s' "$HEALTH_URL"`, '_', ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, CCRC_BOX: '', CCRC_HEALTH_URL: '', ...env },
+      });
+      expect(r.status, `header exited nonzero: ${r.stderr}`).toBe(0);
+      return r.stdout;
+    };
+
+    expect(run([]), 'the no-override default must still hit the known server box')
+      .toBe('http://203.0.113.7:7788/health');
+    expect(run([], { CCRC_BOX: 'user@10.0.0.9' }),
+      'CCRC_BOX must move HEALTH_URL, not leave it pointed at the old box')
+      .toBe('http://10.0.0.9:7788/health');
+    expect(run(['agent', 'user@10.0.0.5']),
+      "the agent target's host argument must also drive HEALTH_URL")
+      .toBe('http://10.0.0.5:7788/health');
+    expect(run([], { CCRC_HEALTH_URL: 'http://example:9999/health' }),
+      'CCRC_HEALTH_URL must still override everything')
+      .toBe('http://example:9999/health');
+  });
+
+  it('the sha assertions capture-then-test — no pipe into grep -q, which races SIGPIPE under pipefail — I7', () => {
+    // `producer | grep -qF pattern` under `set -o pipefail`: if grep -q finds
+    // its match and exits before the producer finishes writing, the producer
+    // can be killed by SIGPIPE, and ITS nonzero exit becomes the pipeline's
+    // reported status — a FAILURE after grep already matched. Measured on
+    // this exact shape (deploy.sh's own comment cites 553/1500 false
+    // failures at 50 output lines). The fix captures into a variable first,
+    // then tests the capture — no pipe left for grep to race.
+    expect(deploySh, 'a tee/grep pipe into the sha assertion is back — capture-then-test was removed')
+      .not.toMatch(/\|\s*tee\s+\/dev\/stderr\s*\|\s*grep/);
+    expect(deploySh, 'a bare curl | grep -qF pipe is back on the health assertion')
+      .not.toMatch(/curl -fsS "\$HEALTH_URL" \|\s*grep/);
+
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    expect(agentBranch, 'ccd version must be captured into a variable before testing it')
+      .toContain('ccd_version_out="$("${SSH[@]}" "$BOX" \'~/.local/bin/ccd version\')"');
+    expect(agentBranch, 'the capture must be tested via printf | grep -qF, not re-piped from ssh')
+      .toContain('printf \'%s\' "$ccd_version_out" | grep -qF "$BUILD_SHA"');
+
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    expect(serverBranch, 'the health response must be captured into a variable before testing it')
+      .toContain('health_out="$(curl -fsS "$HEALTH_URL")"');
+    expect(serverBranch, 'the capture must be tested via printf | grep -qF, not re-piped from curl')
+      .toContain('printf \'%s\' "$health_out" | grep -qF "\\"sha\\":\\"$BUILD_SHA\\""');
+  });
 });

@@ -1125,18 +1125,40 @@ git fetch origin && git merge --ff-only origin/main
 - [ ] **Step 2: Prepare the gitignored real env files from the live boxes**
 
 ```bash
+umask 077   # secrets must never land world/group-readable — deploy/ is inside
+            # the agent's projectsRoot-whitelisted checkout (I5)
 # Server env: today's real values live in ~/.ccrc/remote.env ON server-box.
-ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 'cat ~/.ccrc/remote.env' > deploy/ccrc.env
+# Capture, THEN assert — `>` truncates the destination BEFORE ssh even runs
+# and REGARDLESS of ssh's exit status, so a wrong key or a tailnet hiccup
+# used to leave an EMPTY file with no error (C1). Command substitution
+# propagates ssh's own exit status, and this shell's `set -e` (or your own
+# `|| exit 1`) aborts on it — do not pipe straight into `>` here.
+remote_env="$(ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 'cat ~/.ccrc/remote.env')" \
+  || { echo "FAIL: could not read remote.env from server-box — aborting, nothing written"; exit 1; }
+printf '%s\n' "$remote_env" > deploy/ccrc.env
 # Add what the baked unit used to provide and the new unit no longer does:
 printf 'CCRC_HOST=203.0.113.7\nCCRC_PORT=7788\nCCRC_PROJECTS_ROOT=/data/projects\n' >> deploy/ccrc.env
+chmod 600 deploy/ccrc.env   # explicit, not just umask-implied (I5)
+# REFUSE to continue unless every variable the live box actually depends on
+# made it across — an empty or partial capture must not silently ship (C1).
+# This is what `git check-ignore` below does NOT check: it proves the file
+# is gitignored, not that it has real content.
+for v in CCRC_FLEET CCRC_AGENT_URL CCRC_AGENT_TOKEN CCRC_VAPID_PRIVATE CCRC_HETZNER_TOKEN; do
+  grep -q "^$v=" deploy/ccrc.env \
+    || { echo "FAIL: deploy/ccrc.env is missing $v — refusing to ship a partial config"; exit 1; }
+done
 # Agent env: append the projects root to the existing real agent.env.
-ssh -p 2222 -i ~/.ssh/your-key-b you@198.51.100.7 'cat ~/.ccrc/agent.env' > deploy/ccrc-agent.env
+agent_env="$(ssh -p 2222 -i ~/.ssh/your-key-b you@198.51.100.7 'cat ~/.ccrc/agent.env')" \
+  || { echo "FAIL: could not read agent.env from the fleet host — aborting, nothing written"; exit 1; }
+printf '%s\n' "$agent_env" > deploy/ccrc-agent.env
 printf 'CCRC_PROJECTS_ROOT=/srv/projects\n' >> deploy/ccrc-agent.env
+chmod 600 deploy/ccrc-agent.env   # explicit, not just umask-implied (I5)
 # Both are gitignored — verify before proceeding:
 git check-ignore deploy/ccrc.env deploy/ccrc-agent.env && echo "gitignored, safe"
 ```
-STOP if `check-ignore` fails — do not continue with secret-bearing files
-unignored.
+STOP if either `ssh` capture fails, if the variable-presence loop fails, or
+if `check-ignore` fails — do not continue with secret-bearing files that are
+empty, partial, or unignored.
 
 - [ ] **Step 3: Deploy the agent (fleet host first — verb-set rule), then the server**
 
@@ -1161,8 +1183,24 @@ ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 '
   && bash ~/ccrc/deploy/verify-service.sh ccrc.service'
 curl -fsS http://203.0.113.7:7788/health
 # Expected: {"ok":true,"build":{"sha":"<merged sha>",...}} — the unit now runs
-# on ccrc.env ALONE. Only after this verifies:
-ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 'rm ~/.ccrc/remote.env'
+# on ccrc.env ALONE.
+# C1: /health says NOTHING about CCRC_FLEET, VAPID, the agent URL/token or
+# the Hetzner token — /api/fleet/health does. Gate HERE, on THIS check,
+# BEFORE anything below is removed, not in Step 5 (which runs after the
+# removal and can only diagnose the loss, not prevent it).
+fleet_health="$(curl -fsS http://203.0.113.7:7788/api/fleet/health)" \
+  || { echo "FAIL: /api/fleet/health did not respond — do NOT retire remote.env"; exit 1; }
+printf '%s\n' "$fleet_health"
+printf '%s' "$fleet_health" | grep -qF '"mode":"remote"' \
+  && printf '%s' "$fleet_health" | grep -qF '"connected":true' \
+  || { echo "FAIL: /api/fleet/health is not mode:remote/connected:true — do NOT retire remote.env"; exit 1; }
+# Only after fleet health verifies remote mode: RETIRE, don't destroy. There
+# is no reason for this step to be irreversible (C1) — ~/.ccrc/remote.env is
+# the SOLE on-box home of the VAPID keypair, the Hetzner token, the agent
+# URL/token and the fleet server id. A VAPID keypair cannot be regenerated
+# without invalidating every subscription in the live push-subs.json.
+ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 \
+  'mv ~/.ccrc/remote.env ~/.ccrc/remote.env.retired-$(date +%s)'
 ```
 
 - [ ] **Step 5: The stage-1 exit checklist — every line from the box's own mouth**
@@ -1171,7 +1209,10 @@ ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 'rm ~/.ccrc/remote.env'
 SHA=$(git rev-parse origin/main)
 # Server: stamped, correct sha, remote mode still working.
 curl -fsS http://203.0.113.7:7788/health | grep -F "\"sha\":\"$SHA\"" && echo "server: STAMPED CORRECTLY"
-curl -fsS http://203.0.113.7:7788/api/fleet/health   # expect mode:remote, connected:true
+curl -fsS http://203.0.113.7:7788/api/fleet/health   # expect mode:remote, connected:true — already
+                                                        # GATED before the remote.env retirement in
+                                                        # Step 4 (C1); this is the permanent-record
+                                                        # re-check, not the first look.
 # Fleet host: ccd stamped, timer live, drop-ins loaded, PWA-visible telemetry intact.
 ~/.local/bin/ccd version | grep -F "$SHA" && echo "ccd: STAMPED CORRECTLY"
 systemctl --user is-active ccd-cap-scopes.timer
@@ -1181,6 +1222,16 @@ systemctl --user show claude-session@ccrc-pwa-calm-mesa.service -p MemoryMax --v
 Expected: every check answers as annotated. If the drop-in property checks
 return `infinity`/`0`, the drop-ins did not load — check
 `systemctl --user cat <unit>` for the drop-in header before touching anything.
+
+Once every check above reads correctly:
+
+```bash
+# I5: these gitignored local files carry the Hetzner API token, the VAPID
+# private key and the agent bearer token, and the checkout they sit in is the
+# agent's OWN projectsRoot-whitelisted read tree (assertProjectsRootIsSafe,
+# this branch) — remove the local copies now that the deploy is verified.
+rm -f deploy/ccrc.env deploy/ccrc-agent.env
+```
 
 - [ ] **Step 6: Record the milestone**
 

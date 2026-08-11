@@ -6655,7 +6655,15 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly u
 # ── home-account affinity ──────────────────────────────────────────────
 # Each session has a HOME account; it stays there and only leaves when home is at the rate ceiling
 # (no included-usage headroom left), returning home the instant it has room again.
-_id_wrapper() {   # id -> the wrapper encoded in the id prefix (longest match wins)
+_id_wrapper() {   # id -> the wrapper encoded in the id prefix (FIRST match wins — bash `case`, not longest-prefix)
+  # Arm ORDER is load-bearing, not cosmetic: `claude-corp-*` and `claude-dev0-*`
+  # must both precede the shorter `claude-*`, or every corp/dev0 id falls
+  # through to the `claude` arm instead. For dev0 specifically that means
+  # `_home_for` silently resolves to `claude`, and `_swap_target`'s "home
+  # recovered" branch permanently evacuates dev0 sessions with no error
+  # printed anywhere (I6, final review — this comment used to say "longest
+  # match wins", which would mislead a maintainer into moving `claude-dev0-*`
+  # below `claude-*` and making it dead code).
   case "$1" in
     claude-corp-*) echo claude-corp ;;
     claude-dev0-*) echo claude-dev0 ;;
