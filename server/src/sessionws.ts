@@ -63,6 +63,27 @@ export class SessionStream {
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
+  /** Serialized last-sent outstanding-mail list — the change gate for the
+   *  `mail` frame. `undefined` (not `null`) until the first read, for the
+   *  EXACT reason `lastAskJson` below is `undefined`: this instance is per
+   *  CONNECTION, and a client can arrive already holding a stale `mail` list
+   *  from before a drop — an automatic `ReconnectingSocket` reconnect never
+   *  runs the PWA's own `disconnect()`, and even `disconnect()` never
+   *  touched `mail` in the first place (fix round 1, findings 1/3). The
+   *  scenario the old `null` sentinel missed: a client is shown one item,
+   *  the socket drops, the session acks that delivery while the client is
+   *  away, then a fresh `SessionStream` connects and its own first read is
+   *  ALREADY `[]` — with the old `null` sentinel and its first-read-empty
+   *  swallow (mirroring `checkTasks`'s own swallow), `null === null` never
+   *  held (the JSON is `'[]'`, not `null`), but the SWALLOW clause itself
+   *  (`lastMailJson === null && outstanding.length === 0`) matched and ate
+   *  the send — the reconnecting client's stale one-item list was never
+   *  corrected. `undefined` guarantees the first check always sends
+   *  something explicit: an empty `{type:'mail', mail: []}` frame costs
+   *  exactly what `ask_cleared` already costs on every connect, and it is
+   *  the only way to confirm to a possibly-stale client that there is truly
+   *  nothing outstanding. */
+  private lastMailJson: string | null | undefined = undefined;
   /** Serialized last-sent hook ask envelope — the change gate for `ask` /
    *  `ask_cleared`. See `checkHookAsk`. `undefined` (not `null`) until the
    *  first read: this instance is per CONNECTION, and a client can arrive
@@ -132,6 +153,8 @@ export class SessionStream {
     if (r.ok) await this.checkTasks(r.data.cfgDir, r.data.uuid); // and the plan as it stands
     if (this.stopped) return;
     if (r.ok) await this.checkHookAsk(r.data.uuid); // and any hook ask already waiting
+    if (this.stopped) return;
+    if (r.ok) await this.checkMail(); // and any outstanding mail addressed to this session
     if (this.stopped) return;
     // `absent` is terminal for this connection: a proven-gone session id
     // does not un-absent itself by polling, and installing the retry timer
@@ -238,6 +261,58 @@ export class SessionStream {
     }
     this.lastTasksJson = json;
     this.send({ type: 'tasks', tasks });
+  }
+
+  /**
+   * This session's own outstanding mail (Build 7 Task 6, PR J) — read
+   * directly off `CoordStore.outstandingMailFor`, the SAME in-process call
+   * `readTasks` above is to the filesystem, and sent when it differs from
+   * what this client last saw (see `lastMailJson`'s own comment for why the
+   * gate is `undefined`, not `null`).
+   *
+   * Deliberately NOT a client of `GET /api/mail?to=` (`coord/routes.ts`):
+   * that route is gated on the box token (`requireMailToken`) because it
+   * answers the anonymous box->server ingress — a fleet-host coordinator
+   * script authenticating itself, never a browser. This stream already
+   * knows exactly which one client it is serving (`this.id`, the session the
+   * socket was opened for), so there is no attribution left to check and no
+   * token to hold: the same reasoning `queueSystemMail` gives for bypassing
+   * `POST /api/mail`'s own ingress gate on the write side.
+   *
+   * `deps.coord` is optional exactly like every other coord-gated surface
+   * (`server.ts`'s own `Deps.coord?`): a box with no coordination database
+   * sends no `mail` frame at all, the same silent absence every route in
+   * `coord/routes.ts` answers with 501 `not-configured`.
+   *
+   * `outstandingMailFor` puts the `queued`/`delivered` predicate in the
+   * store's own WHERE clause (fix round 1, findings 2/4) rather than this
+   * caller filtering `mailForRecipient`'s general-purpose, history-bounded
+   * read AFTER its `LIMIT` — the earlier shape let an old unacked delivery
+   * fall outside the newest-100-deliveries window and read as gone here
+   * while `GET /api/runs`' `unreadMail` (store.ts's own `unreadMailCount`,
+   * no `LIMIT` at all) still counted it. "Outstanding = queued|delivered, or
+   * a replay-ceiling park nobody ever acked" (fix, review finding 2 —
+   * `OUTSTANDING_OR_ABANDONED_SQL`) is the store's rule now, in one place,
+   * not this caller's.
+   *
+   * `500`, not the bare default of 100 (fix, review finding 25): the default
+   * is sized for a route argument nobody controls, but this caller is
+   * in-process and every worker's mail resolves to the coordinator session
+   * across every wave of a program (store.ts's own `outstandingMailFor`
+   * docstring) — the run-of-the-mill victim of exactly this cap, and
+   * `MailStrip.tsx` prints `mail.length` as its headline COUNT, not a
+   * capped page of one, so a silent 100-row ceiling reads as a cap wearing
+   * the clothes of a fact. `500` is `clampMailLimit`'s own hard ceiling
+   * (store.ts) — the most this call could ever widen to, so this is "as
+   * wide as the store allows," not an arbitrary bigger number.
+   */
+  private async checkMail(): Promise<void> {
+    if (this.stopped || !this.deps.coord) return;
+    const outstanding = this.deps.coord.outstandingMailFor(this.id, 500);
+    const json = JSON.stringify(outstanding);
+    if (json === this.lastMailJson) return;
+    this.lastMailJson = json;
+    this.send({ type: 'mail', mail: outstanding });
   }
 
   /** Read this session's hookstate and send `ask` / `ask_cleared` when the
@@ -412,6 +487,8 @@ export class SessionStream {
       await this.checkTasks(data.cfgDir, data.uuid);
       if (this.stopped) return;
       await this.checkHookAsk(data.uuid);
+      if (this.stopped) return;
+      await this.checkMail();
     } finally {
       this.ticking = false;
     }

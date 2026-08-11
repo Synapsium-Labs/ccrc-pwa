@@ -1,7 +1,9 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { loadAcks, isUnseen, ack, prune, ackAll, acksSnapshot, resetAcks, subscribeAcks } from '../src/lib/seen';
+import {
+  loadAcks, isUnseen, isUnseenAt, FEED_ACK_KEY, ack, prune, ackAll, acksSnapshot, resetAcks, subscribeAcks,
+} from '../src/lib/seen';
 import type { FleetSession } from '../../shared/api';
 
 const s = (over: Partial<FleetSession>): FleetSession =>
@@ -156,6 +158,57 @@ describe('a store that refuses to be written', () => {
     ack('cc-a', 1); ack('cc-gone', 1);
     refuse();
     expect(prune(new Set(['cc-a']))).toEqual({ 'cc-a': 1 });
+  });
+});
+
+// D-1: `isUnseen` cannot be called on a `NotifyEvent` (no `bucket`, no
+// `bucketSince`), so the comparison itself moved one level down to
+// `isUnseenAt`, and `prune` gained a namespace rule so the feed's watermark
+// — stored under the same map, under a KEY rather than a session id — is
+// never swept up by the fleet-membership prune that runs on every snapshot.
+describe('one comparison, two kinds of key', () => {
+  it('isUnseen is a caller of isUnseenAt, not a second comparison', () => {
+    // Structural, because the whole point is that there is ONE of these
+    // (groupFleet.ts's pre-commitment). A copy of `>` against `acks[...]`
+    // inside isUnseen would pass every behavioural case here.
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'seen.ts'), 'utf8');
+    const body = src.slice(src.indexOf('export function isUnseen('), src.indexOf('\n}', src.indexOf('export function isUnseen(')));
+    expect(body).toContain('isUnseenAt(');
+    expect(body).not.toMatch(/acks\[[^\]]+\]\s*\?\?\s*0/);
+  });
+
+  it('counts an unacked instant as unseen and an acked one as seen', () => {
+    expect(isUnseenAt(FEED_ACK_KEY, 5_000, {})).toBe(true);
+    expect(isUnseenAt(FEED_ACK_KEY, 5_000, { [FEED_ACK_KEY]: 5_000 })).toBe(false);
+    expect(isUnseenAt(FEED_ACK_KEY, 6_000, { [FEED_ACK_KEY]: 5_000 })).toBe(true);
+  });
+
+  it('says nothing about an instant it does not have', () => {
+    expect(isUnseenAt(FEED_ACK_KEY, null, {})).toBe(false);
+  });
+
+  it('prune never deletes a namespaced key — a session id cannot contain a colon', () => {
+    // ccd's own id regex is ^[A-Za-z0-9._-]+$ (ccd:1671), which is what makes
+    // `ccrc:feed` collision-proof. Without this rule the feed watermark is
+    // deleted — and the deletion PERSISTED — within one fleet snapshot.
+    ack('cc-a', 1_000);
+    ack(FEED_ACK_KEY, 2_000);
+    const after = prune(new Set(['cc-a']));
+    expect(after[FEED_ACK_KEY]).toBe(2_000);
+    expect(after['cc-a']).toBe(1_000);
+  });
+
+  it('still prunes an ordinary session id the fleet no longer has', () => {
+    ack('cc-a', 1_000);
+    ack('cc-gone', 1_000);
+    ack(FEED_ACK_KEY, 2_000);
+    const after = prune(new Set(['cc-a']));
+    expect(after['cc-gone']).toBeUndefined();
+    expect(after[FEED_ACK_KEY]).toBe(2_000);
+  });
+
+  it('the feed key is namespaced, not a bare word another session could collide with', () => {
+    expect(FEED_ACK_KEY).toContain(':');
   });
 });
 

@@ -19,7 +19,7 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { resolveTranscriptFile } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { toRunSummary } from './coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR, toRunSummary } from './coord/store.js';
 import { configDirFor } from './config.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
@@ -1584,7 +1584,7 @@ export class FleetWatcher {
           if (d.deliveredAt !== null) {
             const replays = store.bumpReplayCount(d.id);
             if (replays >= MAIL_REPLAY_MAX_ATTEMPTS) {
-              store.rejectDelivery(d.id, 'undeliverable', 'replayed without ack past the replay ceiling');
+              store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
             }
           }
           continue;

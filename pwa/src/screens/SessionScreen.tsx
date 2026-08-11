@@ -20,6 +20,7 @@ import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
+import { MailStrip } from '../session/MailStrip';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { SessionHeader } from '../session/SessionHeader';
@@ -56,6 +57,7 @@ export function SessionScreen({
   const conn = useStore((s) => s.conn);
   const missingFile = useStore((s) => s.missingFile);
   const tasks = useStore((s) => s.tasks);
+  const mail = useStore((s) => s.mail);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
 
@@ -258,6 +260,9 @@ export function SessionScreen({
           />
         )}
       </div>
+
+      {/* Above the plan, which stays the composer's neighbour. */}
+      <MailStrip mail={mail} />
 
       {/* Sits between the conversation and the composer — where the TUI puts it,
           directly above the prompt you're about to type into. */}

@@ -126,6 +126,38 @@ describe('CoordStore: runs', () => {
     s.db.prepare('UPDATE runs SET clearedAt = ? WHERE id = ?').run(at, r.id);
     expect(s.run(r.id)!.clearedAt).toBe(at);
   });
+
+  // Test gap, I5 (finding 24): `runs({includeClosed:true, closedLimit})`'s
+  // own clamp had no test anywhere in the tree — this file's mail-side
+  // `clampMailLimit` coverage (`CoordStore: outstanding mail` below) never
+  // reaches this call site, which shares the function but not a test.
+  it('closedLimit caps ONLY the finished half, to the newest ids — an active run is never dropped by it, however old (finding 24)', () => {
+    const s = store();
+    const active = openRun(s) as { id: number };             // never closes — must survive every clamp below
+
+    const closedIds: number[] = [];
+    for (let wave = 2; wave <= 4; wave++) {
+      const r = openRun(s, { wave }) as { id: number };
+      expect(s.advance(r.id, 'failed', 'coordinator')).toMatchObject({ ok: true }); // planned -> failed, terminal
+      closedIds.push(r.id);
+    }
+
+    // A clamp of 2 keeps the NEWEST 2 (by id) of the 3 closed runs, plus the
+    // active one — never the oldest closed run.
+    const capped = s.runs({ includeClosed: true, closedLimit: 2 }).map((r) => r.id).sort((a, b) => a - b);
+    expect(capped).toEqual([active.id, ...closedIds.slice(1)].sort((a, b) => a - b));
+    expect(capped).not.toContain(closedIds[0]);
+
+    // A non-positive/non-finite closedLimit falls back to `clampMailLimit`'s
+    // 100 default (never 0, which would silently hide every closed run).
+    expect(s.runs({ includeClosed: true, closedLimit: 0 }).map((r) => r.id).sort((a, b) => a - b))
+      .toEqual([active.id, ...closedIds].sort((a, b) => a - b));
+
+    // `includeClosed:false` (the live-frame path) carries NO limit at all —
+    // every closed run is simply absent because the WHERE clause never names
+    // them, clamp or no clamp.
+    expect(s.runs().map((r) => r.id)).toEqual([active.id]);
+  });
 });
 
 describe('CoordStore: caps', () => {
@@ -642,6 +674,57 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     expect(landed).toBe(false);
     expect(row()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', ackedAt: null });
   });
+
+  // Orchestrator ruling I2, part (b): the ONE named exception to the H2 guard
+  // just above. Unlike a LATE ack racing a park (nothing racing here — the
+  // park is long since committed and the caller is asking, explicitly, to
+  // ack an abandoned message), this is the recipient finally seeing it —
+  // exactly what "acked" means — and the row it leaves behind still carries
+  // its park history in `lastError`, an honest record of both things that
+  // happened to it.
+  it('markAcked accepts an EXPLICIT ack of the replay-ceiling park specifically — the one abandoned row a recipient can finally clear (I2(b))', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+    s.rejectDelivery(d.id, 'undeliverable', 'replayed without ack past the replay ceiling');
+
+    const at = Date.now();
+    const landed = s.markAcked(d.id, at);
+    expect(landed).toBe(true);
+    // The park history survives IN the now-acked row (I2(b)'s own text: "the
+    // resulting row … is the honest record") — `lastError` is untouched,
+    // only `state`/`ackedAt` move.
+    expect(s.db.prepare('SELECT state, rejectCode, lastError, ackedAt FROM mail_deliveries WHERE id = ?')
+      .get(d.id)).toEqual({ state: 'acked', rejectCode: 'undeliverable',
+        lastError: 'replayed without ack past the replay ceiling', ackedAt: at });
+
+    // Idempotent the same way an ordinary ack is: a second call answers
+    // `false` (already acked), never re-applies.
+    expect(s.markAcked(d.id, at + 1)).toBe(false);
+  });
+
+  // The exception is NARROW — exact match on BOTH `rejectCode` AND
+  // `lastError`, never a bare `state === 'rejected'` widened to admit every
+  // park (the mutant the ruling names explicitly: "widen the markAcked
+  // exception to ALL rejected rows"). A DIFFERENT `rejectCode:'undeliverable'`
+  // park (the never-delivered `MAIL_MAX_ATTEMPTS` ceiling, or the
+  // `enter-ignored` terminal park — both `watch.ts` writes with this same
+  // code but a different `lastError`) must stay refused exactly like the
+  // `'run closed'` case the H2 test above already pins.
+  it('markAcked still refuses a DIFFERENT rejectCode:\'undeliverable\' park — only the exact replay-ceiling lastError qualifies', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: null, kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+    s.rejectDelivery(d.id, 'undeliverable', 'enter-ignored');   // same code, different reason
+
+    expect(s.markAcked(d.id, Date.now())).toBe(false);
+    expect(s.db.prepare('SELECT state, ackedAt FROM mail_deliveries WHERE id = ?').get(d.id))
+      .toEqual({ state: 'rejected', ackedAt: null });
+  });
 });
 
 describe('CoordStore: feed (Task 10)', () => {
@@ -667,4 +750,231 @@ describe('CoordStore: feed (Task 10)', () => {
     }
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
   });
+});
+
+// Fix round 1, findings 2/4: `mailForRecipient`'s LIMIT used to be applied
+// over ALL deliveries (any state), and the `queued`/`delivered` filter ran
+// AFTER — in `sessionws.ts`'s `checkMail`, outside the store entirely. An
+// outstanding delivery older than the newest N deliveries to that recipient
+// therefore fell out of the window and vanished, even though it was still
+// genuinely queued. `outstandingMailFor` puts the state predicate IN the
+// WHERE clause, so `limit` bounds outstanding rows, never history.
+describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
+  const FROM_ID = 'coordinator';
+  const FROM_UUID = 'c'.repeat(36);
+  const queue = (s: CoordStore, toId: string, subject: string): number => {
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
+      kind: 'question', subject, body: 'body', artifacts: [] });
+    return s.queueDelivery(mail.id, toId, 'envelope').id;
+  };
+
+  it('a LIMIT of N still surfaces an outstanding delivery older than N newer, acked ones', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    // The oldest delivery (smallest id) is the one that stays outstanding.
+    const staleId = queue(s, toId, 'still outstanding');
+    // Three newer deliveries, all acked — under the OLD "limit-then-filter"
+    // shape, a `limit` of 3 would return exactly these three (newest-first)
+    // and the filter would have nothing outstanding left to keep.
+    for (let i = 0; i < 3; i++) {
+      const id = queue(s, toId, `acked #${i}`);
+      s.markDelivered(id, Date.now());
+      s.markAcked(id, Date.now());
+    }
+    const outstanding = s.outstandingMailFor(toId, 3);
+    expect(outstanding.map((m) => m.id)).toEqual([staleId]);
+    expect(outstanding[0]!.subject).toBe('still outstanding');
+    expect(outstanding[0]!.state).toBe('queued');
+  });
+
+  // MAIL_ROW_COLUMNS (store.ts) had two literal columns with zero coverage
+  // anywhere in server/test: `m.at AS at` and `m.runId AS runId` — mutating
+  // either to a constant (`0 AS at` / `NULL AS runId`) left the full suite
+  // green. `at` is not cosmetic: pwa/src/session/MailStrip.tsx:47 picks the
+  // strip's headline with `[...mail].sort((a,b) => b.at - a.at)[0]`, so a
+  // broken `at` column silently shows an arbitrary subject. `runId` is read
+  // straight off `MailSummary` on the `mail` WS frame (shared/api.ts) with
+  // no consumer today, but the row is addressed BY a runId
+  // (`insertMail({..., runId: r.id})`) and must read back the one that was
+  // actually written, not `null`, through both read paths that share
+  // `hydrateMail`.
+  it('reads `at` and `runId` back off the row exactly as written, through both mailForRecipient and outstandingMailFor', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const toId = 'ccrc-pwa-clear-cove';
+    const before = Date.now();
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: r.id,
+      kind: 'question', subject: 'attributed to a run', body: 'body', artifacts: [] });
+    const after = Date.now();
+    s.queueDelivery(mail.id, toId, 'envelope');
+
+    for (const rows of [s.outstandingMailFor(toId), s.mailForRecipient(toId)]) {
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.runId).toBe(r.id);
+      expect(rows[0]!.at).toBeGreaterThanOrEqual(before);
+      expect(rows[0]!.at).toBeLessThanOrEqual(after);
+    }
+  });
+
+  it('excludes acked mail and a run-closed cancellation, includes queued/delivered and an abandoned park (review finding 2)', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const queuedId = queue(s, toId, 'queued');
+    const deliveredId = queue(s, toId, 'delivered');
+    s.markDelivered(deliveredId, Date.now());
+    const ackedId = queue(s, toId, 'acked');
+    s.markDelivered(ackedId, Date.now());
+    s.markAcked(ackedId, Date.now());
+    // A genuine abandonment — the lane gave up (a replay-ceiling park, or any
+    // other `rejectDelivery` the delivery lane itself performs) before anyone
+    // ever acted on the message. Fix, review finding 2: this must STAY
+    // outstanding — never acked, never acted on — distinguishable by its own
+    // `state:'rejected'`, not simply invisible.
+    const abandonedId = queue(s, toId, 'rejected (abandoned)');
+    s.rejectDelivery(abandonedId, 'undeliverable', 'replayed without ack past the replay ceiling');
+    // A run-closed cancellation is NOT abandonment — the run itself is done,
+    // so the message is moot BY DESIGN (`cancelOutstandingDeliveries`'s own
+    // `lastError:'run closed'`). This one stays excluded.
+    const runClosedId = queue(s, toId, 'rejected (run closed)');
+    s.rejectDelivery(runClosedId, 'undeliverable', 'run closed');
+
+    const ids = s.outstandingMailFor(toId).map((m) => m.id).sort((a, b) => a - b);
+    expect(ids).toEqual([queuedId, deliveredId, abandonedId].sort((a, b) => a - b));
+    expect(ids).not.toContain(ackedId);
+    expect(ids).not.toContain(runClosedId);
+  });
+
+  // Orchestrator ruling I2, part (a): before this fix, an abandoned park
+  // (the replay ceiling, above) was PERMANENTLY outstanding —
+  // `cancelOutstandingDeliveries` only ever matches `queued`/`delivered`
+  // rows, so a run's close never touches a delivery already `rejected` for a
+  // different reason, and no writer ever revisited it. The fix is a pure
+  // read-side derivation (a `LEFT JOIN runs` inside `OUTSTANDING_OR_ABANDONED_SQL`
+  // itself) — no park is ever restamped, so the row's own `state`/`lastError`
+  // stay exactly what the park wrote, forever.
+  it('clears an abandoned park by DERIVATION once its own run reaches a terminal state — never by mutating the row (I2(a))', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const activeRun = openRun(s) as { id: number };
+    const willCloseRun = openRun(s, { wave: 2 }) as { id: number };
+
+    const abandonOn = (runId: number, subject: string): number => {
+      const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId,
+        kind: 'question', subject, body: 'body', artifacts: [] });
+      const deliveryId = s.queueDelivery(mail.id, toId, 'envelope').id;
+      s.rejectDelivery(deliveryId, 'undeliverable', 'replayed without ack past the replay ceiling');
+      return deliveryId;
+    };
+    const onActive = abandonOn(activeRun.id, 'abandoned, run still open');
+    const onWillClose = abandonOn(willCloseRun.id, 'abandoned, run about to close');
+
+    // Both stay outstanding while both runs are live — the bug this ruling
+    // fixes: an abandoned park has no writer that ever revisits it.
+    expect(s.outstandingMailFor(toId).map((m) => m.id).sort((a, b) => a - b))
+      .toEqual([onActive, onWillClose].sort((a, b) => a - b));
+
+    // `planned` -> `failed` directly (RUN_TRANSITIONS): reaches a terminal
+    // state without needing a live dispatch. `cancelOutstandingDeliveries`
+    // is not even called by a bare `advance` (only `closeRun` calls it, and
+    // only on `queued`/`delivered` rows anyway) — nothing writes this row.
+    expect(s.advance(willCloseRun.id, 'failed', 'coordinator')).toMatchObject({ ok: true });
+
+    const idsAfterClose = s.outstandingMailFor(toId).map((m) => m.id);
+    expect(idsAfterClose).toContain(onActive);          // its run is still open: stays visible
+    expect(idsAfterClose).not.toContain(onWillClose);    // its run is now terminal: cleared
+
+    // Derivation, not mutation — the row itself never moved.
+    expect(s.delivery(onWillClose)).toMatchObject({ state: 'rejected' });
+    expect(s.db.prepare('SELECT rejectCode, lastError FROM mail_deliveries WHERE id = ?').get(onWillClose))
+      .toEqual({ rejectCode: 'undeliverable', lastError: 'replayed without ack past the replay ceiling' });
+
+    // `unreadMailCount` (the run row's own `RunSummary.unreadMail`, read
+    // through `run()`) derives off the SAME predicate — the MailStrip/badge
+    // count this ruling names must clear too, not just the list read.
+    expect(s.run(willCloseRun.id)!.unreadMail).toBe(0);
+  });
+
+  // I7 (subsumed by I2(a)'s rewrite, as its own text anticipates): a NULL
+  // `lastError` on a `rejected` row is NULL-false against SQLite's bare `!=`,
+  // which would silently drop the row out of the whole OR chain instead of
+  // counting it as abandoned. No real park ever leaves `lastError` NULL
+  // today (every `rejectDelivery` caller passes a reason) — this pins the
+  // guard defensively, the same way `hydrateMail`'s `unknown` tests pin
+  // guards against tokens no current writer produces either.
+  it('a rejected row with a NULL lastError still counts as abandoned — COALESCE, not a bare != (nit I7)', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const deliveryId = queue(s, toId, 'no lastError ever recorded');
+    s.db.prepare("UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable' WHERE id = ?")
+      .run(deliveryId);
+    expect(s.delivery(deliveryId)).toMatchObject({ state: 'rejected' });
+    expect(s.outstandingMailFor(toId).map((m) => m.id)).toEqual([deliveryId]);
+  });
+
+  it('never crosses recipients — mail addressed to a different session is invisible here', () => {
+    const s = store();
+    queue(s, 'some-other-session', 'not for you');
+    expect(s.outstandingMailFor('ccrc-pwa-clear-cove')).toEqual([]);
+  });
+
+  // Task 8 fix round 1, finding 1: `hydrateMail` (the row-shaping helper
+  // `outstandingMailFor` and `mailForRecipient` both delegate to, never
+  // reimplementing it) degrades a `mail.kind` this build does not recognise
+  // to `'unknown'` — the exact same discipline `feedEvents`' own "reads a
+  // kind token this build does not know" test pins for the feed, and
+  // `delivery()`'s own state-degrade test pins for `mail_deliveries.state`
+  // two describes up. Nothing pinned the MAIL side of that same guard.
+  it('reads a mail.kind token this build does not know as `unknown`, never as a raw string', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
+      kind: 'question', subject: 'from a newer build', body: 'body', artifacts: [] });
+    s.queueDelivery(mail.id, toId, 'envelope');
+    s.db.prepare('UPDATE mail SET kind = ? WHERE id = ?').run('escalation', mail.id);
+    expect(s.outstandingMailFor(toId).map((m) => m.kind)).toEqual(['unknown']);
+  });
+
+  // `hydrateMail`'s SIBLING guard, same file, same helper — `delivery()`'s
+  // own state-degrade test (two describes up) pins a completely different
+  // read path (`delivery()` reads one row by id, never through
+  // `hydrateMail`), so it does not reach this one. A state this build does
+  // not recognise cannot be read through `outstandingMailFor` itself — its
+  // own WHERE clause (`OUTSTANDING_STATES_SQL`) would just exclude the row —
+  // so this goes through `mailForRecipient`, the sibling `hydrateMail`
+  // caller with no state filter, which is exactly why the shared helper
+  // exists rather than two copies of the guard.
+  it('reads a mail_deliveries.state token this build does not know as `unknown` via `mailForRecipient` too, not just `delivery()`', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const mail = s.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
+      kind: 'question', subject: 'from a newer build', body: 'body', artifacts: [] });
+    const d = s.queueDelivery(mail.id, toId, 'envelope');
+    s.db.prepare('UPDATE mail_deliveries SET state = ? WHERE id = ?').run('archiving', d.id);
+    expect(s.mailForRecipient(toId).map((m) => m.state)).toEqual(['unknown']);
+  });
+
+  // Task 8 fix round 1, finding 1: `clampMailLimit` (shared by
+  // `outstandingMailFor` and `mailForRecipient`) had no test at either call
+  // site — neither the 100-row default for a non-positive/non-finite ask,
+  // nor the 500-row ceiling, nor that the ceiling still keeps the NEWEST
+  // rows rather than an arbitrary 500. 510 outstanding rows is the minimum
+  // that can discriminate the ceiling from a smaller one.
+  it('clamps a non-positive or non-finite limit to the 100 default, and anything above 500 to the 500 ceiling — keeping the newest rows either way', () => {
+    const s = store();
+    const toId = 'ccrc-pwa-clear-cove';
+    const ids: number[] = [];
+    for (let i = 0; i < 510; i++) ids.push(queue(s, toId, `m${i}`));
+
+    expect(s.outstandingMailFor(toId, 0)).toHaveLength(100);
+    expect(s.outstandingMailFor(toId, -5)).toHaveLength(100);
+    expect(s.outstandingMailFor(toId, NaN)).toHaveLength(100);
+
+    const ceiling = s.outstandingMailFor(toId, 10_000);
+    expect(ceiling).toHaveLength(500);
+    // Newest-first still holds under the ceiling: ids[509]..ids[10], not an
+    // arbitrary 500 — a mutant clamping from the wrong end would still pass
+    // the length assertions above and fail only here.
+    expect(ceiling[0]!.id).toBe(ids[ids.length - 1]);
+    expect(ceiling[ceiling.length - 1]!.id).toBe(ids[ids.length - 500]);
+  }, 20_000);
 });

@@ -18,6 +18,8 @@ import { useMediaQuery } from './lib/useMediaQuery';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
 import { FleetScreen } from './screens/FleetScreen';
+import { MailScreen } from './screens/MailScreen';
+import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { useFleetStore } from './stores/fleet';
 import './styles/shell.css';
@@ -42,6 +44,8 @@ export function App(): ReactNode {
   const sessionId = m ? decodeURIComponent(m[1]!) : null;
   const archive = /^\/archive\/?$/.test(path);
   const accounts = /^\/accounts\/?$/.test(path);
+  const mail = /^\/mail\/?$/.test(path);
+  const runs = /^\/runs\/?$/.test(path);
   // On desktop the accounts strip is a full-width top bar (rendered here, once);
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
@@ -49,7 +53,7 @@ export function App(): ReactNode {
   return (
     <>
       {blocked && <BlockScreen />}
-      <div className="app-shell" data-view={sessionId || archive || accounts ? 'session' : 'fleet'}>
+      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
             <AccountsStrip />
@@ -70,6 +74,10 @@ export function App(): ReactNode {
             <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
           ) : accounts ? (
             <AccountsScreen />
+          ) : mail ? (
+            <MailScreen />
+          ) : runs ? (
+            <RunsScreen />
           ) : (
             <div className="shell-placeholder">
               <p className="shell-placeholder-mark" aria-hidden="true">

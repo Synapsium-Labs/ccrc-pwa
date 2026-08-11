@@ -80,7 +80,7 @@ describe('TaskStrip', () => {
 describe('session reducer — tasks', () => {
   const snap = (): SessionSnapshot => ({
     events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
-    dialog: null, ask: null, tasks: [], missingFile: null,
+    dialog: null, ask: null, tasks: [], mail: [], missingFile: null,
   });
 
   it('replaces the list wholesale on a tasks frame', () => {

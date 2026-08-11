@@ -35,19 +35,31 @@
 // of that dump — still executed bash, just read back rather than probed input
 // by input.
 //
-// `install-session-hooks.sh`'s default `homes` array and
-// `statusline-command.sh`'s two label maps are the exceptions: neither can be
-// USEFULLY executed in a fixture test (installing hooks needs a `--homes`-less
-// invocation whose only observable effect is which directories it touches,
-// and every one is skipped when it doesn't exist under a fixture HOME, so
-// running it is inert rather than revealing; the statusline script needs a
-// real `CLAUDE_CONFIG_DIR` pointed at by the process IT is the statusline of,
-// plus JSON piped to its stdin, to produce anything at all). Per this
-// project's own instruction ("if a bash copy cannot be executed safely in a
-// test, assert on its parsed source text instead and SAY SO") — both assert
-// on parsed source text, and both comparisons are still bidirectional sets.
+// `statusline-command.sh`'s two label maps are the one entry here that truly
+// CANNOT be usefully executed in a fixture test: the script reads its own
+// process's `CLAUDE_CONFIG_DIR` env var (there is no argv to point it at a
+// fixture HOME) and needs JSON piped to its stdin to produce anything at
+// all. Per this project's own instruction ("if a bash copy cannot be
+// executed safely in a test, assert on its parsed source text instead and
+// SAY SO") it gets a parsed-source-text pin below instead — a bidirectional
+// set comparison, same as every other describe in this file.
+//
+// `install-session-hooks.sh`'s and `install-coordinator-skill.sh`'s default
+// `homes` arrays are NOT in that category, and an earlier version of this
+// comment claimed they were — a claim disproved by this same commit's own
+// `install-session-hooks.test.ts` ("...default homes agree with
+// ACCOUNTS.hooksAble, behaviourally") and `install-coordinator-skill.test.ts`
+// ("...default homes agree with ACCOUNTS.hooksAble, behaviourally"): both
+// give a fixture HOME a config dir for EVERY roster wrapper first (not "every
+// one is skipped when it doesn't exist" — none is absent), run the installer
+// with no `--homes` argv (its real default), and assert the managed file
+// lands in exactly the `hooksAble` ones. That is a `--homes`-less invocation
+// whose effect is fully revealing, and it passes. The two `describe` blocks
+// immediately below are a second, cheaper pin on the identical claim — parsed
+// source text, no subprocess — not a substitute for one a fixture cannot
+// make revealing.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCOUNTS, type Wrapper } from '../../shared/api.js';
@@ -178,21 +190,99 @@ describe('ccd _id_wrapper agrees with ACCOUNTS.idPrefix, for the wrappers ccd kn
   });
 });
 
+// Architecture doc increment 2: "the hooks install lane derives its homes
+// from the roster" — for a bash `homes=(...)` fallback that means "is pinned
+// against the roster by this fixture test", not "reads ACCOUNTS at runtime"
+// (out of scope, this file's own header). Two scripts now carry that exact
+// fallback shape — install-session-hooks.sh and, since PR J's install lane,
+// install-coordinator-skill.sh — and both are checked here rather than one
+// getting a second, duplicate describe block elsewhere in the tree.
+const parseDefaultHomes = (scriptRelPath: string): string[] => {
+  const src = readFileSync(path.join(ccrcRoot, ...scriptRelPath.split('/')), 'utf8');
+  const m = /else homes=\(([^)]*)\); fi/.exec(src);
+  expect(m, `${scriptRelPath}'s default \`homes=(...)\` fallback line`).not.toBeNull();
+  return [...(m as RegExpExecArray)[1].matchAll(/"\$HOME\/([^"]+)"/g)].map((mm) => mm[1]!);
+};
+const wantHooksAbleHomes = WRAPPERS.filter((w) => ACCOUNTS[w].hooksAble).map((w) => ACCOUNTS[w].configDirSuffix);
+
 describe('install-session-hooks.sh default homes agrees with ACCOUNTS.hooksAble', () => {
   // Not executed — see this file's header. Parses the literal `homes=(...)`
   // array the script falls back to when no `--homes` argv is given.
   it('installs into exactly the hooksAble config dirs, as literal $HOME/<suffix> paths, in ACCOUNTS order', () => {
-    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-session-hooks.sh'), 'utf8');
-    const m = /else homes=\(([^)]*)\); fi/.exec(src);
-    expect(m, 'install-session-hooks.sh\'s default `homes=(...)` fallback line').not.toBeNull();
-    const got = [...(m as RegExpExecArray)[1].matchAll(/"\$HOME\/([^"]+)"/g)].map((mm) => mm[1]);
-    const want = WRAPPERS.filter((w) => ACCOUNTS[w].hooksAble).map((w) => ACCOUNTS[w].configDirSuffix);
-    expect(got).toEqual(want);
+    expect(parseDefaultHomes('ccd/install-session-hooks.sh')).toEqual(wantHooksAbleHomes);
+  });
+});
+
+describe('install-coordinator-skill.sh default homes agrees with ACCOUNTS.hooksAble', () => {
+  // Same fixture, same reason — a sixth account with `hooksAble: true` must
+  // land in BOTH default lists or it silently keeps its session hooks and
+  // loses the coordinator skill (or the reverse), a split nobody would notice
+  // outside this test.
+  it('installs into exactly the hooksAble config dirs, as literal $HOME/<suffix> paths, in ACCOUNTS order', () => {
+    expect(parseDefaultHomes('ccd/install-coordinator-skill.sh')).toEqual(wantHooksAbleHomes);
+  });
+});
+
+// I8: `REQUIRED_REFS` (install-coordinator-skill.sh) is the OTHER hardcoded
+// literal this installer carries, and it exists for exactly the failure mode
+// this file's own header describes for `homes=(...)` — a literal array is a
+// PROJECTION of something real that a future change can silently drift away
+// from, and "a comment asking a future author to keep them in sync" is not a
+// mechanism. Here the real thing is not `ACCOUNTS` but the filesystem itself:
+// `REQUIRED_REFS` names the `references/*.md` files a partial rsync (the
+// specific hazard its own script comment names — SKILL.md sorts before
+// `references/`, so an interrupted `rsync -az --delete` can land SKILL.md
+// with an incomplete or absent `references/`) must NOT be allowed to ship
+// without. A fifth reference file landing under `references/` with no
+// matching `REQUIRED_REFS` entry would make the guard silently optional for
+// it — exactly the half-installed shape the guard exists to refuse — and
+// nothing before this test would have noticed.
+describe('install-coordinator-skill.sh REQUIRED_REFS agrees with the real references/ directory (I8)', () => {
+  it('names exactly the .md files that live under ccd/coordinator-skill/references/ today', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-coordinator-skill.sh'), 'utf8');
+    const m = /REQUIRED_REFS=\(([^)]*)\)/.exec(src);
+    expect(m, "install-coordinator-skill.sh's REQUIRED_REFS=(...) line").not.toBeNull();
+    const declared = sortedSet((m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean));
+    const actual = sortedSet(
+      readdirSync(path.join(ccrcRoot, 'ccd', 'coordinator-skill', 'references'))
+        .filter((n) => n.endsWith('.md')),
+    );
+    expect(actual.length).toBeGreaterThan(0); // the parse itself must find something, or this vacuously passes
+    expect(declared).toEqual(actual);
+  });
+});
+
+// Fix, review finding 15: the two pins directly above (and the behavioural
+// one in install-coordinator-skill.test.ts) all key on `hooksAble`, because
+// that is the field the installer's `homes=(...)` fallback is actually
+// derived from — bash cannot import `ACCOUNTS` at runtime, so this literal
+// array is the projection. But the SAFETY property Build 7's operator
+// ruling 2 actually depends on ("place the coordinator like any other
+// session, no pinned account") is about `ccdValid`: that is the set ccd's
+// own `_ws_least_loaded` can ACTUALLY land a session on. Nothing before this
+// test asserted `ccdValid ⊆ hooksAble` — the two sets only coincide today
+// because every wrapper in the roster happens to carry `hooksAble: true`.
+// Add a wrapper with `ccdValid: true, hooksAble: false` (a plausible
+// combination — e.g. a managed/corporate profile whose `settings.json` must
+// not be touched) and every pin above stays green, because all of them read
+// `hooksAble`; `_ws_least_loaded` can still land the coordinator there, on a
+// home with no `skills/ccrc-coordinator` at all — no contract, no clause 3
+// reap prohibition, no clause 9 `/clear` prohibition.
+describe('ACCOUNTS: ccdValid is a subset of hooksAble (Build 7 operator ruling 2\'s own precondition)', () => {
+  it('every wrapper ccd can place a session on also gets the coordinator skill installed', () => {
+    for (const w of WRAPPERS) {
+      if (!ACCOUNTS[w].ccdValid) continue;
+      expect(ACCOUNTS[w].hooksAble,
+        `${w} is ccdValid (a placement target) but hooksAble is false — ` +
+          '_ws_least_loaded could place the coordinator on a home with no skill installed').toBe(true);
+    }
   });
 });
 
 describe('ccd statusline-command.sh label maps agree with ACCOUNTS', () => {
-  // Not executed — same reason as install-session-hooks.sh above: the script
+  // Not executed — this file's own header names it (not the two installers
+  // above, which DO get a real subprocess pin now) as the one genuine
+  // "cannot be usefully executed in a fixture test" case: the script
   // needs a real CLAUDE_CONFIG_DIR (it reads its OWN process's env, not an
   // argv) plus a JSON stdin payload to produce anything at all. Parses the
   // two `case "$cfg" in ... esac` blocks instead — one picks the human-facing

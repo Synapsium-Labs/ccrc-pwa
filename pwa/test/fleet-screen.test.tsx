@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
-import { ack, loadAcks, resetAcks } from '../src/lib/seen';
+import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
@@ -236,6 +236,54 @@ describe('FleetScreen', () => {
     // untouched store: conn 'connecting', no sessions — same state as the
     // skeleton test above.
     expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
+  });
+
+  // Fix round 1, Task 4, finding 5: MailBadge is D-2's ENTIRE remedy — the
+  // only door to /mail — and nothing pinned it at its mount point. Deleting
+  // `<MailBadge unread={unreadMail} />` from `.fleet-head-right` (and its
+  // import) left the full 1253-test suite green, because the door is only
+  // ever rendered standalone in mail-screen.test.tsx and tap-targets.test.tsx
+  // — never inside the screen that hosts it. This is the AccountsStrip pair's
+  // twin (see the review fix above): the door is present in the first-run
+  // block AND during the skeleton load, not only once the fleet is
+  // populated.
+  it('renders the mail door in the first-run block, not just the populated fleet', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [] });
+
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
+  });
+
+  it('renders the mail door during the initial skeleton load, not just once sessions are known', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    // untouched store: conn 'connecting', no sessions — same state as the
+    // skeleton test above.
+    expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
+  });
+
+  // The `unreadMail` derivation (FleetScreen.tsx, beside `countLine`) was
+  // likewise untested: replacing it with a literal `0` (badge permanently
+  // silent) or with `feed.length` (badge ignores the watermark entirely)
+  // survived the full suite too. This seeds one record either side of a
+  // `FEED_ACK_KEY` ack and reads the count off the badge's own accessible
+  // name — the same `isUnseenAt` comparison the bucket chips use.
+  it("the mail door's count is the feed filtered through the SAME isUnseenAt comparison the bucket chips use", () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    seed(store, {
+      conn: 'open',
+      sessions: [],
+      feed: [
+        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '' },
+        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '' },
+      ],
+    });
+    expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();
   });
 
   it('renders notices as dismissible banners', () => {

@@ -72,8 +72,9 @@ session and writes `~/.cc-sessions/<id>.hookstate.json` atomically. Its contract
 is absolute: **exit 0 on every path**, write atomically or not at all, no
 network, no locks, no waiting — a hook that can slow or break a session is worse
 than no hook. It self-identifies from tmux (`cc-<id>`), so a non-fleet session
-exits silently. `install-session-hooks.sh` registers it in all four wrapper
-homes (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`),
+exits silently. `install-session-hooks.sh` registers it in every wrapper home
+the `ACCOUNTS` roster marks `hooksAble` — five today (`~/.claude`,
+`~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`, `~/.claude-dev0`),
 sweeping its own managed entries and leaving anything else in `settings.json`
 untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
 
@@ -204,6 +205,66 @@ hand from the PR sheet, which is why that sheet names the hold instead of
 promising a sweep that will never come. See
 [`docs/superpowers/programs/TEMPLATE.md`](docs/superpowers/programs/TEMPLATE.md)
 for the wave-handoff ledger a program keeps beside its hold.
+
+## Programs, runs and mail — the operator's view
+
+A **program** is a long-horizon effort with a slug and a markdown ledger
+(`docs/superpowers/programs/<slug>.md`, in the project's own repo, committed,
+and parsed by nothing). A **run** is one wave of it in one workspace. A
+**coordinator** is an ordinary fleet session running the `ccrc-coordinator`
+skill, placed by `_ws_least_loaded` like any other session, acting through the
+server's HTTP API and never raw `ccd`. See "Fleet coordination" below for the
+skill's contract, the run lifecycle, the mail bus and its box token, caps and
+pause, why `ws-reap` stays human-only, and the honest boundary — this section
+covers only what that one does not: the install lane, the PWA surfaces, the
+disaster-recovery drill, and the Build 4 dogfood runbook.
+
+**The skill ships to every `hooksAble` account home — five today, not four.**
+Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's account drifts on
+swap — so `ccd/install-coordinator-skill.sh` installs into the `ACCOUNTS`
+roster's `hooksAble` config dirs (`~/.claude`, `~/.claude-personal`,
+`~/.claude-corp`, `~/.claude-gpt` and `~/.claude-dev0`), the same
+roster-derived list `install-session-hooks.sh` uses — never a hand-typed one,
+which is exactly the trap `shared/api.ts`'s own roster comment names by
+incident — on every agent deploy, idempotently, backing up anything it
+replaces. That lane is what makes "place the coordinator like any other
+session" safe.
+
+**Three surfaces.** `/runs` is the board — runs grouped by program, with their
+own status words (a run is a lifecycle position, not an attention state, so it
+borrows none of the bucket vocabulary and nothing on it glows). `/mail` is the
+durable feed, reached from the ✉ beside the bell. Every session's own
+outstanding mail sits above the composer, one row above the task strip.
+Records land in the feed whether or not you were watching — only the *push*
+is presence-gated; a record of an agent-to-agent message is a fact about the
+fleet, and it is kept either way.
+
+**If the database is lost**, a program is reconstructible from its ledger
+(committed to the project's own repo) plus the registry and `.prhistory` on
+the **fleet host** — `server/test/reconstruction-drill.test.ts` is that
+procedure, executed against fixtures, naming by name what it recovers and
+what it cannot.
+
+### Dogfood: Build 4 is the first coordinated program
+
+By decision (spec §9), the first program run through the coordinator is Build 4,
+the transcript surface. Before starting it:
+
+1. The token is on both boxes: `ls -l ~/.cc-secrets/ccrc-mail.token` on the
+   fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
+   `cat` either one.
+2. `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` lists one path per
+   `hooksAble` account home — five today.
+3. `~/.cc-sessions/coordinator-paused` does **not** exist, on the **fleet
+   host** — a dispatch reads it there and refuses `409 {refused:'paused'}`
+   with no PWA indicator, so checking on the wrong box is a silent no-op.
+4. The ledger exists and is committed: copy `docs/superpowers/programs/TEMPLATE.md`
+   to `docs/superpowers/programs/build4-transcript-surface.md`, fill the header
+   and wave 1, commit.
+5. Open the run, then dispatch. Watch `/runs`; read `/mail`.
+
+Success is a program that completes with human pauses only at review points,
+and an audit trail that reads true.
 
 ## Attention, notifications and answering
 
@@ -570,6 +631,19 @@ instead of silently starting a program's history over). ccd's flat files —
 the registry, the hold, `.prhistory` — stay the fleet's own ground truth; the
 database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
+
+**The skill's contract.** A coordinator is an ordinary fleet session running
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its nine
+clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
+softened clause is a red suite, not a silent drift. One of those clauses is
+that **`ws-reap` stays human-only, by convention plus a speed bump, named as
+exactly that**: the skill's contract excludes the verb outright (the same
+test asserts it is named only inside the clause that forbids it), the
+coordinator holds every workspace it owns so a reap needs a deliberate
+release first, and reap consent stays the PWA's own ceremony either way.
+Nothing server-side makes reap mechanically impossible for a process with a
+shell — see "The honest boundary" below for what a contract does and does not
+buy.
 
 **Run lifecycle**, three HTTP routes driving six steps, one run row per wave
 (D-56, corrected — the version below was checked line-by-line against
