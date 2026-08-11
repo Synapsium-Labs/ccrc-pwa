@@ -143,8 +143,14 @@ which requires exactly one program in state `active`. Closing this wave's run
 before opening the next one, even for the few seconds between the two calls,
 drops this program's open-run count to zero — the program retires right then,
 and from that instant every such message is refused `unknown-recipient`,
-permanently, until a human re-opens something under this program's slug.
-**Open first** — the new run keeps the count above zero the whole time.
+**permanently: nothing in the HTTP API reactivates a retired program, not
+even opening a fresh run under the same slug** (`openRun`'s own conflict arm
+only ever updates the program row's `title`, never its `state`). Recovery is
+an operator/DB act, not a client one — or address the mail with an explicit
+`runId` instead of relying on the `'coordinator'` role resolving to it, which
+`resolveCoordinator(runId)` answers off that run's own claim regardless of
+program state. **Open first** — the new run keeps the count above zero the
+whole time, which is the only prevention this ordering rule buys.
 
 1. Review the handoff commit the way you would review any commit.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
@@ -157,15 +163,19 @@ permanently, until a human re-opens something under this program's slug.
    `merging`, and the new `planned` one) — it can never read as zero from
    here.
 4. `POST /api/runs/:id/close` `{"fingerprint":{…},"final":false}` on **this
-   wave's** run id — re-measures the same way `/advance` does (skipped only
-   on an explicit `"state":"failed"` abandon), closes this wave's run row as
-   `done`, and places the SAME hold reason again (`program:<slug>
-   wave:<N+1>/M` — idempotent; step 3 already wrote it). Two refusals besides
-   the re-measurement table in §4: `not-dispatched` (this run's `sessionId`
-   is null — it was never dispatched, so there is nothing to re-measure or
-   mail) and `prhistory-unreadable` (`.prhistory` could not be read — the
-   route refuses to close on a ledger it cannot verify; retry once the file
-   is readable again).
+   wave's** run id — re-measures the SAME facts, against the SAME codes, as
+   `/advance` does (skipped only on an explicit `"state":"failed"` abandon),
+   closes this wave's run row as `done`, and places the SAME hold reason
+   again (`program:<slug> wave:<N+1>/M` — idempotent; step 3 already wrote
+   it). The response SHAPE differs from §4's table, though: a mismatch here
+   answers `{"ok":false,"error":"<code>","detail":"<why>"}` — `error`, not
+   `reject.code` — so read `$body.error` on this route, not `$body.reject`.
+   Two refusals besides the re-measurement codes: `not-dispatched` (this
+   run's `sessionId` is null — it was never dispatched, so there is nothing
+   to re-measure or mail) and `prhistory-unreadable` (`.prhistory` could not
+   be read — the route refuses to close on a ledger it cannot verify; retry
+   once the file is readable again) — both of THESE two ride `refused`, the
+   third shape this one route can answer with.
 5. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
 
 ## 6 — Final merge

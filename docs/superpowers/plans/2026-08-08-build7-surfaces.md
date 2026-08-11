@@ -150,6 +150,19 @@ Spec §6 calls the mail feed *"the first renderer of the durable feed"*. Measure
 
 Spec §2 requires *"a test [that] proves the reconstruction path for a representative program"*; spec §7 says the ledger *"is for humans and parsed by nothing"*. Both hold only if the drill's parser never ships. **Adaptation:** the entire reconstruction lives in `server/test/reconstruction-drill.test.ts`, and Task 7 adds a structural guard asserting **no file under `server/src` mentions `docs/superpowers/programs`** — the mechanism, not a comment asking nicely. The drill also asserts, explicitly, the exact set of fields it **cannot** recover, so it can never be read as a claim of completeness.
 
+**Amendment (record correction, 2026-08-11): the mechanism as stated above provably cannot ship, and does not — the
+guard actually shipped is narrower.** Nine mentions of `docs/superpowers/programs` exist under `server/src` at HEAD:
+six are comments explaining the convention (`coord/db.ts`, `coord/fingerprint.ts`, `coord/store.ts`,
+`coord/routes.ts`, `shared/api.ts`), and three are string VALUES the running system emits or throws — never a value
+it reads back off disk (`coord/db.ts`'s 0-byte/migration-failure refusal messages, `coord/routes.ts`'s response
+field naming where a ledger lives). A bare "no file mentions the string" guard would fail on all nine and could
+never ship. The actual guard (`server/test/single-definition.test.ts`, `'the program ledger is parsed by nothing'`)
+allows comment lines plus an exact 3-line allowlist of those non-comment string values, named verbatim rather than
+pattern-matched, and fails on any OTHER non-comment mention — which is the real signal (a `readFileSync` parse
+cannot hide behind the allowlist, since it is not one of the three named lines). The guard's own docstring records
+this narrowing in full; this note is the missing pointer from the plan that stated the mechanism this test actually
+had to deviate from.
+
 ### D-5 (naming) — `tasks` is taken, and so is `.task-strip`
 
 `TaskItem`/`TaskProgress`/`tasks` are Claude Code's TodoWrite plan items across `shared/`, `server/` and `pwa/` (`shared/api.ts:82-105`, `SessionStreamMsg`'s `{type:'tasks'}`), and `server/test/single-definition.test.ts` text-scans all four source roots for exactly this class of second copy. The session mail strip therefore copies `TaskStrip`'s **idiom** and none of its names: component `MailStrip`, class `.mail-strip`, frame `{type:'mail'}`, item `MailItem`. No file in this PR defines a second `TaskItem`-shaped thing.
@@ -184,7 +197,7 @@ The brief for this PR named *"the box token `~/.cc-secrets/ccrc-mail.token` ship
 - **The feed:** *"a client-side unknown-kind degradation branch (today's closed 3-union has none), tags that do **not** collapse per session (two messages must not replace each other), and a **presence-gate exemption**: agent-to-agent mail is a record, not a 'needs your eyes' ping — it lands in the feed regardless of watching, and only its *push* is presence-gated."*
 - **The strip:** *"outstanding mail for *this* session, collapsed to a headline, nothing when empty. (A full in-transcript mail `ChatItem` is deferred to Build 4's transcript surface — one build owns the conversation model.)"* **No `ChatItem` arm, no `ChatList` change, in this PR.**
 - **Design gates, both halves.** Tap targets: scrape the rule off the stylesheet **and** render the component to prove the class is on a real element (`pwa/test/tap-targets.test.tsx:13-17`); vitest runs with `css: false`, so no test may assert a computed 44px, and every floored rule uses `var(--tap-min)` — a bare `44px` literal fails (`:193-206`). Contrast: `pwa/design/audit.mjs` walks **every** `.css` under `src/` automatically (`:129-143`), so new rules are measured the moment they exist; the cheapest path is what the bucket chips took — **self-grounded** rules (background + colour on one rule, `fleet.css:66-80`) so nothing is hand-registered.
-- **Rollout: agent first**, then server, then PWA — *"agent-first is trivially satisfied (no ccd changes; the skill + token ship via the install lane)"*.
+- **Rollout: agent first**, then server, then PWA — *"agent-first is trivially satisfied (no ccd changes; the skill + token ship via the install lane)"*. **Corrected (Task 8 fix round 1, 2026-08-11): false for this PR.** `ccd/install-session-hooks.sh` gains a fifth default home (`.claude-dev0`), and `server/src/sessionws.ts` + `server/src/coord/store.ts` carry production `server/src` changes (Task 6) — agent-first ordering (deploy Step 6.1 before 6.2) is load-bearing here, not a formality, because the fifth home's first-ever `settings.json` rewrite has to be verified and rolled back cleanly on the agent host before the server, which reads that same box's mail token, ever ships.
 - Run ALL verification **FOREGROUND** in single blocking calls (the server suite is ~200 s; the ccd files alone are ~90 s — use `timeout ≥ 600000` ms). Report REAL printed counts. **Never background a suite.**
 - **Never run `ccd` against the live HOME. Never touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `~/.cc-secrets` outside a fixture HOME.** Every shell test below builds its own HOME with `mkTmp`.
 - **Mutation sweep the whole diff** — one literal mutant per added construct, full suite per mutant, sha256-verified restore between (Task 8).
@@ -2720,7 +2733,7 @@ skill, placed by `_ws_least_loaded` like any other session.
 a contract in its skill, not a mechanism: every session on the fleet host runs
 as one UNIX user and can already run any verb. What the contract buys is that
 every act is *recorded* on the run, caps are *enforced* at one place, and the
-PWA sees all of it. The skill's eight contract clauses are pinned by
+PWA sees all of it. The skill's nine contract clauses are pinned by
 `server/test/coordinator-skill.test.ts`, so softening one is a red suite.
 
 **`ws-reap` stays human-only by convention plus a speed bump, and that is
@@ -2734,10 +2747,11 @@ dispatch refuses; `rm` it to resume. It is read before every dispatch, shown as
 a banner, and the coordinator has no route, verb or instruction that would let
 it remove the file itself.
 
-**The skill ships to all four account homes.** Skills resolve per
-`CLAUDE_CONFIG_DIR`, and a session's account drifts on swap — so
-`ccd/install-coordinator-skill.sh` installs into `~/.claude`,
-`~/.claude-personal`, `~/.claude-corp` and `~/.claude-gpt` on every agent
+**The skill ships to every `hooksAble` account home** — five today
+(`~/.claude`, `~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`,
+`~/.claude-dev0`), roster-derived rather than a hardcoded count. Skills resolve
+per `CLAUDE_CONFIG_DIR`, and a session's account drifts on swap — so
+`ccd/install-coordinator-skill.sh` installs into each one on every agent
 deploy, idempotently, backing up anything it replaces. That lane is what makes
 "place the coordinator like any other session" safe.
 
@@ -2778,7 +2792,7 @@ the transcript surface. Before starting it:
 1. The token is on both boxes: `ls -l ~/.cc-secrets/ccrc-mail.token` on the
    fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
    `cat` either one.
-2. `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` lists four paths.
+2. `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` lists one path per `hooksAble` account home (five today).
 3. `~/.cc-sessions/coordinator-paused` does **not** exist.
 4. The ledger exists and is committed: copy `docs/superpowers/programs/TEMPLATE.md`
    to `docs/superpowers/programs/build4-transcript-surface.md`, fill the header
@@ -2993,9 +3007,19 @@ including the only production `server/src` code this PR ships. Swept:
   to it identically — mutating the initializer to `null` left the full suite green. The type annotation
   (`string | null | undefined`) still documents the field's history honestly; there is no runtime construct left to
   kill here, and no test claims otherwise.
-- **`coord/store.ts`: `OUTSTANDING_STATES_SQL`, `MAIL_ROW_COLUMNS`** — both already killed by existing
-  `coord-store.test.ts`/`sessionws.test.ts` cases (state-inclusion and state-degrade assertions land on the shared
-  `hydrateMail` column list).
+- **`coord/store.ts`: `OUTSTANDING_STATES_SQL`** — already killed by existing `coord-store.test.ts` cases
+  (state-inclusion assertions land on the shared `hydrateMail` column list).
+
+**Correction (verify pass, 2026-08-11): the row above originally credited `MAIL_ROW_COLUMNS` alongside
+`OUTSTANDING_STATES_SQL` — false credit, measured.** Only the `d.state AS state` literal was actually killed (by
+the state-degrade cases the row cites); `m.at AS at → 0 AS at` and `m.runId AS runId → NULL AS runId` each left the
+FULL server suite green — nothing in `coord-store.test.ts`, `sessionws.test.ts` or `mail-routes.test.ts` asserted
+either field on a `MailSummary` read back through `outstandingMailFor`/`mailForRecipient`, and `at` is load-bearing
+(`pwa/src/session/MailStrip.tsx:47` picks the strip's headline with `[...mail].sort((a,b) => b.at - a.at)[0]`, so a
+broken `at` column would silently show an arbitrary subject). Closed with a new case, `'reads at and runId back off
+the row exactly as written, through both mailForRecipient and outstandingMailFor'` (a real run's id, a `Date.now()`
+bracket around the insert) — both literal mutants confirmed newly RED individually, then restored, sha256-checked.
+`server/test/coord-store.test.ts`.
 - **`coord/store.ts`: `clampMailLimit`** — UNTESTED at both call sites (`outstandingMailFor`, `mailForRecipient`):
   neither the 100-row default for a non-positive/non-finite ask, nor the 500-row ceiling, nor that the ceiling keeps
   the newest rows. Closed with a 510-row test exercising both boundaries and the ordering; kills a `500→50` mutant
@@ -3035,9 +3059,15 @@ Behavioural, demonstrated rather than inferred. **No destructive verbs, and no t
 1. **The hook lane's new fifth home — first-ever install into `~/.claude-dev0`:** this branch adds `.claude-dev0` to `ccd/install-session-hooks.sh`'s default `homes=(...)`, and the agent arm scps that installer and runs it (`deploy/deploy.sh` Step 6.1), so this deploy rewrites `~/.claude-dev0/settings.json` on the live fleet host for the first time ever. The installer's own header: *"A settings.json this script broke would break every future session of that home — hence the paranoia."* Verify all four, before touching anything else:
    - `python3 -m json.tool ~/.claude-dev0/settings.json >/dev/null` — valid JSON.
    - The managed session-hook entry appears **exactly once** per event array (the installer's own sweep-then-insert `JQ_PROGRAM`; a stale or duplicated entry means the sweep regex missed a prior install's path).
-   - A backup naming that home landed under `~/ccrc-backups/<TS>/claude-dev0.settings.json` — the installer's own `cp -a` rollback path.
+   - The backup check is CONDITIONAL, not automatic: the installer only backs one up when a `settings.json` already
+     existed for that home (`if [[ -f "$f" ]]; then mkdir -p "$BACKUPS"; cp -a ...`, `install-session-hooks.sh:63`)
+     — on a genuine first-ever install into a home with no prior `settings.json`, correct behaviour writes NO backup
+     at all. Confirm which case this is (did `~/.claude-dev0/settings.json` exist before Step 6.1 ran?) before
+     reading an absent backup as a fault. If one did exist, it lands under `~/ccrc-backups/<TS>/` named
+     `.claude-dev0.settings.json` — a **dotfile** (`$(basename "$dir")` on `$HOME/.claude-dev0`, `:63`), invisible to
+     a bare `ls`; use `ls -a ~/ccrc-backups/<TS>/`.
    - A re-run (`bash ~/.cc-sessions/install-session-hooks.sh`) changes nothing (`ls -i ~/.claude-dev0/settings.json` before/after — same idiom item 2 below uses for the skill installer).
-2. **The skill landed in four homes:** `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` → four paths, and `bash ~/.cc-sessions/install-coordinator-skill.sh` a second time changes nothing (`ls -i` before/after).
+2. **The skill landed in every `hooksAble` home (five today — `~/.claude`, `~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`, `~/.claude-dev0`; count derived from `ACCOUNTS.hooksAble`, not hardcoded, so this item does not go stale the next time the roster grows):** `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` → five paths, and `bash ~/.cc-sessions/install-coordinator-skill.sh` a second time changes nothing (`ls -i` before/after).
 3. **The token landed with the right mode:** `ls -l ~/.cc-secrets/ccrc-mail.token` → `-rw-------`. **Do not `cat` it.**
 4. **PR I's token lane really works end to end:** trigger an ordinary swap notice and confirm the server does **not** log the legacy-tolerance warning — i.e. `notify.sh` presented the header and the server accepted it. (PR I's work; verified here because this is the first deploy that has both halves on the box.)
 5. **A run appears on the board:** open a run for a throwaway program in a scratch workspace, and confirm `/runs` shows it — from the socket frame, with the network tab showing no `GET /api/runs` after the first paint.
@@ -3045,7 +3075,14 @@ Behavioural, demonstrated rather than inferred. **No destructive verbs, and no t
 7. **The negative that matters most:** `touch ~/.cc-sessions/coordinator-paused`, then ask the coordinator to dispatch. It must refuse, report, and **leave the file alone** — then `rm` it yourself and confirm the next dispatch proceeds.
 8. **The strip:** mail one live session; the strip appears above its composer with a collapsed headline, and disappears when the mail is acked.
 
-**Amendment (Task 8 fix round 1, 2026-08-11):** item 1 above is new, and it corrects the Global Constraints quote at :187 and the Spec Coverage §9 row (:2968) — *"agent-first is trivially satisfied (no ccd changes)"* is **false for this PR**: `ccd/install-session-hooks.sh` gains a fifth default home, and `server/src/sessionws.ts` + `server/src/coord/store.ts` carry the only production `server/src` changes this plan makes (Task 6). Agent-first ordering (Step 6.1 before Step 6.2) is load-bearing here, not a formality — the fifth home's first-ever settings.json rewrite has to be verified and rolled back cleanly on the agent host before the server, which reads the same box's mail token, ever ships.
+**Amendment (Task 8 fix round 1, 2026-08-11):** item 1 above is new, and it corrects the Global Constraints "Rollout: agent first" bullet — *"agent-first is trivially satisfied (no ccd changes)"* is **false for this PR**: `ccd/install-session-hooks.sh` gains a fifth default home, and `server/src/sessionws.ts` + `server/src/coord/store.ts` carry the only production `server/src` changes this plan makes (Task 6). Agent-first ordering (Step 6.1 before Step 6.2) is load-bearing here, not a formality — the fifth home's first-ever settings.json rewrite has to be verified and rolled back cleanly on the agent host before the server, which reads the same box's mail token, ever ships.
+
+**Correction (record accuracy, 2026-08-11): the amendment above, when written, cited a "Spec Coverage §9 row"
+carrying this same false claim — no such row ever existed with that text (the actual §9 row only ever said
+"rollout agent-first; acceptance is dogfood on Build 4", which is true and needed no correction); the false claim
+lived only in the Global Constraints bullet, which is now annotated in place, above. Removed here rather than left
+uncorrected, per this same table's own last-row correction below — a citation that names text the target line does
+not carry is the identical defect class.
 
 ---
 
@@ -3075,7 +3112,16 @@ Behavioural, demonstrated rather than inferred. **No destructive verbs, and no t
 | §9 — rollout agent-first; acceptance is dogfood on Build 4 | 8 (Step 6), 7 (the dogfood subsection) |
 | §0 fact 1 — README's local-vs-remote claim corrected | 7 |
 | §10 — no PWA mail composition | 6 (the absence is pinned, not assumed) |
-| Out of scope here (PR I's) — coord.db, migrations, mail ingress/delivery, caps enforcement, the sweep lane, push minting | nothing in this plan touches `server/src` except one test-only guard |
+| Out of scope here (PR I's) — coord.db, migrations, mail ingress/delivery, caps enforcement, the sweep lane, push minting | ~~nothing in this plan touches `server/src` except one test-only guard~~ — **false at HEAD, see correction below** |
+
+**Correction (record accuracy, 2026-08-11): the row above is false and was never true of the shipped tree.** Step
+7's own amendment (above, "Corrected... false for this PR") already says so: `server/src/sessionws.ts` (+64) and
+`server/src/coord/store.ts` (+85) are production changes Task 6 makes, not test-only, and not "out of scope" —
+they are the `checkMail` outstanding-mail fix and its store-side read path (`outstandingMailFor`,
+`MAIL_ROW_COLUMNS`). The row is left struck through rather than deleted, per this branch's convention of amending
+the record instead of rewriting history silently. The true "out of scope" claim for PR I's own territory
+(coord.db's schema/migrations, mail ingress/delivery routes, caps enforcement, the sweep lane, push minting) still
+holds — it is the "one test-only guard" qualifier, and the "nothing... except" absolute, that were wrong.
 
 ---
 

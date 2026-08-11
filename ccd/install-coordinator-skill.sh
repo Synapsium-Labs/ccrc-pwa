@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install-coordinator-skill.sh — put the ccrc coordinator skill in every wrapper
-# home's skills dir. Same four-homes, idempotent, backed-up shape as
-# install-session-hooks.sh, and for a sharper reason: skills resolve per
+# home's skills dir. Same roster-derived (five homes today), idempotent,
+# backed-up shape as install-session-hooks.sh, and for a sharper reason: skills resolve per
 # CLAUDE_CONFIG_DIR, and a session's ACCOUNT drifts on swap while its id does
 # not. The coordinator is placed like any other session (`_ws_least_loaded`,
 # no pinned account — Build 7 operator ruling 2), and this lane is the only
@@ -43,7 +43,7 @@ command -v diff >/dev/null 2>&1 \
 
 rc=0
 for dir in "${homes[@]}"; do
-  [[ -d "$dir" ]] || continue           # three of four wrappers is an ordinary box
+  [[ -d "$dir" ]] || continue           # a box missing some of the roster's wrappers is ordinary
   dest="$dir/skills/$NAME"
 
   # Converged already? Do not touch it. Idempotence is observable: the test

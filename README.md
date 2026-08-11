@@ -632,6 +632,19 @@ the registry, the hold, `.prhistory` — stay the fleet's own ground truth; the
 database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
+**The skill's contract.** A coordinator is an ordinary fleet session running
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its nine
+clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
+softened clause is a red suite, not a silent drift. One of those clauses is
+that **`ws-reap` stays human-only, by convention plus a speed bump, named as
+exactly that**: the skill's contract excludes the verb outright (the same
+test asserts it is named only inside the clause that forbids it), the
+coordinator holds every workspace it owns so a reap needs a deliberate
+release first, and reap consent stays the PWA's own ceremony either way.
+Nothing server-side makes reap mechanically impossible for a process with a
+shell — see "The honest boundary" below for what a contract does and does not
+buy.
+
 **Run lifecycle**, three HTTP routes driving six steps, one run row per wave
 (D-56, corrected — the version below was checked line-by-line against
 `server/src/coord/routes.ts`, not written from the route names alone):

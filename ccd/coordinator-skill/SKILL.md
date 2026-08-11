@@ -87,9 +87,20 @@ report. If a command would print it, redirect the command instead of printing
 the token.
 
 Every write route answers JSON, on success and on refusal alike. A `4xx`
-`$code` is a normal **answer**, not a command failure: parse `$body`'s
-`refused` (run routes) or `error` (mail routes) field and act on it — never
-branch on curl's own exit status. The refusals you will actually meet are
+`$code` is a normal **answer**, not a command failure — but the field the
+code rides on is NOT the same on every route, and `ok:false` is the only
+field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
+`refused` (`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`,
+`ambiguous-dispatch`, `worker-busy`, `claimed-by-another`, `not-dispatched`,
+`prhistory-unreadable`); those same three routes put `unknown-run`,
+`bad-transition` and the re-measurement family (`stale-tip`, `pr-regressed`,
+`no-handoff-commit`) on `error` instead; `POST /api/mail` puts every one of
+its own refusals on `error`; and `POST /api/runs/:id/advance` puts **every**
+refusal it ever sends — including codes that ride `refused`/`error` on the
+other routes — on `reject.code`. Check `$body.refused ?? $body.error ??
+$body.reject?.code` (in that order costs nothing, since a body only ever
+populates one) rather than assuming a fixed field, and never branch on
+curl's own exit status. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
 `bad-transition`, `stale-tip`, `pr-regressed`, `no-handoff-commit`,
