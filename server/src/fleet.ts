@@ -247,6 +247,14 @@ export async function assembleFleet(
     // same expressions: `dialogPending` in particular is an OR of two sources
     // and must be read once. STATUS IS STILL FROZEN — `sessionBucket` reads
     // `status`, it never writes it.
-    return { ...session, ...sessionBucket(session, hs?.updatedAt ?? null) };
+    //
+    // `hs?.event` (blocking review finding, F1): this is the ONE call site
+    // that can hand `sessionBucket` the raw hook event, because `hs` (this
+    // tick's fresh `HookState` read) is the only place `event` exists at
+    // all — it is never carried onto the `FleetSession` wire shape, so
+    // `reviveFleetSession`'s own `sessionBucket` call two-argument (defaults
+    // to `null`) is not a second copy of this reasoning, it is a caller with
+    // no `event` to give.
+    return { ...session, ...sessionBucket(session, hs?.updatedAt ?? null, hs?.event ?? null) };
   }));
 }
