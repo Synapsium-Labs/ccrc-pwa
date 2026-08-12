@@ -86,8 +86,9 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         gpt: c({ five: null, seven: 0, ts: now - 60, fiveResetAt: null, sevenResetAt: now + 400000 }),
       },
       expect: { wrapper: 'claude-corp', score: 60 },
-      why: 'gpt is a 4th lane, opt-in only (ccd:11-16) and absent from VALID_WRAPPERS — '
-        + 'it must never win, however free it looks',
+      why: 'gpt is not home-able, so it is an opt-in lane a session reaches only by having it '
+        + 'as HOME (ccd\'s roster header) and it is absent from CCRC_HOME_ABLE, the array '
+        + '_ws_least_loaded iterates — it must never win, however free it looks',
     },
     {
       name: 'disabled-lane-skipped',

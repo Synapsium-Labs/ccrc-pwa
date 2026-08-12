@@ -128,15 +128,27 @@ describe('ccd _is_valid_wrapper agrees with CCD_MIRROR.ccdValid', () => {
 
 describe('ccd _cfg_dir agrees with CCD_MIRROR.configDirSuffix', () => {
   it('maps every ccd-valid wrapper onto the roster\'s own config dir, and nothing onto the rest', () => {
-    // `_cfg_dir`'s case statement has no branch at all for a wrapper ccd
-    // does not know about (`claude-dev0` today) — no default arm, so it
-    // echoes nothing. That silence, not a thrown error, is exactly what
-    // `configDirFor` (server/src/config.ts) treats as "answer undefined".
+    // `_cfg_dir` is a delegate to the generated `_ccrc_cfg_dir`, whose case
+    // statement has one arm per ROSTERED account and no default arm — so an id
+    // the roster does not name echoes nothing at exit 0. That silence, not a
+    // thrown error, is exactly what `configDirFor` (server/src/config.ts)
+    // treats as "answer undefined", and what five of `_cfg_dir`'s six call
+    // sites in ccd depend on.
     for (const w of WRAPPERS) {
       const got = h.sh(`_cfg_dir '${w}'`);
       const want = CCD_MIRROR[w]!.ccdValid ? path.join(h.home, CCD_MIRROR[w]!.configDirSuffix) : '';
       expect(got, w).toBe(want);
     }
+  });
+
+  it('answers an unrostered wrapper with empty stdout at exit 0, through the delegate', () => {
+    // The silence above, asserted where ccd actually calls it. Every id in
+    // `WRAPPERS` is rostered, so the loop never exercises the no-arm path and
+    // the `: ''` branch of its `want` is dead — this is the case that walks
+    // it. Exit 0 is half the contract: `_ws_status` and `_transcript_path`
+    // read the empty ANSWER, not a failure, and `set -uo pipefail` would not
+    // save a call site that assumed otherwise.
+    expect(h.sh("_cfg_dir 'no-such-account' && echo RC0")).toBe('RC0');
   });
 
   it("ccd -> roster: _cfg_dir's own case-arm set is exactly the mirror's ccd-valid set", () => {

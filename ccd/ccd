@@ -26,7 +26,14 @@ WORKTREES_ROOT="$HOME/worktrees"
 # because a 272k window and unofficial-client risk are not things a project
 # should inherit by accident. It also has no Anthropic-style 5h/7d telemetry, so
 # it reads as free until a 429 writes an exclusion into cc-limits (see
-# _auto_swap_check). Instantly killable via the switch file below.
+# _auto_swap_check).
+#
+# Any lane, home-able or not, is instantly killable: `touch $REG/<account>-disabled`
+# and `_lane_enabled` stops offering it as an automatic destination (`_account_ok`).
+# That mechanism is generic and takes no constant. GPT_DISABLE_FILE below is one
+# INSTANCE of it, spelled out only so `_gpt_status` can name the path in a message
+# an operator reads — see the comment on that function, which records what happened
+# the last time this box held two spellings of the same boolean.
 GPT_DISABLE_FILE="$HOME/.cc-sessions/gpt-disabled"   # touch to remove gpt from rotation instantly
 AUTOCOMPACT_DISABLE_FILE="$HOME/.cc-sessions/autocompact-disabled"  # touch to disable proactive /compact fleet-wide
 CLAUDE_AI_BASE="https://claude.ai/code"   # by-name discovery: pick the session whose name == the id
@@ -1095,11 +1102,15 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   # of circumstance, not of rule. `projected-home.test.ts` runs both sides over
   # the same fixtures and says so the day the circumstance changes.
   #
-  # PLACEMENT AND RESCUE DISAGREE ABOUT UNKNOWN, ON PURPOSE: this function skips
-  # an unmeasured account, while `_avail` calls one available and
-  # `_swap_target` scores it 0 — i.e. best. That is a ruling, not drift, and the
-  # reasoning lives on `_avail`, where the cost of the other choice is
-  # measurable.
+  # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES, stated precisely because
+  # the loose form of it ("unmeasured never wins") is contradicted two lines
+  # below by this function's own fallback: PREFER MEASURED ACCOUNTS; IF NONE IS
+  # MEASURED, FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER. Skipping
+  # here and ranking-last in `_swap_target` are the two affordable spellings of
+  # the same preference — this function can skip because it HAS that fallback,
+  # and the rescue loop cannot because its "no candidate" answer strands a stuck
+  # session. `_avail` stays permissive because it answers eligibility, not rank.
+  # Full reasoning on `_avail`.
   #
   # CCRC_HOME_ABLE is in roster declaration order (shared/generate.mjs emits
   # roster.homeAble as-is), and that order is load-bearing twice over: the
@@ -6791,31 +6802,40 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   # The monthly spend cap only gates PAID OVERAGE above 100%, so an account under the ceiling is
   # always usable, and a spend-blocked one is already >=100% (excluded by this same rate check).
   #
-  # UNKNOWN IS AVAILABLE HERE, and unknown is SKIPPED in `_ws_least_loaded`.
-  # The split is a ruling, not drift: it is the difference between choosing
-  # among good options and finding a way out.
+  # UNKNOWN IS AVAILABLE HERE. It is not a score, and this is the one of the
+  # three unknown-handling sites that must stay permissive, because ELIGIBILITY
+  # and RANK are different questions and only this function answers the first.
   #
-  #   • Placement (_ws_least_loaded) ranks healthy candidates for a NEW
-  #     workspace. Reading unknown as 0 there made the account nobody could see
-  #     the emptiest-looking one, and therefore a permanent magnet — it never
-  #     reports, so it never stops winning. Skipping it costs nothing: an
-  #     all-unknown fleet still falls back to the first placeable account, so
-  #     first boot still places.
-  #   • This function answers "may a session RUN here", and `_swap_target`'s
-  #     candidate loop uses it to find an ESCAPE from an account a session
-  #     cannot stay on. Telemetry is only written when a session renders its
-  #     statusline (see _limit_field), so a quiet account reports nothing at
-  #     all. Reading that as blocked would evacuate every session off a
-  #     perfectly healthy home the moment it went quiet — the mirror image of
-  #     the 2026-07-27 incident _limit_field records — and would leave a
-  #     hard-blocked session with NO destination at all.
+  #   • This function answers "may a session RUN here" — and it also answers
+  #     `_swap_target`'s two "stay" shortcuts (`_avail "$home"`, `_avail
+  #     "$cur"`). Telemetry is only written when a session renders its
+  #     statusline (see _limit_field), so an account that is merely QUIET
+  #     reports nothing at all. Reading that as blocked would evacuate every
+  #     session off a perfectly healthy home the moment it went quiet — the
+  #     mirror image of the 2026-07-27 incident _limit_field records — and
+  #     would leave a hard-blocked session with NO destination.
   #     `ccd-login-screen.test.ts`'s "evacuates even though home carries zero
   #     telemetry" case is exactly that rescue, run over a fleet with no
   #     telemetry files whatsoever: it passes only while unknown is available.
+  #   • Ranking is where unknown must lose, and both ranking sites now make it
+  #     lose, by the means each can afford. `_ws_least_loaded` SKIPS an
+  #     unmeasured account outright (it has a fallback for the all-unmeasured
+  #     fleet, so skipping costs nothing). `_swap_target` cannot skip — a
+  #     rescue with no destination strands a stuck session — so it ranks
+  #     unmeasured LAST instead, eligible but never preferred.
   #
-  # So the rule is not "unknown means X" but: unmeasured must never WIN a
-  # placement, and must never LOSE a rescue. Aligning the three sites would
-  # have to break one of those.
+  # An earlier version of this comment claimed the three sites could not be
+  # aligned without breaking something. That was true only of the alignment it
+  # considered, "unknown ⇒ ineligible everywhere", which does break the rescue
+  # above. Rank-last is the third option it missed, and it is what
+  # `_swap_target` does today (review round 1, finding 1). The rule the three
+  # sites now share:
+  #
+  #     unmeasured never OUTRANKS measured, and never becomes INELIGIBLE.
+  #
+  # Placement's fallback is the one deliberate exception, and it is a fallback
+  # rather than a ranking: prefer measured accounts; if NONE is measured, take
+  # the first home-able account in roster order.
   local w="$1" sc
   sc=$(_limit_score "$w"); [[ -z "$sc" ]] && return 0      # no telemetry at all = assume free
   [[ "$sc" -lt "$SWAP_CEILING" ]]
@@ -6849,11 +6869,31 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     [[ "$cand" == "$cur" ]] && continue
     _account_ok "$cand" || continue
     _avail "$cand" || continue
-    # Unknown scores 0 — best — rather than being skipped the way
-    # `_ws_least_loaded` skips it. See the ruling on `_avail`: this loop is the
-    # escape route, and a rescue that can only land on measured accounts
-    # strands a blocked session every time the fleet has gone quiet.
-    sc=$(_limit_score "$cand"); : "${sc:=0}"
+    # UNMEASURED RANKS LAST, not first. This was `: "${sc:=0}"` until review
+    # round 1 (finding 1), which is the identical magnet Task 6 removed from
+    # `_ws_least_loaded`: an account that never reports scored 0, beat every
+    # account that had honestly said how loaded it was, and — since it never
+    # reports — went on winning every rescue forever.
+    #
+    # 100 rather than skipping the candidate: this loop is the ESCAPE ROUTE,
+    # and a rescue that can only land on measured accounts strands a blocked
+    # session every time the fleet has gone quiet (see the ruling on `_avail`).
+    # Eligibility must survive; only preference changes.
+    #
+    # 100 is exact, not a large-ish number. `_avail` above has already rejected
+    # every candidate scoring >= SWAP_CEILING (98), so a measured candidate
+    # that reaches this line is at most 97 and always outranks an unmeasured
+    # one — while 100 is still far below `best_score`'s 999 sentinel, so an
+    # unmeasured candidate is picked the moment it is the only one left.
+    # Unmeasured candidates tie with each other at 100 and the strict `<` takes
+    # the first in pool order, i.e. roster declaration order, the same
+    # tie-break `_ws_least_loaded` and `projectHome` use.
+    #
+    # The cost, stated: a fleet whose measured accounts all sit just under the
+    # ceiling now sends a rescue to a busy-but-known account instead of a quiet
+    # unknown one that might have been emptier. That is the same trade
+    # placement already makes, and the alternative is the magnet.
+    sc=$(_limit_score "$cand"); : "${sc:=100}"
     [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
   done
   [[ -n "$best" ]] && echo "$best"
