@@ -56,6 +56,27 @@ each cut from main after the previous merged.
   raced; the sweep answered draft-present twice, backed off, and delivered cleanly
   once the box emptied. The design behaved exactly as specified; recorded as a pass.
 
+## Wave 1 outcome + F5
+
+WAVE 1 CODE IS DONE AND GREEN. Re-measured by the coordinator in the worker's own
+worktree: server 2043 tests (57 new), pwa 1317, tsc clean x2. The diff is exactly
+the plan's wave-1 file set (coord/items.ts, dispatchRun tx, POST /api/runs/:id/items,
+the tally em-dash, gates + mutation tables). 5 commits on feat/build4-w1-items @ 9c3632e.
+
+- F5 — THE BRIEF'S BRANCH INSTRUCTION BREAKS THE DONE-FINGERPRINT. The wave-1 brief
+  (coordinator-authored) said "Work on branch feat/build4-w1-items cut from main" —
+  the ordinary SDD per-PR convention. But ccrc's done-fingerprint (D-2) is
+  handoffCommit === WORKSPACE-branch tip: verifyDone re-measures record.branch
+  (ws/wave-1-worker-coordination-for-build4), which is stale at d0c44df while the
+  work sits on the feature branch at 9c3632e. So advance/close both return stale-tip
+  and there is no non-abandon bookkeeping path to close a run whose work is correct.
+  The worker did exactly as instructed — the defect is the coordinator's brief and,
+  upstream, the SKILL/plan brief-writing guidance, which must say: the worker commits
+  ON ITS WORKSPACE BRANCH; never instruct a separate feature branch. FIX: SKILL
+  (references/wave-lifecycle.md brief template) + the plan's brief sketches.
+  This is the dogfood's most valuable finding — a whole class of program would have
+  wedged at every wave's close.
+
 ## Carried constraints
 
 - The wave-1 run's own tally reads `—` (no items exist until wave 1 ships the writer and a
