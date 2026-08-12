@@ -63,9 +63,14 @@ const openApp = async (home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'
 const wedged = (
   coord: CoordStore, home: string, state: RunState, sessionId: string | null, program = 'build4',
 ): number => {
-  const { id } = coord.openRun({
+  const opened = coord.openRun({
     program, title: 'Fleet controls', project: PROJECT, wave: 1, waveOf: 3, claimedBy: CLAIMED_BY,
   });
+  // `openRun` answers a UNION — it can refuse (a second coordinator) — so the
+  // id is narrowed rather than destructured off the refusal shape, exactly as
+  // `coord-decide.test.ts` does.
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  const { id } = opened;
   if (sessionId !== null) {
     seed(home, sessionId);
     if (state === 'planned') coord.setSession(id, sessionId);
@@ -263,13 +268,28 @@ describe('POST /api/runs/:id/abandon', () => {
   it('never calls verifyDone — the five done-authority codes are unreachable here', async () => {
     const home = mkTmp('ccrc-abandon-');
     const { run, calls } = makeRunner();
-    const w = await openApp(home, run); app = w.app;
+    // THE PIN IS "NO I/O AT ALL", not "no pr-state" — measured, in this wave's
+    // own mutation sweep. A `verifyDone` folded into the abandon arm answers
+    // `tip-unmeasurable` off a fixture with no git repo and returns BEFORE its
+    // `ccd pr-state` call, so a pr-state-only pin watched the mutant walk past
+    // it. What `verifyDone` cannot avoid is reading: it lists the registry
+    // (`readRegistryMeasured`) and reads git's own ref files (`gitref.ts`)
+    // before it can answer anything except the cheap claim-shape refusal — and
+    // the abandon arm touches `deps.io` not once.
+    const reads: string[] = [];
+    let recording = false;
+    const io: FleetIO = {
+      ...localIO,
+      readFile: async (p) => { if (recording) reads.push(p); return localIO.readFile(p); },
+      readdir: async (p) => { if (recording) reads.push(p); return localIO.readdir(p); },
+    };
+    const w = await openApp(home, run, { io }); app = w.app;
     const id = wedged(w.coord, home, 'dispatched', `${PROJECT}-noverify`);
 
+    recording = true;
     const res = await postAbandon(app, id);
     expect(res.statusCode).toBe(200);
-    // `verifyDone`'s one fleet call is `pr-state`; its absence is the pin, and
-    // it discriminates — the ordinary close path emits it for every done claim.
+    expect(reads).toEqual([]);
     expect(calls.map((c) => c[0])).not.toContain('pr-state');
     expect(res.json()).not.toMatchObject({ error: 'stale-tip' });
   });

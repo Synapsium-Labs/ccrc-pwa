@@ -166,6 +166,17 @@ describe('the coordinator skill: linkage', () => {
       // of the coordinator's protocol; the skill has no reason to call it
       // and naming it would be clutter, not linkage.
       'GET /api/feed',
+      // BUILD 4 — the two OPERATOR routes (spec §4.1). These are exempt for a
+      // stronger reason than clutter: naming them here would be an invitation
+      // the skill's own contract forbids. `$REG/coordinator-paused` exists
+      // precisely so the coordinator CANNOT unpause itself ("no verb, no
+      // route, no way", `rundefs.ts`), and the abandon is the release valve
+      // for a run wedged BY a stuck coordinator — a door the coordinator is
+      // not the one to walk through. Both ride the PWA's unauthenticated
+      // surface and carry `causedBy: 'operator'`; the coordinator's own close
+      // (`POST /api/runs/:id/close`) is the one it is told about.
+      'POST /api/coord/pause',
+      'POST /api/runs/:id/abandon',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {

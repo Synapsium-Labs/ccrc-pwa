@@ -565,3 +565,54 @@ describe('the program ledger is parsed by nothing', () => {
     expect(violations).toEqual([]);
   });
 });
+
+// — Build 4, Task 10: the wave's own two definitions —
+describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
+  // The type's fingerprint: the union as it is declared, not every mention.
+  const DECLARES = /export type MarkerState\s*=/;
+
+  it('MarkerState is declared in exactly one file, and that file is shared/api.ts', () => {
+    const holders = ALL.filter((f) => DECLARES.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it("'coordinator-paused' is a literal in exactly one source file", () => {
+    // `COORDINATOR_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
+    // definition; `dispatch.ts` and `watch.ts` both import it. A second literal
+    // is how the pause banner and the dispatch gate would come to disagree
+    // about what "paused" means — one of them reading a name the other never
+    // writes.
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel);
+    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+  });
+
+  it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
+    // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
+    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:184` holds
+    // a second literal ON PURPOSE (`sweepMail` uses it; importing the
+    // `rundefs.ts` copy into that scope as well would be a redeclaration,
+    // TS2451), and `rundefs.ts`'s own docstring carries the argument for the
+    // split. So the expected shape here is a NAMED LIST rather than one file —
+    // and any new holder still fails.
+    //
+    // Two of the four are not marker literals at all: `'mail-disabled'` is also
+    // a `RunRefuseCode` member, so `shared/api.ts` (the vocabulary) and
+    // `coord/dispatch.ts` (the refusal that uses it) spell the same characters
+    // for a different reason. Listing them here is the honest shape — a scan
+    // that pretended they were copies would be describing the tree wrongly.
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
+    expect(holders).toEqual([
+      'server/src/coord/dispatch.ts',   // the refusal CODE
+      'server/src/coord/rundefs.ts',    // the marker literal (definition)
+      'server/src/watch.ts',            // the marker literal (module-local, on purpose)
+      'shared/api.ts',                  // the refusal-code vocabulary
+    ]);
+  });
+
+  it('watch.ts reaches the pause marker through the shared constant, never a copy', () => {
+    // Not just "no second literal" — that is satisfied by deleting the emitter.
+    const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
+    expect(src).toContain('COORDINATOR_PAUSE_MARKER');
+    expect(src).toMatch(/import \{ COORDINATOR_PAUSE_MARKER \} from '\.\/coord\/rundefs\.js'/);
+  });
+});
