@@ -59,6 +59,18 @@ case "$event" in
                    // .tool_input.url // .tool_input.pattern // "") | tostring | .[0:200])}}' \
         <<<"$payload" 2>/dev/null) || ask_json="null"
     fi ;;
+  SessionStart)
+    # F1 (build4 dogfood, docs/superpowers/programs/build4.md): a freshly
+    # spawned session has never taken a turn, so it has no hookstate file at
+    # all — the mail delivery gate's `hs === null` conjunct correctly
+    # fails SHUT on that (never inject mid-thought), but with NOTHING ever
+    # writing this id's first hookstate, that worker's very FIRST
+    # coordination brief sat queued forever (measured live: ~40min, until a
+    # human-forced first turn). A just-started session is definitionally at
+    # an idle boundary — sitting there waiting for input, exactly like a
+    # session that just finished a `Stop` — so SessionStart writes `done`
+    # too, the same idle the delivery gate already knows how to read.
+    state="done" ;;
   Stop)
     state="done"
     [[ $(jq -r '.is_interrupt // false' <<<"$payload" 2>/dev/null) == true ]] && interrupted="true" ;;
