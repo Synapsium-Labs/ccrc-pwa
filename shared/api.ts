@@ -694,10 +694,33 @@ export type BucketInput = Pick<
  * `hookUpdatedAt` is read ONLY by `bucketSince`; no branch's BUCKET depends on
  * it. That is what lets `reviveFleetSession` call this with `null` and keep the
  * bucket while discarding the timestamp.
+ *
+ * `hookEvent` (optional, default `null`) is read ONLY by the `done` branch
+ * below, and only to tell one specific `done` apart from every other: F1
+ * (build4 dogfood) made `session-hook.sh`'s `SessionStart` write `state:
+ * 'done'` so the mail delivery gate's `hs.state === 'done'` conjunct is
+ * satisfied for a session that has never taken a turn (a just-started
+ * session IS at an idle boundary — the gate's reasoning is sound). But
+ * `done` is ALSO this ladder's own bucket for "finished a turn", surfaced
+ * verbatim on the wire (`fleet.ts`) and BADGED (`pwa/src/lib/seen.ts`'s
+ * `BADGED` set) — and a `SessionStart` `done` proves no such thing: it is
+ * "never started", not "just finished", the exact false positive this
+ * ladder's own `done` docstring below warns a hookless idle→done claim would
+ * be. Without this parameter a virgin worker would flash the `done` bucket
+ * and get badged for ordinary spawn, training the operator to ignore the
+ * badge — precisely what `seen.ts`'s own docstring says a badge must never
+ * do. `reviveFleetSession` never has an `event` to pass (`FleetSession`
+ * carries no such field on the wire — only `fleet.ts`'s LIVE assembly reads
+ * `HookState.event` directly), so it always takes the default and keeps the
+ * pre-F1 behaviour on a cached snapshot; that path is not where F1's virgin
+ * session ever appears; it also self-heals independently of this parameter
+ * (`HOOKSTATE_FRESH_MS`'s 30-minute freshness gate nulls a stale `hookState`,
+ * so an unacknowledged bucket does not persist).
  */
 export function sessionBucket(
   s: BucketInput,
   hookUpdatedAt: number | null,
+  hookEvent: string | null = null,
 ): { bucket: SessionBucket; bucketSince: number | null } {
   // `archivedAt` is epoch SECONDS (ccd writes `$REG/<id>.archived` as an epoch);
   // every other timestamp on this record is epoch ms.
@@ -737,7 +760,14 @@ export function sessionBucket(
   // a turn finished rather than never starting. It also decays for free —
   // hookstate.ts's 30-minute freshness gate nulls `hookState`, so an
   // unacknowledged `done` falls back to `idle` instead of accumulating.
-  if (s.hookState === 'done') return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
+  if (s.hookState === 'done') {
+    // `SessionStart` is F1's write, not a finished turn — see this
+    // function's own docstring for `hookEvent`. Degrade to `idle`: exactly
+    // the bucket a virgin session would report if `SessionStart` had never
+    // touched `state` at all, which is the honest fact on the ground.
+    if (hookEvent === 'SessionStart') return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
+    return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
+  }
   return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
 }
 

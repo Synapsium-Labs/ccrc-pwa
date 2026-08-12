@@ -179,10 +179,14 @@ not after.
    declared no ledger, and the board renders `—` rather than `0/0`. The ledger
    is **fixed at dispatch** — no route adds an item to a dispatched run, so
    work discovered mid-wave is a note in the wave-done mail and an item in the
-   NEXT wave's brief. This is also where wave 1's hold actually lands, reason
-   `program:<slug> wave:1/M`. For wave ≥ 2 the route itself resumes the
-   workspace and injects `/clear` before queuing the brief — this session
-   never sends `/clear` itself (clause 9). Then **end your turn** (clause 7).
+   NEXT wave's brief. **The brief must tell the worker to commit on its
+   WORKSPACE branch, never a separate feature branch** — the done-fingerprint
+   (step 4) re-measures the workspace branch, and a feature branch wedges every
+   close with `stale-tip` forever (F5, `references/wave-lifecycle.md` §2). This
+   is also where wave 1's hold actually lands, reason `program:<slug>
+   wave:1/M`. For wave ≥ 2 the route itself resumes the workspace and injects
+   `/clear` before queuing the brief — this session never sends `/clear`
+   itself (clause 9). Then **end your turn** (clause 7).
 3. **Wake on mail.** A worker's message arrives injected in the envelope shape
    in `references/mail-envelope.md`. Ack it (`POST /api/mail/:id/ack`, body
    `{fromId, fromUuid}`) before acting on it, or the delivery lane replays it

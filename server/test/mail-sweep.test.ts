@@ -18,6 +18,7 @@ import type { Deps } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { renderEnvelope } from '../src/coord/envelope.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
@@ -590,6 +591,110 @@ describe('sweepMail: the send', () => {
     expect(keyPresses(h.calls)).toEqual([]);
     expect(literalSends(h.calls)).toEqual([]);
     expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+  });
+
+  it('F3 / bug #21: resumes its OWN unsubmitted envelope rather than self-blocking with draft-present', async () => {
+    // REPRODUCES the dogfood self-block (build4.md's F3, live wave-1): a
+    // PRIOR sweep typed this exact envelope and its Enter was lost, so the
+    // box now holds OUR OWN text, byte for byte — the shape `echoedBox`
+    // fixtures throughout this file already model for a freshly-typed
+    // envelope. Pre-fix, `sendPrompt` (never passed `replaceDraft`) would
+    // read this as `draft-present` and back off — FOREVER, since nothing
+    // ever empties the box again. Post-fix, `resumeIfOwn` recognizes the
+    // marker row as this delivery's own text and finishes the submit: no
+    // C-u, no retyping (`literalSends` stays empty — it is never composed
+    // again), exactly one `Enter`.
+    const h = harness({ panes: [echoedBox(ENVELOPE), emptyBox] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toEqual(['Enter']);
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('F3: a genuine human draft is still never touched, even with resumeIfOwn now in play', async () => {
+    // The sacred guard F2 already proved: `resumeIfOwn` only ever presses
+    // Enter on a box that matches THIS delivery's OWN needle. Unrelated
+    // human text — including text that, like this fixture, sits in the box
+    // the moment the sweep looks — must fall straight through to the
+    // ordinary `draft-present` refusal, with NO key pressed at all.
+    const h = harness({ panes: ['❯ can you also check the staging deploy\n'] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toEqual([]);
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.lastError).toBe('draft-present');
+    expect(row.state).toBe('queued');
+  });
+
+  it('F3 blocking finding: a DIFFERENT envelope stuck in the box is never mis-submitted under a later delivery\'s row', async () => {
+    // The reachable failure a real review caught: this file's own ENVELOPE
+    // fixture ('ccrc-mail test payload') and the 'hello world' fixture in
+    // send.test.ts both have a DISTINCTIVE marker row, so neither test above
+    // exercises the shape that actually breaks — `renderEnvelope`'s first
+    // rendered line is the SAME constant fence ("```ccrc-mail") on every
+    // real mail envelope, so a marker-row-only match cannot tell two
+    // DIFFERENT envelopes to the SAME session apart.
+    //
+    // Here the box already holds a REAL rendered envelope A, left un-
+    // submitted by a prior sweep's lost Enter (exactly the terminal
+    // `enter-ignored` shape the test above this one pins — the row rejects,
+    // but nothing ever clears the physical box). A second, unrelated
+    // envelope B is then queued for the SAME session and becomes the
+    // delivery THIS sweep actually attempts. Pre-fix, `resumeIfOwn` read
+    // A's marker row as proof it was B's own draft and pressed Enter,
+    // submitting A's bytes while marking B `delivered` though its own text
+    // was never typed anywhere.
+    const envelopeA = renderEnvelope({
+      id: 9001, fromId: FROM_ID, toId: ID, runId: null, program: null, wave: null, waveOf: null,
+      kind: 'finding', subject: 'first', body: 'the first message, stuck in the box', artifacts: [],
+    });
+    const boxOf = (envelope: string): string =>
+      envelope.split('\n').map((l, i) => (i === 0 ? `❯ ${l}` : `  ${l}`)).join('\n') + '\n';
+    // This harness's fake tmux answers `capture-pane` from a fixed script
+    // regardless of what keys are sent — the same convention every other
+    // test in this file uses — so a single scripted pane models a box that
+    // never changes, exactly what a stuck, un-submitted draft looks like.
+    const h = harness({ panes: [boxOf(envelopeA)] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+
+    // Queued and rendered the same way `POST /api/mail` actually does it
+    // (coord/routes.ts): insert the mail row, queue the delivery so its own
+    // id exists, THEN render the envelope against the DELIVERY id.
+    const mailB = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId: ID, runId: null,
+      kind: 'finding', subject: 'second', body: 'a totally different second message', artifacts: [] });
+    const deliveryB = coord.queueDelivery(mailB.id, ID, '');
+    const envelopeB = renderEnvelope({
+      id: deliveryB.id, fromId: FROM_ID, toId: ID, runId: null, program: null, wave: null, waveOf: null,
+      kind: 'finding', subject: 'second', body: 'a totally different second message', artifacts: [],
+    });
+    coord.setDeliveryEnvelope(deliveryB.id, envelopeB);
+
+    await w.sweepMail();
+    // No Enter pressed on A's bytes, and B's own text is never composed
+    // again either (nothing was retyped) — refused as a foreign draft.
+    expect(keyPresses(h.calls)).toEqual([]);
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, deliveryB.id);
+    expect(row.state).toBe('queued');            // NOT delivered
+    expect(row.lastError).toBe('draft-present');  // refused, not silently mis-submitted
   });
 
   it('backs off with exponential spacing on draft-present / dialog-open / verify-failed', async () => {

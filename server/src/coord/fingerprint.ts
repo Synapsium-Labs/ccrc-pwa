@@ -167,8 +167,19 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
       detail: `no readable ref for ${branch} under ${run.project}` };
   }
   if (tip !== claim.branchTip) {
+    // F5 (build4 dogfood): a stale-tip that NEVER MOVES no matter how many
+    // times the same claim is resubmitted is the signature of a brief that
+    // told the worker to commit on a separate feature branch instead of this
+    // workspace's own — the fingerprint re-measures `branch` (this run's
+    // WORKSPACE branch), never a branch the brief merely mentioned, so real,
+    // reviewed work sitting on the wrong branch reads exactly like a stale
+    // claim forever. Naming that here (not a behaviour change — the code and
+    // the refusal are unchanged) is one line a future coordinator can read
+    // without having lived through the dogfood that found it.
     return { ok: false, code: 'stale-tip',
-      detail: `${branch} is at ${tip}, the claim says ${claim.branchTip}` };
+      detail: `${branch} is at ${tip}, the claim says ${claim.branchTip} — if the worker committed ` +
+        'on a DIFFERENT branch than this workspace\'s own, that is the almost-certain cause: the brief ' +
+        'must instruct the worker to commit on its workspace branch, never a separate feature branch' };
   }
 
   const argv = CCD_ARGV.prStateSession(run.sessionId);

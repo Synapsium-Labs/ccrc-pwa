@@ -94,6 +94,38 @@ describe('sessionBucket', () => {
       .toEqual({ bucket: 'done', bucketSince: 7777 });
   });
 
+  // Blocking review finding (F1): `session-hook.sh`'s `SessionStart` writes
+  // `state: 'done'` so the mail delivery gate can inject a virgin worker's
+  // first brief (its `hs.state === 'done'` conjunct — watch.ts), but `done`
+  // is ALSO this ladder's own bucket for "finished a turn", surfaced
+  // verbatim on the wire and BADGED (pwa/src/lib/seen.ts's `BADGED` set).
+  // Without the `hookEvent` degrade a never-run session would flash `done`
+  // and get badged for ordinary spawn — exactly the false positive this
+  // ladder's own `done` branch exists to rule out for a hookless idle→done
+  // transition. `hookEvent: 'SessionStart'` must degrade to `idle`, the
+  // honest fact on the ground, not accumulate as `done`.
+  it('F1: a SessionStart-sourced done degrades to idle, not the done bucket', () => {
+    expect(sessionBucket({ ...base, hookState: 'done' }, 7777, 'SessionStart'))
+      .toEqual({ bucket: 'idle', bucketSince: 1000 });
+  });
+
+  // The same hook state, once a REAL turn has actually run (`Stop` or a
+  // manual `PostCompact`), still reports `done` — the fix must not blunt the
+  // bucket for the case it exists for, only for `SessionStart`'s specific
+  // "never started" claim.
+  it('F1: a Stop-sourced done still reports done — only SessionStart degrades', () => {
+    expect(sessionBucket({ ...base, hookState: 'done' }, 7777, 'Stop'))
+      .toEqual({ bucket: 'done', bucketSince: 7777 });
+  });
+
+  // No third argument at all (every pre-F1 call site, and `reviveFleetSession`
+  // on a cached snapshot that never had an `event` to give) must keep the
+  // pre-fix answer — the default is `null`, not `'SessionStart'`.
+  it('F1: hookEvent omitted keeps done — the default never degrades it', () => {
+    expect(sessionBucket({ ...base, hookState: 'done' }, 7777))
+      .toEqual({ bucket: 'done', bucketSince: 7777 });
+  });
+
   it('leaves a hookless idle session in idle — no hook evidence, no done claim', () => {
     expect(sessionBucket(base, null)).toEqual({ bucket: 'idle', bucketSince: 1000 });
   });
@@ -161,5 +193,48 @@ describe('sessionBucket', () => {
     const noHook = fleetNoHookFile.find((x) => x.id === 'claude-demo')!;
     expect(noHook.status).toBe('idle');
     expect(noHook.bucket).toBe('idle');
+  });
+
+  // Blocking review finding (F1), end to end through `assembleFleet` — the
+  // exact wire shape a freshly-spawned worker produces: `session-hook.sh`'s
+  // `SessionStart` write (`state: 'done', event: 'SessionStart'`), before
+  // that worker has taken a single turn. `hookState` itself is still `done`
+  // on the wire (unchanged — the mail delivery gate at watch.ts still needs
+  // it), but `bucket` — the field the fleet screen's sections, counts and
+  // badge (`pwa/src/lib/seen.ts`'s `BADGED`) all key off — must read `idle`,
+  // never `done`: a virgin worker has not "finished a turn wanting
+  // attention", it has not run at all.
+  it('F1: assembleFleet buckets a virgin SessionStart-done session as idle, not done', async () => {
+    const home = mkTmp('ccrc-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = {
+      wrapper: 'claude2', project: 'claude2-MekWarLive', workdir: '/data/projects/MekWarLive',
+      uuid: '1'.repeat(36), started: '1',
+    };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude2-MekWarLive.${k}`), v);
+    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
+      name: 'mekwar-a1', status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes('cc-claude2-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const sessionStartDone = new Map<string, HookState>([
+      ['claude2-MekWarLive',
+        { state: 'done', updatedAt: 1784600000000, event: 'SessionStart', ask: null, subagents: [], interrupted: false }],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, sessionStartDone,
+    );
+    const s = fleet.find((x) => x.id === 'claude2-MekWarLive')!;
+    // The raw hook field is unchanged — the mail delivery gate still reads it.
+    expect(s.hookState).toBe('done');
+    // The bucket — what the PWA sections/badges on — is not.
+    expect(s.bucket).toBe('idle');
   });
 });

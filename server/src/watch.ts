@@ -1314,12 +1314,17 @@ export class FleetWatcher {
    *      (`:731-736`, "MUST NOT collapse `unknown` to idle") applies here for
    *      the same reason: this ends in a keystroke.
    *
-   * ONLY THEN `sendPrompt`, unchanged, with its whole proof discipline —
-   * echo verified, `draft-present` refused, `dialog-open` refused — inside the
-   * session's own `KeyedQueue` slot. NOTHING HERE TEACHES IT TO RETRY: the
-   * two-Enter budget and `submitEnter`'s one-Enter doctrine
-   * (`inject/send.ts:456-460`) are load-bearing, and the escalation for a stuck
-   * box is the human.
+   * ONLY THEN `sendPrompt`, with its whole proof discipline — echo verified,
+   * `draft-present` refused, `dialog-open` refused — inside the session's own
+   * `KeyedQueue` slot, and `resumeIfOwn: true` (F3 / bug #21, fix-round): a
+   * box already holding THIS delivery's own un-submitted envelope (a prior
+   * sweep's lost Enter) is recognized and its Enter finished, rather than
+   * misread as `draft-present` and backed off forever — the exact self-block
+   * the build4 dogfood measured live (`docs/superpowers/programs/build4.md`).
+   * See `sendPrompt`'s own docstring for the discrimination. NOTHING HERE
+   * TEACHES IT TO RETYPE OR PRESS BLINDLY: the two-Enter budget and
+   * `submitEnter`'s one-Enter doctrine (`inject/send.ts:456-460`) are
+   * load-bearing, and the escalation for a stuck box is the human.
    *
    * `replaceDraft` IS NEVER PASSED. A half-typed human message outranks every
    * agent-to-agent finding in this system; `draft-present` is a back-off, and
@@ -1572,7 +1577,13 @@ export class FleetWatcher {
         seen.add(d.toId);
         // The stored envelope, byte for byte. `renderEnvelope` is not called
         // here and must never be: spec:176-177's "verbatim, never re-rendered".
-        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope);
+        // `resumeIfOwn: true` (F3 / bug #21): if a PRIOR sweep's Enter for
+        // THIS SAME envelope was lost, the box now holds our own un-submitted
+        // text — `sendPrompt` recognizes it (see its own docstring) and
+        // presses Enter rather than reading it as `draft-present` and backing
+        // off forever, which is the exact self-block the build4 dogfood
+        // measured live. A genuine human draft is still never touched.
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope, { resumeIfOwn: true });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
