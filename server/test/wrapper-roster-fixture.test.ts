@@ -2,18 +2,29 @@
 // docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md. It drives
 // ccd's bash against a TypeScript roster and demands they agree.
 //
-// THIS FILE IS ON ITS WAY OUT, and knows it. The roster it used to compare
-// against — `shared/api.ts`'s `ACCOUNTS` — was deleted in Task 6 of the
-// stage-2a plan, because the roster is runtime data now
-// (`~/.ccrc/accounts.json`). Task 8 then made ccd SOURCE the generated
-// projection of it (`~/.ccrc/accounts.sh`, which `makeCcdHarness` writes into
-// every fixture home), so ccd no longer keeps copies at all: `VALID_WRAPPERS`
-// is gone, `_is_valid_wrapper` iterates `CCRC_ACCOUNTS`, and `_cfg_dir` /
-// `_id_wrapper` are one-line delegates to generated functions. What is left
-// for this file to compare is therefore a generated bash roster against a
-// hand-written TypeScript one — the same roster twice, which is why Task 9
-// rewrites it into a round-trip with no literal on either side and deletes
-// `ccdMirror.ts` with it.
+// NOT on its way out any more — an earlier version of this comment said it
+// was, on the theory that once ccd stopped keeping its own copies of the
+// roster there would be nothing left here worth comparing. That theory was
+// half right. The roster this file used to compare against —
+// `shared/api.ts`'s `ACCOUNTS` — was deleted in Task 6 of the stage-2a plan,
+// because the roster is runtime data now (`~/.ccrc/accounts.json`), and
+// Task 8 made ccd SOURCE the generated projection of it
+// (`~/.ccrc/accounts.sh`, which `makeCcdHarness` writes into every fixture
+// home) instead of keeping copies: `VALID_WRAPPERS` is gone,
+// `_is_valid_wrapper` iterates `CCRC_ACCOUNTS`, and `_cfg_dir` / `_id_wrapper`
+// are one-line delegates to generated functions. But the describes below
+// still earn their keep: they check that ccd's bash answer SPACE — the full
+// arm set of a `case` statement, the full token list of a `for` loop — is
+// EXACTLY the roster's, in both directions, which "ccd now sources a
+// generated file" does not itself guarantee (a generator with a bug and a
+// hand-written mirror with the SAME bug would agree with each other forever,
+// green). Task 9 adds one more describe, further down, that checks a
+// property those four cannot: that the generated bash and the SERVER's own
+// TypeScript (`configDirFor`, `idHomeWrapper`) compute the same answer for
+// the same input — across a roster built specifically to expose the
+// ordering bug this codebase has already shipped once by hand. `ccdMirror.ts`
+// stays; see its own header, and the note beside the new describe below, for
+// why the round-trip does not make the rest of this file redundant.
 //
 // Until that lands, what stops the two drifting is still a test that RUNS the
 // bash and checks its answers, every suite run, rather than a comment asking a
@@ -60,12 +71,43 @@
 // and the question has since dissolved: both installers source the same
 // generated roster ccd does, so there is no array left to parse. See the note
 // where the two parsed-source describes used to be, further down.
+//
+// WHAT THIS FILE ACTUALLY GUARANTEES, STATED PRECISELY — read this before
+// trusting a green run here for more than it proves. Before Stage 2a, every
+// comparison in this file ran against `shared/api.ts`'s `ACCOUNTS`, the same
+// literal the SERVER imported and ran on — so a drift caught here WAS a
+// drift in production. That is no longer true. `ACCOUNTS` is gone (Task 6);
+// every roster on both sides of every describe below — `CCD_MIRROR` (derived
+// from `DEFAULT_TEST_ROSTER`) and the round-trip's two fixture rosters — is
+// a roster THIS TEST FILE wrote, never the one a real box boots with. A
+// production `~/.ccrc/accounts.json` with a typo'd id, a wrong
+// `configDirSuffix`, or a missing account is invisible to every test here,
+// because nothing here reads one. What a green run DOES still prove is that
+// the MACHINERY agrees with itself for whatever roster it is handed —
+// `generateAccountsSh`, `configDirFor`, `idHomeWrapper`, `_is_valid_wrapper`,
+// `_ccrc_cfg_dir` and `_ccrc_id_wrapper` all computing the same answer for
+// the same input, including on a roster built to expose the one ordering bug
+// this codebase has already shipped by hand once (see the round-trip
+// describe below). That is real coverage — it is what stops a future edit to
+// any one of those six from silently disagreeing with the other five — but
+// it is coverage of the CODE, not of the DATA. Task 10 puts a real
+// `deploy/accounts.default.json` in the repo; the day a test here reads THAT
+// file instead of a fixture this file wrote, the guarantee gets its
+// production-drift-detecting strength back. Until then: a red run here means
+// the roster machinery disagrees with itself; a green one is silent on
+// whether the roster ccrc actually ships is even valid.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD_MIRROR, CCD_MIRROR_NAMES } from './fixtures/ccdMirror.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+import { loadConfig, configDirFor } from '../src/config.js';
+import { idHomeWrapper } from '../src/fleet.js';
+import { generateAccountsSh } from '../../shared/generate.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -216,6 +258,92 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
     const id = `${CCD_MIRROR['claude-dev0']!.idPrefix}fixture-slug`;
     expect(h.sh(`_id_wrapper '${id}'`)).toBe('claude-dev0');
   });
+});
+
+// Task 9's own addition, and the reason this file's guarantee-strength
+// paragraph up top exists: a ROUND-TRIP, run over two rosters, that never
+// touches `makeCcdHarness`/`CCD_MIRROR` at all. Every describe above this one
+// asks "does ccd's bash agree with a hand-written side table"; this one asks
+// "does the GENERATOR's bash agree with the SERVER's own TypeScript
+// (`configDirFor`, server/src/config.ts; `idHomeWrapper`, server/src/fleet.ts)
+// for the SAME roster object" — the drift a hand-typed mirror can never
+// catch, because a generator with a bug and a mirror with the identical bug
+// agree with each other forever, green. It is why `ccdMirror.ts` does not
+// become redundant just because this describe exists: this checks
+// per-input AGREEMENT between two independent implementations, the four
+// describes above check answer-SPACE completeness against `CCD_MIRROR`
+// (which the round-trip does not touch at all), and the statusline describe
+// below needs `CCD_MIRROR.label`, a concept with no TypeScript twin to
+// cross-check against. Three different properties; none subsumes another.
+//
+// Two rosters, not one, and the second is the point. `DEFAULT_TEST_ROSTER`
+// is production-shaped (today's five real accounts), and no two of THOSE
+// ids share a prefix — which means a `case` statement with the WRONG arm
+// order (alphabetical, insertion order, anything but length-descending)
+// still answers every probe correctly on this roster, by accident.
+// `PREFIX_COLLISION_ROSTER`, below, is built to fail that accident: `a`,
+// `a-b` and `a-b-c` are each a strict textual prefix of the next, so an arm
+// placed above a longer one that should have sorted first (bash's `case`
+// takes the FIRST match, never the longest) mis-resolves a `a-b-c-…` id to
+// `a` and this test goes red. It is the adversarial fixture, not the
+// production-shaped one, that actually PROVES the length-descending
+// ordering `shared/generate.mjs` documents, rather than trusting the
+// comment.
+//
+// ONE bash process per roster, not one per probe. Every account contributes
+// two probes (`_ccrc_cfg_dir` and `_ccrc_id_wrapper`), joined into a single
+// `;`-separated snippet and run through one `execFileSync` call — the
+// per-wrapper describes above already spawn one bash process per input each,
+// and a per-account × per-id matrix over two rosters would multiply that
+// badly if it followed the same shape.
+const PREFIX_COLLISION_ROSTER = {
+  version: 1,
+  accounts: [
+    {
+      id: 'a', label: 'A', configDirSuffix: '.a',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+    },
+    {
+      id: 'a-b', label: 'AB', configDirSuffix: '.a-b',
+      exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    },
+    {
+      id: 'a-b-c', label: 'ABC', configDirSuffix: '.a-b-c',
+      exec: { kind: 'generated' }, homeAble: false, hue: 'blue', telemetry: 'none',
+    },
+  ],
+};
+
+describe('accounts.sh round-trip: the generated bash agrees with the server TypeScript, for real rosters', () => {
+  it.each([
+    ["production-shaped (today's five real accounts)", DEFAULT_TEST_ROSTER],
+    ['adversarial (ids are strict prefixes of each other)', PREFIX_COLLISION_ROSTER],
+  ] as const)('%s: _ccrc_cfg_dir and _ccrc_id_wrapper match configDirFor and idHomeWrapper for every account',
+    (_label, spec) => {
+      const home = mkTmp('ccrc-roundtrip-');
+      seedRoster(home, spec);
+      // `loadConfig`, not a bare `parseRoster` call — the same path every
+      // server test takes to get a real `CcrcConfig`, so `cfg.roster` is the
+      // exact object `configDirFor` and `idHomeWrapper` see in production,
+      // not a second parse this test built only for itself.
+      const cfg = loadConfig({ CCRC_HOME: home });
+      writeFileSync(path.join(home, '.ccrc', 'accounts.sh'), generateAccountsSh(cfg.roster));
+
+      const probes = cfg.roster.accounts.flatMap((a) => [
+        `_ccrc_cfg_dir '${a.id}'`,
+        `_ccrc_id_wrapper '${a.id}-quiet-basin'`,
+      ]);
+      const out = execFileSync(
+        'bash', ['-c', `source "$HOME/.ccrc/accounts.sh"; ${probes.join('; ')}`],
+        { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' },
+      ).trim().split('\n');
+
+      cfg.roster.accounts.forEach((a, i) => {
+        expect(out[i * 2], `_ccrc_cfg_dir ${a.id}`).toBe(configDirFor(cfg, a.id));
+        expect(out[i * 2 + 1], `_ccrc_id_wrapper ${a.id}-quiet-basin`)
+          .toBe(idHomeWrapper(cfg.roster, `${a.id}-quiet-basin`));
+      });
+    });
 });
 
 // Architecture doc increment 2 — "the hooks install lane derives its homes
