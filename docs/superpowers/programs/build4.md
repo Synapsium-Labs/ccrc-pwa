@@ -14,8 +14,8 @@ each cut from main after the previous merged.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Coordination: the writer (Tasks 1–5 — items on dispatch, dispatchRun tx, settleItems, POST /api/runs/:id/items, skill docs) | — | dispatched (run 1, worker ccrc-pwa-amber-harbor, brief 2793B queued) |
-| 2 | Fleet Mutation + run-control substrate (Tasks 6–10 — coord-pause verb+grant, coord frame, abandon route) | — | pending |
+| 1 | Coordination: the writer (Tasks 1–5) | #38 (merged) | done — code merged via ordinary PR; run 1 closed state:failed as BOOKKEEPING (F5: its fingerprint could never measure the feature branch). The work is on main. |
+| 2 | Fleet Mutation + run-control substrate (Tasks 6–10) | — | dispatched (run 2, same workspace, resumed:true + /clear via dispatch — D-1's first production outing; brief 3075B + SEVEN DECLARED ITEMS — wave 1's feature in service; hardened machinery: F1/F3/F5 all deployed) |
 | 3 | PWA: the console's hands (Tasks 11–14 — banner, abandon sheet, start-program sheet) | — | pending |
 | 4 | Session Conversation: the transcript (Tasks 15–19 — envelope parser, mail ChatItem, ask card) | — | pending |
 
