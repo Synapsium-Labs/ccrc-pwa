@@ -1,7 +1,14 @@
 # The envelope
 
-Mail is injected into your session as a fenced, self-describing block. You need
-no tooling to act on it; everything is on the face of it.
+Your session is never typed a message directly — only a tiny one-line nudge
+pointing at `GET /api/mail?to=<you>` (`references/wave-lifecycle.md` §3). Each
+listed row carries a `deliveryId` — use THAT, never the row's `id`
+(`references/wave-lifecycle.md` §3, re-opened D-41) — for
+`GET /api/mail/<deliveryId>`, which is what returns one outstanding delivery:
+a fenced, self-describing block. You need no tooling to act on it; everything
+is on the face of it. (The `id:` field inside the fenced block below IS the
+delivery id already — `renderEnvelope` has always published the delivery id
+there; the mail/delivery id ambiguity is only a listing-row concern.)
 
 <!-- BEGIN renderEnvelope — paste the real output here (Step 6) -->
 
@@ -24,7 +31,7 @@ Wave 3 is on the branch. Handoff commit is the ledger update; PR #591 is green.
 ```
 ````
 
-**Ack before you act.** `POST /api/mail/:id/ack`, body `{"fromId":…,"fromUuid":…}`
+**Ack before you act.** `POST /api/mail/<deliveryId>/ack`, body `{"fromId":…,"fromUuid":…}`
 (`references/wave-lifecycle.md` §3). Until then the lane replays this message
 verbatim on later sweeps — but not forever: past a bounded number of replay
 attempts, the lane gives up and marks the delivery undeliverable. If you see
