@@ -111,6 +111,27 @@ describe('a swap that cannot carry the conversation', () => {
     expect(h.reg(id, 'lastswap')).toBeNull();
   });
 
+  it('CLEARS a lastswap the AUTO-swap caller already stamped — a refusal is not a landing', () => {
+    // The gap the manual-path test above does not cover: _auto_swap_check stamps
+    // `lastswap` itself, BEFORE `_dispatch_swap` ever runs (both the hard-blocked
+    // rescue arm and the return-home arm), so by the time this detached `cmd_swap`
+    // decides to refuse, `lastswap` is already fresh — "never write it" is not
+    // enough on THIS path, unlike the manual one. Replays _spawn's own fromswap
+    // computation (ccd:6915-6917) verbatim: with a stale/absent lastswap, a resume
+    // must not read as a swap landing and auto-compact.
+    const id = seed();
+    h.sh(`_reg_set ${id} lastswap "$(date +%s)"`);   // what _auto_swap_check already did
+    shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    expect(h.reg(id, 'lastswap')).toBeNull();
+    const fromswap = h.sh(`
+      fromswap=0
+      lastswap=$(_reg_get ${id} lastswap)
+      [[ -n "$lastswap" && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
+      echo "$fromswap"
+    `);
+    expect(fromswap).toBe('0');
+  });
+
   it('re-reads the uuid after the flush and decides on THAT one — a /clear rotates it', () => {
     // The pre-flight is ADVISORY. Here uuid-A has a transcript and passes it;
     // the teardown rotates the registry to uuid-B (what _sync_uuid does after
@@ -154,6 +175,19 @@ describe('a swap that cannot carry the conversation', () => {
     h.sh(`${SWAP_STUBS} cmd_swap ${id} claude2`);
     expect(h.reg(id, 'swapblocked')).toBeNull();
     expect(h.reg(id, 'wrapper')).toBe('claude2');
+  });
+
+  it('distinguishes "nothing found" from "found but the copy failed" in the reason', () => {
+    // _swap_carry_jsonl's rc 1 covers two different causes (its own docstring: "nothing
+    // found" OR "matches existed and every copy failed") without telling the caller
+    // which. An operator diagnosing a full disk or an EACCES must not be pointed at "no
+    // transcript found" — the wrong cause, and the wrong fix.
+    const id = seed(UUID_A);
+    plantTranscript('.claude', '-x-projects-demo', UUID_A);
+    const copyFails = `cp() { return 1; };`;
+    shFail(`${SWAP_STUBS} ${copyFails} cmd_swap ${id} claude2`);
+    expect(h.reg(id, 'swapblocked'))
+      .toContain(`transcript found for ${UUID_A} under claude but every copy failed`);
   });
 });
 
@@ -205,17 +239,27 @@ describe('_auto_swap_check and a refused session', () => {
     // becomes 720 banners and 720 swap.log lines an hour. Both sides of the
     // boundary are asserted so 1800 cannot drift to 900 (the swap cooldown it
     // sits beside) and `-lt` cannot become `-le` unnoticed.
+    //
+    // `date +%s` is PINNED, not merely raced against: the stamp and the check are two
+    // separate `h.sh` calls, each sourcing a ~7,600-line script, and a cold run without
+    // this pin measured that gap crossing a real wall-clock second often enough to flip
+    // the assertion — `date +%s` truncates, so "stamped 1799s old" could read as 1800s
+    // old by the time `_auto_swap_check`'s own `now=$(date +%s)` ran. Pinning both calls
+    // to the SAME fixed epoch makes the elapsed time an exact integer (`NOW - (NOW -
+    // age)` == `age`) independent of how long either process actually takes to start.
     const id = seed();
+    const NOW = 1_700_000_000;
+    const DATE_STUB = `date() { [[ "\${1:-}" == +%s ]] && echo ${NOW} || command date "$@"; };`;
     const stamp = (age: number): void => {
-      h.sh(`_reg_set ${id} swapblocked "$(( $(date +%s) - ${age} )) no transcript found"`);
+      h.sh(`${DATE_STUB} _reg_set ${id} swapblocked "$((${NOW} - ${age})) no transcript found"`);
     };
 
     stamp(1799);
-    h.sh(`${AUTO_STUBS} _auto_swap_check ${id}`);
+    h.sh(`${DATE_STUB} ${AUTO_STUBS} _auto_swap_check ${id}`);
     expect(h.calls().join('\n')).not.toContain('dispatch');
 
     stamp(1801);
-    h.sh(`${AUTO_STUBS} _auto_swap_check ${id}`);
+    h.sh(`${DATE_STUB} ${AUTO_STUBS} _auto_swap_check ${id}`);
     expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude2`);
   });
 

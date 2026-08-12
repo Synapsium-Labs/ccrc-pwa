@@ -133,11 +133,12 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
   # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
-  # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper`. That is a
-  # WIDER set than `_reg_set`/`_reg_get`: the inventory that stood here named
-  # only the shell-written fields and so silently dropped `prcheckedat`,
-  # `prphase` and `prhistory` (written by `_pr_py`'s own `put`/append) and
-  # `hookstate` (written by the hooks). The purge itself was always right — it
+  # `setup`, `started`, `swapblocked`, `uuid`, `workdir`, `workspace`,
+  # `wrapper`. That is a WIDER set than `_reg_set`/`_reg_get`: the inventory
+  # that stood here named only the shell-written fields and so silently dropped
+  # `prcheckedat`, `prphase` and `prhistory` (written by `_pr_py`'s own
+  # `put`/append) and `hookstate` (written by the hooks). The purge itself was
+  # always right — it
   # matches the SUFFIX shape, not a list — but an inventory that omits files is
   # an inventory a future reader trusts and a future writer copies.
   # AND THE ORDER IS PART OF THE CONTRACT — final-round verification P4. This
@@ -7258,8 +7259,12 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   # invocation is from inside the session being swapped, where cmd_swap detaches a
   # transient unit and returns 0 to its caller (see the systemd-run arm below) — the
   # caller is dead, killed by this very swap, long before this function runs. So:
-  #   - $REG/<id>.swapblocked = "<epoch> <reason>" — the DURABLE one. On the fleet wire
-  #     within one 2s watcher tick and rendered on the row (spec M9). Survives nobody
+  #   - $REG/<id>.swapblocked = "<epoch> <reason>" — the DURABLE one. Meant to land on the
+  #     fleet wire within one 2s watcher tick and render on the row (spec M9) once the PWA
+  #     half of this plan wires that up, a LATER task — this comment describes intent, not
+  #     shipped behavior: today `server/src/registry.ts` does not read this field and
+  #     nothing under `server/` or `shared/` does either. What exists today is the file on
+  #     disk, read back by `_auto_swap_check`'s own back-off gate below. Survives nobody
   #     watching, which /api/notify does not.
   #   - $REG/notify.sh — the banner for whoever IS watching; the same hook the successful
   #     swap already fires, so it rides a pipeline that is deployed and working.
@@ -7275,11 +7280,23 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   _reg_set "$id" swapblocked "$(date +%s) $reason"
   echo "$(date '+%F %T') swap-refused $id: $cur -> $target ($reason)" >> "$REG/swap.log"
   [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap BLOCKED: $id stays on $cur — $reason" >/dev/null 2>&1
-  # NO `_reg_set lastswap` here, and the omission is load-bearing: _spawn reads lastswap
-  # and treats a spawn within 300s as the swap LANDING, answering the big-transcript
-  # resume gate with "resume from summary" — an auto-compaction. A refusal that stamped
-  # lastswap would compact the very history it refused in order to protect. lastswap is
-  # written only by a swap that completed.
+  # `lastswap` is CLEARED here, not merely left unwritten. On the AUTO-swap path
+  # (_auto_swap_check, both the hard-blocked rescue arm and the return-home arm) it is
+  # already stamped BEFORE `_dispatch_swap` ever runs — seconds before this function is
+  # reached — so "never write it" would not be enough on that path; a refusal has to
+  # retract a stamp that already landed. A refusal means no landing happened, so a
+  # `lastswap` claiming one is false for every one of its readers, not only `_spawn`
+  # (which would answer the big-transcript resume gate with "resume from summary" — an
+  # auto-compaction of exactly the history this refusal exists to protect): the same
+  # false stamp makes `_auto_compact_check` skip a compaction on the grounds that "a
+  # swap landing already compacted from summary" (untrue after a refusal), and it would
+  # also re-arm `_auto_swap_check`'s own 900s SWAP_COOLDOWN gate — moot regardless,
+  # since the 1800s swapblocked gate this task added is strictly longer, but a stale
+  # `lastswap` is still a lie sitting in the registry. Plain removal, not back-dating:
+  # there is no old value worth preserving once a swap has been refused, and every
+  # window that reads `lastswap` is minutes wide, so deleting a genuinely old one costs
+  # nothing either.
+  rm -f "$REG/$id.lastswap"
   if [[ "$restart" == 1 ]]; then
     # Registry `wrapper` was never touched, so this puts the session back exactly where
     # it was: same account, same unit, still holding its file. Same `|| cmd_ensure`
@@ -7364,9 +7381,21 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   [[ "$cur" == gpt && "$target" != gpt ]] && sanitize=1
   if ! _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize"; then
     if [[ -z "$force" ]]; then
+      # _swap_carry_jsonl's rc 1 covers two different causes it does not distinguish in
+      # its own return code: nothing matched this uuid at all, OR matches existed and
+      # every copy failed (a full disk, an EACCES). Ask _transcript_matches again — cheap,
+      # a read, and nothing on disk has changed since the carry attempt — so the operator
+      # reading swap.log/the banner is pointed at the right cause instead of always being
+      # told "not found" when the real problem was a copy that failed.
+      local reason
+      if [[ -n "$(_transcript_matches "$srccfg" "$uuid")" ]]; then
+        reason="transcript found for $uuid under $cur but every copy failed"
+      else
+        reason="no transcript found for $uuid under $cur after flush"
+      fi
       # Registry `wrapper` is still $cur — nothing has been flipped — so _swap_refuse's
       # restart puts the session back on the account that still holds its history.
-      _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur after flush" 1
+      _swap_refuse "$id" "$cur" "$target" "$reason" 1
       return 1
     fi
     echo "ccd: warn: no transcript for $uuid under $cur config; --force: $id resumes without history" >&2
