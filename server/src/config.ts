@@ -89,16 +89,31 @@ export function configDirFor(cfg: CcrcConfig, wrapper: string): string | undefin
  *
  * Throws `RosterError` — never returns a partial or empty roster — when the
  * file is missing, unreadable, not valid JSON, or fails `parseRoster`'s
- * validation.
+ * validation. MISSING and UNREADABLE are deliberately distinct outcomes,
+ * same discipline as the registry ladder's "not listed" vs "listed but
+ * unreadable": a `chmod 000` `accounts.json` plainly EXISTS, and reporting
+ * it as absent would send an operator to `ccrc install`, which overwrites
+ * nothing and fixes nothing — the actual fix is a permissions change on a
+ * file that was never missing.
  */
 function loadRoster(accountsPath: string): Roster {
   let raw: string;
   try {
     raw = readFileSync(accountsPath, 'utf8');
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new RosterError(
+        `no account roster at ${accountsPath}.`,
+        `Run \`ccrc install\` (or ship deploy/accounts.default.json to ${accountsPath}).`,
+      );
+    }
+    // EACCES (permission bits), EISDIR (accounts.json is a directory), or
+    // anything else `readFileSync` can throw for a path that DOES exist —
+    // none of these are "run the installer", they are "fix what's there".
     throw new RosterError(
-      `no account roster at ${accountsPath}.`,
-      `Run \`ccrc install\` (or ship deploy/accounts.default.json to ${accountsPath}).`,
+      `${accountsPath} exists but could not be read: ${(err as Error).message}.`,
+      `Check permissions on ${accountsPath} (and that it is a regular file, not a directory) — ` +
+        'it must be readable by the ccrc server process.',
     );
   }
   let json: unknown;
@@ -115,7 +130,12 @@ function loadRoster(accountsPath: string): Roster {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
-  const accountsPath = env.CCRC_ACCOUNTS ?? path.join(home, '.ccrc', 'accounts.json');
+  // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line (every
+  // optional value in deploy/ccrc.env.example is written this way) yields an
+  // empty string, which `??` treats as "set" and `||` correctly treats the
+  // same as unset — the alternative silently resolves to `no account roster
+  // at .`, naming a path nobody wrote.
+  const accountsPath = env.CCRC_ACCOUNTS || path.join(home, '.ccrc', 'accounts.json');
   const roster = loadRoster(accountsPath);
   return {
     host: env.CCRC_HOST ?? '127.0.0.1',

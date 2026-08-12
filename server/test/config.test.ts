@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { configDirFor, loadConfig } from '../src/config.js';
 import { mungePath } from '../src/munge.js';
@@ -40,14 +40,21 @@ describe('loadConfig', () => {
     expect(configDirFor(cfg, 'claude')).toBe(path.join(home, '.claude'));
   });
 
-  // The postmortem `configDirFor`'s own docstring names, pinned here at the
+  // The postmortem `configDirFor`'s own docstring names, applied here at the
   // level `loadConfig`'s caller actually sees it: `claude-dev0` was missing
   // from the map `configDirFor` reads, for its entire life, because that map
   // used to be a hand-typed literal kept BESIDE the roster rather than
   // derived FROM it (`resolve()` in `sessionws.ts` returned null; the client
   // only ever saw "unknown session" — indistinguishable from a reaped one).
-  // Pinning the whole SET here, not just one member, is what makes adding a
-  // 6th account a deliberate, visible act instead of a silent gap.
+  // NOTE what this test does and does not prove: its expectation is derived
+  // from `cfg.roster.accounts` itself, the same list it iterates, so on its
+  // own it cannot catch a roster member silently missing a mapping (it would
+  // pass identically for a roster of any size, including a shrunk one). What
+  // it DOES prove is that `configDirFor` resolves EVERY entry the roster
+  // claims to have, not merely a hardcoded subset of ids — the fixed
+  // five-account SET is pinned separately, by the sibling test above
+  // ('loads the roster...'), which is where a 6th account silently missing
+  // its mapping would actually be caught.
   it('maps every account the roster declares — an unmapped one is invisible, not loud', () => {
     const home = mkTmp('cfg-');
     seedRoster(home);
@@ -60,13 +67,79 @@ describe('loadConfig', () => {
     const home = mkTmp('cfg-');
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', 'accounts.json'), '{"version":1,"accounts":[]}');
+    // Same two-step shape as roster.test.ts's own `refuses %s` table: throws
+    // RosterError AND carries a non-empty remedy — `toThrow(RosterError)`
+    // alone passed against a mutant that replaced the remedy with `''`.
     expect(() => loadConfig({ CCRC_HOME: home })).toThrow(RosterError);
+    try {
+      loadConfig({ CCRC_HOME: home });
+    } catch (e) {
+      expect((e as RosterError).remedy).toBeTruthy();
+    }
+  });
+
+  // Companion to the malformed-roster case above, on the OTHER side of
+  // `loadRoster`'s two try/catches: `'{"version":1,"accounts":[]}'` is valid
+  // JSON that `parseRoster` rejects, so it never reaches the `JSON.parse`
+  // catch at all. This fixture is invalid JSON itself (an operator's
+  // trailing comma after hand-editing the file — the likeliest real-world
+  // shape of this failure) so it actually exercises that second arm.
+  it('refuses to boot when accounts.json is not valid JSON, naming the remedy', () => {
+    const home = mkTmp('cfg-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.ccrc', 'accounts.json'),
+      '{\n  "version": 1,\n  "accounts": [\n    {"id": "claude"},\n  ]\n}\n',
+    );
+    expect(() => loadConfig({ CCRC_HOME: home })).toThrow(RosterError);
+    try {
+      loadConfig({ CCRC_HOME: home });
+    } catch (e) {
+      expect((e as RosterError).remedy).toBeTruthy();
+    }
   });
 
   it('refuses to boot when accounts.json is absent, rather than running an empty roster', () => {
     const home = mkTmp('cfg-');
     expect(() => loadConfig({ CCRC_HOME: home })).toThrow(/accounts\.json/);
+    try {
+      loadConfig({ CCRC_HOME: home });
+    } catch (e) {
+      expect((e as RosterError).remedy).toBeTruthy();
+      expect((e as RosterError).remedy).toMatch(/ccrc install/);
+    }
   });
+
+  // Finding 2 (fix round 1): MISSING and UNREADABLE must not collapse to the
+  // same remedy — a `chmod 000` file plainly EXISTS, and sending the operator
+  // to `ccrc install` (which would not touch, let alone fix, a permissions
+  // problem) is actively misleading. Root reads through any mode bit, so this
+  // cannot discriminate when the suite runs as root (CI does not; the fleet
+  // host does not) — same guard, same reasoning, as `coord-token.test.ts`'s
+  // identical `chmod 000` case.
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses to boot with a DISTINCT remedy when accounts.json exists but cannot be read, never claiming ' +
+    'it is missing', () => {
+      const home = mkTmp('cfg-');
+      mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+      const p = path.join(home, '.ccrc', 'accounts.json');
+      writeFileSync(p, JSON.stringify(DEFAULT_TEST_ROSTER));
+      chmodSync(p, 0o000);
+      try {
+        expect(() => loadConfig({ CCRC_HOME: home })).toThrow(RosterError);
+        try {
+          loadConfig({ CCRC_HOME: home });
+        } catch (e) {
+          const err = e as RosterError;
+          expect(err.message).not.toMatch(/no account roster at/);
+          expect(err.remedy).not.toMatch(/ccrc install/);
+          expect(err.remedy).toMatch(/permission/i);
+        }
+      } finally {
+        chmodSync(p, 0o644); // restore — afterAll's recursive rm needs to read/unlink it
+      }
+    },
+  );
 
   it('derives coordDbPath from CCRC_HOME by default, and honours CCRC_COORD_DB as an override', () => {
     // The precedent this pins is `fleetstate.test.ts`'s `defaultCachePath`

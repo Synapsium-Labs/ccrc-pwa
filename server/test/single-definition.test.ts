@@ -359,7 +359,7 @@ describe('the account roster — config dir is data, joined in one place', () =>
     // cross-cutting (a)) is satisfied by there being no such indexing
     // anywhere, not by confining it to one function. Nine call sites did
     // this before fleet.ts (x2), server.ts, commands.ts, watch.ts (x4) and
-    // sessionws.ts all switched to `configDirFor(cfg.home, wrapper)`.
+    // sessionws.ts all switched to `configDirFor(cfg, wrapper)`.
     const holders = ALL.filter((f) => /\.wrappers\[/.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual([]);
   });

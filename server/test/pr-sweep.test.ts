@@ -727,7 +727,7 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
   // now DEGRADED instead — `readSessionRecord` finds it — so `!rec` alone no
   // longer catches this case. Written FIRST and confirmed red against the
   // pre-gate code, which would fall through past the (now-added)
-  // `measuredIdentity` check straight to `configDirFor(cfg.home, rec.wrapper)`
+  // `measuredIdentity` check straight to `configDirFor(cfg, rec.wrapper)`
   // — `rec.wrapper` measured fine here, so it would have answered `'ok'`
   // for a row whose OWN `.workdir`/`.uuid` this read could not confirm at
   // all, preserving the pre-change behaviour for the previously-dropped row
