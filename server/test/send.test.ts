@@ -506,6 +506,49 @@ describe('sendPrompt', () => {
   });
 });
 
+// F3 / bug #21 (build4 dogfood, docs/superpowers/programs/build4.md): the
+// mail delivery lane types an envelope via sendPrompt; when its Enter is
+// lost, the text sits in the box as a "draft" that the LANE'S OWN NEXT
+// attempt then reads as draft-present and backs off — forever, since nothing
+// else will ever empty that box. `resumeIfOwn` is the opt-in escape hatch: a
+// draft that matches the caller's OWN text (to the same marker-row precision
+// `submitEnter`'s correspondence gate already trusts) is finished, not
+// refused. It is OFF by default — sendPrompt's other two callers (the
+// operator's composer, `/clear` in coord/dispatch.ts) must keep refusing
+// outright, exactly as before.
+describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
+  it('finishes submitting a draft that already matches the caller\'s own text — no retype, one Enter', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ hello world\n', // initial capture — OUR OWN text, left by a prior lost Enter
+      '❯ \n',             // after Enter — box emptied
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    // No `-l` literal send anywhere: the text was never retyped, only submitted.
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+  });
+
+  it('still refuses a foreign human draft as draft-present, even with resumeIfOwn set — the sacred guard (F2)', async () => {
+    const { tmux, calls } = fakeTmux(['❯ completely unrelated human thought\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'completely unrelated human thought' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('without resumeIfOwn, an identical own-text draft is STILL refused as draft-present — opt-in only', async () => {
+    const { tmux, calls } = fakeTmux(['❯ hello world\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world');
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'hello world' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('reports enter-ignored, not draft-present, when the resumed own draft still will not submit', async () => {
+    const { tmux } = fakeTmux(['❯ hello world\n']); // last pane repeats: never empties, never leaves
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello world' });
+  });
+});
+
 // Claude Code 2.1.220 does NOT empty the box on Enter when the session is
 // busy — it queues the turn and swaps the box row for a hint ("Press up to
 // edit queued messages"), captured live against a real busy session. The old

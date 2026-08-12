@@ -592,6 +592,53 @@ describe('sweepMail: the send', () => {
     expect(deliveryRow(coord, id).lastError).toBe('draft-present');
   });
 
+  it('F3 / bug #21: resumes its OWN unsubmitted envelope rather than self-blocking with draft-present', async () => {
+    // REPRODUCES the dogfood self-block (build4.md's F3, live wave-1): a
+    // PRIOR sweep typed this exact envelope and its Enter was lost, so the
+    // box now holds OUR OWN text, byte for byte — the shape `echoedBox`
+    // fixtures throughout this file already model for a freshly-typed
+    // envelope. Pre-fix, `sendPrompt` (never passed `replaceDraft`) would
+    // read this as `draft-present` and back off — FOREVER, since nothing
+    // ever empties the box again. Post-fix, `resumeIfOwn` recognizes the
+    // marker row as this delivery's own text and finishes the submit: no
+    // C-u, no retyping (`literalSends` stays empty — it is never composed
+    // again), exactly one `Enter`.
+    const h = harness({ panes: [echoedBox(ENVELOPE), emptyBox] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toEqual(['Enter']);
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('F3: a genuine human draft is still never touched, even with resumeIfOwn now in play', async () => {
+    // The sacred guard F2 already proved: `resumeIfOwn` only ever presses
+    // Enter on a box that matches THIS delivery's OWN needle. Unrelated
+    // human text — including text that, like this fixture, sits in the box
+    // the moment the sweep looks — must fall straight through to the
+    // ordinary `draft-present` refusal, with NO key pressed at all.
+    const h = harness({ panes: ['❯ can you also check the staging deploy\n'] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toEqual([]);
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.lastError).toBe('draft-present');
+    expect(row.state).toBe('queued');
+  });
+
   it('backs off with exponential spacing on draft-present / dialog-open / verify-failed', async () => {
     const h = harness({ panes: ['❯ half-typed draft\n'] }); // draft-present every time it's read
     const coord = store(h.home);

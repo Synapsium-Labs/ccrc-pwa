@@ -111,6 +111,29 @@ async function submitted(
   return false;
 }
 
+/**
+ * Press Enter (up to twice — the SAME one-retry-after-an-overlay budget
+ * `sendPrompt`'s own tail below spends after typing) and report whether
+ * `needle` proved the text left the box. Factored out so `sendPrompt`'s
+ * `resumeIfOwn` branch — which presses Enter on text ALREADY sitting in the
+ * box rather than retyping it — shares the identical submit-proof discipline
+ * as the ordinary type-then-submit path, instead of a second hand-rolled copy
+ * that could drift from it.
+ */
+async function pressEnterAndConfirm(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  needle: string,
+): Promise<SendResult> {
+  await d.tmux.sendKey(id, 'Enter');
+  if (await submitted(d, id, sleep, needle)) return { ok: true };
+  await d.tmux.sendKey(id, 'Enter');
+  if (await submitted(d, id, sleep, needle)) return { ok: true };
+  const stuck = await d.tmux.capture(id);
+  return { ok: false, error: 'enter-ignored', draft: draftOf(await d.tmux.captureAnsi(id) ?? ''), pane: (stuck ?? '').slice(-PANE_TAIL) };
+}
+
 /** How long to let the pane settle after a C-u before reading the box again. */
 const CLEAR_POLL_MS = 150;
 /**
@@ -255,14 +278,35 @@ async function clearBox(
  * session through the KeyedQueue. Refuses to clobber a half-typed draft
  * unless `replaceDraft`, verifies the pane echoed the text before Enter, and
  * verifies the box emptied after it.
+ *
+ * `resumeIfOwn` (bug #21 / F3 — the mail lane's own un-submitted injection
+ * self-blocking its own retry, dogfood-measured on the build4 program's wave
+ * 1): a caller that sets this is stating "the box may already hold exactly
+ * what I am about to send, left there by MY OWN prior attempt whose Enter
+ * did not land — if so, finish submitting it rather than refusing it as a
+ * foreign draft." See the `draft` branch below for the discrimination this
+ * buys, and its own limit.
  */
 export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { replaceDraft?: boolean; attachments?: readonly string[] } = {},
+  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
+  // Computed up front, from `text`/`attachments` alone — independent of the
+  // pane, and needed BEFORE the draft check below now that `resumeIfOwn`
+  // must compare against it there too, not only in the echo-verification
+  // loop this was previously computed just ahead of.
+  //
+  // Attachment paths go first, each on its own line, then the user's text —
+  // one atomic turn, so the transcript reads image-above-caption and a send
+  // that fails to verify can't strand a bare path in the box.
+  const attachments = opts.attachments ?? [];
+  const composed = composePrompt(text, attachments);
+  // Alt+Enter is newline inside the Claude Code input box.
+  const parts = composed.split('\n');
+  const needle = (parts.find((p) => p.trim().length > 0) ?? '').trim().slice(0, ECHO_NEEDLE);
   return d.queue.run(id, async (): Promise<SendResult> => {
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
@@ -277,6 +321,26 @@ export function sendPrompt(
 
     const draft = draftOf(pane);
     if (draft) {
+      // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
+      // OWN `text`, and `submitEnter`'s own correspondence gate already
+      // established the doctrine this reuses verbatim — "the box's MARKER
+      // ROW... is all draftOf can see and all [a prior observation] could
+      // have carried, so equality of it is exactly as much correspondence as
+      // exists to prove" (`submitEnter`'s own docstring). A draft that STARTS
+      // WITH our own needle is, to that same precision, THIS delivery's own
+      // unsent text, not someone else's — so finish the submit (press Enter,
+      // verified) rather than either retyping over it (would double the
+      // text) or refusing it as `draft-present` (would wedge forever: this
+      // function never retries on its own, so an unrecognized "own" draft
+      // would answer `draft-present` on every future call for as long as it
+      // sits there — the exact self-block F3 measured live). A draft that
+      // does NOT match — any genuine human draft included — falls straight
+      // through to the ordinary `draft-present` refusal two lines down,
+      // untouched: F2 (never type over a human mid-sentence) is unaffected,
+      // because this branch only ever PRESSES ENTER, never clears or types.
+      if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle)) {
+        return pressEnterAndConfirm(d, id, sleep, needle);
+      }
       if (!opts.replaceDraft) return { ok: false, error: 'draft-present', draft };
       // A single C-u could never clear a draft of two or more lines (see
       // clearBox), so "replace" failed with draft-clear-failed on any user
@@ -290,15 +354,6 @@ export function sendPrompt(
       if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
       if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
     }
-
-    // Attachment paths go first, each on its own line, then the user's text —
-    // one atomic turn, so the transcript reads image-above-caption and a send
-    // that fails to verify can't strand a bare path in the box.
-    const attachments = opts.attachments ?? [];
-    const composed = composePrompt(text, attachments);
-
-    // Alt+Enter is newline inside the Claude Code input box.
-    const parts = composed.split('\n');
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await d.tmux.sendKey(id, 'M-Enter');
       await d.tmux.sendLiteral(id, parts[i]!);
@@ -314,7 +369,9 @@ export function sendPrompt(
     // Trimmed: `draftOf` trims the box row, and a trimmed line under 24 chars
     // can't end in whitespace, so an untrimmed needle would false-negative on
     // any short first line ending in a space/tab (a markdown hard break, e.g.).
-    const needle = (parts.find((p) => p.trim().length > 0) ?? '').trim().slice(0, ECHO_NEEDLE);
+    // (`needle` itself is now computed above, ahead of the queue's `run` —
+    // see that computation's own comment for why the `resumeIfOwn` branch
+    // needs it earlier than this echo-verification loop does.)
     let after: string | null = null;
 
     if (attachments.length > 0) {
@@ -387,13 +444,10 @@ export function sendPrompt(
     // vanished with no error anywhere. So: press, confirm OUR TEXT left the box
     // (see `submitted`), press once more if it didn't (that second Enter is
     // what submits after an overlay consumed the first), and only then claim
-    // it landed.
-    await d.tmux.sendKey(id, 'Enter');
-    if (await submitted(d, id, sleep, needle)) return { ok: true };
-    await d.tmux.sendKey(id, 'Enter');
-    if (await submitted(d, id, sleep, needle)) return { ok: true };
-    const stuck = await d.tmux.capture(id);
-    return { ok: false, error: 'enter-ignored', draft: draftOf(await d.tmux.captureAnsi(id) ?? ''), pane: (stuck ?? '').slice(-PANE_TAIL) };
+    // it landed. (`pressEnterAndConfirm` — shared with the `resumeIfOwn`
+    // branch above, which presses Enter on text already sitting in the box
+    // instead of reaching this point at all.)
+    return pressEnterAndConfirm(d, id, sleep, needle);
   });
 }
 
