@@ -85,7 +85,7 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     const deps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
       fleetState: undefined, tmux: base.tmux, queue: base.queue };
 
-    const first = await dispatchRun(deps, opened.id, 'do the thing');
+    const first = await dispatchRun(deps, opened.id, 'do the thing', undefined);
     expect(first.ok).toBe(true);
     const callsAfterFirst = calls.length;
     expect(callsAfterFirst).toBeGreaterThan(0);   // ws-add and ws-hold genuinely ran
@@ -101,7 +101,7 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     // calls, D-46's guarantee is a property the caller's `CoordMutex`
     // supplies, not one `dispatchRun` enforces by itself (fix round 1,
     // finding 5).
-    const second = await dispatchRun(deps, opened.id, 'do the thing');
+    const second = await dispatchRun(deps, opened.id, 'do the thing', undefined);
     expect(second).toMatchObject({ ok: false, kind: 'bad-transition', from: 'dispatched', to: 'dispatched' });
     expect(calls.length).toBe(callsAfterFirst);   // no second ws-add/ensure/ws-hold
     expect(coord.runEvents(opened.id).length).toBe(1);   // still only the first dispatch's own row
@@ -150,8 +150,8 @@ describe('dispatchRun, called CONCURRENTLY with no CoordMutex in the loop (fix r
     // timing accident to hope for; it is guaranteed by JS run-to-completion
     // semantics regardless of how the real disk I/O below interleaves.
     const [a, b] = await Promise.all([
-      dispatchRun(deps, opened.id, 'do the thing'),
-      dispatchRun(deps, opened.id, 'do the thing'),
+      dispatchRun(deps, opened.id, 'do the thing', undefined),
+      dispatchRun(deps, opened.id, 'do the thing', undefined),
     ]);
 
     // The robust claim, true under every interleaving: the transition guard
@@ -209,7 +209,7 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
 
     const dispatchDeps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
       fleetState: undefined, tmux: base.tmux, queue: base.queue };
-    const dispatched = await dispatchRun(dispatchDeps, opened.id, 'do the thing');
+    const dispatched = await dispatchRun(dispatchDeps, opened.id, 'do the thing', undefined);
     expect(dispatched.ok).toBe(true);
     expect(coord.run(opened.id)!.state).toBe('dispatched');
 

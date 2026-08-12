@@ -116,11 +116,11 @@ curl's own exit status. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
 `bad-transition`, `stale-tip`, `pr-regressed`, `no-handoff-commit`,
-`unknown-run`, `registry-unmeasurable`. Their meanings are in
-`references/wave-lifecycle.md`.
+`unknown-run`, `registry-unmeasurable`, `unknown-item`, `item-terminal`. Their
+meanings are in `references/wave-lifecycle.md`.
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
-`/:id/advance`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a
+`/:id/advance`, `/:id/items`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a
 mostly disjoint vocabulary, all on `error`: `unauthenticated`, `bad-kind`,
 `oversize`, `registry-unmeasurable`, `unknown-sender`, `stale-uuid`,
 `unknown-recipient`, `unknown-run`. §3 of `references/wave-lifecycle.md`
@@ -169,22 +169,36 @@ not after.
    workspace to hold until wave 1's own dispatch spawns one. (Wave ≥ 2 names
    `sessionId` in this same call to reclaim the workspace wave 1 held, and
    THAT places the hold immediately.)
-2. **Dispatch.** `POST /api/runs/:id/dispatch` with the wave brief. This is
-   where wave 1's hold actually lands, reason `program:<slug> wave:1/M`. For
-   wave ≥ 2 the route itself resumes the workspace and injects `/clear` before
-   queuing the brief — this session never sends `/clear` itself (clause 9).
-   **The brief must tell the worker to commit on its WORKSPACE branch, never
-   a separate feature branch** — the done-fingerprint (step 4) re-measures the
-   workspace branch, and a feature branch wedges every close with `stale-tip`
-   forever (F5, `references/wave-lifecycle.md` §2). Then **end your turn**
-   (clause 7).
+2. **Dispatch.** `POST /api/runs/:id/dispatch` with the wave brief AND the
+   wave's declared ledger: the body is `{"brief": "<prose>", "items":
+   ["<title>", …]}`, at most 32 titles of at most 200 UTF-8 bytes each. The
+   brief is prose the server never reads; the items are the machine-readable
+   half of the same wave plan, and **they must agree** — the board's tally is
+   built from the items, so a brief naming five units of work beside three
+   items renders a lie. `items` may be omitted (or `[]`): that says this wave
+   declared no ledger, and the board renders `—` rather than `0/0`. The ledger
+   is **fixed at dispatch** — no route adds an item to a dispatched run, so
+   work discovered mid-wave is a note in the wave-done mail and an item in the
+   NEXT wave's brief. **The brief must tell the worker to commit on its
+   WORKSPACE branch, never a separate feature branch** — the done-fingerprint
+   (step 4) re-measures the workspace branch, and a feature branch wedges every
+   close with `stale-tip` forever (F5, `references/wave-lifecycle.md` §2). This
+   is also where wave 1's hold actually lands, reason `program:<slug>
+   wave:1/M`. For wave ≥ 2 the route itself resumes the workspace and injects
+   `/clear` before queuing the brief — this session never sends `/clear`
+   itself (clause 9). Then **end your turn** (clause 7).
 3. **Wake on mail.** A worker's message arrives injected in the envelope shape
    in `references/mail-envelope.md`. Ack it (`POST /api/mail/:id/ack`, body
    `{fromId, fromUuid}`) before acting on it, or the delivery lane replays it
    verbatim.
 4. **Re-measure a claimed `wave-done`**, then `POST /api/runs/:id/advance` with
    the fingerprint. A typed rejection means the claim was stale: mail the worker
-   the rejection code and leave the run where it is.
+   the rejection code and leave the run where it is. Once — and only once —
+   that advance answers `ok`, settle the wave's work items:
+   `POST /api/runs/:id/items` with `{"items":[{"id":<n>,"state":"done"}]}`.
+   That ordering IS the authorisation: the server's own re-measurement is what
+   makes the claim a fact (clause 6), and settling straight off the mail would
+   put `5/5` on the console for a wave nothing verified.
 5. **Review the handoff commit** like any other commit, update the ledger,
    then `POST /api/runs` **for wave N+1 first** — same `sessionId`, same
    workspace, and it re-holds with the wave N+1 reason — and only THEN
