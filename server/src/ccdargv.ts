@@ -86,6 +86,11 @@ export const CCD_ARGV = {
    *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string) => argv(['ws-rename', '--session', id, '--branch', branch]),
+  /** The pause marker's writer (Build 4, spec §4.2). `state` is a two-member
+   *  union rather than a string: `POST /api/coord/pause` takes a boolean, and
+   *  the on|off vocabulary is ccd's — the mapping happens once, at the call
+   *  site, so no route can invent a third word the verb would `die` on. */
+  coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
 } as const;
 
 /**

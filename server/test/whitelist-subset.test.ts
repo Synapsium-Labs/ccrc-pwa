@@ -33,6 +33,7 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
   wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4'],
   wsRelease: ['demo-quiet-basin'],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes'],
+  coordPause: ['on'],
 };
 
 /**
@@ -280,6 +281,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4'],
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
+    coordPause: ['coord-pause', '--state', 'on'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {

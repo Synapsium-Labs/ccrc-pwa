@@ -945,6 +945,43 @@ export function registerCoordRoutes(
     return sendSettleItemsOutcome(reply, outcome);
   });
 
+  /**
+   * `POST /api/coord/pause` — the OPERATOR's door, and the ONE route in this
+   * file that is deliberately NOT behind `requireMailToken` (D-B4-9).
+   *
+   * The box token authenticates the FLEET HOST (build7:136-143) and the
+   * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
+   * so the coordinator CANNOT unpause itself — "no verb, no route, no way"
+   * (`rundefs.ts:47-52`). A pause route gated by that token would hand the
+   * coordinator its own unpause: the same key, both sides of a boundary that
+   * only means anything because the two callers are different. So this rides
+   * the PWA's existing unauthenticated surface, the same perimeter
+   * `hold`/`release`/`archive`/`reap`/`prompt`/`ask` have always ridden
+   * (`pwa/src/lib/api.ts` sends no token of any kind).
+   *
+   * Honesty clause, in the register of Build 7's own spec: on a single-uid box
+   * any session can `rm` this marker directly. This route removes no
+   * enforcement that ever existed — the skill's contract (clause 4) plus a
+   * recorded chokepoint is the boundary, and it is convention with a speed
+   * bump, named as exactly that.
+   *
+   * NO `notConfigured` ARM. Every other route here needs `deps.coord`; a pause
+   * is a file on the fleet host and a box with no coordination database can
+   * still be paused — answering 501 would be a lie about what the act needs.
+   */
+  app.post('/api/coord/pause', async (req, reply) => {
+    const body = (req.body ?? {}) as { paused?: unknown };
+    if (typeof body.paused !== 'boolean') return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const argv = CCD_ARGV.coordPause(body.paused ? 'on' : 'off');
+    if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    // `requested`, never `paused`: this route ran a verb, it did not READ the
+    // marker. The authoritative answer is the `{type:'coord'}` frame (Task 8),
+    // and the toggle settles on that — never on this response (spec §4.2).
+    return reply.code(200).send({ ok: true, requested: body.paused });
+  });
+
   /** `GET /api/runs?closed=1` — cold start, and the archive of finished runs
    *  (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`). */
   app.get('/api/runs', async (req, reply) => {
