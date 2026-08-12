@@ -1,10 +1,12 @@
 // The per-session actions that no longer fit on a row. The failure paths are
 // the point: ccd's refusals are the only explanation the reader gets.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
+import { createFleetStore } from '../src/stores/fleet';
+import { TEST_ROSTER } from './rosterFixture';
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
@@ -111,8 +113,10 @@ describe('the unguarded delete is gone', () => {
 
 describe('away note', () => {
   it('spells out the swap, which the line only marks', () => {
+    const fleet = createFleetStore();
+    act(() => { fleet.setState({ roster: TEST_ROSTER }); });
     render(<SessionActionsSheet session={s({ wrapper: 'claude2', home: 'claude' })}
-                                open onClose={() => {}} onReap={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} fleet={fleet} />);
     expect(screen.getByText(/Pinned to team·max, running on alt·max/)).toBeInTheDocument();
   });
 

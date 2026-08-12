@@ -9,6 +9,7 @@ import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '../src/components/Toast';
+import { TEST_ROSTER } from './rosterFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
 // never leak into the next's initial (expanded) expectation. `resetAcks` for
@@ -101,6 +102,7 @@ describe('FleetScreen', () => {
     render(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
+      roster: TEST_ROSTER,
       sessions: [
         session({
           id: 'claude:OpenClawHetzner',

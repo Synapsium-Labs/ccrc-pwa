@@ -11,6 +11,7 @@ import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHe
 import { SessionScreen, useKeyboardInsets } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
+import { TEST_ROSTER } from './rosterFixture';
 
 afterEach(() => {
   cleanup();
@@ -81,6 +82,7 @@ const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
   onMoveAccount: vi.fn(),
   onStopSession: vi.fn(),
   onReapWorkspace: vi.fn(),
+  roster: TEST_ROSTER,
   ...over,
 });
 

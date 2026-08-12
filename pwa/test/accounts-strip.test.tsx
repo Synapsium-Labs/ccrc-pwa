@@ -7,6 +7,7 @@ import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { declValue, ruleIn } from './cssRule';
+import { TEST_ROSTER } from './rosterFixture';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
@@ -25,8 +26,7 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
   vi.spyOn(api, 'accounts').mockResolvedValue({
     accounts,
     projected: { wrapper: 'claude', score: 0 },
-    // Carried on the wire since Stage 2a; unread here until Task 7.
-    roster: [],
+    roster: TEST_ROSTER,
   });
 };
 
@@ -46,7 +46,7 @@ describe('AccountsStrip', () => {
       ],
       // The strip ignores it; the route always sends it (see useProjectedHome).
       projected: { wrapper: 'claude', score: 57 },
-      roster: [],
+      roster: TEST_ROSTER,
     });
     render(<AccountsStrip />);
     // claude's 5h rolled over; claude2's 5h was really measured at zero.

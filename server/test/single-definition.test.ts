@@ -347,22 +347,24 @@ describe('the account roster — runtime data, no compile-time copies', () => {
   // Each name below was a real export of `shared/api.ts` until Task 6; a
   // re-appearance means someone rebuilt the compile-time roster rather than
   // reading `cfg.roster`.
-  it('the roster and its derived lists survive in exactly one place, and it is temporary', () => {
+  it('the roster and its derived lists survive in NO shipped source file', () => {
     const RESURRECTED =
       /^\s*(?:export\s+)?const\s+(ACCOUNTS|ALL_WRAPPERS|ACCOUNT_ORDER|KNOWN_WRAPPERS|HOME_ABLE_WRAPPERS|PRODUCTION_ROSTER)\b/m;
     const holders = ALL.filter((f) => RESURRECTED.test(readFileSync(f, 'utf8'))).map(rel);
-    // `toEqual`, not "does not contain": the one surviving copy is named here
-    // so that REMOVING it turns this red too, and whoever removes it has to
-    // come back and say so.
-    //
-    // `pwa/src/lib/accounts.ts` is that copy. Its `accountLabel` /
-    // `accountColorVar` / `KNOWN_WRAPPERS` are synchronous, called during
-    // render by eight component modules, so they cannot read a roster that
-    // arrives over the wire until the store threading in Task 7 of the stage-2a
-    // plan lands — which is the same task that deletes the literal. It is the
-    // last copy site's last days, not a new one, and its own file header says
-    // so at length.
-    expect(holders).toEqual(['pwa/src/lib/accounts.ts']);
+    // Task 7 of the stage-2a plan deleted the last copy site:
+    // `pwa/src/lib/accounts.ts`'s `PRODUCTION_ROSTER` — a hand-typed,
+    // synchronous, five-account transitional literal Task 6 left behind on
+    // purpose, because `accountLabel`/`accountColorVar`/`KNOWN_WRAPPERS` were
+    // called during render by eight component modules and could not read a
+    // roster that arrives over the wire until the store threading this same
+    // task does landed. `accountLabel`/`accountHue`/`homeAbleLabelList` are
+    // now pure projections over a `RosterWire[]` every caller threads in
+    // (`stores/fleet.ts`'s `roster` field, or a screen's own `/api/accounts`
+    // poll) — nothing left under the four scanned roots holds a compile-time
+    // copy of the roster, so `toEqual([])`, not "does not contain the deleted
+    // name": the assertion tightened rather than merely surviving the
+    // deletion it was written to notice.
+    expect(holders).toEqual([]);
   });
 
   it('shared/api.ts holds the concept and shared/roster.ts holds the data', () => {

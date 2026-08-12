@@ -13,6 +13,7 @@ import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { declValue, ruleIn } from './cssRule';
+import { TEST_ROSTER } from './rosterFixture';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
@@ -34,9 +35,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const stubAccounts = (accounts: AccountUsage[], projected: { wrapper: string; score: number } | null = null): void => {
-  // `roster: []` — the wire carries the roster since Stage 2a, and nothing in
-  // the PWA reads it until Task 7 threads it into the label/colour lookups.
-  vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected, roster: [] });
+  vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected, roster: TEST_ROSTER });
 };
 
 afterEach(() => {

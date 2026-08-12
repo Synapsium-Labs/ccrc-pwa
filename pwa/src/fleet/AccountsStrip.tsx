@@ -15,7 +15,7 @@
 // placeholder body instead of disappearing with the gauges.
 import { useEffect, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import type { AccountUsage } from '../../../shared/api';
+import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
 import { accountLabel, accountColorVar } from '../lib/accounts';
 import { api } from '../lib/api';
@@ -54,12 +54,30 @@ function LimitRow({ label, pct, resetAt, nowSec, rolledOver }: {
 
 export function AccountsStrip(): ReactNode {
   const [accounts, setAccounts] = useState<AccountUsage[] | null>(null);
+  // Same poll, same response — `roster` is read alongside `accounts` rather
+  // than through the fleet store, since this component already runs its own
+  // `/api/accounts` cadence (its own file comment on why: coupling to a
+  // shared store beats nothing, but a second GET against two small local
+  // JSON files beats coupling this component to whichever store instance a
+  // caller happens to be using). Defaults to `[]`, the same "unarrived
+  // roster" state `accountLabel`/`accountColorVar` already degrade for.
+  const [roster, setRoster] = useState<readonly RosterWire[]>([]);
   const now = useNow(30_000); // tick the reset countdown
 
   useEffect(() => {
     let live = true;
     const load = (): void => {
-      void api.accounts().then((r) => { if (live) setAccounts(r.accounts); }).catch(() => {});
+      void api.accounts().then((r) => {
+        if (!live) return;
+        setAccounts(r.accounts);
+        // `Array.isArray`, not a bare trust: a fetch stub answering an
+        // unmatched route with bare `{}` (several fixtures across this suite
+        // predate Task 7 and do exactly that) hands back `r.roster ===
+        // undefined`, and every `accountLabel`/`accountColorVar` call below
+        // does `roster.find(...)` unguarded — same reasoning as
+        // `stores/fleet.ts`'s own roster poll.
+        if (Array.isArray(r.roster)) setRoster(r.roster);
+      }).catch(() => {});
     };
     load();
     const t = setInterval(load, 20_000);
@@ -118,8 +136,8 @@ export function AccountsStrip(): ReactNode {
       ) : (
         live.map((a) => (
           <div key={a.wrapper} className="account-gauge">
-            <span className="account-gauge-label" style={{ color: `var(${accountColorVar(a.wrapper)})` }}>
-              {accountLabel(a.wrapper)}
+            <span className="account-gauge-label" style={{ color: `var(${accountColorVar(roster, a.wrapper)})` }}>
+              {accountLabel(roster, a.wrapper)}
             </span>
             {/* Wrapped so the label can sit inline beside the windows on desktop
                 (a flex row); on mobile this stays a plain block under the label.

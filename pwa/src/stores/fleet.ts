@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type FleetMsg, type FleetSession, type NotifyEvent, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, type AccountsResponse, type FleetMsg, type FleetSession, type NotifyEvent, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -18,6 +18,24 @@ export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
   notices: FleetNotice[];
+  /**
+   * The account roster — `GET /api/accounts`'s `roster` field, id/label/hue/
+   * homeAble only (never the server-only config `RosterWire` deliberately
+   * omits). `pwa/src/lib/accounts.ts`'s `accountLabel`/`accountHue`/
+   * `homeAbleLabelList` are pure projections over whatever array a caller
+   * hands them; THIS is where every consumer but the three screens running
+   * their own `/api/accounts` poll (AccountsStrip, AccountsScreen,
+   * useProjectedHome) gets that array from.
+   *
+   * Threaded through the FLEET store, not a new one, because this store is
+   * the one thing connected APP-WIDE (app.tsx), independent of which route
+   * is mounted — SessionHeader, SessionLine, SessionActionsSheet and friends
+   * all need a roster on `/s/:id` deep links that never mount FleetScreen's
+   * own accounts poller. Default `[]`: the same "unarrived roster" state
+   * `accountLabel`/`accountHue` already degrade gracefully for (raw wrapper
+   * name, `--ink-tertiary`) — never a guessed account.
+   */
+  roster: readonly RosterWire[];
   /** The dormant protocol handshake (shared/api.ts's FLEET_PROTO_MIN): set on
    *  a `hello` this build cannot satisfy, CLEARED on a later compatible one —
    *  a reconnect to a fixed server must unblock, so this is never a one-way
@@ -132,6 +150,9 @@ export interface FleetStoreDeps {
   /** Injectable so a test can drive the durable feed read without a server —
    *  same reason `catchUp` above is. Defaults to `api.feed`. */
   fetchFeed?: (limit: number) => Promise<{ events: import('../../../shared/api').NotifyEvent[] }>;
+  /** Injectable so a test can drive the roster poll without a server — same
+   *  reason `catchUp`/`fetchFeed` above are. Defaults to `api.accounts`. */
+  fetchAccounts?: () => Promise<AccountsResponse>;
 }
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
@@ -139,6 +160,7 @@ export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
 export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   let socket: ReconnectingSocket | null = null;
   let noticeSeq = 0;
+  let rosterTimer: ReturnType<typeof setInterval> | null = null;
 
   return create<FleetState>()((set, get) => {
     const nudge = (): void => socket?.nudge();
@@ -159,9 +181,41 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       blocked: false,
       runs: [],
       runsFrameSeen: false,
+      roster: [],
 
       connect() {
         if (socket) return;
+
+        // The roster poll — independent of the `/ws/fleet` socket entirely
+        // (it is a plain `GET /api/accounts` read, same endpoint
+        // AccountsStrip/AccountsScreen/useProjectedHome already poll on
+        // their own 20s cadence for `accounts`/`projected`). Duplicate
+        // polling against a local endpoint reading two small JSON files
+        // beats coupling every roster consumer to one mounted screen — the
+        // same trade those hooks' own comments already make. Silent on
+        // failure, and no state change on failure: an unarrived roster
+        // degrades to `accountLabel`/`accountHue`'s own raw-name/neutral-ink
+        // fallback rather than erroring.
+        //
+        // `Array.isArray`, not a bare `r.roster` trust: every `accountLabel`/
+        // `accountHue` call site below does `roster.find(...)` unguarded, on
+        // the strength of the store's own `readonly RosterWire[]` type — so
+        // this is the one place that type is actually enforced against
+        // untrusted JSON. A stub answering an unmatched route with bare `{}`
+        // (AccountsStrip's own sibling comment names the exact shape: several
+        // fixtures across this suite predate Task 7 and do exactly this for
+        // every route they do not explicitly handle) hands back `r.roster ===
+        // undefined`, and `set({ roster: undefined })` would corrupt every
+        // consumer's next render into a `TypeError` — a shape no server
+        // response can legitimately produce (`AccountsResponse.roster` is
+        // never optional), but a bad JSON body can.
+        const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
+        const pollRoster = (): void => {
+          void fetchAccounts().then((r) => { if (Array.isArray(r.roster)) set({ roster: r.roster }); }).catch(() => {});
+        };
+        pollRoster();
+        rosterTimer = setInterval(pollRoster, 20_000);
+
         // What has the server recorded since we last asked? Asked once per
         // connect, including automatic reconnects — a phone that slept through
         // a question is exactly the case this exists for. Never awaited and
@@ -266,6 +320,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         window.removeEventListener('online', nudge);
         socket?.stop();
         socket = null;
+        if (rosterTimer !== null) {
+          clearInterval(rosterTimer);
+          rosterTimer = null;
+        }
       },
 
       dismissNotice(id) {

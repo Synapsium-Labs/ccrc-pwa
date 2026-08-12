@@ -7,12 +7,12 @@
 // restart itself then plays out over the fleet stream.
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, RosterWire } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
-import { accountColorVar, accountLabel, KNOWN_WRAPPERS } from '../lib/accounts';
+import { accountHue, accountLabel, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useDisabledWrappers } from './useProjectedHome';
@@ -23,12 +23,16 @@ export type AccountLimits = { five: number | null; seven: number | null } | null
 /** The accounts a session may be moved to. `disabled` names lanes ccd's
  *  kill-switch has switched off — they are excluded, because offering a swap
  *  target that cannot take work is worse than offering none. */
-export function pickableWrappers(sessions: FleetSession[], disabled: readonly string[] = []): string[] {
-  // `string[]`, not the roster's `readonly Wrapper[]`: a live session can
-  // report a wrapper the roster doesn't have an entry for at all (a build
-  // running an older/newer roster than the fleet host), and this list must
-  // still offer it as a swap target rather than reject it at the type level.
-  const all: string[] = [...KNOWN_WRAPPERS];
+export function pickableWrappers(
+  roster: readonly RosterWire[],
+  sessions: FleetSession[],
+  disabled: readonly string[] = [],
+): string[] {
+  // `string[]`, not the roster's own id type: a live session can report a
+  // wrapper the roster doesn't have an entry for at all (a build running an
+  // older/newer roster than the fleet host), and this list must still offer
+  // it as a swap target rather than reject it at the type level.
+  const all: string[] = rosterWrapperIds(roster);
   for (const s of sessions) {
     if (!all.includes(s.wrapper)) all.push(s.wrapper);
   }
@@ -114,22 +118,33 @@ export function AccountRow({
   limits,
   suggested = false,
   onPick,
+  roster,
 }: {
   wrapper: string;
   limits: AccountLimits;
   suggested?: boolean;
   onPick: (wrapper: string) => void;
+  roster: readonly RosterWire[];
 }): ReactNode {
-  const colorVar = accountColorVar(wrapper);
+  // A direct hue lookup, not a re-parse of `accountColorVar`'s returned
+  // token NAME: the string-inspection this replaced
+  // (`colorVar.startsWith('--acct-')`) worked only by coincidence — it was
+  // really asking "does this wrapper have a real hue", and `accountHue`
+  // answers that directly, `undefined` for a wrapper the roster does not
+  // have. The `--bg-raised` fallback is unchanged: a wrapper outside the
+  // roster (a live session reporting an id this roster build does not know)
+  // still gets a neutral chip, never an invented tint.
+  const hue = accountHue(roster, wrapper);
+  const colorVar = hue === undefined ? '--ink-tertiary' : `--acct-${hue}`;
   const chipStyle: CSSProperties = {
     color: `var(${colorVar})`,
-    background: colorVar.startsWith('--acct-') ? `var(${colorVar}-tint)` : 'var(--bg-raised)',
+    background: hue === undefined ? 'var(--bg-raised)' : `var(${colorVar}-tint)`,
   };
   return (
     <button type="button" className="acct-row" onClick={() => onPick(wrapper)}>
       <span className="chip" style={chipStyle}>
         <i aria-hidden="true" />
-        {accountLabel(wrapper)}
+        {accountLabel(roster, wrapper)}
       </span>
       {suggested && <span className="acct-suggested">suggested</span>}
       <span className="acct-gauges">
@@ -164,6 +179,7 @@ export function SwapSheet({
   fleet = useFleetStore,
 }: SwapSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
+  const roster = fleet((s) => s.roster);
   // The target awaiting its consequence confirm (null = still browsing).
   const [target, setTarget] = useState<string | null>(null);
 
@@ -196,14 +212,14 @@ export function SwapSheet({
   useEffect(() => { setTarget(null); }, [open, session.id]);
 
   const disabledWrappers = useDisabledWrappers(open);
-  const wrappers = pickableWrappers(sessions, disabledWrappers).filter((w) => w !== session.wrapper);
+  const wrappers = pickableWrappers(roster, sessions, disabledWrappers).filter((w) => w !== session.wrapper);
   const suggested = leastLoaded(sessions, wrappers);
 
   const move = (wrapper: string): void => {
     void (async () => {
       try {
         await api.swap(session.id, wrapper);
-        toast(`Moving ${session.project} to ${accountLabel(wrapper)}…`);
+        toast(`Moving ${session.project} to ${accountLabel(roster, wrapper)}…`);
       } catch (err) {
         toast(`Couldn't move — ${apiErrorText(err)}`, 'error');
       }
@@ -211,13 +227,13 @@ export function SwapSheet({
     onClose();
   };
 
-  const targetLabel = target === null ? '' : accountLabel(target);
+  const targetLabel = target === null ? '' : accountLabel(roster, target);
 
   return (
     <>
       <Sheet open={open} onClose={onClose} eyebrow="move session" title="Move to another account">
         <p className="sheet-copy">
-          {session.project} runs on {accountLabel(session.wrapper)} now. Pick where it should
+          {session.project} runs on {accountLabel(roster, session.wrapper)} now. Pick where it should
           live.
         </p>
         <div className="acct-list">
@@ -228,6 +244,7 @@ export function SwapSheet({
               limits={limitsFor(sessions, w)}
               suggested={w === suggested}
               onPick={setTarget}
+              roster={roster}
             />
           ))}
         </div>

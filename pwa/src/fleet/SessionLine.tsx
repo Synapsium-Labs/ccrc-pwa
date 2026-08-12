@@ -19,7 +19,7 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { unmeasuredFields, type FleetSession, type SessionBucket } from '../../../shared/api';
+import { unmeasuredFields, type FleetSession, type RosterWire, type SessionBucket } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { humanBytes } from '../screens/ArchiveScreen';
@@ -65,11 +65,18 @@ export function SessionLine({
   onOpen,
   selected = false,
   onActions,
+  roster = [],
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
   selected?: boolean; // the open session in the desktop sidebar
   onActions: (session: FleetSession) => void;
+  /** The account roster, threaded down from `ProjectCard`/`FleetScreen`'s own
+   *  `stores/fleet.ts` read. Defaults to `[]` so a line rendered before the
+   *  first poll lands (or in a test that renders this component standalone)
+   *  degrades to `accountLabel`/`accountColorVar`'s own raw-name/neutral-ink
+   *  fallback rather than needing a roster it was never given. */
+  roster?: readonly RosterWire[];
 }): ReactNode {
   const dead = session.status === 'dead';
   // THE authority: no local re-derivation of attention/busy/state survives
@@ -127,7 +134,7 @@ export function SessionLine({
   };
 
   // Identity stays in the name; a dead line's account drains to gray.
-  const acctVar = accountColorVar(session.wrapper);
+  const acctVar = accountColorVar(roster, session.wrapper);
   // Inline styles beat every selector short of !important, so the account hue
   // has to be dropped HERE on the selected row: .sess-line--active's achromatic
   // override could never win against it, and the hue measures 1.46:1 on the
@@ -308,11 +315,11 @@ export function SessionLine({
             data-away={away || undefined}
             aria-label={
               away
-                ? `running on ${accountLabel(session.wrapper)}, pinned to ${accountLabel(session.home)}`
+                ? `running on ${accountLabel(roster, session.wrapper)}, pinned to ${accountLabel(roster, session.home)}`
                 : undefined
             }
           >
-            {accountLabel(session.wrapper)}
+            {accountLabel(roster, session.wrapper)}
             {away && (
               <span className="sess-acct-away" aria-hidden="true">
                 ↗

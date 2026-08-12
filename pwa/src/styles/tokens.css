@@ -4,10 +4,16 @@
    is a true light theme (paper terminal), not an inversion.
 
    Governing rule of the palette: GLOW MEANS LIFE. Only living states (busy,
-   attention) are allowed to emit light. Dead and idle are matte. Green is
-   reserved for session state + the primary action; the four account hues live
-   in the cool half of the wheel (cyan / blue / violet / magenta) so account
-   identity can never be misread as session state.
+   attention) are allowed to emit light — never an account. Dead and idle are
+   matte. Account identity runs six hues (shared/roster.ts's HUES: cyan /
+   violet / blue / magenta / amber / green — a free-form runtime roster, Stage
+   2a, can outgrow the original four "cool half of the wheel" hues, so the
+   palette grew to match rather than clipping a sixth account's colour to a
+   collision). amber/green necessarily share a hue FAMILY with
+   --status-attention/--status-busy; what keeps an account from reading as
+   session state is the same discipline the original four already relied on —
+   never glow, and a flatter, pastel tone against the status pair's vivid one
+   — not merely which 90° wedge the hue sits in.
 
    Contrast: every value verified with WCAG 2.1 relative-luminance math
    (design/contrast-check.mjs, all pass). Ratios quoted in comments are
@@ -82,7 +88,7 @@
      one and not the other fails the gate. */
   --status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
 
-  /* PR keycap (Task 15). --pr-merged ALIASES --acct-claude2 rather than
+  /* PR keycap (Task 15). --pr-merged ALIASES --acct-violet rather than
      repeating its hex: a literal single hex here (#C7A7F4, dark-only) reads
      8.06:1 on dark --bg-raised but only 1.75:1 on LIGHT's --bg-raised — well
      under the 3:1 non-text floor — because it never gets a light-theme
@@ -92,7 +98,7 @@
      "== --ink-tertiary", so a second hardcoded copy is exactly the kind of
      duplicate this file's own account-hue mechanism (--acct-active,
      below) exists to avoid. */
-  --pr-merged: var(--acct-claude2);   /* violet, filled — merged: DARK 8.06:1, LIGHT 5.93:1 vs --bg-raised */
+  --pr-merged: var(--acct-violet);    /* violet, filled — merged: DARK 8.06:1, LIGHT 5.93:1 vs --bg-raised */
   --pr-dim:    var(--ink-tertiary);   /* the "nothing to say" dot */
 
   /* Two more buckets (Build 2, attention UX): `done` and `cleanup`. Neither is
@@ -102,7 +108,7 @@
      deliberately does not, which is exactly the "done and idle are both
      not-amber-not-busy" fusion that rule exists to end.
      `cleanup` was tried as --pr-merged (the SAME violet the PR keycap already
-     uses for "merged") and MEASURED unsafe: --acct-claude2's light value is
+     uses for "merged") and MEASURED unsafe: --acct-violet's light value is
      tuned for --bg-raised only (5.93:1 there) and reads 2.60:1 on the
      light-theme lamp well, under the dots' shared 3:1 floor — this dot,
      unlike the keycap's, sits on --bg-well in .sess-lamp. Reusing violet would
@@ -116,25 +122,39 @@
   --status-cleanup:        var(--status-idle);
   --status-cleanup-text:   var(--ink-secondary);
 
-  /* Account accents — chip text on chip tint. Cool half of the wheel only
-     (hues ~190/222/265/330), 40°+ apart, so no account hue collides with
-     status green/amber/red. Chips always carry the account name in mono;
-     color is the secondary cue. */
-  --acct-claude:       #6FD6EA;  /* cyan   — 8.95:1 on its tint */
-  --acct-claude-tint:  #0E2A31;
-  --acct-claude2:      #C7A7F4;  /* violet — 7.90:1 on its tint */
-  --acct-claude2-tint: #241C38;
-  --acct-corp:         #96B4F4;  /* blue   — 7.57:1 on its tint */
-  --acct-corp-tint:    #16233B;
-  --acct-gpt:          #F0A3C8;  /* magenta — 8.11:1 on its tint */
-  --acct-gpt-tint:     #331B28;
+  /* Account accents — chip text on chip tint. Six hues (shared/roster.ts's
+     HUES): cyan/violet/blue/magenta live in the cool half of the wheel
+     (~190/265/222/330), 40°+ apart, so none of them collides with status
+     green/amber/red. amber/green (Stage 2a Task 7 — a free-form roster can
+     assign more than four accounts a hue, so the palette had to grow past
+     "cool half only") DO share a hue family with --status-attention/
+     --status-busy, and that is deliberate rather than an oversight: every
+     account hue here is a PASTEL, desaturated tone (~65-80% dark-theme
+     lightness) against the status pair's vivid, saturated glow — the same
+     tonal split that already keeps cyan/violet/blue/magenta from reading as
+     "state" even though nothing stopped THEM sharing a status hue either.
+     Only a living session state glows (box-shadow bloom); an account chip
+     never does, in either family. Chips always carry the account name in
+     mono; color is the secondary cue. */
+  --acct-cyan:         #6FD6EA;  /* cyan    — 8.95:1 on its tint */
+  --acct-cyan-tint:    #0E2A31;
+  --acct-violet:       #C7A7F4;  /* violet  — 7.90:1 on its tint */
+  --acct-violet-tint:  #241C38;
+  --acct-blue:         #96B4F4;  /* blue    — 7.57:1 on its tint */
+  --acct-blue-tint:    #16233B;
+  --acct-magenta:      #F0A3C8;  /* magenta — 8.11:1 on its tint */
+  --acct-magenta-tint: #331B28;
+  --acct-amber:        #E8CB73;  /* amber   — 8.69:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-amber-tint:   #352C13;
+  --acct-green:        #70D2AE;  /* green   — 7.73:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-green-tint:   #183027;
 
   /* One-variable account accent: screens stamp data-acct at their root and
      components style chips/headers against --acct-active only (rebinding
      selectors at the bottom of this file). The glow never rebinds — glow is
      green/amber; account hues never emit light. */
-  --acct-active:      var(--acct-claude);
-  --acct-active-tint: var(--acct-claude-tint);
+  --acct-active:      var(--acct-cyan);
+  --acct-active-tint: var(--acct-cyan-tint);
 
   /* Limits bar. Bands follow the operator's model-routing policy:
      ok < 50%, warn 50–75% ("prefer handoff"), critical > 75% ("hand off
@@ -326,14 +346,18 @@
   --status-dead-text:      #B2402C;  /* 5.73:1 vs surface */
   --status-dead-tint:      rgba(178, 64, 44, 0.12);  /* dead-text on it 4.81:1 over surface */
 
-  --acct-claude:       #0A6377;  /* 5.80:1 on its tint */
-  --acct-claude-tint:  #DAF0F6;
-  --acct-claude2:      #6D3FB4;  /* 5.73:1 on its tint */
-  --acct-claude2-tint: #EDE6FA;
-  --acct-corp:         #2F55B8;  /* 5.60:1 on its tint */
-  --acct-corp-tint:    #E3EAFA;
-  --acct-gpt:          #A62667;  /* 5.59:1 on its tint */
-  --acct-gpt-tint:     #FAE3EE;
+  --acct-cyan:         #0A6377;  /* 5.80:1 on its tint */
+  --acct-cyan-tint:    #DAF0F6;
+  --acct-violet:       #6D3FB4;  /* 5.73:1 on its tint */
+  --acct-violet-tint:  #EDE6FA;
+  --acct-blue:         #2F55B8;  /* 5.60:1 on its tint */
+  --acct-blue-tint:    #E3EAFA;
+  --acct-magenta:      #A62667;  /* 5.59:1 on its tint */
+  --acct-magenta-tint: #FAE3EE;
+  --acct-amber:        #7C5C03;  /* 5.74:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-amber-tint:   #FAF6EB;
+  --acct-green:        #09714B;  /* 5.50:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-green-tint:   #E7F8F2;
 
   --limit-track:    #E3E7E2;
   --limit-ok:       #178A48;  /* 3.52:1 vs track (needs 3:1) */
@@ -368,10 +392,12 @@
    Because substitution happens at these elements, the light theme's account
    values flow through automatically.
    ========================================================================== */
-[data-acct='claude']  { --acct-active: var(--acct-claude);  --acct-active-tint: var(--acct-claude-tint); }
-[data-acct='claude2'] { --acct-active: var(--acct-claude2); --acct-active-tint: var(--acct-claude2-tint); }
-[data-acct='corp']    { --acct-active: var(--acct-corp);    --acct-active-tint: var(--acct-corp-tint); }
-[data-acct='gpt']     { --acct-active: var(--acct-gpt);     --acct-active-tint: var(--acct-gpt-tint); }
+[data-acct='cyan']    { --acct-active: var(--acct-cyan);    --acct-active-tint: var(--acct-cyan-tint); }
+[data-acct='violet']  { --acct-active: var(--acct-violet);  --acct-active-tint: var(--acct-violet-tint); }
+[data-acct='blue']    { --acct-active: var(--acct-blue);    --acct-active-tint: var(--acct-blue-tint); }
+[data-acct='magenta'] { --acct-active: var(--acct-magenta); --acct-active-tint: var(--acct-magenta-tint); }
+[data-acct='amber']   { --acct-active: var(--acct-amber);   --acct-active-tint: var(--acct-amber-tint); }
+[data-acct='green']   { --acct-active: var(--acct-green);   --acct-active-tint: var(--acct-green-tint); }
 
 /* ==========================================================================
    REDUCED MOTION — glow freezes at mid-intensity, springs become fades,

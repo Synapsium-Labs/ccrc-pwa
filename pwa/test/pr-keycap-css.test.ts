@@ -4,7 +4,7 @@
 // regressing silently. Two things this file exists to pin specifically:
 // `unchecked` must not read as `none` (hollow+dashed vs hollow+solid), and
 // the two new tokens (`--pr-merged`, `--pr-dim`) must stay ALIASES of
-// `--acct-claude2` / `--ink-tertiary` rather than drifting back into a
+// `--acct-violet` / `--ink-tertiary` rather than drifting back into a
 // second hardcoded copy of either colour (see tokens.css's own comment).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -85,7 +85,7 @@ describe('the PR keycap CSS', () => {
     // kill. Read the declaration out of `:root` instead, so re-aligning the
     // column is free and changing the alias is not.
     const root = ruleIn(tokensCss, ':root');
-    expect(declValue(root, '--pr-merged')).toBe('var(--acct-claude2)');
+    expect(declValue(root, '--pr-merged')).toBe('var(--acct-violet)');
     expect(declValue(root, '--pr-dim')).toBe('var(--ink-tertiary)');
   });
 });

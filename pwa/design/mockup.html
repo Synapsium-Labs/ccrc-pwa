@@ -39,17 +39,21 @@
   --status-dead-text:      #E8836F;  /* 6.80:1 vs surface */
   --status-dead-tint:      rgba(224, 106, 85, 0.12);  /* EXIT badge pill */
 
-  --acct-claude:       #6FD6EA;  /* 8.95:1 on tint */
-  --acct-claude-tint:  #0E2A31;
-  --acct-claude2:      #C7A7F4;  /* 7.90:1 on tint */
-  --acct-claude2-tint: #241C38;
-  --acct-corp:         #96B4F4;  /* 7.57:1 on tint */
-  --acct-corp-tint:    #16233B;
-  --acct-gpt:          #F0A3C8;  /* 8.11:1 on tint */
-  --acct-gpt-tint:     #331B28;
+  --acct-cyan:         #6FD6EA;  /* 8.95:1 on tint */
+  --acct-cyan-tint:    #0E2A31;
+  --acct-violet:       #C7A7F4;  /* 7.90:1 on tint */
+  --acct-violet-tint:  #241C38;
+  --acct-blue:         #96B4F4;  /* 7.57:1 on tint */
+  --acct-blue-tint:    #16233B;
+  --acct-magenta:      #F0A3C8;  /* 8.11:1 on tint */
+  --acct-magenta-tint: #331B28;
+  --acct-amber:        #E8CB73;  /* 8.69:1 on tint */
+  --acct-amber-tint:   #352C13;
+  --acct-green:        #70D2AE;  /* 7.73:1 on tint */
+  --acct-green-tint:   #183027;
 
-  --acct-active:      var(--acct-claude);
-  --acct-active-tint: var(--acct-claude-tint);
+  --acct-active:      var(--acct-cyan);
+  --acct-active-tint: var(--acct-cyan-tint);
 
   /* Limits bands = routing policy: ok < 50, warn 50–75, critical > 75 */
   --limit-track:    #242A25;
@@ -167,14 +171,18 @@
   --status-dead-text:      #B2402C;  /* 5.73:1 vs surface */
   --status-dead-tint:      rgba(178, 64, 44, 0.12);
 
-  --acct-claude:       #0A6377;  /* 5.80:1 on tint */
-  --acct-claude-tint:  #DAF0F6;
-  --acct-claude2:      #6D3FB4;  /* 5.73:1 on tint */
-  --acct-claude2-tint: #EDE6FA;
-  --acct-corp:         #2F55B8;  /* 5.60:1 on tint */
-  --acct-corp-tint:    #E3EAFA;
-  --acct-gpt:          #A62667;  /* 5.59:1 on tint */
-  --acct-gpt-tint:     #FAE3EE;
+  --acct-cyan:         #0A6377;  /* 5.80:1 on tint */
+  --acct-cyan-tint:    #DAF0F6;
+  --acct-violet:       #6D3FB4;  /* 5.73:1 on tint */
+  --acct-violet-tint:  #EDE6FA;
+  --acct-blue:         #2F55B8;  /* 5.60:1 on tint */
+  --acct-blue-tint:    #E3EAFA;
+  --acct-magenta:      #A62667;  /* 5.59:1 on tint */
+  --acct-magenta-tint: #FAE3EE;
+  --acct-amber:        #7C5C03;  /* 5.74:1 on tint */
+  --acct-amber-tint:   #FAF6EB;
+  --acct-green:        #09714B;  /* 5.50:1 on tint */
+  --acct-green-tint:   #E7F8F2;
 
   --limit-track:    #E3E7E2;
   --limit-ok:       #178A48;  /* 3.52:1 vs track */
@@ -202,10 +210,12 @@
 }
 
 /* account rebinding — one variable, stamped at the screen root */
-[data-acct='claude']  { --acct-active: var(--acct-claude);  --acct-active-tint: var(--acct-claude-tint); }
-[data-acct='claude2'] { --acct-active: var(--acct-claude2); --acct-active-tint: var(--acct-claude2-tint); }
-[data-acct='corp']    { --acct-active: var(--acct-corp);    --acct-active-tint: var(--acct-corp-tint); }
-[data-acct='gpt']     { --acct-active: var(--acct-gpt);     --acct-active-tint: var(--acct-gpt-tint); }
+[data-acct='cyan']    { --acct-active: var(--acct-cyan);    --acct-active-tint: var(--acct-cyan-tint); }
+[data-acct='violet']  { --acct-active: var(--acct-violet);  --acct-active-tint: var(--acct-violet-tint); }
+[data-acct='blue']    { --acct-active: var(--acct-blue);    --acct-active-tint: var(--acct-blue-tint); }
+[data-acct='magenta'] { --acct-active: var(--acct-magenta); --acct-active-tint: var(--acct-magenta-tint); }
+[data-acct='amber']   { --acct-active: var(--acct-amber);   --acct-active-tint: var(--acct-amber-tint); }
+[data-acct='green']   { --acct-active: var(--acct-green);   --acct-active-tint: var(--acct-green-tint); }
 
 @media (prefers-reduced-motion: reduce) {
   :root {
@@ -363,10 +373,12 @@ body {
   border-radius: var(--r-full);
 }
 .chip i { width: 5px; height: 5px; border-radius: var(--r-full); background: currentColor; }
-.chip--claude  { color: var(--acct-claude);  background: var(--acct-claude-tint); }
-.chip--claude2 { color: var(--acct-claude2); background: var(--acct-claude2-tint); }
-.chip--corp    { color: var(--acct-corp);    background: var(--acct-corp-tint); }
-.chip--gpt     { color: var(--acct-gpt);     background: var(--acct-gpt-tint); }
+.chip--cyan    { color: var(--acct-cyan);    background: var(--acct-cyan-tint); }
+.chip--violet  { color: var(--acct-violet);  background: var(--acct-violet-tint); }
+.chip--blue    { color: var(--acct-blue);    background: var(--acct-blue-tint); }
+.chip--magenta { color: var(--acct-magenta); background: var(--acct-magenta-tint); }
+.chip--amber   { color: var(--acct-amber);   background: var(--acct-amber-tint); }
+.chip--green   { color: var(--acct-green);   background: var(--acct-green-tint); }
 /* screen-scoped account accent — colors arrive via [data-acct] rebinding */
 .chip--active  { color: var(--acct-active);  background: var(--acct-active-tint); }
 
@@ -692,7 +704,7 @@ code {
         <span class="lamp ping"><span class="dot dot--busy" role="img" aria-label="busy"></span></span>
       </div>
       <div class="card-sub">
-        <span class="chip chip--corp"><i></i>claude-corp</span>
+        <span class="chip chip--blue"><i></i>claude-corp</span>
         <span class="status-line status-line--busy">working · 04:12</span>
       </div>
       <div class="limits">
@@ -709,23 +721,23 @@ code {
         <span class="lamp"><span class="dot dot--dead" role="img" aria-label="dead"></span></span>
       </div>
       <div class="card-sub">
-        <span class="chip chip--claude2"><i></i>claude2</span>
+        <span class="chip chip--violet"><i></i>claude2</span>
         <span class="status-line status-line--dead">exited · 3h ago — chat is read-only</span>
       </div>
       <button class="btn-ghost">Restart session</button>
     </article>
 
     <div class="legend">
-      <span class="chip chip--claude"><i></i>claude</span>
-      <span class="chip chip--claude2"><i></i>claude2</span>
-      <span class="chip chip--corp"><i></i>claude-corp</span>
-      <span class="chip chip--gpt"><i></i>gpt</span>
+      <span class="chip chip--cyan"><i></i>claude</span>
+      <span class="chip chip--violet"><i></i>claude2</span>
+      <span class="chip chip--blue"><i></i>claude-corp</span>
+      <span class="chip chip--magenta"><i></i>gpt</span>
     </div>
   </section>
 
   <!-- ══════════════ 02 · CHAT ══════════════ -->
   <p class="eyebrow section-label">02 · session — chat run</p>
-  <section class="screen" data-acct="corp">
+  <section class="screen" data-acct="blue">
     <div class="chat-head">
       <span class="back">&#8249;</span>
       <div class="chat-title-wrap">
@@ -878,7 +890,7 @@ code {
         <span class="lamp"><span class="dot dot--attention" role="img" aria-label="waiting on you"></span></span>
       </div>
       <div class="card-sub">
-        <span class="chip chip--claude"><i></i>claude</span>
+        <span class="chip chip--cyan"><i></i>claude</span>
         <span class="badge-attn">waiting on you · 4m</span>
       </div>
       <div class="limits">
@@ -904,10 +916,10 @@ code {
     </div>
 
     <div class="legend">
-      <span class="chip chip--claude"><i></i>claude</span>
-      <span class="chip chip--claude2"><i></i>claude2</span>
-      <span class="chip chip--corp"><i></i>claude-corp</span>
-      <span class="chip chip--gpt"><i></i>gpt</span>
+      <span class="chip chip--cyan"><i></i>claude</span>
+      <span class="chip chip--violet"><i></i>claude2</span>
+      <span class="chip chip--blue"><i></i>claude-corp</span>
+      <span class="chip chip--magenta"><i></i>gpt</span>
     </div>
   </section>
 

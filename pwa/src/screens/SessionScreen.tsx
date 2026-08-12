@@ -10,7 +10,7 @@ import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { SwapSheet } from '../fleet/SwapSheet';
-import { accountColorVar } from '../lib/accounts';
+import { accountHue } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
@@ -60,6 +60,7 @@ export function SessionScreen({
   const mail = useStore((s) => s.mail);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
+  const roster = useFleet((s) => s.roster);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -117,8 +118,16 @@ export function SessionScreen({
   const wrapperFromId = id.split(':', 1)[0] ?? id;
   const project = live?.project ?? (id.slice(wrapperFromId.length + 1) || id);
   const wrapper = live?.wrapper ?? wrapperFromId;
-  const acctVar = accountColorVar(wrapper);
-  const acct = acctVar.startsWith('--acct-') ? acctVar.slice('--acct-'.length) : undefined;
+  // A direct roster lookup, not a re-parse of a colour-token NAME: this used
+  // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
+  // return value, which worked only for a wrapper whose colour happened to be
+  // an `--acct-*` token. `claude-dev0`'s `colorVar` used to be the non-hue
+  // `--ink-tertiary` (no account had it as a real hue), so the strip found no
+  // `--acct-` prefix, `acct` came back `undefined`, and dev0 rendered in
+  // `claude`'s cyan — a real user-visible bug this lookup closes, since
+  // `accountHue` returns `undefined` for an unrostered wrapper and nothing
+  // else.
+  const acct = accountHue(roster, wrapper);
 
   // The stream sends status only on change — until its first frame the fleet
   // snapshot speaks for the session (same fallback the header does), so a
@@ -189,6 +198,7 @@ export function SessionScreen({
         session={live}
         status={status}
         statusUpdatedAt={statusUpdatedAt}
+        roster={roster}
         onInterrupt={() => void interrupt()}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
