@@ -56,6 +56,27 @@ each cut from main after the previous merged.
   raced; the sweep answered draft-present twice, backed off, and delivered cleanly
   once the box emptied. The design behaved exactly as specified; recorded as a pass.
 
+## F6 — DISPATCH'S /clear HITS BUG #21; THE HARDENING WAS INCOMPLETE
+
+Wave 2's dispatch (run 2) FAILED to deliver its brief. Root cause: dispatch's
+own /clear injection lost its Enter (bug #21 / typed-but-unsent) — /clear sat
+as a draft, never ran, so the resumed worker's context was not cleared and its
+hookstate stayed 14h stale; the 30-min freshness gate (HOOKSTATE_FRESH_MS)
+nulls it; the delivery gate (hs===null) skips the brief forever (0 attempts).
+The dispatch response's clearedAt was set on sendPrompt's typed-ok, NOT on
+proof the Enter landed — the coordinator (me) trusted the field over the pane.
+
+ORCHESTRATOR ERROR: the F3 hardening fixed the typed-but-unsent race ONLY on
+the mail lane and explicitly left dispatch's /clear "unaffected". Wrong: bug
+#21 is a property of the INJECTION PRIMITIVE (sendPrompt + its Enter); every
+caller is exposed — mail (fixed), dispatch /clear (not), human prompt (escapes
+only via the manual Send-it). Per-caller patching is whack-a-mole.
+
+FIX (task #21 at the root): make sendPrompt/submitEnter PROVE its own Enter
+landed and self-recover (the resumeIfOwn logic belongs IN the primitive, not
+bolted onto callers). One fix covers mail, dispatch /clear, and any future
+caller. Dogfood paused until deployed; then wave 2 re-dispatches clean.
+
 ## Wave 1 outcome + F5
 
 WAVE 1 CODE IS DONE AND GREEN. Re-measured by the coordinator in the worker's own
