@@ -62,7 +62,7 @@ const askFixture: HookAsk = {
 };
 
 const mailFixture: MailSummary = {
-  id: 1, at: 1_754_000_000_000, fromId: 'coordinator', toId: 's1', runId: 3,
+  id: 1, deliveryId: 1, at: 1_754_000_000_000, fromId: 'coordinator', toId: 's1', runId: 3,
   kind: 'question', subject: 'rebase before you start?', artifacts: [], state: 'delivered',
 };
 

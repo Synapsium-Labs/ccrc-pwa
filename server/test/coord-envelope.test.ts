@@ -161,11 +161,21 @@ describe('renderMailNudge', () => {
     expect(nudge).not.toMatch(/\bid: \d+/);
   });
 
-  it('names the full read+ack protocol: list, fetch body, ack — with the token location', () => {
+  // Blocking review finding, re-opened D-41: the listing (`GET /api/mail?to=`)
+  // returns rows carrying BOTH `id` (`mail.id`) and `deliveryId`
+  // (`mail_deliveries.id`) — two independent sequences that only agree while
+  // every mail resolves to exactly one delivery. Both `GET /api/mail/:id` and
+  // `POST /api/mail/:id/ack` key on the DELIVERY id, so the nudge must send
+  // the worker to `deliveryId`, never bare `id`, and say so explicitly.
+  it('names the full read+ack protocol using deliveryId, NOT id — with the token location', () => {
     const nudge = renderMailNudge('demo-coordinator');
     expect(nudge).toContain('GET /api/mail?to=demo-coordinator');
-    expect(nudge).toContain('GET /api/mail/<id>');
-    expect(nudge).toContain('POST /api/mail/<id>/ack');
+    expect(nudge).toContain('deliveryId');
+    expect(nudge).toContain('NOT id');
+    expect(nudge).toContain('GET /api/mail/<deliveryId>');
+    expect(nudge).toContain('POST /api/mail/<deliveryId>/ack');
+    expect(nudge).not.toContain('/api/mail/<id>');
+    expect(nudge).not.toContain('/api/mail/<id>/ack');
     expect(nudge).toContain('~/.cc-secrets/ccrc-mail.token');
     expect(nudge).toContain('x-ccrc-mail-token');
   });

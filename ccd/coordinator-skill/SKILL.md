@@ -189,8 +189,11 @@ not after.
    itself (clause 9). Then **end your turn** (clause 7).
 3. **Wake on mail.** What actually lands in your session is a tiny one-line
    nudge ("you have new mail…"), never the message body — list it
-   (`GET /api/mail?to=<your id>`), fetch each body (`GET /api/mail/:id`, the
-   envelope shape in `references/mail-envelope.md`), then act. Ack it
+   (`GET /api/mail?to=<your id>`), then per row use its `deliveryId` for `:id`
+   below, NEVER the row's own `id` (re-opened D-41 — the two are separate
+   sequences that only agree for a mail sent to one recipient;
+   `references/wave-lifecycle.md` §3): fetch each body (`GET /api/mail/:id`,
+   the envelope shape in `references/mail-envelope.md`), then act. Ack it
    (`POST /api/mail/:id/ack`, body `{fromId, fromUuid}`) before acting on it,
    or the delivery lane replays the nudge.
 4. **Re-measure a claimed `wave-done`**, then `POST /api/runs/:id/advance` with

@@ -91,9 +91,24 @@ export function renderEnvelope(m: EnvelopeInput): string {
  *  at the LISTING endpoint, not one delivery, so one nudge drains all of a
  *  session's outstanding mail and re-injecting it is idempotent. The body,
  *  headers and ack instruction all live in the fetched envelope
- *  (`GET /api/mail/<id>`, `routes.ts`) — this line teaches the worker nothing
- *  the old typed lane didn't, it just tells it where to look instead of
- *  handing it the bytes.
+ *  (`GET /api/mail/<deliveryId>`, `routes.ts`) — this line teaches the worker
+ *  nothing the old typed lane didn't, it just tells it where to look instead
+ *  of handing it the bytes.
+ *
+ *  MUST SAY `deliveryId`, NEVER BARE `id` (blocking finding, both review
+ *  rounds / re-opened D-41): `GET /api/mail?to=` returns `MailSummary` rows
+ *  carrying BOTH `id` (`mail.id`) and `deliveryId` (`mail_deliveries.id`) —
+ *  two independent `AUTOINCREMENT` sequences (`schema.ts`) that only walk
+ *  together while every mail resolves to exactly one delivery, and diverge
+ *  permanently the moment one mail fans out to more than one recipient
+ *  (`store.ts`'s own `MAIL_ROW_COLUMNS` comment). Both `GET /api/mail/:id`
+ *  (`deliveryEnvelope`, `store.ts`) and `POST /api/mail/:id/ack`
+ *  (`coord.delivery(id)`, `routes.ts`) key on the DELIVERY id. A nudge that
+ *  told the worker to use the listing's bare `id` would send it to fetch and
+ *  ack a DIFFERENT delivery (or 404) the instant that fan-out happens — the
+ *  worker's own delivery would then replay forever, never acked. Naming
+ *  `deliveryId` explicitly, and flagging it against `id` by name, is what
+ *  keeps that failure from depending on the worker guessing correctly.
  *
  *  ONE LINE, NO `\n` — `composePrompt`'s `split('\n')` in `sendPrompt` then
  *  yields exactly one part, so the M-Enter loop that joins multi-line prompts
@@ -102,8 +117,8 @@ export function renderEnvelope(m: EnvelopeInput): string {
  *  why the constant 24-char prefix is what makes the echo/submit checks
  *  trivial regardless of terminal width. */
 export function renderMailNudge(toId: string): string {
-  return `ccrc-mail: you have new mail. List it (GET /api/mail?to=${toId}), ` +
-    `read each body (GET /api/mail/<id>), act, then ack (POST /api/mail/<id>/ack ` +
-    `body {"fromId":"${toId}","fromUuid":"<your uuid>"}). ` +
+  return `ccrc-mail: you have new mail. List (GET /api/mail?to=${toId}); per row use its ` +
+    `deliveryId, NOT id: GET /api/mail/<deliveryId>, ack POST /api/mail/<deliveryId>/ack ` +
+    `body {"fromId":"${toId}","fromUuid":"<your uuid>"}. ` +
     `Token: ~/.cc-secrets/ccrc-mail.token, header x-ccrc-mail-token.`;
 }

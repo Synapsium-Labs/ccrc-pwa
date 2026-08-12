@@ -1992,7 +1992,20 @@ export interface RunSummary {
 
 /** One mail row, for the feed and the session strip (both PR J). */
 export interface MailSummary {
+  /** The MAIL id (`mail.id`) — identifies the message, not any one
+   *  recipient's copy of it. NOT the id `GET /api/mail/:id` or
+   *  `POST /api/mail/:id/ack` key on — see `deliveryId` below. */
   id: number;
+  /** The DELIVERY id (`mail_deliveries.id`) — a SEPARATE `AUTOINCREMENT`
+   *  sequence from `id` above (`server/src/coord/schema.ts`) that only
+   *  happens to walk alongside it while every mail resolves to exactly one
+   *  delivery, and diverges the first time it does not (one mail fanned to
+   *  several recipients). This is the id both `GET /api/mail/:id`
+   *  (`deliveryEnvelope`) and `POST /api/mail/:id/ack` (`coord.delivery`)
+   *  resolve against — the reference-nudge protocol (`renderMailNudge`,
+   *  `coord/envelope.ts`) tells a worker to read THIS field, never `id`,
+   *  for both calls (re-opened D-41, blocking review finding). */
+  deliveryId: number;
   at: number;
   fromId: string;
   toId: string;

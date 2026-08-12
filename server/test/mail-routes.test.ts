@@ -693,29 +693,45 @@ describe('GET /api/mail/:id', () => {
 
   // Hard case (e): the worker can still ack from the nudge — the full
   // read+ack protocol the nudge itself names (envelope.ts's own
-  // `renderMailNudge`): list outstanding mail, fetch the body of each by id,
-  // then ack it. Chained end to end here at the route level.
-  it('supports the full nudge-driven protocol: list -> fetch body -> ack', async () => {
+  // `renderMailNudge`): list outstanding mail, fetch the body of each by
+  // DELIVERY id, then ack it. Chained end to end here at the route level.
+  //
+  // The two id sequences are desynchronised FIRST (same technique as "the ack
+  // instruction names the DELIVERY id" describe block above) — with only one
+  // mail ever sent, `mail.id` and `mail_deliveries.id` are numerically
+  // indistinguishable and a regression back to the listing's bare `id` field
+  // would pass unnoticed (exactly the masking the blocking review finding
+  // named: this test used to read `mail[0]!.id` and call it `deliveryId`).
+  it('supports the full nudge-driven protocol: list -> fetch body -> ack, using the listing\'s deliveryId (blocking finding, re-opened D-41)', async () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
     const w = await withMail(home); app = w.app;
+    // Desync the sequences before the real send: one filler mail row with NO
+    // delivery bumps `mail.id`'s own AUTOINCREMENT without touching
+    // `mail_deliveries.id`.
+    w.coord.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: UUID, toId: 'demo-coordinator',
+      runId: null, kind: 'finding', subject: 'filler', body: 'filler', artifacts: [] });
     await send(app, { ...GOOD, toId: 'demo-coordinator' });
 
     // 1: list — what the nudge's own `GET /api/mail?to=` step returns.
     const listRes = await app.inject({ method: 'GET', url: '/api/mail?to=demo-coordinator',
       headers: { 'x-ccrc-mail-token': TOKEN } });
     expect(listRes.statusCode).toBe(200);
-    const { mail } = listRes.json() as { mail: { id: number }[] };
+    const { mail } = listRes.json() as { mail: { id: number; deliveryId: number }[] };
     expect(mail.length).toBe(1);
-    const deliveryId = mail[0]!.id;
+    // The desync really happened: the mail id and delivery id disagree, so a
+    // protocol that used `mail[0]!.id` would now point at the wrong row (or
+    // 404).
+    expect(mail[0]!.deliveryId).not.toBe(mail[0]!.id);
+    const deliveryId = mail[0]!.deliveryId;
 
-    // 2: fetch body — the nudge's `GET /api/mail/<id>` step.
+    // 2: fetch body — the nudge's `GET /api/mail/<deliveryId>` step.
     const bodyRes = await getEnvelope(app, deliveryId);
     expect(bodyRes.statusCode).toBe(200);
     const { envelope } = bodyRes.json() as { envelope: string };
     expect(envelope).toContain('the body');
 
-    // 3: ack — the nudge's `POST /api/mail/<id>/ack` step.
+    // 3: ack — the nudge's `POST /api/mail/<deliveryId>/ack` step.
     const ackRes = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
     expect(ackRes.statusCode).toBe(200);
     expect(ackRes.json()).toMatchObject({ ok: true, already: false });

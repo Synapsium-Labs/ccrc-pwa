@@ -619,6 +619,13 @@ export function registerCoordRoutes(
    * history read for a caller that genuinely wants it (a debugging session,
    * an operator inspecting `/mail`) — `mailForRecipient` is not deleted, only
    * no longer the default a doc calls "outstanding".
+   *
+   * Each row's `id` is the MAIL id, not the delivery id (blocking review
+   * finding, re-opened D-41) — use `deliveryId` (`store.ts`'s
+   * `MAIL_ROW_COLUMNS`) for `GET /api/mail/:id` and `POST /api/mail/:id/ack`
+   * immediately below, both of which key on `mail_deliveries.id`. The
+   * reference nudge (`renderMailNudge`, `coord/envelope.ts`) that points a
+   * worker at this route tells it exactly that.
    */
   app.get('/api/mail', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);

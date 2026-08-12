@@ -176,13 +176,24 @@ const OUTSTANDING_OR_ABANDONED_SQL =
   "AND COALESCE(rr.state, '') NOT IN ('done','failed')))";
 
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
- *  read — they differ only in their WHERE clause, never in these columns. */
+ *  read — they differ only in their WHERE clause, never in these columns.
+ *
+ *  `d.id AS deliveryId` ALONGSIDE `m.id AS id` (blocking review finding,
+ *  re-opened D-41): `m.id` (`mail.id`) and `d.id` (`mail_deliveries.id`) are
+ *  two independent `AUTOINCREMENT` sequences (`schema.ts`) that only walk
+ *  together while every mail resolves to exactly one delivery. Both
+ *  `GET /api/mail/:id` (`deliveryEnvelope`) and `POST /api/mail/:id/ack`
+ *  (`coord.delivery`) key on the DELIVERY id, and the reference-nudge
+ *  protocol (`renderMailNudge`, `coord/envelope.ts`) sends a worker straight
+ *  from this listing into both of those routes — without this column the
+ *  only id on offer was `mail.id`, which resolves the WRONG row (or 404s)
+ *  the moment one mail fans out to more than one recipient. */
 const MAIL_ROW_COLUMNS =
-  'm.id AS id, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
+  'm.id AS id, d.id AS deliveryId, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
   'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state';
 
 interface MailRowDb {
-  id: number; at: number; fromId: string; toId: string; runId: number | null;
+  id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
   kind: string; subject: string; artifacts: string; state: string;
 }
 
@@ -935,7 +946,7 @@ export class CoordStore {
    *  how a row is read. */
   private hydrateMail(rows: readonly MailRowDb[]): MailSummary[] {
     return rows.map((r) => ({
-      id: r.id, at: r.at, fromId: r.fromId, toId: r.toId, runId: r.runId,
+      id: r.id, deliveryId: r.deliveryId, at: r.at, fromId: r.fromId, toId: r.toId, runId: r.runId,
       kind: isMailKind(r.kind) ? r.kind : 'unknown', subject: r.subject,
       artifacts: JSON.parse(r.artifacts) as string[],
       state: isMailDeliveryState(r.state) ? r.state : 'unknown',
