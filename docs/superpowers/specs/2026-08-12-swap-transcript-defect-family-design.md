@@ -225,11 +225,26 @@ read — so sharing them costs nothing while a copy costs 188MB. The honest limi
 observed property of Claude Code's checkpoint layout, not a documented guarantee. If some future
 version rewrote a checkpoint in place, both accounts would see the change. What that cannot do is
 damage the thing this whole spec is about — the transcript is never aliased — so the failure mode
-of being wrong here is a shared checkpoint, not a lost conversation. `cp -a` without `-l` is the
-fallback the moment linking fails for any reason, so a cross-device destination degrades to a slow
-correct copy rather than to nothing — which is also the whole remedy if the write-once property is
-ever disproved: delete one flag, pay 188MB, change nothing else. The swap logs which mode it used,
-so the evidence exists if a future defect ever implicates a shared checkpoint.
+of being wrong here is a shared checkpoint, not a lost conversation. It is also the whole remedy if
+the write-once property is ever disproved: drop one flag, pay 188MB, change nothing else.
+
+**The fallback has to clear the ground before it runs, and this is where a plausible design was
+wrong.** `cp -a` without `-l` is the fallback the moment linking fails — but `cp -al` builds the
+directory skeleton *before* it links files, so a failure partway leaves the destination **already
+existing**, and the existence check that is the whole anti-nesting guard was evaluated before the
+copy ever started. Measured: a cross-device destination — the fallback's own documented trigger —
+produces `<pdir>/<uuid>/<uuid>/…` while the real path holds empty directories, so the resumed
+session sees no sidecars at all and the log records a clean success. A same-device partial failure
+is worse: the file ends up both hardlinked at the right path and copied a level down, doubling the
+bytes the link tree exists to save. And because the guard is `-e`, the wreckage is sticky — every
+later swap onto that account reports "already present, left alone" and never repairs it. So the
+fallback removes a destination it created before retrying, and **success is judged by the copy's
+exit status, never by the destination directory existing** — that directory exists as soon as
+`cp -al` has done nothing useful at all.
+
+The swap logs which mode it used, so the evidence exists if a future defect ever implicates a
+shared checkpoint — and the log has to be honest about a mixed result rather than reporting the
+mode it intended.
 
 The task list at `<configdir>/tasks/<uuid>/` (ccd:7056-7060) is **unchanged**, and it is worth
 saying why it does not need any of this: it is keyed by uuid rather than by a munged directory, so
