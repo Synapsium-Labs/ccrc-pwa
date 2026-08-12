@@ -34,6 +34,13 @@ SWAP_QUIET=600                  # preempt only sessions quiet this long (any sur
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
 SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
+SPAWN_GATE_TRIES=450            # capture-pane polls before the startup-gate window expires (~15 min
+                                # at the 2s tick). A plain shell variable with the production default,
+                                # deliberately NOT an env override — HOME is ccd's only isolation
+                                # boundary (see PROJECTS_ROOT above) and nothing on the wire can set
+                                # a shell variable. A test that sources ccd assigns it afterwards,
+                                # which is what keeps the rc-4 case a 3-poll assertion instead of a
+                                # 4,500-process one.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -6857,8 +6864,16 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   # same words inside a restored transcript can't false-trigger keystrokes.
   # Window is ~15 min because 700k+-token resumes take minutes between gates; healthy sessions
   # return the moment the live marker shows, so the common path stays fast.
+  # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
+  # vanished mid-poll; 4 = the window expired with no marker. 3 and 4 both used to be "0 after ~15
+  # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
   local t="$1" fromswap="${2:-0}" i pane
-  for i in $(seq 1 450); do
+  for i in $(seq 1 "$SPAWN_GATE_TRIES"); do
+    # BEFORE the capture, and this order is the fix: `capture-pane` against a dead session fails into
+    # an EMPTY $pane, which matches no branch below, so the loop used to poll a corpse for the full
+    # window and then answer success. `has-session` is the one probe that distinguishes "not ready
+    # yet" from "not there", and it costs one call.
+    tmux has-session -t "$t" 2>/dev/null || return 3
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
@@ -6901,6 +6916,9 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
     fi
     sleep 2
   done
+  # The window expired. An explicit verdict, because falling out of a `for` loop under `set -uo
+  # pipefail` with no `-e` returns the status of the last command — `sleep 2`, i.e. 0. That is M6.
+  return 4
 }
 
 _spawn() {   # id mode(new|resume) — (re)create the tmux session under the right account
@@ -6931,15 +6949,30 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   tmux set-option -t "$tname" window-size latest 2>/dev/null
   local prompt_rc
   _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
-  # Code 2 means _accept_first_run_prompts stopped at a login screen: $id and $wrapper are
-  # only in scope HERE, not inside that function (which only knows the tmux name), so the
-  # operator-facing warning — naming both, spec §5 — is emitted from this side of the return.
-  [[ "$prompt_rc" == 2 ]] && echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2
-  # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (GPT backend
-  # doesn't take it and the injection would just error into the prompt box). Code 2 means
-  # _accept_first_run_prompts stopped at a login screen — skip the same way: a synthesized
-  # keystroke into an auth flow is never correct.
-  [[ "$wrapper" != gpt && "$prompt_rc" != 2 ]] && _inject_spawn_effort "$tname"
+  # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — _spawn
+  # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
+  # inside the unit to a `ccd start` running in another process, which is what Task 5's
+  # _supervised_start polls. $REG is on the fleet wire within one 2s watcher tick (M9); an exit code
+  # is on nothing's wire at all.
+  _reg_set "$id" spawn "$(date +%s) $prompt_rc"
+  case "$prompt_rc" in
+    # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
+    # so this is correct whether or not the .stopped stamp itself has landed yet.
+    0) rm -f "$REG/$id.stopped" ;;
+    # $id and $wrapper are only in scope HERE, not inside _accept_first_run_prompts (which knows
+    # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
+    # side of the return.
+    2) echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2 ;;
+    3) echo "ccd: $id: the tmux session vanished during startup — nothing is running" >&2 ;;
+    4) echo "ccd: $id: startup window expired with no live TUI marker" >&2 ;;
+  esac
+  # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (the GPT backend
+  # doesn't take it and the injection would just error into the prompt box). The guard used to read
+  # `!= 2` because 2 was the only non-zero code — with 3 and 4 in the table that would type a slash
+  # command at a session that does not exist, so it is `== 0`: inject only into a TUI we watched
+  # come up.
+  [[ "$wrapper" != gpt && "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
+  return "$prompt_rc"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
@@ -6974,7 +7007,15 @@ cmd_start() {
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  _spawn "$id" "$mode"; _reg_set "$id" started 1
+  local rc; _spawn "$id" "$mode"; rc=$?
+  # `started` stays unconditional: it records that this row has HAD a session, which is what §4.3's
+  # never-started rung reads. A spawn that failed is still a row that was started — it classifies
+  # `orphan`, which is the honest answer, not `never-started`.
+  _reg_set "$id" started 1
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "started $id ($mode) — discover on claude.ai by name: $id"
 }
 
@@ -6983,7 +7024,12 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
   if _alive "$id"; then echo "alive: $id"; return 0; fi
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  _spawn "$id" "$mode"; _reg_set "$id" started 1
+  local rc; _spawn "$id" "$mode"; rc=$?
+  _reg_set "$id" started 1
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "ensured $id ($mode)"
 }
 
