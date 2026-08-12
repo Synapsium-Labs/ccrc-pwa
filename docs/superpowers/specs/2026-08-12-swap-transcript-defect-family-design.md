@@ -443,8 +443,14 @@ verdict raised inside the supervisor reaches a `ccd start` running in another pr
 ends the 15-minute wait immediately, which is a bug fix in its own right: today a vanished pane
 costs a quarter of an hour of polling a session that is not there.
 
-The unit's `[Service]` gains `StartLimitIntervalSec` and `StartLimitBurst` so a session that dies
-instantly becomes a *failed* unit rather than an invisible restart loop. A failed unit has no
+The unit gains `StartLimitIntervalSec` and `StartLimitBurst` so a session that dies instantly
+becomes a *failed* unit rather than an invisible restart loop. **They go in `[Unit]`, not
+`[Service]`** — an earlier draft of this sentence said `[Service]` and was wrong for the systemd the
+fleet host runs. Measured on systemd 255 with `systemd-analyze verify`: `StartLimitIntervalSec=` in
+`[Service]` is rejected with *"Unknown key name … in section 'Service', ignoring"*, while
+`StartLimitBurst=` in `[Service]` is silently accepted for legacy compatibility. Following the
+original wording would therefore have applied the burst against systemd's **default** interval
+rather than the one intended — a half-configured limiter that looks configured. A failed unit has no
 supervisor, so it heartbeats nothing and §4.3 classifies it `orphan` — which is the honest answer
 to the only question the row has to answer: nothing is bringing this back, and `ccd start <id>`
 is what would. §3.1's `reset-failed` is what makes that sentence true rather than aspirational.
