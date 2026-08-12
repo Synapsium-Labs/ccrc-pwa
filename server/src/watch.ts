@@ -13,8 +13,16 @@ import { readHookState, type HookState } from './hookstate.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
-import type { NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type {
+  CoordStatus, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+} from '../../shared/api.js';
 import { UNCHECKED_PR } from '../../shared/api.js';
+// The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
+// NOT imported beside it: this file holds its own module-local literal
+// (`sweepMail` already uses it), a second `const` of that name in one scope is
+// a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
+// literals exist. `single-definition.test.ts` pins both halves of that split.
+import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { resolveTranscriptFile } from './transcript/resolve.js';
@@ -371,6 +379,11 @@ export class FleetWatcher {
    *  least once, even into an empty fleet — mirroring `lastJson`'s own
    *  initial value. */
   private lastRunsJson: string | null = null;
+  /** The `coord` frame's last value and its own byte-equality guard, beside
+   *  `lastRunsJson` and for the same reasons. `coord` is `null` until the first
+   *  tick measures — see `currentCoord()`. */
+  private coord: CoordStatus | null = null;
+  private lastCoordJson: string | null = null;
   /** Watermark: the highest `mail_deliveries.id` this lane has already
    *  raised a `mail` NotifyEvent for. Seeded to the CURRENT max id on the
    *  priming tick (`tick()`'s own `!this.primed` arm) rather than left at 0,
@@ -465,6 +478,16 @@ export class FleetWatcher {
     return new Map(this.hookStates);
   }
 
+  /** The last measured marker state, for `/ws/fleet`'s cold start. `null` means
+   *  THIS PROCESS HAS NEVER MEASURED — a socket that connects before the first
+   *  tick is sent no `coord` frame at all, because inventing `clear` there
+   *  would tell the phone the fleet is running on a box nothing has looked at.
+   *  That is a different fact from `unmeasurable`, which is a measurement that
+   *  came back unreadable. Same reasoning as currentPending(). */
+  currentCoord(): CoordStatus | null {
+    return this.coord;
+  }
+
   async tick(): Promise<void> {
     // C0.1: a tick already in flight refuses a second one rather than
     // stacking — see `ticking`'s own docstring above. Mirrors
@@ -495,6 +518,15 @@ export class FleetWatcher {
       // states for this exact read: "a failed second listing proves nothing
       // and changes nothing".
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+      // BEFORE the fail-shut return below, and on BOTH arms (D-B4-10). An
+      // unlistable registry is not "nothing is set": it is the exact state
+      // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
+      // the wire as `unmeasurable` on the same tick it happens. Placed beside
+      // `emitRuns()` instead, this would be 236 lines below a `return` — the
+      // banner would sit frozen on its last value while the server refused
+      // every dispatch, which is the precise lie spec §4.2 mints
+      // `unmeasurable` to prevent.
+      this.emitCoord(registryRead.listed ? registryRead.names : null);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
@@ -800,6 +832,29 @@ export class FleetWatcher {
     if (json === this.lastRunsJson) return;
     this.lastRunsJson = json;
     this.bus.emit('runs', runs);
+  }
+
+  /** The `{type:'coord'}` frame (spec §4.2). Derived from the SAME registry
+   *  listing this tick already performed — carried out of `readRegistryMeasured`
+   *  on `RegistryRead.names` rather than taken again (D-B4-10).
+   *
+   *  `null` names is an UNLISTABLE directory, not an empty one, and rides the
+   *  wire as `unmeasurable` — the state `dispatchRun` fails shut on.
+   *
+   *  Byte-equality guarded exactly like `emitRuns` above. No `try`/`catch`:
+   *  unlike `emitRuns` this touches no `node:sqlite` and no I/O — it is an
+   *  array scan, a `JSON.stringify` and a `bus.emit`, and the bus's own
+   *  listeners are the two socket writers `emitRuns` already trusts. */
+  private emitCoord(names: readonly string[] | null): void {
+    const status: CoordStatus = names === null
+      ? { pause: 'unmeasurable', mail: 'unmeasurable' }
+      : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
+          mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear' };
+    const json = JSON.stringify(status);
+    if (json === this.lastCoordJson) return;
+    this.lastCoordJson = json;
+    this.coord = status;
+    this.bus.emit('coord', status);
   }
 
   /**

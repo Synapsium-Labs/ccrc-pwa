@@ -1396,7 +1396,37 @@ export type FleetMsg =
   /** Build 7. ADDITIVE, so no FLEET_PROTO bump: an already-deployed PWA drops
    *  an unknown frame type silently (`pwa/src/stores/fleet.ts:54-73`), which is
    *  the one-way new-writer/old-reader rule this file states at :560-566. */
-  | { type: 'runs'; runs: RunSummary[] };
+  | { type: 'runs'; runs: RunSummary[] }
+  /** Build 4, spec §4.2. Additive on the same terms as `runs` above. */
+  | { type: 'coord'; coord: CoordStatus };
+
+/**
+ * What a registry MARKER file was measured to be. One type covers both markers
+ * because they are one concept read one way: a name present or absent in the
+ * single `readdir` the fleet lane already performs each tick.
+ *
+ * `unmeasurable` is not decoration and is not a third flavour of "no". The
+ * registry directory can fail to list — and when it does, `dispatchRun` treats
+ * that as a pause it cannot rule out and FAILS SHUT (`coord/dispatch.ts`). If
+ * the wire could only say `clear`/`set`, the phone would render "running" for a
+ * state the server would refuse to dispatch in. Not knowing is not `[]`.
+ */
+export type MarkerState = 'clear' | 'set' | 'unmeasurable';
+
+const MARKER_STATES: readonly MarkerState[] = ['clear', 'set', 'unmeasurable'];
+
+/** Use THIS, never `MARKER_STATES.includes(x as MarkerState)` — `isRunState`'s
+ *  own rule, for its own reason (the array's element type would force a caller
+ *  to assert the very thing it is asking). */
+export function isMarkerState(v: unknown): v is MarkerState {
+  return typeof v === 'string' && (MARKER_STATES as readonly string[]).includes(v);
+}
+
+/** The two markers the coordination lane is governed by: `coordinator-paused`
+ *  (spec §4.2 — the one file that stops a program mid-flight) and
+ *  `mail-disabled` (the injection kill-switch `sweepMail` already gates on).
+ *  Read together because they come from one listing. */
+export interface CoordStatus { pause: MarkerState; mail: MarkerState }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */

@@ -94,6 +94,11 @@ describe('fleet REST + WS', () => {
     expect(snapshot.type).toBe('fleet');
     expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude2-MekWarLive']);
 
+    // Build 4: the cold start's LAST frame — this watcher has ticked, so it has
+    // measured the markers and says so. Consumed here rather than ignored,
+    // because the frames after it are what this test is actually about.
+    expect((await next()).type).toBe('coord');
+
     seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
     await watcher.tick(); // registry changed -> emits
     const pushed = await next();
@@ -557,6 +562,7 @@ describe('fleet REST + WS', () => {
       const runs = await next();
       expect(runs.type).toBe('runs');
       expect(runs.runs.map((r: { id: number; state: string }) => [r.id, r.state])).toEqual([[opened.id, 'planned']]);
+      expect((await next()).type).toBe('coord');   // Build 4: hello, fleet, runs, coord
 
       // A real transition (`coord.advance`, the ONLY writer of `runs.state` —
       // `store.ts`'s own docstring) must re-emit the frame on the next tick.
@@ -590,6 +596,7 @@ describe('fleet REST + WS', () => {
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
       expect((await next()).type).toBe('runs');
+      expect((await next()).type).toBe('coord');
 
       // Nothing about the run changed — a second tick must NOT re-emit.
       // Proven the same way the file's own `fleet` no-change test proves it:
@@ -618,6 +625,9 @@ describe('fleet REST + WS', () => {
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
+      // Build 4: `coord` still arrives on a coord-LESS server — a pause is a
+      // fleet-host file, not a run, so it does not ride `deps.coord`.
+      expect((await next()).type).toBe('coord');
 
       await watcher.tick();
       bus.emit('notice', { message: 'unrelated' });
@@ -668,6 +678,156 @@ describe('fleet REST + WS', () => {
       expect(warnSpy.mock.calls.some(([line]) =>
         String(line).includes('/ws/fleet cold-start runs() failed'))).toBe(true);
 
+      ws.close();
+    });
+  });
+
+  // — Build 4 Task 8: the `{type:'coord'}` frame — the pause marker and the
+  //   mail kill-switch reach the wire, off the tick's OWN registry listing —
+  describe('the `coord` frame', () => {
+    /** A server + watcher + connected socket, with the boilerplate every case
+     *  below repeats. `tick` false leaves the watcher unprimed, which is the
+     *  "never measured" state one case exists to pin. */
+    const connect = async (over: Partial<Deps> = {}, opts: { tick?: boolean } = {}) => {
+      const deps = { ...testDeps(home), ...over };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      if (opts.tick !== false) await watcher.tick();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      return { ws, next, watcher, bus };
+    };
+
+    const marker = (name: string) => writeFileSync(path.join(home, '.cc-sessions', name), '');
+
+    it('sends coord after hello/fleet/runs on connect, when it has ever measured', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const { ws, next } = await connect({ coord });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('runs');
+      // LAST, deliberately: chained after `runs` inside the same `.then`, so
+      // the wire order every client relies on is hello, fleet, runs, coord.
+      const frame = await next();
+      expect(frame.type).toBe('coord');
+      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear' });
+      ws.close();
+    });
+
+    it('sends NOTHING for coord before the first tick — never a fabricated "clear"', async () => {
+      // `currentCoord()` is null until a tick has measured. A cold start that
+      // invented `clear` would tell the phone the fleet is running on a box
+      // this process has never looked at.
+      const { ws, next, bus } = await connect({}, { tick: false });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      bus.emit('notice', { message: 'unrelated' });
+      expect(await next()).toEqual({ type: 'notice', message: 'unrelated' });
+      ws.close();
+    });
+
+    it('re-emits only on CHANGE, byte-equality guarded like runs', async () => {
+      const { ws, next, watcher, bus } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('coord');
+
+      await watcher.tick();                       // nothing moved
+      bus.emit('notice', { message: 'unrelated' });
+      expect(await next()).toEqual({ type: 'notice', message: 'unrelated' });
+
+      marker('coordinator-paused');               // now it moved
+      await watcher.tick();
+      const frame = await next();
+      expect(frame.type).toBe('coord');
+      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear' });
+      ws.close();
+    });
+
+    it('reports set for coordinator-paused and clear for mail-disabled independently', async () => {
+      marker('mail-disabled');
+      const { ws, next, watcher } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set' });
+
+      marker('coordinator-paused');
+      await watcher.tick();
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set' });
+      ws.close();
+    });
+
+    // THE TWO CASES THE EMITTER EXISTS FOR. `dispatchRun` treats an unlistable
+    // registry as a pause it cannot rule out and FAILS SHUT, so the wire must
+    // be able to say the same thing — on the very tick it happens.
+    it('reports unmeasurable for BOTH markers when the registry cannot be listed', async () => {
+      const unlistable: FleetIO = { ...localIO, readdir: async () => null };
+      const { ws, next, watcher } = await connect({ io: unlistable }, { tick: false });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      await watcher.tick();
+      const frame = await next();
+      expect(frame.type).toBe('coord');
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable' });
+      ws.close();
+    });
+
+    it('emits coord on the tick that FAILS SHUT — before the early return, not after it', async () => {
+      // A whole tick, driven from a healthy read into an unlistable one. The
+      // `!listed` arm returns 236 lines above `emitRuns()`, so an emitter
+      // placed beside THAT one never runs here: the banner would sit frozen on
+      // `clear` while the server refused every dispatch — the precise lie
+      // `unmeasurable` was minted to prevent.
+      let listable = true;
+      const flaky: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
+      const { ws, next, watcher } = await connect({ io: flaky });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear' });
+
+      listable = false;
+      await watcher.tick();     // this tick returns early — and still reports
+      const frame = await next();
+      expect(frame.type).toBe('coord');
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable' });
+
+      // And nothing ELSE was broadcast on that tick: the fail-shut return still
+      // skips the fleet snapshot, exactly as it did before this frame existed.
+      listable = true;
+      marker('coordinator-paused');
+      await watcher.tick();
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear' });
+      ws.close();
+    });
+
+    it('an old client still shrugs: an unknown frame type is dropped silently', async () => {
+      // The additive-frame rule, exercised against the reader every deployed
+      // PWA runs — `asFleetMsg` in `pwa/src/stores/fleet.ts` owns the client
+      // half; here the pin is that the frame is additive on the WIRE: a client
+      // that only knows hello/fleet/runs receives coord as an ordinary JSON
+      // object with a `type` it does not match, and the socket stays usable.
+      const { ws, next, bus } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      const coordFrame = await next();
+      expect(Object.keys(coordFrame).sort()).toEqual(['coord', 'type']);
+      bus.emit('notice', { message: 'still alive' });
+      expect(await next()).toEqual({ type: 'notice', message: 'still alive' });
+      ws.close();
+    });
+
+    it('does not bump FLEET_PROTO', async () => {
+      // Additive frames are the one-way new-writer/old-reader rule this repo
+      // already states; bumping the handshake would be a lie about the change.
+      const { ws, next } = await connect();
+      const hello = await next();
+      expect(hello).toEqual({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN });
+      expect(FLEET_PROTO).toBe(1);
       ws.close();
     });
   });

@@ -352,8 +352,20 @@ async function buildRecord(
  *  genuinely lists nobody" the same way a degraded row is now distinguishable
  *  from an absent one. `readRegistry` below is the old, narrower signature
  *  ([] on unlistable) kept for pure-display call sites that have no refusal
- *  to make either way. */
-export type RegistryRead = { listed: true; records: SessionRecord[] } | { listed: false };
+ *  to make either way.
+ *
+ *  `names` (Build 4, D-B4-10) is the RAW listing this read derived its records
+ *  from, carried rather than re-read. It exists for the one caller that needs a
+ *  NON-session fact out of the same directory — `watch.ts`'s `emitCoord`, which
+ *  reports `$REG/coordinator-paused` and `$REG/mail-disabled` to the wire. A
+ *  second `readdir` for that would be a second clock for one fact, and the two
+ *  would disagree on exactly the ticks that matter. It is the FIRST listing,
+ *  deliberately: the re-listing below exists to resolve a per-row reap race,
+ *  runs on some calls only, and hanging the markers' cadence on it would make
+ *  the banner's clock depend on whether an unrelated session was mid-reap. */
+export type RegistryRead =
+  | { listed: true; records: SessionRecord[]; names: readonly string[] }
+  | { listed: false };
 
 export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promise<RegistryRead> {
   const now = Date.now();
@@ -403,10 +415,12 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
         if (holdUnconfirmed.has(rec.id) && !again.includes(`${rec.id}.hold`)) rec.held = null;
         if (identityUnconfirmed.has(rec.id) && !again.includes(`${rec.id}.uuid`)) retired.add(rec.id);
       }
-      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)) };
+      // `names`, not `again`: the FIRST listing is the one every caller shares
+      // (D-B4-10). `again` answers a different question, on some calls only.
+      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names };
     }
   }
-  return { listed: true, records: out };
+  return { listed: true, records: out, names };
 }
 
 export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {
