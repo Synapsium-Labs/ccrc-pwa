@@ -56,6 +56,28 @@ each cut from main after the previous merged.
   raced; the sweep answered draft-present twice, backed off, and delivered cleanly
   once the box emptied. The design behaved exactly as specified; recorded as a pass.
 
+## F7 — LARGE MULTI-LINE BRIEFS ARE FRAGILE TO TYPE OVER tmux
+
+Live wave-2 delivery (after the hookstate was nudged fresh): attempt 1
+verify-failed (send.ts echo-verify of a ~3KB multi-line paste did not match —
+the paste had not fully rendered / reflowed when verify ran), leaving partial
+content in the box; attempt 2+ draft-present (the deployed F3 resumeIfOwn
+cannot match a MANGLED partial envelope, only a clean own-draft, so it
+self-blocks again). So there are TWO distinct large-brief failure modes:
+(a) Enter lost — the submit-proof fix (wf_ad1d4fd6-896, running) addresses it;
+(b) echo-verify flaky on a large multi-line paste — NOT addressed by
+submit-proof; a distinct robustness gap.
+DEEPER DESIGN QUESTION: typing a ~3KB brief into a tmux pane is inherently
+fragile near the 8KB cap. Candidate: deliver a large brief by writing it to a
+file in the worker's workspace and injecting a SHORT "read <path>" prompt
+instead of typing the whole payload — the short prompt is robust, the file is
+the payload. Flag for the fix workflow / a follow-up; do not silently accept
+the fragility.
+
+ORCHESTRATOR DISCIPLINE NOTE: stopped hand-nursing wave 2 after three
+optimistic half-successes the operator caught. Wave 2 is BLOCKED until the
+root-cause fix lands; no more live poking.
+
 ## F6 — DISPATCH'S /clear HITS BUG #21; THE HARDENING WAS INCOMPLETE
 
 Wave 2's dispatch (run 2) FAILED to deliver its brief. Root cause: dispatch's
