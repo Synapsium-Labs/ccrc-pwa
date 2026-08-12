@@ -7091,16 +7091,64 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   return 1
 }
 
-cmd_start() {
-  local wrapper="${1:-}" project="${2:-}" workdir="${3:-}"
-  [[ -n "$wrapper" && -n "$project" ]] || die "usage: ccd start <wrapper> <project> [workdir]"
-  _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${VALID_WRAPPERS[*]})"
-  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
+cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
+  # THE ONE-ARGUMENT FORM IS THE CORRECT ONE FOR ANYTHING THAT ALREADY EXISTS.
+  # `<wrapper> <project>` recomputes `<wrapper>-<project>`, and a session keeps
+  # the id it was born with across every swap — `claude2-expoAI-assistant` is
+  # still that id while its `wrapper` field reads `claude-dev0`. So an operator
+  # reading the account off the board and typing it back MINTS A SECOND ID for
+  # a session that already exists. `cmd_stop` grew this form first, for the
+  # same reason, and its own comment records it.
+  #
+  # There is no id form for CREATION: a new session needs an account and a
+  # project, and there is NO WORKDIR TO INVENT from an id alone. A single
+  # argument with no registry row is therefore refused with the creating
+  # form's usage in the message, never resolved to `$PROJECTS_ROOT/<id>`.
+  local id wrapper="" project="" workdir=""
+  if [[ $# -ge 2 ]]; then
+    wrapper="$1"; project="$2"; workdir="${3:-}"
+    [[ -n "$wrapper" && -n "$project" ]] \
+      || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
+    _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${VALID_WRAPPERS[*]})"
+    [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
+    id=$(_id "$wrapper" "$project")
+  else
+    id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"
+    # The id becomes a path under $REG, so its shape is checked exactly as
+    # cmd_forget and cmd_ws_hold check theirs.
+    [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+    [[ -f "$REG/$id.uuid" ]] \
+      || die "no registry for '$id' — a new session needs its account and project: ccd start <wrapper> <project> [workdir]"
+  fi
+
+  # THE REGISTRY WINS OVER THE ARGUMENT, FOR THE ACCOUNT ONLY (spec §3.4).
+  # `_reg_set "$id" wrapper "$wrapper"` used to be unconditional, so
+  # `ccd start claude2 expoAI-assistant` on a session auto-swap had moved to
+  # claude-dev0 rewrote the row to an account whose config dir does not hold
+  # the transcript — the resumed session then finds no history under the very
+  # account it was just told it lives on. `ccd swap` is the ONLY verb that
+  # moves a session between accounts; a differing argument is a warning, and
+  # the warning names the verb that would actually do what was asked.
+  local regw; regw=$(_reg_get "$id" wrapper)
+  if [[ -n "$regw" ]]; then
+    [[ -z "$wrapper" || "$wrapper" == "$regw" ]] \
+      || echo "ccd: warn: $id lives on $regw, not $wrapper — starting it on $regw (to move it: ccd swap $id $wrapper)" >&2
+    wrapper="$regw"
+  fi
+  [[ -n "$wrapper" ]] || die "no wrapper recorded for '$id' and none given"
   [[ -x "$WRAPPER_DIR/$wrapper" ]] || die "wrapper missing: $WRAPPER_DIR/$wrapper"
-  [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
+
+  # The workdir stays the creating form's third argument to set. An id alone
+  # carries no directory, so the id form READS what the row already has and
+  # writes nothing back over it.
+  if [[ -n "$project" ]]; then
+    [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
+  else
+    project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  fi
   [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
-  local id; id=$(_id "$wrapper" "$project")
+
   if _alive "$id"; then
     # M5's shape, reachable from a keyboard: a live pane whose unit was never enabled, or was
     # disabled without `--now` some other way. A bare `ccd start` staying a pure no-op here is
@@ -7117,23 +7165,31 @@ cmd_start() {
     echo "already running: $id (find on claude.ai by name: $id)"; return 0
   fi
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
-  _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
+  _reg_set "$id" wrapper "$wrapper"
+  [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
+  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+  # A deliberate revival supersedes a refused swap's banner: `ccd start <id>`
+  # is the human act §4.4 names as "what would bring this back" (whether typed
+  # directly or reached via the two-argument form once the registry has
+  # reasserted the real account above), so a stale refusal must not go on
+  # shadowing it.
+  rm -f "$REG/$id.swapblocked"
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
     local rc; _supervised_start "$id"; rc=$?
     # `started` stays unconditional here too (Task 4's own invariant, restated below): a
     # supervised start that never even reaches the in-unit cmd_ensure — the crash-looped FAILED
     # unit this task's own StartLimitBurst is designed to produce, or `_supervised_start`'s own
     # 30s timeout with no spawn stamp yet — must still classify `orphan` once a later task reads
-    # this field, not `never-started`. No `($mode)` in the success line: that IS the in-unit
-    # cmd_ensure's to know, not this process's.
+    # this field, not `never-started`. `($mode)` now appears here too (Task 6): the id form exists
+    # precisely so an operator can tell whether they resumed the row they named or minted a fresh
+    # one, and the supervised path is the one a human at a keyboard actually takes.
     _reg_set "$id" started 1
     [[ "$rc" -eq 0 ]] || return "$rc"
-    echo "started $id — discover on claude.ai by name: $id"
+    echo "started $id ($mode) — discover on claude.ai by name: $id"
     return 0
   fi
-  local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   local rc; _spawn "$id" "$mode"; rc=$?
   # `started` stays unconditional: it records that this row has HAD a session, which is what §4.3's
   # never-started rung reads. A spawn that failed is still a row that was started — it classifies
@@ -7643,14 +7699,21 @@ cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps 
   echo "home for $id set to $w"
 }
 
-cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
+cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # Behaviorally an ALIAS of cmd_start since §3.1 — the start path itself is
-  # `systemctl --user enable --now`, so there is no second act left for this verb to perform. It
-  # keeps its name because the agent whitelist and CCD_ARGV grant `enable` and `start` separately,
-  # and whitelist-subset.test.ts layer 3 fails on a grant no route builds.
-  local wrapper="${1:?}" project="${2:?}" workdir="${3:-}"
-  cmd_start "$wrapper" "$project" "$workdir" || return $?
-  echo "enabled boot-persistence for $(_id "$wrapper" "$project")"
+  # `systemctl --user enable --now`, so there is no second act left for this verb to perform beyond
+  # the boot-persistence confirmation line below. It keeps its name because the agent whitelist and
+  # CCD_ARGV grant `enable` and `start` separately, and whitelist-subset.test.ts layer 3 fails on a
+  # grant no route builds. §3.4 gives it the same one-argument id form as `start` — it takes the
+  # SAME two shapes, so it needs its own usage line rather than borrowing start's, or a mistyped
+  # `ccd enable` would answer as a verb the operator did not type.
+  [[ $# -ge 1 ]] || die "usage: ccd enable <id> | ccd enable <wrapper> <project> [workdir]"
+  # The id is computed the same way cmd_start computes it — never trusted from
+  # a raw argument — so this line names the row cmd_start actually touched,
+  # even on the two-argument form once the registry's wrapper has won.
+  local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
+  cmd_start "$@" || return $?
+  echo "enabled boot-persistence for $id"
 }
 
 cmd_stop() {   # <id>  |  <wrapper> <project>
