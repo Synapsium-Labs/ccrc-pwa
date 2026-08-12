@@ -1193,6 +1193,38 @@ describe('ws-restore', () => {
   });
 });
 
+describe('ws-restore propagates a failed spawn', () => {
+  // The same plan-level gap ws-add has, mirrored on the restore path:
+  // `_spawn` failing (rc 3 or rc 4) must not print `restored <id> — <workdir>`
+  // over a session that never came back — M6's silent success.
+  const restoreWithSpawnRc = (rc: number): string =>
+    `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
+     _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; };
+     _spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return ${rc}; };
+     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
+     _alive() { return 1; };`;
+
+  it('refuses the success line and returns the rc on a vanished-session spawn (rc 3)', () => {
+    workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const r = shFail(`${restoreWithSpawnRc(3)} cmd_ws_restore --session demo-quiet-basin`);
+    expect(r.code).toBe(3);
+    expect(r.stdout).not.toMatch(/^restored /);
+    // The undo IS complete regardless — the archive stamps are gone whether or
+    // not the revived spawn came up, or the row is stuck archived with nothing
+    // left to un-archive it on a retry.
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+  });
+
+  it('does the same on rc 4 (startup window expired)', () => {
+    workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const r = shFail(`${restoreWithSpawnRc(4)} cmd_ws_restore --session demo-quiet-basin`);
+    expect(r.code).toBe(4);
+    expect(r.stdout).not.toMatch(/^restored /);
+  });
+});
+
 describe('ws-attic', () => {
   it('lists the refs pinned under this session, and drops them on demand', () => {
     workspace('demo', 'quiet-basin');

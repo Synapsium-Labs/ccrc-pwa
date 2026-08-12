@@ -41,6 +41,9 @@ SPAWN_GATE_TRIES=450            # capture-pane polls before the startup-gate win
                                 # a shell variable. A test that sources ccd assigns it afterwards,
                                 # which is what keeps the rc-4 case a 3-poll assertion instead of a
                                 # 4,500-process one.
+SUPERVISED_START_WAIT=30        # seconds `ccd start`/`ccd ensure` wait for the unit's pane to appear.
+                                # A bound on FAILURE REPORTING, not a cost anybody normally pays: a
+                                # pane shows up about a second after the unit starts.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -1129,8 +1132,18 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     fi
   fi
 
-  _spawn "$id" new; _reg_set "$id" started 1
+  # Captured, not discarded: a silent M6-shaped success on the workspace path
+  # was found by Task 4's reviewer (cmd_ws_add rc=0 with the success line
+  # printed over a spawn whose tmux session had vanished). Supervision wiring
+  # is untouched — `_ws_supervise` still runs on a failed spawn, since a
+  # unit that can retry is strictly better than one that never gets enabled.
+  local rc; _spawn "$id" new; rc=$?
+  _reg_set "$id" started 1
   _ws_supervise "$id"
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "workspace $id on $hw — $wt (branch $branch, from $base)"
 }
 
@@ -2189,7 +2202,10 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
   rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
-  _spawn "$id" resume
+  # Captured, not discarded — same M6-shaped gap as ws-add, folded into this
+  # task because it owns the start paths and the spawn-rc plumbing. Supervision
+  # wiring stays untouched: `_ws_supervise` still runs on a failed spawn.
+  local rc; _spawn "$id" resume; rc=$?
   _reg_set "$id" started 1
   _ws_supervise "$id"
   # GIVEN BACK BEFORE THE VERB ANSWERS, for the reason `cmd_ws_reap` states at
@@ -2197,8 +2213,13 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # two strangers, and ccd is SOURCED — by `ccd` itself and by its tests — so a
   # descriptor left open here would refuse the next `ws-reap` in the same shell
   # with `in-progress` for ever. The `die`s above need no close of their own:
-  # `die` exits, and the kernel closes what exits.
+  # `die` exits, and the kernel closes what exits. Given back regardless of the
+  # spawn's fate — the undo (archive stamps gone) is real either way.
   exec {lfd}>&-
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "restored $id — $workdir"
 }
 
@@ -7006,6 +7027,64 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   return 0
 }
 
+# Its own function for the same reason _ws_supervise and _ws_unsupervise are (ccd:212-216): a test
+# harness can stub it, and `command -v` finds a shell function before it finds a binary, so nothing
+# else could.
+_have_systemctl() { command -v systemctl >/dev/null 2>&1; }
+
+_supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observable verdict.
+  # `ccd start`/`ccd ensure` outside a unit become `systemctl --user enable --now`, and the unit's
+  # ExecStart (`ccd supervise %i`) does the spawning it already does. That is what makes a restarted
+  # session a SUPERVISED one — with _sync_uuid, _auto_swap_check and _auto_compact_check running and
+  # something to record its death — instead of the bare pane stop-then-start used to leave.
+  #
+  # `local a=1 b="$a"` does NOT see `a`: local expands all its arguments before assigning any of
+  # them, and under `set -u` that is a fatal unbound-variable error. Hence the second line.
+  local id="$1" since i st at rc unit
+  unit="claude-session@$id"
+  since=$(date +%s)
+  if ! _have_systemctl; then
+    echo "ccd: warn: systemctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
+    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    _spawn "$id" "$mode"; rc=$?
+    _reg_set "$id" started 1
+    return "$rc"
+  fi
+  # §3.3 deliberately creates failed units — that is the point of the start limit — and a unit
+  # sitting in `failed` refuses to start again until its failure is cleared. Without this, the very
+  # verb §4.4 advertises as "what revives it" would not.
+  systemctl --user reset-failed "$unit" 2>/dev/null
+  if ! systemctl --user enable --now "$unit" 2>/dev/null; then
+    echo "ccd: warn: could not enable unit $unit — starting $id UNSUPERVISED (unit installed? lingering?)" >&2
+    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    _spawn "$id" "$mode"; rc=$?
+    _reg_set "$id" started 1
+    return "$rc"
+  fi
+  # `enable --now` returns when systemd has STARTED THE UNIT, not when a pane exists — but
+  # `ccd attach` and `ccd menu` exec `tmux attach` on the next line, and §3.3 requires a failed
+  # spawn to be reported rather than assumed. So wait on two observables: the pane (success, exactly
+  # as today, since the TUI may still be working through a long resume) or a spawn stamp NEWER than
+  # this call carrying a non-zero rc. The freshness test is what stops the last failure this row
+  # ever had from being reported as this one's; a stale stamp written in the same second as `since`
+  # can only mean an operator is retrying a session that is failing right now, where reporting the
+  # failure is still the right answer.
+  for i in $(seq 1 "$SUPERVISED_START_WAIT"); do
+    _alive "$id" && return 0
+    st=$(_reg_get "$id" spawn)
+    if [[ -n "$st" ]]; then
+      at="${st%% *}"; rc="${st##* }"
+      if [[ "$at" =~ ^[0-9]+$ && "$at" -ge "$since" && "$rc" != 0 ]]; then
+        echo "ccd: $id failed to start: spawn rc $rc (see $REG/$id.spawn)" >&2
+        return "$rc"
+      fi
+    fi
+    sleep 1
+  done
+  echo "ccd: $id: unit started but no pane appeared within ${SUPERVISED_START_WAIT}s — systemctl --user status $unit" >&2
+  return 1
+}
+
 cmd_start() {
   local wrapper="${1:-}" project="${2:-}" workdir="${3:-}"
   [[ -n "$wrapper" && -n "$project" ]] || die "usage: ccd start <wrapper> <project> [workdir]"
@@ -7021,6 +7100,13 @@ cmd_start() {
   _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
+  if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
+    _supervised_start "$id" || return $?
+    # No `($mode)` and no `started` write here: neither is this process's to know. The spawn
+    # happened inside the unit, and the in-unit cmd_ensure below is what recorded both.
+    echo "started $id — discover on claude.ai by name: $id"
+    return 0
+  fi
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   local rc; _spawn "$id" "$mode"; rc=$?
   # `started` stays unconditional: it records that this row has HAD a session, which is what §4.3's
@@ -7038,6 +7124,15 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
   local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
   if _alive "$id"; then echo "alive: $id"; return 0; fi
+  # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
+  # else it is a REQUEST for one, and the request goes through the unit so the session comes back
+  # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
+  # and correctly takes the supervised branch — which is why the guard is not INVOCATION_ID.
+  if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
+    _supervised_start "$id" || return $?
+    echo "ensured $id"
+    return 0
+  fi
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   local rc; _spawn "$id" "$mode"; rc=$?
   _reg_set "$id" started 1
@@ -7050,6 +7145,17 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
+  # §3.2's self-heal: creating the enable symlink is idempotent and safe from inside the unit
+  # (`enable` without `--now` asks systemd for nothing else), and this one line heals M5's three
+  # boot-persistence-less rows the next time each supervisor restarts — which the deploy's
+  # `try-restart "claude-session@*"` sweep makes fleet-wide and automatic.
+  systemctl --user enable "claude-session@$id" 2>/dev/null \
+    || echo "ccd: warn: could not enable boot-persistence for $id" >&2
+  # The recursion guard, in-process. `local` is dynamically scoped in bash, so cmd_ensure sees it
+  # and the caller does not; it is never exported and never an argv token, so — unlike an added
+  # argv word, which the agent's prefix-matching exec whitelist would permit — it is not
+  # addressable from the wire at all.
+  local CCD_IN_UNIT=1
   cmd_ensure "$id"
   while _alive "$id"; do _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; sleep 5; done
   echo "session $id ended; exiting for systemd restart" >&2
@@ -7508,14 +7614,13 @@ cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps 
 }
 
 cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
+  # Behaviorally an ALIAS of cmd_start since §3.1 — the start path itself is
+  # `systemctl --user enable --now`, so there is no second act left for this verb to perform. It
+  # keeps its name because the agent whitelist and CCD_ARGV grant `enable` and `start` separately,
+  # and whitelist-subset.test.ts layer 3 fails on a grant no route builds.
   local wrapper="${1:?}" project="${2:?}" workdir="${3:-}"
-  cmd_start "$wrapper" "$project" "$workdir"
-  local id; id=$(_id "$wrapper" "$project")
-  if systemctl --user enable --now "claude-session@$id" 2>/dev/null; then
-    echo "enabled boot-persistence for $id"
-  else
-    echo "warn: could not enable systemd unit (lingering/unit installed?)" >&2
-  fi
+  cmd_start "$wrapper" "$project" "$workdir" || return $?
+  echo "enabled boot-persistence for $(_id "$wrapper" "$project")"
 }
 
 cmd_stop() {   # <id>  |  <wrapper> <project>

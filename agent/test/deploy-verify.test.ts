@@ -246,6 +246,38 @@ describe('the verification is actually wired into the deploy, and can observe a 
     }
   });
 
+  it('a session that dies instantly becomes a FAILED unit — and the keys sit in [Unit], where systemd reads them', () => {
+    // Spec §3.3. The section is not cosmetic, and the spec's own sentence ("the
+    // unit's [Service] gains…") is wrong for the systemd this fleet runs.
+    // Measured on systemd 255 with `systemd-analyze verify`:
+    //   StartLimitIntervalSec= in [Service] -> "Unknown key name
+    //     'StartLimitIntervalSec' in section 'Service', ignoring."
+    //   StartLimitBurst=       in [Service] -> silently accepted (legacy compat)
+    // Split across the two sections, the burst would be honored against
+    // systemd's DEFAULT 10s interval: a rate limit nobody chose, arrived at
+    // without a word. Both keys live in [Unit].
+    const unit = readFileSync(path.join(deployDir, '..', 'ccd', 'claude-session@.service'), 'utf8');
+    const unitSection = /\[Unit\]([\s\S]*?)(?=\n\[)/.exec(unit)?.[1] ?? '';
+    expect(unitSection).toMatch(/^StartLimitIntervalSec=\d+$/m);
+    expect(unitSection).toMatch(/^StartLimitBurst=\d+$/m);
+    // Anchored at the SECTION HEADER, not a bare substring search: the [Unit]
+    // section's own comment explains the split by naming "[Service]" in prose
+    // ("belong to [Unit], not [Service]"), and that mention precedes the real
+    // header — `indexOf('[Service]')` would find the comment instead and slice
+    // the StartLimit lines themselves into the region under test.
+    const serviceSection = unit.slice(unit.search(/^\[Service\]/m));
+    expect(/^StartLimit/m.test(serviceSection),
+      'a StartLimit key sits in [Service], where systemd 255 ignores it').toBe(false);
+    // And the limit must be reachable at THIS unit's restart cadence or it is
+    // decoration: RestartSec=3 means a crash loop spends ~3s per attempt, so
+    // the whole burst has to fit inside the interval.
+    const burst = Number(/^StartLimitBurst=(\d+)$/m.exec(unitSection)![1]);
+    const interval = Number(/^StartLimitIntervalSec=(\d+)$/m.exec(unitSection)![1]);
+    const restartSec = Number(/^RestartSec=(\d+)$/m.exec(unit)![1]);
+    expect(burst * restartSec, 'the burst cannot be spent inside the interval — the unit never fails')
+      .toBeLessThan(interval);
+  });
+
   it('every hand-copied script lands via scp-to-temp + mv, never an in-place overwrite', () => {
     // Stage 0, finding 1 — a live correctness bug, not a hardening nicety.
     // `scp` writes the DESTINATION INODE in place, and bash executes scripts

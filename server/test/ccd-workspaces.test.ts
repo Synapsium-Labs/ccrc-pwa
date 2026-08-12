@@ -408,6 +408,46 @@ describe('disk floor', () => {
   });
 });
 
+describe('ws-add propagates a failed spawn', () => {
+  // The plan-level gap Task 4's reviewer found: cmd_ws_add discarded _spawn's
+  // rc entirely, so a stubbed vanished-session spawn (rc 3) still printed the
+  // success line — `workspace demo-quiet-mesa on claude — …` — over a session
+  // that never came up. M6's silent success, surviving on the workspace path.
+  const shFail = (snippet: string): { code: number; stdout: string; stderr: string } => {
+    try { return { code: 0, stdout: sh(snippet), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: Buffer; stderr?: Buffer };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+  const WS_ADD_SPAWN_FAIL = (rc: number): string =>
+    `_spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return ${rc}; }; _ws_supervise() { :; }; tmux() { :; };`;
+
+  it('refuses the success line and returns the rc on a vanished-session spawn (rc 3)', () => {
+    makeRepo('demo');
+    const r = shFail(`${WS_ADD_SPAWN_FAIL(3)} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(r.code).toBe(3);
+    expect(r.stdout).not.toMatch(/^workspace /);
+    // The worktree and registry row are KEPT — a failed spawn is a row worth
+    // retrying (the unit is still enabled), not a reason to unwind what
+    // ws-add already created.
+    expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
+  it('does the same on rc 4 (startup window expired)', () => {
+    makeRepo('demo');
+    const r = shFail(`${WS_ADD_SPAWN_FAIL(4)} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(r.code).toBe(4);
+    expect(r.stdout).not.toMatch(/^workspace /);
+  });
+
+  it('still prints the success line and returns 0 on a healthy spawn', () => {
+    makeRepo('demo');
+    const out = sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(out).toMatch(/^workspace demo-quiet-mesa /);
+  });
+});
+
 describe('cmd_stop', () => {
   // `ccd stop <wrapper> <project>` recomputes `<wrapper>-<project>`. A workspace
   // id is `<project>-<slug>` and does not reverse into a wrapper, so any caller
