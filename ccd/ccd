@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=49024d598e6c2a2fc2a76b96306054b480b690bbe17b94d557097ba7e7a0a644
+# ccrc:generated 1 sha256=b587c0aa6ef2276cb0f1c0ff8db98dd48df41de4f94b59c28fabd7511728aaab
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -86,15 +86,27 @@ die() { echo "ccd: $*" >&2; exit 1; }
 # that are not installed, `_cfg_dir` answering with a config dir that holds no
 # transcript — the shape of failure that once cost one account six sessions of
 # chat. `set -uo pipefail` (line 5, under the shebang and the provenance
-# marker) carries no `-e`, so neither line below
-# aborts on its own; both `|| die`s are what make it loud, and both are
-# load-bearing: `-r` catches absent-or-unreadable before `source` says anything,
-# and the second catches a file broken badly enough that `source` returns
-# non-zero — which without it would surface hundreds of lines later as an
-# unbound-variable error naming CCRC_ACCOUNTS.
+# marker) carries no `-e`, so none of the checks below
+# aborts on its own; the `die`s are what make it loud, and each is
+# load-bearing: the pre-`source` pair catches absent-or-unreadable before
+# `source` says anything, and the last one catches a file broken badly enough
+# that `source` returns non-zero — which without it would surface hundreds of
+# lines later as an unbound-variable error naming CCRC_ACCOUNTS.
+#
+# MISSING and UNREADABLE are DELIBERATELY DISTINCT, the same discipline
+# `loadRoster` (server/src/config.ts) applies to `accounts.json` and for the
+# identical reason: a `chmod 000` accounts.sh plainly EXISTS, and telling its
+# operator "no account roster — generate it" sends them to a generator that
+# will happily rewrite a file whose bytes were never the problem, on a box
+# where every ccd invocation is already dying. The remedy for one is `ccrc
+# install`; the remedy for the other is chmod/chown, and nothing else.
+# (`-e` is false for a DANGLING symlink, so that case reports as missing —
+# which is what it is: the roster the link names is not there.)
 CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
-[[ -r "$CCRC_ACCOUNTS_SH" ]] \
+[[ -e "$CCRC_ACCOUNTS_SH" ]] \
   || die "no account roster at $CCRC_ACCOUNTS_SH — generate it from ~/.ccrc/accounts.json (deploy/deploy.sh, or \`ccrc install\`)"
+[[ -r "$CCRC_ACCOUNTS_SH" ]] \
+  || die "account roster $CCRC_ACCOUNTS_SH exists but is not readable by $(id -un) — fix its permissions (it must be readable by the user ccd runs as; the deploy installs it 644). Regenerating it will not help."
 # The first `source` this file has ever carried, so there is no in-file
 # convention to copy. source=/dev/null is shellcheck's own idiom for a path it
 # cannot follow: this one is generated at deploy time and has no in-repo

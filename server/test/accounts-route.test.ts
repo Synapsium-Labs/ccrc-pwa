@@ -146,6 +146,13 @@ describe('GET /api/accounts', () => {
   // it the PWA has no way to label or colour an account that telemetry has never
   // mentioned — `accounts` above is built from `.cc-limits/*.json`, so an
   // account nothing has ever run on has no row there at all.
+  //
+  // `claude2` carries a label that is NOT its id (`alt·max`, its real one in
+  // `deploy/accounts.migration.json`) — see `DEFAULT_TEST_ROSTER`. Every
+  // fixture account used to label itself with its own id, which made this
+  // assertion unable to fail on the very confusion it exists to catch: a
+  // handler emitting `a.id` into `label` passed it byte for byte, and `label`
+  // is what the PWA actually renders.
   it('carries the roster, including accounts telemetry has never mentioned', async () => {
     const home = seedLimits({ claude: { five: 2, seven: 3 } });
     const { accounts, roster } = await getPayload(home);
@@ -153,7 +160,7 @@ describe('GET /api/accounts', () => {
     expect(accounts.map((a) => a.wrapper)).toEqual(['claude']);
     expect(roster).toEqual([
       { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true },
-      { id: 'claude2', label: 'claude2', hue: 'violet', homeAble: true },
+      { id: 'claude2', label: 'alt·max', hue: 'violet', homeAble: true },
       { id: 'claude-corp', label: 'claude-corp', hue: 'blue', homeAble: true },
       { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false },
       { id: 'claude-dev0', label: 'claude-dev0', hue: 'green', homeAble: true },

@@ -25,19 +25,36 @@ import { mkTmp } from './tmpHelpers.js';
  * the roster-drift scanner (`single-definition.test.ts`) does not scan — and
  * that scanner now reads its own list of wrapper names FROM here, because the
  * roster it hunts for copies of no longer exists in any source file it could
- * trust to read them from. Keep it in step with the production roster
- * (`deploy/accounts.default.json`, Task 10), not with whatever any one test
- * happens to need.
+ * trust to read them from.
  *
- * Root, not only: two other copies of some of these names exist right now, and
- * both are scheduled for deletion rather than permanent.
- * `test/fixtures/ccdMirror.ts` DERIVES its ids, config dirs and home-able flags
- * from this object (it adds only the three concepts ccd has and the roster does
- * not) and throws at import if the two disagree, so it cannot drift — Tasks 8
- * and 9 delete it. `pwa/src/lib/accounts.ts`'s `PRODUCTION_ROSTER` is a genuine
- * independent copy, the one thing the PWA cannot yet get off the wire, and Task
- * 7 deletes it; `single-definition.test.ts` names it as the single allowed
- * holder with an exact-equality assertion, so its removal is noticed too. */
+ * KEEP IT IN STEP WITH `deploy/accounts.migration.json` — this fleet's five
+ * real accounts: same ids, same declaration order, same config-dir suffixes,
+ * home-able flags, hues and `exec` shapes — not with whatever any one test
+ * happens to need. NOT with `deploy/accounts.default.json`, which is the
+ * single-`claude` fresh-install roster this fixture is deliberately NOT (first
+ * paragraph). An earlier version of this comment named `accounts.default.json`
+ * here and so contradicted itself two paragraphs up; `label` is now the one
+ * field that intentionally diverges from the migration roster, and only for
+ * `claude2` — see the note on it below.
+ *
+ * ROOT, AND THE ONLY OTHER COPY IS DERIVED FROM IT.
+ * `test/fixtures/ccdMirror.ts` DERIVES its ids, config dirs and home-able
+ * flags from this object — adding only the two concepts ccd has and the roster
+ * does not, `label` (statusline's display string) and `ccdValid` — and throws
+ * at import if the two disagree, so it cannot drift. It STAYS: Task 9
+ * considered deleting it once its last reader grew a generated-bash ⇄ server
+ * TypeScript round-trip, and ruled against, because that round-trip checks
+ * per-input agreement while the four describes still reading this fixture
+ * check ccd's whole bash ANSWER SPACE against the roster in both directions —
+ * a different property neither replaces. The ruling is recorded in
+ * `ccdMirror.ts`'s own header.
+ *
+ * `pwa/src/lib/accounts.ts`'s `PRODUCTION_ROSTER` — the one genuinely
+ * independent hand-typed copy, the thing the PWA could not yet get off the
+ * wire — is GONE, deleted in Task 7. `single-definition.test.ts` no longer
+ * names it as the single allowed holder: it asserts `toEqual([])`, i.e. NO
+ * shipped source file under the four scanned roots holds a compile-time copy
+ * of the roster at all. */
 export const DEFAULT_TEST_ROSTER = {
   version: 1,
   accounts: [
@@ -46,7 +63,15 @@ export const DEFAULT_TEST_ROSTER = {
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
     },
     {
-      id: 'claude2', label: 'claude2', configDirSuffix: '.claude-personal',
+      // The one account whose LABEL IS NOT ITS ID, deliberately (M9, final
+      // review), and it is `alt·max` because that is genuinely this
+      // account's label in `deploy/accounts.migration.json`. Every other entry
+      // here labels itself with its own id, which made `label` and `id`
+      // indistinguishable on the wire: `accounts-route.test.ts`'s roster
+      // assertion would have passed just the same if the handler had emitted
+      // `a.id` for `label`, and the PWA renders `label`. One discriminating
+      // row is enough to make that assertion able to fail.
+      id: 'claude2', label: 'alt·max', configDirSuffix: '.claude-personal',
       exec: { kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' },
       homeAble: true, hue: 'violet', telemetry: 'anthropic',
     },

@@ -20,11 +20,14 @@
 // the server's own TypeScript — and does not touch `ccdValid` or `homeAble`
 // at all, so it proves nothing about answer-space completeness and cannot
 // replace those four. `label` has no substitute anywhere: it is ccd's
-// human-facing display string, not a roster field (the test roster uses ids
-// as labels — see `CCD_SIDE` below), and `wrapper-roster-fixture.test.ts`'s
+// human-facing display string, and the test roster does not carry it — four of
+// its five accounts label themselves with their own id, and the remaining one
+// (`claude2`) carries a real label purely so the wire assertion in
+// `accounts-route.test.ts` can tell `label` from `id`; see `CCD_SIDE` below —
+// and `wrapper-roster-fixture.test.ts`'s
 // statusline describe still needs it. This file goes only when something
 // else supplies BOTH of those — most likely Task 10's real
-// `deploy/accounts.default.json` carrying real labels, at which point the
+// `deploy/accounts.migration.json` carrying real labels, at which point the
 // four completeness describes and the statusline describe can probably read
 // it directly and this hand-derived side table stops earning its keep.
 //
@@ -46,8 +49,9 @@
 // The side table below holds only what the roster genuinely does not know:
 //
 //   `label`     — ccd's `statusline-command.sh` display label, which is NOT the
-//                 roster's `label` field in the test fixture (the fixture uses
-//                 ids as labels; ccd's bash carries the human ones). A real
+//                 roster's `label` field in the test fixture (which labels four
+//                 of its five accounts with their own ids; ccd's bash carries
+//                 the human ones). A real
 //                 roster's label and this are the same concept; statusline is
 //                 the one ccd surface Task 8 left reading a literal.
 //   `ccdValid`  — `_is_valid_wrapper` used to accept `VALID_WRAPPERS` plus a

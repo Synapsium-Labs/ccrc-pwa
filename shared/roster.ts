@@ -184,9 +184,9 @@ export class RosterError extends Error {
  *  - a bash `case` pattern
  *  - a session-id prefix
  *
- * Critically, ccd's `_default_pool` (ccd:6558) joins ids into a
- * space-separated string via `"${VALID_WRAPPERS[*]}"`, and `_swap_target`
- * (ccd:6709) reads that back through an UNQUOTED
+ * Critically, ccd's `_default_pool` (ccd:6686) joins ids into a
+ * space-separated string via `"${CCRC_HOME_ABLE[*]}"`, and `_swap_target`
+ * (ccd:6858) reads that back through an UNQUOTED
  * `for cand in $(_pool_for "$id")`. Whitespace in an id would word-split
  * there silently and corrupt account routing — which is why `[a-z0-9-]`
  * has no room for anything else, including whitespace. Capped at 32

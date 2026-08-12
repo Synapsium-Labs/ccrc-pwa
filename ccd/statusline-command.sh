@@ -152,6 +152,32 @@ fi
 # ── Side-effect: publish this account's limit telemetry for `ccd` auto-swap ──
 #    Limits are account-scoped, so any session's report is valid for the whole
 #    account; last writer wins. Consumed by `ccd supervise` on server-box.
+#
+#    KNOWN LIMITATION — the last hand-written roster copy in the tree, and the
+#    reason free-form account ids are only HALF delivered by stage 2a.
+#    Everything else that needed to know the roster now reads it as data (ccd
+#    and both installers `source` ~/.ccrc/accounts.sh; the server reads
+#    ~/.ccrc/accounts.json), but this file is a Claude Code statusline hook: it
+#    is handed a config dir and nothing else, runs per render, and has no ccrc
+#    context to source. So the map below is four literal arms, and an account
+#    NOT in it falls to `lbl=""` — which means NO ~/.cc-limits/<id>.json is
+#    ever written for it.
+#
+#    The consequence, stated plainly: an account added to ~/.ccrc/accounts.json
+#    by hand (or by `ccrc adopt`) with a config dir this case statement does not
+#    name is PERMANENTLY UNMEASURED. Combined with stage 2a's own "unknown is
+#    not zero" rule in `projectHome` (server/src/limits.ts) — an unmeasured
+#    account now ranks BELOW every measured one instead of beating them all at
+#    a fake score of 0 — such an account will never win a workspace placement,
+#    silently, forever. Auto-swap will not pick it either (`_avail` has nothing
+#    to read).
+#
+#    ZERO IMPACT ON TODAY'S FLEET: every account in
+#    deploy/accounts.migration.json is either in the map below or is `gpt`,
+#    which is `telemetry: "none"` in the roster precisely because it never
+#    reports rate limits and is excluded from placement scoring by design.
+#    Stage 2b is where this map becomes roster-driven. Until then: adding a
+#    free-form account means adding an arm here too.
 case "$cfg" in
   "$HOME/.claude")          lbl="claude" ;;
   "$HOME/.claude-personal") lbl="claude2" ;;

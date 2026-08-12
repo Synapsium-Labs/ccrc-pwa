@@ -613,9 +613,14 @@ describe('the verification is actually wired into the deploy, and can observe a 
 
     // And the example documents every variable the LIVE box actually needs —
     // the three VAPID vars were real config with no documentation anywhere.
+    // `CCRC_ACCOUNTS` joins the list in stage 2a: `config.ts` justifies its
+    // `||`-over-`??` by pointing at the bare `CCRC_ACCOUNTS=` line this file
+    // ships, so an example that stopped shipping it would leave that reasoning
+    // describing a file that no longer exists.
     const example = readFileSync(path.join(deployDir, 'ccrc.env.example'), 'utf8');
     for (const v of ['CCRC_HOST', 'CCRC_PORT', 'CCRC_VAPID_PUBLIC',
-      'CCRC_VAPID_PRIVATE', 'CCRC_VAPID_SUBJECT', 'CCRC_PROJECTS_ROOT']) {
+      'CCRC_VAPID_PRIVATE', 'CCRC_VAPID_SUBJECT', 'CCRC_PROJECTS_ROOT',
+      'CCRC_ACCOUNTS']) {
       expect(example, `ccrc.env.example does not document ${v}`).toContain(v);
     }
   });
@@ -715,6 +720,40 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(genIdx, 'the agent branch never generates accounts.sh').toBeGreaterThan(-1);
     expect(genIdx, 'generation must precede the install it produces the file for')
       .toBeLessThan(shIdx);
+  });
+
+  it('~/.ccrc/accounts.sh also lands BEFORE both installers the deploy then RUNS', () => {
+    // ccd is not the only roster reader the agent branch starts. Task 8 made
+    // `install-session-hooks.sh` and `install-coordinator-skill.sh` `source`
+    // the same generated `~/.ccrc/accounts.sh` — that is how they learn which
+    // config dirs exist at all, the literal `homes=(…)` arrays having been
+    // deleted — and each `exit 1`s when it is absent. deploy.sh executes both
+    // over ssh, so with the roster install moved after either of them a deploy
+    // fails HALFWAY: rsync --delete has already run, the new ccd is already
+    // installed, and neither the hooks nor the coordinator skill got
+    // installed at all. The ordering is correct today and nothing pinned it —
+    // the ccd test above pins only ccd.
+    //
+    // ANCHORED ON THE `ssh` INVOCATIONS THEMSELVES, verbatim, for the reason
+    // the sibling test above records by measurement: a probe anchored on a
+    // script's NAME matches the `install_atomic` line that SHIPS it (and the
+    // comments around it) rather than the line that RUNS it, so it would
+    // "prove" an ordering the shell never performs.
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const shIdx = agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644');
+    expect(shIdx, 'deploy.sh never installs ~/.ccrc/accounts.sh').toBeGreaterThan(-1);
+
+    for (const [what, invocation] of [
+      ['session hooks', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-session-hooks.sh'"],
+      ['coordinator skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-coordinator-skill.sh'"],
+    ] as const) {
+      const runIdx = agentBranch.indexOf(invocation);
+      expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)
+        .toBeGreaterThan(-1);
+      expect(shIdx, `accounts.sh must be installed before the ${what} installer runs — it sources the roster and exits 1 without it`)
+        .toBeLessThan(runIdx);
+    }
   });
 
   it('the server branch refuses a roster-less box BEFORE it touches anything — loadConfig will not boot without one', () => {

@@ -130,11 +130,13 @@ function loadRoster(accountsPath: string): Roster {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
-  // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line (every
-  // optional value in deploy/ccrc.env.example is written this way) yields an
-  // empty string, which `??` treats as "set" and `||` correctly treats the
-  // same as unset — the alternative silently resolves to `no account roster
-  // at .`, naming a path nobody wrote.
+  // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line — which is
+  // exactly how deploy/ccrc.env.example ships this key, along with every other
+  // value whose default lives HERE rather than in that file (`CCRC_AGENT_URL`,
+  // `CCRC_PROJECTS_ROOT`, the VAPID trio, …) — yields an empty string, which
+  // `??` treats as "set" and `||` correctly treats the same as unset. The
+  // alternative silently resolves to `no account roster at .`, naming a path
+  // nobody wrote.
   const accountsPath = env.CCRC_ACCOUNTS || path.join(home, '.ccrc', 'accounts.json');
   const roster = loadRoster(accountsPath);
   return {

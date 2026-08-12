@@ -139,6 +139,43 @@ ship_secret() {
 # Point CCRC_ACCOUNTS_JSON at either, or at a roster of your own.
 ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-deploy/accounts.migration.json}"
 
+# `node` ON THE DEPLOYING MACHINE is NEW as of this branch — no earlier deploy
+# needed a local interpreter at all (the remote build runs node on the BOX).
+# Both branches below now run `deploy/gen-accounts.mjs` locally, and both
+# report any nonzero exit from it as "the roster is not one ccrc can use" —
+# including 127, `node: command not found`. That sends an operator to debug a
+# roster file that is perfectly fine, on a machine whose actual problem is a
+# missing interpreter (F2, final review). Ask the question separately, with
+# its own answer, and ask it BEFORE the first ssh so a workstation that cannot
+# run the deploy at all learns it without touching the box.
+require_node() {
+  command -v node >/dev/null 2>&1 || {
+    echo "deploy: FAILED — no \`node\` on PATH on THIS machine (the one running deploy.sh)." >&2
+    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node >=22.13.0 locally;" >&2
+    echo "  this is NOT a problem with $ACCOUNTS_JSON or with the roster on $BOX. Install node and re-run." >&2
+    exit 1
+  }
+}
+require_node
+
+# The roster `ship_roster` may be about to SEED, proven usable BEFORE it is
+# seeded (F1, final review). `~/.ccrc/accounts.json` is USER-OWNED and
+# create-if-missing (see the block above), so ccrc never overwrites a seed it
+# already placed: seeding an unusable roster onto a box that had none poisons
+# that box PERMANENTLY. The deploy would abort loudly at the read-back a few
+# lines further down — and so would every later deploy, until a human ssh'd in
+# and deleted the file by hand. Validate the LOCAL bytes here, where the only
+# cost of being wrong is an exit code.
+#
+# Callers guard on `[ -f "$ACCOUNTS_JSON" ]`: an absent local roster is a
+# legitimate deploy (the box already has one, which is what the guard beside
+# each call site allows), and it is the BOX's copy — read back over ssh — that
+# gets validated in that case.
+check_local_roster() {
+  node deploy/gen-accounts.mjs "$ACCOUNTS_JSON" >/dev/null \
+    || { echo "deploy: FAILED — local $ACCOUNTS_JSON is not a roster ccrc can use (see above); refusing to seed it onto $BOX, where it would be permanent" >&2; exit 1; }
+}
+
 ship_roster() {
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
   if ! "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/accounts.json ]'; then
@@ -158,6 +195,12 @@ if [ "$TARGET" = "agent" ]; then
   # new ccd already installed, and no rollback path.
   [ -f "$ACCOUNTS_JSON" ] || "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/accounts.json ]' \
     || { echo "deploy: FAILED — no roster at $ACCOUNTS_JSON locally and no ~/.ccrc/accounts.json already on $BOX; ccd dies on every invocation without one" >&2; exit 1; }
+  # …and if there IS a local roster, it is the one `ship_roster` may seed onto
+  # a box that has none — permanently, since ccrc never overwrites it. Prove
+  # it parses before it can land. `[ ! -f X ] || …` (the file's own
+  # absent-source-is-the-only-skippable-case idiom): an absent local roster is
+  # handled by the guard above, a present-but-broken one must abort here.
+  [ ! -f "$ACCOUNTS_JSON" ] || check_local_roster
   ship_roster
   # Generated from the roster THE BOX WILL BOOT WITH — read back over ssh,
   # never from the local file — so that the generated file's own first claim
@@ -393,6 +436,10 @@ else
   # and every mutation below it.
   [ -f "$ACCOUNTS_JSON" ] || "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/accounts.json ]' \
     || { echo "deploy: FAILED — no roster at $ACCOUNTS_JSON locally and no ~/.ccrc/accounts.json already on $BOX; the server refuses to boot without one" >&2; exit 1; }
+  # Same seed-time proof as the agent branch, for the same reason: a bad local
+  # roster seeded onto a fresh box is never overwritten again, so it has to be
+  # rejected while it is still only a local file (F1, final review).
+  [ ! -f "$ACCOUNTS_JSON" ] || check_local_roster
   ship_roster
   BOX_ROSTER="$(mktemp)"
   "${SSH[@]}" "$BOX" 'cat ~/.ccrc/accounts.json' > "$BOX_ROSTER"

@@ -43,7 +43,7 @@ const measured = (l: AccountLimits | undefined): number | null =>
 /**
  * The account a new workspace would land on, and its pressure score.
  *
- * A mirror of ccd's `_ws_least_loaded` (ccd:1001-1012), which is the authority
+ * A mirror of ccd's `_ws_least_loaded` (ccd:1081), which is the authority
  * — it runs at `ws-add` time and writes `home`. This only PREDICTS it, so the
  * `+` can name the account and its headroom before the tap rather than leave a
  * workspace to present as a stalled session on an exhausted account.
@@ -66,7 +66,7 @@ const measured = (l: AccountLimits | undefined): number | null =>
  * conflating them is what produced the bug:
  *   - `telemetry: 'none'` (`shared/roster.ts`) — this account will NEVER report,
  *     so its permanent unknown must not be read as permanent emptiness.
- *   - `disabled` — ccd's per-lane kill switch, since `_account_ok` (ccd:57)
+ *   - `disabled` — ccd's per-lane kill switch, since `_account_ok` (ccd:122)
  *     gates `_ws_least_loaded` on exactly that marker.
  *
  * UNKNOWN IS ALSO NOT UNPLACEABLE. On a fresh install nothing has reported yet,
@@ -170,7 +170,7 @@ export async function readLimits(
   // markered lane, so surface each one that telemetry didn't — but only a
   // wrapper the ROSTER has: the registry dir also holds `-disabled` markers
   // that name no account at all (`autocompact-disabled`, a fleet-wide
-  // proactive-/compact kill switch, ccd:22), and this loop is the only place
+  // proactive-/compact kill switch, ccd:39), and this loop is the only place
   // that would otherwise turn one of those into a fabricated "autocompact" row
   // on GET /api/accounts, which the accounts screen renders like any other
   // disabled lane. `inRoster` (shared/roster.ts) is the membership test that

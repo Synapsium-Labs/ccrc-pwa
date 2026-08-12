@@ -219,15 +219,21 @@ pause, why `ws-reap` stays human-only, and the honest boundary — this section
 covers only what that one does not: the install lane, the PWA surfaces, the
 disaster-recovery drill, and the Build 4 dogfood runbook.
 
-**The skill ships to every `hooksAble` account home — five today, not four.**
+**The skill ships to every account's config dir — five today, not four.**
 Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's account drifts on
-swap — so `ccd/install-coordinator-skill.sh` installs into the account
-roster's hooks-able config dirs (`~/.claude`, `~/.claude-personal`,
-`~/.claude-corp`, `~/.claude-gpt` and `~/.claude-dev0`), the same list
-`install-session-hooks.sh` uses, pinned against the roster by
-`wrapper-roster-fixture.test.ts` rather than trusted — a hand-typed copy of the
-roster is exactly the trap `shared/api.ts`'s own `Wrapper` docstring names by
-incident — on every agent deploy, idempotently, backing up anything it
+swap — so `ccd/install-coordinator-skill.sh` installs into *every* config dir
+the roster names (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
+`~/.claude-gpt` and `~/.claude-dev0` on this fleet), the same list
+`install-session-hooks.sh` uses. There is no hooks-able subset — that concept
+existed only while both installers carried a hand-typed `homes=(…)` array;
+both now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
+config dir that is absent, which is what makes "every account" the safe answer
+rather than a broader one. Neither list is trusted: `install-session-hooks.test.ts`
+and `install-coordinator-skill.test.ts` each RUN their installer with no
+`--homes` argv against a fixture home holding a config dir per rostered
+account, and assert every one of them was touched (the older source-text pin in
+`wrapper-roster-fixture.test.ts` went away with the array it was reading).
+Installation happens on every agent deploy, idempotently, backing up anything it
 replaces. That lane is what makes "place the coordinator like any other
 session" safe.
 
@@ -255,7 +261,7 @@ the transcript surface. Before starting it:
    fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
    `cat` either one.
 2. `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` lists one path per
-   `hooksAble` account home — five today.
+   rostered account config dir — five today.
 3. `~/.cc-sessions/coordinator-paused` does **not** exist, on the **fleet
    host** — a dispatch reads it there and refuses `409 {refused:'paused'}`
    with no PWA indicator, so checking on the wrong box is a silent no-op.
@@ -300,6 +306,80 @@ Three routes can act on a session, each with its own named refusals:
 | `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 
 ## Accounts: usage, placement and the disabled marker
+
+### The roster is runtime data: `~/.ccrc/accounts.json`
+
+**The account list is not in the code.** It is a JSON file on each box, and
+without it neither half of ccrc runs:
+
+| File | Owner | Read by | Missing ⇒ |
+|---|---|---|---|
+| `~/.ccrc/accounts.json` | **you** — ccrc creates it once and never overwrites it | the server, at boot (`loadConfig` → `loadRoster`, `server/src/config.ts`) | the server **refuses to boot** (`RosterError`, naming the remedy) rather than run against a roster that is not the box's |
+| `~/.ccrc/accounts.sh` | **ccrc** — regenerated and replaced wholesale by every agent deploy | `ccd` on **every invocation**, plus `install-session-hooks.sh` and `install-coordinator-skill.sh` | `ccd` dies (`ccd: no account roster at …`) and both installers `exit 1` |
+
+`accounts.sh` is a pure projection of `accounts.json` — `deploy/gen-accounts.mjs`
+produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_UPSTREAM`,
+`_ccrc_cfg_dir`, `_ccrc_id_wrapper`), and the deploy generates it from the
+roster **read back off the box**, never from the local file, so ccd's routing
+can never disagree with what the server serves from that same box's copy.
+Nothing hand-edits it; a torn one would take out every live session at once,
+which is why it lands via the same atomic scp-to-temp + `mv` as `ccd` itself,
+and lands **before** `ccd` and before both installers.
+
+An account entry is `{id, label, configDirSuffix, exec, homeAble, hue,
+telemetry}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
+under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
+what the PWA renders; `homeAble: false` holds an account out of automatic
+placement; `telemetry: 'none'` says the account will never report rate limits,
+so its permanent unknown is not read as permanent emptiness.
+
+**Getting the file onto a box.** The deploy seeds it, create-if-missing, on
+both targets:
+
+```bash
+bash deploy/deploy.sh agent <host>   # seeds ~/.ccrc/accounts.json if absent, then generates + ships accounts.sh
+CCRC_ACCOUNTS_JSON=deploy/accounts.default.json bash deploy/deploy.sh   # seed a fresh, unrelated install instead
+bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts from ~/.local/bin and write accounts.json
+```
+
+- `deploy/accounts.migration.json` (the default) is this fleet's five accounts
+  byte for byte; `deploy/accounts.default.json` is the single-`claude` roster a
+  fresh install should start from. `CCRC_ACCOUNTS_JSON` points the deploy at
+  either, or at a roster of your own — and the deploy validates that file
+  **locally, before seeding it**, because a seeded roster is never overwritten
+  again and a bad one would have to be deleted by hand over ssh.
+- `ccd/ccrc-adopt` goes the other direction — disk → roster — for a box built
+  before this file existed as a concept. It reads `~/.local/bin`, classifies
+  each wrapper (`upstream` / `generated` / `external`, every uncertain call
+  landing on `external`), and writes `~/.ccrc/accounts.json` only if absent
+  (`--force` to overwrite, `--out` to write elsewhere). It writes nothing else:
+  no wrappers, no units, no hooks. There is no installed `ccrc` binary yet —
+  run it from the checkout, as `bash ccd/ccrc-adopt`.
+- `CCRC_ACCOUNTS` (in `~/.ccrc/ccrc.env`) overrides where the **server** reads
+  the roster from. `ccd` has no such override on purpose: it derives the path
+  from `HOME` alone, so a stray `Environment=` cannot run a live box against
+  someone else's account list.
+
+#### Known limitations
+
+- **Limit telemetry is still keyed by a hand-written map.**
+  `ccd/statusline-command.sh` publishes `~/.cc-limits/<id>.json` from a
+  four-arm `case` over the session's config dir — it is a Claude Code
+  statusline hook, handed a config dir and nothing else, with no ccrc context
+  to source a roster from. An account whose config dir is not in that map is
+  **never measured**, and since an unmeasured account now ranks below every
+  measured one for placement (stage 2a's "unknown is not zero" fix in
+  `projectHome`, `server/src/limits.ts` — an account nobody could see used to
+  score 0 and beat every real one), it would never receive a workspace. No impact on this fleet — every account in
+  `accounts.migration.json` is either in the map or is `gpt`, which is
+  `telemetry: 'none'` — but it means **free-form account ids are only half
+  delivered**: adding one today means adding a `case` arm there too. Making
+  that map roster-driven is stage 2b.
+- **`ccrc install` does not exist yet.** Nothing turns a roster entry into a
+  wrapper script, a config dir or a systemd unit; the roster describes a box
+  that was provisioned by hand or by an earlier deploy. `ccrc-adopt` is the
+  reverse direction only.
 
 **`/accounts`** (a fourth branch of the route ternary, reached by tapping the
 compact `AccountsStrip` mounted in the desktop top bar and the mobile fleet
