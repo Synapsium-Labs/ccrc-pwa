@@ -140,7 +140,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
   # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
-  # `setup`, `started`, `swapblocked`, `uuid`, `workdir`, `workspace`,
+  # `setup`, `spawn`, `started`, `swapblocked`, `uuid`, `workdir`, `workspace`,
   # `wrapper`. That is a WIDER set than `_reg_set`/`_reg_get`: the inventory
   # that stood here named only the shell-written fields and so silently dropped
   # `prcheckedat`, `prphase` and `prhistory` (written by `_pr_py`'s own
@@ -6872,8 +6872,17 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
     # BEFORE the capture, and this order is the fix: `capture-pane` against a dead session fails into
     # an EMPTY $pane, which matches no branch below, so the loop used to poll a corpse for the full
     # window and then answer success. `has-session` is the one probe that distinguishes "not ready
-    # yet" from "not there", and it costs one call.
-    tmux has-session -t "$t" 2>/dev/null || return 3
+    # yet" from "not there", and it costs one call — except when it just failed, in which case a
+    # SECOND probe confirms it before this returns 3. A single failed `has-session` read on a box
+    # running a whole fleet of sessions can be transient load, not a vanished pane; tipping a healthy
+    # 15-minute resume into a false rc 3 on one flaky read would turn a spurious hiccup into a hard,
+    # loudly-reported failure (this task made rc 3/4 loud specifically so it WOULD be reported — a
+    # false positive is now as visible as a real one). A short debounce, not a retry loop: one
+    # re-check, not a second pass at the whole window.
+    if ! tmux has-session -t "$t" 2>/dev/null; then
+      sleep 1
+      tmux has-session -t "$t" 2>/dev/null || return 3
+    fi
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
@@ -6963,8 +6972,14 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
     # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
     # side of the return.
     2) echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2 ;;
-    3) echo "ccd: $id: the tmux session vanished during startup — nothing is running" >&2 ;;
-    4) echo "ccd: $id: startup window expired with no live TUI marker" >&2 ;;
+    # `started` stays 1 after a failed spawn (cmd_start/cmd_ensure, §4.3 orphan classification), so a
+    # retry resumes THIS uuid rather than minting a fresh one — correct when rc 4 means the pane lived
+    # 15 minutes and may hold real history (flipping to --session-id on retry would risk clobbering
+    # it), but a trap when rc 3/4 means nothing ever really started: the retry then resumes a uuid
+    # with no transcript behind it, forever, on every retry AND every Restart=always cycle, because
+    # nothing else ever clears $REG/$id.started. Named here so the operator has the escape hatch.
+    3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
+    4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (the GPT backend
   # doesn't take it and the injection would just error into the prompt box). The guard used to read

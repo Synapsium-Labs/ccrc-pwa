@@ -52,13 +52,17 @@ const rcOf = (snippet: string, env: NodeJS.ProcessEnv = {}): number =>
   Number(/rc=(\d+)/.exec(h.sh(`${TMUX} rm -f "$HOME/pane-up"; ${snippet}; echo "rc=$?"`, env))![1]);
 
 describe('_accept_first_run_prompts: four verdicts, no silent success', () => {
-  it('returns 3 the moment the tmux session is gone — one probe, not a 15-minute wait (M6)', () => {
-    // Kills two mutants at once: dropping the has-session probe (the pre-fix
-    // code, which polls a dead session for the full window and then answers 0)
-    // and probing AFTER the capture (which would burn a capture on nothing).
+  it('returns 3 once a SECOND probe confirms the tmux session is gone — a fast debounce, not a 15-minute wait (M6)', () => {
+    // Kills three mutants at once: dropping the has-session probe entirely (the
+    // pre-fix code, which polls a dead session for the full window and then
+    // answers 0), probing AFTER the capture (which would burn a capture on
+    // nothing), and trusting a SINGLE has-session read (review finding: one
+    // flaky read on a loaded box would tip a healthy long resume into a false
+    // rc 3, and this task made rc 3 loud). `sleep` is stubbed to a no-op, so
+    // the debounce costs nothing in wall time here but is still two real calls.
     expect(rcOf('_accept_first_run_prompts cc-test 0')).toBe(3);
     expect(h.calls().filter((c) => c.includes('capture-pane'))).toEqual([]);
-    expect(h.calls().filter((c) => c.includes('has-session')).length).toBe(1);
+    expect(h.calls().filter((c) => c.includes('has-session')).length).toBe(2);
   });
 
   it('returns 4 when the window expires with no live marker, and polls exactly SPAWN_GATE_TRIES times', () => {
@@ -108,6 +112,27 @@ describe('_spawn: the verdict becomes a fact before it becomes a return code', (
     expect(rcOf('_spawn myid new', { PANE_TEXT: '', SPAWN_MAKES_PANE: '0' })).toBe(3);
   });
 
+  it('rc 4 (window expired with no live marker) also stamps the fact, warns on stderr, and skips /effort', () => {
+    // Coverage gap flagged in review: rc 4 was only exercised through the
+    // classifier above — _spawn's own rc-4 stamp/warning and the callers'
+    // `-eq 4` guard had no assertion, so a mutant deleting `|| "$rc" -eq 4`
+    // anywhere would have stayed green.
+    seed('expired');
+    const out = h.sh(
+      `${TMUX} rm -f "$HOME/pane-up"; SPAWN_GATE_TRIES=2; _spawn expired new 2>&1; :`,
+      { PANE_TEXT: 'a pane with nothing this function recognises' },
+    );
+    expect(h.reg('expired', 'spawn')).toMatch(/^\d{10} 4$/);
+    expect(out).toContain('startup window expired with no live TUI marker');
+    expect(h.calls().some((c) => c.includes('/effort'))).toBe(false);
+  });
+
+  it('propagates rc 4 as its own exit code too', () => {
+    seed('expired2');
+    expect(rcOf('SPAWN_GATE_TRIES=2; _spawn expired2 new',
+      { PANE_TEXT: 'a pane with nothing this function recognises' })).toBe(4);
+  });
+
   it('skips the /effort injection on every non-zero verdict, not just the login screen', () => {
     // The pre-fix guard was `prompt_rc != 2`, written when 2 was the only
     // non-zero code. Left alone it would type a slash command at a session
@@ -145,21 +170,45 @@ describe('the callers M6 actually lied through', () => {
     expect(h.reg('myid', 'spawn')).toMatch(/^\d{10} 3$/);
   });
 
+  it('ccd ensure treats rc 4 (window expired) the same as rc 3 — no success line, verdict propagated', () => {
+    seed('myid4');
+    const r = shFail(`${TMUX} rm -f "$HOME/pane-up"; SPAWN_GATE_TRIES=2; CCD_IN_UNIT=1; cmd_ensure myid4`,
+      { PANE_TEXT: 'a pane with nothing this function recognises' });
+    expect(r.code).toBe(4);
+    expect(r.stdout).not.toContain('ensured');
+    expect(r.stderr).toContain('ensure failed for myid4 (spawn rc 4)');
+    expect(h.reg('myid4', 'spawn')).toMatch(/^\d{10} 4$/);
+  });
+
   it('ccd start does the same — and both still report success on a healthy spawn', () => {
-    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    h.sh(`mkdir -p "$HOME/projects/demo" "$HOME/projects/demo2"`);
     const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo`,
       { PANE_TEXT: '', SPAWN_MAKES_PANE: '0' });
     expect(bad.code).toBe(3);
     expect(bad.stdout).not.toContain('started claude2-demo');
     expect(bad.stderr).toContain('start failed for claude2-demo (spawn rc 3)');
-    // Positive control: without it, "never print a success line" passes.
-    // Mode is "resume", not "new": `started` is stamped unconditionally even
-    // on the failed first attempt (pre-existing behavior, unrelated to this
-    // task — a spawn that failed is still a row that HAD a session, which is
-    // what §4.3's orphan/never-started split reads), so the retry correctly
-    // computes mode=resume from the registry.
-    const good = h.sh(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo`,
+    // Positive control: without it, "never print a success line" passes. A
+    // FRESH id (demo2, not demo) — not a corrected "(resume)" string — because
+    // pinning "(new)" against the SAME id would pin a state that cannot occur
+    // in production: a --resume against a uuid a failed call minted but never
+    // wrote a real transcript for (spec M7 resolves that by searching project
+    // storage and finding nothing). It would also couple this control to the
+    // still-under-discussion "started stays 1 on failure" policy — decoupling
+    // that later should not turn a correct fix into an apparent regression
+    // here. A fresh project sidesteps both.
+    const good = h.sh(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo2`,
       { PANE_TEXT: '? for shortcuts' });
-    expect(good).toContain('started claude2-demo (resume)');
+    expect(good).toContain('started claude2-demo2 (new)');
+  });
+
+  it('ccd start treats rc 4 (window expired) the same as rc 3', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo4"`);
+    const bad = shFail(
+      `${TMUX} rm -f "$HOME/pane-up"; SPAWN_GATE_TRIES=2; CCD_IN_UNIT=1; cmd_start claude2 demo4`,
+      { PANE_TEXT: 'a pane with nothing this function recognises' },
+    );
+    expect(bad.code).toBe(4);
+    expect(bad.stdout).not.toContain('started claude2-demo4');
+    expect(bad.stderr).toContain('start failed for claude2-demo4 (spawn rc 4)');
   });
 });
