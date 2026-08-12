@@ -635,6 +635,38 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, mail });
   });
 
+  /**
+   * `GET /api/mail/:id` (robust-mail-delivery spec §1.2) — the body channel
+   * the reference nudge (`coord/envelope.ts`'s `renderMailNudge`) points a
+   * worker at instead of typing the envelope into its pane. Serves the
+   * STORED envelope verbatim (`coord.deliveryEnvelope`) — `renderEnvelope` is
+   * not called here and must never be: spec:176-177's "verbatim, never
+   * re-rendered" applies to every reader, not only the delivery lane that
+   * originally queued it.
+   *
+   * Token-only, matching `GET /api/mail?to=`'s own convention immediately
+   * above: this is a read with no attribution to check, so the box token
+   * alone is the gate — there is no sender identity to verify the way the
+   * ingress and ack routes do.
+   *
+   * A distinct path from `POST /api/mail/:id/ack` (`:id` vs `:id/ack`) —
+   * Fastify's router disambiguates on the literal `/ack` suffix, so there is
+   * no ordering hazard between the two route registrations.
+   */
+  app.get('/api/mail/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/mail/:id')) return;
+    const coord = deps.coord;
+
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+
+    const row = coord.deliveryEnvelope(id);
+    if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
+    return reply.code(200).send({ ok: true, id: row.id, toId: row.toId, state: row.state, envelope: row.envelope });
+  });
+
   // ── runs (Task 9) ──────────────────────────────────────────────────────
   //
   // spec:192-198: "It acts through the server's HTTP API, not raw ccd… One

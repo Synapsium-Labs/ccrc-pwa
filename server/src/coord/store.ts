@@ -856,6 +856,19 @@ export class CoordStore {
              state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
   }
 
+  /** The stored envelope for one delivery, for GET /api/mail/:id — the body
+   *  channel the reference nudge (robust-mail-delivery spec §1.1/1.2) points
+   *  at instead of a typed payload. Separate from `delivery()` so that route's
+   *  hot path keeps its narrow 4-column select; this one adds only the single
+   *  extra column a body-serving route needs. */
+  deliveryEnvelope(id: number): { id: number; toId: string; state: MailDeliveryState; envelope: string } | null {
+    const row = this.db.prepare('SELECT id, toId, state, envelope FROM mail_deliveries WHERE id = ?')
+      .get(id) as { id: number; toId: string; state: string; envelope: string } | undefined;
+    if (!row) return null;
+    return { id: row.id, toId: row.toId,
+             state: isMailDeliveryState(row.state) ? row.state : 'unknown', envelope: row.envelope };
+  }
+
   /**
    * Every delivery ADDRESSED TO `toId`, newest first, as `MailSummary` — the
    * read side of `GET /api/mail?to=<id>` (review finding 15: this route fell
