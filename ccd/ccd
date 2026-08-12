@@ -7145,6 +7145,65 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried,
   return 0
 }
 
+_swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a hardlink tree. Always rc 0.
+  # <projects dir>/<uuid>/ holds subagents, tool-results and workflows, and was
+  # copied by NOTHING before this build: 188MB of the incident session's state,
+  # left behind on the account it was swapped off. Globbed in its own right
+  # because sidecars exist in project dirs with no .jsonl for the same uuid, and
+  # each lands at the mirror of its OWN source dir.
+  #
+  # `cp -al` — a hardlink tree, the one place a source inode is shared across
+  # accounts, and the asymmetry with §2.2 is deliberate: the transcript is
+  # appended to, a sidecar's contents are write-once artifacts read after they
+  # are written. `cp -a` without `-l` is the fallback the moment linking fails
+  # (a cross-device destination), so the degradation is a slow correct copy
+  # rather than nothing — and it is the whole remedy if the write-once property
+  # is ever disproved: delete one flag, pay the bytes, change nothing else. The
+  # mode is logged so the evidence exists if a future defect implicates a shared
+  # checkpoint.
+  #
+  # An existing destination sidecar is LEFT ALONE rather than merged — the
+  # opposite of the transcript's unlink-first rule, because a tree can be
+  # half-merged where a single file is replaced in one step. `_sidecar_matches`
+  # strips the source's trailing slash; the real anti-nesting guard is that the
+  # destination `$dst` (the `<uuid>` directory itself, not just its parent)
+  # must not already exist before `cp -al`/`cp -a` runs — measured: `cp -al
+  # src/<uuid> dst/<uuid>` onto an ALREADY-EXISTING destination nests the tree
+  # inside itself regardless of either path's trailing slash. `mkdir -p` below
+  # only creates the PARENT (`$dstcfg/projects/$pdir`), never `$dst` itself, so
+  # the guard holds.
+  #
+  # C-collated sort: no destination is ever contested (each sidecar's `pdir`
+  # comes from a distinct source project directory), so ordering never changes
+  # WHAT is carried — only the order of the swap.log lines a human reads
+  # afterward. Sorted anyway so that order is reproducible rather than a
+  # function of glob/readdir order, which is locale- and filesystem-dependent.
+  local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode
+  local -a sidecars=()
+  mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
+  (( ${#sidecars[@]} )) || return 0
+  for src in "${sidecars[@]}"; do
+    # Parameter expansion, not `basename "$(dirname …)"`: every munged project
+    # dir starts with `-`, and GNU basename would read it as options.
+    pdir="${src%/*}"; pdir="${pdir##*/}"
+    dst="$dstcfg/projects/$pdir/$uuid"
+    if [[ -e "$dst" ]]; then
+      echo "ccd: sidecar already present at $dst — left alone (not merged)" >&2
+      echo "$(date '+%F %T') sidecar $uuid -> $dst (kept)" >> "$REG/swap.log"
+      continue
+    fi
+    mkdir -p "$dstcfg/projects/$pdir"
+    mode=link
+    cp -al "$src" "$dst" 2>/dev/null || { mode=copy; cp -a "$src" "$dst" 2>/dev/null; }
+    if [[ -d "$dst" ]]; then
+      echo "$(date '+%F %T') sidecar $uuid -> $dst ($mode)" >> "$REG/swap.log"
+    else
+      echo "ccd: warn: could not carry sidecar $src -> $dst" >&2
+    fi
+  done
+  return 0
+}
+
 cmd_swap() {   # id target-wrapper — move a session to another account, conversation intact.
   # Transcripts are plain JSONL with no account binding (validated 2026-07-03): copy the
   # current transcript into the target config dir, flip the registry wrapper, restart.
@@ -7170,19 +7229,24 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
   systemctl --user stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null
   sleep 1                                                  # let claude flush its final transcript entries
-  if [[ -f "$srccfg/projects/$mdir/$uuid.jsonl" ]]; then
-    mkdir -p "$dstcfg/projects/$mdir"
-    cp "$srccfg/projects/$mdir/$uuid.jsonl" "$dstcfg/projects/$mdir/"
-    # gpt -> Anthropic: the Codex lane (via LiteLLM) writes assistant messages with
-    # EMPTY text blocks, which the Anthropic API rejects on the next turn ("text
-    # content blocks must be non-empty" -> every turn 400s). Fill them so the
-    # resumed session is valid. Anthropic -> Anthropic and *-> gpt need no fixup.
-    if [[ "$cur" == gpt && "$target" != gpt ]]; then
-      _sanitize_anthropic "$dstcfg/projects/$mdir/$uuid.jsonl"
-    fi
-  else
-    echo "ccd: warn: transcript $uuid.jsonl not found under $cur config; session may resume without history" >&2
-  fi
+  # Find the conversation by uuid, never by one guessed directory. Claude Code
+  # writes under the munge of ITS cwd; the line this replaces munged the
+  # REGISTRY workdir, and the two diverge the moment a session moves. On
+  # 2026-08-11 that miss cost a session its entire history and said so only in a
+  # log file nobody reads.
+  # gpt -> Anthropic: the Codex lane (via LiteLLM) writes assistant messages with
+  # EMPTY text blocks, which the Anthropic API rejects on the next turn ("text
+  # content blocks must be non-empty" -> every turn 400s). Fill them so the
+  # resumed session is valid. Anthropic -> Anthropic and *-> gpt need no fixup.
+  # The carry runs it on the COPY and BEFORE the hardlinks, because
+  # _sanitize_anthropic rewrites through os.replace and that breaks links.
+  local sanitize=0
+  [[ "$cur" == gpt && "$target" != gpt ]] && sanitize=1
+  _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize" \
+    || echo "ccd: warn: transcript $uuid.jsonl not found under $cur config; session may resume without history" >&2
+  # Unconditional, and separate: sidecars are globbed in their own right and
+  # exist in project dirs that hold no .jsonl for this uuid at all.
+  _swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"
   # The task list lives at <configdir>/tasks/<uuid>/ and is keyed by config dir,
   # so a swap orphans it under the OLD account: the resumed session forgets its
   # plan entirely (seen 2026-07-26 — custom-tools kept 8 task files under
