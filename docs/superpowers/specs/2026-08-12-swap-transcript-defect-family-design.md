@@ -1,7 +1,8 @@
 # A swap carries the whole conversation, a start restores supervision, and a dead row says why it is dead
 
 **Status:** DRAFT 2026-08-12 — written after the 2026-08-11 incident was root-caused and the box
-was re-measured. Baseline `176a8a1` on `main`; the deployed `~/ccrc/ccd/ccd` was verified
+was re-measured. §2.5 was added the same day, on the operator's ruling, after it surfaced while
+planning the other four. Baseline `176a8a1` on `main`; the deployed `~/ccrc/ccd/ccd` was verified
 byte-identical to `ccd/ccd` at that sha on 2026-08-12, so every `ccd:NNNN` anchor below names the
 same line the fleet is running. An anchor is a snapshot at spec-writing time, not a live index.
 Fleet measurements were taken against the live `~/.cc-sessions` and `~/.claude*` on this box on
@@ -27,7 +28,9 @@ inferred from one guess instead of measured, and a failed inference is silent*. 
 four: the swap locates transcripts by uuid instead of by a guessed path (D1); the human start path
 goes through the unit instead of around it (D2); a deliberate stop becomes a recorded fact so a
 dead row can say which kind of dead it is (D3); and the PWA's transcript resolver stops betting the
-whole render on one munged path (D4).
+whole render on one munged path (D4). A fifth was found while planning the first four and folded in
+on the operator's ruling: ccd's own `_transcript_path` writes the same unchecked guess into the
+archive manifests and reap tombstones that outlive the sessions they describe (§2.5).
 
 ## 1. Measured facts that shaped everything
 
@@ -306,7 +309,36 @@ fail `wsaudit.test.ts` for a reason the author would not expect.
 (ccd:6728) skips a session whose `swapblocked` stamp is younger than 30 minutes, so one refusal
 produces one banner and one field, not 720 of each per hour.
 
-## 3. D2 — the human start path restores supervision instead of routing around it
+### 2.5 D1's sibling: the records written at archive and reap name a path nobody checked
+
+`_transcript_path` (ccd:300-320) is ccd's own copy of the resolution D4 fixes on the server, and it
+has the same shape the rest of this spec is about: it munges the resolved registry workdir, prints
+the result, and never asks whether anything is there. Its own docstring says why it exists —
+"recorded so a reap never has to be reconstructed from an escaped path after the registry is gone"
+— which is exactly what makes a wrong answer expensive. Its three consumers are
+`_ws_archive_manifest` (ccd:2123), `cmd_ws_audit` (ccd:4032) and `_ws_tombstone` (ccd:4704): the
+durable records written when a workspace is archived, audited and reaped, and the tombstone
+outlives the registry row it describes.
+
+So a session that moved gets a tombstone naming a directory that does not hold its transcript. The
+history is not lost — the uuid still finds it — but the one artifact whose entire purpose is to
+survive the row's deletion records the wrong address, and it records it confidently.
+
+The fix is D1's locator pointed at the same problem, with the same existence-first discipline as
+§5.1 and one rung fewer:
+
+1. the resolved registry-workdir munge when that file exists — today's answer, now checked;
+2. the raw registry-workdir munge when that file exists;
+3. `_transcript_matches` under the session's own config dir, newest mtime winning;
+4. the resolved munge unchecked, exactly as today, so a session that has genuinely written nothing
+   yet still records the canonical address rather than an empty string.
+
+There is deliberately no live-cwd rung. These three callers run at archive, audit and reap time,
+when the session is stopped or idle and the registry workdir is the durable fact; reaching into
+`<cfg>/sessions/<pid>.json` for a cwd that is about to stop existing would add a failure mode to a
+record that is supposed to be stable. The function's contract — print one path, return non-zero
+only when the registry cannot answer — does not change, so no consumer and no manifest format
+moves.
 
 `cmd_start` (ccd:6951) and `cmd_ensure` (ccd:6971) both call `_spawn` directly. `cmd_stop`
 (ccd:7101) is `systemctl --user disable --now`. So stop-then-start yields a tmux pane with no unit:
@@ -786,6 +818,7 @@ Each defect owes specific tests, and they are the ones a mutation sweep can actu
 | D1 | multi-directory uuid glob carries every match; hardlinked source names cost one copy and N links; destination collision resolves to the newest source mtime; sidecars carry, including one with no `.jsonl` sibling; zero matches refuse, leave `wrapper` unchanged, restart the session, and stamp `swapblocked`; a `gpt`→Anthropic swap still sanitizes, and the sanitized file is the one the links point at |
 | D2 | `stop` then `start` leaves the unit enabled; `ensure` inside the unit does not re-enter `systemctl start`; `attach` finds a live pane; a vanished pane returns rc 3 without waiting out the window; an exhausted window returns rc 4; a failed unit is revived by `start` (the `reset-failed` path) |
 | D3 | the stamp records epoch and a validated surface, and an unknown word normalizes; `_ws_unsupervise` stamps from every call site and `_ws_supervise` clears; the classification table, driven from one fixture through both the TypeScript function and the bash twin; an unreadable field yields `unmeasurable`, never `orphan` |
+| §2.5 | `_transcript_path` prefers an existing file over a guessed one; falls through to the uuid glob when neither munge exists; still prints the resolved munge when nothing exists anywhere; a tombstone written for a moved session names the file that holds the history |
 | D4 | each rung wins in its own fixture; the registry-workdir rungs rescue a live session whose cwd moved; the glob rung dedupes identical `(size, mtimeMs)` candidates; a foreign-config hit is bannered and never reached while an own-account answer exists; a null `readdir` yields an incomplete fallback rather than an absence; the memo re-validates with one stat and re-ladders when its winner disappears |
 
 Every behavior above is proved by a test before it is written, the whole diff is mutation-swept with
