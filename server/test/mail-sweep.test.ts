@@ -18,6 +18,7 @@ import type { Deps } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { renderEnvelope } from '../src/coord/envelope.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
@@ -637,6 +638,63 @@ describe('sweepMail: the send', () => {
     const row = deliveryRow(coord, id);
     expect(row.lastError).toBe('draft-present');
     expect(row.state).toBe('queued');
+  });
+
+  it('F3 blocking finding: a DIFFERENT envelope stuck in the box is never mis-submitted under a later delivery\'s row', async () => {
+    // The reachable failure a real review caught: this file's own ENVELOPE
+    // fixture ('ccrc-mail test payload') and the 'hello world' fixture in
+    // send.test.ts both have a DISTINCTIVE marker row, so neither test above
+    // exercises the shape that actually breaks — `renderEnvelope`'s first
+    // rendered line is the SAME constant fence ("```ccrc-mail") on every
+    // real mail envelope, so a marker-row-only match cannot tell two
+    // DIFFERENT envelopes to the SAME session apart.
+    //
+    // Here the box already holds a REAL rendered envelope A, left un-
+    // submitted by a prior sweep's lost Enter (exactly the terminal
+    // `enter-ignored` shape the test above this one pins — the row rejects,
+    // but nothing ever clears the physical box). A second, unrelated
+    // envelope B is then queued for the SAME session and becomes the
+    // delivery THIS sweep actually attempts. Pre-fix, `resumeIfOwn` read
+    // A's marker row as proof it was B's own draft and pressed Enter,
+    // submitting A's bytes while marking B `delivered` though its own text
+    // was never typed anywhere.
+    const envelopeA = renderEnvelope({
+      id: 9001, fromId: FROM_ID, toId: ID, runId: null, program: null, wave: null, waveOf: null,
+      kind: 'finding', subject: 'first', body: 'the first message, stuck in the box', artifacts: [],
+    });
+    const boxOf = (envelope: string): string =>
+      envelope.split('\n').map((l, i) => (i === 0 ? `❯ ${l}` : `  ${l}`)).join('\n') + '\n';
+    // This harness's fake tmux answers `capture-pane` from a fixed script
+    // regardless of what keys are sent — the same convention every other
+    // test in this file uses — so a single scripted pane models a box that
+    // never changes, exactly what a stuck, un-submitted draft looks like.
+    const h = harness({ panes: [boxOf(envelopeA)] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+
+    // Queued and rendered the same way `POST /api/mail` actually does it
+    // (coord/routes.ts): insert the mail row, queue the delivery so its own
+    // id exists, THEN render the envelope against the DELIVERY id.
+    const mailB = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId: ID, runId: null,
+      kind: 'finding', subject: 'second', body: 'a totally different second message', artifacts: [] });
+    const deliveryB = coord.queueDelivery(mailB.id, ID, '');
+    const envelopeB = renderEnvelope({
+      id: deliveryB.id, fromId: FROM_ID, toId: ID, runId: null, program: null, wave: null, waveOf: null,
+      kind: 'finding', subject: 'second', body: 'a totally different second message', artifacts: [],
+    });
+    coord.setDeliveryEnvelope(deliveryB.id, envelopeB);
+
+    await w.sweepMail();
+    // No Enter pressed on A's bytes, and B's own text is never composed
+    // again either (nothing was retyped) — refused as a foreign draft.
+    expect(keyPresses(h.calls)).toEqual([]);
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, deliveryB.id);
+    expect(row.state).toBe('queued');            // NOT delivered
+    expect(row.lastError).toBe('draft-present');  // refused, not silently mis-submitted
   });
 
   it('backs off with exponential spacing on draft-present / dialog-open / verify-failed', async () => {

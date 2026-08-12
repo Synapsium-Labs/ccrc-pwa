@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { sendPrompt, draftOf } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { renderEnvelope } from '../src/coord/envelope.js';
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const noSleep = async () => {};
@@ -546,6 +547,75 @@ describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
     const { tmux } = fakeTmux(['❯ hello world\n']); // last pane repeats: never empties, never leaves
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
     expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello world' });
+  });
+});
+
+// Blocking review finding (F3): the bespoke single-line fixtures above
+// ('hello world', 'ccrc-mail test payload') each have a distinctive marker
+// row, so they never exercised the shape that actually breaks —
+// `renderEnvelope`'s FIRST rendered line is the SAME constant fence
+// ("```ccrc-mail") on every real mail envelope. A marker-row-only check
+// therefore cannot tell two different envelopes queued for the same session
+// apart: pre-fix, a draft left by envelope A's lost Enter would be resumed
+// (and submitted!) by a call trying to deliver a completely different
+// envelope B, because `needle` — derived from B's own first line — matches
+// A's marker row exactly. These tests render TWO real envelopes with
+// `renderEnvelope` (same fence, different `id:` line) and pin the exact
+// per-delivery discrimination `matchesOwnDraft` exists for.
+describe('sendPrompt resumeIfOwn discriminates PER DELIVERY, not just per marker row (F3 blocking finding)', () => {
+  const envelopeInput = (id: number, body: string) => ({
+    id, fromId: 'coordinator', toId: 'x', runId: null, program: null, wave: null, waveOf: null,
+    kind: 'finding' as const, subject: 'hi', body, artifacts: [],
+  });
+  const envelopeA = renderEnvelope(envelopeInput(1, 'first message body'));
+  const envelopeB = renderEnvelope(envelopeInput(2, 'a completely different second message'));
+
+  /** The exact multi-row shape a real tmux pane shows once `sendPrompt`'s own
+   *  M-Enter loop has typed a multi-line envelope: marker `❯ ` on line one,
+   *  every further line indented two spaces with no marker — the same
+   *  convention `submit-route.test.ts`'s blank-first-row fixture uses. */
+  const boxOf = (envelope: string): string =>
+    envelope.split('\n').map((l, i) => (i === 0 ? `❯ ${l}` : `  ${l}`)).join('\n') + '\n';
+
+  it('both envelopes share the identical marker row — the precondition this bug needs', () => {
+    // Sanity-checks the premise itself: if this ever stops being true (a
+    // future renderEnvelope change puts something delivery-specific on line
+    // one), the bug this suite pins can no longer occur, and that's fine —
+    // but the test above would need to change with it, not silently pass
+    // for the wrong reason.
+    expect(envelopeA.split('\n')[0]).toBe(envelopeB.split('\n')[0]);
+    expect(envelopeA.split('\n')[0]).toBe('```ccrc-mail');
+  });
+
+  it('resumes ITS OWN real envelope — no retype, one Enter', async () => {
+    const { tmux, calls } = fakeTmux([boxOf(envelopeA), '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeA, { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    // No `-l` literal send anywhere: the envelope was never retyped, only submitted.
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+  });
+
+  it('does NOT resume a DIFFERENT envelope\'s draft left in the same box, even though the marker row matches — the exact bug', async () => {
+    // The box holds envelope A, un-submitted (a prior sweep's lost Enter).
+    // THIS call is trying to deliver envelope B — a different delivery, same
+    // recipient. Pre-fix: `needle` (B's first line) matched A's marker row
+    // byte for byte, so `resumeIfOwn` pressed Enter and SUBMITTED A's bytes
+    // while the caller believed it was delivering B.
+    const { tmux, calls } = fakeTmux([boxOf(envelopeA)]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeB, { resumeIfOwn: true });
+    // Refused as a foreign draft — envelope A's own marker row, verbatim —
+    // not resumed under envelope B's identity.
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(sendKeysCalls(calls)).toEqual([]); // no Enter pressed on someone else's envelope
+  });
+
+  it('resumes envelope B once it is actually B sitting in the box', async () => {
+    // The other half of the same discrimination: once the box genuinely
+    // holds B's own un-submitted text, delivering B (not A) resumes it.
+    const { tmux, calls } = fakeTmux([boxOf(envelopeB), '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeB, { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
   });
 });
 

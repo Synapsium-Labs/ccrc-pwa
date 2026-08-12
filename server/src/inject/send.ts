@@ -274,6 +274,38 @@ async function clearBox(
 }
 
 /**
+ * Second-row correspondence for `resumeIfOwn`'s per-delivery discrimination
+ * (blocking review finding, F3): does the box's FIRST CONTINUATION row —
+ * one row below the marker, invisible to `draftOf` — correspond to THIS
+ * call's own SECOND composed line, when there is one to check?
+ *
+ * Exists because the marker row alone cannot always tell two different
+ * deliveries to the SAME session apart: `renderEnvelope`'s first rendered
+ * line is the constant fence ("```ccrc-mail") on every mail envelope, so
+ * `needle` (`sendPrompt`'s own marker-row check, below) is that same fence
+ * for essentially every mail message — a draft left behind by a DIFFERENT
+ * envelope's lost Enter starts with it exactly as our own would. The
+ * second rendered line (`id: <delivery id>`) is what actually varies per
+ * delivery, and it lands one row below the marker because `sendPrompt`'s
+ * own M-Enter loop puts one composed line per visual row (see
+ * `continuationRows`, which this reads from) — so comparing it is the
+ * cheapest available proof of PER-MESSAGE identity, not merely
+ * per-marker-row-prefix identity.
+ *
+ * When this call's own composed text has no second line (`parts[1]` is
+ * absent or blank — every non-mail, single-line caller), there is nothing
+ * further to disambiguate against: the marker-row check is all the
+ * precision that ever existed for a one-line message, so this returns
+ * `true` rather than manufacturing a distinction that isn't there.
+ */
+function matchesOwnDraft(ansiPane: string, parts: readonly string[]): boolean {
+  const second = (parts[1] ?? '').trim();
+  if (second === '') return true;
+  const boxSecond = continuationRows(ansiPane)[0] ?? '';
+  return boxSecond.startsWith(second.slice(0, ECHO_NEEDLE));
+}
+
+/**
  * Inject a prompt into the session's Claude Code input box, serialized per
  * session through the KeyedQueue. Refuses to clobber a half-typed draft
  * unless `replaceDraft`, verifies the pane echoed the text before Enter, and
@@ -323,22 +355,37 @@ export function sendPrompt(
     if (draft) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
-      // established the doctrine this reuses verbatim — "the box's MARKER
-      // ROW... is all draftOf can see and all [a prior observation] could
-      // have carried, so equality of it is exactly as much correspondence as
-      // exists to prove" (`submitEnter`'s own docstring). A draft that STARTS
-      // WITH our own needle is, to that same precision, THIS delivery's own
-      // unsent text, not someone else's — so finish the submit (press Enter,
-      // verified) rather than either retyping over it (would double the
-      // text) or refusing it as `draft-present` (would wedge forever: this
-      // function never retries on its own, so an unrecognized "own" draft
-      // would answer `draft-present` on every future call for as long as it
-      // sits there — the exact self-block F3 measured live). A draft that
-      // does NOT match — any genuine human draft included — falls straight
-      // through to the ordinary `draft-present` refusal two lines down,
+      // established the doctrine this reuses — "the box's MARKER ROW... is
+      // all draftOf can see and all [a prior observation] could have
+      // carried, so equality of it is exactly as much correspondence as
+      // exists to prove" (`submitEnter`'s own docstring). But a draft that
+      // starts with `needle` is only THIS DELIVERY'S own unsent text to
+      // that precision when `needle` itself can tell deliveries apart — and
+      // for mail it usually cannot: `renderEnvelope`'s first line is the
+      // SAME constant fence ("```ccrc-mail") on every envelope, so `needle`
+      // is that fence for essentially every mail message, and a marker-row
+      // check alone would treat ANY envelope sitting in the box as THIS
+      // one — including a DIFFERENT message to the same session, mistakenly
+      // submitting its bytes under this delivery's row (blocking review
+      // finding: a second envelope to the same session was mis-submitted
+      // exactly this way). So the check goes one row deeper whenever there
+      // is a second line to check: `matchesOwnDraft` compares the box's
+      // FIRST CONTINUATION row — invisible to `draftOf`, but not to
+      // `continuationRows` — against this call's own second composed line,
+      // the field `renderEnvelope` actually varies per delivery
+      // (`id: <delivery id>`). Only when marker row AND (when present)
+      // second row both correspond is this trusted as OUR draft — so finish
+      // the submit (press Enter, verified) rather than either retyping over
+      // it (would double the text) or refusing it as `draft-present` (would
+      // wedge forever: this function never retries on its own, so an
+      // unrecognized "own" draft would answer `draft-present` on every
+      // future call for as long as it sits there — the exact self-block F3
+      // measured live). A draft that does NOT match — any genuine human
+      // draft, or another delivery's own still-unsent envelope — falls
+      // straight through to the ordinary `draft-present` refusal below,
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
-      if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle)) {
+      if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
         return pressEnterAndConfirm(d, id, sleep, needle);
       }
       if (!opts.replaceDraft) return { ok: false, error: 'draft-present', draft };
@@ -463,17 +510,18 @@ const isRuleRow = (line: string): boolean => {
 };
 
 /**
- * Is there box content strictly BELOW the marker row — a continuation row
- * `draftOf` never reads, because its documented contract is the marker row
- * only (see its own docstring)?
+ * Every non-blank box row STRICTLY BELOW the marker row, in order, up to
+ * (not including) the closing rule — the content `draftOf` never reads,
+ * because its documented contract is the marker row only (see its own
+ * docstring). Shared by `hasContentBelowMarker` (presence only) and
+ * `resumeIfOwn`'s per-delivery discrimination below (the first row's
+ * CONTENT, not just whether one exists).
  *
  * Reachable end-to-end: `sendPrompt` writes a leading blank line with
  * `M-Enter` whenever the composed prompt's first `\n`-split part is `''`
  * (its own `parts` loop above), so an `enter-ignored` on a message that
  * *starts* with a blank line leaves exactly this shape — a blank marker row
- * with the real text one row down, invisible to `draftOf`. Reporting
- * `nothing-to-submit` for that pane would be a lie: there is something to
- * send, this function just cannot prove what.
+ * with the real text one row down, invisible to `draftOf`.
  *
  * The real captures back exactly one claim, and this function is scoped to
  * only that claim: a rule row closes the box immediately, so any non-blank
@@ -481,24 +529,32 @@ const isRuleRow = (line: string): boolean => {
  * chrome (chrome is only ever seen AFTER that rule — and shares the box's
  * own two-space indent, which is why indentation alone cannot tell a
  * continuation row from chrome: only the rule boundary can). This proves
- * PRESENCE, not identity — a pasted separator line could itself look like a
- * rule and cut the scan short (under-detecting, the safe direction) — so
- * the result is never used to build a submit needle or to press Enter, only
- * to decide whether claiming the box is empty would be false.
+ * PRESENCE (of each row), not identity beyond the row's own text — a pasted
+ * separator line could itself look like a rule and cut the scan short
+ * (under-detecting, the safe direction).
  */
-function hasContentBelowMarker(ansiPane: string): boolean {
+function continuationRows(ansiPane: string): string[] {
   const lines = ansiPane.split('\n');
   let markerIdx = -1;
   for (let i = 0; i < lines.length; i++) {
     if (lines[i]!.replace(SGR, '').startsWith('❯')) markerIdx = i;   // last ❯ line, same as draftOf
   }
-  if (markerIdx === -1) return false;
+  if (markerIdx === -1) return [];
+  const rows: string[] = [];
   for (let i = markerIdx + 1; i < lines.length; i++) {
     const stripped = lines[i]!.replace(DIM_SPAN, '').replace(SGR, '');
-    if (isRuleRow(stripped)) return false;
-    if (stripped.trim() !== '') return true;
+    if (isRuleRow(stripped)) break;
+    if (stripped.trim() !== '') rows.push(stripped.trim());
   }
-  return false;
+  return rows;
+}
+
+/** Is there box content strictly BELOW the marker row? See `continuationRows`
+ *  — this only asks whether that array is non-empty; the result is never used
+ *  to build a submit needle or to press Enter, only to decide whether
+ *  claiming the box is empty would be false. */
+function hasContentBelowMarker(ansiPane: string): boolean {
+  return continuationRows(ansiPane).length > 0;
 }
 
 /**
