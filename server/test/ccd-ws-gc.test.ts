@@ -479,6 +479,28 @@ describe('ws-gc --prune', () => {
    * it. That makes this a human-run terminal reclaimer, not a lower bar.
    */
 
+  // Both `.gitignore` commits below (wt and main) must land the SAME sha —
+  // `orphanWithIgnored`'s comment explains why. They start from the same
+  // parent, same tree change and same author/committer identity, so the only
+  // remaining input to the commit hash is the timestamp; git commit
+  // timestamps have 1-second resolution, so two real-time `git commit` calls
+  // straddling a second boundary produce DIFFERENT shas, breaking ancestry
+  // and turning `_ws_gc_merged` false. Pinning `GIT_AUTHOR_DATE` and
+  // `GIT_COMMITTER_DATE` to the same fixed instant for both calls makes the
+  // two commits identical by construction instead of by luck.
+  const commitPinned = (cwd: string, message: string): void => {
+    execFileSync('git', ['-C', cwd, 'commit', '-m', message], {
+      encoding: 'utf8',
+      env: {
+        ...process.env, HOME: h.home,
+        GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
+        GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
+        GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z',
+        GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z',
+      },
+    });
+  };
+
   /** An orphan whose ignored content is given by `files`, kept out of git via a
    *  COMMITTED `.gitignore` — so the tree still reads clean to `_ws_gc_dirty`
    *  and to `git worktree remove`, which is the whole premise of the finding.
@@ -493,13 +515,13 @@ describe('ws-gc --prune', () => {
     const wt = addWs('demo', slug);
     fs.writeFileSync(path.join(wt, '.gitignore'), ignore);
     h.git(wt, 'add', '.gitignore');
-    h.git(wt, 'commit', '-m', 'ignore');
+    commitPinned(wt, 'ignore');
     // The .gitignore lands on main too, so the branch stays an ancestor of
     // origin/HEAD and `_ws_gc_merged` still says merged — otherwise the row
     // declines `unmerged` and the test would be about the wrong guard.
     const main = path.join(h.home, 'projects', 'demo');
     fs.writeFileSync(path.join(main, '.gitignore'), ignore);
-    h.git(main, 'add', '.gitignore'); h.git(main, 'commit', '-m', 'ignore');
+    h.git(main, 'add', '.gitignore'); commitPinned(main, 'ignore');
     h.git(main, 'push', 'origin', 'main');
     for (const [rel, body] of Object.entries(files)) {
       const abs = path.join(wt, rel);
@@ -590,10 +612,14 @@ describe('ws-gc --prune', () => {
     // become two ignore lines and quietly stop ignoring anything.
     const main = h.makeRepo('demo');
     const wt = addWs('demo', 'still-cove');
+    // Same SHA-identity dependency as `orphanWithIgnored` above, and the same
+    // fix: pin the commit timestamps so wt's and main's `.gitignore` commits
+    // land the same sha by construction, keeping the branch an ancestor of
+    // origin/HEAD instead of racing a 1-second git timestamp boundary.
     for (const dir of [wt, main]) {
       fs.writeFileSync(path.join(dir, '.gitignore'), '*.log\n');
       h.git(dir, 'add', '.gitignore');
-      h.git(dir, 'commit', '-m', 'ignore logs');
+      commitPinned(dir, 'ignore logs');
     }
     h.git(main, 'push', 'origin', 'main');
     // No `/` anywhere in it: this is ONE filename, not a path, and a slash

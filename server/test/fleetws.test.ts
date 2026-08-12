@@ -14,7 +14,7 @@ import { loadSnapshot } from '../src/fleetstate.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
-import { testDeps } from './helpers.js';
+import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
@@ -48,6 +48,7 @@ describe('fleet REST + WS', () => {
 
   beforeEach(() => {
     home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude2-MekWarLive', 'claude2');
   });
 
@@ -246,6 +247,7 @@ describe('fleet REST + WS', () => {
     // absent directory as proof of an empty fleet — the overloaded-null
     // conflation this whole ladder exists to remove.
     const emptyHome = mkTmp('ccrc-empty-');
+    seedRoster(emptyHome);
     mkdirSync(path.join(emptyHome, '.cc-sessions'), { recursive: true });
     const cfg = loadConfig({ CCRC_HOME: emptyHome, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null }, stateCachePath: cachePath };

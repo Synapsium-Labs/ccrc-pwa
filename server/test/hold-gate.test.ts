@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { readRegistry, HOLD_NO_REASON, HOLD_UNREADABLE } from '../src/registry.js';
 import type { SessionRecord } from '../src/registry.js';
@@ -20,6 +20,7 @@ import type { PrState } from '../../shared/api.js';
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
+  seedRoster(home);
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   for (const id of ids) {

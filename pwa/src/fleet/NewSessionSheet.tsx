@@ -36,6 +36,7 @@ export function NewSessionSheet({
   fleet = useFleetStore,
 }: NewSessionSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
+  const roster = fleet((s) => s.roster);
   const disabledWrappers = useDisabledWrappers(open);
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
@@ -99,7 +100,7 @@ export function NewSessionSheet({
     setStarting(true);
     try {
       await api.createSession({ wrapper, project: project.name, workdir: project.workdir });
-      toast(`Starting ${project.name} on ${accountLabel(wrapper)}…`);
+      toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
       onClose();
     } catch (err) {
       toast(`Couldn't start — ${apiErrorText(err)}`, 'error');
@@ -116,12 +117,13 @@ export function NewSessionSheet({
           <div className="acct-list">
             {/* A kill-switched lane cannot start a session either — offering
                 it here is the same bug SwapSheet's picker had, one layer up. */}
-            {pickableWrappers(sessions, disabledWrappers).map((w) => (
+            {pickableWrappers(roster, sessions, disabledWrappers).map((w) => (
               <AccountRow
                 key={w}
                 wrapper={w}
                 limits={limitsFor(sessions, w)}
                 onPick={setWrapper}
+                roster={roster}
               />
             ))}
           </div>
@@ -136,7 +138,7 @@ export function NewSessionSheet({
               setProject(null);
             }}
           >
-            <span aria-hidden="true">‹</span> on {accountLabel(wrapper)} — change
+            <span aria-hidden="true">‹</span> on {accountLabel(roster, wrapper)} — change
           </button>
           <input
             className="proj-search"
@@ -186,7 +188,7 @@ export function NewSessionSheet({
               ? 'Starting…'
               : project === null
                 ? 'Choose a project'
-                : `Start ${project.name} on ${accountLabel(wrapper)}`}
+                : `Start ${project.name} on ${accountLabel(roster, wrapper)}`}
           </button>
         </>
       )}

@@ -64,15 +64,21 @@ The phosphor identity survives daylight inside the glass.
   means "prefer handing work off"; red means "hand off everything spec-able" —
   a gauge going amber is an instruction, not decoration. Same hue = same
   meaning everywhere.
-- **The four accounts live in the cool half of the wheel**, 40°+ apart:
-  claude = cyan, claude-corp = blue, claude2 = violet, gpt = magenta. No
-  account hue can ever be misread as session state. Chips always carry the
-  account name in mono; color is the secondary cue, never the only one.
-  Components consume account color through one variable: screens stamp
-  `data-acct` at their root and `tokens.css` rebinds `--acct-active` /
-  `--acct-active-tint` to that account's pair — chat headers and chips style
-  against `--acct-active` only, and no component hard-codes an account hue.
-  The glow never rebinds: glow stays green/amber only.
+- **Accounts run six hues** (`shared/roster.ts`'s `HUES`, Stage 2a): cyan,
+  violet, blue, magenta, amber, green — a free-form runtime roster is not
+  capped at four, so the palette grew to match rather than colliding a fifth
+  or sixth account onto a hue already spoken for. The first four stay in the
+  cool half of the wheel, 40°+ apart; amber/green necessarily share a hue
+  FAMILY with `--status-attention`/`--status-busy`. No account hue can ever
+  be misread as session state anyway: every account colour is a pastel,
+  desaturated tone against the status pair's vivid glow, and only a living
+  session state glows at all — an account chip never does, in either family.
+  Chips always carry the account name in mono; color is the secondary cue,
+  never the only one. Components consume account color through one variable:
+  screens stamp `data-acct` at their root and `tokens.css` rebinds
+  `--acct-active` / `--acct-active-tint` to that account's pair — chat headers
+  and chips style against `--acct-active` only, and no component hard-codes
+  an account hue. The glow never rebinds: glow stays green/amber only.
 - **The interactive accent is the phosphor green** — send button, links, focus
   ring, the `❯` preselect. "Acting" and "working" deliberately share one color
   story: what you press is what makes sessions glow.
@@ -257,10 +263,12 @@ Full annotated values (with computed contrast ratios per theme) live in
 | status | `--status-attention` / `-text` / `-tint` | `#F2B84B` / `#F2B84B` / `#2E2413` | `#B27400` / `#8A5A0A` / `#F7E9CF` | dot / badge text / badge bg |
 | status | `--status-dead` / `-text` | `#E06A55` / `#E8836F` | `#B2402C` / `#B2402C` | matte dot / label |
 | status | `--status-dead-tint` | `rgba(224,106,85,.12)` | `rgba(178,64,44,.12)` | EXIT badge pill (label 4.8–5.9 on it) |
-| account | `--acct-claude` / `-tint` | `#6FD6EA` / `#0E2A31` | `#0A6377` / `#DAF0F6` | cyan chip (4.5+; 5.8–9.0) |
-| account | `--acct-claude2` / `-tint` | `#C7A7F4` / `#241C38` | `#6D3FB4` / `#EDE6FA` | violet chip |
-| account | `--acct-corp` / `-tint` | `#96B4F4` / `#16233B` | `#2F55B8` / `#E3EAFA` | blue chip |
-| account | `--acct-gpt` / `-tint` | `#F0A3C8` / `#331B28` | `#A62667` / `#FAE3EE` | magenta chip |
+| account | `--acct-cyan` / `-tint` | `#6FD6EA` / `#0E2A31` | `#0A6377` / `#DAF0F6` | cyan chip (4.5+; 5.8–9.0) |
+| account | `--acct-violet` / `-tint` | `#C7A7F4` / `#241C38` | `#6D3FB4` / `#EDE6FA` | violet chip |
+| account | `--acct-blue` / `-tint` | `#96B4F4` / `#16233B` | `#2F55B8` / `#E3EAFA` | blue chip |
+| account | `--acct-magenta` / `-tint` | `#F0A3C8` / `#331B28` | `#A62667` / `#FAE3EE` | magenta chip |
+| account | `--acct-amber` / `-tint` | `#E8CB73` / `#352C13` | `#7C5C03` / `#FAF6EB` | amber chip (4.5+; 5.7–8.7) |
+| account | `--acct-green` / `-tint` | `#70D2AE` / `#183027` | `#09714B` / `#E7F8F2` | green chip (4.5+; 5.5–7.7) |
 | account | `--acct-active` / `-tint` | rebound per `[data-acct]` | same | screen-scoped account accent |
 | limits | `--limit-track` | `#242A25` | `#E3E7E2` | bar track |
 | limits | `--limit-ok` / `-warn` / `-critical` | `#45D67E` / `#F2B84B` / `#E06A55` | `#178A48` / `#B27400` / `#B2402C` | fills, 3:1 vs track; bands <50 / 50–75 / >75% |

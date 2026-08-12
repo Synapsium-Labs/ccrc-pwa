@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
 import { ProjectCard } from '../src/fleet/ProjectCard';
+import { TEST_ROSTER } from './rosterFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
@@ -102,7 +103,7 @@ describe('the + button', () => {
   // against the aria-label format regressing unnoticed.
   it('carries the account into the accessible name, not just the pixels', () => {
     render(<ProjectCard group={grp()} projected={{ wrapper: 'claude', score: 18 }}
-                        onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} />);
+                        onAddWorkspace={() => {}} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByRole('button', { name: /New workspace on demo — team·max, 82% free/i }))
       .toBeInTheDocument();
   });
@@ -110,7 +111,7 @@ describe('the + button', () => {
 
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
-    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} />);
+    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByText('team·shared')).toBeInTheDocument();
   });
 
@@ -120,7 +121,7 @@ describe('pinned account', () => {
   });
 
   it('names the pin for assistive tech — a bare label reads as decoration', () => {
-    render(<ProjectCard group={grp({ pin: 'claude' })} onOpen={() => {}} onActions={() => {}} />);
+    render(<ProjectCard group={grp({ pin: 'claude' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText('pinned to team·max')).toBeInTheDocument();
   });
 });
@@ -139,14 +140,14 @@ describe('the + is icon-only', () => {
 
   it('keeps the account and headroom in the accessible name', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
-                        onAddWorkspace={() => {}} projected={projected} />);
+                        onAddWorkspace={() => {}} projected={projected} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText('New workspace on demo — alt·max, 91% free'))
       .toBeInTheDocument();
   });
 
   it('carries them as a tooltip too, for a pointer that can hover', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
-                        onAddWorkspace={() => {}} projected={projected} />);
+                        onAddWorkspace={() => {}} projected={projected} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText(/New workspace on demo/))
       .toHaveAttribute('title', 'New workspace on demo — alt·max, 91% free');
   });
@@ -158,7 +159,7 @@ describe('the + is icon-only', () => {
   // 'the + button' above).
   it('names the four HOME_ABLE lanes individually when the server projects nothing — never "all accounts" (gpt is never consulted for this fact but renders as an account row on the same screen)', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
-                        onAddWorkspace={() => {}} projected={null} />);
+                        onAddWorkspace={() => {}} projected={null} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText('New workspace on demo — team·max, alt·max, team·shared and lab·dev0 all disabled'))
       .toBeInTheDocument();
   });

@@ -6,7 +6,8 @@
 // store keeps conn 'connecting' until the socket opens, and FleetScreen
 // stale-marks everything under that state. /api and /ws are never cached
 // (network-only) — this snapshot is the only offline data, by design.
-import { reviveFleetSessions, unmeasuredFields, type FleetSession } from '../../../shared/api';
+import { reviveFleetSessions, unmeasuredFields, type FleetSession, type RosterWire } from '../../../shared/api';
+import { HUES } from '../../../shared/roster';
 
 // Stays at v1 — deliberately. A snapshot written before `tasks`/`pr`/`archivedAt`
 // existed is still usable data, and the read normalizes it (reviveFleetSessions);
@@ -22,6 +23,33 @@ const storage = (): Storage => window.localStorage;
 export interface FleetSnapshot {
   savedAt: number; // epoch ms of the snapshot
   sessions: FleetSession[];
+  /** The account roster, at the moment this snapshot was written (fix round
+   *  1, finding 3). Cold-offline-start's whole reason to exist is rendering
+   *  *something* instantly — without this, `accountLabel`/`accountColorVar`
+   *  read an empty roster on a cold start exactly as they would before the
+   *  first `/api/accounts` poll, and every account rendered as its raw
+   *  wrapper id (`claude2`, `claude-corp`) instead of the jargon-free label
+   *  this module exists to restore. Against the compile-time roster this
+   *  replaced, that case never existed — labels were always available,
+   *  synchronously, with no snapshot involved. `[]` for a pre-Task-7
+   *  snapshot, same as an unarrived roster. */
+  roster: RosterWire[];
+}
+
+/** Loose but real validation for a `RosterWire` read back out of localStorage
+ *  — same-origin JS can write this key too, and an older or half-written
+ *  build's snapshot is not attacker input but is still untrusted shape at
+ *  runtime (`pwa/src/lib/api.ts`'s `getJson` is a bare cast; nothing upstream
+ *  of this module ever validated `roster`). Not full `parseRoster`-grade
+ *  parsing — a persisted UI cache degrading a malformed entry to "not there"
+ *  is enough; it does not need `RosterError`'s named remedies, since nobody
+ *  reads this file by hand. */
+function isRosterWireLike(v: unknown): v is RosterWire {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o['id'] === 'string' && typeof o['label'] === 'string'
+    && typeof o['homeAble'] === 'boolean'
+    && typeof o['hue'] === 'string' && (HUES as readonly string[]).includes(o['hue']);
 }
 
 /** Best-effort persist — quota errors and private-mode walls are swallowed;
@@ -58,7 +86,13 @@ export interface FleetSnapshot {
  *    server-side (Task 2) — this is the client-side mirror of that gate,
  *    independently enforced because the two caches (this one, and
  *    `~/.ccrc/state-cache.json`) have no other seam in common. */
-export function saveFleetSnapshot(sessions: FleetSession[]): void {
+/** `roster` defaults to `[]`, not "whatever was there before" — a caller that
+ *  wants the persisted roster carried forward passes it explicitly
+ *  (`stores/fleet.ts`'s only production call site does, with `get().roster`).
+ *  A default that silently preserved would need to read storage itself to
+ *  know what to preserve, which is a second read this function has never
+ *  needed for `sessions` either. */
+export function saveFleetSnapshot(sessions: FleetSession[], roster: readonly RosterWire[] = []): void {
   if (sessions.length === 0) return;
   // `unmeasuredFields`, not `s.unmeasured` directly (blocking review finding
   // 2): a LIVE fleet frame never goes through `reviveFleetSession` (only this
@@ -67,7 +101,7 @@ export function saveFleetSnapshot(sessions: FleetSession[]): void {
   // static type — see `unmeasuredFields`'s own docstring in shared/api.ts.
   if (sessions.some((s) => unmeasuredFields(s).length > 0)) return;
   try {
-    const snap: FleetSnapshot = { savedAt: Date.now(), sessions };
+    const snap: FleetSnapshot = { savedAt: Date.now(), sessions, roster: [...roster] };
     storage().setItem(KEY, JSON.stringify(snap));
   } catch {
     /* ignore */
@@ -80,18 +114,28 @@ export function saveFleetSnapshot(sessions: FleetSession[]): void {
  *  around it — so the sessions are REVIVED into today's shape rather than cast:
  *  fields added since get their nulls, and anything that cannot be a
  *  FleetSession rejects the whole snapshot instead of hydrating a fleet whose
- *  `archivedAt === undefined` reads as archived. See shared/api.ts. */
+ *  `archivedAt === undefined` reads as archived. See shared/api.ts.
+ *
+ *  `roster` is NOT held to the same all-or-nothing standard `sessions` is —
+ *  a snapshot written before this field existed (every snapshot on disk the
+ *  moment it ships) is not corrupt, it is version skew, and rejecting the
+ *  whole snapshot over it would throw away the sessions too, right when the
+ *  offline cache matters most. Absent, wrong-shaped, or holding an
+ *  individually malformed entry all degrade to `[]` / a filtered array
+ *  rather than failing the read — the same "unarrived roster" state
+ *  `accountLabel`/`accountColorVar` already have a fallback for. */
 export function loadFleetSnapshot(): FleetSnapshot | null {
   try {
     const raw = storage().getItem(KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const { savedAt, sessions } = parsed as { savedAt?: unknown; sessions?: unknown };
+    const { savedAt, sessions, roster } = parsed as { savedAt?: unknown; sessions?: unknown; roster?: unknown };
     if (typeof savedAt !== 'number') return null;
     const revived = reviveFleetSessions(sessions);
     if (revived === null) return null;
-    return { savedAt, sessions: revived };
+    const revivedRoster = Array.isArray(roster) ? roster.filter(isRosterWireLike) : [];
+    return { savedAt, sessions: revived, roster: revivedRoster };
   } catch {
     return null;
   }

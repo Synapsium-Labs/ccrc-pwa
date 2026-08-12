@@ -12,7 +12,7 @@ import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
-import { guardRunner, testDeps } from './helpers.js';
+import { guardRunner, seedRoster, testDeps } from './helpers.js';
 import { askKey } from '../src/askkey.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 
@@ -34,6 +34,7 @@ async function makeApp(
   opts: { status?: 'busy' | 'idle' } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkTmp('ccrc-');
+  seedRoster(home);
   const resolvedPanes = typeof panes === 'function' ? panes(home) : panes;
   seedSession(home, ID, 'claude2');
   const PANE_PID = 4242;
@@ -112,6 +113,7 @@ describe('write routes', () => {
   // unreadable `workdir` cannot touch.
   it('POST prompt succeeds — no 404 — when the live session\'s own workdir field is unreadable', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, ID, 'claude2');
     const PANE_PID = 4242;
     const panes = ['scrollback\n❯ \n', 'scrollback\n❯ hello\n', 'scrollback\n❯ \n'];
@@ -149,6 +151,7 @@ describe('write routes', () => {
 
   it('POST prompt still 404s a truly unregistered id under the same unreadable-field IO', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, ID, 'claude2');
     const workdirUnreadableIO: FleetIO = {
       ...localIO,
@@ -648,6 +651,7 @@ describe('POST /api/sessions/:id/stop', () => {
   it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
      'identity could not be measured', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, ID, 'claude2');
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -663,6 +667,7 @@ describe('POST /api/sessions/:id/stop', () => {
 
   it('still refuses 404 unknown-session for a session PROVEN absent from the registry', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     // Fix (blocking review finding 3, test-fixture half): the registry
     // DIRECTORY must actually exist and be listable — a real fleet host
     // always has one once `ccd` has ever run — or this fixture proves
@@ -693,6 +698,7 @@ describe('POST /api/sessions/:id/stop', () => {
   it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the whole registry directory ' +
      'cannot be listed at all', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, ID, 'claude2');
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -709,6 +715,7 @@ describe('POST /api/sessions/:id/stop', () => {
 
   it('stops normally (200) when the row is fully measured', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, ID, 'claude2');
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -746,6 +753,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
 
   it('501s when the deployed ccd has neither verb, and shells out to nothing', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, ID, 'claude2');
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
@@ -763,6 +771,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
 
   it('200s and runs ccd ws-hold/ws-release --session, the reason passed through verbatim', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, ID, 'claude2');
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => {

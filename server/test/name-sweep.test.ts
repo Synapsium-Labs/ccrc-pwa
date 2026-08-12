@@ -130,7 +130,7 @@ describe('the naming sweep', () => {
 
   // Fix (blocking review finding 4): the test above does not, on its own,
   // kill the guard's deletion — degrading `.wrapper` is ALSO caught by the
-  // pre-existing `configDirFor(home, '')` -> `undefined` -> `continue` two
+  // pre-existing `configDirFor(cfg, '')` -> `undefined` -> `continue` two
   // lines below the guard, so reverting the guard to a plain
   // `{uuid: r.uuid, wrapper: r.wrapper, workdir: r.workdir}` read still
   // leaves this fixture asserting `h.calls === []` for that UNRELATED

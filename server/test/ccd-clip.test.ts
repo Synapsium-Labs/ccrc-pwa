@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let isolatedHome: string;
@@ -17,6 +17,10 @@ beforeEach(() => {
   // runs even when guarded by BASH_SOURCE[0] == $0. The guard only wraps the dispatch case.
   // Use os.tmpdir() to keep temp directories out of the repo.
   isolatedHome = mkTmp('ccrc-ccd-home-');
+  // That file-scope setup now includes sourcing `~/.ccrc/accounts.sh`, which is
+  // fatal when absent — so an isolated HOME has to carry a roster before ccd
+  // will get as far as defining `_clip_dest`.
+  seedAccountsSh(isolatedHome);
 });
 
 afterEach(() => {

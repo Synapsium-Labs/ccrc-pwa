@@ -7,9 +7,14 @@ import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { clipName, clipPath, stageUpload, CLIP_NAME_RE } from '../src/clip.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 
 const ID = 'claude2-MekWarLive';
-const cfgFor = () => loadConfig({ CCRC_HOME: mkTmp('ccrc-') });
+const cfgFor = () => {
+  const home = mkTmp('ccrc-');
+  seedRoster(home);
+  return loadConfig({ CCRC_HOME: home });
+};
 
 describe('clipName', () => {
   it('keeps the real extension — a JPEG must not be named .png', () => {

@@ -58,6 +58,7 @@ export function FleetScreen({
   const conn = useStore((s) => s.conn);
   const notices = useStore((s) => s.notices);
   const dismissNotice = useStore((s) => s.dismissNotice);
+  const roster = useStore((s) => s.roster);
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -401,6 +402,7 @@ export function FleetScreen({
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}
                 onActions={openActionsFor}
+                roster={roster}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for
                    a project, wrong for an archive fold that must start

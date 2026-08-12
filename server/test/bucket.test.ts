@@ -10,6 +10,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { HookState } from '../src/hookstate.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 
 const base: BucketInput = {
   status: 'idle', statusUpdatedAt: 1000, dialogPending: false,
@@ -136,6 +137,7 @@ describe('sessionBucket', () => {
     // its sibling: with hookstate present, `bucket` is the field that moved.
     // Harness copied from fleet.test.ts's "status is IDENTICAL..." fixture.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
@@ -175,6 +177,7 @@ describe('sessionBucket', () => {
     // reports idle — mirrors sessionBucket's own "leaves a hookless idle
     // session in idle" unit test, through the full assembleFleet path.
     const home2 = mkTmp('ccrc-');
+    seedRoster(home2);
     const reg2 = path.join(home2, '.cc-sessions');
     mkdirSync(reg2, { recursive: true });
     writeFileSync(path.join(reg2, 'claude-demo.wrapper'), 'claude');
@@ -206,6 +209,11 @@ describe('sessionBucket', () => {
   // attention", it has not run at all.
   it('F1: assembleFleet buckets a virgin SessionStart-done session as idle, not done', async () => {
     const home = mkTmp('ccrc-');
+    // Stage 2a: `loadConfig` reads `~/.ccrc/accounts.json` and refuses to boot
+    // without it, so every fixture home needs a roster before it is loaded.
+    // This test arrived on main while that branch was in flight, so it is the
+    // one call site the sweep could not have covered.
+    seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {

@@ -10,7 +10,7 @@ import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { SwapSheet } from '../fleet/SwapSheet';
-import { accountColorVar } from '../lib/accounts';
+import { accountHue } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
@@ -60,6 +60,7 @@ export function SessionScreen({
   const mail = useStore((s) => s.mail);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
+  const roster = useFleet((s) => s.roster);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -117,8 +118,27 @@ export function SessionScreen({
   const wrapperFromId = id.split(':', 1)[0] ?? id;
   const project = live?.project ?? (id.slice(wrapperFromId.length + 1) || id);
   const wrapper = live?.wrapper ?? wrapperFromId;
-  const acctVar = accountColorVar(wrapper);
-  const acct = acctVar.startsWith('--acct-') ? acctVar.slice('--acct-'.length) : undefined;
+  // A direct roster lookup, not a re-parse of a colour-token NAME: this used
+  // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
+  // return value, which worked only for a wrapper whose colour happened to be
+  // an `--acct-*` token. `claude-dev0`'s `colorVar` used to be the non-hue
+  // `--ink-tertiary` (no account had it as a real hue), so the strip found no
+  // `--acct-` prefix, `acct` came back `undefined`, and dev0 rendered in
+  // `claude`'s cyan — a real user-visible bug this lookup closes, since
+  // `accountHue` returns `undefined` for an unrostered wrapper and nothing
+  // else.
+  //
+  // `'unknown'`, never a bare `undefined` here (fix round 1, finding 4): an
+  // `undefined` value makes React omit the `data-acct` attribute entirely, no
+  // `[data-acct]` rule in tokens.css matches, and `--acct-active` is left at
+  // `:root`'s default — which is `--acct-cyan`. Before the roster arrives (or
+  // for a wrapper it genuinely does not carry), every OTHER account used to
+  // flash cyan — a real hue that reads as "this is the claude account" rather
+  // than "unknown" — for exactly as long as the first `/api/accounts` poll
+  // takes. `[data-acct='unknown']` (tokens.css) rebinds `--acct-active` to
+  // neutral ink instead, the same fallback pair `accountColorVar` and
+  // `SwapSheet`'s `AccountRow` already use for a hue-less wrapper.
+  const acct = accountHue(roster, wrapper) ?? 'unknown';
 
   // The stream sends status only on change — until its first frame the fleet
   // snapshot speaks for the session (same fallback the header does), so a
@@ -189,6 +209,7 @@ export function SessionScreen({
         session={live}
         status={status}
         statusUpdatedAt={statusUpdatedAt}
+        roster={roster}
         onInterrupt={() => void interrupt()}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}

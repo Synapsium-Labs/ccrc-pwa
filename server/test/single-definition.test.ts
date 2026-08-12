@@ -18,7 +18,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PR_REASONS, isPrReason, ACCOUNTS } from '../../shared/api.js';
+import { PR_REASONS, isPrReason } from '../../shared/api.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -368,24 +369,49 @@ describe('Build 7 nouns', () => {
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
 // "an account" / "a wrapper" was the one domain concept in this system with no
 // type and no home, enumerated by hand in eight places across three languages.
-// `shared/api.ts`'s `ACCOUNTS` is now the one TypeScript home for it.
-describe('the account roster — one ACCOUNTS map, shared/api.ts', () => {
-  // Derived from the roster itself, NOT hand-typed — a hand-typed copy here
-  // would be the scanner that exists to prevent hand-typed copies being
-  // itself one: a 6th account added to `ACCOUNTS` (say `claude-dev1`) and
-  // then restated as `['claude-dev1', 'claude2']` somewhere under the four
-  // roots must score a hit, and a scanner still matching against a five-name
-  // literal frozen at write time would stay green while that drift reopened.
-  const WRAPPER_NAMES = Object.keys(ACCOUNTS);
+// That was closed by deriving every list from one `ACCOUNTS` literal in
+// `shared/api.ts`.
+//
+// Stage 2a then deleted that literal (Task 6): the roster is DATA now —
+// `~/.ccrc/accounts.json`, parsed by `shared/roster.ts`, carried on
+// `CcrcConfig.roster`, projected to bash as `~/.ccrc/accounts.sh`. So the rule
+// this describe enforces has GROWN, not shrunk. Before, a second copy was
+// caught by the compiler if it disagreed with `Record<Wrapper, AccountDef>`;
+// now `Wrapper` is `string`, the compiler has nothing to say about a hand-typed
+// account list, and a text scan is the only mechanism left. The bar is
+// unchanged — "a reasonable person adding a copy in the ordinary way is stopped
+// before review", not "unforgeable".
+describe('the account roster — runtime data, no compile-time copies', () => {
+  // The names to hunt for now come from `DEFAULT_TEST_ROSTER`
+  // (server/test/helpers.ts), NOT from a shipped source file — because after
+  // Task 6 the roster is not defined in one. The single copy still under the
+  // scanned roots (`pwa/src/lib/accounts.ts`'s transitional `PRODUCTION_ROSTER`,
+  // deleted in Task 7) is the very thing this hunts for, so drawing the hunt
+  // list from it would make the scanner blind to itself. `server/test/` is not
+  // one of the four scanned ROOTS, so the list cannot trip its own scan either;
+  // and it is still a real list of the five production ids, so a restatement of
+  // two of them anywhere under the roots scores a hit exactly as it did before.
+  //
+  // Hand-typing the names HERE instead would make the scanner that exists to
+  // prevent hand-typed copies one itself: a 6th account (say `claude-dev1`)
+  // added to the production roster and then restated as
+  // `['claude-dev1', 'claude2']` under some root must score a hit, and a
+  // scanner frozen at five names would stay green while that drift reopened.
+  const WRAPPER_NAMES = DEFAULT_TEST_ROSTER.accounts.map((a) => a.id);
+
+  it('the name list this scans is real, and is the roster', () => {
+    // A scan for names nothing spells is a scan that passes everything — the
+    // same reasoning as `the roots this scans` at the top of this file. If the
+    // test roster is ever emptied or renamed out from under this, THIS goes red
+    // rather than the scans below going quietly vacuous.
+    expect(WRAPPER_NAMES.length).toBeGreaterThanOrEqual(2);
+    expect(WRAPPER_NAMES).toContain('claude');
+  });
 
   // The fingerprint every historical copy shared: two or more wrapper names
   // quoted inside the SAME `[...]` array literal — fleet.ts's old
   // `idHomeWrapper` prefix list, server.ts's old `ACCOUNT_ORDER`, pwa's old
   // `KNOWN_WRAPPERS`, shared/api.ts's own old `HOME_ABLE_WRAPPERS`.
-  // `ACCOUNTS`' own keys never trip this: they are bare object-literal
-  // property names (`claude: {`), never inside square brackets, and a
-  // roster entry's `idPrefix`/`configDirSuffix` VALUES are single strings,
-  // never two wrapper names in the same literal.
   const enumeratesAsArray = (src: string): boolean => {
     for (const m of src.matchAll(/\[[^\]]*\]/gs)) {
       const hits = WRAPPER_NAMES.filter((w) => new RegExp(`['"]${w}['"]`).test(m[0]));
@@ -399,50 +425,84 @@ describe('the account roster — one ACCOUNTS map, shared/api.ts', () => {
     expect(holders).toEqual([]);
   });
 
-  it('ACCOUNTS is defined in exactly one file, and that file is shared/api.ts', () => {
-    const holders = ALL.filter((f) => /^\s*export const ACCOUNTS\b/m.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(holders).toEqual(['shared/api.ts']);
+  // The rule the deleted `ACCOUNTS` test used to enforce ("defined in exactly
+  // one file"), restated for a world where the answer is "in no file at all".
+  // Each name below was a real export of `shared/api.ts` until Task 6; a
+  // re-appearance means someone rebuilt the compile-time roster rather than
+  // reading `cfg.roster`.
+  it('the roster and its derived lists survive in NO shipped source file', () => {
+    const RESURRECTED =
+      /^\s*(?:export\s+)?const\s+(ACCOUNTS|ALL_WRAPPERS|ACCOUNT_ORDER|KNOWN_WRAPPERS|HOME_ABLE_WRAPPERS|PRODUCTION_ROSTER)\b/m;
+    const holders = ALL.filter((f) => RESURRECTED.test(readFileSync(f, 'utf8'))).map(rel);
+    // Task 7 of the stage-2a plan deleted the last copy site:
+    // `pwa/src/lib/accounts.ts`'s `PRODUCTION_ROSTER` — a hand-typed,
+    // synchronous, five-account transitional literal Task 6 left behind on
+    // purpose, because `accountLabel`/`accountColorVar`/`KNOWN_WRAPPERS` were
+    // called during render by eight component modules and could not read a
+    // roster that arrives over the wire until the store threading this same
+    // task does landed. `accountLabel`/`accountHue`/`homeAbleLabelList` are
+    // now pure projections over a `RosterWire[]` every caller threads in
+    // (`stores/fleet.ts`'s `roster` field, or a screen's own `/api/accounts`
+    // poll) — nothing left under the four scanned roots holds a compile-time
+    // copy of the roster, so `toEqual([])`, not "does not contain the deleted
+    // name": the assertion tightened rather than merely surviving the
+    // deletion it was written to notice.
+    expect(holders).toEqual([]);
   });
 
-  it('HOME_ABLE_WRAPPERS, ACCOUNT_ORDER and KNOWN_WRAPPERS are derived from ACCOUNTS, not hand-typed', () => {
-    const src = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
-    expect(src).toMatch(/export const HOME_ABLE_WRAPPERS: readonly Wrapper\[\] = ALL_WRAPPERS\.filter/);
-    expect(src).toMatch(/export const ACCOUNT_ORDER: readonly Wrapper\[\] = ALL_WRAPPERS\.filter/);
-    expect(src).toMatch(/export const KNOWN_WRAPPERS: readonly Wrapper\[\] = ACCOUNT_ORDER/);
+  it('shared/api.ts holds the concept and shared/roster.ts holds the data', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    // The alias survives, widened — and its docstring is the roster concept's
+    // only architectural record now that the literal is gone.
+    expect(api).toMatch(/export type Wrapper = string;/);
+    // ...and the guard that widening made meaningless is gone with it: a
+    // `v is Wrapper` predicate over `string` narrows nothing while reading like
+    // a check the compiler enforces. The DEFINITION is what must be absent —
+    // the docstring above still names it, because why it was deleted is worth
+    // more than the four lines it occupied.
+    expect(api).not.toMatch(/^\s*export function isWrapper\b/m);
+    // The wire contract is named once (server handler, PWA fetch, route test).
+    expect(api).toMatch(/export interface AccountsResponse\b/);
+
+    const roster = readFileSync(path.join(ccrcRoot, 'shared/roster.ts'), 'utf8');
+    expect(roster).toMatch(/export function parseRoster\(/);
+    expect(roster).toMatch(/export function inRoster\(/);
   });
 
-  it('is what the four former copy sites (plus limits.ts\'s fifth) now import', () => {
-    const importsFrom = (f: string, name: string): boolean =>
-      new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)*shared/api(?:\\.js)?'`)
-        .test(readFileSync(path.join(ccrcRoot, f), 'utf8'));
-    // server.ts's old ACCOUNT_ORDER literal, and limits.ts's old
-    // `[...HOME_ABLE_WRAPPERS, 'gpt']` — both now import the roster's own
-    // ACCOUNT_ORDER instead of restating (or half-restating) it.
-    for (const f of ['server/src/server.ts', 'server/src/limits.ts']) {
-      expect(importsFrom(f, 'ACCOUNT_ORDER'), f).toBe(true);
-    }
-    // pwa's old KNOWN_WRAPPERS literal — same set, kept under its old name
-    // (shared/api.ts's own `KNOWN_WRAPPERS` docstring explains why).
-    expect(importsFrom('pwa/src/lib/accounts.ts', 'KNOWN_WRAPPERS')).toBe(true);
-    // fleet.ts's old idHomeWrapper prefix list, and pwa's old hand-typed
-    // label/colour map — both now read the roster's per-account fields
-    // directly.
-    for (const f of ['server/src/fleet.ts', 'pwa/src/lib/accounts.ts']) {
-      expect(importsFrom(f, 'ACCOUNTS'), f).toBe(true);
-    }
+  it('every former copy site now reads the roster it is given, not one it builds', () => {
+    const srcOf = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    // fleet.ts's old `BY_ID_PREFIX_LENGTH_DESC` — a module-level const sorted
+    // at import time, which runtime roster data cannot be — is now
+    // `roster.byIdLengthDesc`, precomputed once by `parseRoster`.
+    expect(srcOf('server/src/fleet.ts')).toMatch(/roster\.byIdLengthDesc/);
+    // Again the definition, not the mention: `idHomeWrapper`'s docstring names
+    // the const it replaced and says why that shape could not survive.
+    expect(srcOf('server/src/fleet.ts')).not.toMatch(/^\s*const BY_ID_PREFIX_LENGTH_DESC\b/m);
+    // limits.ts's old `isKnownWrapper`, a module-scope const built from
+    // `ACCOUNT_ORDER` at import time.
+    expect(srcOf('server/src/limits.ts')).toMatch(/inRoster\(cfg\.roster/);
+    // server.ts's `rank()`, rebuilt per request from the config's roster.
+    expect(srcOf('server/src/server.ts')).toMatch(/deps\.cfg\.roster\.accounts/);
+    // ...with the unknown-wrapper fallback intact: a wrapper the roster does
+    // not have sorts LAST rather than vanishing off the accounts screen. Ranked
+    // `order.length`, not a magic 99 — a bound that was safe only while the
+    // roster was a five-member union (see the handler's own comment).
+    expect(srcOf('server/src/server.ts')).toMatch(/i < 0 \? order\.length/);
   });
 });
 
 describe('the account roster — config dir is data, joined in one place', () => {
   it('no source file under the four roots indexes cfg.wrappers[...] directly', () => {
     // `configDirFor` (server/src/config.ts) is the one place a wrapper
-    // becomes a directory, and it maps straight from `ACCOUNTS` + `home`
-    // rather than through `cfg.wrappers` at all — so the rule ("no
+    // becomes a directory, and it maps straight from `cfg.roster.byId` +
+    // `home` rather than through `cfg.wrappers` at all — a field that no
+    // longer exists on `CcrcConfig` at all, since Task 5 replaced it with the
+    // parsed roster. The rule ("no
     // cfg.wrappers[x] indexing outside configDirFor", architecture doc,
-    // cross-cutting (a)) is satisfied by there being no such indexing
-    // anywhere, not by confining it to one function. Nine call sites did
+    // cross-cutting (a)) is therefore satisfied by there being no such
+    // indexing anywhere, not by confining it to one function. Nine call sites did
     // this before fleet.ts (x2), server.ts, commands.ts, watch.ts (x4) and
-    // sessionws.ts all switched to `configDirFor(cfg.home, wrapper)`.
+    // sessionws.ts all switched to `configDirFor(cfg, wrapper)`.
     const holders = ALL.filter((f) => /\.wrappers\[/.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual([]);
   });

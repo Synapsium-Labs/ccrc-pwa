@@ -267,7 +267,7 @@ function toggleableIO(): { io: FleetIO; degrade: (id: string, field: string) => 
 // the wire (`FleetSession` carries no `unmeasured` field). Before the fix,
 // `tick()`'s busy→idle push loop read straight off `s.status`, which
 // `assembleFleet` freezes at its `alive` default of 'idle' for a
-// wrapper-degraded row (`configDirFor(cfg.home, '') === undefined` skips
+// wrapper-degraded row (`configDirFor(cfg, '') === undefined` skips
 // `readLiveState` entirely) — so a session that was genuinely still mid-turn
 // fired a false "✓ Finished" push AND a recorded feed event asserting a turn
 // completed. Written FIRST and confirmed red against the pre-gate code.

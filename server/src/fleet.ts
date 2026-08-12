@@ -7,10 +7,11 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, PrState, SessionStatus, TaskProgress, Wrapper } from '../../shared/api.js';
+import type { FleetSession, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { ACCOUNTS, sessionBucket } from '../../shared/api.js';
+import { sessionBucket } from '../../shared/api.js';
+import type { Roster } from '../../shared/roster.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
@@ -50,41 +51,43 @@ export function hookAskSummary(hs: HookState | null): string | null {
   return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
 }
 
-/** `ACCOUNTS`' wrappers, longest `idPrefix` first — computed once, since
- *  `ACCOUNTS` is static. `idHomeWrapper` walks this order so a prefix that is
- *  itself a prefix of a longer one (`'claude-'` inside `'claude-dev0-'` and
- *  `'claude-corp-'`) never wins first. */
-const BY_ID_PREFIX_LENGTH_DESC: readonly Wrapper[] =
-  (Object.keys(ACCOUNTS) as Wrapper[]).slice().sort((a, b) => ACCOUNTS[b].idPrefix.length - ACCOUNTS[a].idPrefix.length);
-
 /**
  * Which account a session id belongs to, from the id alone — the fallback
  * `assembleFleet` uses when the registry has no explicit `home` written
  * (older sessions; ccd only started writing `home` recently).
  *
- * Longest-`idPrefix`-wins over `ACCOUNTS`, in `BY_ID_PREFIX_LENGTH_DESC`
- * order, replaces a hand-typed, unordered prefix array that did not even
- * MENTION `claude-dev0`, under which `claude-dev0-quiet-basin` would have
- * fallen through to the bare `'claude-'` branch and come back `claude` — a
- * session attributed to the wrong account.
+ * Longest-id-wins, over `roster.byIdLengthDesc` (`shared/roster.ts`, which
+ * sorts by id length descending and then id ascending, so the order is total
+ * rather than engine-defined). The prefix an id is matched against is
+ * `<account id>-`, which is also the pattern ccd's `_ccrc_id_wrapper` case arms
+ * are generated from — one rule, two languages.
  *
- * Prophylactic, not a fix for an observed misattribution: `claude-dev0-*`
- * cannot appear in the registry today. `ACCOUNTS['claude-dev0'].ccdValid`
- * is `false`, and the cross-language fixture test
- * (`wrapper-roster-fixture.test.ts`) pins that ccd's own `_is_valid_wrapper`
- * rejects `claude-dev0` — so nothing under `ccd/` can mint an id with that
- * prefix. What this ordering keeps true is that IF `claude-dev0` (or any
- * future wrapper whose `idPrefix` is a strict extension of another member's)
- * ever becomes ccd-valid, the longest match still wins rather than silently
- * reproducing the old bug. `fleet.test.ts:40` pins the corrected answer as a
- * regression guard, not as a record of a live incident.
+ * The ordering is the entire point. Its predecessor was a hand-typed, unordered
+ * prefix array that did not even MENTION `claude-dev0`, under which
+ * `claude-dev0-quiet-basin` fell through to the bare `claude-` branch and came
+ * back `claude` — a live session attributed to the wrong account, which is not
+ * hypothetical: `claude-dev0-*` ids exist in the registry today. Get the order
+ * wrong here (or in ccd's own `case`) and a `claude-dev0` session is silently
+ * re-attributed to `claude`, reproducing the old bug for real. `fleet.test.ts`
+ * pins both the real ids and a synthetic prefix-collision roster.
  *
- * Falls back to `'claude'` for an id with no wrapper prefix at all — a main
- * checkout's id is the bare project name, never `<wrapper>-<slug>`.
+ * Falls back to `roster.upstreamId` — the one account running the Claude Code
+ * binary itself — for an id with no account prefix at all, since a main
+ * checkout's id is the bare project name, never `<wrapper>-<slug>`. That
+ * fallback used to be the literal `'claude'`, which is only that account's name
+ * on boxes whose roster happens to call it that; `parseRoster` guarantees
+ * exactly one upstream account, so this names the same thing everywhere.
+ *
+ * Takes the roster rather than reading one: the previous
+ * `BY_ID_PREFIX_LENGTH_DESC` was a module-level const evaluated at import time,
+ * and runtime roster data does not exist then. `assembleFleet` passes
+ * `cfg.roster`, whose `byIdLengthDesc` was sorted once by `parseRoster` — this
+ * runs once per registry row, so re-sorting per call would be O(rows ×
+ * accounts log accounts) on every fleet tick.
  */
-export function idHomeWrapper(id: string): Wrapper {
-  for (const w of BY_ID_PREFIX_LENGTH_DESC) if (id.startsWith(ACCOUNTS[w].idPrefix)) return w;
-  return 'claude';
+export function idHomeWrapper(roster: Roster, id: string): string {
+  for (const a of roster.byIdLengthDesc) if (id.startsWith(`${a.id}-`)) return a.id;
+  return roster.upstreamId;
 }
 
 /**
@@ -111,7 +114,7 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // degraded `rec.wrapper` is `''`, which `configDirFor` (an unknown wrapper
   // string) already answers `undefined` for — honest-but-blind, and it fails
   // TOWARD refusing an interrupt rather than granting one on a guess.
-  const cfgDir = configDirFor(cfg.home, rec.wrapper);
+  const cfgDir = configDirFor(cfg, rec.wrapper);
   if (!pid || !cfgDir) return 'idle';
   const live = await readLiveState(io, cfgDir, pid);
   return live ? liveSessionStatus(live.status) : 'idle';
@@ -186,7 +189,7 @@ export async function assembleFleet(
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
-      const cfgDir = configDirFor(cfg.home, r.wrapper);
+      const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid && cfgDir) {
         const live = await readLiveState(io, cfgDir, pid);
         if (live) {
@@ -213,7 +216,7 @@ export async function assembleFleet(
     // that derivation is done the moment this line runs.
     const hs = hookStates?.get(r.id) ?? null;
     const session: FleetSession = {
-      id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(r.id),
+      id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an

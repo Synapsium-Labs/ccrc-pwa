@@ -1,10 +1,12 @@
 // The per-session actions that no longer fit on a row. The failure paths are
 // the point: ccd's refusals are the only explanation the reader gets.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
+import { createFleetStore } from '../src/stores/fleet';
+import { TEST_ROSTER } from './rosterFixture';
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
@@ -25,10 +27,26 @@ const stubFetch = (body: unknown, status = 502): void => {
   })));
 };
 
+/** A real `AccountsResponse` shape for `GET /api/accounts` — every other
+ *  route this blanket stub answers still gets the bare `'{}'` 200, which is
+ *  fine for a POST action that only needs to succeed. `/api/accounts` is
+ *  different: `SwapSheet` mounts under every `SessionActionsSheet` and polls
+ *  it via `useDisabledWrappers` whenever the sheet is open, so a bare `{}`
+ *  here answered `roster: undefined` — a wire shape the server never sends
+ *  (fix round 1: the guards this motivated should be a production boundary
+ *  check, not load-bearing for the suite). */
+const accountsRoute = (): Response =>
+  new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
+    status: 200, headers: { 'content-type': 'application/json' },
+  });
+
 // vitest runs without globals, so RTL's auto-cleanup never registers itself
 // (see test/message-links.test.tsx et al.) — without this, rerender/multi-render
 // tests below leak DOM across `it` blocks.
-beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 }))); });
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) =>
+    String(input).includes('/api/accounts') ? accountsRoute() : new Response('{}', { status: 200 })));
+});
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('composition', () => {
@@ -111,8 +129,10 @@ describe('the unguarded delete is gone', () => {
 
 describe('away note', () => {
   it('spells out the swap, which the line only marks', () => {
+    const fleet = createFleetStore();
+    act(() => { fleet.setState({ roster: TEST_ROSTER }); });
     render(<SessionActionsSheet session={s({ wrapper: 'claude2', home: 'claude' })}
-                                open onClose={() => {}} onReap={() => {}} />);
+                                open onClose={() => {}} onReap={() => {}} fleet={fleet} />);
     expect(screen.getByText(/Pinned to team·max, running on alt·max/)).toBeInTheDocument();
   });
 

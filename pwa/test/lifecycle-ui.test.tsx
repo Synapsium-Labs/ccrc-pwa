@@ -15,6 +15,7 @@ import { createSessionStore } from '../src/stores/session';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
 import { SwapSheet, pickableWrappers } from '../src/fleet/SwapSheet';
 import { SessionScreen } from '../src/screens/SessionScreen';
+import { TEST_ROSTER } from './rosterFixture';
 
 afterEach(() => {
   cleanup();
@@ -58,6 +59,7 @@ const makeFleet = (): FleetStore => {
   act(() => {
     store.setState({
       conn: 'open',
+      roster: TEST_ROSTER,
       sessions: [
         fleetSession(),
         fleetSession({
@@ -78,7 +80,7 @@ const makeFleet = (): FleetStore => {
  *  that need a specific (or empty) fleet rather than makeFleet()'s fixed pair. */
 const storeWith = (sessions: FleetSession[]): FleetStore => {
   const store = createFleetStore({ makeSocket: fakeSocket });
-  act(() => { store.setState({ conn: 'open', sessions }); });
+  act(() => { store.setState({ conn: 'open', sessions, roster: TEST_ROSTER }); });
   return store;
 };
 
@@ -93,6 +95,8 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
   vi.spyOn(api, 'accounts').mockResolvedValue({
     accounts,
     projected: { wrapper: 'claude', score: 0 },
+    // Carried on the wire since Stage 2a; unread here until Task 7.
+    roster: [],
   });
 };
 
@@ -425,11 +429,11 @@ describe('SwapSheet', () => {
   it('excludes a disabled account from the swap picker', () => {
     // The bug a display-only fix leaves behind: the strip stops showing gpt
     // while the picker still offers it as a swap target.
-    expect(pickableWrappers([], ['gpt'])).not.toContain('gpt');
+    expect(pickableWrappers(TEST_ROSTER, [], ['gpt'])).not.toContain('gpt');
   });
 
   it('keeps every account when none is disabled', () => {
-    expect(pickableWrappers([], [])).toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
+    expect(pickableWrappers(TEST_ROSTER, [], [])).toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
   });
 
   it('does not offer a disabled account in the rendered picker', async () => {

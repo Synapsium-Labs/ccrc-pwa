@@ -58,6 +58,7 @@ export function SessionActionsSheet({
   onReap: (id: string) => void;
   fleet?: FleetStore;
 }): ReactNode {
+  const roster = fleet((s) => s.roster);
   // Every hook runs BEFORE the null guard below: `session` goes null whenever
   // the sheet closes, and a conditional hook would throw on that render.
   const [swapOpen, setSwapOpen] = useState(false);
@@ -339,8 +340,8 @@ export function SessionActionsSheet({
 
           {session.status !== 'dead' && session.wrapper !== session.home && (
             <p className="sess-sheet-note">
-              Pinned to {accountLabel(session.home)}, running on{' '}
-              {accountLabel(session.wrapper)} — moved when its account filled up.
+              Pinned to {accountLabel(roster, session.home)}, running on{' '}
+              {accountLabel(roster, session.wrapper)} — moved when its account filled up.
             </p>
           )}
 

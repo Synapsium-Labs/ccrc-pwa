@@ -703,7 +703,7 @@ describe('the auditor itself', () => {
   });
 
   it('resolves var() chains rather than only literals', () => {
-    // --pr-merged -> --acct-claude2 -> a hex, per theme.
+    // --pr-merged -> --acct-violet -> a hex, per theme.
     expect(resolveColor('var(--pr-merged)', DARK)).toEqual(resolveColor('#C7A7F4', DARK));
     expect(resolveColor('var(--pr-merged)', LIGHT)).toEqual(resolveColor('#6D3FB4', LIGHT));
   });

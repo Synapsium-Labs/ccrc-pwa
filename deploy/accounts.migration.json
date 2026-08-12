@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "claude",
+      "label": "team·max",
+      "configDirSuffix": ".claude",
+      "exec": { "kind": "upstream" },
+      "homeAble": true,
+      "hue": "cyan",
+      "telemetry": "anthropic"
+    },
+    {
+      "id": "claude2",
+      "label": "alt·max",
+      "configDirSuffix": ".claude-personal",
+      "exec": { "kind": "generated", "secretsFile": ".cc-secrets/claude2-oauth.env" },
+      "homeAble": true,
+      "hue": "violet",
+      "telemetry": "anthropic"
+    },
+    {
+      "id": "claude-corp",
+      "label": "team·shared",
+      "configDirSuffix": ".claude-corp",
+      "exec": { "kind": "generated" },
+      "homeAble": true,
+      "hue": "blue",
+      "telemetry": "anthropic"
+    },
+    {
+      "id": "gpt",
+      "label": "gpt",
+      "configDirSuffix": ".claude-gpt",
+      "exec": { "kind": "external" },
+      "homeAble": false,
+      "hue": "magenta",
+      "telemetry": "none"
+    },
+    {
+      "id": "claude-dev0",
+      "label": "lab·dev0",
+      "configDirSuffix": ".claude-dev0",
+      "exec": { "kind": "generated", "secretsFile": ".cc-secrets/claude-dev0-oauth.env" },
+      "homeAble": true,
+      "hue": "green",
+      "telemetry": "anthropic"
+    }
+  ]
+}

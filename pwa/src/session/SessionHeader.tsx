@@ -10,7 +10,7 @@
 // never fires while focus is in a text field.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, SessionBucket, SessionStatus } from '../../../shared/api';
+import type { FleetSession, RosterWire, SessionBucket, SessionStatus } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
@@ -43,6 +43,11 @@ export interface SessionHeaderProps {
   /** Pre-snapshot identity derived from the session id (`wrapper:project`) —
    *  keeps the header instant on deep links before `/ws/fleet` lands. */
   fallback?: { title: string; wrapper: string };
+  /** The account roster (`stores/fleet.ts`'s `roster`) — defaults to `[]` so
+   *  a header rendered before the first poll lands degrades to
+   *  `accountLabel`'s own raw-wrapper-name fallback rather than needing a
+   *  roster it was never given. */
+  roster?: readonly RosterWire[];
 }
 
 /** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
@@ -79,6 +84,7 @@ export function SessionHeader({
   onStopSession,
   onReapWorkspace,
   fallback,
+  roster = [],
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
@@ -233,7 +239,7 @@ export function SessionHeader({
           {wrapper !== '' && (
             <span className="chip chip--active">
               <i aria-hidden="true" />
-              {accountLabel(wrapper)}
+              {accountLabel(roster, wrapper)}
             </span>
           )}
           {/* Derived from archivedAt, never from pr.phase — a merged PR whose

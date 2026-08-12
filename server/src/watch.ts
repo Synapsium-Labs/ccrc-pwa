@@ -1095,7 +1095,7 @@ export class FleetWatcher {
           if (prev) next.set(r.id, prev);
           return;
         }
-        const cfgDir = configDirFor(this.deps.cfg.home, r.wrapper);
+        const cfgDir = configDirFor(this.deps.cfg, r.wrapper);
         if (!cfgDir) return;
         const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
         if (p) next.set(r.id, p);
@@ -1234,7 +1234,7 @@ export class FleetWatcher {
       // "an unsupported verb records no attempt" true of the stat gate as well
       // as of the attempted set.
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
-      const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
+      const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
       if (!cfgDir) continue;
       const file = await resolveTranscriptFile(this.deps.io, cfgDir, identity.workdir, identity.uuid);
       if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
@@ -1581,7 +1581,7 @@ export class FleetWatcher {
         // at all.
         if (hs !== null && hs.ask !== null) continue;
         const pid = await this.deps.tmux.panePid(d.toId);
-        const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
+        const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!pid || !cfgDir) continue;
         const live = await readLiveState(this.deps.io, cfgDir, pid);
         if (!live || liveSessionStatus(live.status) !== 'idle') continue;
@@ -1821,7 +1821,7 @@ export class FleetWatcher {
     const held = rec.held;
     if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
     const pid = await this.deps.tmux.panePid(id);
-    const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
+    const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
     if (!pid || !cfgDir) return { verdict: 'unknown', held };
     const live = await readLiveState(this.deps.io, cfgDir, pid);
     if (!live) return { verdict: 'unknown', held };
