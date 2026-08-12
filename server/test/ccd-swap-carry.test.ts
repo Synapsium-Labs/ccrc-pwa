@@ -155,6 +155,41 @@ describe('_swap_carry_jsonl', () => {
     expect(read(dst('-mdir-elsewhere'))).toBe('NEW\n');
   });
 
+  it('still returns a real rc when mdir is empty, instead of killing the shell', () => {
+    // §ambiguity resolution's mdir flows straight from `_reg_get workdir`,
+    // which is `cat … 2>/dev/null` — "" for a missing `.workdir` file. An
+    // empty bash array subscript on WRITE (`winner[""]=...`) is a FATAL
+    // interpreter error under `set -u`, not a recoverable one: no rc, nothing
+    // after it runs. Task 2 calls this AFTER `systemctl stop` and `tmux
+    // kill-session`, so a crash here would tear the session down and then die
+    // mid-carry — wrapper never flipped, nothing restarted, nothing carried,
+    // no rc to branch on. Every match must still land at its own mirrored
+    // dir even though there is no mdir slot to cover.
+    plant(SRC, '-data-projects-demo', 'A\n');
+    plant(SRC, '-w-quiet-mesa', 'B\n');
+    expect(carry('')).toBe('RC0');
+    expect(read(dst('-data-projects-demo'))).toBe('A\n');
+    expect(read(dst('-w-quiet-mesa'))).toBe('B\n');
+  });
+
+  it('breaks an equal-mtime tie the same way regardless of locale, via a C-collated sort', () => {
+    // stat -c %Y is whole-second granularity, so ties are reachable, and ccd
+    // runs from an interactive shell, `systemd-run --user`, and the auto-swap
+    // dispatcher — three environments, three possible locales. Left to the
+    // glob's own order the winner would follow LC_COLLATE and could flip
+    // depending on who triggered the swap. Under the LC_ALL=C sort this
+    // function now pins, '-B-dir' sorts before '-a-dir' (ASCII 'B' < 'a') —
+    // the opposite of casefolded collations like en_US.UTF-8 — so the winner
+    // is pinned to a specific, reproducible answer rather than merely
+    // "consistent with itself".
+    plant(SRC, '-a-dir', 'A\n', 1000);
+    plant(SRC, '-B-dir', 'B\n', 1000);
+    expect(carry('-mdir-elsewhere')).toBe('RC0');
+    expect(read(dst('-a-dir'))).toBe('A\n');
+    expect(read(dst('-B-dir'))).toBe('B\n');
+    expect(read(dst('-mdir-elsewhere'))).toBe('B\n');
+  });
+
   it('resolves a destination collision by newest source mtime, and drops the loser', () => {
     // The incident replayed WITH a full carry: the stale startup transcript
     // still sits at the old munge, which for many rows IS mdir. Copy both

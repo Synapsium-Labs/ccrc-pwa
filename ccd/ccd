@@ -7021,6 +7021,9 @@ _transcript_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>.json
   # The glob runs in a subshell so `nullglob` — which is what makes "no matches"
   # an empty list rather than a literal `*`-bearing path that `[[ -f ]]` quietly
   # answers no to — cannot leak into the caller's shell.
+  # rc is ALWAYS 0, found or not: "no matches" is empty output, not a nonzero
+  # rc. A caller deciding whether to refuse (Task 3) must count output lines —
+  # `_transcript_matches … || die` never fires.
   local cfg="$1" uuid="$2" f
   [[ -n "$cfg" && -n "$uuid" ]] || return 0
   ( shopt -s nullglob
@@ -7033,9 +7036,13 @@ _transcript_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>.json
 _sidecar_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>/ sidecar dir, no trailing slash.
   # Globbed in its OWN right, not "beside each jsonl": two of the incident's
   # sidecars sit in project dirs that hold no .jsonl for that uuid at all. The
-  # trailing slash in the glob is what restricts it to directories; the stripped
-  # slash on the way out is what stops `cp -a src/ dst` nesting the sidecar
-  # inside itself when a previous attempt half-created the destination.
+  # trailing slash in the glob is what restricts it to directories. The
+  # stripped slash on the way OUT gives every caller the same bare `<uuid>`
+  # path — it is NOT what stops `cp -a src/ dst` nesting: measured, `cp -al
+  # src/<uuid> dst/<uuid>` onto an ALREADY-EXISTING destination nests
+  # regardless of either side's trailing slash. The real guard is "the
+  # destination must not already exist before the copy runs", and that is the
+  # copying caller's job (Task 2), not this locator's.
   local cfg="$1" uuid="$2" d
   [[ -n "$cfg" && -n "$uuid" ]] || return 0
   ( shopt -s nullglob
@@ -7069,7 +7076,14 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried,
   # rules read mtimes and a plain cp stamps every copy with the time of the swap.
   local srccfg="$1" dstcfg="$2" uuid="$3" mdir="$4" sanitize="${5:-0}"
   local -a matches=()
-  mapfile -t matches < <(_transcript_matches "$srccfg" "$uuid")
+  # C-collated: the glob itself carries no order guarantee, and ccd runs from
+  # an interactive shell, from `systemd-run --user`, and from the auto-swap
+  # dispatcher — three environments, three possible locales. Left unpinned,
+  # which match wins an equal-mtime tie (below) would depend on who triggered
+  # the swap. Pinning here is what makes that tie-break reproducible; the
+  # `LC_ALL=C sort` on the slot list further down is the same reasoning
+  # applied one step later.
+  mapfile -t matches < <(_transcript_matches "$srccfg" "$uuid" | LC_ALL=C sort)
   (( ${#matches[@]} )) || return 1
 
   local -A mtime_of=() ino_of=() winner=()
@@ -7081,12 +7095,20 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried,
     pdir="${f%/*}"; pdir="${pdir##*/}"
     mt=$(stat -c %Y "$f" 2>/dev/null); [[ "$mt" =~ ^[0-9]+$ ]] || mt=0
     mtime_of["$f"]="$mt"
-    ino_of["$f"]=$(stat -c %i "$f" 2>/dev/null)
+    # device:inode, not inode alone — an inode number is unique only WITHIN a
+    # filesystem, and two distinct transcripts on different devices could
+    # otherwise collide and get treated as the same content.
+    ino_of["$f"]=$(stat -c '%d:%i' "$f" 2>/dev/null)
     [[ -n "${ino_of[$f]}" ]] || ino_of["$f"]="path:$f"
-    # Its own mirrored dir, and — for every match — the mdir slot. Strictly
-    # greater, so equal mtimes keep the first match in (sorted) glob order and
-    # the answer stays deterministic.
-    for s in "$pdir" "$mdir"; do
+    # Its own mirrored dir, and — for every match — the mdir slot, UNLESS mdir
+    # is empty: `_reg_get`'s `cat … 2>/dev/null` yields "" for a missing
+    # `.workdir` file, and `winner[""]=...` on an empty subscript is a FATAL
+    # bash error under `set -u` that kills the interpreter mid-loop, not a
+    # recoverable one — no rc, nothing after it runs. `${mdir:+"$mdir"}` drops
+    # the slot instead of ever writing to it. Strictly greater, so an
+    # equal-mtime tie keeps the first match in (C-sorted, see above) order,
+    # and the answer stays deterministic.
+    for s in "$pdir" ${mdir:+"$mdir"}; do
       cur="${winner[$s]:-}"
       if [[ -z "$cur" ]] || (( mt > ${mtime_of[$cur]} )); then winner["$s"]="$f"; fi
     done
