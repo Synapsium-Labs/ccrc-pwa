@@ -394,6 +394,7 @@ for name in "${REST[@]}"; do
 done
 
 echo "$PROG: label is id-as-written for every account below — none of these are the friendly names an operator picked (e.g. \"team·max\"), because nothing on disk records that. Edit \"label\" in $OUT by hand once it's written." >&2
+echo "$PROG: homeAble and telemetry are policy defaults inferred from exec kind (upstream/generated -> true/anthropic, external -> false/none), not facts read off disk — review and edit them in $OUT too." >&2
 
 # ── build the JSON ─────────────────────────────────────────────────────
 declare -a ACCOUNT_JSON=()

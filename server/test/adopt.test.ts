@@ -138,6 +138,18 @@ describe('ccrc-adopt: the measured five-account box', () => {
     expect(r.stderr).toMatch(/label is id-as-written/i);
   });
 
+  it('says on stderr that homeAble/telemetry are policy defaults, not facts read off disk, and names the file to edit', () => {
+    // Round-1 review finding: the report claimed this disclosure existed
+    // alongside the label caveat; it did not (homeAble/telemetry were
+    // assigned silently). Pinning it so the claim in the report stays true.
+    const home = freshBox();
+    const r = runAdoptRaw(home);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/homeAble/);
+    expect(r.stderr).toMatch(/telemetry/);
+    expect(r.stderr).toMatch(/policy default/i);
+  });
+
   it('recognizes claude-corp (no secretsFile) and claude-dev0 (with one), matching every account on disk', () => {
     const home = freshBox();
     const roster = parseRoster(JSON.parse(runAdopt(home)));
@@ -373,6 +385,43 @@ describe('ccrc-adopt: disk noise this box actually has', () => {
     expect(roster.byId.has('ccgpt')).toBe(false);
   });
 
+  it('classifies an upstream symlink whose target lives OUTSIDE .local/bin correctly — not by the link file\'s own tiny size', () => {
+    // The real shape on this box: $HOME/.local/bin/claude is a symlink to
+    // $HOME/.local/share/claude/versions/<ver>, a multi-hundred-MB ELF that
+    // lives entirely outside .local/bin. A classifier that judged the link
+    // by its OWN metadata (a symlink's `stat` size is the length of the
+    // target path string it holds, a few dozen bytes) rather than reading
+    // through it would get this wrong. Round-1 review asked for this pinned
+    // — the earlier alias test only covers a target that is ANOTHER
+    // candidate inside .local/bin (gpt -> ccgpt), a different case.
+    const home = mkTmp('ccrc-adopt-symlink-outside-');
+    const bin = binDir(home);
+    mkdirSync(bin, { recursive: true });
+    const versionsDir = path.join(home, '.local', 'share', 'claude', 'versions');
+    mkdirSync(versionsDir, { recursive: true });
+    const realBinary = path.join(versionsDir, '2.1.228');
+    // Multi-MB, non-script, ELF-shaped — large enough that reading it whole
+    // would be slow; is_script() must only ever look at its first two bytes.
+    const bytes = Buffer.alloc(5 * 1024 * 1024);
+    bytes[0] = 0x7f; bytes[1] = 0x45; bytes[2] = 0x4c; bytes[3] = 0x46; // \x7fELF
+    writeFileSync(realBinary, bytes);
+    chmodSync(realBinary, 0o755);
+    symlinkSync(realBinary, path.join(bin, 'claude'));
+
+    writeExec(path.join(bin, 'claude2'), [
+      '#!/usr/bin/env bash', 'export CLAUDE_CONFIG_DIR="$HOME/.claude-personal"',
+      'exec "$HOME/.local/bin/claude" "$@"', '',
+    ].join('\n'));
+    mkdirSync(path.join(home, '.claude'), { recursive: true });
+
+    const start = Date.now();
+    const roster = parseRoster(JSON.parse(runAdopt(home)));
+    expect(Date.now() - start).toBeLessThan(10_000);
+    expect(roster.upstreamId).toBe('claude');
+    expect(roster.byId.get('claude')!.exec.kind).toBe('upstream');
+    expect(roster.byId.get('claude2')!.exec.kind).toBe('generated');
+  });
+
   it('ignores ccd.bak-<date>-shaped and <id>.bak-<date>-shaped files: a "." never appears in a real account id', () => {
     const home = mkTmp('ccrc-adopt-backups-');
     buildMeasuredBox(home);
@@ -412,6 +461,36 @@ describe('ccrc-adopt: cross-check reports disagreement, never silently prefers a
     expect(r.code).toBe(0);
     expect(r.stderr).toMatch(/claude-ghost/);
     expect(r.stderr).toMatch(/session registry/i);
+  });
+
+  it('reads multiple .wrapper files with no trailing newline as separate ids, not one concatenated string', () => {
+    // Regression: the measured shape is that NONE of ~/.cc-sessions's
+    // `.wrapper` (and `.home`) files carry a trailing newline. An earlier
+    // version of the registry scan did `cat *.wrapper | sort -u`, which with
+    // 2+ such files silently ran their contents together into one garbled
+    // line (reproduced during development: a real run reported a single
+    // ~800-character "id"). One file alone can't catch this — concatenating
+    // ONE file's bytes with nothing is a no-op — so this needs 2+.
+    const home = mkTmp('ccrc-adopt-crosscheck-multiwrapper-');
+    buildMeasuredBox(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    // A real, discovered id — must NOT be reported as missing from the
+    // registry once correctly split out from its neighbours.
+    writeFileSync(path.join(home, '.cc-sessions', 'proj-a.wrapper'), 'claude'); // no trailing \n
+    // Two more ghost ids, back to back with no separator on disk.
+    writeFileSync(path.join(home, '.cc-sessions', 'proj-b.wrapper'), 'claude-ghost-a'); // no trailing \n
+    writeFileSync(path.join(home, '.cc-sessions', 'proj-c.wrapper'), 'claude-ghost-b'); // no trailing \n
+
+    const r = runAdoptRaw(home);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/cross-check:.*"claude-ghost-a"/);
+    expect(r.stderr).toMatch(/cross-check:.*"claude-ghost-b"/);
+    // Never the garbled concatenation a bulk `cat | sort` would produce.
+    expect(r.stderr).not.toContain('claude-ghost-aclaude-ghost-b');
+    expect(r.stderr).not.toContain('claudeclaude-ghost');
+    // "claude" IS discovered AND IS in the registry (its own file) — must
+    // not be flagged as a mismatch in either direction.
+    expect(r.stderr).not.toMatch(/adopt discovered "claude", which the .* session registry never mentions/);
   });
 
   it('flags a ~/.claude* directory with no matching discovered configDirSuffix', () => {
