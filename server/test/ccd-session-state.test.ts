@@ -66,6 +66,18 @@ describe('_ws_unsupervise records a deliberate stop', () => {
       .toMatch(/^\d{10} unknown$/);
   });
 
+  it('an EXPLICIT empty surface normalizes to `unknown`, not to the internal `ccd` default', () => {
+    // Review finding (MINOR #4): `${2:-ccd}` defaults on empty too, so a
+    // caller declaring `--surface ''` — an empty word genuinely off the wire
+    // — fell through the closed-set check entirely and stamped `ccd`,
+    // misattributing a real stop to ccd acting on its own account. `${2-ccd}`
+    // (no colon) defaults ONLY when $2 is truly absent, which is the shape
+    // of the four internal call sites that pass no second argument at all —
+    // covered separately by the "default surface `ccd`" test above.
+    h.sh(`${NOSYS} _ws_unsupervise ${ID} ''`);
+    expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} unknown$/);
+  });
+
   it('stamps even when systemd refuses — the intent is a fact either way', () => {
     // The disable is already swallowed (`2>/dev/null || true`), so a box with
     // no lingering must still record that somebody stopped this row. Kills
@@ -74,17 +86,37 @@ describe('_ws_unsupervise records a deliberate stop', () => {
     expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} cli$/);
   });
 
+  it('warns on stderr when systemd refuses the disable — the mirror of _ws_supervise\'s own warning', () => {
+    // Review finding (IMPORTANT #2): the old inlined `cmd_stop` warned
+    // `ccd: warn: could not disable unit claude-session@<id> (it may
+    // resurrect if it was enabled)` on this exact failure. Routing through
+    // this choke point swallowed it (`2>/dev/null || true`), so an operator
+    // on a box with lingering off or a missing unit file got an unqualified
+    // "stopped" with nothing saying the disable did not take, while its
+    // mirror `_ws_supervise` still warns on the same failure one function up.
+    const r = run(`systemctl() { return 1; }; _ws_unsupervise ${ID} cli`);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain(`could not disable unit claude-session@${ID}`);
+  });
+
   it('_ws_supervise clears the stamp — supervision supersedes an earlier stop', () => {
     h.sh(`${NOSYS} _ws_unsupervise ${ID} pwa`);
     h.sh(`${NOSYS} _ws_supervise ${ID}`);
     expect(h.reg(ID, 'stopped')).toBeNull();
   });
 
-  it('a spawn clears it too — a revival supersedes the stop, even a failed one', () => {
-    // Attempt, not success: a spawn that fails should classify `orphan`
-    // ("nothing is watching this; ccd start <id> is what would"), never
-    // `stopped` ("somebody stopped it"). The rc is recorded separately in
-    // $REG/<id>.spawn by §3.1.
+  it('a SUCCESSFUL spawn clears it too — the direct path only, success only', () => {
+    // Success only, deliberately: `_spawn` clears `.stopped` on `prompt_rc ==
+    // 0` and leaves it standing on a failure — ccd-spawn-verdict.test.ts:146
+    // pins that half of the contract, and this test must not contradict it.
+    // The failed-revival path is NOT `_spawn`'s to fix at all: on the
+    // supervised path (`ccd start`/`ccd enable`/`ccd ensure` outside a unit)
+    // `_spawn` runs in a DIFFERENT PROCESS, so when the unit never comes up —
+    // a crash-looped FAILED unit, `enable --now` itself failing,
+    // `_supervised_start`'s own 30s timeout — `_spawn` never runs in this
+    // process and never gets the chance. That case is fixed at the verb level
+    // instead (cmd_start/cmd_ensure, tested below), on attempt rather than
+    // success.
     h.sh(`_reg_set ${ID} wrapper claude2
       _reg_set ${ID} workdir "$HOME"
       _reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199`);
@@ -93,6 +125,48 @@ describe('_ws_unsupervise records a deliberate stop', () => {
     h.sh(`_accept_first_run_prompts() { return 0; }; _inject_spawn_effort() { :; };
       tmux() { :; }; _spawn ${ID} resume`);
     expect(h.reg(ID, 'stopped')).toBeNull();
+  });
+});
+
+describe('a failed revival still clears .stopped, at the verb level', () => {
+  // Review finding (IMPORTANT #1): before this fix, `.stopped` was cleared in
+  // exactly two places — `_ws_supervise` and a SUCCESSFUL `_spawn` — and
+  // NEITHER is on `ccd start`/`ccd enable`/`ccd ensure`'s path: `_ws_supervise`
+  // is reached only from ws-add/ws-restore, and `_supervised_start` inlines
+  // its own `enable --now` rather than routing through it. So spec §4.1's
+  // clause naming those three verbs was unimplemented — measured: stop from
+  // the PWA, revive two days later via `POST /api/sessions/:id/ensure`,
+  // resume dies rc 3, and the row still prints "stopped by pwa, 2d ago"
+  // because `_session_state` checks the stop stamp BEFORE `started`. Fixed by
+  // clearing `.stopped` at the verb level, unconditionally on ATTEMPT (mirror
+  // of the existing `swapblocked` clear, same altitude, same reasoning): a
+  // failed revival must read `orphan` — the honest signal that someone tried
+  // — never a stale `stopped` that hides the attempt.
+  const seed = (): void => {
+    h.sh(`_reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
+      _reg_set ${ID} project demo
+      _reg_set ${ID} workdir "$HOME"
+      _reg_set ${ID} wrapper claude2
+      _reg_set ${ID} started 1`);
+    h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} pwa`);
+  };
+
+  it('cmd_start clears a stale .stopped even when the revival attempt fails, and the row reads `orphan`', () => {
+    seed();
+    const r = run(`_alive() { return 1; }; _supervised_start() { return 3; };
+      cmd_start ${ID}`);
+    expect(r.code).toBe(3);
+    expect(h.reg(ID, 'stopped')).toBeNull();
+    expect(h.sh(`_alive() { return 1; }; _session_state ${ID}`)).toBe('orphan');
+  });
+
+  it('cmd_ensure clears a stale .stopped even when the revival attempt fails, and the row reads `orphan`', () => {
+    seed();
+    const r = run(`_alive() { return 1; }; _supervised_start() { return 4; };
+      cmd_ensure ${ID}`);
+    expect(r.code).toBe(4);
+    expect(h.reg(ID, 'stopped')).toBeNull();
+    expect(h.sh(`_alive() { return 1; }; _session_state ${ID}`)).toBe('orphan');
   });
 });
 
@@ -145,6 +219,17 @@ describe('cmd_stop', () => {
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('usage: ccd stop');
   });
+
+  it('warns when systemd refuses the disable, and still prints the success line', () => {
+    // Review finding (IMPORTANT #2), from cmd_stop's own call site: a
+    // deliberate stop is recorded (and the pane is still killed) even when
+    // the unit disable fails, but the operator must be told the disable
+    // itself did not take — see the matching `_ws_unsupervise` test above.
+    const r = run(`systemctl() { return 1; }; tmux() { :; }; cmd_stop ${ID}`);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe(`stopped ${ID}`);
+    expect(r.stderr).toContain(`could not disable unit claude-session@${ID}`);
+  });
 });
 
 describe('the supervisor heartbeat', () => {
@@ -181,8 +266,14 @@ describe('the supervisor heartbeat', () => {
     // Between those the row is not alive and, after 120s of a `cp -a`
     // fallback over a 188MB sidecar, would stop looking watched — "the fleet
     // marked a session abandoned while it was being carefully moved". No
-    // `.supervised` is planted here, so the only stamp is the swap's own:
-    // delete the re-stamps and this reads `orphan`.
+    // `.supervised` is planted here, so the only stamps are the swap's own —
+    // and there are TWO of them, checked at two DIFFERENT points, so deleting
+    // either alone is caught. The first (right after the teardown flush,
+    // before the carry) is what covers a carry that itself runs long — the
+    // stated reason it exists — so it is read from INSIDE the (stubbed)
+    // carry, not only at the restart the second stamp alone would satisfy
+    // (review finding, MINOR #6: `start:restarting` alone cannot tell the two
+    // stamps apart).
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
     h.sh(`_reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
       _reg_set ${ID} project demo
@@ -196,9 +287,11 @@ describe('the supervisor heartbeat', () => {
       printf '{"type":"message"}\\n' > "$HOME/.claude-dev0/projects/$mdir/b7001948-0000-4c2f-9a1b-0cfc0dc3d199.jsonl"`);
     run(`CCD_SWAP_DETACHED=1
       _alive() { return 1; }; tmux() { :; }; cmd_ensure() { :; }; sleep() { :; };
+      _swap_carry_jsonl() { echo "mid-carry:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
       systemctl() { [[ "$*" == *"start claude-session@"* ]] \
         && echo "start:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
       cmd_swap ${ID} claude2`);
+    expect(h.calls()).toContain('mid-carry:restarting');
     expect(h.calls()).toContain('start:restarting');
   });
 });
@@ -274,6 +367,16 @@ describe('_session_state drives §4.3\'s table', () => {
     // the clock ccd reads a beat later cannot flake either assertion.
     expect(askState({ alive: false, supervisedAgo: 60, stopped: false, started: true })).toBe('restarting');
     expect(askState({ alive: false, supervisedAgo: 200, stopped: false, started: true })).toBe('orphan');
+  });
+
+  it('a FUTURE-dated heartbeat is stale, not fresh forever', () => {
+    // Review finding (MINOR #5): the freshness check was only `now - sup <
+    // 120`. A future stamp (clock skew, or a hand-edited registry) makes
+    // `now - sup` negative, which satisfies `< 120` unconditionally — the
+    // row would read `restarting` for ever instead of ageing out to `orphan`.
+    // A negative `supervisedAgo` plants exactly that: `now - (-N)` = a
+    // timestamp N seconds in the future.
+    expect(askState({ alive: false, supervisedAgo: -99999999999, stopped: false, started: true })).toBe('orphan');
   });
 
   it('a garbage heartbeat is no heartbeat, not a fresh one', () => {

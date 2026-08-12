@@ -143,8 +143,9 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
   # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
-  # `setup`, `spawn`, `started`, `swapblocked`, `uuid`, `workdir`, `workspace`,
-  # `wrapper`. That is a WIDER set than `_reg_set`/`_reg_get`: the inventory
+  # `setup`, `spawn`, `started`, `stopped`, `supervised`, `swapblocked`,
+  # `uuid`, `workdir`, `workspace`, `wrapper`. That is a WIDER set than
+  # `_reg_set`/`_reg_get`: the inventory
   # that stood here named only the shell-written fields and so silently dropped
   # `prcheckedat`, `prphase` and `prhistory` (written by `_pr_py`'s own
   # `put`/append) and `hookstate` (written by the hooks). The purge itself was
@@ -242,11 +243,24 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # session on a 2s tick, and packing them keeps `stopped` one read instead of
   # two. The stamp is written BEFORE the disable, because the intent is a fact
   # whether or not systemd cooperates — the disable is already swallowed.
-  local id="$1" surface="${2:-ccd}"
+  # `${2-ccd}`, NOT `${2:-ccd}`: the colon form defaults on EMPTY too, so a
+  # caller that explicitly declares `--surface ''` (an empty word off the
+  # wire) would default straight past the closed-set check to `ccd`,
+  # misattributing a PWA-sourced stop to ccd acting on its own account. The
+  # bare `-` form defaults only when $2 is truly absent (the four internal
+  # call sites, which pass no second argument at all) and leaves an explicit
+  # empty string to fall into the `case`'s `*` arm below, same as any other
+  # non-member word.
+  local id="$1" surface="${2-ccd}"
   case "$surface" in cli|pwa|agent|ccd) ;; *) surface=unknown ;; esac
   printf '%s %s' "$(date +%s)" "$surface" > "$REG/$id.stopped"
   rm -f "$REG/$id.supervised"
-  systemctl --user disable --now "claude-session@$id" 2>/dev/null || true
+  # A silent failure here used to be observable at cmd_stop's own inlined call
+  # (the message this replaced); routing all five call sites through one
+  # choke point must not mean the warning stops firing for any of them. Mirrors
+  # _ws_supervise's own warning on the same failure, one function up.
+  systemctl --user disable --now "claude-session@$id" 2>/dev/null \
+    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
 }
 
 _session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|never-started
@@ -261,12 +275,16 @@ _session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|neve
   # genuinely absent. That state exists only on the server's side of the seam,
   # where remote `readFile` collapses missing/forbidden/disconnected into one
   # null and an unreadable registry must never print `orphan`.
-  local id="$1" sup fresh=0
+  local id="$1" sup fresh=0 now
   sup=$(_reg_get "$id" supervised)
+  now=$(date +%s)
   # A garbage stamp is NO stamp: this field is ccd's own, but it is a file on
   # disk, and a truncated one must degrade to "nobody is watching" rather than
-  # to a silently-fresh `running`.
-  [[ "$sup" =~ ^[0-9]+$ ]] && (( $(date +%s) - sup < 120 )) && fresh=1
+  # to a silently-fresh `running`. `>= 0` matters as much as `< 120`: without
+  # it a FUTURE-dated stamp (clock skew, or a hand-edited registry) reads as
+  # fresh forever — `now - sup` goes negative, which satisfies `< 120`
+  # unconditionally and never ages out.
+  [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )) && fresh=1
   if _alive "$id"; then
     (( fresh )) && { echo running; return 0; }
     # A pane with no supervisor: no auto-swap, no auto-compact, no uuid-sync,
@@ -7231,6 +7249,21 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # reasserted the real account above), so a stale refusal must not go on
   # shadowing it.
   rm -f "$REG/$id.swapblocked"
+  # And a stale deliberate-stop stamp, at the same altitude and for the same
+  # reason (§4.1: "cleared by ccd start, ccd enable and any successful
+  # spawn"). `_spawn`'s own clear only fires on prompt_rc==0, and on THIS path
+  # it runs in a DIFFERENT PROCESS entirely — `_supervised_start` below polls a
+  # unit whose ExecStart is a separate `ccd supervise` invocation. When that
+  # unit never comes up at all (a crash-looped FAILED unit, `enable --now`
+  # itself failing, `_supervised_start`'s own 30s timeout with no spawn stamp
+  # yet), `_spawn` never runs in THIS process and never gets the chance to
+  # clear it — the brief's original "clear inside _spawn" fix could not have
+  # reached this case. Cleared here on ATTEMPT, unconditionally, exactly like
+  # swapblocked above: `started` stays 1 regardless of the outcome (restated
+  # below), so a failed revival still reads `orphan` — the honest signal that
+  # someone tried and it didn't come up — instead of a stale `stopped` that
+  # hides the attempt and tells the operator to do the thing they just did.
+  rm -f "$REG/$id.stopped"
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
     local rc; _supervised_start "$id"; rc=$?
     # `started` stays unconditional here too (Task 4's own invariant, restated below): a
@@ -7268,6 +7301,13 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
   # already-alive no-op return above, so it fires only on an actual (re)start
   # attempt, exactly as cmd_start's own clear does.
   rm -f "$REG/$id.swapblocked"
+  # And the mirror of cmd_start's stopped-clear (see its comment for the full
+  # argument): `_spawn`'s success-only clear cannot reach the supervised path
+  # when the unit itself never starts, since `_spawn` then runs in a different
+  # process altogether. The verb clears it here instead, on attempt,
+  # unconditionally — `ensure` is `POST /api/sessions/:id/ensure`'s actual
+  # revive route, so this is the case the spec sentence was written for.
+  rm -f "$REG/$id.stopped"
   # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
   # else it is a REQUEST for one, and the request goes through the unit so the session comes back
   # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
