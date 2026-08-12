@@ -142,6 +142,65 @@ the tally em-dash, gates + mutation tables). 5 commits on feat/build4-w1-items @
   This is the dogfood's most valuable finding — a whole class of program would have
   wedged at every wave's close.
 
+## F8 — FRESH-SPAWN DISPATCH ORPHANS A WORKSPACE WHEN THE PICKED WRAPPER CANNOT SPAWN
+
+Found 2026-08-12 dispatching wave 2 to a FRESH worker (run 3, no sessionId). Dispatch
+answered `{ok:false, stderr:""}` and the run stayed `planned` (the D-46/D-48 ordering fix
+held — nothing wedged). But the box was left with an ORPHANED workspace, `swift-harbor`:
+worktree + full registry entries present, no session, no run binding.
+
+Cause, in order: `cmd_ws_add` writes the worktree and registry FIRST and runs
+`_spawn` + `_ws_supervise` LAST. `_ws_least_loaded` picked wrapper `claude-dev0` by
+session-count + disk only — it does NOT consider wrapper HEALTH. dev0 was rate-limited
+(logged in, over limit), so the fresh session showed a usage-limit screen that
+`_accept_first_run_prompts` does not recognize — it matches ready banners and
+`_pane_login_screen`, nothing else — and its `for i in $(seq 1 450); sleep 2` loop polled
+toward ~900s. The agent's per-verb ccd budget (`server/src/remote/runner.ts`,
+`CCD_TIMEOUT_MS = 90_000`) fired first and killed ws-add mid-`_spawn`.
+
+Signature to recognize it: `<id>.started` marker absent, `claude-session@<id>.service`
+inactive(dead) with ZERO journal entries, worktree on disk, registry complete.
+
+DIAGNOSTIC TRAP, recorded because it cost a wrong diagnosis here: the dispatch failure is
+`fleetFailed` with EMPTY stderr — the kill leaves nothing on stderr. Empty stderr means
+"timed out and was killed", NOT "no error", and NOT the agent's 10s
+`DEFAULT_EXEC_TIMEOUT_MS` (the remote runner always sets a per-verb `timeoutMs` for ccd, so
+the agent default never applies to it). Threading a longer timeout would only wait longer
+for a spawn that was never going to succeed.
+
+Three defects, tracked for Build 5 (safety/ops): (1) placement must consider wrapper health,
+not just load; (2) `_accept_first_run_prompts` must fail fast, bounded under the agent
+budget, and recognize a limit/usage screen the way it recognizes a login screen;
+(3) a failed ws-add must not leave an orphan — roll back or surface it as reclaimable,
+without autonomous deletion (ws-rm/ws-reap stay human-only).
+
+WORKAROUND USED, and it is the general one: dispatch onto an already-running HEALTHY session
+instead of spawning. Re-`POST /api/runs` with the same (program, wave, claimedBy) plus
+`sessionId` — `openRun` is idempotent for a still-`planned` row, so it reuses the run,
+attaches the session and places the hold; dispatch then takes the fast `ensure` path, no
+ws-add and no spawn. (`dispatched -> dispatched` is illegal, so an already-dispatched run
+cannot be re-dispatched — you need a `planned` row.)
+
+## Wave 2 dispatched 2026-08-12 — on amber-harbor, over the proven lane
+
+Run 3, wave 2/4, 8 declared items, on the EXISTING healthy session `ccrc-pwa-amber-harbor`
+(operator ruling: reuse the healthy box rather than block on dev0's recovery). Verified in
+the pane, not by response code: `/clear` landed, the reference nudge arrived within 60s, the
+worker fetched the brief and began executing its first instruction. Statusline: Opus 5,
+xhigh, ultracode.
+
+The brief's FIRST instruction is the F5 correction — `git checkout
+ws/wave-1-worker-coordination-for-build4 && git reset --hard origin/main` — safe because
+BOTH `feat/build4-w1-items` and the workspace branch were fully contained in `origin/main`
+(wave 1 already merged), so nothing was lost. Confirmed applied: the worktree now reports
+`b1f54fe [ws/wave-1-worker-coordination-for-build4]`.
+
+Run 2 stays `dispatched` and wedged, deliberately: its clean abandon route
+(`POST /api/runs/:id/abandon`, no fingerprint, always release, never archive) is Task 9 OF
+THIS VERY WAVE. The old close route demands a fingerprint even for an abandon, and
+`final:true` would risk the ordinary sweep archiving a box worth keeping. The program is
+being blocked by exactly the feature it is building — the purest dogfood signal in the run.
+
 ## Carried constraints
 
 - The wave-1 run's own tally reads `—` (no items exist until wave 1 ships the writer and a
