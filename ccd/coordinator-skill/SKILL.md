@@ -187,10 +187,12 @@ not after.
    wave:1/M`. For wave ≥ 2 the route itself resumes the workspace and injects
    `/clear` before queuing the brief — this session never sends `/clear`
    itself (clause 9). Then **end your turn** (clause 7).
-3. **Wake on mail.** A worker's message arrives injected in the envelope shape
-   in `references/mail-envelope.md`. Ack it (`POST /api/mail/:id/ack`, body
-   `{fromId, fromUuid}`) before acting on it, or the delivery lane replays it
-   verbatim.
+3. **Wake on mail.** What actually lands in your session is a tiny one-line
+   nudge ("you have new mail…"), never the message body — list it
+   (`GET /api/mail?to=<your id>`), fetch each body (`GET /api/mail/:id`, the
+   envelope shape in `references/mail-envelope.md`), then act. Ack it
+   (`POST /api/mail/:id/ack`, body `{fromId, fromUuid}`) before acting on it,
+   or the delivery lane replays the nudge.
 4. **Re-measure a claimed `wave-done`**, then `POST /api/runs/:id/advance` with
    the fingerprint. A typed rejection means the claim was stale: mail the worker
    the rejection code and leave the run where it is. Once — and only once —

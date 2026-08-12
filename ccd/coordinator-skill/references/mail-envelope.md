@@ -1,7 +1,10 @@
 # The envelope
 
-Mail is injected into your session as a fenced, self-describing block. You need
-no tooling to act on it; everything is on the face of it.
+Your session is never typed a message directly — only a tiny one-line nudge
+pointing at `GET /api/mail?to=<you>` (`references/wave-lifecycle.md` §3). This
+is what `GET /api/mail/:id` returns for one outstanding delivery: a fenced,
+self-describing block. You need no tooling to act on it; everything is on the
+face of it.
 
 <!-- BEGIN renderEnvelope — paste the real output here (Step 6) -->
 
