@@ -25,16 +25,27 @@
 //    `_ccrc_id_wrapper`'s case arms are matched by the test suite as bare
 //    `id-*)` text (`/^[a-z0-9-]+-\*\)/`), and a case *pattern* quoted with
 //    `'...'` is legal bash but no longer matches that assertion.
-//  - `configDirSuffix` has NO such charset restriction — `parseRoster` only
-//    requires it to start with `.` and contain neither `/` nor `..` — and
-//    it is embedded inside a double-quoted string (`"$HOME/<suffix>"`),
-//    where `$`, `` ` `` and `"` are still live to the shell. `dqEscape`
-//    below backslash-escapes exactly the characters that are special
-//    inside a double-quoted bash string, so a suffix containing one can
-//    never break out of the string or trigger expansion. It is a no-op for
-//    every suffix in the fixture roster (`.a`, `.ab`, `.abc` contain none
-//    of those characters), so it changes nothing about the brief's example
-//    output while closing a real gap for any suffix that does.
+//  - `configDirSuffix` is embedded inside a double-quoted string
+//    (`"$HOME/<suffix>"`), where `$`, `` ` `` and `"` are still live to the
+//    shell. `dqEscape` below backslash-escapes exactly the characters that
+//    are special inside a double-quoted bash string, so a suffix containing
+//    one can never break out of the string or trigger expansion. It is a
+//    no-op for every suffix in the fixture roster (`.a`, `.ab`, `.abc`
+//    contain none of those characters), so it changes nothing about the
+//    brief's example output while closing a real gap for any suffix that
+//    does.
+//
+//    `shared/roster.ts`'s `parseRoster` ALSO now rejects a `configDirSuffix`
+//    containing anything outside a conservative safe set (letters, digits,
+//    `.`, `-`, `_`) — do not read that as making `dqEscape` redundant and
+//    delete it. `generateAccountsSh` consumes a `Roster` structurally (see
+//    above: no import, no runtime check that its argument ever passed
+//    through `parseRoster`), so the parser's gate protects only rosters
+//    that were actually parsed by it. `dqEscape` is what protects this
+//    function itself, for every caller — including one that builds a
+//    `Roster`-shaped object by hand, the way
+//    `server/test/roster-generate.test.ts`'s hostile-payload case
+//    deliberately does. Two independent locks on one door, on purpose.
 
 /**
  * Backslash-escapes the characters that are still live inside a

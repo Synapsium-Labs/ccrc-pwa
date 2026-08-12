@@ -291,6 +291,40 @@ function parseAccount(raw: unknown, index: number): Draft {
     );
   }
 
+  // Second, independent gate on the same field: every configDirSuffix that
+  // passes this parser reaches `shared/generate.mjs`'s emitter, which embeds
+  // it inside a double-quoted bash string (`"$HOME/<suffix>"`) in
+  // `_ccrc_cfg_dir`'s case bodies. The generator already defends that
+  // embedding itself (`dqEscape`, backslash-escaping `\`, `"`, `$` and the
+  // backtick) — the check below is deliberately NOT a replacement for that,
+  // it is a second lock on the same door. A roster this permissive check
+  // rejects never reaches disk at all, with a remedy naming the exact fix;
+  // the generator's escaping is what protects every OTHER path that can
+  // produce a `Roster`-shaped value without going through `parseRoster`
+  // first (`generate.mjs` consumes a `Roster` structurally, so nothing
+  // stops a future caller from building one by hand the way
+  // `server/test/roster-generate.test.ts`'s hostile-payload case
+  // deliberately does, on purpose, to prove the generator's own defense
+  // holds on its own). Keep both — a single point of failure in an
+  // injection path is worth doubling up, and removing either one on the
+  // grounds that the other already covers it reopens exactly the gap this
+  // comment exists to prevent someone from reopening.
+  //
+  // The safe set is deliberately conservative rather than "everything that
+  // isn't a metacharacter": letters, digits, `.`, `-` and `_` cover every
+  // production suffix today (`.claude`, `.claude-personal`, `.claude-corp`,
+  // `.claude-gpt`, `.claude-dev0`) with room to spare, and a legitimate new
+  // account name has no reason to need anything outside it.
+  if (!/^\.[A-Za-z0-9._-]+$/.test(configDirSuffix)) {
+    throw new RosterError(
+      `account "${id}" has a configDirSuffix ${JSON.stringify(configDirSuffix)} containing a ` +
+        'character outside the safe set: only letters, digits, ".", "-" and "_" are allowed ' +
+        'after the leading ".".',
+      `Set "configDirSuffix" for account "${id}" in ${ROSTER_PATH} to only letters, digits, ` +
+        `".", "-" and "_" (e.g. ".${id}") — remove any other character.`,
+    );
+  }
+
   const exec = parseExec(raw['exec'], id);
 
   const homeAble = raw['homeAble'];

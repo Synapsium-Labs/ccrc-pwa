@@ -9,7 +9,7 @@
 // happened to tie.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
@@ -63,5 +63,55 @@ describe('generateAccountsSh', () => {
     const body = generateAccountsSh(roster);
     const arms = [...body.matchAll(/^\s{4}([a-z0-9-]+)-\*\)/gm)].map((m) => m[1]!);
     expect(arms).toEqual(['a-b-c', 'a-b', 'a']);
+  });
+
+  // Fix round 1: the six tests above never exercise `dqEscape` — every
+  // fixture `configDirSuffix` (`.a`, `.ab`, `.abc`) is free of the four
+  // characters it escapes, so a broken template literal or a broken regex
+  // in `shared/generate.mjs` would leave this whole file green while
+  // reopening shell injection. This test supplies a `configDirSuffix`
+  // `shared/roster.ts`'s `parseRoster` now REJECTS outright (see
+  // `server/test/roster.test.ts`'s "suffix with a shell metacharacter"
+  // case) — so it is built as a plain `Roster`-shaped object, never passed
+  // through `parseRoster` at all, on purpose: `generateAccountsSh` consumes
+  // a `Roster` structurally (shared/generate.mjs's header), with no runtime
+  // check that its argument was ever parsed, so this is the only way left
+  // to exercise the generator's OWN defense independent of the parser's.
+  //
+  // A string-equality assertion alone would pass even if the payload had
+  // ALSO executed (bash's command substitution still leaves the rest of the
+  // string intact), so this additionally plants a canary file the payload
+  // would create if any of its three injection vectors fired, and asserts
+  // it does not exist.
+  it('escapes a hostile configDirSuffix as inert literal text, and the injected commands never run', () => {
+    const hostileHome = mkTmp('roster-gen-hostile-');
+    mkdirSync(path.join(hostileHome, '.ccrc'), { recursive: true });
+    const canary = path.join(hostileHome, 'canary-hit');
+
+    // Three independent injection vectors aimed at the same canary file —
+    // command substitution, a backtick command, and breaking out of the
+    // double-quoted string via an embedded `"` to inject a bare command —
+    // plus a literal trailing backslash to confirm it round-trips as a
+    // single inert `\`, not a dropped or doubled character.
+    const hostileSuffix =
+      `.a$(touch ${canary})\`touch ${canary}\`"; touch ${canary}; echo "\\z`;
+    const hostileAccount = {
+      id: 'hostile', label: 'Hostile', configDirSuffix: hostileSuffix,
+      exec: { kind: 'upstream' as const }, homeAble: true,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const,
+    };
+    const hostileRoster = {
+      version: 1 as const,
+      accounts: [hostileAccount],
+      byId: new Map([['hostile', hostileAccount]]),
+      byIdLengthDesc: [hostileAccount],
+      homeAble: [hostileAccount],
+      upstreamId: 'hostile',
+    };
+    writeFileSync(path.join(hostileHome, '.ccrc', 'accounts.sh'), generateAccountsSh(hostileRoster));
+
+    expect(sh(hostileHome, "_ccrc_cfg_dir 'hostile'")).toBe(`${hostileHome}/${hostileSuffix}`);
+    expect(existsSync(canary), 'a hostile configDirSuffix executed instead of round-tripping as inert text')
+      .toBe(false);
   });
 });

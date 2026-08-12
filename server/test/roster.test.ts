@@ -67,6 +67,13 @@ describe('parseRoster', () => {
     // and then resolves to $HOME itself when joined — the same failure class
     // agent/src/server.ts's assertProjectsRootIsSafe guards against.
     ['suffix is exactly "."', one({ configDirSuffix: '.' }), /configDirSuffix/i],
+    // '.$(rm -rf ~)' starts with '.', has no '/' and no '..' — it passes
+    // every check above this one, and is refused only by the safe-charset
+    // gate added alongside shared/generate.mjs's own dqEscape defense
+    // (server/test/roster-generate.test.ts's hostile-payload case exercises
+    // that generator-side half independently, by constructing a
+    // Roster-shaped object that never passes through parseRoster at all).
+    ['suffix with a shell metacharacter', one({ configDirSuffix: '.$(rm -rf ~)' }), /outside the safe set/i],
     ['empty roster', { version: 1, accounts: [] }, /at least one/i],
   ])('refuses %s', (_name, bad, pattern) => {
     expect(() => parseRoster(bad)).toThrow(RosterError);
