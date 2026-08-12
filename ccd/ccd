@@ -223,9 +223,64 @@ _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate c
 # The systemd calls live in their own functions (rather than inline in cmd_ws_add)
 # so the test harness can stub them — sourcing ccd and calling cmd_ws_add under
 # vitest would otherwise enable a REAL claude-session@<id> unit on the host.
-_ws_supervise()   { systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
+_ws_supervise()   { rm -f "$REG/$1.stopped"                                   # supervision supersedes an earlier stop
+                    systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
                       || echo "warn: could not enable unit claude-session@$1" >&2; }
-_ws_unsupervise() { systemctl --user disable --now "claude-session@$1" 2>/dev/null || true; }
+
+_ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBODY MEANT TO.
+  # THE SINGLE CHOKE POINT, which is why the stamp lives here and not in
+  # cmd_stop: ws-rm, ws-archive, ws-reap and forget all reach systemd through
+  # this function, and an archived workspace with no stamp would classify
+  # `orphan` for ever (§4.1). The surface defaults to `ccd` because those four
+  # call sites ARE ccd acting on its own account; `cmd_stop` passes its own.
+  #
+  # The word is text from the wire, so it is validated against the closed set
+  # on arrival and anything else becomes `unknown` — it is a DECLARATION, not
+  # an authentication, and `--surface pwa` means only that the caller said so.
+  #
+  # Epoch and surface share ONE field: the registry is read per-field per
+  # session on a 2s tick, and packing them keeps `stopped` one read instead of
+  # two. The stamp is written BEFORE the disable, because the intent is a fact
+  # whether or not systemd cooperates — the disable is already swallowed.
+  local id="$1" surface="${2:-ccd}"
+  case "$surface" in cli|pwa|agent|ccd) ;; *) surface=unknown ;; esac
+  printf '%s %s' "$(date +%s)" "$surface" > "$REG/$id.stopped"
+  rm -f "$REG/$id.supervised"
+  systemctl --user disable --now "claude-session@$id" 2>/dev/null || true
+}
+
+_session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|never-started
+  # The bash twin of shared/'s `sessionLifecycle` (spec §4.3). A pure function
+  # of four inputs — pane alive, heartbeat freshness, stop stamp, `started` —
+  # evaluated in this exact order; both implementations are driven from one
+  # fixture, so the order and the 120-second window are the contract, not an
+  # implementation detail.
+  #
+  # `unmeasurable` is the ONE row of the table this side cannot reach: ccd
+  # reads $REG off local disk, where a read either works or the file is
+  # genuinely absent. That state exists only on the server's side of the seam,
+  # where remote `readFile` collapses missing/forbidden/disconnected into one
+  # null and an unreadable registry must never print `orphan`.
+  local id="$1" sup fresh=0
+  sup=$(_reg_get "$id" supervised)
+  # A garbage stamp is NO stamp: this field is ccd's own, but it is a file on
+  # disk, and a truncated one must degrade to "nobody is watching" rather than
+  # to a silently-fresh `running`.
+  [[ "$sup" =~ ^[0-9]+$ ]] && (( $(date +%s) - sup < 120 )) && fresh=1
+  if _alive "$id"; then
+    (( fresh )) && { echo running; return 0; }
+    # A pane with no supervisor: no auto-swap, no auto-compact, no uuid-sync,
+    # and nothing to record its death. What a pre-fix `ccd start` minted.
+    echo unsupervised; return 0
+  fi
+  # The stop stamp is checked BEFORE the heartbeat so that a stop taken inside
+  # the 120s freshness window reads `stopped` immediately, not `restarting`.
+  # `-e` not `-f`: present-but-unreadable still means somebody stopped this.
+  [[ -e "$REG/$id.stopped" ]] && { echo stopped; return 0; }
+  (( fresh )) && { echo restarting; return 0; }
+  [[ "$(_reg_get "$id" started)" == "1" ]] && { echo orphan; return 0; }
+  echo never-started
+}
 
 # ── PR / archive lifecycle helpers ─────────────────────────────────
 # `local x=$(cmd)` returns local's status, never cmd's — so anything whose exit
@@ -7206,6 +7261,13 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
   local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
   if _alive "$id"; then echo "alive: $id"; return 0; fi
+  # A deliberate revival supersedes a refused swap's banner (§2.4, mirroring
+  # cmd_start's matching line): `POST /api/sessions/:id/ensure` is the PWA's
+  # actual revive route, so a refusal banner left standing on the row `ensure`
+  # just revived would teach the operator to ignore banners. Placed AFTER the
+  # already-alive no-op return above, so it fires only on an actual (re)start
+  # attempt, exactly as cmd_start's own clear does.
+  rm -f "$REG/$id.swapblocked"
   # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
   # else it is a REQUEST for one, and the request goes through the unit so the session comes back
   # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
@@ -7231,6 +7293,20 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
+  # THE FIRST STAMP GOES BEFORE cmd_ensure, NOT AFTER IT. `cmd_ensure` can sit
+  # inside `_accept_first_run_prompts` for up to fifteen minutes while a 700k-
+  # token resume works through its gates, and a heartbeat that started with the
+  # watch loop would leave every large resume reading `unsupervised` for those
+  # fifteen minutes — the loudest possible false alarm, fired precisely when
+  # the fleet is doing the most work (§4.2).
+  #
+  # The stamp is how the SERVER learns this at all: the agent's read whitelist
+  # permits ~/.cc-sessions and ~/.claude*, and nothing under ~/.config/systemd,
+  # so rather than widen a security boundary to learn a fact, the supervisor
+  # publishes it. And it is strictly better than an enable symlink: the symlink
+  # promises a start at next boot, this proves auto-swap, uuid-sync and
+  # auto-compact are running for this row right now.
+  _reg_set "$id" supervised "$(date +%s)"
   # §3.2's self-heal: creating the enable symlink is idempotent and safe from inside the unit
   # (`enable` without `--now` asks systemd for nothing else), and this one line heals M5's three
   # boot-persistence-less rows the next time each supervisor restarts — which the deploy's
@@ -7243,7 +7319,15 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # addressable from the wire at all.
   local CCD_IN_UNIT=1
   cmd_ensure "$id"
-  while _alive "$id"; do _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; sleep 5; done
+  # Re-stamped every 30s from the 5-second tick this loop already runs, so the
+  # 120-second freshness window never expires under a live supervisor.
+  local beat=0
+  while _alive "$id"; do
+    _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
+    beat=$((beat + 5))
+    (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
+    sleep 5
+  done
   echo "session $id ended; exiting for systemd restart" >&2
   exit 1
 }
@@ -7616,6 +7700,14 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   systemctl --user stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null
   sleep 1                                                  # let claude flush its final transcript entries
+  # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
+  # not alive and, after 120 seconds, would also stop looking watched — and
+  # §2.3's `cp -a` fallback over a 188MB sidecar can take that long. Re-stamped
+  # here and again below so the window classifies `restarting`, which is
+  # exactly what it is. Note the swap does NOT write `.stopped`: it is not a
+  # deliberate stop, which is why it goes round `_ws_unsupervise` rather than
+  # through it.
+  _reg_set "$id" supervised "$(date +%s)"
   # AUTHORITATIVE. Two things changed across that sleep and both matter. The transcript
   # gained the session's final entries — for a session being moved mid-turn, the most
   # valuable lines in it, which is the whole reason the sleep exists. And the uuid may
@@ -7673,6 +7765,7 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
                                  # banner left standing on a row that just worked teaches
                                  # the operator to ignore banners.
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
+  _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
   systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   # Optional user notification (swap kills any attached remote session — give them a ping).
   # Drop an executable ~/.cc-sessions/notify.sh taking the message as $1 (curl to a Discord
@@ -7716,7 +7809,36 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   echo "enabled boot-persistence for $id"
 }
 
-cmd_stop() {   # <id>  |  <wrapper> <project>
+cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <project>
+  # FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order is the whole
+  # correctness argument. `$# -ge 2` means wrapper-plus-project, so with the
+  # flag left in argv `ccd stop <id> --surface pwa` reads as a two-argument
+  # stop and `_id` mints `<id>---surface` — aiming the stop at a session that
+  # does not exist while the real one keeps running.
+  #
+  # The surface arrives as an argv flag because nothing else can carry it: the
+  # exec seam is `(cmd, args) => Promise<ExecResult>` with no env, and the
+  # agent's wire ExecReq carries {cmd, args, timeoutMs} and nothing else — a
+  # CCD_SURFACE variable would report the server process's own environment,
+  # identically for every caller in the fleet.
+  #
+  # cmd_stop's OWN default is `cli`, not _ws_unsupervise's `ccd`: a session
+  # shelling `ccd stop` from its own Bash tool passes no flag, and `cli` is
+  # exactly what that looks like from the box.
+  local surface=cli args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates.
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
+                   surface="$2"; shift 2 ;;
+      --surface=*) surface="${1#--surface=}"; shift ;;
+      *)           args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"
+
   # The two-argument form is the legacy one and recomputes `<wrapper>-<project>`.
   # That only works for ids that ENCODE a wrapper; a workspace id is
   # `<project>-<slug>`, so a caller forced to reverse one guesses a wrapper and
@@ -7727,10 +7849,14 @@ cmd_stop() {   # <id>  |  <wrapper> <project>
     local wrapper="${1:?}" project="${2:?}"
     id=$(_id "$wrapper" "$project")
   else
-    id="${1:?usage: ccd stop <id> | ccd stop <wrapper> <project>}"
+    id="${1:?usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>}"
   fi
-  systemctl --user disable --now "claude-session@$id" 2>/dev/null \
-    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
+  # Through the choke point, never around it: the inlined `systemctl --user
+  # disable --now` this replaces was the one stop path in the file that left
+  # no record, which is how a deliberate stop became indistinguishable from a
+  # crash (§4.1). The pane kill stays HERE rather than moving inward, because
+  # every other call site already runs these two as a pair.
+  _ws_unsupervise "$id" "$surface"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
   echo "stopped $id"
 }
@@ -7777,15 +7903,22 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
 }
 
 cmd_ls() {
-  printf '%-28s %-12s %-6s %s\n' "ID" "WRAPPER" "ALIVE" "WORKDIR"
+  # STATE, not ALIVE: `no` was one word for three different facts — a session
+  # somebody deliberately stopped, one that died with nothing watching it, and
+  # a row that never had a session at all (§4.4). The column is 13 wide because
+  # `never-started` is 13 characters. Nothing parses this output — no server,
+  # agent or pwa caller shells `ccd ls`, and `cmd_menu` formats its own list —
+  # so the rename costs no parser. The gpt trailer below is a different matter:
+  # its exact strings are pinned by ccd-limits.test.ts and are not touched here.
+  printf '%-28s %-12s %-13s %s\n' "ID" "WRAPPER" "STATE" "WORKDIR"
   local f id; shopt -s nullglob
   local files=("$REG"/*.uuid)
   [[ ${#files[@]} -eq 0 ]] && { echo "(no sessions)"; return 0; }
   local gpt_here=0
   for f in "${files[@]}"; do
-    id=$(basename "$f" .uuid); local alive=no; _alive "$id" && alive=yes
+    id=$(basename "$f" .uuid); local state; state=$(_session_state "$id")
     local w; w=$(_reg_get "$id" wrapper); [[ "$w" == gpt ]] && gpt_here=$((gpt_here+1))
-    printf '%-28s %-12s %-6s %s\n' "$id" "$w" "$alive" "$(_reg_get "$id" workdir)"
+    printf '%-28s %-12s %-13s %s\n' "$id" "$w" "$state" "$(_reg_get "$id" workdir)"
   done
   echo "gpt overflow lane: $(_gpt_status)  —  $gpt_here session(s) currently on it"
   echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
