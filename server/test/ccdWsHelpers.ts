@@ -6,7 +6,15 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { mkTmp } from './tmpHelpers.js';
-import { HOME_ABLE_WRAPPERS } from '../../shared/api.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
+
+/** The home-able ids of the test roster — the set ccd's own `VALID_WRAPPERS`
+ *  still hard-codes (Task 8 of the stage-2a plan is what makes ccd read the
+ *  generated roster instead). Derived, not hand-typed, for the same reason
+ *  `single-definition.test.ts`'s scanner is: a copy frozen at write time stops
+ *  tracking the roster the moment a home-able account is added or removed. */
+const HOME_ABLE_WRAPPERS: readonly string[] =
+  DEFAULT_TEST_ROSTER.accounts.filter((a) => a.homeAble).map((a) => a.id);
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
@@ -78,11 +86,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
   // ccd's VALID_WRAPPERS — the wrappers a bare binary on $PATH must exist
-  // for (`_spawn`'s `command -v "$w"` check) — is exactly ACCOUNTS' home-able
-  // set (see wrapper-roster-fixture.test.ts). Derived here, not hand-typed,
-  // for the same reason single-definition.test.ts's own scanner is: a copy
-  // frozen at write time stops tracking the roster the moment a 4th
-  // home-able account exists.
+  // for (`_spawn`'s `command -v "$w"` check) — is exactly the roster's
+  // home-able set (see wrapper-roster-fixture.test.ts).
   for (const w of HOME_ABLE_WRAPPERS) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }

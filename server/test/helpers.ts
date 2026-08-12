@@ -17,10 +17,17 @@ import { mkTmp } from './tmpHelpers.js';
  * `claude-corp`, `claude-dev0` and `gpt` by id (`dialog.test.ts` resolves
  * `configDirFor(cfg, 'claude2')` and expects a real path back, for example),
  * so the test default has to mirror today's five production accounts
- * exactly — built here from `shared/api.ts`'s `ACCOUNTS` literal, in its
- * declaration order, rather than invented fresh. `shared/api.ts` still owns
- * the live roster in this task (Task 6 removes it); this is a parallel,
- * independent copy for tests only. */
+ * exactly — transcribed from `shared/api.ts`'s `ACCOUNTS` literal, in its
+ * declaration order, before Task 6 deleted it.
+ *
+ * That literal is gone, so this is now the tree's only TypeScript copy of the
+ * production account names, and deliberately so: it is TEST data, under a
+ * directory the roster-drift scanner (`single-definition.test.ts`) does not
+ * scan — and that scanner now reads its own list of wrapper names FROM here,
+ * because the roster it hunts for copies of no longer exists in any source
+ * file to read it from. Keep it in step with the production roster
+ * (`deploy/accounts.default.json`, Task 10), not with whatever any one test
+ * happens to need. */
 export const DEFAULT_TEST_ROSTER = {
   version: 1,
   accounts: [

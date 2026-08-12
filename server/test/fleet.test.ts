@@ -8,8 +8,9 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import type { HookState } from '../src/hookstate.js';
 import type { PrState } from '../../shared/api.js';
+import { parseRoster } from '../../shared/roster.js';
 import { mkTmp } from './tmpHelpers.js';
-import { seedRoster } from './helpers.js';
+import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -22,27 +23,54 @@ const mkHookState = (over: Partial<HookState> = {}): HookState =>
   ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false, ...over });
 
 describe('idHomeWrapper', () => {
+  const roster = parseRoster(DEFAULT_TEST_ROSTER);
+
   it('longest prefix wins', () => {
-    expect(idHomeWrapper('claude-corp-orchard-api')).toBe('claude-corp');
-    expect(idHomeWrapper('claude2-MekWarLive')).toBe('claude2');
-    expect(idHomeWrapper('claude-synapsium-platform')).toBe('claude');
-    expect(idHomeWrapper('gpt-foo')).toBe('gpt');
+    expect(idHomeWrapper(roster, 'claude-corp-orchard-api')).toBe('claude-corp');
+    expect(idHomeWrapper(roster, 'claude2-MekWarLive')).toBe('claude2');
+    expect(idHomeWrapper(roster, 'claude-synapsium-platform')).toBe('claude');
+    expect(idHomeWrapper(roster, 'gpt-foo')).toBe('gpt');
   });
 
-  // Prophylactic pin, not a record of an observed misattribution — see
-  // `idHomeWrapper`'s own docstring in `fleet.ts` for why `claude-dev0-*`
-  // cannot appear in the registry today (`ACCOUNTS['claude-dev0'].ccdValid`
-  // is `false`). The old prefix list (`['claude-corp', 'claude2', 'claude',
-  // 'gpt']`) never even MENTIONED `claude-dev0`, so `claude-dev0-quiet-basin`
-  // fell through to the bare `'claude-'` branch — this assertion was GREEN
-  // with the WRONG answer before the fix (confirmed against the exact
-  // pre-fix source: it returned `'claude'`). Longest-`idPrefix`-wins over the
-  // `ACCOUNTS` roster is the fix: `'claude-dev0-'` (12 chars) is tried before
-  // `'claude-'` (7 chars) — and is what keeps the answer correct if
-  // `claude-dev0` (or a future wrapper shaped like it) ever becomes
-  // ccd-valid.
+  // Not prophylactic: `claude-dev0-*` ids exist in the registry today. The old
+  // prefix list (a hand-typed, unordered array) never even MENTIONED
+  // `claude-dev0`, so `claude-dev0-quiet-basin` fell through to the bare
+  // `'claude-'` branch — this assertion was GREEN with the WRONG answer before
+  // the fix (confirmed against the exact pre-fix source: it returned
+  // `'claude'`). `roster.byIdLengthDesc` is what keeps it right: `claude-dev0`
+  // (11 chars) is tried before `claude` (6).
   it('resolves claude-dev0 sessions to claude-dev0, not to claude', () => {
-    expect(idHomeWrapper('claude-dev0-quiet-basin')).toBe('claude-dev0');
+    expect(idHomeWrapper(roster, 'claude-dev0-quiet-basin')).toBe('claude-dev0');
+  });
+
+  // The ordering property, isolated from the production names that happen to
+  // exhibit it — a roster of two accounts where one id is a strict prefix of
+  // the other, which is the collision `byIdLengthDesc` exists for. Free-form
+  // ids (the point of Stage 2a) make this reachable by anyone writing an
+  // `accounts.json`, not just by the five names that shipped.
+  it('resolves the longer id when one account id is a prefix of another', () => {
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'claude', label: 'c', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'claude-dev0', label: 'd', configDirSuffix: '.claude-dev0', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] });
+    expect(idHomeWrapper(r, 'claude-dev0-quiet-basin')).toBe('claude-dev0');
+    expect(idHomeWrapper(r, 'claude-quiet-basin')).toBe('claude');
+    // The fallback branch, which no test covered before: an id with no account
+    // prefix at all — a main checkout's id is the bare project name. It answers
+    // the roster's UPSTREAM account (the one running the Claude Code binary
+    // itself), not the literal string 'claude', which is only this roster's
+    // name for it.
+    expect(idHomeWrapper(r, 'zzz-quiet-basin')).toBe('claude');
+  });
+
+  it('falls back to the upstream account whatever it is called', () => {
+    // The same fallback on a roster where the upstream account is NOT named
+    // `claude` — the assertion above cannot tell the two rules apart.
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'work', label: 'w', configDirSuffix: '.work', exec: { kind: 'generated' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'main', label: 'm', configDirSuffix: '.main', exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] });
+    expect(idHomeWrapper(r, 'OpenClawHetzner')).toBe('main');
   });
 });
 

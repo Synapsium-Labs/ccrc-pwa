@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { ACCOUNTS, type Wrapper } from '../../shared/api.js';
+import { CCD_MIRROR, CCD_MIRROR_NAMES } from './fixtures/ccdMirror.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
@@ -97,7 +97,7 @@ describe('install-session-hooks', () => {
   });
 });
 
-describe('install-session-hooks.sh default homes agree with ACCOUNTS.hooksAble, behaviourally', () => {
+describe('install-session-hooks.sh default homes agree with CCD_MIRROR.hooksAble, behaviourally', () => {
   // wrapper-roster-fixture.test.ts pins this by PARSING the installer's
   // source; this proves the same claim by actually RUNNING it — a fixture
   // HOME gets a config dir for every roster wrapper (hooksAble and not), the
@@ -107,19 +107,19 @@ describe('install-session-hooks.sh default homes agree with ACCOUNTS.hooksAble, 
   // hardcoded fallback array forgot would fail THIS, not just the
   // source-text pin — the silent mail hole `claude-dev0` had, closed as a
   // class rather than a one-off patch.
-  const WRAPPERS = Object.keys(ACCOUNTS) as Wrapper[];
+  const WRAPPERS = CCD_MIRROR_NAMES;
   let rosterHome: string;
   beforeEach(() => {
     rosterHome = mkTmp('ccrc-hookinstall-roster-');
-    for (const w of WRAPPERS) fs.mkdirSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix), { recursive: true });
+    for (const w of WRAPPERS) fs.mkdirSync(path.join(rosterHome, CCD_MIRROR[w]!.configDirSuffix), { recursive: true });
   });
   afterEach(() => { fs.rmSync(rosterHome, { recursive: true, force: true }); });
 
   it("touches exactly the roster's hooksAble config dirs when given no --homes argv", () => {
     execFileSync('bash', [INSTALLER], { env: { ...process.env, HOME: rosterHome } });
     for (const w of WRAPPERS) {
-      const got = fs.existsSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix, 'settings.json'));
-      expect(got, w).toBe(ACCOUNTS[w].hooksAble);
+      const got = fs.existsSync(path.join(rosterHome, CCD_MIRROR[w]!.configDirSuffix, 'settings.json'));
+      expect(got, w).toBe(CCD_MIRROR[w]!.hooksAble);
     }
   });
 });

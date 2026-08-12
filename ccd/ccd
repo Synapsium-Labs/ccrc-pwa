@@ -999,12 +999,32 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
 }
 
 _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" if none is placeable
-  local best="" bs=1000 w sc
+  # UNKNOWN IS NOT ZERO. This used to read `[[ -z "$sc" ]] && sc=0`, so an
+  # account _limit_score knows nothing about — no ~/.cc-limits/<w>.json at all —
+  # scored 0 and beat every account that had honestly reported its pressure.
+  # The emptiest-looking account was simply the one nobody could see. Skip it
+  # instead: unmeasured ranks below measured, never above.
+  #
+  # UNKNOWN IS NOT UNPLACEABLE either. On a fresh box nothing has reported yet,
+  # and refusing to place work there would break first run, so if NO account was
+  # measured this falls back to the first _account_ok account in iteration order
+  # — same rule, same answer, as the server's projectHome (server/src/limits.ts).
+  #
+  # The server's copy has one term this cannot: it also skips an account whose
+  # roster entry says telemetry:'none' (gpt's shape — `"five": null` with no 5h
+  # window, which _limit_score reads as a measured 0). Parity still holds,
+  # because the only such account is gpt, and gpt is not home-able: it is absent
+  # from the array iterated here and from roster.homeAble there, so neither
+  # implementation ever scores it. `projected-home.test.ts` runs both sides over
+  # the same fixtures and would say so if that stopped being true.
+  local best="" bs=1000 first="" w sc
   for w in "${VALID_WRAPPERS[@]}"; do
     _account_ok "$w" || continue
-    sc=$(_limit_score "$w"); [[ -z "$sc" ]] && sc=0
+    [[ -z "$first" ]] && first="$w"
+    sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
+  [[ -z "$best" ]] && best="$first"
   echo "$best"
 }
 

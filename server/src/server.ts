@@ -35,9 +35,9 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
-  ACCOUNT_ORDER, FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountUsage, type FleetMsg, type FleetSession, type RunSummary, type SessionClientMsg,
-  type SessionStreamMsg, type TaskItem,
+  FLEET_PROTO, FLEET_PROTO_MIN,
+  type AccountsResponse, type AccountUsage, type FleetMsg, type FleetSession, type RunSummary,
+  type SessionClientMsg, type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
 
 /**
@@ -232,10 +232,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
-  // respawns, and swaps. Ordered by ACCOUNT_ORDER (the roster's declaration order).
-  app.get('/api/accounts', async () => {
+  // respawns, and swaps. Ordered by the roster's declaration order.
+  app.get('/api/accounts', async (): Promise<AccountsResponse> => {
     const limits = await readLimits(deps.io, deps.cfg);
-    const rank = (w: string) => { const i = (ACCOUNT_ORDER as readonly string[]).indexOf(w); return i < 0 ? 99 : i; };
+    // Rebuilt per request from `deps.cfg.roster`, not hoisted to module scope:
+    // the roster is runtime data read at boot (`~/.ccrc/accounts.json`), so a
+    // module-level rank table would be built before any roster exists. The
+    // `i < 0 ? 99` fallback is load-bearing and stays: a wrapper the roster does
+    // not have — a stale `.cc-limits/<name>.json` from a removed account, a
+    // typo'd registry write — sorts LAST rather than disappearing off the
+    // screen, and `accounts-route.test.ts` pins exactly that.
+    const order = deps.cfg.roster.accounts.map((a) => a.id);
+    const rank = (w: string): number => { const i = order.indexOf(w); return i < 0 ? 99 : i; };
     const accounts: AccountUsage[] = Object.entries(limits)
       .map(([wrapper, l]): AccountUsage => ({
         wrapper, five: l.five, seven: l.seven, ts: l.ts,
@@ -248,7 +256,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // rather than in the PWA: ccd's `_ws_least_loaded` is the routing rule and
     // this is already the second implementation of it — a third would drift
     // from both. The `+` only displays what this says.
-    return { accounts, projected: projectHome(limits) };
+    //
+    // `roster` ships every account the box knows, including ones telemetry has
+    // never mentioned — `accounts` above is built from `.cc-limits/*.json`, so
+    // an account that has never run has no row there at all, and the PWA would
+    // otherwise have no way to learn its label or colour. Only the fields a
+    // browser can use (`RosterWire`): `exec`, `configDirSuffix` and `telemetry`
+    // stay server-side.
+    return {
+      accounts,
+      projected: projectHome(deps.cfg.roster, limits),
+      roster: deps.cfg.roster.accounts.map((a) => ({
+        id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble,
+      })),
+    };
   });
 
   app.get('/ws/fleet', { websocket: true }, (socket) => {

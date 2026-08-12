@@ -25,6 +25,8 @@ const stubAccounts = (accounts: AccountUsage[]): void => {
   vi.spyOn(api, 'accounts').mockResolvedValue({
     accounts,
     projected: { wrapper: 'claude', score: 0 },
+    // Carried on the wire since Stage 2a; unread here until Task 7.
+    roster: [],
   });
 };
 
@@ -44,6 +46,7 @@ describe('AccountsStrip', () => {
       ],
       // The strip ignores it; the route always sends it (see useProjectedHome).
       projected: { wrapper: 'claude', score: 57 },
+      roster: [],
     });
     render(<AccountsStrip />);
     // claude's 5h rolled over; claude2's 5h was really measured at zero.

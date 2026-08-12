@@ -34,7 +34,9 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const stubAccounts = (accounts: AccountUsage[], projected: { wrapper: string; score: number } | null = null): void => {
-  vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected });
+  // `roster: []` — the wire carries the roster since Stage 2a, and nothing in
+  // the PWA reads it until Task 7 threads it into the label/colour lookups.
+  vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected, roster: [] });
 };
 
 afterEach(() => {

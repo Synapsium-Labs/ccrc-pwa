@@ -220,6 +220,7 @@ describe('FleetScreen', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
       accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false }],
       projected: { wrapper: 'claude', score: 0 },
+      roster: [],
     });
     const store = makeStore();
     render(<FleetScreen store={store} />);
@@ -929,8 +930,10 @@ describe('AccountsStrip', () => {
         { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false },
       ],
       // gpt is not home-able, so the projection names an Anthropic account
-      // regardless of what telemetry exists — see limits.ts HOME_ABLE.
+      // regardless of what telemetry exists — see `projectHome` in limits.ts,
+      // which filters `roster.homeAble`.
       projected: { wrapper: 'claude', score: 0 },
+      roster: [],
     });
     render(<AccountsStrip />);
     // one account gauge → two meters (5h + 7d)

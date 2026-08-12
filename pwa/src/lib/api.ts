@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountUsage, CatchUp, FleetHealth, FleetSession, NotifyEvent, PrView, ProjectedHome, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, NotifyEvent, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -187,8 +187,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),
-    accounts: () =>
-      getJson<{ accounts: AccountUsage[]; projected: ProjectedHome | null }>('/api/accounts'),
+    // `AccountsResponse`, not a restatement of it: this shape used to be
+    // hand-written here, in the handler and in the route test, and the roster
+    // field added in Stage 2a is exactly the kind of addition that lands in two
+    // of three copies. The generic is the contract now.
+    accounts: () => getJson<AccountsResponse>('/api/accounts'),
     projects: () =>
       getJson<{ roots: string[]; projects: { name: string; workdir: string }[] }>('/api/projects'),
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>

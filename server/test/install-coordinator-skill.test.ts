@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { ACCOUNTS, type Wrapper } from '../../shared/api.js';
+import { CCD_MIRROR, CCD_MIRROR_NAMES } from './fixtures/ccdMirror.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-coordinator-skill.sh');
 const SRC = path.resolve(__dirname, '../../ccd/coordinator-skill');
@@ -156,7 +156,7 @@ describe('install-coordinator-skill', () => {
   });
 });
 
-describe('install-coordinator-skill.sh default homes agree with ACCOUNTS.hooksAble, behaviourally', () => {
+describe('install-coordinator-skill.sh default homes agree with CCD_MIRROR.hooksAble, behaviourally', () => {
   // wrapper-roster-fixture.test.ts pins this by PARSING the installer's
   // source; this proves the same claim by actually RUNNING it — same shape
   // as install-session-hooks.test.ts's own behavioural pin (fix-round
@@ -166,19 +166,19 @@ describe('install-coordinator-skill.sh default homes agree with ACCOUNTS.hooksAb
   // dir for every roster wrapper (hooksAble and not), the installer is
   // invoked with NO --homes argv at all (its real default), and the skill
   // must land in exactly the hooksAble ones.
-  const WRAPPERS = Object.keys(ACCOUNTS) as Wrapper[];
+  const WRAPPERS = CCD_MIRROR_NAMES;
   let rosterHome: string;
   beforeEach(() => {
     rosterHome = mkTmp('ccrc-skillinstall-roster-');
-    for (const w of WRAPPERS) fs.mkdirSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix), { recursive: true });
+    for (const w of WRAPPERS) fs.mkdirSync(path.join(rosterHome, CCD_MIRROR[w]!.configDirSuffix), { recursive: true });
   });
   afterEach(() => { fs.rmSync(rosterHome, { recursive: true, force: true }); });
 
   it("touches exactly the roster's hooksAble config dirs when given no --homes argv", () => {
     execFileSync('bash', [INSTALLER], { env: { ...process.env, HOME: rosterHome, CCRC_SKILL_SRC: SRC } });
     for (const w of WRAPPERS) {
-      const got = fs.existsSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix, 'skills', 'ccrc-coordinator', 'SKILL.md'));
-      expect(got, w).toBe(ACCOUNTS[w].hooksAble);
+      const got = fs.existsSync(path.join(rosterHome, CCD_MIRROR[w]!.configDirSuffix, 'skills', 'ccrc-coordinator', 'SKILL.md'));
+      expect(got, w).toBe(CCD_MIRROR[w]!.hooksAble);
     }
   });
 });

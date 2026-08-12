@@ -73,7 +73,7 @@ is absolute: **exit 0 on every path**, write atomically or not at all, no
 network, no locks, no waiting — a hook that can slow or break a session is worse
 than no hook. It self-identifies from tmux (`cc-<id>`), so a non-fleet session
 exits silently. `install-session-hooks.sh` registers it in every wrapper home
-the `ACCOUNTS` roster marks `hooksAble` — five today (`~/.claude`,
+the account roster marks hooks-able — five today (`~/.claude`,
 `~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`, `~/.claude-dev0`),
 sweeping its own managed entries and leaving anything else in `settings.json`
 untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
@@ -221,11 +221,12 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **The skill ships to every `hooksAble` account home — five today, not four.**
 Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's account drifts on
-swap — so `ccd/install-coordinator-skill.sh` installs into the `ACCOUNTS`
-roster's `hooksAble` config dirs (`~/.claude`, `~/.claude-personal`,
-`~/.claude-corp`, `~/.claude-gpt` and `~/.claude-dev0`), the same
-roster-derived list `install-session-hooks.sh` uses — never a hand-typed one,
-which is exactly the trap `shared/api.ts`'s own roster comment names by
+swap — so `ccd/install-coordinator-skill.sh` installs into the account
+roster's hooks-able config dirs (`~/.claude`, `~/.claude-personal`,
+`~/.claude-corp`, `~/.claude-gpt` and `~/.claude-dev0`), the same list
+`install-session-hooks.sh` uses, pinned against the roster by
+`wrapper-roster-fixture.test.ts` rather than trusted — a hand-typed copy of the
+roster is exactly the trap `shared/api.ts`'s own `Wrapper` docstring names by
 incident — on every agent deploy, idempotently, backing up anything it
 replaces. That lane is what makes "place the coordinator like any other
 session" safe.

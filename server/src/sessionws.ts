@@ -374,8 +374,9 @@ export class SessionStream {
       // A deployment gap, not a registry-read failure: the registry's own
       // identity triple measured CLEAN, `configDirFor` (server/src/config.ts)
       // just does not recognise this wrapper — a typo'd registry write, or a
-      // wrapper `shared/api.ts`'s `ACCOUNTS` roster has not been taught about
-      // yet. Retrying this same poll can never heal it without a redeploy, so
+      // wrapper this box's roster (`~/.ccrc/accounts.json`) has not been taught
+      // about yet. Retrying this same poll can never heal it without a fixed
+      // roster and a restart (`loadConfig` reads it once, at boot), so
       // this is `absent`, not `unmeasurable`, even though identity itself was
       // fully measured — a session the registry knows, running under a
       // wrapper this build cannot map, while the fleet list still shows it

@@ -231,9 +231,12 @@ describe('configDirFor — the ONE place a wrapper becomes a directory', () => {
 describe('DEFAULT_TEST_ROSTER', () => {
   // Guards the fixture itself: every other test in this suite that seeds a
   // bare `seedRoster(home)` is trusting this shape to mirror today's five
-  // production accounts (shared/api.ts's `ACCOUNTS`) exactly — a drift here
-  // would desync dozens of tests from what it silently changes.
-  it('mirrors the five production accounts, in ACCOUNTS declaration order', () => {
+  // production accounts exactly — a drift here would desync dozens of tests
+  // from what it silently changes. Doubly so since Task 6 deleted
+  // `shared/api.ts`'s `ACCOUNTS`: this fixture is now the tree's only
+  // TypeScript copy of those names, and `single-definition.test.ts`'s roster
+  // scanner reads its own hunt list out of it.
+  it('mirrors the five production accounts, in roster declaration order', () => {
     expect(DEFAULT_TEST_ROSTER.accounts.map((a) => a.id))
       .toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
   });

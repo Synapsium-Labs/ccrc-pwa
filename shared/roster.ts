@@ -1,4 +1,4 @@
-// The account roster — parsed, validated data that replaces the compile-time
+// The account roster — parsed, validated data that REPLACED the compile-time
 // `ACCOUNTS` literal in `shared/api.ts` (Stage 2a,
 // docs/superpowers/specs/2026-08-11-stage2a-roster-becomes-data-design.md).
 //
@@ -8,9 +8,13 @@
 // reads `~/.ccrc/accounts.json` off disk (a later task) does the `readFile`
 // and hands the parsed value in here.
 //
-// Task 2 of the stage-2a plan. Nothing in the tree calls `parseRoster` yet —
-// `shared/api.ts`'s `ACCOUNTS` is untouched, and stays the live roster until
-// Task 6 rewires its consumers.
+// Written in Task 2 of the stage-2a plan; live since Task 5, when `loadConfig`
+// began reading `~/.ccrc/accounts.json` into `CcrcConfig.roster`, and sole
+// since Task 6, which deleted `shared/api.ts`'s `ACCOUNTS` literal and moved
+// its consumers (`configDirFor`, `idHomeWrapper`, `projectHome`, `readLimits`,
+// `GET /api/accounts`) onto the parsed roster instead. `shared/api.ts`'s
+// `Wrapper` docstring is where the concept's history is recorded; this file is
+// where its data lives.
 
 /**
  * The six colors an account can render in. Replaces today's hand-picked
@@ -27,9 +31,11 @@ export const HUES = ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green'] as c
 export type Hue = (typeof HUES)[number];
 
 /** The only way to narrow an untrusted value to a `Hue` — same shape as
- *  `shared/api.ts`'s `isPrPhase`/`isPrReason`/`isWrapper`: the CONSTANT is
- *  cast, never the input, so this is a real type guard rather than an
- *  assertion dressed up as one. */
+ *  `shared/api.ts`'s `isPrPhase`/`isPrReason`: the CONSTANT is cast, never the
+ *  input, so this is a real type guard rather than an assertion dressed up as
+ *  one. (`isWrapper` was the third of that family until `Wrapper` widened to
+ *  `string`, at which point narrowing to it meant nothing — see `inRoster`
+ *  below, which replaced it as a plain boolean.) */
 function isHue(v: unknown): v is Hue {
   return typeof v === 'string' && (HUES as readonly string[]).includes(v);
 }
@@ -91,10 +97,10 @@ export interface AccountDef {
  *  1. `server/src/fleet.ts`'s `idHomeWrapper` runs once per registry row
  *     inside `assembleFleet`'s `recs.map(...)` — re-sorting per call would
  *     be O(rows × accounts log accounts) on every fleet tick.
- *  2. Today's equivalent, `BY_ID_PREFIX_LENGTH_DESC` (fleet.ts:57-58), is a
+ *  2. Its predecessor, `BY_ID_PREFIX_LENGTH_DESC` (fleet.ts), was a
  *     MODULE-LEVEL const evaluated at import time. Runtime roster data does
- *     not exist at import time, so that shape cannot survive — putting the
- *     ordering on the parsed `Roster` object is what replaces it.
+ *     not exist at import time, so that shape could not survive — putting the
+ *     ordering on the parsed `Roster` object is what replaced it (Task 6).
  */
 export interface Roster {
   version: 1;
@@ -108,10 +114,11 @@ export interface Roster {
    * first. Sorted by `id.length` descending, `id` ascending as the
    * tie-break.
    *
-   * The tie-break is load-bearing, not decorative: today's comparator
-   * (`ACCOUNTS[b].idPrefix.length - ACCOUNTS[a].idPrefix.length`, fleet.ts)
-   * has no secondary key, so equal-length ids fall back to whatever order
-   * the JS engine's sort happens to leave them in. Real ids collide on
+   * The tie-break is load-bearing, not decorative: the comparator this
+   * replaced (`ACCOUNTS[b].idPrefix.length - ACCOUNTS[a].idPrefix.length`,
+   * fleet.ts's deleted `BY_ID_PREFIX_LENGTH_DESC`) had no secondary key, so
+   * equal-length ids fell back to whatever order the JS engine's sort
+   * happened to leave them in. Real ids collide on
    * length today — `claude-corp` and `claude-dev0` are both 11 characters —
    * so "engine-defined" was never hypothetical. Sorting by `id` ascending
    * as the second key makes the order total and deterministic.
@@ -121,6 +128,32 @@ export interface Roster {
   homeAble: readonly AccountDef[];
   /** The id of the one account with `exec.kind === 'upstream'`. */
   upstreamId: string;
+}
+
+/**
+ * Is `v` an account this roster has? The membership test `shared/api.ts`'s
+ * `isWrapper` used to be, and deliberately NOT a type guard: once `Wrapper`
+ * became `string` (Stage 2a, Task 6), a `v is Wrapper` predicate narrowed
+ * nothing while still reading like a guard — a signature that promises the
+ * compiler is checking something it is not.
+ *
+ * `unknown` rather than `string` for the same reason `isPrReason` takes one:
+ * every caller's input arrives off disk or off the wire, and a parameter typed
+ * `string` invites `as string` at the call site, which is the assertion this
+ * check exists to replace.
+ *
+ * The one consumer that matters is `readLimits` (`server/src/limits.ts`): the
+ * registry directory holds `<name>-disabled` markers that name no account at
+ * all — `autocompact-disabled` is a fleet-wide proactive-/compact kill switch,
+ * not a lane — and this is what stops one of those from being backfilled into
+ * a phantom `autocompact` row on `GET /api/accounts`, which the accounts
+ * screen would then render as a real account. `configDirFor`
+ * (`server/src/config.ts`) answers the same question by doing the lookup it
+ * already needs (`roster.byId.get(...)` → `undefined`), so it stays as it is
+ * rather than asking twice.
+ */
+export function inRoster(roster: Roster, v: unknown): boolean {
+  return typeof v === 'string' && roster.byId.has(v);
 }
 
 /**
