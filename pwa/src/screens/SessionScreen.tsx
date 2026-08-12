@@ -127,7 +127,18 @@ export function SessionScreen({
   // `claude`'s cyan — a real user-visible bug this lookup closes, since
   // `accountHue` returns `undefined` for an unrostered wrapper and nothing
   // else.
-  const acct = accountHue(roster, wrapper);
+  //
+  // `'unknown'`, never a bare `undefined` here (fix round 1, finding 4): an
+  // `undefined` value makes React omit the `data-acct` attribute entirely, no
+  // `[data-acct]` rule in tokens.css matches, and `--acct-active` is left at
+  // `:root`'s default — which is `--acct-cyan`. Before the roster arrives (or
+  // for a wrapper it genuinely does not carry), every OTHER account used to
+  // flash cyan — a real hue that reads as "this is the claude account" rather
+  // than "unknown" — for exactly as long as the first `/api/accounts` poll
+  // takes. `[data-acct='unknown']` (tokens.css) rebinds `--acct-active` to
+  // neutral ink instead, the same fallback pair `accountColorVar` and
+  // `SwapSheet`'s `AccountRow` already use for a hue-less wrapper.
+  const acct = accountHue(roster, wrapper) ?? 'unknown';
 
   // The stream sends status only on change — until its first frame the fleet
   // snapshot speaks for the session (same fallback the header does), so a

@@ -8,6 +8,7 @@ import type { FleetSession } from '../../shared/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
 import { createFleetStore } from '../src/stores/fleet';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { TEST_ROSTER } from './rosterFixture';
 
 const session = (id: string): FleetSession => ({
   id,
@@ -79,6 +80,58 @@ describe('fleet snapshot (lib/offline)', () => {
   });
 });
 
+// Fix round 1, finding 3: a cold offline start hydrated `sessions` from the
+// snapshot but never `roster` — every account rendered as its raw wrapper id
+// (`claude2`, `claude-corp`) instead of the jargon-free label this module
+// exists to restore, a real regression against the compile-time roster this
+// replaced (which had no "unarrived" state at all).
+describe('the roster travels with the snapshot (fix round 1, finding 3)', () => {
+  it('round-trips the roster alongside sessions', () => {
+    saveFleetSnapshot([session('claude:OpenClawHetzner')], TEST_ROSTER);
+    expect(loadFleetSnapshot()?.roster).toEqual(TEST_ROSTER);
+  });
+
+  it('degrades an absent roster to `[]` — a pre-Task-7 snapshot is version skew, not corruption', () => {
+    // Same call shape a caller that has never heard of `roster` would make —
+    // the second argument defaults, it is not required.
+    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    expect(loadFleetSnapshot()?.roster).toEqual([]);
+    // And the sessions still revive normally — an unknown-to-this-snapshot
+    // field must not sink the read the way a malformed SESSION does.
+    expect(loadFleetSnapshot()?.sessions).toHaveLength(1);
+  });
+
+  it('degrades a roster of the wrong shape entirely to `[]`, without rejecting the whole snapshot', () => {
+    window.localStorage.setItem(
+      'ccrc.fleet-snapshot.v1',
+      JSON.stringify({ savedAt: Date.now(), sessions: [session('claude:OpenClawHetzner')], roster: 'not an array' }),
+    );
+    const snap = loadFleetSnapshot();
+    expect(snap?.roster).toEqual([]);
+    expect(snap?.sessions).toHaveLength(1);
+  });
+
+  it('filters out individually malformed roster entries rather than crashing or rejecting the snapshot', () => {
+    window.localStorage.setItem(
+      'ccrc.fleet-snapshot.v1',
+      JSON.stringify({
+        savedAt: Date.now(),
+        sessions: [session('claude:OpenClawHetzner')],
+        roster: [
+          TEST_ROSTER[0],
+          null, // the shape a `null` array entry takes — `.id` on it would throw
+          { id: 'claude2', label: 'alt·max', hue: 'not-a-real-hue', homeAble: true },
+          { id: 'claude-corp', label: 'team·shared', homeAble: true }, // missing hue
+          'not an object',
+        ],
+      }),
+    );
+    const snap = loadFleetSnapshot();
+    expect(snap?.roster).toEqual([TEST_ROSTER[0]]);
+    expect(snap?.sessions).toHaveLength(1);
+  });
+});
+
 // Registry ladder (Task 2): `saveFleetSnapshot` refuses two frame shapes
 // before ever touching storage — same reasoning `lib/seen.ts`'s `prune`
 // already states for an empty set (seen.ts:198-208): absent evidence proves
@@ -121,6 +174,13 @@ describe('fleet store hydration + persistence', () => {
     expect(store.getState().conn).toBe('connecting');
   });
 
+  // Fix round 1, finding 3.
+  it('hydrates the roster from the snapshot at boot too, alongside sessions', () => {
+    saveFleetSnapshot([session('claude:OpenClawHetzner')], TEST_ROSTER);
+    const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
+    expect(store.getState().roster).toEqual(TEST_ROSTER);
+  });
+
   it('persists each live fleet message as the new snapshot', () => {
     const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
     store.getState().connect();
@@ -130,6 +190,24 @@ describe('fleet store hydration + persistence', () => {
 
     expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
     expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    store.getState().disconnect();
+  });
+
+  // Fix round 1, finding 3: a `fleet` frame carries no roster of its own (it
+  // travels over the separate `/api/accounts` poll), so the snapshot's
+  // roster has to come off CURRENT store state at the moment of the write,
+  // not off the message.
+  it('persists the current in-memory roster alongside a live fleet frame', () => {
+    const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
+    store.getState().connect();
+    // Simulates the independent roster poll having already landed by the
+    // time this fleet frame arrives.
+    store.setState({ roster: TEST_ROSTER });
+    const sock = FakeSocket.instances[0]!;
+    sock.open();
+    sock.message(JSON.stringify({ type: 'fleet', sessions: [session('claude2:mekwarlive')] }));
+
+    expect(loadFleetSnapshot()?.roster).toEqual(TEST_ROSTER);
     store.getState().disconnect();
   });
 

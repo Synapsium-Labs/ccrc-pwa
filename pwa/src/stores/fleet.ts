@@ -168,12 +168,22 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       if (document.visibilityState === 'visible') nudge();
     };
 
+    // One read, not two (`sessions` and `roster` below both come off it) —
+    // fix round 1, finding 3. Before this, a cold offline start hydrated
+    // `sessions` from the snapshot but `roster` stayed at its bare `[]`
+    // default, so every account rendered as its raw wrapper id
+    // (`claude2`, `claude-corp`) instead of the jargon-free label this
+    // whole module exists to restore — a real regression against the
+    // compile-time roster this replaced, which never had an "unarrived"
+    // state to begin with.
+    const snapshot = loadFleetSnapshot();
+
     return {
       // Hydrate from the last persisted snapshot (lib/offline.ts) so a cold
       // start renders the fleet instantly. conn stays 'connecting' — the
       // screen stale-marks everything until the socket opens and the live
       // snapshot replaces this one.
-      sessions: loadFleetSnapshot()?.sessions ?? [],
+      sessions: snapshot?.sessions ?? [],
       conn: 'connecting',
       notices: [],
       feed: [],
@@ -181,7 +191,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       blocked: false,
       runs: [],
       runsFrameSeen: false,
-      roster: [],
+      roster: snapshot?.roster ?? [],
 
       connect() {
         if (socket) return;
@@ -211,7 +221,18 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         // never optional), but a bad JSON body can.
         const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
         const pollRoster = (): void => {
-          void fetchAccounts().then((r) => { if (Array.isArray(r.roster)) set({ roster: r.roster }); }).catch(() => {});
+          void fetchAccounts().then((r) => {
+            // Preserves the last good roster on a malformed response — never
+            // clobbers it with `[]` (fix round 1, finding 5): a transient bad
+            // read must not un-teach every consumer the account labels it
+            // already had.
+            if (Array.isArray(r.roster)) { set({ roster: r.roster }); return; }
+            // A genuine protocol break (a route answering the wrong shape) has
+            // no other signal anywhere — every consumer just silently reverts
+            // to raw wrapper ids, which reads as "nothing is wrong" (fix
+            // round 1, finding 6).
+            console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
+          }).catch(() => {});
         };
         pollRoster();
         rosterTimer = setInterval(pollRoster, 20_000);
@@ -280,7 +301,11 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             const msg = asFleetMsg(m);
             if (!msg) return; // unknown frame — ignore
             if (msg.type === 'fleet') {
-              saveFleetSnapshot(msg.sessions); // keep the offline snapshot fresh
+              // `get().roster`, not the bare sessions: the roster travels
+              // independently (the poll above, not this socket), so the
+              // snapshot's own roster has to be read off current state
+              // rather than out of `msg` — a `fleet` frame carries none.
+              saveFleetSnapshot(msg.sessions, get().roster); // keep the offline snapshot fresh
               set({ sessions: msg.sessions });
             } else if (msg.type === 'notice') {
               noticeSeq += 1;

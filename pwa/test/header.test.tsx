@@ -331,6 +331,48 @@ describe('SessionScreen interrupt wiring', () => {
   });
 });
 
+// Fix round 1, finding 1: the dev0-in-cyan bug (see SessionScreen.tsx's own
+// comment on `acct`) had NO regression coverage — `grep -rn "data-acct"
+// pwa/test` returned nothing before this block existed. Pins both the general
+// case (a non-cyan account stamps its OWN hue, not cyan) and finding 4's
+// companion fix (an unresolved hue stamps 'unknown', never a bare absence
+// that would leave `--acct-active` at its cyan default).
+describe('SessionScreen account accent (data-acct)', () => {
+  const makeStores = (roster: typeof TEST_ROSTER | []) => {
+    const store = createSessionStore('claude2:OpenClawHetzner', {
+      makeSocket: fakeSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({
+        sessions: [fleetSession({ id: 'claude2:OpenClawHetzner', wrapper: 'claude2' })],
+        conn: 'open',
+        roster,
+      });
+    });
+    return { store, fleet };
+  };
+
+  it("stamps the session's own hue — a non-cyan account never renders in claude's cyan", () => {
+    const { store, fleet } = makeStores(TEST_ROSTER);
+    const { container } = render(
+      <SessionScreen id="claude2:OpenClawHetzner" store={store} fleet={fleet} />,
+    );
+    // claude2 -> violet (rosterFixture.ts). Cyan would mean the old
+    // string-parsed lookup (or its regression) is back.
+    expect(container.querySelector('.chat')).toHaveAttribute('data-acct', 'violet');
+  });
+
+  it("stamps 'unknown', never cyan, before the roster has arrived", () => {
+    const { store, fleet } = makeStores([]);
+    const { container } = render(
+      <SessionScreen id="claude2:OpenClawHetzner" store={store} fleet={fleet} />,
+    );
+    expect(container.querySelector('.chat')).toHaveAttribute('data-acct', 'unknown');
+  });
+});
+
 describe('SessionScreen reap wiring (Task 17)', () => {
   it('wires onReapWorkspace to the real ReapSheet, not a no-op', async () => {
     // The line above this test (Task 16's own "Clean up (Task 16) both

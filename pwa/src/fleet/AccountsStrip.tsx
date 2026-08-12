@@ -75,8 +75,16 @@ export function AccountsStrip(): ReactNode {
         // predate Task 7 and do exactly that) hands back `r.roster ===
         // undefined`, and every `accountLabel`/`accountColorVar` call below
         // does `roster.find(...)` unguarded — same reasoning as
-        // `stores/fleet.ts`'s own roster poll.
-        if (Array.isArray(r.roster)) setRoster(r.roster);
+        // `stores/fleet.ts`'s own roster poll. Preserves the last good
+        // roster rather than clobbering it with `[]` on a malformed
+        // response (fix round 1, finding 5), and warns once so a genuine
+        // protocol break has some signal (finding 6) instead of silently
+        // reverting every label to a raw wrapper id.
+        if (Array.isArray(r.roster)) {
+          setRoster(r.roster);
+        } else {
+          console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
+        }
       }).catch(() => {});
     };
     load();

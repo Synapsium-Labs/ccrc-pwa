@@ -58,6 +58,18 @@ const stubFetch502 = (stderr: string): void => {
   );
 };
 
+/** A real `AccountsResponse` for `GET /api/accounts` — the reap-flow fetch
+ *  stubs below used to fall through to a bare `new Response('{}')` for it
+ *  (a wire shape the server never sends, since `accounts`/`projected`/
+ *  `roster` are none of them optional). AccountsStrip and the fleet store's
+ *  own roster poll both hit this route on every FleetScreen mount, so those
+ *  guards were load-bearing for this suite rather than a production-only
+ *  boundary check (fix round 1). */
+const accountsRoute = (): Response =>
+  new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
+    status: 200, headers: { 'content-type': 'application/json' },
+  });
+
 const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'claude:OpenClawHetzner',
   wrapper: 'claude',
@@ -536,6 +548,7 @@ describe('FleetScreen', () => {
         if (String(url).includes('/workspace/audit')) {
           return new Response(JSON.stringify(wsAudit), { status: 200, headers: { 'content-type': 'application/json' } });
         }
+        if (String(url).includes('/api/accounts')) return accountsRoute();
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
@@ -571,6 +584,7 @@ describe('FleetScreen', () => {
           return new Response(JSON.stringify({ reaped: 'a', branch: 'ws/quiet-mesa', attic: 1, sentence: '' }),
             { status: 200, headers: { 'content-type': 'application/json' } });
         }
+        if (String(url).includes('/api/accounts')) return accountsRoute();
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
@@ -632,6 +646,7 @@ describe('FleetScreen', () => {
           // leave it rendered under bravo's identity until this resolves.
           return new Promise<Response>((resolve) => { resolveBravoAudit = resolve; });
         }
+        if (String(url).includes('/api/accounts')) return accountsRoute();
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();

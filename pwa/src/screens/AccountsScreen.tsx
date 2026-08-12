@@ -48,7 +48,21 @@ function useAccountsPoll(): AccountsPoll {
           // already degrade a bare `undefined` to their own "no poll landed"
           // branch (the falsy `!accounts` check, the three-state `projected`
           // read) rather than indexing into it.
-          setState({ accounts: r.accounts, projected: r.projected, roster: Array.isArray(r.roster) ? r.roster : [] });
+          //
+          // Functional update, not a flat object literal (fix round 1,
+          // finding 5): the flat form clobbered an already-good roster with
+          // `[]` the instant one later poll came back malformed, while
+          // `stores/fleet.ts` and `AccountsStrip.tsx` both already preserved
+          // it by simply skipping the write. `prev.roster` is the same
+          // preservation here, where `accounts`/`projected` still need to
+          // update on every read regardless. Warn once on the malformed
+          // branch — a genuine protocol break has no other signal anywhere
+          // (finding 6).
+          setState((prev) => {
+            if (Array.isArray(r.roster)) return { accounts: r.accounts, projected: r.projected, roster: r.roster };
+            console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
+            return { accounts: r.accounts, projected: r.projected, roster: prev.roster };
+          });
         })
         .catch(() => {});
     };
@@ -120,10 +134,20 @@ export function AccountsScreen(): ReactNode {
   // right below, so "all accounts disabled" would read as a claim about the
   // list under it that the server never actually checked. Naming the three
   // lanes individually is what ccd's own placement refusal already does.
+  //
+  // `homeAbleNames === ''` (fix round 1, finding 7): `projected` and `roster`
+  // arrive on the same poll response in the steady state, but a first
+  // response that lands with a valid `projected: null` and a malformed
+  // `roster` leaves `roster` at its `[]` default (`useAccountsPoll`
+  // preserves rather than clobbers on a malformed read — see its own
+  // comment) — same degenerate case ProjectCard's `addLabel` guards.
+  const homeAbleNames = homeAbleLabelList(roster);
   const projectionLine = projected === undefined
     ? null
     : projected === null
-      ? `Next workspace: ${homeAbleLabelList(roster)} all disabled — nothing can take it`
+      ? homeAbleNames === ''
+        ? 'Next workspace: all disabled — nothing can take it'
+        : `Next workspace: ${homeAbleNames} all disabled — nothing can take it`
       : `Next workspace lands on ${accountLabel(roster, projected.wrapper)} — least-loaded`;
 
   return (

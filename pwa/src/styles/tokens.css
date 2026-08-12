@@ -398,6 +398,15 @@
 [data-acct='magenta'] { --acct-active: var(--acct-magenta); --acct-active-tint: var(--acct-magenta-tint); }
 [data-acct='amber']   { --acct-active: var(--acct-amber);   --acct-active-tint: var(--acct-amber-tint); }
 [data-acct='green']   { --acct-active: var(--acct-green);   --acct-active-tint: var(--acct-green-tint); }
+/* Fix round 1, finding 4: `data-acct='unknown'` is `SessionScreen`'s own
+   fallback for a hue `accountHue` could not resolve — the roster has not
+   arrived yet, or the wrapper genuinely is not in it. Without a rule here,
+   the `[data-acct]` match fails entirely and `--acct-active` is left at
+   `:root`'s default (cyan) — a real hue that reads as "this is the claude
+   account" rather than "unknown". Rebound to the same neutral ink/raised
+   pair `.chip--archived` above and `accountColorVar`'s own hue-less fallback
+   already use, both already gated at 4.5+ in both themes. */
+[data-acct='unknown'] { --acct-active: var(--ink-tertiary); --acct-active-tint: var(--bg-raised); }
 
 /* ==========================================================================
    REDUCED MOTION — glow freezes at mid-intensity, springs become fades,

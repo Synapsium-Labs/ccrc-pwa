@@ -80,10 +80,21 @@ export function ProjectCard({
   // blanket "all" would overstate what the server actually knows. A value:
   // name it. The button stays enabled in all three cases regardless, because
   // ccd's die at ws-add time is the authority, not this forecast.
+  // The roster can genuinely land AFTER `projected === null` already has
+  // (they poll independently — ProjectCard's own `projected` prop comes from
+  // `useProjectedHome`, `roster` from the fleet store's separate poll), so
+  // `homeAbleLabelList` can legitimately still return `''` here (fix round 1,
+  // finding 7): `roster.filter((a) => a.homeAble)` over an empty array is
+  // empty. Naming zero accounts individually read as "New workspace on demo
+  // — all disabled" (single space, no phantom list) rather than a name
+  // list gone missing mid-sentence.
+  const homeAbleNames = homeAbleLabelList(roster);
   const addLabel = projected
     ? `New workspace on ${group.project} — ${accountLabel(roster, projected.wrapper)}, ${headroom}% free`
     : projected === null
-      ? `New workspace on ${group.project} — ${homeAbleLabelList(roster)} all disabled`
+      ? homeAbleNames === ''
+        ? `New workspace on ${group.project} — all disabled`
+        : `New workspace on ${group.project} — ${homeAbleNames} all disabled`
       : `New workspace on ${group.project}`;
 
   // Status never owns the card's perimeter except for attention (the one state
