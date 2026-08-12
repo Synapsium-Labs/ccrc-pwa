@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Node engine floor `>=22.13.0`, pinned in `agent/package.json:5`, `pwa/package.json:6`, `server/package.json:5`. No root `package.json` — four workspaces.
-- `shared/` imports nothing, not even `node:*`. Hashing and file IO live in `server/`.
+- **`shared/*.ts` imports nothing, not even `node:*`** — the PWA bundles those files, and that is the rule's actual reason. `shared/*.mjs` (`generate.mjs`, `mark.mjs`) is deploy-side tooling that the PWA never imports; it may use `node:*`, and `mark.mjs` uses `node:crypto`. File IO stays in `server/` and in `deploy/gen-accounts.mjs`. A reviewer seeing `node:crypto` under `shared/` should check which of the two rules applies before flagging it.
 - Account id: `^[a-z][a-z0-9-]{0,31}$`, unique. **Load-bearing:** ccd's `_default_pool` (ccd:6558) joins ids with `"${VALID_WRAPPERS[*]}"` and `_swap_target` (ccd:6709) consumes them through an unquoted `for cand in $(_pool_for "$id")`. Whitespace in an id would word-split silently.
 - `configDirSuffix` begins with `.`, contains no `/` and no `..`.
 - Exactly one account has `exec.kind === 'upstream'`.
