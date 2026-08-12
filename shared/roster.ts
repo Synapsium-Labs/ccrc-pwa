@@ -34,11 +34,11 @@ function isHue(v: unknown): v is Hue {
   return typeof v === 'string' && (HUES as readonly string[]).includes(v);
 }
 
-/** `HUES[i % HUES.length]`, asserted non-null: `HUES` is a fixed, nonempty
- *  6-element tuple, so a modulo index is always in range. One assertion
- *  here documents that once, instead of a bare `!` at every call site. */
-function hueAt(i: number): Hue {
-  return HUES[i % HUES.length]!;
+/** `arr[i % arr.length]`, asserted non-null: every call site below passes a
+ *  provably nonempty array, so a modulo index is always in range. One
+ *  assertion here documents that once, instead of a bare `!` at each site. */
+function cycleAt<T>(arr: readonly T[], i: number): T {
+  return arr[i % arr.length]!;
 }
 
 /**
@@ -166,6 +166,14 @@ const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
   ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry'],
 );
+// `upstream` and `external` carry no fields beyond the discriminator;
+// `generated` is the only kind with a second, optional one. Split so a typo
+// like `secretFile` (missing the `s`) — which silently drops an account's
+// secrets-file reference, and the account then launches with no OAuth token
+// and no diagnostic anywhere — gets caught by `warnUnknownKeys` instead of
+// vanishing the way an unrecognised key on a plain object always would.
+const EXEC_KEYS_BASE: ReadonlySet<string> = new Set(['kind']);
+const EXEC_KEYS_GENERATED: ReadonlySet<string> = new Set(['kind', 'secretsFile']);
 
 /** Named in every remedy below, since `parseRoster` itself never sees a
  *  path (it takes parsed JSON, not a file) — this is where the schema's
@@ -211,6 +219,7 @@ function parseExec(raw: unknown, id: string): ExecSpec {
       `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated" or "external".`,
     );
   }
+  warnUnknownKeys(raw, kind === 'generated' ? EXEC_KEYS_GENERATED : EXEC_KEYS_BASE, `on account "${id}"'s exec`);
   if (kind === 'generated') {
     const secretsFile = raw['secretsFile'];
     if (secretsFile !== undefined && typeof secretsFile !== 'string') {
@@ -255,18 +264,30 @@ function parseAccount(raw: unknown, index: number): Draft {
     );
   }
 
+  // `configDirSuffix` is joined to `$HOME` by whoever installs the account
+  // (never here — `shared/` cannot import `node:path`), so this is the
+  // ONE place that join is validated safe. `"."` passes every check above
+  // it (starts with `.`, no `/`, no `..`) and then resolves to `$HOME`
+  // itself — the exact failure class `agent/src/server.ts`'s
+  // `assertProjectsRootIsSafe` exists for: a config dir that IS $HOME folds
+  // every dotfile, `~/.ssh` included, into a scope meant for one account.
+  // With `/` already banned, `"."` is the only string that can normalise to
+  // `$HOME` itself — any other value starting with `.` and containing
+  // neither `/` nor `..` names a real, distinct one-segment subdirectory.
   const configDirSuffix = raw['configDirSuffix'];
   if (
     typeof configDirSuffix !== 'string' ||
     !configDirSuffix.startsWith('.') ||
+    configDirSuffix === '.' ||
     configDirSuffix.includes('/') ||
     configDirSuffix.includes('..')
   ) {
     throw new RosterError(
       `account "${id}" has an invalid configDirSuffix ${JSON.stringify(configDirSuffix)}: it ` +
-        'must start with "." and contain neither "/" nor "..".',
+        'must start with "." and contain neither "/" nor "..", and must not be "." itself ' +
+        '(which resolves to $HOME).',
       `Set "configDirSuffix" for account "${id}" in ${ROSTER_PATH} to a dot-prefixed directory ` +
-        `name directly under $HOME (e.g. ".${id}").`,
+        `name directly under $HOME (e.g. ".${id}") — never "." itself.`,
     );
   }
 
@@ -310,34 +331,49 @@ function parseAccount(raw: unknown, index: number): Draft {
 
 /**
  * Fills in `hue` for every account that did not declare one, mutating the
- * drafts in place. Walks `HUES` in order, skipping hues already claimed —
- * explicitly by any account, or by an earlier auto-assignment in this same
- * pass — and cycles once every hue is claimed rather than leaving one
- * unset (design spec §3: "past six accounts the palette cycles rather than
- * falling back to neutral"; a later `doctor` task is where the resulting
- * collision gets reported to the user, not here).
+ * drafts in place.
+ *
+ * The pool auto-assignment draws from is `HUES`, in order, minus any hue an
+ * account claimed EXPLICITLY — an explicit claim is always honoured and
+ * never handed to a different account. Accounts needing auto-assignment
+ * then take one pool entry each, in declaration order, `i % pool.length` —
+ * true round-robin, not "first free slot": for six or fewer such accounts
+ * this is indistinguishable from "next free hue by position" (`pool.length`
+ * is at least that many), but past six it means the 7th auto-assigned
+ * account gets the pool's 1st hue again, the 8th its 2nd, and so on.
+ *
+ * That distinction is the fix for a real bug: an earlier version searched
+ * for "the next hue nobody has claimed yet" per account and fell back to
+ * "whichever hue this search happened to land on last" once the pool was
+ * exhausted — which is deterministic, but happened to be the SAME hue every
+ * time (the search always ran the same number of steps per account), so
+ * accounts 7, 8, 9, … all clumped onto the pool's last entry instead of
+ * spreading out. Design spec §3 says the palette "cycles" past six accounts;
+ * clumping is not cycling. `i % pool.length` cycles for real.
+ *
+ * If every hue in `HUES` was claimed explicitly (pool empty) and an account
+ * still needs one, auto-assignment falls back to cycling the full `HUES`
+ * list — there is no hue left that avoids colliding with some explicit
+ * choice, so this at least still spreads collisions round-robin rather than
+ * concentrating them.
+ *
+ * A resulting collision is not reported here — design spec §3 puts that on
+ * a later `doctor` task, which sees the finished roster and can name both
+ * colliding accounts; this function's only job is to never leave a `hue`
+ * unset.
  */
 function assignHues(accounts: Draft[]): void {
-  const claimed = new Set<Hue>();
-  for (const a of accounts) if (a.hue !== undefined) claimed.add(a.hue);
+  const explicit = new Set<Hue>();
+  for (const a of accounts) if (a.hue !== undefined) explicit.add(a.hue);
 
-  let cursor = 0;
+  const pool = HUES.filter((h) => !explicit.has(h));
+  const available = pool.length > 0 ? pool : HUES;
+
+  let i = 0;
   for (const a of accounts) {
     if (a.hue !== undefined) continue;
-    let chosen: Hue | undefined;
-    for (let tries = 0; tries < HUES.length; tries++) {
-      const candidate = hueAt(cursor);
-      cursor++;
-      if (!claimed.has(candidate)) {
-        chosen = candidate;
-        break;
-      }
-    }
-    // Every hue already claimed by some other account: cycle rather than
-    // leave this one unset.
-    if (chosen === undefined) chosen = hueAt(cursor - 1);
-    a.hue = chosen;
-    claimed.add(chosen);
+    a.hue = cycleAt(available, i);
+    i++;
   }
 }
 
