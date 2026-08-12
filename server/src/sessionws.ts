@@ -369,7 +369,7 @@ export class SessionStream {
     // uuid it would be built from, and is a guess wearing a real address.
     const identity = measuredIdentity(read.record);
     if (identity === null) return { ok: false, reason: 'unmeasurable' };
-    const cfgDir = configDirFor(this.deps.cfg.home, identity.wrapper);
+    const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
     if (!cfgDir) {
       // A deployment gap, not a registry-read failure: the registry's own
       // identity triple measured CLEAN, `configDirFor` (server/src/config.ts)

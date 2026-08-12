@@ -8,7 +8,7 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { saveSnapshot, type FleetState } from '../src/fleetstate.js';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { testDeps } from './helpers.js';
+import { seedRoster, testDeps } from './helpers.js';
 import type { FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -25,6 +25,7 @@ function remoteDeps(
   stateCachePath?: string,
 ): Deps {
   const home = mkTmp('ccrc-');
+  seedRoster(home);
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote', ...env });
   return { cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath, queue: new KeyedQueue() };
 }

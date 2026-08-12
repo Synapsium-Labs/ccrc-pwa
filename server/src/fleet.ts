@@ -113,7 +113,7 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // degraded `rec.wrapper` is `''`, which `configDirFor` (an unknown wrapper
   // string) already answers `undefined` for — honest-but-blind, and it fails
   // TOWARD refusing an interrupt rather than granting one on a guess.
-  const cfgDir = configDirFor(cfg.home, rec.wrapper);
+  const cfgDir = configDirFor(cfg, rec.wrapper);
   if (!pid || !cfgDir) return 'idle';
   const live = await readLiveState(io, cfgDir, pid);
   return live ? liveSessionStatus(live.status) : 'idle';
@@ -188,7 +188,7 @@ export async function assembleFleet(
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
-      const cfgDir = configDirFor(cfg.home, r.wrapper);
+      const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid && cfgDir) {
         const live = await readLiveState(io, cfgDir, pid);
         if (live) {

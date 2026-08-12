@@ -688,7 +688,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // route did not, and an id is about to become part of an argv.
   const prTasks = async (id: string): Promise<TaskItem[] | null> => {
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
-    const cfgDir = rec ? configDirFor(deps.cfg.home, rec.wrapper) : undefined;
+    const cfgDir = rec ? configDirFor(deps.cfg, rec.wrapper) : undefined;
     return rec && cfgDir ? readTasks(deps.io, cfgDir, rec.uuid) : null;
   };
 

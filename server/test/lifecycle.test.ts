@@ -10,6 +10,7 @@ import { ccdRunner, listProjects } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -36,6 +37,7 @@ async function makeApp(opts: { fail?: boolean; projectsRoot?: string } = {}): Pr
   home: string;
 }> {
   const home = mkTmp('ccrc-');
+  seedRoster(home);
   seedDefault(home);
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
@@ -99,6 +101,7 @@ describe('lifecycle routes', () => {
     // the correct id — using the swapped wrapper would kill a nonexistent session
     // and leave the real one alive.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude2-cctest', {
       wrapper: 'claude',            // swapped to claude…
       project: 'cctest',
@@ -126,6 +129,7 @@ describe('lifecycle routes', () => {
     // cc-claude-rp-llm and disable claude-session@claude-rp-llm, exit 0, and
     // the PWA would report success while the workspace kept running.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'rp-llm-quiet-mesa', {
       wrapper: 'claude',
       project: 'rp-llm',
@@ -280,7 +284,9 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return result; };
     return { run, calls };
   };
-  const cfg = loadConfig({ CCRC_HOME: mkTmp('ccrc-') });
+  const ccdRunnerHome = mkTmp('ccrc-');
+  seedRoster(ccdRunnerHome);
+  const cfg = loadConfig({ CCRC_HOME: ccdRunnerHome });
 
   it('names cfg.ccdBin and passes the argv tokens through verbatim', async () => {
     const { run, calls } = spy({ code: 0, stdout: '', stderr: '' });

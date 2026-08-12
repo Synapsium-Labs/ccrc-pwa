@@ -51,7 +51,7 @@ function lastSkillListing(jsonl: string): string {
 export async function sessionCommands(deps: Deps, id: string): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
   const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
   if (!rec) return { builtins: BUILTINS, skills: [] };
-  const cfgDir = configDirFor(deps.cfg.home, rec.wrapper);
+  const cfgDir = configDirFor(deps.cfg, rec.wrapper);
   let cwd = rec.workdir;
   if (cfgDir && (await deps.tmux.hasSession(id))) {
     const pid = await deps.tmux.panePid(id);

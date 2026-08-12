@@ -16,6 +16,7 @@ import { localIO } from '../src/io.js';
 import { readLimits, projectHome } from '../src/limits.js';
 import { leastLoadedCases } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 import { CCD } from './ccdWsHelpers.js';
 
 let home: string;
@@ -29,6 +30,7 @@ const sh = (snippet: string): string =>
 
 beforeEach(() => {
   home = mkTmp('ccrc-projected-');
+  seedRoster(home);
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
