@@ -834,11 +834,12 @@ export function registerCoordRoutes(
    * ceremony (audit → reap, typed `expect`); a release destroys nothing, so
    * the two-tap confirm in the sheet is the whole ceremony here.
    *
-   * UNGATED, on the operator surface, for `POST /api/coord/pause`'s own reason
-   * (D-B4-9 and spec §4.1): the box token authenticates the fleet host and the
-   * coordinator holds it, so gating the release valve for a WEDGED COORDINATOR
-   * behind the coordinator's own key would leave the wedge with no door. The
-   * act names its cause — `causedBy: 'operator'`, never `'coordinator'`.
+   * UNGATED — deliberately NOT behind `requireMailToken`, for
+   * `POST /api/coord/pause`'s own reason (D-B4-9 and spec §4.1): the box token
+   * authenticates the fleet host and the coordinator holds it, so gating the
+   * release valve for a run wedged BY a stuck coordinator behind that same
+   * coordinator's key would leave the wedge with no door at all. The act names
+   * its cause — `causedBy: 'operator'`, never `'coordinator'`.
    */
   app.post('/api/runs/:id/abandon', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -978,8 +979,13 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/coord/pause` — the OPERATOR's door, and the ONE route in this
-   * file that is deliberately NOT behind `requireMailToken` (D-B4-9).
+   * `POST /api/coord/pause` — the OPERATOR's door, and one of the TWO routes in
+   * this file that are UNGATED: deliberately NOT behind `requireMailToken`
+   * (D-B4-9). The other is `POST /api/runs/:id/abandon` above, added by this
+   * same build and ungated for this same reason. Between them they are the
+   * WHOLE unauthenticated write surface of this file — a claim `coord-pause-
+   * route.test.ts`'s `UNGATED` set holds to exactly these two names, in both
+   * directions.
    *
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely

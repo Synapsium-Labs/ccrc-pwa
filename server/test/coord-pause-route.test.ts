@@ -1,6 +1,8 @@
 // `POST /api/coord/pause` — the operator's door onto `$REG/coordinator-paused`,
-// and the ONE write route in `coord/routes.ts` that is deliberately not behind
-// `requireMailToken` (D-B4-9).
+// and one of the TWO write routes in `coord/routes.ts` deliberately not behind
+// `requireMailToken` (D-B4-9). The other is `POST /api/runs/:id/abandon`, added
+// by the same build for the same reason; the `UNGATED` set below is the whole
+// list, and the scanner holds it to exactly those two.
 //
 // The authorization ruling is spec §4.1 and it is the whole reason this file
 // asserts an ABSENCE: the box token authenticates the FLEET HOST, the
@@ -208,13 +210,64 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     expect(routes.length).toBeGreaterThan(4);
   });
 
-  it('the pause route names its reason at the call site, not in a plan nobody reads', () => {
-    // The honesty clause is load-bearing documentation: a later edit that
-    // "fixes" the missing gate has to delete an argument, not just add a line.
-    const idx = SRC.indexOf("app.post('/api/coord/pause'");
-    expect(idx).toBeGreaterThan(0);
-    const preamble = SRC.slice(Math.max(0, idx - 2000), idx);
-    expect(preamble).toContain('requireMailToken');
-    expect(preamble).toMatch(/coordinator/i);
+  /**
+   * A route's OWN docstring: everything between the end of the previous
+   * handler and this route's registration.
+   *
+   * ANCHORED TO THE TEXT, NOT TO A BYTE COUNT — review finding F-A, and the
+   * second instance this wave of "a pin that cannot fail". The first version
+   * sliced 2000 characters backwards from the route, and measured on the
+   * shipped tree that window reached 437 characters PAST the docstring into
+   * the previous route's body: `requireMailToken` came free from
+   * `POST /api/runs/:id/items`'s own gate and `/coordinator/i` from the
+   * advance route's `causedBy` literal, so deleting this docstring entirely
+   * left both assertions green. A window sized in bytes is a window whose
+   * contents depend on how long the neighbours are.
+   *
+   * `\n  });\n` is the close of a route handler at this file's one-level
+   * indentation, which is what makes the slice this route's own text and
+   * nothing else's.
+   */
+  const HANDLER_END = '\n  });\n';
+  const docstringFor = (route: string): string => {
+    const at = SRC.indexOf(`app.post('${route}'`);
+    expect(at, `${route} is not registered`).toBeGreaterThan(0);
+    const prevEnd = SRC.lastIndexOf(HANDLER_END, at);
+    expect(prevEnd, `no preceding handler close before ${route}`).toBeGreaterThan(0);
+    return SRC.slice(prevEnd + HANDLER_END.length, at);
+  };
+
+  it.each([...UNGATED])('%s names its reason at the call site, not in a plan nobody reads', (route) => {
+    // The argument is load-bearing documentation: a later edit that "fixes"
+    // the missing gate must have to delete a written argument, not merely add
+    // a line. Verified by running the mutant — deleting either docstring turns
+    // this red.
+    const doc = docstringFor(route);
+    // Guard the guard: an empty or one-line slice must not be able to pass the
+    // content checks by having nothing in it to contradict them.
+    expect(doc.length, `${route} carries no docstring`).toBeGreaterThan(600);
+    expect(doc, 'says what it is NOT behind').toContain('requireMailToken');
+    expect(doc, 'says it is ungated, in the word the reader greps for').toContain('UNGATED');
+    expect(doc, 'names the deviation that carries the ruling').toContain('D-B4-9');
+    expect(doc, "names the caller the box token would have handed the other side of")
+      .toMatch(/coordinator/i);
+  });
+
+  /** The docstring as PROSE: comment markers stripped and whitespace
+   *  collapsed, so a phrase that happens to wrap across two comment lines
+   *  still matches. Without this a sentence is findable or not depending on
+   *  where the 80th column fell. */
+  const prose = (doc: string): string =>
+    doc.split('\n').map((l) => l.replace(/^\s*(\/\*\*|\*\/|\*|\/\/)?\s?/, '')).join(' ')
+      .replace(/\s+/g, ' ');
+
+  it('the pause docstring carries the honesty clause spec §4.1 demands', () => {
+    // Not decoration: the ruling is explicitly "convention with a speed bump,
+    // named as exactly that". A version of this route whose comment claimed
+    // enforcement it does not have would be worse than no comment.
+    const doc = prose(docstringFor('/api/coord/pause'));
+    expect(doc).toMatch(/Honesty clause/i);
+    expect(doc).toMatch(/single-uid box any session can `rm` this marker directly/i);
+    expect(doc).toMatch(/convention with a speed bump/i);
   });
 });
