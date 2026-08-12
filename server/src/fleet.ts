@@ -68,16 +68,18 @@ const BY_ID_PREFIX_LENGTH_DESC: readonly Wrapper[] =
  * fallen through to the bare `'claude-'` branch and come back `claude` — a
  * session attributed to the wrong account.
  *
- * Prophylactic, not a fix for an observed misattribution: `claude-dev0-*`
- * cannot appear in the registry today. `ACCOUNTS['claude-dev0'].ccdValid`
- * is `false`, and the cross-language fixture test
- * (`wrapper-roster-fixture.test.ts`) pins that ccd's own `_is_valid_wrapper`
- * rejects `claude-dev0` — so nothing under `ccd/` can mint an id with that
- * prefix. What this ordering keeps true is that IF `claude-dev0` (or any
- * future wrapper whose `idPrefix` is a strict extension of another member's)
- * ever becomes ccd-valid, the longest match still wins rather than silently
- * reproducing the old bug. `fleet.test.ts:40` pins the corrected answer as a
- * regression guard, not as a record of a live incident.
+ * Load-bearing now, not merely prophylactic: `claude-dev0-*` DOES appear in
+ * the registry today. `ACCOUNTS['claude-dev0'].ccdValid` is `true` —
+ * `claude-dev0` is home-able and ccd-valid — and the cross-language fixture
+ * test (`wrapper-roster-fixture.test.ts`) pins that ccd's own `_id_wrapper`
+ * matches `claude-dev0-*` before the shorter `claude-*`, so ccd mints real
+ * ids under that prefix. What this ordering keeps true is exactly what makes
+ * it load-bearing rather than a guard against a hypothetical: get the arm
+ * order wrong here (or in ccd's own `case`) and a live `claude-dev0` session
+ * is silently re-attributed to `claude`, reproducing the old bug for real.
+ * `fleet.test.ts:40` pins the corrected answer as a regression guard, not as
+ * a record of a live incident — the incident it guards against just stopped
+ * being hypothetical.
  *
  * Falls back to `'claude'` for an id with no wrapper prefix at all — a main
  * checkout's id is the bare project name, never `<wrapper>-<slug>`.

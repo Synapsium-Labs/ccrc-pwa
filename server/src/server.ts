@@ -232,7 +232,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
-  // respawns, and swaps. Ordered claude / claude2 / claude-corp / gpt.
+  // respawns, and swaps. Ordered by ACCOUNT_ORDER (the roster's declaration order).
   app.get('/api/accounts', async () => {
     const limits = await readLimits(deps.io, deps.cfg);
     const rank = (w: string) => { const i = (ACCOUNT_ORDER as readonly string[]).indexOf(w); return i < 0 ? 99 : i; };

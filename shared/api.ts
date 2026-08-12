@@ -1201,8 +1201,10 @@ export interface FleetHealth {
  * same concept — a `CLAUDE_CONFIG_DIR`-scoped Claude Code identity a session
  * runs under — and until this type existed it had no home and eight
  * independent enumerations in three languages, no two of them the same set
- * BY DESIGN (home-able / ccd-valid / hooks-able below are three genuinely
- * different subsets, not one list copied three ways):
+ * BY DESIGN (home-able / ccd-valid / hooks-able below used to be three
+ * genuinely different subsets — `claude-dev0`'s promotion collapsed two of
+ * them, ccd-valid and hooks-able are now both "all five"; only home-able
+ * still narrows the roster today, 4 of 5, `gpt` the lone exclusion):
  *   server/src/config.ts        loadConfig.wrappers   — now derived from `ACCOUNTS`
  *   server/src/fleet.ts         idHomeWrapper          — now longest-`idPrefix`-wins here
  *   server/src/server.ts        ACCOUNT_ORDER          — now imported from here
@@ -1221,8 +1223,9 @@ export interface FleetHealth {
  * account: `idHomeWrapper` prefix-matched `claude-` before it ever tried
  * `claude-dev0-`, so `claude-dev0-quiet-basin` came back `claude`
  * (`fleet.test.ts` pins the corrected answer). That second one is
- * prophylactic, not observed — `claude-dev0` is not ccd-valid, so ccd cannot
- * mint an id under that prefix today (see `fleet.ts`'s own docstring on
+ * load-bearing now, not merely prophylactic — `claude-dev0` IS ccd-valid, so
+ * ccd mints real `claude-dev0-*` ids today, and the wrong arm order would
+ * misattribute one of them for real (see `fleet.ts`'s own docstring on
  * `idHomeWrapper`). Both close the same root defect — a concept enumerated by
  * hand in N places fails the moment N+1 exists — with one fix: N=1.
  *
@@ -1250,17 +1253,19 @@ interface AccountDef {
    *  `var(...)` so both themes flow through it — never a color value here. */
   colorVar: string;
   /** A landing spot `ccd`'s `_ws_least_loaded` will choose ON ITS OWN —
-   *  mirrors ccd's `VALID_WRAPPERS` (ccd:14) exactly. Three today, not four
-   *  or five: `gpt` is a 4th, opt-in-only lane a session reaches solely by
-   *  being sent there on purpose, and `claude-dev0` is a 5th account ccd's
-   *  home-swap logic has never heard of. */
+   *  mirrors ccd's `VALID_WRAPPERS` (ccd:14) exactly. Four today, not three
+   *  or five: `claude`, `claude2`, `claude-corp`, and `claude-dev0` — the
+   *  latter promoted to a first-class, home-able account. `gpt` is the one
+   *  exclusion: a 4th, opt-in-only lane a session reaches solely by being
+   *  sent there on purpose, never by `_ws_least_loaded`'s own choice. */
   homeAble: boolean;
   /** Accepted by ccd's `_is_valid_wrapper` (ccd:104: `VALID_WRAPPERS` plus a
    *  hardcoded `gpt`) — the set `ccd swap` / `ccd attach` / etc. will act on
-   *  BY NAME. `claude-dev0` is false: it is a bare `CLAUDE_CONFIG_DIR` alias
-   *  (`~/.local/bin/claude-dev0`) that ccd's own case statements (`_cfg_dir`,
-   *  `_id_wrapper`) do not mention at all — confirmed by this file's
-   *  cross-language fixture test, not merely asserted here. */
+   *  BY NAME. All five are `true`: `claude-dev0`'s promotion added a
+   *  `claude-dev0-*)` arm to ccd's own case statements (`_cfg_dir`,
+   *  `_id_wrapper`), and `VALID_WRAPPERS` (ccd:14) now lists it too —
+   *  confirmed by this file's cross-language fixture test, not merely
+   *  asserted here. */
   ccdValid: boolean;
   /** `install-session-hooks.sh`'s default `homes` array installs
    *  `session-hook.sh` here, AND — since PR J's install lane —
@@ -1316,9 +1321,11 @@ export const ACCOUNTS: Record<Wrapper, AccountDef> = {
     // The 5th account (see `server/src/config.ts`'s own comment on why it
     // was added: `~/.local/bin/claude-dev0` sets `CLAUDE_CONFIG_DIR` and
     // ccd's home-swap/hook-install machinery has never been taught about
-    // it). `label`/`colorVar` are the raw name and neutral ink — exactly
-    // what the pre-roster pwa map already fell back to for a wrapper it
-    // didn't recognise, so giving it a REAL entry here must not repaint it.
+    // it). `label`/`colorVar` are the raw name and neutral ink — the same
+    // values the pre-roster pwa map fell back to for a wrapper it didn't
+    // recognise, but that reason no longer applies: dev0 IS recognised now,
+    // with a REAL entry here. `--ink-tertiary` simply means no hue has been
+    // assigned to it yet, so giving it this entry must not repaint it.
     configDirSuffix: '.claude-dev0', idPrefix: 'claude-dev0-', label: 'lab·dev0',
     colorVar: '--ink-tertiary', homeAble: true, ccdValid: true, hooksAble: true,
   },
@@ -1338,21 +1345,24 @@ export function isWrapper(v: unknown): v is Wrapper {
   return typeof v === 'string' && (ALL_WRAPPERS as readonly string[]).includes(v);
 }
 
-/** The three accounts a session may call HOME — mirrors ccd's `VALID_WRAPPERS`
+/** The four accounts a session may call HOME — mirrors ccd's `VALID_WRAPPERS`
  *  (ccd:14). Derived from `ACCOUNTS`' `homeAble` flag rather than hand-typed,
  *  so a wrapper that changes home-ability shows up here without a second
  *  edit. Single source of truth for `server/src/limits.ts`'s `projectHome`
  *  (which lanes to score) and `pwa/src/lib/accounts.ts`'s
- *  `homeAbleLabelList` (the same three, spelled out by label). */
+ *  `homeAbleLabelList` (the same four, spelled out by label). */
 export const HOME_ABLE_WRAPPERS: readonly Wrapper[] = ALL_WRAPPERS.filter((w) => ACCOUNTS[w].homeAble);
 
 /** ccd's rotation order — the wrappers `_is_valid_wrapper` (ccd:104) accepts
  *  by name, in `ACCOUNTS` declaration order. Ranks `GET /api/accounts`
  *  (`server/src/server.ts`) so the strip and the accounts screen render in a
  *  stable, human-chosen order rather than whatever order `.cc-limits/*.json`
- *  happened to be read in; a wrapper NOT in this list (a live session really
- *  is running one, `claude-dev0` today) is never hidden by that ranking —
- *  `rank()`'s unknown-wrapper fallback sorts it last, not off the list. */
+ *  happened to be read in; a wrapper NOT in this list is never hidden by
+ *  that ranking — `rank()`'s unknown-wrapper fallback sorts it last, not
+ *  off the list. No known `Wrapper` illustrates that case today: all five
+ *  are ccd-valid now, `claude-dev0` included, so `ACCOUNT_ORDER` currently
+ *  equals `ALL_WRAPPERS`. The fallback exists for whatever string
+ *  `.cc-limits/*.json` reports that isn't a recognised `Wrapper` at all. */
 export const ACCOUNT_ORDER: readonly Wrapper[] = ALL_WRAPPERS.filter((w) => ACCOUNTS[w].ccdValid);
 
 /** The same set as `ACCOUNT_ORDER`, under the name `pwa/src/lib/accounts.ts`
