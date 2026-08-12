@@ -298,8 +298,23 @@ on its original account** — registry `wrapper` is untouched at that point, so
 
 That restart must not masquerade as a swap landing. `_spawn` reads `lastswap` and treats a spawn
 within 300 seconds as a swap arrival, answering the big-transcript resume gate with "resume from
-summary" — an auto-compaction. A refusal that set `lastswap` would therefore compact the very
-history it refused in order to protect. `lastswap` is written only by a swap that completed.
+summary" — an auto-compaction. A refusal that left `lastswap` fresh would therefore compact the
+very history it refused in order to protect.
+
+**Not writing it is not enough, and this is where the obvious statement of the rule was wrong.**
+`_auto_swap_check` stamps `lastswap` *before* it dispatches (ccd:6772 on the rescue arm, ccd:6791
+on the return-home arm), because a fire-and-forget transient unit cannot report back. So on the
+auto-swap path — the rate-limit rescue, which is the shape of the incident and the dominant path in
+practice — the stamp is already there when the refusal happens. A refusal must therefore **clear**
+`lastswap`, not merely decline to write it.
+
+Clearing is the correct answer for all three of its readers, not a workaround for one. A refusal
+means no landing happened: `_spawn` must not resume from summary, `_auto_compact_check` must not
+suppress a compaction on the grounds that "a swap landing already compacted from summary"
+(ccd:6811), and `_auto_swap_check`'s own 900-second cooldown is superseded here by the
+1800-second `swapblocked` gate, which is strictly longer. Deleting a genuinely old value costs
+nothing — every window that reads `lastswap` is minutes wide — while keeping a false fresh one
+costs a conversation.
 
 **A refusal is visible in three places, one of which survives nobody watching.** It writes
 `$REG/<id>.swapblocked` as `<epoch> <reason>` (M9: the registry is the durable channel, on the wire
