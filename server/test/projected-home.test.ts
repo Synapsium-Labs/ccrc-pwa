@@ -139,11 +139,27 @@ describe('projectHome ranks unmeasured below measured', () => {
     expect(projectHome(r, { a: L(5, 5) })).toEqual({ wrapper: 'a', score: 5 });
   });
 
-  it('a telemetry:none account is never scored', () => {
-    // g is home-able here on purpose — the exclusion has to come from
-    // `telemetry`, not from `homeAble` doing the work by accident (which is
-    // what hid this bug in production: gpt is the only telemetry:'none'
-    // account and it is held out by homeAble anyway).
+  it('a telemetry:none account is never scored, even reporting a real measured zero', () => {
+    // `L(0, 0)` — a REAL measured zero — is the ONLY shape that tests this
+    // filter, and getting that wrong is how the filter shipped with no
+    // coverage at all: written first with gpt's real on-disk `L(null, 0)`,
+    // this case stayed green with `const scorable = live` (the filter deleted
+    // outright), because `measured()` rejects a half-null row anyway and was
+    // silently doing the work. Three things could exclude `g` here and only one
+    // of them is under test, so the other two are deliberately switched off:
+    // `g` is home-able (not held out by `homeAble`, which is what hides this in
+    // production — gpt is the only telemetry:'none' account and is excluded
+    // that way regardless) and fully measured (not held out by `measured()`).
+    // With the filter present the answer is `b`; delete the filter and `g` wins
+    // at 0.
+    expect(projectHome(r, { a: L(90, 90), b: L(80, 80), g: L(0, 0) })).toEqual({ wrapper: 'b', score: 80 });
+  });
+
+  it("a telemetry:none account is never scored on gpt's real half-null shape either", () => {
+    // The production shape, kept as its own case: `~/.cc-limits/gpt.json` is
+    // `{"five": null, "seven": 0}`. Both exclusions apply here and this case
+    // cannot tell them apart — which is exactly why the case above exists. It
+    // pins the ANSWER for the shape that actually reaches disk today.
     expect(projectHome(r, { a: L(90, 90), b: L(80, 80), g: L(null, 0) })).toEqual({ wrapper: 'b', score: 80 });
   });
 

@@ -300,12 +300,14 @@ describe('Build 7 nouns', () => {
 // before review", not "unforgeable".
 describe('the account roster — runtime data, no compile-time copies', () => {
   // The names to hunt for now come from `DEFAULT_TEST_ROSTER`
-  // (server/test/helpers.ts), NOT from any shipped source file — because after
-  // Task 6 there is no shipped source file with the production account names in
-  // it, which is the whole point. `server/test/` is not one of the four scanned
-  // ROOTS, so the list cannot trip its own scan; and it is still a real list of
-  // the five production ids, so a restatement of two of them anywhere under the
-  // roots scores a hit exactly as it did before.
+  // (server/test/helpers.ts), NOT from a shipped source file — because after
+  // Task 6 the roster is not defined in one. The single copy still under the
+  // scanned roots (`pwa/src/lib/accounts.ts`'s transitional `PRODUCTION_ROSTER`,
+  // deleted in Task 7) is the very thing this hunts for, so drawing the hunt
+  // list from it would make the scanner blind to itself. `server/test/` is not
+  // one of the four scanned ROOTS, so the list cannot trip its own scan either;
+  // and it is still a real list of the five production ids, so a restatement of
+  // two of them anywhere under the roots scores a hit exactly as it did before.
   //
   // Hand-typing the names HERE instead would make the scanner that exists to
   // prevent hand-typed copies one itself: a 6th account (say `claude-dev1`)
@@ -397,8 +399,10 @@ describe('the account roster — runtime data, no compile-time copies', () => {
     // server.ts's `rank()`, rebuilt per request from the config's roster.
     expect(srcOf('server/src/server.ts')).toMatch(/deps\.cfg\.roster\.accounts/);
     // ...with the unknown-wrapper fallback intact: a wrapper the roster does
-    // not have sorts LAST rather than vanishing off the accounts screen.
-    expect(srcOf('server/src/server.ts')).toMatch(/i < 0 \? 99/);
+    // not have sorts LAST rather than vanishing off the accounts screen. Ranked
+    // `order.length`, not a magic 99 — a bound that was safe only while the
+    // roster was a five-member union (see the handler's own comment).
+    expect(srcOf('server/src/server.ts')).toMatch(/i < 0 \? order\.length/);
   });
 });
 

@@ -20,14 +20,24 @@ import { mkTmp } from './tmpHelpers.js';
  * exactly — transcribed from `shared/api.ts`'s `ACCOUNTS` literal, in its
  * declaration order, before Task 6 deleted it.
  *
- * That literal is gone, so this is now the tree's only TypeScript copy of the
- * production account names, and deliberately so: it is TEST data, under a
- * directory the roster-drift scanner (`single-definition.test.ts`) does not
- * scan — and that scanner now reads its own list of wrapper names FROM here,
- * because the roster it hunts for copies of no longer exists in any source
- * file to read it from. Keep it in step with the production roster
+ * That literal is gone, so this is the ROOT copy of the production account
+ * names in TypeScript, and deliberately so: it is TEST data, under a directory
+ * the roster-drift scanner (`single-definition.test.ts`) does not scan — and
+ * that scanner now reads its own list of wrapper names FROM here, because the
+ * roster it hunts for copies of no longer exists in any source file it could
+ * trust to read them from. Keep it in step with the production roster
  * (`deploy/accounts.default.json`, Task 10), not with whatever any one test
- * happens to need. */
+ * happens to need.
+ *
+ * Root, not only: two other copies of some of these names exist right now, and
+ * both are scheduled for deletion rather than permanent.
+ * `test/fixtures/ccdMirror.ts` DERIVES its ids, config dirs and home-able flags
+ * from this object (it adds only the three concepts ccd has and the roster does
+ * not) and throws at import if the two disagree, so it cannot drift — Tasks 8
+ * and 9 delete it. `pwa/src/lib/accounts.ts`'s `PRODUCTION_ROSTER` is a genuine
+ * independent copy, the one thing the PWA cannot yet get off the wire, and Task
+ * 7 deletes it; `single-definition.test.ts` names it as the single allowed
+ * holder with an exact-equality assertion, so its removal is noticed too. */
 export const DEFAULT_TEST_ROSTER = {
   version: 1,
   accounts: [

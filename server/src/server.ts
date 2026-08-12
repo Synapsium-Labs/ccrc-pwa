@@ -237,13 +237,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const limits = await readLimits(deps.io, deps.cfg);
     // Rebuilt per request from `deps.cfg.roster`, not hoisted to module scope:
     // the roster is runtime data read at boot (`~/.ccrc/accounts.json`), so a
-    // module-level rank table would be built before any roster exists. The
-    // `i < 0 ? 99` fallback is load-bearing and stays: a wrapper the roster does
-    // not have — a stale `.cc-limits/<name>.json` from a removed account, a
-    // typo'd registry write — sorts LAST rather than disappearing off the
-    // screen, and `accounts-route.test.ts` pins exactly that.
+    // module-level rank table would be built before any roster exists.
+    //
+    // The unknown-wrapper fallback is load-bearing and stays: a wrapper the
+    // roster does not have — a stale `.cc-limits/<name>.json` from a removed
+    // account, a typo'd registry write — sorts LAST rather than disappearing off
+    // the screen, and `accounts-route.test.ts` pins exactly that.
+    //
+    // `order.length`, not the `99` it was written as: 99 was safe by
+    // construction while `Wrapper` was a five-member union, and stopped being
+    // safe the moment the roster became arbitrary JSON off disk. A 100th
+    // account would have TIED with every unknown and fallen through to the
+    // alphabetical tie-break below — the roster's declaration order silently
+    // abandoned past the hundredth entry. This is the widening quietly dropping
+    // a bound the compiler used to guarantee (review round 1, finding 3);
+    // `order.length` is exact, is always one past the last real rank, and costs
+    // nothing.
     const order = deps.cfg.roster.accounts.map((a) => a.id);
-    const rank = (w: string): number => { const i = order.indexOf(w); return i < 0 ? 99 : i; };
+    const rank = (w: string): number => { const i = order.indexOf(w); return i < 0 ? order.length : i; };
     const accounts: AccountUsage[] = Object.entries(limits)
       .map(([wrapper, l]): AccountUsage => ({
         wrapper, five: l.five, seven: l.seven, ts: l.ts,

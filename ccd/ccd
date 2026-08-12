@@ -1010,13 +1010,30 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   # measured this falls back to the first _account_ok account in iteration order
   # — same rule, same answer, as the server's projectHome (server/src/limits.ts).
   #
-  # The server's copy has one term this cannot: it also skips an account whose
-  # roster entry says telemetry:'none' (gpt's shape — `"five": null` with no 5h
-  # window, which _limit_score reads as a measured 0). Parity still holds,
-  # because the only such account is gpt, and gpt is not home-able: it is absent
-  # from the array iterated here and from roster.homeAble there, so neither
-  # implementation ever scores it. `projected-home.test.ts` runs both sides over
-  # the same fixtures and would say so if that stopped being true.
+  # The server's copy (projectHome, server/src/limits.ts) is stricter about
+  # "unknown" in TWO ways this is not, and both are stated here rather than
+  # discovered later:
+  #
+  #   1. It skips an account whose roster entry says telemetry:'none' — an
+  #      account that will never report, so its permanent unknown must not read
+  #      as permanent emptiness. Bash has no telemetry field to consult until
+  #      ~/.ccrc/accounts.sh arrives.
+  #   2. It treats a HALF-measured row as unknown, where _limit_score
+  #      substitutes 0 for the missing half (`: "${five:=0}"`) and returns a
+  #      real number. With a home-able `{"five":null,"seven":0}`, bash picks
+  #      that account at 0 and the server picks the cheapest fully-measured one.
+  #
+  # Parity holds today because both gaps are reachable only through the SAME
+  # account: gpt is the only telemetry:'none' account and the only one whose
+  # file carries a null half (it has no 5h window at all), and gpt is not
+  # home-able — absent from the array iterated here and from roster.homeAble
+  # there — so neither implementation ever scores it. Nothing else writes a
+  # half-null file: statusline-command.sh emits both fields for every Anthropic
+  # account. But `_limit_score`'s own `:=0` defaults and `_limit_five`'s
+  # back-compat shim exist precisely because a file CAN be missing a key, so
+  # this is an agreement of circumstance, not of rule, until Task 8 gives bash
+  # the roster. `projected-home.test.ts` runs both sides over the same fixtures
+  # and says so the day the circumstance changes.
   local best="" bs=1000 first="" w sc
   for w in "${VALID_WRAPPERS[@]}"; do
     _account_ok "$w" || continue
