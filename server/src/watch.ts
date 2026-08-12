@@ -20,6 +20,7 @@ import { deriveBranch } from './naming.js';
 import { resolveTranscriptFile } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import { MAIL_REPLAY_CEILING_ERROR, toRunSummary } from './coord/store.js';
+import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 
 /** Task sweeps read every task file of every session, so they run on their own
@@ -1303,27 +1304,39 @@ export class FleetWatcher {
    *   1. `$REG/mail-disabled` is absent, by DIRECTORY LISTING, fail-shut;
    *   2. this session is off its per-session cooldown;
    *   3. tmux has the session;
-   *   4. the hookstate is fresh AND says `done` AND carries no ask — `done` is
-   *      the hook's idle, and `readHookState` has already applied the freshness
-   *      and uuid gates (`hookstate.ts:149-154`), so a stale or foreign file
-   *      reads as null and null is NOT idle;
+   *   4. no FRESH hookstate carries an unanswered `ask` (robust-mail-delivery
+   *      spec §2.1 / F6b fix). This is a PENDING-QUESTION guard only — a
+   *      null/stale `hs` (`readHookState`'s freshness/uuid gates,
+   *      `hookstate.ts:149-154`) is NON-BLOCKING here: idle authority moved
+   *      wholly to conjunct 5 below, so a resumed long-idle worker, or one
+   *      whose `/clear` emitted no registered hook, is still deliverable;
    *   5. the live status file says AFFIRMATIVELY idle and `statusUpdatedAt` is
-   *      at least `MAIL_QUIET_MS` old. Affirmatively, because `liveStatus`
-   *      answers `'idle'` for a missing pid, a missing config dir and an
-   *      unreadable file (`fleet.ts:118-131`) — `archiveSafety`'s rule
-   *      (`:731-736`, "MUST NOT collapse `unknown` to idle") applies here for
-   *      the same reason: this ends in a keystroke.
+   *      at least `MAIL_QUIET_MS` old — the SOLE idle authority. Affirmatively,
+   *      because `liveStatus` answers `'idle'` for a missing pid, a missing
+   *      config dir and an unreadable file (`fleet.ts:118-131`) —
+   *      `archiveSafety`'s rule (`:731-736`, "MUST NOT collapse `unknown` to
+   *      idle") applies here for the same reason: this ends in a keystroke.
    *
-   * ONLY THEN `sendPrompt`, unchanged, with its whole proof discipline —
-   * echo verified, `draft-present` refused, `dialog-open` refused — inside the
-   * session's own `KeyedQueue` slot. NOTHING HERE TEACHES IT TO RETRY: the
-   * two-Enter budget and `submitEnter`'s one-Enter doctrine
-   * (`inject/send.ts:456-460`) are load-bearing, and the escalation for a stuck
-   * box is the human.
+   * ONLY THEN `sendPrompt`, with its whole proof discipline — echo verified,
+   * `draft-present` refused, `dialog-open` refused — inside the session's own
+   * `KeyedQueue` slot, injecting `renderMailNudge(d.toId)` — a tiny, single-
+   * line, ID-AGNOSTIC reference (robust-mail-delivery spec §1), NEVER
+   * `d.envelope` — with `resumeIfOwn: true` (F3 / bug #21, fix-round): a box
+   * already holding this session's own un-submitted nudge (a prior sweep's
+   * lost Enter) is recognized and its Enter finished, rather than misread as
+   * `draft-present` and backed off forever — the exact self-block the build4
+   * dogfood measured live (`docs/superpowers/programs/build4.md`). See
+   * `sendPrompt`'s own docstring for the discrimination. NOTHING HERE TEACHES
+   * IT TO RETYPE OR PRESS BLINDLY: the two-Enter budget and `submitEnter`'s
+   * one-Enter doctrine (`inject/send.ts:456-460`) are load-bearing, and the
+   * escalation for a stuck box is the human.
    *
    * `replaceDraft` IS NEVER PASSED. A half-typed human message outranks every
    * agent-to-agent finding in this system; `draft-present` is a back-off, and
-   * the mail is still there in two minutes.
+   * the mail is still there in two minutes. `clearMailResidue` IS passed, but
+   * only once this delivery has provably been attempted before (spec §2.2) —
+   * see the send site's own comment — and it can never clear a human draft
+   * either (`isMailResidue`'s own docstring, `inject/send.ts`).
    *
    * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
    * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
@@ -1557,7 +1570,16 @@ export class FleetWatcher {
         }
         if (!(await this.deps.tmux.hasSession(d.toId))) continue;
         const hs = await hookStateFor(d.toId);
-        if (hs === null || hs.state !== 'done' || hs.ask !== null) continue;
+        // Pending-question guard ONLY (robust-mail-delivery spec §2.1 / F6b
+        // fix). A null/stale `hs` must NOT block delivery: a resumed
+        // long-idle worker, or one whose `/clear` emitted no registered hook,
+        // has no fresh hookstate but is plainly deliverable — the live
+        // status file, read unconditionally four lines below, is the sole
+        // idle authority now (it already ran on this path before this fix;
+        // this is not a new read). Block only when a FRESH hs affirmatively
+        // carries an unanswered question — `hs.state` is no longer read here
+        // at all.
+        if (hs !== null && hs.ask !== null) continue;
         const pid = await this.deps.tmux.panePid(d.toId);
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!pid || !cfgDir) continue;
@@ -1570,9 +1592,35 @@ export class FleetWatcher {
         // session per sweep", not "one row considered per sweep", and moving
         // the claim earlier must not change that.
         seen.add(d.toId);
-        // The stored envelope, byte for byte. `renderEnvelope` is not called
-        // here and must never be: spec:176-177's "verbatim, never re-rendered".
-        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, d.envelope);
+        // The REFERENCE NUDGE (robust-mail-delivery spec §1), not `d.envelope`
+        // — the lane no longer types the whole stored envelope into the pane.
+        // `renderMailNudge` is a pure, ID-AGNOSTIC function of `d.toId` alone
+        // (never called with the delivery id): a single-line, ~40-byte
+        // reference that cannot wrap, cannot verify-fail on size and cannot
+        // collapse to a paste chip. The body/ack instructions still live in
+        // the stored envelope, unrendered here, served verbatim over
+        // `GET /api/mail/:id` for the worker to fetch.
+        //
+        // `resumeIfOwn: true` (F3 / bug #21): if a PRIOR sweep's Enter for
+        // this session's nudge was lost, the box now holds our own
+        // un-submitted text — `sendPrompt` recognizes it (see its own
+        // docstring) and presses Enter rather than reading it as
+        // `draft-present` and backing off forever. Because the nudge carries
+        // no per-delivery identity, resuming it is always correct regardless
+        // of which due row this sweep is actually attempting.
+        //
+        // `clearMailResidue: prior` (spec §2.2): safe to clear ONLY when this
+        // delivery has provably been attempted before (a failed send on
+        // record, or a prior successful delivery now replaying) — the new
+        // lane never types a multi-line payload, so a paste-chip or
+        // ```ccrc-mail fence in the box of a delivery that has NEVER been
+        // attempted is far likelier a human's own paste than our residue, and
+        // is left untouched. `isMailResidue` itself also never matches human
+        // text (send.ts's own docstring) — this is belt AND suspenders, not
+        // either alone.
+        const prior = d.attempts > 0 || d.deliveredAt !== null;
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
+          { resumeIfOwn: true, clearMailResidue: prior });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);

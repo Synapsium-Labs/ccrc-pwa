@@ -404,6 +404,9 @@ describe('the rejection table is total, in both directions', () => {
       'coordinator-paused',   // $REG marker filename, not a code
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
+      'not-found',            // GET /api/mail/:id's generic 404 for an
+                               // unknown delivery id; not a mail reject code
+                               // (nothing was ever rejected — it never existed)
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
@@ -605,5 +608,133 @@ describe('POST /api/mail/:id/ack', () => {
     const res = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID }, null);
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+  });
+});
+
+// GET /api/mail/:id — the body channel the reference nudge (robust-mail-
+// delivery spec §1.2) points at. Serves the STORED envelope verbatim; never
+// calls renderEnvelope again (spec:176-177's "verbatim, never re-rendered"
+// extends to every reader, not only the delivery lane).
+const getEnvelope = (app: FastifyInstance, id: number | string, token: string | null = TOKEN) =>
+  app.inject({ method: 'GET', url: `/api/mail/${id}`,
+    headers: token === null ? {} : { 'x-ccrc-mail-token': token } });
+
+describe('GET /api/mail/:id', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('returns the stored envelope verbatim for a known delivery', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+    const delivery = w.coord.dueDeliveries(Date.now(), 60_000)[0]!;
+
+    const res = await getEnvelope(app, delivery.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      ok: true, id: delivery.id, toId: 'demo-coordinator', state: 'queued', envelope: delivery.envelope,
+    });
+    // Not a re-render — the exact bytes `dueDeliveries` already has, which
+    // are themselves rendered exactly once at queue time.
+    expect(res.json()).toMatchObject({ envelope: expect.stringContaining('the body') });
+  });
+
+  it('404s an unknown delivery id', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await getEnvelope(app, 999999);
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
+  });
+
+  it('400s a non-integer id', async () => {
+    const home = mkTmp('ccrc-mail-');
+    const w = await withMail(home); app = w.app;
+    const res = await getEnvelope(app, 'not-a-number');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it('401s without the box token — the same gate as GET /api/mail?to=, a read with no attribution to check', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+    const delivery = w.coord.dueDeliveries(Date.now(), 60_000)[0]!;
+
+    const noToken = await getEnvelope(app, delivery.id, null);
+    expect(noToken.statusCode).toBe(401);
+    expect(noToken.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+
+    const wrongToken = await getEnvelope(app, delivery.id, 'wrong');
+    expect(wrongToken.statusCode).toBe(401);
+    expect(wrongToken.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+  });
+
+  it('is a distinct route from POST /api/mail/:id/ack — no router ordering hazard', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+    const delivery = w.coord.dueDeliveries(Date.now(), 60_000)[0]!;
+
+    const before = await getEnvelope(app, delivery.id);
+    expect(before.json()).toMatchObject({ state: 'queued' });
+
+    const ackRes = await ack(app, delivery.id, { fromId: 'demo-coordinator', fromUuid: UUID });
+    expect(ackRes.statusCode).toBe(200);
+
+    const after = await getEnvelope(app, delivery.id);
+    expect(after.statusCode).toBe(200);
+    expect(after.json()).toMatchObject({ state: 'acked' });
+  });
+
+  // Hard case (e): the worker can still ack from the nudge — the full
+  // read+ack protocol the nudge itself names (envelope.ts's own
+  // `renderMailNudge`): list outstanding mail, fetch the body of each by
+  // DELIVERY id, then ack it. Chained end to end here at the route level.
+  //
+  // The two id sequences are desynchronised FIRST (same technique as "the ack
+  // instruction names the DELIVERY id" describe block above) — with only one
+  // mail ever sent, `mail.id` and `mail_deliveries.id` are numerically
+  // indistinguishable and a regression back to the listing's bare `id` field
+  // would pass unnoticed (exactly the masking the blocking review finding
+  // named: this test used to read `mail[0]!.id` and call it `deliveryId`).
+  it('supports the full nudge-driven protocol: list -> fetch body -> ack, using the listing\'s deliveryId (blocking finding, re-opened D-41)', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    // Desync the sequences before the real send: one filler mail row with NO
+    // delivery bumps `mail.id`'s own AUTOINCREMENT without touching
+    // `mail_deliveries.id`.
+    w.coord.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: UUID, toId: 'demo-coordinator',
+      runId: null, kind: 'finding', subject: 'filler', body: 'filler', artifacts: [] });
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+
+    // 1: list — what the nudge's own `GET /api/mail?to=` step returns.
+    const listRes = await app.inject({ method: 'GET', url: '/api/mail?to=demo-coordinator',
+      headers: { 'x-ccrc-mail-token': TOKEN } });
+    expect(listRes.statusCode).toBe(200);
+    const { mail } = listRes.json() as { mail: { id: number; deliveryId: number }[] };
+    expect(mail.length).toBe(1);
+    // The desync really happened: the mail id and delivery id disagree, so a
+    // protocol that used `mail[0]!.id` would now point at the wrong row (or
+    // 404).
+    expect(mail[0]!.deliveryId).not.toBe(mail[0]!.id);
+    const deliveryId = mail[0]!.deliveryId;
+
+    // 2: fetch body — the nudge's `GET /api/mail/<deliveryId>` step.
+    const bodyRes = await getEnvelope(app, deliveryId);
+    expect(bodyRes.statusCode).toBe(200);
+    const { envelope } = bodyRes.json() as { envelope: string };
+    expect(envelope).toContain('the body');
+
+    // 3: ack — the nudge's `POST /api/mail/<deliveryId>/ack` step.
+    const ackRes = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
+    expect(ackRes.statusCode).toBe(200);
+    expect(ackRes.json()).toMatchObject({ ok: true, already: false });
+    expect(w.coord.delivery(deliveryId)?.state).toBe('acked');
   });
 });

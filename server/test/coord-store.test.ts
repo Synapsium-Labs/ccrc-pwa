@@ -206,8 +206,205 @@ describe('CoordStore: work items', () => {
     const one = s.addWorkItem(r.id, 'implement the reader', []);
     s.addWorkItem(r.id, 'review it', [one.id]);
     expect(s.itemTally(r.id)).toEqual({ done: 0, total: 2 });
-    s.setWorkItemState(one.id, 'done', 'ccrc-pwa-quiet-mesa');
+    s.setWorkItemState(r.id, one.id, 'done', 'ccrc-pwa-quiet-mesa');
     expect(s.itemTally(r.id)).toEqual({ done: 1, total: 2 });
+  });
+});
+
+// ── Build 4, Task 2: one terminality point, and one batch commit ────────────
+// Spec §3.2 and `architecture:145-147`: work items have ONE invariant —
+// `done`/`failed`/`abandoned` are terminal — carried in the `UPDATE`'s own
+// `WHERE` rather than in a transition table or a read above the write.
+
+describe('setWorkItemState — one terminality point', () => {
+  it('settles a pending item and answers ok', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const one = s.addWorkItem(r.id, 'write it', []);
+    expect(s.setWorkItemState(r.id, one.id, 'done', 'ccrc-pwa-quiet-mesa'))
+      .toEqual({ ok: true, state: 'done' });
+    expect(s.workItems(r.id)).toEqual([
+      { id: one.id, title: 'write it', state: 'done', claimedBy: 'ccrc-pwa-quiet-mesa' },
+    ]);
+  });
+
+  it('settles a CLAIMED item — only done/failed/abandoned are terminal', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const direct = s.addWorkItem(r.id, 'claimed then done, directly', []);
+    const batched = s.addWorkItem(r.id, 'claimed then done, in a batch', []);
+    expect(s.setWorkItemState(r.id, direct.id, 'claimed', 'ccrc-pwa-quiet-mesa'))
+      .toEqual({ ok: true, state: 'claimed' });
+    expect(s.setWorkItemState(r.id, direct.id, 'done', 'ccrc-pwa-quiet-mesa'))
+      .toEqual({ ok: true, state: 'done' });
+    // The batch must agree with the `WHERE`: a pre-pass that called `claimed`
+    // terminal would refuse this and the two would have drifted.
+    expect(s.setWorkItemState(r.id, batched.id, 'claimed', null)).toEqual({ ok: true, state: 'claimed' });
+    expect(s.settleItems(r.id, [{ id: batched.id, state: 'done', claimedBy: null }]))
+      .toEqual({ ok: true, items: { done: 2, total: 2 } });
+  });
+
+  it('answers unknown-item for an id that belongs to ANOTHER run', () => {
+    // D-B4-5: the signature is run-scoped, so a settle body can never move
+    // another run's item.
+    const s = store();
+    const mine = openRun(s) as { id: number };
+    const theirs = openRun(s, { wave: 2 }) as { id: number };
+    const other = s.addWorkItem(theirs.id, 'not yours', []);
+    expect(s.setWorkItemState(mine.id, other.id, 'done', null)).toEqual({ ok: false, why: 'unknown-item' });
+    expect(s.workItems(theirs.id)).toEqual([
+      { id: other.id, title: 'not yours', state: 'pending', claimedBy: null },
+    ]);
+  });
+
+  it('answers unknown-item for an id no run has', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    expect(s.setWorkItemState(r.id, 9999, 'done', null)).toEqual({ ok: false, why: 'unknown-item' });
+  });
+
+  it('refuses to move a settled item, and names the state it is already in', () => {
+    // Mutant A: deleting the `AND state NOT IN (…)` clause from the UPDATE.
+    // Driven DIRECTLY, never through `settleItems` — the batch refuses in its
+    // pre-pass, one statement earlier, and cannot discriminate this clause.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    for (const terminal of ['done', 'failed', 'abandoned'] as const) {
+      const it0 = s.addWorkItem(r.id, `already ${terminal}`, []);
+      expect(s.setWorkItemState(r.id, it0.id, terminal, 'ccrc-pwa-quiet-mesa'))
+        .toEqual({ ok: true, state: terminal });
+      expect(s.setWorkItemState(r.id, it0.id, 'claimed', 'ccrc-pwa-other'))
+        .toEqual({ ok: false, why: 'terminal', state: terminal });
+    }
+  });
+
+  it('leaves a refused row EXACTLY as it was — same state, same claimedBy', () => {
+    // Mutant B: UPDATE first, then check. A guard that runs after the write
+    // MOVES the row and then reports the refusal.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const one = s.addWorkItem(r.id, 'settled once', []);
+    s.setWorkItemState(r.id, one.id, 'done', 'ccrc-pwa-quiet-mesa');
+    expect(s.setWorkItemState(r.id, one.id, 'failed', 'ccrc-pwa-vandal'))
+      .toEqual({ ok: false, why: 'terminal', state: 'done' });
+    expect(s.workItems(r.id)).toEqual([
+      { id: one.id, title: 'settled once', state: 'done', claimedBy: 'ccrc-pwa-quiet-mesa' },
+    ]);
+    expect(s.itemTally(r.id)).toEqual({ done: 1, total: 1 });
+  });
+
+  it('reads every state back through isWorkItemState, never a cast', () => {
+    // `hydrateRun`'s rule, one file over: a token this build does not know —
+    // a newer server's seventh state, a rolled-back binary — reads as the
+    // designated `unknown` member, never as a raw string.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const one = s.addWorkItem(r.id, 'from the future', []);
+    s.db.prepare('UPDATE work_items SET state = ? WHERE id = ?').run('transcending', one.id);
+    expect(s.workItems(r.id)).toEqual([
+      { id: one.id, title: 'from the future', state: 'unknown', claimedBy: null },
+    ]);
+  });
+});
+
+describe('settleItems — the batch, all-or-nothing, in ONE transaction', () => {
+  /** Three pending items on one run, plus the run id. */
+  const seeded = () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const ids = ['one', 'two', 'three'].map((t) => s.addWorkItem(r.id, t, []).id);
+    return { s, runId: r.id, ids: ids as [number, number, number] };
+  };
+
+  it('settles every item in the body and answers the fresh tally', () => {
+    const { s, runId, ids } = seeded();
+    expect(s.settleItems(runId, [
+      { id: ids[0], state: 'done', claimedBy: 'ccrc-pwa-quiet-mesa' },
+      { id: ids[1], state: 'failed', claimedBy: null },
+    ])).toEqual({ ok: true, items: { done: 1, total: 3 } });
+    expect(s.workItems(runId).map((i) => [i.state, i.claimedBy])).toEqual([
+      ['done', 'ccrc-pwa-quiet-mesa'], ['failed', null], ['pending', null],
+    ]);
+  });
+
+  it('settles NOTHING when one id in the batch is unknown — the earlier ids are untouched', () => {
+    const { s, runId, ids } = seeded();
+    expect(s.settleItems(runId, [
+      { id: ids[0], state: 'done', claimedBy: null },
+      { id: 9999, state: 'done', claimedBy: null },
+      { id: ids[1], state: 'done', claimedBy: null },
+    ])).toEqual({ ok: false, itemId: 9999, why: 'unknown-item' });
+    expect(s.itemTally(runId)).toEqual({ done: 0, total: 3 });
+    expect(s.workItems(runId).every((i) => i.state === 'pending')).toBe(true);
+  });
+
+  it('settles NOTHING when one id in the batch is already terminal, and names it', () => {
+    const { s, runId, ids } = seeded();
+    s.setWorkItemState(runId, ids[2], 'abandoned', null);
+    expect(s.settleItems(runId, [
+      { id: ids[0], state: 'done', claimedBy: null },
+      { id: ids[2], state: 'done', claimedBy: null },
+    ])).toEqual({ ok: false, itemId: ids[2], why: 'terminal', state: 'abandoned' });
+    expect(s.itemTally(runId)).toEqual({ done: 0, total: 3 });
+    expect(s.workItems(runId).map((i) => i.state)).toEqual(['pending', 'pending', 'abandoned']);
+  });
+
+  it('refuses a body naming the SAME id twice when the first settle is terminal, and writes nothing', () => {
+    // The pre-pass carries the batch's OWN effect forward: the second write
+    // lands on a now-terminal row and earns the refusal the `WHERE` clause
+    // would have given it — reached BEFORE the first write instead of after.
+    const { s, runId, ids } = seeded();
+    expect(s.settleItems(runId, [
+      { id: ids[0], state: 'done', claimedBy: null },
+      { id: ids[0], state: 'failed', claimedBy: null },
+    ])).toEqual({ ok: false, itemId: ids[0], why: 'terminal', state: 'done' });
+    expect(s.itemTally(runId)).toEqual({ done: 0, total: 3 });
+    expect(s.workItems(runId).every((i) => i.state === 'pending')).toBe(true);
+  });
+
+  it('allows the same id twice when the first target is NOT terminal (pending -> claimed -> done)', () => {
+    const { s, runId, ids } = seeded();
+    expect(s.settleItems(runId, [
+      { id: ids[0], state: 'claimed', claimedBy: 'ccrc-pwa-quiet-mesa' },
+      { id: ids[0], state: 'done', claimedBy: 'ccrc-pwa-quiet-mesa' },
+    ])).toEqual({ ok: true, items: { done: 1, total: 3 } });
+    expect(s.workItems(runId)[0]).toMatchObject({ state: 'done', claimedBy: 'ccrc-pwa-quiet-mesa' });
+  });
+
+  it('scopes every id to the run: another run\'s item is unknown-item, and that run is untouched', () => {
+    const { s, runId, ids } = seeded();
+    const theirs = openRun(s, { wave: 2 }) as { id: number };
+    const other = s.addWorkItem(theirs.id, 'not yours', []);
+    expect(s.settleItems(runId, [
+      { id: ids[0], state: 'done', claimedBy: null },
+      { id: other.id, state: 'done', claimedBy: null },
+    ])).toEqual({ ok: false, itemId: other.id, why: 'unknown-item' });
+    expect(s.itemTally(runId)).toEqual({ done: 0, total: 3 });
+    expect(s.itemTally(theirs.id)).toEqual({ done: 0, total: 1 });
+    expect(s.workItems(theirs.id)[0]).toMatchObject({ state: 'pending' });
+  });
+
+  it('rolls the whole batch back if a write throws inside the transaction', () => {
+    // The pre-pass is a PRECHECK, not a second guard: if it and the `WHERE`
+    // ever disagreed, the write loop throws rather than half-writing, and
+    // `tx` rolls the batch back.
+    const { s, runId, ids } = seeded();
+    const real = s.setWorkItemState.bind(s);
+    let n = 0;
+    s.setWorkItemState = (rid, id, state, claimedBy) => {
+      if (++n === 2) throw new Error('disk full mid-batch');
+      return real(rid, id, state, claimedBy);
+    };
+    try {
+      expect(() => s.settleItems(runId, [
+        { id: ids[0], state: 'done', claimedBy: null },
+        { id: ids[1], state: 'done', claimedBy: null },
+      ])).toThrow('disk full mid-batch');
+    } finally {
+      s.setWorkItemState = real;
+    }
+    expect(s.itemTally(runId)).toEqual({ done: 0, total: 3 });
+    expect(s.workItems(runId).every((i) => i.state === 'pending')).toBe(true);
   });
 });
 

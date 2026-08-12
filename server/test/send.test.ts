@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, draftOf } from '../src/inject/send.js';
+import { sendPrompt, draftOf, isMailResidue } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { renderEnvelope } from '../src/coord/envelope.js';
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const noSleep = async () => {};
@@ -503,6 +504,243 @@ describe('sendPrompt', () => {
     const busy = 'esc to interrupt\n❯ \n';
     const { tmux } = fakeTmux(['❯ \n', '❯ do the thing\n', busy]);
     expect(await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'do the thing')).toEqual({ ok: true });
+  });
+});
+
+// F3 / bug #21 (build4 dogfood, docs/superpowers/programs/build4.md): the
+// mail delivery lane types an envelope via sendPrompt; when its Enter is
+// lost, the text sits in the box as a "draft" that the LANE'S OWN NEXT
+// attempt then reads as draft-present and backs off — forever, since nothing
+// else will ever empty that box. `resumeIfOwn` is the opt-in escape hatch: a
+// draft that matches the caller's OWN text (to the same marker-row precision
+// `submitEnter`'s correspondence gate already trusts) is finished, not
+// refused. It is OFF by default — sendPrompt's other two callers (the
+// operator's composer, `/clear` in coord/dispatch.ts) must keep refusing
+// outright, exactly as before.
+describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
+  it('finishes submitting a draft that already matches the caller\'s own text — no retype, one Enter', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ hello world\n', // initial capture — OUR OWN text, left by a prior lost Enter
+      '❯ \n',             // after Enter — box emptied
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    // No `-l` literal send anywhere: the text was never retyped, only submitted.
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+  });
+
+  it('still refuses a foreign human draft as draft-present, even with resumeIfOwn set — the sacred guard (F2)', async () => {
+    const { tmux, calls } = fakeTmux(['❯ completely unrelated human thought\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'completely unrelated human thought' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('without resumeIfOwn, an identical own-text draft is STILL refused as draft-present — opt-in only', async () => {
+    const { tmux, calls } = fakeTmux(['❯ hello world\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world');
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'hello world' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('reports enter-ignored, not draft-present, when the resumed own draft still will not submit', async () => {
+    const { tmux } = fakeTmux(['❯ hello world\n']); // last pane repeats: never empties, never leaves
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello world' });
+  });
+});
+
+// Blocking review finding (F3): the bespoke single-line fixtures above
+// ('hello world', 'ccrc-mail test payload') each have a distinctive marker
+// row, so they never exercised the shape that actually breaks —
+// `renderEnvelope`'s FIRST rendered line is the SAME constant fence
+// ("```ccrc-mail") on every real mail envelope. A marker-row-only check
+// therefore cannot tell two different envelopes queued for the same session
+// apart: pre-fix, a draft left by envelope A's lost Enter would be resumed
+// (and submitted!) by a call trying to deliver a completely different
+// envelope B, because `needle` — derived from B's own first line — matches
+// A's marker row exactly. These tests render TWO real envelopes with
+// `renderEnvelope` (same fence, different `id:` line) and pin the exact
+// per-delivery discrimination `matchesOwnDraft` exists for.
+describe('sendPrompt resumeIfOwn discriminates PER DELIVERY, not just per marker row (F3 blocking finding)', () => {
+  const envelopeInput = (id: number, body: string) => ({
+    id, fromId: 'coordinator', toId: 'x', runId: null, program: null, wave: null, waveOf: null,
+    kind: 'finding' as const, subject: 'hi', body, artifacts: [],
+  });
+  const envelopeA = renderEnvelope(envelopeInput(1, 'first message body'));
+  const envelopeB = renderEnvelope(envelopeInput(2, 'a completely different second message'));
+
+  /** The exact multi-row shape a real tmux pane shows once `sendPrompt`'s own
+   *  M-Enter loop has typed a multi-line envelope: marker `❯ ` on line one,
+   *  every further line indented two spaces with no marker — the same
+   *  convention `submit-route.test.ts`'s blank-first-row fixture uses. */
+  const boxOf = (envelope: string): string =>
+    envelope.split('\n').map((l, i) => (i === 0 ? `❯ ${l}` : `  ${l}`)).join('\n') + '\n';
+
+  it('both envelopes share the identical marker row — the precondition this bug needs', () => {
+    // Sanity-checks the premise itself: if this ever stops being true (a
+    // future renderEnvelope change puts something delivery-specific on line
+    // one), the bug this suite pins can no longer occur, and that's fine —
+    // but the test above would need to change with it, not silently pass
+    // for the wrong reason.
+    expect(envelopeA.split('\n')[0]).toBe(envelopeB.split('\n')[0]);
+    expect(envelopeA.split('\n')[0]).toBe('```ccrc-mail');
+  });
+
+  it('resumes ITS OWN real envelope — no retype, one Enter', async () => {
+    const { tmux, calls } = fakeTmux([boxOf(envelopeA), '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeA, { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    // No `-l` literal send anywhere: the envelope was never retyped, only submitted.
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+  });
+
+  it('does NOT resume a DIFFERENT envelope\'s draft left in the same box, even though the marker row matches — the exact bug', async () => {
+    // The box holds envelope A, un-submitted (a prior sweep's lost Enter).
+    // THIS call is trying to deliver envelope B — a different delivery, same
+    // recipient. Pre-fix: `needle` (B's first line) matched A's marker row
+    // byte for byte, so `resumeIfOwn` pressed Enter and SUBMITTED A's bytes
+    // while the caller believed it was delivering B.
+    const { tmux, calls } = fakeTmux([boxOf(envelopeA)]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeB, { resumeIfOwn: true });
+    // Refused as a foreign draft — envelope A's own marker row, verbatim —
+    // not resumed under envelope B's identity.
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(sendKeysCalls(calls)).toEqual([]); // no Enter pressed on someone else's envelope
+  });
+
+  it('resumes envelope B once it is actually B sitting in the box', async () => {
+    // The other half of the same discrimination: once the box genuinely
+    // holds B's own un-submitted text, delivering B (not A) resumes it.
+    const { tmux, calls } = fakeTmux([boxOf(envelopeB), '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeB, { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+  });
+});
+
+// `clearMailResidue` (robust-mail-delivery spec §2.2): the safe dirty-box
+// clear. The reference-nudge lane's own residue — a CC paste-chip collapse of
+// the OLD lane's typed multi-line envelope, or a stranded ```ccrc-mail fence
+// opener — is recognized and cleared before typing, so the lane can recover a
+// box the old typed-envelope lane left corrupted (build4's wave-2 dogfood)
+// without a human clearing it by hand. Gated on `isMailResidue`'s own
+// fingerprint, which matches NEITHER of the two shapes a genuine human draft
+// would ever produce — F2 (never type over a human) is unaffected.
+describe('isMailResidue', () => {
+  it('matches a CC paste-chip collapse — the shape a multi-line typed envelope leaves behind', () => {
+    expect(isMailResidue('[Pasted text #1 +54 lines]')).toBe(true);
+    expect(isMailResidue('[Pasted text #23 +2 lines]')).toBe(true);
+  });
+
+  it('matches a stranded ```ccrc-mail fence opener — the OLD lane\'s envelope marker row', () => {
+    expect(isMailResidue('```ccrc-mail')).toBe(true);
+    expect(isMailResidue('````ccrc-mail')).toBe(true); // a wider fence, escaped for a body with backticks in it
+  });
+
+  it('does NOT match an ordinary code fence with no ccrc-mail tag — a human\'s own pasted snippet', () => {
+    expect(isMailResidue('```ts')).toBe(false);
+    expect(isMailResidue('```')).toBe(false);
+  });
+
+  it('does NOT match plain human text, including text that happens to mention "Pasted" or "ccrc-mail" mid-sentence', () => {
+    expect(isMailResidue('can you also check the staging deploy')).toBe(false);
+    expect(isMailResidue('I pasted text #1 into the wrong window')).toBe(false); // lowercase, not the chip shape
+    expect(isMailResidue('the ccrc-mail lane looks broken to me')).toBe(false); // mentions it, doesn't fence it
+  });
+
+  it('does NOT match an empty draft', () => {
+    expect(isMailResidue('')).toBe(false);
+  });
+});
+
+describe('sendPrompt clearMailResidue', () => {
+  it('clears a paste-chip residue, then types and sends normally', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ [Pasted text #1 +54 lines]\n',   // initial — stranded chip from the old lane
+      '❯ \n',                              // after C-u — cleared
+      '❯ ccrc-mail: you have new mail…\n', // verify — the nudge echoed
+      '❯ \n',                              // after Enter — box emptied
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail. List it.',
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', 'C-u'],
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'ccrc-mail: you have new mail. List it.'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
+
+  it('clears a stranded ```ccrc-mail fence opener, then types and sends normally', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ ```ccrc-mail\n',
+      '❯ \n',
+      '❯ ccrc-mail: you have new mail…\n',
+      '❯ \n',
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail. List it.',
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)[0]).toEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
+  });
+
+  it('a genuine human draft is STILL refused as draft-present, even with clearMailResidue set — F2 preserved (hard case d)', async () => {
+    const { tmux, calls } = fakeTmux(['❯ can you also check the staging deploy\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail. List it.',
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'can you also check the staging deploy' });
+    // No C-u, nothing typed — the human draft is never touched.
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('without clearMailResidue, an identical chip is STILL refused as draft-present — opt-in only', async () => {
+    const { tmux, calls } = fakeTmux(['❯ [Pasted text #1 +54 lines]\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail. List it.',
+      { resumeIfOwn: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: '[Pasted text #1 +54 lines]' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('reports draft-clear-failed, not a false success, when the residue will not clear', async () => {
+    const { tmux, calls } = fakeTmux(['❯ [Pasted text #1 +54 lines]\n', '❯ [Pasted text #1 +54 lines]\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail. List it.',
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: '[Pasted text #1 +54 lines]' });
+    expect(new Set(sendKeysCalls(calls).map((c) => c.join(' ')))).toEqual(new Set(['tmux send-keys -t cc-x C-u']));
+  });
+
+  it('resumeIfOwn still takes priority: a stale OWN nudge is resumed (Enter only), never cleared', async () => {
+    const nudge = 'ccrc-mail: you have new mail. List it.';
+    const { tmux, calls } = fakeTmux(['❯ ' + nudge + '\n', '❯ \n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', nudge,
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: true });
+    // Only Enter — no C-u, no retype: resumeIfOwn's own-draft match wins
+    // before clearMailResidue's residue check is ever reached.
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+  });
+
+  it('a menu that opens mid-clear is reported as dialog-open, same as the replaceDraft site', async () => {
+    const { tmux, calls } = fakeTmux(['❯ [Pasted text #1 +54 lines]\n', 'some scrollback\n\n❯ 1. Yes\n  2. No\n  Enter to select\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail. List it.',
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'dialog-open' });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'C-u']]);
   });
 });
 

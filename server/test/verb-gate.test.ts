@@ -110,6 +110,19 @@ const CONTROL_KEYWORD = /^(if|for|while|switch|catch|do|try|else|return|typeof|a
  *  unit a gate can sensibly live in. */
 function isHandlerHead(head: string): boolean {
   if (/app\.(get|post|put|patch|delete)\s*\(/.test(head)) return true;
+  // A signature WRAPPED across lines — `server/src` writes ten-odd of these
+  // (`clip.ts`, `hookstate.ts`, `registry.ts`, `prstate.ts`, `coord/gitref.ts`
+  // …), and `coord/dispatch.ts`'s `dispatchRun` became the first one that also
+  // makes a ccd call (Build 4, Task 1's fourth parameter pushed it over).
+  // The line carrying the `{` is then the PARAMETER LIST's own closing line —
+  // no name, no `(` — so the name-anchored match below cannot see it and the
+  // site resolved `scope: null`, which this suite reports as an ungated call
+  // site: a false offender, loud rather than silent, but still a scanner that
+  // could not read the tree it scans. This arm reads that closing line for
+  // what it is. It can only ever pick a NEARER enclosing brace than the
+  // fallback did, i.e. search LESS text for a gate — so it cannot turn an
+  // ungated site green.
+  if (/^\s*\)\s*(?::[^{]*)?(?:=>\s*)?\{\s*$/.test(head)) return true;
   const m = /^\s*(?:export\s+)?(?:private\s+|public\s+|protected\s+)?(?:static\s+)?(?:async\s+)?(?:function\s+)?([A-Za-z_]\w*)\s*\(/.exec(head);
   if (!m || CONTROL_KEYWORD.test(m[1]!)) return false;
   return /\)\s*(?::[^{]*)?\{\s*$/.test(head);
@@ -196,6 +209,27 @@ describe('the scanner itself', () => {
       `  app.post('/a', async (req, reply) => {\n    const argv = CCD_ARGV.wsAudit(id);\n    if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({});\n    return run(reply, argv);\n  });\n`
       + `  app.post('/b', async (req, reply) => {\n    return run(reply, CCD_ARGV.wsRestore(id));\n  });`), 'f.ts');
     expect(sites.map((s) => [s.key, s.gated])).toEqual([['wsAudit', true], ['wsRestore', false]]);
+  });
+
+  it('resolves the scope of a function whose SIGNATURE spans lines, gated and ungated alike', () => {
+    // The shape `coord/dispatch.ts` now has, and the shape that used to
+    // resolve `scope: null`. Both verdicts must still be reachable through
+    // it — a widening that made every wrapped signature read "gated" would
+    // be worse than the blind spot it fixed.
+    const wrapped = (body: string): string =>
+      'import { CCD_ARGV, verbSupported } from \'./ccdargv.js\';\n'
+      + 'export async function act(\n  deps: D, id: number, brief: unknown, items: unknown,\n'
+      + '): Promise<Out> {\n' + body + '\n}\n';
+    const [gated] = scanCcdCallSites(wrapped(
+      '  const argv = CCD_ARGV.wsHold(id, reason);\n'
+      + '  if (!verbSupported(deps.fleetState, argv)) return { ok: false };\n'
+      + '  return deps.runCcd(argv);'), 'f.ts');
+    expect(gated!.scope, 'a wrapped signature must still resolve a scope').not.toBeNull();
+    expect([gated!.key, gated!.gated]).toEqual(['wsHold', true]);
+
+    const [ungated] = scanCcdCallSites(wrapped('  return deps.runCcd(CCD_ARGV.wsArchive(id));'), 'f.ts');
+    expect(ungated!.scope).not.toBeNull();
+    expect([ungated!.key, ungated!.gated]).toEqual(['wsArchive', false]);
   });
 
   it('ignores a call site and a gate that are only mentioned in a comment', () => {

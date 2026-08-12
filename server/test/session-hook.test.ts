@@ -87,6 +87,21 @@ describe('event → state mapping', () => {
     expect(s.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la' } });
     expect(s.ask.questions).toBeUndefined();
   });
+  // F1 (build4 dogfood, docs/superpowers/programs/build4.md): a virgin
+  // session has never taken a turn, so before this fix it had NO hookstate
+  // file at all — `sweepMail`'s delivery gate (`hs === null`) correctly
+  // fails shut on that, never injecting mid-thought, but nothing then ever
+  // wrote this id's FIRST hookstate either — the worker's first coordination
+  // brief sat queued forever. A just-started session is definitionally idle:
+  // SessionStart must write `state: 'done'`, the exact fact the gate's
+  // `hs.state === 'done'` conjunct is waiting to see.
+  it('SessionStart writes done — a virgin session is at an idle boundary (F1)', () => {
+    run({ hook_event_name: 'SessionStart' });
+    const s = readState();
+    expect(s).toMatchObject({ v: 1, state: 'done', event: 'SessionStart',
+      sessionId: 'uuid-1', pid: 4242, ask: null });
+    expect(s.updatedAt).toBeGreaterThan(0);
+  });
   it('Stop is done and clears ask; interrupted survives when the payload says so', () => {
     run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
     run({ hook_event_name: 'Stop', is_interrupt: true });

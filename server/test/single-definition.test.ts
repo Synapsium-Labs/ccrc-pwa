@@ -281,6 +281,89 @@ describe('Build 7 nouns', () => {
         `${rel(f)} names a work item a Task — see the plan's D-7`).toBe(false);
     }
   });
+
+  // ── Build 4, Task 5 ──────────────────────────────────────────────────────
+
+  it('defines WORK_ITEM_TITLE_MAX and WORK_ITEM_MAX exactly once, in shared/', () => {
+    for (const name of ['WORK_ITEM_TITLE_MAX', 'WORK_ITEM_MAX']) {
+      const hits = ALL.filter((f) =>
+        new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8')));
+      expect(hits.map(rel), name).toEqual(['shared/api.ts']);
+    }
+  });
+
+  it('spells the terminal trio ONCE — TERMINAL_ITEM_STATES, and no hand-written SQL literal', () => {
+    // The invariant has one home (`architecture:145-147`), so the LIST it is
+    // built from must have one too: `setWorkItemState`'s `WHERE` literal is
+    // produced by `TERMINAL_ITEM_STATES.join(...)` and `settleItems`' pre-pass
+    // reads the same array, so a second spelling anywhere is a second
+    // definition of terminality that nothing forces to agree.
+    //
+    // The fingerprint is the three names as ONE WHOLE list — anchored on the
+    // brackets at both ends, which is exactly how a copy gets written, and
+    // what tells a terminality claim apart from the VOCABULARY that merely
+    // contains these three among its six (`WORK_ITEM_STATES`, `shared/api.ts`:
+    // `['pending', 'claimed', 'done', 'failed', 'abandoned', 'unknown']` — a
+    // list of every state there is, not a list of the terminal ones, and not a
+    // copy of anything). The shipped SQL is BUILT by `join`, so this scanner
+    // sees no literal at all in it; a hand-written `('done','failed',
+    // 'abandoned')` scores a hit on both this and the SQL check below.
+    const TRIO = /[[(]\s*['"`]done['"`],\s*['"`]failed['"`],\s*['"`]abandoned['"`]\s*[\])]/;
+    const holders = ALL.filter((f) => TRIO.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['server/src/coord/store.ts']);
+    // …and in that one file it is the constant, not a literal in a query.
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(/export const TERMINAL_ITEM_STATES = \['done', 'failed', 'abandoned'\]/);
+    for (const f of ALL) {
+      const src = readFileSync(f, 'utf8');
+      expect(/\(\s*['"]done['"]\s*,\s*['"]failed['"]\s*,\s*['"]abandoned['"]\s*\)/.test(src),
+        `${rel(f)} hand-writes the terminal trio as an SQL literal`).toBe(false);
+    }
+  });
+
+  // D-B4-16: no L1 file holds a database handle. `architecture:78-81` puts
+  // `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 as TYPES only,
+  // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this
+  // build (`dispatchRun`, `settleItems`, `closeRun`) lands as a `CoordStore`
+  // method, and this is the scanner that says so.
+  describe('the coord ring — only store.ts, rundefs.ts and routes.ts hold the handle', () => {
+    const coordDir = path.join(ccrcRoot, 'server/src/coord');
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefs.ts', 'routes.ts', 'db.ts', 'schema.ts']);
+    const coordFiles = sources(coordDir);
+
+    it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
+      // Scanner-coverage pin (`architecture:104-105`): a scan over an empty or
+      // truncated list passes everything.
+      expect(coordFiles.length).toBeGreaterThanOrEqual(6);
+      for (const f of ['items.ts', 'dispatch.ts', 'close.ts', 'store.ts']) {
+        expect(coordFiles.map((p) => path.basename(p))).toContain(f);
+      }
+    });
+
+    it('imports neither ./db.js nor node:sqlite outside the three that own the handle', () => {
+      for (const f of coordFiles) {
+        if (HANDLE_HOLDERS.has(path.basename(f))) continue;
+        const src = readFileSync(f, 'utf8');
+        expect(/from\s+'\.\/db\.js'/.test(src), `${rel(f)} imports ./db.js`).toBe(false);
+        expect(/from\s+'node:sqlite'/.test(src), `${rel(f)} imports node:sqlite`).toBe(false);
+      }
+    });
+
+    it('never reaches around the store for its handle — no `coord.db`/`store.db` receiver', () => {
+      // Anchored on what a USE looks like — `tx(coord.db, …)`,
+      // `coord.db.prepare(…)`, `(coord.db)` — rather than on the two words,
+      // because `coord.db` is also the DATABASE FILE's name and several
+      // docstrings in this directory legitimately mention it as prose
+      // (`token.ts`'s own `CoordDbUnmigratable` paragraph, for one).
+      const REACH = /\b(?:coord|store)\.db\s*[.,)]/;
+      for (const f of coordFiles) {
+        if (HANDLE_HOLDERS.has(path.basename(f))) continue;
+        const src = readFileSync(f, 'utf8');
+        expect(REACH.test(src),
+          `${rel(f)} names a database handle on a coord/store receiver`).toBe(false);
+      }
+    });
+  });
 });
 
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):

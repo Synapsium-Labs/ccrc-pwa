@@ -488,7 +488,7 @@ describe('SessionScreen overflow menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: /Change model/ }));
     // The chooser is open now — tap a model row.
-    fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Opus 5/ }));
     expect(prompt).toHaveBeenCalledWith('claude:OpenClawHetzner', '/model opus');
   });
 

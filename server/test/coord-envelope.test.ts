@@ -8,7 +8,7 @@
 // pins the function directly, including the one case that route test cannot
 // reach (a body that itself contains a fenced code block).
 import { describe, it, expect } from 'vitest';
-import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
+import { renderEnvelope, renderMailNudge, type EnvelopeInput } from '../src/coord/envelope.js';
 
 const BASE: EnvelopeInput = {
   id: 7, fromId: 'demo-quiet-mesa', toId: 'demo-coordinator',
@@ -129,5 +129,59 @@ describe('renderEnvelope/fenceFor: the fence cannot be closed by the body\'s own
     // escapable by a subject line carrying its own long backtick run.
     const env = renderEnvelope({ ...BASE, subject: 'contains ```` four ticks' });
     expect(openingFence(env).length).toBe(5);
+  });
+});
+
+// `renderMailNudge` — the reference-nudge lane (robust-mail-delivery spec §1.1):
+// the ONLY thing the delivery lane ever types now. Every invariant here is
+// load-bearing for `sendPrompt`'s echo/submit discipline downstream — a
+// regression in any one of them reopens the exact F7/F6b failure modes the
+// nudge exists to close.
+describe('renderMailNudge', () => {
+  it('is a single line — no \\n anywhere — so composePrompt never splits it and the M-Enter loop is a no-op', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge).not.toContain('\n');
+  });
+
+  it('starts with a CONSTANT 24-char head, identical across different toId values — the sendPrompt echo needle', () => {
+    const a = renderMailNudge('demo-coordinator');
+    const b = renderMailNudge('a-completely-different-session-id');
+    const head = 'ccrc-mail: you have new ';
+    expect(head.length).toBe(24);
+    expect(a.slice(0, 24)).toBe(head);
+    expect(b.slice(0, 24)).toBe(head);
+    expect(a.slice(0, 24)).toBe(b.slice(0, 24));
+  });
+
+  it('embeds toId — the listing endpoint it points at, not one delivery', () => {
+    const nudge = renderMailNudge('demo-quiet-mesa');
+    expect(nudge).toContain('GET /api/mail?to=demo-quiet-mesa');
+    // ID-AGNOSTIC by design: no per-delivery id anywhere in the nudge — it
+    // points at the LISTING endpoint so one nudge drains all outstanding mail.
+    expect(nudge).not.toMatch(/\bid: \d+/);
+  });
+
+  // Blocking review finding, re-opened D-41: the listing (`GET /api/mail?to=`)
+  // returns rows carrying BOTH `id` (`mail.id`) and `deliveryId`
+  // (`mail_deliveries.id`) — two independent sequences that only agree while
+  // every mail resolves to exactly one delivery. Both `GET /api/mail/:id` and
+  // `POST /api/mail/:id/ack` key on the DELIVERY id, so the nudge must send
+  // the worker to `deliveryId`, never bare `id`, and say so explicitly.
+  it('names the full read+ack protocol using deliveryId, NOT id — with the token location', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge).toContain('GET /api/mail?to=demo-coordinator');
+    expect(nudge).toContain('deliveryId');
+    expect(nudge).toContain('NOT id');
+    expect(nudge).toContain('GET /api/mail/<deliveryId>');
+    expect(nudge).toContain('POST /api/mail/<deliveryId>/ack');
+    expect(nudge).not.toContain('/api/mail/<id>');
+    expect(nudge).not.toContain('/api/mail/<id>/ack');
+    expect(nudge).toContain('~/.cc-secrets/ccrc-mail.token');
+    expect(nudge).toContain('x-ccrc-mail-token');
+  });
+
+  it('is short — well under a kilobyte, the whole point of a "tiny" nudge', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge.length).toBeLessThan(300);
   });
 });

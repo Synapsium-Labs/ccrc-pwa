@@ -36,7 +36,8 @@ run row's own `wave`.
 
 ## 2 — Dispatch a wave
 
-`POST /api/runs/:id/dispatch` `{"brief":"<the wave brief, prose>"}`
+`POST /api/runs/:id/dispatch`
+`{"brief":"<the wave brief, prose>","items":["<title>", …]}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
 
@@ -48,6 +49,24 @@ with the run now `dispatched`, or a refusal:
 | `cap-daily` | `maxSessionsPerDay` is used up | stop, name the cap, wait |
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
+
+**`items` — the wave's declared ledger.** `"items"` is the machine-readable
+half of the wave plan whose other half is the brief: one title per unit of
+work, at most **32** of them, each at most **200 UTF-8 bytes** (bytes, not
+characters — a title of emoji or CJK hits the cap sooner than its length
+suggests). The brief stays prose the server never reads; these titles are what
+the run board counts, so **the two must agree** — a brief that names five
+units of work beside three items renders a tally that lies. A malformed
+`items` (not an array, an entry that is not a non-empty string, past either
+cap) answers `error:'bad-request'` (400) before anything is listed, spawned or
+held: the run is untouched, still `planned`. Omitting `items`, or sending
+`[]`, is legal and means this wave declared no ledger — the board renders `—`
+rather than `0/0`.
+
+**The ledger is fixed at dispatch.** No route adds an item to a dispatched
+run, so `total` never grows and the tally can never move backwards. Work
+discovered mid-wave is a note in the wave-done mail and an item in the NEXT
+wave's brief — that is what waves are for.
 
 `unknown-run` (404) means the run id is wrong or the DB was rebuilt — re-read
 `GET /api/runs`. `bad-transition` (409) means this run is not `planned` —
@@ -77,39 +96,77 @@ route (clause 9); dispatch is the one writer of that step, and a coordinator
 that "helps" by clearing the pane itself is a second writer racing the
 first.
 
+**The brief must say: commit on the WORKSPACE branch — never a separate
+feature branch (F5, build4 dogfood wave 1).** `ws-add` creates the workspace
+on its own branch (`ws/<slug>`); §4's done-fingerprint re-measures THAT
+branch's tip (`record.branch`, the live registry's own field), never a
+branch the brief merely names. The ordinary per-PR SDD convention elsewhere
+in this codebase — "cut a fresh `feat/<name>` branch from main" — is WRONG
+here: a worker that follows it faithfully leaves the workspace branch
+unmoved, so every later `/advance`/`/close` re-measures a tip that never
+changes and refuses `stale-tip` forever, with no non-abandon path to close a
+run whose work is otherwise correct and reviewed. Every brief — wave 1's
+spawn and every reclaim after it — must say plainly: **"commit on this
+workspace's own branch; do not create or switch to a separate feature
+branch."** This is not optional phrasing left to judgement (clause 5's "the
+content is this session's judgement" does not cover it) — it is the one
+sentence that keeps the wave closeable at all.
+
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
 and that injection is your next turn.
 
 ## 3 — Read mail
 
-Mail arrives as the envelope in `references/mail-envelope.md`. For each one:
+What lands in your session is NOT the message — it is a tiny one-line nudge
+("`ccrc-mail: you have new mail. List (GET /api/mail?to=<you>); per row use
+its deliveryId, NOT id…`") that points at it. The nudge is the same 24-char
+text every time and carries no delivery id itself: one nudge means "you have
+outstanding mail", not "here is one message" — always re-list rather than
+assuming the nudge names exactly one row.
 
-1. `POST /api/mail/:id/ack` **first**, body `{"fromId":"<your id>","fromUuid":"<your
-   uuid>"}` — the exact pair from "Learn who you are, first" ($id, $uuid).
-   Anything else 400s `bad-kind`; a `fromUuid` that does not match
-   `$REG/<your id>.uuid` 403s `stale-uuid` (the file this session's own
-   `/clear` would rotate — re-read it if you have any doubt). Until you ack,
-   the lane replays the message verbatim on later sweeps — you will see it
-   again, and a second copy of a message you already acted on is how a wave
-   gets dispatched twice. This is bounded, not forever: past a bounded number
-   of replay attempts the lane gives up and marks the delivery undeliverable
-   (`state:"rejected"` — it stays visible on the read below, since it was
-   never acked and never acted on). If you see the SAME `id` injected several
-   times, that is a signal to ack (or act on) it now, not a promise it will
-   keep arriving indefinitely.
-2. Then act.
+0. **List**: `GET /api/mail?to=<your session id>`. This returns only
+   OUTSTANDING mail — `queued`/`delivered` (unacked), plus a delivery the lane
+   gave up retrying before anyone acted on it (`state:"rejected"`,
+   distinguishable by that field) — never a row you have already acked. Add
+   `&all=1` to read the full history instead (every state, including
+   `acked`), which is what you want for a human-facing "what happened"
+   question, never for "what do I still owe an answer to" — reading history
+   for the latter is how a wave gets dispatched twice (a stale copy of a
+   `wave-done` you already acted on reads identically to new work unless you
+   separately filter on `state`, which the unfiltered history does not do for
+   you). **Each row carries two ids — `id` and `deliveryId` — and they are
+   NOT interchangeable** (re-opened D-41): `id` is the message's own id, but
+   `GET /api/mail/:id` and `POST /api/mail/:id/ack` below both key on the
+   DELIVERY id. The two only happen to be numerically equal for a mail sent
+   to exactly one recipient; a mail fanned out to several recipients gives
+   each of you a different `deliveryId` for the SAME `id`. **Always use
+   `deliveryId`** for the next two calls — using `id` fetches or acks a
+   different worker's copy (or 404s) and leaves your own delivery to replay
+   until the lane gives up on it.
 
-To see what is outstanding: `GET /api/mail?to=<your session id>`. This
-returns only OUTSTANDING mail — `queued`/`delivered` (unacked), plus a
-delivery the lane gave up retrying before anyone acted on it
-(`state:"rejected"`, distinguishable by that field) — never a row you have
-already acked. Add `&all=1` to read the full history instead (every state,
-including `acked`), which is what you want for a human-facing "what happened"
-question, never for "what do I still owe an answer to" — reading history for
-the latter is how a wave gets dispatched twice (a stale copy of a `wave-done`
-you already acted on reads identically to new work unless you separately
-filter on `state`, which the unfiltered history does not do for you).
+For each outstanding row, with `:id` below filled in from its `deliveryId`
+(never its `id` — see above):
+
+1. `GET /api/mail/:id` to fetch the body — the envelope shape in
+   `references/mail-envelope.md`, served verbatim (never re-rendered) from
+   what was queued. Token-gated the same as every other call here; no
+   `fromId`/`fromUuid` needed for this read.
+2. `POST /api/mail/:id/ack` **before acting on it**, body
+   `{"fromId":"<your id>","fromUuid":"<your uuid>"}` — the exact pair from
+   "Learn who you are, first" ($id, $uuid). Anything else 400s `bad-kind`; a
+   `fromUuid` that does not match `$REG/<your id>.uuid` 403s `stale-uuid` (the
+   file this session's own `/clear` would rotate — re-read it if you have any
+   doubt). Until you ack, the lane keeps re-injecting the nudge on later
+   sweeps — the SAME nudge, not a growing pile of them — and the mail it
+   points at is still there when you list again. This is bounded, not
+   forever: past a bounded number of replay attempts the lane gives up and
+   marks the delivery undeliverable (`state:"rejected"` — it stays visible on
+   the list above, since it was never acked and never acted on). If you see
+   the nudge fire several times for what looks like the same mail, that is a
+   signal to ack (or act on) it now, not a promise it will keep arriving
+   indefinitely.
+3. Then act.
 
 **Sending mail of your own** — a rejection (§4), a question, a status
 update — is `POST /api/mail`, body:
@@ -195,6 +252,39 @@ Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
 `answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
 this run's id — and leave the run alone. A stale `wave-done` must never
 settle a wave.
+
+### 4b — Settle the work items, AFTER the advance answers `ok`
+
+`POST /api/runs/:id/items`
+`{"items":[{"id":<item id>,"state":"done","claimedBy":"<worker id>"}, …]}`
+→ `{"ok":true,"id":<run id>,"items":{"done":<n>,"total":<n>}}` — the fresh
+tally, which is what the board renders.
+
+**Order is the authorisation.** Send this only once `POST /api/runs/:id/advance`
+has answered `ok` for the same claim. That answer is the server's own
+re-measurement, and it is the moment ccrc is allowed to believe a worker
+(contract clause 6). Settling never off the worker's claim alone: a tally that
+flips to `5/5` because a mail said so is a lie on the console, and the console
+is the product. Nothing re-measures here — this route performs no fleet act at
+all — precisely because the re-measurement already happened one call earlier.
+
+`state` is one of `pending` / `claimed` / `done` / `failed` / `abandoned`.
+`unknown` is a READ-side value the board uses for a token it does not
+recognise; a writer may not name it (400 `bad-request`). `claimedBy` is
+optional and defaults to `null`. Item ids come from the run row's own ledger —
+`GET /api/runs` carries the tally, and the ids are the ones the dispatch
+declared, in body order.
+
+A batch is **all-or-nothing**, inside one transaction: a body naming one bad
+id settles NOTHING, and the earlier ids in the same body are untouched.
+Partial success on a ledger write is how tallies drift.
+
+| shape | meaning | what you do |
+|---|---|---|
+| `refused:'unknown-item'` (404), with `itemId` | that id is not THIS run's item (another run's, or none) | **stop and report** — do not retry with a guessed id. Re-read the run's ledger first |
+| `refused:'item-terminal'` (409), with `itemId` and `state` | the item already settled (`done`/`failed`/`abandoned` are terminal) and the write was refused, not silently applied | **stop and report** — a tally that moved backwards is a lie on the console. If the item genuinely needs a different outcome, that is an operator decision, not a retry |
+| `error:'unknown-run'` (404) | the run id is wrong or the DB was rebuilt | re-read `GET /api/runs` |
+| `error:'bad-request'` (400) | shape: no `items` array, an empty one, a non-integer id, a `state` outside the vocabulary, or past 32 entries | fix the body; nothing was written |
 
 ## 5 — The boundary: open the next wave's run, THEN close this one
 
