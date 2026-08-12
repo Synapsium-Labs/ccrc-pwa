@@ -7009,6 +7009,120 @@ if n:
 PY
 }
 
+_transcript_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>.jsonl, one per line.
+  # A session uuid is globally UNIQUE, so the transcript can be found instead of
+  # guessed. cmd_swap used to munge one directory and copy exactly that path;
+  # Claude Code writes under the munge of ITS cwd, which diverges the moment the
+  # session moves (a /cd relocates the transcript, a worktree tool does not), and
+  # on 2026-08-11 the guess missed and the swap completed with no history.
+  # Deliberately scoped to ONE config dir: the same uuid exists under five
+  # accounts at five different sizes, and a cross-account sweep would carry
+  # whichever stale copy sorted first.
+  # The glob runs in a subshell so `nullglob` — which is what makes "no matches"
+  # an empty list rather than a literal `*`-bearing path that `[[ -f ]]` quietly
+  # answers no to — cannot leak into the caller's shell.
+  local cfg="$1" uuid="$2" f
+  [[ -n "$cfg" && -n "$uuid" ]] || return 0
+  ( shopt -s nullglob
+    for f in "$cfg"/projects/*/"$uuid".jsonl; do
+      [[ -f "$f" ]] || continue
+      printf '%s\n' "$f"
+    done )
+}
+
+_sidecar_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>/ sidecar dir, no trailing slash.
+  # Globbed in its OWN right, not "beside each jsonl": two of the incident's
+  # sidecars sit in project dirs that hold no .jsonl for that uuid at all. The
+  # trailing slash in the glob is what restricts it to directories; the stripped
+  # slash on the way out is what stops `cp -a src/ dst` nesting the sidecar
+  # inside itself when a previous attempt half-created the destination.
+  local cfg="$1" uuid="$2" d
+  [[ -n "$cfg" && -n "$uuid" ]] || return 0
+  ( shopt -s nullglob
+    for d in "$cfg"/projects/*/"$uuid"/; do
+      [[ -d "$d" ]] || continue
+      printf '%s\n' "${d%/}"
+    done )
+}
+
+_swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried, rc 1 nothing found.
+  # Destination slots = each match's MIRRORED relative dir (so the target account
+  # looks like where Claude Code actually had the file) plus `mdir`, the munge of
+  # the resolved registry workdir — the directory the resumed process starts in,
+  # and the first address it reads. Where two matches want one slot the newest
+  # source mtime wins, which is the rule that makes the mdir slot safe: a session
+  # that moved has a STALE transcript still sitting at its old startup munge,
+  # which for many rows IS mdir, and copying both while preserving directories
+  # would land the stale one at exactly the address that matters.
+  #
+  # One copy per distinct INODE (one inode wore three names in production, at
+  # 70MB); every other slot for that inode is a hardlink to the copy. Every
+  # destination write unlinks first (`cp -p --remove-destination`, `ln -f`): a
+  # previous swap onto this account left its names hardlinked to EACH OTHER, so a
+  # plain cp writes through the shared inode and rewrites siblings this swap
+  # never claimed, and a plain ln fails EEXIST — which, with no `set -e`, this
+  # script would sail straight past.
+  #
+  # A cp across config dirs, never a link from source to destination: the
+  # transcript is the one file that gets APPENDED to, so an aliased source would
+  # grow a conversation that account never had. `-p` because two of this design's
+  # rules read mtimes and a plain cp stamps every copy with the time of the swap.
+  local srccfg="$1" dstcfg="$2" uuid="$3" mdir="$4" sanitize="${5:-0}"
+  local -a matches=()
+  mapfile -t matches < <(_transcript_matches "$srccfg" "$uuid")
+  (( ${#matches[@]} )) || return 1
+
+  local -A mtime_of=() ino_of=() winner=()
+  local f pdir mt s cur
+  for f in "${matches[@]}"; do
+    # Parameter expansion, not `basename "$(dirname …)"`: every munged project
+    # dir starts with `-`, and GNU basename would read `-data-projects-x` as
+    # options.
+    pdir="${f%/*}"; pdir="${pdir##*/}"
+    mt=$(stat -c %Y "$f" 2>/dev/null); [[ "$mt" =~ ^[0-9]+$ ]] || mt=0
+    mtime_of["$f"]="$mt"
+    ino_of["$f"]=$(stat -c %i "$f" 2>/dev/null)
+    [[ -n "${ino_of[$f]}" ]] || ino_of["$f"]="path:$f"
+    # Its own mirrored dir, and — for every match — the mdir slot. Strictly
+    # greater, so equal mtimes keep the first match in (sorted) glob order and
+    # the answer stays deterministic.
+    for s in "$pdir" "$mdir"; do
+      cur="${winner[$s]:-}"
+      if [[ -z "$cur" ]] || (( mt > ${mtime_of[$cur]} )); then winner["$s"]="$f"; fi
+    done
+  done
+
+  # Sorted, and C-collated, so which slot holds the physical copy is reproducible
+  # rather than a function of bash's hash order.
+  local -a slots=()
+  mapfile -t slots < <(printf '%s\n' "${!winner[@]}" | LC_ALL=C sort)
+
+  local -A copied=()
+  local carried=0 slot src ino dst
+  for slot in "${slots[@]}"; do
+    src="${winner[$slot]}"; ino="${ino_of[$src]}"
+    dst="$dstcfg/projects/$slot/$uuid.jsonl"
+    mkdir -p "$dstcfg/projects/$slot"
+    if [[ -n "${copied[$ino]:-}" ]]; then
+      ln -f "${copied[$ino]}" "$dst" 2>/dev/null \
+        || cp -p --remove-destination "${copied[$ino]}" "$dst" 2>/dev/null \
+        || { echo "ccd: warn: could not place transcript at $dst" >&2; continue; }
+    else
+      cp -p --remove-destination "$src" "$dst" 2>/dev/null \
+        || { echo "ccd: warn: could not carry transcript $src -> $dst" >&2; continue; }
+      # Order is load-bearing: _sanitize_anthropic rewrites through os.replace,
+      # which BREAKS hardlinks — the replaced name gets a new inode and every
+      # sibling keeps the unsanitized one. Copy -> sanitize -> link.
+      [[ "$sanitize" == 1 ]] && _sanitize_anthropic "$dst"
+      copied["$ino"]="$dst"; carried=$((carried + 1))
+    fi
+  done
+  (( carried > 0 )) || return 1
+  echo "$(date '+%F %T') carry $uuid: ${#matches[@]} match(es), $carried copy/copies, ${#slots[@]} destination(s)" \
+    >> "$REG/swap.log"
+  return 0
+}
+
 cmd_swap() {   # id target-wrapper — move a session to another account, conversation intact.
   # Transcripts are plain JSONL with no account binding (validated 2026-07-03): copy the
   # current transcript into the target config dir, flip the registry wrapper, restart.
