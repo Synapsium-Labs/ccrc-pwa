@@ -522,7 +522,8 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried,
 - [ ] **Step 4: Run the new suite to verify it passes**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-swap-carry.test.ts` (`timeout: 600000`)
-Expected: PASS (16 cases)
+Expected: PASS (15 cases — the count of `it()` blocks in Step 1, which is the authority; never add a
+case to make a count match)
 
 - [ ] **Step 5: Run the gates**
 
