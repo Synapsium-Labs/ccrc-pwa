@@ -33,9 +33,17 @@ import { mkTmp } from './tmpHelpers.js';
  * happens to need. NOT with `deploy/accounts.default.json`, which is the
  * single-`claude` fresh-install roster this fixture is deliberately NOT (first
  * paragraph). An earlier version of this comment named `accounts.default.json`
- * here and so contradicted itself two paragraphs up; `label` is now the one
- * field that intentionally diverges from the migration roster, and only for
- * `claude2` — see the note on it below.
+ * here and so contradicted itself two paragraphs up; that correction also
+ * inverted the `label` claim it made, so here is the measured truth against
+ * `deploy/accounts.migration.json`: `label` DIVERGES from the migration
+ * roster for three of the five accounts — `claude`, `claude-corp` and
+ * `claude-dev0` all use their own id as the test label here, where
+ * production's real label is `team·max`, `team·shared` and `lab·dev0`
+ * respectively. It MATCHES for the other two, `claude2` (`alt·max`) and
+ * `gpt` (`gpt`). `claude2` is the one worth a second look — see the note on
+ * it below — not because it diverges, but for the opposite reason: it is the
+ * only entry here whose label is NOT its own id, and that is what lets it
+ * agree with production instead of by coincidence.
  *
  * ROOT, AND THE ONLY OTHER COPY IS DERIVED FROM IT.
  * `test/fixtures/ccdMirror.ts` DERIVES its ids, config dirs and home-able
