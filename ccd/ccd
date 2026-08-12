@@ -7074,7 +7074,13 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     st=$(_reg_get "$id" spawn)
     if [[ -n "$st" ]]; then
       at="${st%% *}"; rc="${st##* }"
-      if [[ "$at" =~ ^[0-9]+$ && "$at" -ge "$since" && "$rc" != 0 ]]; then
+      # `return` truncates its argument mod 256, so an unvalidated rc from a malformed stamp
+      # could come back as 0 (success) on a genuine failure — measured: "1000" returns 232, and
+      # anything ≡0 mod 256 would lie outright. Unreachable today (only `_spawn` writes this
+      # field, always as two fields in one `printf`), but the field is a file, not a type: accept
+      # the parsed rc only if it is a plausible one-to-three-digit exit code; otherwise the stamp
+      # is unusable and the loop keeps polling rather than trusting it.
+      if [[ "$at" =~ ^[0-9]+$ && "$at" -ge "$since" && "$rc" =~ ^[0-9]{1,3}$ && "$rc" -le 255 && "$rc" != 0 ]]; then
         echo "ccd: $id failed to start: spawn rc $rc (see $REG/$id.spawn)" >&2
         return "$rc"
       fi
@@ -7095,15 +7101,35 @@ cmd_start() {
   [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
   local id; id=$(_id "$wrapper" "$project")
-  if _alive "$id"; then echo "already running: $id (find on claude.ai by name: $id)"; return 0; fi
+  if _alive "$id"; then
+    # M5's shape, reachable from a keyboard: a live pane whose unit was never enabled, or was
+    # disabled without `--now` some other way. A bare `ccd start` staying a pure no-op here is
+    # correct — a fresh spawn is not what an alive session needs — but `cmd_enable` aliases
+    # straight through this branch, and its whole contract is "make this boot-persistent"; review
+    # found it printing `enabled boot-persistence for <id>` here while issuing zero systemctl
+    # calls. Reconcile unconditionally: idempotent, no `--now` (the same line cmd_supervise's own
+    # self-heal uses), and never reached from the fresh-start branch below, which already ran
+    # `enable --now` moments ago — so this never duplicates that call.
+    if _have_systemctl; then
+      systemctl --user enable "claude-session@$id" 2>/dev/null \
+        || echo "ccd: warn: could not enable boot-persistence for $id" >&2
+    fi
+    echo "already running: $id (find on claude.ai by name: $id)"; return 0
+  fi
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
   _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
-    _supervised_start "$id" || return $?
-    # No `($mode)` and no `started` write here: neither is this process's to know. The spawn
-    # happened inside the unit, and the in-unit cmd_ensure below is what recorded both.
+    local rc; _supervised_start "$id"; rc=$?
+    # `started` stays unconditional here too (Task 4's own invariant, restated below): a
+    # supervised start that never even reaches the in-unit cmd_ensure — the crash-looped FAILED
+    # unit this task's own StartLimitBurst is designed to produce, or `_supervised_start`'s own
+    # 30s timeout with no spawn stamp yet — must still classify `orphan` once a later task reads
+    # this field, not `never-started`. No `($mode)` in the success line: that IS the in-unit
+    # cmd_ensure's to know, not this process's.
+    _reg_set "$id" started 1
+    [[ "$rc" -eq 0 ]] || return "$rc"
     echo "started $id — discover on claude.ai by name: $id"
     return 0
   fi
@@ -7129,7 +7155,11 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
   # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
   # and correctly takes the supervised branch — which is why the guard is not INVOCATION_ID.
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
-    _supervised_start "$id" || return $?
+    local rc; _supervised_start "$id"; rc=$?
+    # `started` stays unconditional (Task 4's invariant, ccd:7118) on this path too — see cmd_start's
+    # matching comment for why the in-unit cmd_ensure setting it is not enough on its own.
+    _reg_set "$id" started 1
+    [[ "$rc" -eq 0 ]] || return "$rc"
     echo "ensured $id"
     return 0
   fi

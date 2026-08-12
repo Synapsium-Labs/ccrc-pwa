@@ -265,7 +265,14 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // ("belong to [Unit], not [Service]"), and that mention precedes the real
     // header — `indexOf('[Service]')` would find the comment instead and slice
     // the StartLimit lines themselves into the region under test.
-    const serviceSection = unit.slice(unit.search(/^\[Service\]/m));
+    const serviceIdx = unit.search(/^\[Service\]/m);
+    // `.search()` returns -1 when the header is missing, and `.slice(-1)` would
+    // then take the FINAL CHARACTER of the file — the "no StartLimit in
+    // [Service]" assertion below would pass vacuously on a unit with no
+    // [Service] section at all, which is the same trap the indexOf bug above
+    // was. Guard it explicitly rather than let a negative index slice quietly.
+    expect(serviceIdx, 'no [Service] section header found in the unit file').toBeGreaterThan(-1);
+    const serviceSection = unit.slice(serviceIdx);
     expect(/^StartLimit/m.test(serviceSection),
       'a StartLimit key sits in [Service], where systemd 255 ignores it').toBe(false);
     // And the limit must be reachable at THIS unit's restart cadence or it is

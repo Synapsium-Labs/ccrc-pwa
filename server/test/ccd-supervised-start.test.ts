@@ -127,6 +127,51 @@ describe('stop then start leaves the unit ENABLED', () => {
   });
 });
 
+describe('cmd_enable reconciles a session that is already alive', () => {
+  it('does not claim boot-persistence it never created — M5\'s shape, from the keyboard', () => {
+    // Review finding, CRITICAL: cmd_start's already-alive branch returns before
+    // it ever reaches _supervised_start, so cmd_enable on a LIVE pane with no
+    // unit issued ZERO systemctl calls while still printing "enabled
+    // boot-persistence for <id>" and returning 0 — a false success line, the
+    // exact M6 family this plan exists to kill, and it lands precisely on the
+    // row this task exists to fix: a live pane, no unit, no supervisor, no
+    // self-heal (§3.2's self-heal only runs from INSIDE a unit that is already
+    // running). `ccd enable` is the last remedy for that row; it must actually
+    // apply one.
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_enable claude2 demo`);
+    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@claude2-demo']);
+    expect(out).toContain('enabled boot-persistence for claude2-demo');
+  });
+
+  it('a bare ccd start on the same row reconciles it too — the fix lives in the shared alive branch cmd_enable aliases through', () => {
+    // cmd_enable IS cmd_start plus one echo (§3.1), so the reconcile line lives
+    // in cmd_start's already-alive branch, not duplicated in cmd_enable. A
+    // plain `ccd start` benefits identically — self-healing an M5 row does not
+    // require remembering to type `enable` — and the call is a harmless,
+    // idempotent no-op the next time either verb runs.
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_start claude2 demo`);
+    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@claude2-demo']);
+    expect(out).toContain('already running: claude2-demo');
+  });
+
+  it('never duplicates the call a fresh start already made — one enable, whichever verb triggered it', () => {
+    // The counterpart to the pre-existing "one enable, not a second act" test:
+    // the alive-branch reconcile line must not ALSO fire on the fresh-start
+    // path, which already ran `enable --now` inside `_supervised_start`
+    // moments earlier. Not alive at the start of this call, so it takes the
+    // fresh-start branch, never the alive one.
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    const out = h.sh(`${UNIT} cmd_start claude2 demo`);
+    expect(sysCalls()).toEqual([
+      'systemctl --user reset-failed claude-session@claude2-demo',
+      'systemctl --user enable --now claude-session@claude2-demo',
+    ]);
+    expect(out).toContain('started claude2-demo');
+  });
+});
+
 describe('the recursion guard is an in-process variable', () => {
   it('an ensure INSIDE the unit spawns directly and issues no systemctl at all', () => {
     // If ensure re-entered `systemctl start` on its own unit, the supervisor
@@ -193,6 +238,54 @@ describe('the start waits on observables', () => {
     const attachAt = calls.indexOf('tmux attach -t cc-claude2-demo');
     expect(enableAt).toBeGreaterThan(-1);
     expect(attachAt).toBeGreaterThan(enableAt);
+  });
+
+  it('writes `started` even when the supervised start fails — the row still classifies orphan, not never-started', () => {
+    // Review finding, IMPORTANT: Task 4's invariant ("started stays
+    // unconditional... a spawn that failed is still a row that was started")
+    // lives on the in-unit cmd_ensure branch, which a crash-looped FAILED
+    // unit — exactly the shape this task's own StartLimitBurst is designed to
+    // produce — may never reach even once from THIS process's point of view.
+    // The outer cmd_ensure/cmd_start must uphold the same invariant on its
+    // own, not depend on an inner process it does not wait for completing a
+    // write. Same substrate as "reports the unit's own verdict" above.
+    seed('myid');
+    expect(h.reg('myid', 'started')).toBeNull();
+    shFail(`sleep() { :; };
+      systemctl() {
+        echo "systemctl $*" >> "$HOME/ccd-calls"
+        case "$*" in "--user enable --now "*) echo "$(date +%s) 3" > "$REG/myid.spawn" ;; esac
+        return 0
+      };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+      cmd_ensure myid`);
+    expect(h.reg('myid', 'started')).toBe('1');
+  });
+
+  it('writes `started` on the bound-timeout failure too, not only on a reported spawn rc', () => {
+    // The other exit from _supervised_start's wait loop — no pane, no fresh
+    // spawn stamp at all within the window — must uphold the same invariant.
+    seed('myid');
+    expect(h.reg('myid', 'started')).toBeNull();
+    shFail(`${NO_PANE} SUPERVISED_START_WAIT=1; cmd_ensure myid`);
+    expect(h.reg('myid', 'started')).toBe('1');
+  });
+
+  it('a malformed spawn-rc field is not trusted as a return code', () => {
+    // Review finding, MINOR: `return` truncates its argument mod 256, so an
+    // unvalidated rc from a corrupted stamp could come back 0 (success) on a
+    // real failure — measured, "1000" truncates to 232, and anything ≡0 mod
+    // 256 would lie outright. Unreachable in production (only `_spawn` writes
+    // this field, always two fields in one `printf`) but defended anyway: an
+    // out-of-range rc must be treated as an unusable stamp, so the call falls
+    // through to the ordinary "no pane appeared" timeout instead of returning
+    // (or worse, silently succeeding on) the bogus value.
+    seed('myid');
+    h.sh(`_reg_set myid spawn "$(date +%s) 1000"`);
+    const r = shFail(`${NO_PANE} SUPERVISED_START_WAIT=1; cmd_ensure myid`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('no pane appeared within 1s');
+    expect(r.stderr).not.toContain('spawn rc');
   });
 });
 
