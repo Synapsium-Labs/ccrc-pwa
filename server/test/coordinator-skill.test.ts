@@ -279,6 +279,52 @@ describe('the coordinator skill: linkage', () => {
       'the worked example must be exactly what renderEnvelope produces').toContain(rendered);
   });
 
+  it('documents items on the dispatch body', () => {
+    // Build 4, spec §3.1. The brief is prose the server never reads; the
+    // items are the machine-readable half of the same wave plan, and the
+    // skill must carry the pairing or a coordinator writes one without the
+    // other.
+    const lifecycle = refs('wave-lifecycle.md');
+    expect(skill).toContain('"items"');
+    expect(lifecycle).toContain('"items"');
+    for (const fact of ['32', '200']) {
+      expect(lifecycle, `the ${fact} cap is not stated`).toContain(fact);
+    }
+    // The two halves must be said to agree — a brief that names five units of
+    // work and an `items` array with three is a ledger that lies on the board.
+    expect(`${skill}\n${lifecycle}`).toMatch(/brief[\s\S]{0,400}?the server never reads/i);
+  });
+
+  it('names POST /api/runs/:id/items after the re-measurement, never before', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const settle = lifecycle.indexOf('POST /api/runs/:id/items');
+    const advance = lifecycle.indexOf('POST /api/runs/:id/advance');
+    expect(settle, 'the settle call is not documented at all').toBeGreaterThan(-1);
+    expect(advance).toBeGreaterThan(-1);
+    // ORDER is the contract: the settle is what the coordinator does once the
+    // server has already believed the wave, never a step that could precede
+    // it. Documented in §4, after the advance call it depends on.
+    expect(settle).toBeGreaterThan(advance);
+    expect(lifecycle).toMatch(/after[\s\S]{0,200}?advance[\s\S]{0,200}?(answers?|answered)\s+`?ok/i);
+    // Both refusals carry their status and their instruction.
+    expect(lifecycle).toContain('unknown-item');
+    expect(lifecycle).toContain('item-terminal');
+    expect(lifecycle).toMatch(/tally that moved backwards is a lie on the console/i);
+  });
+
+  it('still forbids the coordinator from settling on a worker\'s claim alone', () => {
+    // The settle route is a WRITE authorised by the server's own
+    // re-measurement — not by the wave-done mail that prompted it. Clause 6
+    // is the sentence that says so and it must survive this addition
+    // verbatim; and nothing in the corpus may tell a coordinator to settle
+    // straight off a claim.
+    expect(skill).toContain('A `wave-done` is a claim, not a fact.');
+    const lifecycle = refs('wave-lifecycle.md');
+    expect(lifecycle).toMatch(/never (?:off|on) (?:the|a) (?:worker'?s? )?claim(?:\s+alone)?/i);
+    // And the ledger stays fixed at dispatch: no route adds an item later.
+    expect(lifecycle).toMatch(/fixed at dispatch/i);
+  });
+
   it('ships the ledger template byte-identical to the repo’s', () => {
     // D-7: the skill runs against projects that have no docs/superpowers, so it
     // must carry the template. Two copies exist; this is the mechanism that

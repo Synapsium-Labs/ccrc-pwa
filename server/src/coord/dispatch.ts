@@ -10,7 +10,10 @@ import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReason, queueSystemMail } from './rundefs.js';
-import { MAIL_BODY_MAX_BYTES, type RunRefuseCode, type RunState } from '../../../shared/api.js';
+import {
+  MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX,
+  type RunRefuseCode, type RunState,
+} from '../../../shared/api.js';
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -65,7 +68,9 @@ export type DispatchOutcome =
  * in the same order the route used to (D-46: the transition guard runs
  * BEFORE the body is even looked at).
  */
-export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unknown): Promise<DispatchOutcome> {
+export async function dispatchRun(
+  deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
+): Promise<DispatchOutcome> {
   const coord = deps.coord;
   const run = coord.run(id);
   if (!run) return { ok: false, kind: 'unknown-run' };
@@ -97,6 +102,32 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
   if (Buffer.byteLength(brief, 'utf8') > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES };
   }
+
+  // Spec §3.1. The BRIEF stays opaque prose and is parsed by nothing
+  // (build7:216-217, :246-248) — the server never learns to read a wave plan
+  // out of English. The coordinator, which wrote the brief, declares the item
+  // titles beside it, as a structured field. `undefined` and `[]` are the same
+  // legal answer: this run declared no ledger, and its tally renders an em
+  // dash rather than 0/0 (spec §3.3).
+  //
+  // Validated HERE, beside the brief's own checks and BEFORE the pause check:
+  // a malformed body is the cheapest refusal there is and D-46's ordering rule
+  // puts it first — nothing is listed, counted, spawned or held for a request
+  // that was never going to be accepted. BYTES, not characters, for
+  // `WORK_ITEM_TITLE_MAX`'s own reason (`shared/api.ts`) and the brief cap's
+  // just above.
+  if (items !== undefined) {
+    if (!Array.isArray(items) || items.length > WORK_ITEM_MAX) {
+      return { ok: false, kind: 'bad-request' };
+    }
+    for (const t of items) {
+      if (typeof t !== 'string' || t.trim() === '' ||
+          Buffer.byteLength(t, 'utf8') > WORK_ITEM_TITLE_MAX) {
+        return { ok: false, kind: 'bad-request' };
+      }
+    }
+  }
+  const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
 
   // 1: PAUSE / KILL-SWITCH FIRST, before anything is counted or spawned. A
   // directory we cannot list is a pause we cannot rule out — fail-shut, the
@@ -275,18 +306,21 @@ export async function dispatchRun(deps: DispatchRunDeps, id: number, brief: unkn
   const holdRes = await deps.runCcd(holdArgv);
   if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
 
-  // 6: one call each, so the `run_events` row happens and is independently
-  // attributable from the dispatch write (`markDispatched`'s own
-  // docstring). A `/clear` refusal is now RECORDED (deviation D-47, found
-  // in Task 9 review) — D-1's own amended text promises "the refusal
-  // recorded" and nothing did: `run_events.detail` carries the typed
-  // `sendPrompt` error code (`dialog-open`/`draft-present`/`verify-failed`/
-  // `enter-ignored`/…) an operator (or Task 11's own record) can otherwise
-  // only guess at.
-  coord.markDispatched(id, sessionId, workspace, branch, resumed);
-  if (clearedAt !== null) coord.setClearedAt(id, clearedAt);
-  const adv = coord.advance(id, 'dispatched', 'coordinator',
-    clearError !== null ? `clear-refused:${clearError}` : undefined);
+  // 6: ONE call, and one transaction (D-B4-4). The dispatch write, the
+  // `clearedAt` stamp, the transition and the declared ledger's INSERTs used
+  // to be three independent `tx()`s plus (as of spec §3.1) a fourth batch of
+  // statements after them — the same split `CoordStore.closeRun` was created
+  // to close, reached a second time. `CoordStore.dispatchRun` owns the commit;
+  // the `run_events` row still happens inside it and is still independently
+  // attributable (`markDispatched`'s own docstring). A `/clear` refusal is
+  // RECORDED (deviation D-47, found in Task 9 review) — D-1's own amended
+  // text promises "the refusal recorded" and nothing did: `run_events.detail`
+  // carries the typed `sendPrompt` error code (`dialog-open`/`draft-present`/
+  // `verify-failed`/`enter-ignored`/…) an operator (or Task 11's own record)
+  // can otherwise only guess at.
+  const adv = coord.dispatchRun({ runId: id, sessionId, workspace, branch, resumed, clearedAt,
+    items: itemTitles,
+    detail: clearError !== null ? `clear-refused:${clearError}` : undefined });
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never

@@ -51,6 +51,20 @@ export const runState = (run: { state: RunState }): RunState =>
 export const runItems = (run: { items?: RunItemTally }): RunItemTally =>
   run.items ?? { done: 0, total: 0 };
 
+/** The tally's WORDS (spec §3.3, D-B4-15). `total === 0` renders an em dash,
+ *  never `0/0`: a wave that declared no ledger must not read as a wave that
+ *  has done nothing. This is `summarize()`'s own rule — "drop zero-count
+ *  clauses rather than print `0 X`" (`MailStrip.tsx:32-41`) — applied to the
+ *  one place it was not, and it lives HERE rather than at the single call
+ *  site because a rule stated at its only caller is a rule with no home: the
+ *  next surface to render a tally would restate it or forget it.
+ *
+ *  `done` is deliberately NOT part of the condition: `0/7` is a declared
+ *  ledger nothing has settled yet, which is a real and useful fact, and only
+ *  a ledger that does not exist gets the dash. */
+export const itemTallyLabel = (items: RunItemTally): string =>
+  items.total === 0 ? '—' : `${items.done}/${items.total}`;
+
 /** Tolerant read of `RunSummary.closedAt`. `undefined` degrades to `null`
  *  (never-finished, i.e. active) rather than surviving as a value that is
  *  simultaneously `!== null` (so the row lands in `finished`) and `!== null`
