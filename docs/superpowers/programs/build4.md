@@ -201,6 +201,77 @@ THIS VERY WAVE. The old close route demands a fingerprint even for an abandon, a
 `final:true` would risk the ordinary sweep archiving a box worth keeping. The program is
 being blocked by exactly the feature it is building — the purest dogfood signal in the run.
 
+## Wave 2 CLOSED done 2026-08-12 — 8/8, handoff 4f539b35, merged as PR #44 (main c8fd87f)
+
+The first wave in this program to complete the full lifecycle: dispatch -> wave-done ->
+review -> fix -> merge -> deploy -> advance -> settle -> close. The run board reads
+`run 3: wave 2/4 done items=8/8 handoff=4f539b35`, and wave 1's work-item writer counted a
+real wave for the first time.
+
+Reviewed by a 6-lens adversarial workflow (whitelist security, the ungated routes, the
+abandon arm, the registry/wire frame, plan conformance, do-the-tests-hold), each finding
+handed to an independent agent prompted to REFUTE it. 7 filed, 5 refuted, 2 confirmed, and
+ZERO runtime or security defects — the whitelist grant + `REQUIRED_VERB_FLAG` enrolment, both
+ungated routes, the abandon arm's four negative pins and the coord frame all survived.
+
+The two confirmed were both test-strength/honesty, and the major one is worth remembering:
+the pin that was supposed to keep the D-B4-9 ungated-route ARGUMENT load-bearing sliced a
+2000-BYTE window backwards from the route, which overshot the docstring by 437 bytes into the
+PREVIOUS route's body — so both its assertions were satisfied by unrelated code and deleting
+the whole pause docstring left the suite GREEN. The same disease the worker had already caught
+and fixed once in its own mutation table. Fixed by anchoring the window to the route's own
+text (previous handler's `});` .. this route's registration) plus a `prose()` normaliser, so a
+sentence is not findable-or-not depending on where the 80th column fell. VERIFIED BY THE
+COORDINATOR, not accepted on report: mutant applied -> RED 2 failed | 10 passed (the exact two
+named pins), restored -> GREEN 12 passed, tree clean, tip unmoved.
+
+The worker also reported a METHOD DEFECT in its own sweep, unprompted: its first mutant run
+reverted with `git checkout -- <file>` while the fixes were still UNCOMMITTED, silently
+discarding them, so every later mutant ran against the pre-fix tree and reported "killed" for
+pins that were not. It caught this by measuring the docstring slices directly rather than
+trusting pass/fail, committed first, and re-ran the whole set clean. General rule worth
+keeping: a `git checkout`-based mutation sweep is only valid when the tree it reverts TO is
+the tree you mean to test.
+
+LIVE VERIFICATION of the shipped capability, agent-first (ccd + whitelist to the fleet host,
+then the server; both at c8fd87f):
+- `ccd caps` on the fleet host lists `coord-pause`.
+- `POST /api/coord/pause {paused:true}` UNAUTHENTICATED -> `{ok:true,requested:true}` and the
+  marker appears at `$REG/coordinator-paused`. The whole path — ungated route -> agent WS ->
+  whitelisted `ccd coord-pause --state on` -> file on the box — works.
+- `{state:"on"}` (wrong shape) -> 400 `bad-request`, marker untouched: fail-shut.
+- THE KILL-SWITCH BITES: dispatch while paused -> `{ok:false,refused:"paused"}` and NO
+  workspace was created — it refuses at step 1, ahead of caps and ahead of any fleet act.
+- Unpause clears the marker; a second unpause is idempotent.
+- `POST /api/runs/2/abandon` (no body — D-B4-7) -> `{ok:true,id:2,state:"failed"}`, clearing
+  the run-2 wedge WITH THE ROUTE THIS WAVE SHIPPED. The program was blocked by a missing
+  feature, built it, and used it to unblock itself.
+
+## F9 — THE HOLD IS PER-SESSION, SO ONE RUN'S ABANDON CAN UNPROTECT ANOTHER RUN'S WORKSPACE
+
+Found closing wave 2. Sequence: PR #44 merged 20:03 -> run 2 (the stale duplicate wave-2 row,
+same session) abandoned ~20:09, whose `ws-release` removed the hold -> the ordinary sweep saw
+MERGED + UNHELD and archived `amber-harbor` at 20:10:36, reason `merged:#44` -> run 3's close
+then failed its fleet act: "ccrc-pwa-amber-harbor is archived — restore first: a hold cannot
+protect a pane that is already gone".
+
+The hold is keyed on the SESSION, not the run, and two runs (2 and 3) shared one session. So
+abandoning the dead one released the protection the LIVE one still needed, and the archive
+sweep took the workspace out from under an open run. Nothing was lost — the work was already
+merged to main and the worktree is still on disk — but the bookkeeping could not complete by
+its intended path.
+
+D-48 held exactly as designed: the fleet act runs AHEAD of the transition commit, so the
+failed `ws-hold` left run 3 retryable in `merging` rather than wedged terminal. The close then
+succeeded with `final:true` (release rather than re-hold), which is the honest choice once the
+workspace is archived and will not carry wave 3.
+
+Fixes to consider (Build 5, artifact-lifecycle / task #34): refcount the hold across open runs
+for a session, or refuse to release while another non-terminal run names the same session; and
+make the archive sweep skip a workspace that any open run still points at. Related: the
+close route's ws-hold failure mode should say "another run still holds this" rather than
+present as an unrelated archive error.
+
 ## Carried constraints
 
 - The wave-1 run's own tally reads `—` (no items exist until wave 1 ships the writer and a
