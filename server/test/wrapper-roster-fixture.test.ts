@@ -81,21 +81,29 @@
 // from `DEFAULT_TEST_ROSTER`) and the round-trip's two fixture rosters — is
 // a roster THIS TEST FILE wrote, never the one a real box boots with. A
 // production `~/.ccrc/accounts.json` with a typo'd id, a wrong
-// `configDirSuffix`, or a missing account is invisible to every test here,
-// because nothing here reads one. What a green run DOES still prove is that
-// the MACHINERY agrees with itself for whatever roster it is handed —
-// `generateAccountsSh`, `configDirFor`, `idHomeWrapper`, `_is_valid_wrapper`,
-// `_ccrc_cfg_dir` and `_ccrc_id_wrapper` all computing the same answer for
-// the same input, including on a roster built to expose the one ordering bug
-// this codebase has already shipped by hand once (see the round-trip
-// describe below). That is real coverage — it is what stops a future edit to
-// any one of those six from silently disagreeing with the other five — but
-// it is coverage of the CODE, not of the DATA. Task 10 puts a real
-// `deploy/accounts.default.json` in the repo; the day a test here reads THAT
-// file instead of a fixture this file wrote, the guarantee gets its
-// production-drift-detecting strength back. Until then: a red run here means
-// the roster machinery disagrees with itself; a green one is silent on
-// whether the roster ccrc actually ships is even valid.
+// `configDirSuffix`, or a missing account is invisible to every describe ABOVE
+// the round-trip, because none of them reads one. What a green run there DOES
+// still prove is that the MACHINERY agrees with itself for whatever roster it
+// is handed — `generateAccountsSh`, `configDirFor`, `idHomeWrapper`,
+// `_is_valid_wrapper`, `_ccrc_cfg_dir` and `_ccrc_id_wrapper` all computing
+// the same answer for the same input, including on a roster built to expose
+// the one ordering bug this codebase has already shipped by hand once (see
+// the round-trip describe below). That is real coverage — it is what stops a
+// future edit to any one of those six from silently disagreeing with the
+// other five — but it is coverage of the CODE, not of the DATA.
+//
+// THE ROUND-TRIP IS NOW THE EXCEPTION, and this paragraph used to say so as a
+// promise rather than a fact ("the day a test here reads THAT file instead of
+// a fixture this file wrote, the guarantee gets its production-drift-detecting
+// strength back"). Task 10 put both real rosters in the repo and the
+// round-trip below now reads them OFF DISK — `deploy/accounts.default.json`,
+// what a fresh install ships, and `deploy/accounts.migration.json`, this
+// fleet's five real accounts byte for byte, which is what every box on it gets
+// seeded with. A typo in either one is now a red run here, not a crash-looping
+// deploy. The adversarial prefix-collision roster stays alongside them: the
+// shipped rosters are what ccrc DEPLOYS, the adversarial one is what actually
+// exercises the length-descending arm order, and neither substitutes for the
+// other.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -103,7 +111,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD_MIRROR, CCD_MIRROR_NAMES } from './fixtures/ccdMirror.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
-import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
+import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { loadConfig, configDirFor } from '../src/config.js';
 import { idHomeWrapper } from '../src/fleet.js';
@@ -276,11 +284,16 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
 // below needs `CCD_MIRROR.label`, a concept with no TypeScript twin to
 // cross-check against. Three different properties; none subsumes another.
 //
-// Two rosters, not one, and the second is the point. `DEFAULT_TEST_ROSTER`
-// is production-shaped (today's five real accounts), and no two of THOSE
-// ids share a prefix — which means a `case` statement with the WRONG arm
-// order (alphabetical, insertion order, anything but length-descending)
-// still answers every probe correctly on this roster, by accident.
+// Three rosters, and the last is the point. The first two are the rosters
+// this repo SHIPS, read straight off disk (Task 10) rather than transcribed
+// into a fixture: `deploy/accounts.default.json` is what a fresh install gets,
+// `deploy/accounts.migration.json` is this fleet's five real accounts, and
+// `deploy/deploy.sh` seeds a box's `~/.ccrc/accounts.json` from one of them.
+// Reading them here is what makes a typo in either a red suite instead of a
+// crash-looping service — but neither PROVES the arm ordering, because no two
+// ids in either roster share a prefix, so a `case` statement with the WRONG
+// arm order (alphabetical, insertion order, anything but length-descending)
+// still answers every probe correctly on both, by accident.
 // `PREFIX_COLLISION_ROSTER`, below, is built to fail that accident: `a`,
 // `a-b` and `a-b-c` are each a strict textual prefix of the next, so an arm
 // placed above a longer one that should have sorted first (bash's `case`
@@ -314,9 +327,18 @@ const PREFIX_COLLISION_ROSTER = {
   ],
 };
 
+/** A roster this repo actually ships, read off disk. Deliberately NOT a
+ *  transcription: the whole value of these two cases is that the bytes under
+ *  test are the bytes `deploy/deploy.sh` seeds a box with. */
+const shippedRoster = (name: string): unknown =>
+  JSON.parse(readFileSync(path.join(ccrcRoot, 'deploy', name), 'utf8')) as unknown;
+
 describe('accounts.sh round-trip: the generated bash agrees with the server TypeScript, for real rosters', () => {
   it.each([
-    ["production-shaped (today's five real accounts)", DEFAULT_TEST_ROSTER],
+    ['the shipped fresh-install default (deploy/accounts.default.json)',
+      shippedRoster('accounts.default.json')],
+    ["the shipped migration roster (deploy/accounts.migration.json) — today's five real accounts",
+      shippedRoster('accounts.migration.json')],
     ['adversarial (ids are strict prefixes of each other)', PREFIX_COLLISION_ROSTER],
   ] as const)('%s: _ccrc_cfg_dir and _ccrc_id_wrapper match configDirFor and idHomeWrapper for every account',
     (_label, spec) => {

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
+// The path to the ccd script is spelled in exactly ONE file in this tree, and
+// `single-definition.test.ts` enforces it by scanning for the shapes a copy
+// takes — including a `path.join` whose last two arguments both name the
+// script. Joining that path here scored a hit as a second copy; so, on the
+// next run, did this comment while trying to explain it, which is why it now
+// describes the shape instead of writing it.
+import { CCD } from './ccdWsHelpers.js';
 
 const MARKER_RE = /^# ccrc:generated 1 sha256=([0-9a-f]{64})$/;
 
@@ -108,5 +116,38 @@ describe('provenance marker', () => {
     const marked = markGenerated(shebangOnly);
     expect(marked.split('\n')[0]).toBe('#!/usr/bin/env bash');
     expect(verifyMarker(marked)).toBe('ccrc-unmodified');
+  });
+});
+
+// Task 10 stamped the COMMITTED `ccd/ccd` with the marker, which is what
+// lets stage 2b's installer tell ccrc's own shipped ccd apart from one an
+// operator has hand-edited on a box. That claim has a maintenance cost and
+// no natural enforcement: `ccd` is edited constantly, every edit invalidates
+// the hash, and a stale marker does not fail quietly — it makes ccrc's own,
+// untouched, freshly-deployed ccd report `ccrc-edited` on every box forever,
+// which is precisely the verdict that will tell 2b's installer NOT to
+// replace it. So the re-stamp is a gate, not a convention.
+//
+//   Re-stamp after editing ccd:
+//     node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; \
+//       const { markGenerated } = await import('./shared/mark.mjs'); \
+//       writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"
+//
+// `markGenerated` is idempotent (it strips any existing marker before
+// hashing), so that command is safe to run whether or not the file is
+// already stamped.
+describe('the committed ccd carries a marker that matches its own bytes', () => {
+  const ccd = readFileSync(CCD, 'utf8');
+
+  it('keeps the shebang on line 1 and the marker on line 2 — ccd is executed directly', () => {
+    const lines = ccd.split('\n');
+    expect(lines[0]).toBe('#!/usr/bin/env bash');
+    expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
+  });
+
+  it('verifies as ccrc-unmodified — re-stamp ccd/ccd after editing it (see the note above)', () => {
+    expect(verifyMarker(ccd),
+      'ccd/ccd was edited without re-stamping its provenance marker; run the re-stamp '
+      + 'command in the comment above this describe').toBe('ccrc-unmodified');
   });
 });

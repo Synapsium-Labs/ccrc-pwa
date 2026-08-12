@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ccrc:generated 1 sha256=49024d598e6c2a2fc2a76b96306054b480b690bbe17b94d557097ba7e7a0a644
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -84,7 +85,8 @@ die() { echo "ccd: $*" >&2; exit 1; }
 # silently running a roster that is not the box's: sessions placed on wrappers
 # that are not installed, `_cfg_dir` answering with a config dir that holds no
 # transcript — the shape of failure that once cost one account six sessions of
-# chat. `set -uo pipefail` (line 4) carries no `-e`, so neither line below
+# chat. `set -uo pipefail` (line 5, under the shebang and the provenance
+# marker) carries no `-e`, so neither line below
 # aborts on its own; both `|| die`s are what make it loud, and both are
 # load-bearing: `-r` catches absent-or-unreadable before `source` says anything,
 # and the second catches a file broken badly enough that `source` returns

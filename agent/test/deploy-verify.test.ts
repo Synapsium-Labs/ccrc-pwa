@@ -286,9 +286,15 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // spellings are banned — `"$BOX":dest` (the old code's) and `"$BOX:dest"`
     // (install_atomic's own, which the first regex draft missed: a call site
     // "fixed" by switching quote style would have sailed through).
+    // `.ccrc/accounts.sh` joins the set in stage 2a's Task 10. It is not a
+    // script anyone execs, but it IS sourced by every single ccd invocation
+    // on the box, which is the same hazard wearing a different hat: a torn
+    // half-written roster is a `source` that fails, and ccd's own `|| die`
+    // then turns every live supervisor into a failed unit at once.
     for (const dest of [
       '.local/bin/ccd', '.cc-sessions/notify.sh',
       '.cc-sessions/session-hook.sh', '.cc-sessions/install-session-hooks.sh',
+      '.ccrc/accounts.sh',
     ]) {
       const escaped = dest.replace(/[./]/g, '\\$&');
       const direct = new RegExp(
@@ -301,6 +307,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'install_atomic deploy/notify.sh .cc-sessions/notify.sh',
       'install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh',
       'install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh',
+      'install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh',
     ]) {
       expect(deploySh, `missing atomic install call: ${call}`).toContain(call);
     }
@@ -668,6 +675,96 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .toBeGreaterThan(serverBuildAt);
     expect(serverStamp, 'the stamp must run BEFORE the restart that makes it live')
       .toBeLessThan(serverRestartAt);
+  });
+
+  it('~/.ccrc/accounts.sh lands BEFORE ccd — every ccd invocation in the gap would die', () => {
+    // Stage 2a, Task 10. `ccd` no longer carries the account roster: it
+    // SOURCES `~/.ccrc/accounts.sh` and `|| die`s when that file is absent
+    // (deliberately — a ccd silently running a roster that is not the box's
+    // is what cost one account six sessions of chat). Neither box has the
+    // file yet, so the ordering below is not a tidiness preference: ship the
+    // new ccd first and every ccd invocation between the two installs dies —
+    // including the ones the supervisor sweep at the bottom of this branch
+    // makes, which restarts every live claude-session@ supervisor on the box.
+    //
+    // ANCHORED ON THE `install_atomic` INVOCATIONS THEMSELVES, never on a
+    // helper name: the measured trap right next door is that
+    // `deploySh.indexOf('stamp_build', agentBranchStart)` resolves to a
+    // COMMENT mentioning the helper rather than to the call, so a name-based
+    // probe here would happily "prove" an ordering that the shell never runs.
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const shIdx = agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644');
+    const ccdIdx = agentBranch.indexOf('install_atomic ccd/ccd .local/bin/ccd 755');
+    expect(shIdx, 'deploy.sh never installs ~/.ccrc/accounts.sh').toBeGreaterThan(-1);
+    expect(ccdIdx, 'the agent branch no longer installs ccd').toBeGreaterThan(-1);
+    expect(shIdx, 'accounts.sh must be installed before ccd').toBeLessThan(ccdIdx);
+
+    // `install_atomic` does NOT create its destination directory, and the
+    // only unconditional `mkdir -p ~/.ccrc` on the agent path lives inside
+    // `stamp_build` — which runs AFTER ccd. Without an explicit one the very
+    // first deploy to a box scp's into a directory that does not exist.
+    const mkdirIdx = agentBranch.lastIndexOf("'mkdir -p ~/.ccrc'", shIdx);
+    expect(mkdirIdx, 'nothing creates ~/.ccrc before the roster is installed into it')
+      .toBeGreaterThan(-1);
+
+    // And the roster is GENERATED, from the roster the box will boot with,
+    // before anything is replaced — not read out of a file the repo assumes
+    // the box already has.
+    const genIdx = agentBranch.indexOf('node deploy/gen-accounts.mjs');
+    expect(genIdx, 'the agent branch never generates accounts.sh').toBeGreaterThan(-1);
+    expect(genIdx, 'generation must precede the install it produces the file for')
+      .toBeLessThan(shIdx);
+  });
+
+  it('the server branch refuses a roster-less box BEFORE it touches anything — loadConfig will not boot without one', () => {
+    // The server's half of the same task, and it has to be PRE-flight rather
+    // than a post-restart health check. `loadConfig` (server/src/config.ts)
+    // refuses to boot without `~/.ccrc/accounts.json`, and `ccrc.service` is
+    // `Restart=always` with `RestartSec=3` and no StartLimit — so a deploy
+    // that discovered the problem after the restart would already have
+    // replaced dist/ and stamped build.json, with no rollback, leaving the
+    // box mutated and crash-looping every three seconds. Modelled on (and
+    // asserted the same way as) the ccrc.env guard above.
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+    const guardAt = serverBranch.indexOf('[ -f "$ACCOUNTS_JSON" ]');
+    expect(guardAt, 'the server branch never checks for a roster at all').toBeGreaterThan(-1);
+    expect(serverBranch, 'the guard must fall back to checking the box for an already-provisioned roster')
+      .toContain('[ -f ~/.ccrc/accounts.json ]');
+    expect(serverBranch, 'a missing roster on both sides must abort the deploy with a clear message')
+      .toMatch(/deploy: FAILED[^\n]*accounts\.json/);
+
+    const buildAt = serverBranch.indexOf('(cd pwa && npm ci && npm run build)');
+    const rsyncAt = serverBranch.indexOf('rsync -az');
+    const backupMkdirAt = serverBranch.indexOf('mkdir -p ~/ccrc-backups/$TS');
+    expect(buildAt, 'the PWA build line was not found').toBeGreaterThan(-1);
+    expect(guardAt, 'the roster guard must run before the PWA build, not after').toBeLessThan(buildAt);
+    expect(guardAt, 'the roster guard must run before rsync --delete touches the box').toBeLessThan(rsyncAt);
+    expect(guardAt, 'the roster guard must run before the box is mutated at all')
+      .toBeLessThan(backupMkdirAt);
+
+    // BOTH boxes get the roster: in remote fleet mode the server serves the
+    // fleet host's account labels and hues out of its OWN local copy.
+    for (const [label, branch] of [
+      ['agent', deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'))],
+      ['server', serverBranch],
+    ] as const) {
+      expect(branch, `the ${label} branch never ships ~/.ccrc/accounts.json`).toContain('ship_roster');
+    }
+    // …create-if-missing, NEVER overwritten: accounts.json is user-owned
+    // config (design §5), so an operator's edit on the box has to survive
+    // every later deploy. The seeding scp must therefore sit behind a
+    // negated existence test rather than firing unconditionally.
+    const fn = /ship_roster\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no ship_roster() helper').toBeTruthy();
+    const body = fn![1]!;
+    expect(body, 'the roster seed must be guarded by a not-already-present test')
+      .toContain("if ! \"${SSH[@]}\" \"$BOX\" '[ -f ~/.ccrc/accounts.json ]'");
+    const testAt = body.indexOf('[ -f ~/.ccrc/accounts.json ]');
+    const scpAt = body.indexOf('"${SCP[@]}"');
+    expect(scpAt, 'ship_roster never copies anything').toBeGreaterThan(-1);
+    expect(scpAt, 'the seed copy must run only after the not-present test, never unconditionally')
+      .toBeGreaterThan(testAt);
   });
 
   it('the deploy proves the box now RUNS what it shipped — sha equality, not just 200 OK', () => {
