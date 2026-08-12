@@ -98,6 +98,23 @@ function idArray(ids) {
  * session id matching no known account still resolves to the upstream
  * account rather than to nothing.
  *
+ * THAT ORDERING IS THE WHOLE POINT OF EMITTING THIS FUNCTION, and it is worth
+ * recording what it cost when the arms were hand-written in `ccd` instead.
+ * Bash `case` takes the FIRST arm that matches, never the longest, so
+ * `claude-corp-*` and `claude-dev0-*` had to be kept above the shorter
+ * `claude-*` by hand. When `claude-dev0` arrived the hand-written comment
+ * beside those arms said "longest match wins" — which is false, and which
+ * would have invited a maintainer to sort the arms alphabetically and make
+ * `claude-dev0-*` dead code. The failure that follows is silent: every dev0
+ * id resolves to `claude`, so `_home_for` reports the wrong home and
+ * `_swap_target`'s "home recovered" branch permanently evacuates every dev0
+ * session, with no error printed anywhere. Emitting the arms in
+ * length-descending order makes that a property of this function rather than
+ * of the care taken by the last person to touch a `case` statement — and it
+ * is why `server/test/roster-generate.test.ts` asserts the BEHAVIOUR of the
+ * generated bash (a prefix-colliding roster of `a`, `a-b`, `a-b-c` resolving
+ * correctly) rather than the literal arm text.
+ *
  * @param {import('./roster.js').Roster} roster
  * @returns {string}
  */

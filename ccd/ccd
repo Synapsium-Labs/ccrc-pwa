@@ -11,13 +11,22 @@ WRAPPER_DIR="$HOME/.local/bin"
 # Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
 PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
 WORKTREES_ROOT="$HOME/worktrees"
-VALID_WRAPPERS=(claude claude2 claude-corp claude-dev0)   # canonical Anthropic accounts (home-able)
-# `gpt` is a 4th lane (ccgpt = Claude Code on the ChatGPT-sub Codex backend), OPT-IN only
-# since 2026-07-26: a session reaches it solely by having gpt as its HOME (`ccd prefer <id>
-# gpt`), never as general overflow — its 272k window and unofficial-client risk are not
-# things a project should inherit by accident. Instantly killable via the switch file below.
-# It has no Anthropic-style 5h/7d telemetry, so it reads as free until a 429 writes an
-# exclusion into cc-limits (see _auto_swap_check).
+# THE ACCOUNT ROSTER IS DATA, not a literal in this file: `~/.ccrc/accounts.sh`
+# (sourced below, beneath `die`) defines CCRC_ACCOUNTS — every account, in
+# roster declaration order — CCRC_HOME_ABLE (the subset a session may be PLACED
+# on) and CCRC_UPSTREAM. The four hand-kept copies that used to live here are
+# gone: VALID_WRAPPERS, the literal `gpt` appended inside _is_valid_wrapper, and
+# the `case` arms of _cfg_dir and _id_wrapper.
+#
+# An account that is NOT home-able is an OPT-IN lane, never general overflow
+# (user decision 2026-07-26, when "an account that is not home-able" meant `gpt`
+# — ccgpt, Claude Code on the ChatGPT-sub Codex backend — by name, which is why
+# so many rules below used to say `gpt` where they meant this): a session
+# reaches such a lane solely by having it as its HOME (`ccd prefer <id> gpt`),
+# because a 272k window and unofficial-client risk are not things a project
+# should inherit by accident. It also has no Anthropic-style 5h/7d telemetry, so
+# it reads as free until a 429 writes an exclusion into cc-limits (see
+# _auto_swap_check). Instantly killable via the switch file below.
 GPT_DISABLE_FILE="$HOME/.cc-sessions/gpt-disabled"   # touch to remove gpt from rotation instantly
 AUTOCOMPACT_DISABLE_FILE="$HOME/.cc-sessions/autocompact-disabled"  # touch to disable proactive /compact fleet-wide
 CLAUDE_AI_BASE="https://claude.ai/code"   # by-name discovery: pick the session whose name == the id
@@ -50,12 +59,53 @@ COMPACT_QUIET=60                # seconds a session must be idle before an auto-
 
 die() { echo "ccd: $*" >&2; exit 1; }
 
+# ── the account roster ──────────────────────────────────────────────────
+# Generated from ~/.ccrc/accounts.json (deploy/deploy.sh today, `ccrc install`
+# once that verb lands). Derived from HOME with NO env override, exactly as REG,
+# WRAPPER_DIR, PROJECTS_ROOT and WORKTREES_ROOT are: HOME is the single
+# isolation boundary the test harness sets, and an override here would let a
+# stray Environment= run a live box against somebody else's account list.
+#
+# Sourced HERE — after `die` (this file's only error exit) and before the first
+# function that reads the roster — rather than beside REG at the top: a `|| die`
+# above that definition would call a function that does not exist yet and print
+# `die: command not found` in place of the remedy.
+#
+# ABSENT IS FATAL, deliberately the OPPOSITE of `ccd version`'s answer for a
+# missing ~/.ccrc/build.json (which prints "unstamped" at exit 0 and dies only
+# on garbage). A missing build stamp costs a label. A missing roster would mean
+# silently running a roster that is not the box's: sessions placed on wrappers
+# that are not installed, `_cfg_dir` answering with a config dir that holds no
+# transcript — the shape of failure that once cost one account six sessions of
+# chat. `set -uo pipefail` (line 4) carries no `-e`, so neither line below
+# aborts on its own; both `|| die`s are what make it loud, and both are
+# load-bearing: `-r` catches absent-or-unreadable before `source` says anything,
+# and the second catches a file broken badly enough that `source` returns
+# non-zero — which without it would surface hundreds of lines later as an
+# unbound-variable error naming CCRC_ACCOUNTS.
+CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+[[ -r "$CCRC_ACCOUNTS_SH" ]] \
+  || die "no account roster at $CCRC_ACCOUNTS_SH — generate it from ~/.ccrc/accounts.json (deploy/deploy.sh, or \`ccrc install\`)"
+# The first `source` this file has ever carried, so there is no in-file
+# convention to copy. source=/dev/null is shellcheck's own idiom for a path it
+# cannot follow: this one is generated at deploy time and has no in-repo
+# counterpart to check against (shared/generate.mjs emits it).
+# shellcheck source=/dev/null
+source "$CCRC_ACCOUNTS_SH" \
+  || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
+
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
 # An account is a legal AUTOMATIC destination iff its wrapper exists and its
 # lane is enabled. Manual verbs (start/swap/prefer) deliberately bypass this:
 # a named wrapper is an operator override.
 _account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }
-_gpt_enabled() { _account_ok gpt; }   # same file ($GPT_DISABLE_FILE == $REG/gpt-disabled), same semantics, one definition
+# Same file ($GPT_DISABLE_FILE == $REG/gpt-disabled), same semantics, one
+# definition. No production caller left — `_default_pool` used to be it, and now
+# asks `_account_ok "$home"` about whichever account the session actually calls
+# home — so this survives as the NAME of the equivalence, which
+# ccd-account-ok.test.ts pins: the gpt kill-switch is the general per-lane
+# kill-switch, not a second mechanism beside it.
+_gpt_enabled() { _account_ok gpt; }
 _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
   # Same file `_gpt_enabled`/`_account_ok` check ($REG/gpt-disabled ==
@@ -101,7 +151,16 @@ _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   fi
   echo "enabled, available"
 }
-_is_valid_wrapper() { local w="$1" v; for v in "${VALID_WRAPPERS[@]}" gpt; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+# Membership over the roster itself, not over a list this file keeps beside it.
+# The hardcoded `gpt` that used to be appended after "${VALID_WRAPPERS[@]}" here
+# — the established idiom for adding an opt-in lane — has nothing left to add:
+# every rostered account is a valid wrapper, and an opt-in lane is now expressed
+# by being absent from CCRC_HOME_ABLE rather than by being named in this line.
+_is_valid_wrapper() { local w="$1" v; for v in "${CCRC_ACCOUNTS[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+# The placement half of the same question, and the general form of every rule
+# below that used to say `gpt`: an account that is not home-able is one a
+# session may only reach by having it as HOME.
+_is_home_able() { local w="$1" v; for v in "${CCRC_HOME_ABLE[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
@@ -1016,8 +1075,10 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   #
   #   1. It skips an account whose roster entry says telemetry:'none' — an
   #      account that will never report, so its permanent unknown must not read
-  #      as permanent emptiness. Bash has no telemetry field to consult until
-  #      ~/.ccrc/accounts.sh arrives.
+  #      as permanent emptiness. ~/.ccrc/accounts.sh HAS now arrived and this
+  #      gap did not close with it: the generated file carries ids, home-ability
+  #      and the upstream id, and no telemetry field at all (shared/
+  #      generate.mjs), so bash still has nothing to consult.
   #   2. It treats a HALF-measured row as unknown, where _limit_score
   #      substitutes 0 for the missing half (`: "${five:=0}"`) and returns a
   #      real number. With a home-able `{"five":null,"seven":0}`, bash picks
@@ -1026,16 +1087,27 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   # Parity holds today because both gaps are reachable only through the SAME
   # account: gpt is the only telemetry:'none' account and the only one whose
   # file carries a null half (it has no 5h window at all), and gpt is not
-  # home-able — absent from the array iterated here and from roster.homeAble
-  # there — so neither implementation ever scores it. Nothing else writes a
-  # half-null file: statusline-command.sh emits both fields for every Anthropic
-  # account. But `_limit_score`'s own `:=0` defaults and `_limit_five`'s
-  # back-compat shim exist precisely because a file CAN be missing a key, so
-  # this is an agreement of circumstance, not of rule, until Task 8 gives bash
-  # the roster. `projected-home.test.ts` runs both sides over the same fixtures
-  # and says so the day the circumstance changes.
+  # home-able — absent from CCRC_HOME_ABLE here and from roster.homeAble there —
+  # so neither implementation ever scores it. Nothing else writes a half-null
+  # file: statusline-command.sh emits both fields for every Anthropic account.
+  # But `_limit_score`'s own `:=0` defaults and `_limit_five`'s back-compat shim
+  # exist precisely because a file CAN be missing a key, so this is an agreement
+  # of circumstance, not of rule. `projected-home.test.ts` runs both sides over
+  # the same fixtures and says so the day the circumstance changes.
+  #
+  # PLACEMENT AND RESCUE DISAGREE ABOUT UNKNOWN, ON PURPOSE: this function skips
+  # an unmeasured account, while `_avail` calls one available and
+  # `_swap_target` scores it 0 — i.e. best. That is a ruling, not drift, and the
+  # reasoning lives on `_avail`, where the cost of the other choice is
+  # measurable.
+  #
+  # CCRC_HOME_ABLE is in roster declaration order (shared/generate.mjs emits
+  # roster.homeAble as-is), and that order is load-bearing twice over: the
+  # `first` fallback below takes the first placeable account, and the tie-break
+  # is a STRICT `<`, so the first home-able account also wins every tie. The
+  # server's `projectHome` ranks ties by the same declaration order.
   local best="" bs=1000 first="" w sc
-  for w in "${VALID_WRAPPERS[@]}"; do
+  for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
     [[ -z "$first" ]] && first="$w"
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
@@ -1087,7 +1159,7 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   local hw; hw=$(_ws_least_loaded)
   if [[ -z "$hw" ]]; then
     local w why=""
-    for w in "${VALID_WRAPPERS[@]}"; do
+    for w in "${CCRC_HOME_ABLE[@]}"; do
       if [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
       elif ! _lane_enabled "$w"; then why+=" $w:disabled"; fi
     done
@@ -6560,15 +6632,16 @@ cmd_ws_gc() {   # [--prune]
   echo "reclaimed $GC_RECLAIMED, declined $GC_DECLINED"
 }
 
-_cfg_dir() {   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
-  case "$1" in
-    claude)      echo "$HOME/.claude" ;;
-    claude2)     echo "$HOME/.claude-personal" ;;
-    claude-corp) echo "$HOME/.claude-corp" ;;
-    claude-dev0) echo "$HOME/.claude-dev0" ;;
-    gpt)         echo "$HOME/.claude-gpt" ;;
-  esac
-}
+_cfg_dir() { _ccrc_cfg_dir "$1"; }   # wrapper -> the CLAUDE_CONFIG_DIR that wrapper uses
+# The `case` behind that one line is generated from the roster (shared/
+# generate.mjs), and generated WITHOUT a default arm on purpose: an unknown
+# wrapper answers EMPTY at exit 0, which is the contract five of this
+# function's six call sites depend on — `_ws_status`, `_transcript_path` and
+# `_sync_uuid` return early on empty, `_auto_swap_check` and
+# `_auto_compact_check` build a path from it that then fails to stat, and only
+# `cmd_swap` treats the silence as fatal. The delegate stays rather than
+# call sites moving to `_ccrc_cfg_dir` directly: `_cfg_dir` is ccd's own name
+# for the question, and one seam is easier to re-point than six.
 
 _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the registry.
   # Claude Code rotates the active session uuid during normal operation (/clear, compaction),
@@ -6586,14 +6659,27 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
 }
 
 _default_pool() {   # id -> wrappers this session may auto-swap between.
-  # Free swapping across ALL Anthropic accounts (explicit user decision 2026-07-03).
-  # gpt is NOT a general overflow target (user decision 2026-07-26): only a session
-  # whose HOME is gpt may rotate onto it — today that is orchard-api alone.
-  # Everything else stays on Anthropic, so no project silently lands on the Codex
-  # lane with its 272k window and unofficial-client risk.
+  # Free swapping across ALL home-able accounts (explicit user decision 2026-07-03).
+  # An account that is NOT home-able is not a general overflow target (user
+  # decision 2026-07-26, made about `gpt` when gpt was the only such account):
+  # only a session whose HOME is that account may rotate onto it — today that is
+  # orchard-api on gpt alone. Everything else stays on the home-able
+  # accounts, so no project silently lands on the Codex lane with its 272k
+  # window and unofficial-client risk.
   # Narrow per session with a space-separated list in the registry `pool` field.
-  local pool="${VALID_WRAPPERS[*]}"
-  [[ "$(_reg_get "$1" home)" == gpt ]] && _gpt_enabled && pool="$pool gpt"
+  #
+  # A SPACE-JOINED STRING, not an array, and `_swap_target` consumes it through
+  # an UNQUOTED `for cand in $(_pool_for "$id")` — word splitting is the
+  # interface. That is safe only because every token here is a rostered id, and
+  # `shared/roster.ts`'s ID_RE (^[a-z][a-z0-9-]{0,31}$) admits no whitespace.
+  # `_is_valid_wrapper` below is what keeps a stale registry `home` — an account
+  # dropped from the roster since — from putting an unvetted token into that
+  # split.
+  local pool="${CCRC_HOME_ABLE[*]}" home
+  home=$(_reg_get "$1" home)
+  if [[ -n "$home" ]] && _is_valid_wrapper "$home" && ! _is_home_able "$home" && _account_ok "$home"; then
+    pool="$pool $home"
+  fi
   echo "$pool"
 }
 _pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$1"; }
@@ -6692,28 +6778,44 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly u
 # ── home-account affinity ──────────────────────────────────────────────
 # Each session has a HOME account; it stays there and only leaves when home is at the rate ceiling
 # (no included-usage headroom left), returning home the instant it has room again.
-_id_wrapper() {   # id -> the wrapper encoded in the id prefix (FIRST match wins — bash `case`, not longest-prefix)
-  # Arm ORDER is load-bearing, not cosmetic: `claude-corp-*` and `claude-dev0-*`
-  # must both precede the shorter `claude-*`, or every corp/dev0 id falls
-  # through to the `claude` arm instead. For dev0 specifically that means
-  # `_home_for` silently resolves to `claude`, and `_swap_target`'s "home
-  # recovered" branch permanently evacuates dev0 sessions with no error
-  # printed anywhere (I6, final review — this comment used to say "longest
-  # match wins", which would mislead a maintainer into moving `claude-dev0-*`
-  # below `claude-*` and making it dead code).
-  case "$1" in
-    claude-corp-*) echo claude-corp ;;
-    claude-dev0-*) echo claude-dev0 ;;
-    claude2-*)     echo claude2 ;;
-    claude-*)      echo claude ;;
-    gpt-*)         echo gpt ;;
-  esac
-}
+_id_wrapper() { _ccrc_id_wrapper "$1"; }   # id -> the wrapper encoded in the id prefix
+# Arm ORDER decides the answer here (bash `case` takes the FIRST match, not the
+# longest), and it is no longer this file's problem to get right: the generator
+# emits the arms longest-id-first, and its own header states that as a property
+# of the emitter rather than as a plea to whoever edits the arms next — because
+# there are no arms to edit any more. Unlike `_cfg_dir`, this one DOES have a
+# default arm: an id matching no account resolves to CCRC_UPSTREAM.
 _home_for() { local h; h=$(_reg_get "$1" home); [[ -n "$h" ]] && echo "$h" || _id_wrapper "$1"; }
 
 _avail() {   # wrapper -> success if it has included-usage headroom (rate score under the ceiling).
   # The monthly spend cap only gates PAID OVERAGE above 100%, so an account under the ceiling is
   # always usable, and a spend-blocked one is already >=100% (excluded by this same rate check).
+  #
+  # UNKNOWN IS AVAILABLE HERE, and unknown is SKIPPED in `_ws_least_loaded`.
+  # The split is a ruling, not drift: it is the difference between choosing
+  # among good options and finding a way out.
+  #
+  #   • Placement (_ws_least_loaded) ranks healthy candidates for a NEW
+  #     workspace. Reading unknown as 0 there made the account nobody could see
+  #     the emptiest-looking one, and therefore a permanent magnet — it never
+  #     reports, so it never stops winning. Skipping it costs nothing: an
+  #     all-unknown fleet still falls back to the first placeable account, so
+  #     first boot still places.
+  #   • This function answers "may a session RUN here", and `_swap_target`'s
+  #     candidate loop uses it to find an ESCAPE from an account a session
+  #     cannot stay on. Telemetry is only written when a session renders its
+  #     statusline (see _limit_field), so a quiet account reports nothing at
+  #     all. Reading that as blocked would evacuate every session off a
+  #     perfectly healthy home the moment it went quiet — the mirror image of
+  #     the 2026-07-27 incident _limit_field records — and would leave a
+  #     hard-blocked session with NO destination at all.
+  #     `ccd-login-screen.test.ts`'s "evacuates even though home carries zero
+  #     telemetry" case is exactly that rescue, run over a fleet with no
+  #     telemetry files whatsoever: it passes only while unknown is available.
+  #
+  # So the rule is not "unknown means X" but: unmeasured must never WIN a
+  # placement, and must never LOSE a rescue. Aligning the three sites would
+  # have to break one of those.
   local w="$1" sc
   sc=$(_limit_score "$w"); [[ -z "$sc" ]] && return 0      # no telemetry at all = assume free
   [[ "$sc" -lt "$SWAP_CEILING" ]]
@@ -6747,6 +6849,10 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     [[ "$cand" == "$cur" ]] && continue
     _account_ok "$cand" || continue
     _avail "$cand" || continue
+    # Unknown scores 0 — best — rather than being skipped the way
+    # `_ws_least_loaded` skips it. See the ruling on `_avail`: this loop is the
+    # escape route, and a rescue that can only land on measured accounts
+    # strands a blocked session every time the fleet has gone quiet.
     sc=$(_limit_score "$cand"); : "${sc:=0}"
     [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
   done
@@ -6791,12 +6897,19 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
   # Hard-blocked (a real limit/spend banner is up, or auth was lost): the session is stuck
-  # anyway -> swap now. The 429/rate-limit patterns also catch the gpt overflow lane hitting the
-  # ChatGPT-sub Codex usage cap (surfaces as "API Error: 429 ..."). When gpt is the exhausted
-  # account, write a cc-limits/gpt.json exclusion so OTHER sessions stop rotating into it until
-  # the 5h window rolls over (gpt has no native telemetry; this is its only "pool is full" signal).
+  # anyway -> swap now. The 429/rate-limit patterns also catch an opt-in overflow lane hitting
+  # its own backend's usage cap (the gpt lane's ChatGPT-sub Codex cap surfaces as "API Error:
+  # 429 ..."). When the exhausted account is one that is NOT home-able, write a
+  # cc-limits/<account>.json exclusion so OTHER sessions stop rotating into it until the 5h
+  # window rolls over: a non-home-able lane is an external backend with no Anthropic-style
+  # telemetry of its own (see the header), so this is its only "pool is full" signal. Home-able
+  # accounts report for themselves and must not have a synthetic exclusion written over the
+  # sample statusline-command.sh maintains.
   if [[ -n "$hard_blocked" ]]; then
-    [[ "$wrapper" == gpt ]] && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/gpt.json"
+    # _is_valid_wrapper first, so a stale registry `wrapper` — an account since
+    # dropped from the roster — cannot name the file this writes.
+    _is_valid_wrapper "$wrapper" && ! _is_home_able "$wrapper" \
+      && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
     _reg_set "$id" lastswap "$now"
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
     _dispatch_swap "$id" "$target"
@@ -6962,11 +7075,12 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # only in scope HERE, not inside that function (which only knows the tmux name), so the
   # operator-facing warning — naming both, spec §5 — is emitted from this side of the return.
   [[ "$prompt_rc" == 2 ]] && echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2
-  # /effort ultracode is a Claude-model effort tier; skip it on the gpt lane (GPT backend
-  # doesn't take it and the injection would just error into the prompt box). Code 2 means
-  # _accept_first_run_prompts stopped at a login screen — skip the same way: a synthesized
-  # keystroke into an auth flow is never correct.
-  [[ "$wrapper" != gpt && "$prompt_rc" != 2 ]] && _inject_spawn_effort "$tname"
+  # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
+  # (those are the opt-in external backends — gpt/Codex today — which don't take it, so the
+  # injection would just error into the prompt box). Code 2 means _accept_first_run_prompts
+  # stopped at a login screen — skip the same way: a synthesized keystroke into an auth flow
+  # is never correct.
+  _is_home_able "$wrapper" && [[ "$prompt_rc" != 2 ]] && _inject_spawn_effort "$tname"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
@@ -6988,7 +7102,7 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
 cmd_start() {
   local wrapper="${1:-}" project="${2:-}" workdir="${3:-}"
   [[ -n "$wrapper" && -n "$project" ]] || die "usage: ccd start <wrapper> <project> [workdir]"
-  _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${VALID_WRAPPERS[*]})"
+  _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
   [[ -x "$WRAPPER_DIR/$wrapper" ]] || die "wrapper missing: $WRAPPER_DIR/$wrapper"
   [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
@@ -7051,7 +7165,7 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
   # current transcript into the target config dir, flip the registry wrapper, restart.
   # Manual swaps may target ANY valid wrapper; the pool policy only constrains auto-swaps.
   local id="${1:?usage: ccd swap <id> <target-wrapper>}" target="${2:?usage: ccd swap <id> <target-wrapper>}"
-  _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${VALID_WRAPPERS[*]})"
+  _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
@@ -7074,11 +7188,16 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
   if [[ -f "$srccfg/projects/$mdir/$uuid.jsonl" ]]; then
     mkdir -p "$dstcfg/projects/$mdir"
     cp "$srccfg/projects/$mdir/$uuid.jsonl" "$dstcfg/projects/$mdir/"
-    # gpt -> Anthropic: the Codex lane (via LiteLLM) writes assistant messages with
-    # EMPTY text blocks, which the Anthropic API rejects on the next turn ("text
-    # content blocks must be non-empty" -> every turn 400s). Fill them so the
-    # resumed session is valid. Anthropic -> Anthropic and *-> gpt need no fixup.
-    if [[ "$cur" == gpt && "$target" != gpt ]]; then
+    # An external lane -> an Anthropic one: the Codex lane (via LiteLLM) writes
+    # assistant messages with EMPTY text blocks, which the Anthropic API rejects on
+    # the next turn ("text content blocks must be non-empty" -> every turn 400s).
+    # Fill them so the resumed session is valid. Anthropic -> Anthropic needs no
+    # fixup, and neither does a move ONTO an external lane. Keyed on home-ability
+    # rather than on the name `gpt` for the same reason as everything else here —
+    # a non-home-able account is the opt-in external backend by definition — and
+    # sanitizing is safe in the over-eager direction anyway: it only rewrites text
+    # blocks that are already empty.
+    if ! _is_home_able "$cur" && _is_home_able "$target"; then
       _sanitize_anthropic "$dstcfg/projects/$mdir/$uuid.jsonl"
     fi
   else
@@ -7118,7 +7237,7 @@ cmd_swap_self() {   # target — run from INSIDE a cc session (terminal, web, or
 cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps it here, and returns
   # here whenever home is free again). Default home = the wrapper in the id prefix.
   local id="${1:?usage: ccd prefer <id> <wrapper>}" w="${2:?usage: ccd prefer <id> <wrapper>}"
-  _is_valid_wrapper "$w" || die "unknown wrapper '$w' (valid: ${VALID_WRAPPERS[*]})"
+  _is_valid_wrapper "$w" || die "unknown wrapper '$w' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _reg_set "$id" home "$w"
   echo "home for $id set to $w"
@@ -7206,7 +7325,15 @@ cmd_ls() {
     local w; w=$(_reg_get "$id" wrapper); [[ "$w" == gpt ]] && gpt_here=$((gpt_here+1))
     printf '%-28s %-12s %-6s %s\n' "$id" "$w" "$alive" "$(_reg_get "$id" workdir)"
   done
-  echo "gpt overflow lane: $(_gpt_status)  —  $gpt_here session(s) currently on it"
+  # The one place a lane is still named, and deliberately: `_gpt_status`'s prose
+  # reads Codex's own telemetry shape (ccgpt-usage's JSON, "Codex weekly cap"),
+  # which is a fact about THAT backend rather than about "an account that is not
+  # home-able" — generalising the wording would print Codex's story for a lane
+  # that has never met Codex. So the footer is skipped entirely when the roster
+  # has no gpt account, instead of being rewritten for accounts it cannot
+  # describe.
+  _is_valid_wrapper gpt \
+    && echo "gpt overflow lane: $(_gpt_status)  —  $gpt_here session(s) currently on it"
   echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
 }
 

@@ -7,16 +7,41 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { parseRoster } from '../../shared/roster.js';
+import { generateAccountsSh } from '../../shared/generate.mjs';
 
-/** The home-able ids of the test roster — the set ccd's own `VALID_WRAPPERS`
- *  still hard-codes (Task 8 of the stage-2a plan is what makes ccd read the
- *  generated roster instead). Derived, not hand-typed, for the same reason
- *  `single-definition.test.ts`'s scanner is: a copy frozen at write time stops
- *  tracking the roster the moment a home-able account is added or removed. */
+/** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
+ *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
+ *  for the same reason `single-definition.test.ts`'s scanner is: a copy frozen
+ *  at write time stops tracking the roster the moment a home-able account is
+ *  added or removed. */
 const HOME_ABLE_WRAPPERS: readonly string[] =
   DEFAULT_TEST_ROSTER.accounts.filter((a) => a.homeAble).map((a) => a.id);
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
+
+/**
+ * Writes `<home>/.ccrc/accounts.sh` — the generated roster `ccd` sources on the
+ * line after it defines `die`, and the FIRST thing any fixture home needs,
+ * because ccd now dies with a remedy rather than running against a roster that
+ * is not the box's. Sourcing ccd without this file does not produce a failing
+ * assertion; it produces a non-zero `execFileSync` and an opaque
+ * `ccd: no account roster…` on stderr.
+ *
+ * Generated, never hand-written, for the reason the whole stage-2a plan
+ * exists: a fixture `accounts.sh` typed out here would be a fourth copy of the
+ * roster, and it would be the copy that decides what every ccd test believes.
+ * `parseRoster` runs first so the fixture crosses the same validation a real
+ * `~/.ccrc/accounts.json` does — a test roster that the production loader
+ * would reject is not a test of anything.
+ *
+ * The marker `shared/mark.mjs` adds is deliberately absent: it is provenance
+ * for a human reading a deployed file, and ccd neither reads nor cares.
+ */
+export function seedAccountsSh(home: string, roster: unknown = DEFAULT_TEST_ROSTER): void {
+  fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.ccrc', 'accounts.sh'), generateAccountsSh(parseRoster(roster)));
+}
 
 /** ws-add spawns a session; tmux is not available under test, so stub _spawn and
  *  the systemd call. Everything else runs for real. `tmux` is shadowed too,
@@ -81,13 +106,20 @@ export interface CcdHarness {
 
 export function makeCcdHarness(prefix: string): CcdHarness {
   const home = mkTmp(prefix);
+  // BEFORE anything else: sourcing ccd without a roster is fatal by design, so
+  // a harness that built its directories first and its roster last would fail
+  // every snippet with a stderr message instead of a test result.
+  seedAccountsSh(home);
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  // ccd's VALID_WRAPPERS — the wrappers a bare binary on $PATH must exist
-  // for (`_spawn`'s `command -v "$w"` check) — is exactly the roster's
-  // home-able set (see wrapper-roster-fixture.test.ts).
+  // The wrappers a bare binary on $PATH must exist for (`_account_ok`'s
+  // `-x "$WRAPPER_DIR/$w"` check, `_spawn`'s `command -v "$w"`): the roster's
+  // home-able set, i.e. exactly ccd's `CCRC_HOME_ABLE`. A non-home-able account
+  // deliberately gets NO stub — an opt-in lane nobody installed is the ordinary
+  // state of a box, and `ccd-account-ok.test.ts` asserts `_account_ok gpt` is
+  // false straight out of this harness for exactly that reason.
   for (const w of HOME_ABLE_WRAPPERS) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }

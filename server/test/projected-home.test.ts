@@ -18,7 +18,7 @@ import { parseRoster } from '../../shared/roster.js';
 import { leastLoadedCases } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, seedAccountsSh } from './ccdWsHelpers.js';
 
 let home: string;
 
@@ -31,7 +31,12 @@ const sh = (snippet: string): string =>
 
 beforeEach(() => {
   home = mkTmp('ccrc-projected-');
+  // BOTH projections of the one roster, into the one fixture home: `accounts.json`
+  // for `loadConfig` and `accounts.sh` for ccd. That they are generated from the
+  // same `DEFAULT_TEST_ROSTER` is what makes the pairing below a comparison of two
+  // RULES rather than of two rosters — this file's whole point.
   seedRoster(home);
+  seedAccountsSh(home);
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });

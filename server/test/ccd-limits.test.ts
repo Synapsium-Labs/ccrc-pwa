@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { rolloverCases } from './fixtures/rollover.js';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let home: string;
@@ -24,6 +24,10 @@ const sh = (snippet: string): string =>
 
 beforeEach(() => {
   home = mkTmp('ccrc-ccd-limits-');
+  // ccd refuses to run without `~/.ccrc/accounts.sh`. Same reason as
+  // `ghContainedEnv` above: this file predates `makeCcdHarness` and builds its
+  // own HOME, and a fixture home that ccd will not source is not a fixture.
+  seedAccountsSh(home);
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   // _avail requires the wrapper binary to exist and be executable.
   const bin = path.join(home, '.local', 'bin');

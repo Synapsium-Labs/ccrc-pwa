@@ -3,15 +3,15 @@
 // that roster already carries, plus a small side table for the three concepts
 // ccd has and the roster does not.
 //
-// TRANSITIONAL, AND DELETED BY TASKS 8 AND 9 of the stage-2a plan. Three test
-// files compare ccd's hand-written arrays and `case` arms against a TypeScript
-// roster: `wrapper-roster-fixture.test.ts`, `install-session-hooks.test.ts` and
-// `install-coordinator-skill.test.ts`. Task 6 deleted the roster they compared
-// against (`shared/api.ts`'s `ACCOUNTS`), because the roster is runtime data
-// now — but ccd itself does not read it until Task 8, and these readers are
-// rewritten or deleted in Tasks 8 and 9. Until then the cross-language
-// guarantee is worth keeping alive, and keeping it alive means a fixture,
-// because the thing on the other side of the comparison is still a literal.
+// TRANSITIONAL, AND ON ITS LAST READER. Three test files used to compare ccd's
+// hand-written arrays and `case` arms against a TypeScript roster. Task 8 —
+// which made ccd, and both installers, source the generated
+// `~/.ccrc/accounts.sh` — took two of them off this fixture entirely:
+// `install-session-hooks.test.ts` and `install-coordinator-skill.test.ts` now
+// assert against `DEFAULT_TEST_ROSTER` directly, because the literal `homes`
+// arrays they were pinning no longer exist. `wrapper-roster-fixture.test.ts`
+// is the one reader left, and Task 9 rewrites it into a round-trip with no
+// literal on either side — at which point this file has no readers and goes.
 //
 // WHY IT IS DERIVED AND NOT WRITTEN OUT. The first version of this file
 // restated the ids, config-dir suffixes and home-able flags that
@@ -33,15 +33,20 @@
 //   `label`     — ccd's `statusline-command.sh` display label, which is NOT the
 //                 roster's `label` field in the test fixture (the fixture uses
 //                 ids as labels; ccd's bash carries the human ones). A real
-//                 roster's label and this are the same concept, and Task 8 is
-//                 where they become the same value.
-//   `ccdValid`  — `_is_valid_wrapper` (ccd:104) accepts `VALID_WRAPPERS` plus a
-//                 hardcoded `gpt`. Once ccd reads the generated roster, every
-//                 rostered account is valid and the concept has nothing left to
-//                 distinguish.
-//   `hooksAble` — both installers' default `homes` arrays. Task 8 points them at
-//                 every account's config dir (both already `continue` past a
-//                 home that does not exist), so this concept disappears too.
+//                 roster's label and this are the same concept; statusline is
+//                 the one ccd surface Task 8 left reading a literal.
+//   `ccdValid`  — `_is_valid_wrapper` used to accept `VALID_WRAPPERS` plus a
+//                 hardcoded `gpt`; it now iterates `CCRC_ACCOUNTS`, so every
+//                 rostered account is valid and this field is `true` for all of
+//                 them. Kept only until Task 9 rewrites its last reader — the
+//                 describes there still ask "which accounts should ccd accept",
+//                 and answering that with a field says it once.
+//
+// `hooksAble` was the third, and is gone: it named the accounts in the
+// installers' literal `homes` arrays, and those arrays were replaced in Task 8
+// by a `source` of the generated roster, so the concept has nothing left to
+// distinguish (both installers already `continue` past a home whose directory
+// is absent, which is what made "every account" safe).
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 
 export interface CcdMirrorAccount {
@@ -50,19 +55,18 @@ export interface CcdMirrorAccount {
   label: string;
   homeAble: boolean;
   ccdValid: boolean;
-  hooksAble: boolean;
 }
 
 /** The ccd-only half. Keyed by roster id, and checked against the roster
  *  below in BOTH directions — an account in one and not the other throws at
  *  import rather than silently dropping out of every comparison in three test
  *  files, which is the failure mode a fixture like this has. */
-const CCD_SIDE: Record<string, { label: string; ccdValid: boolean; hooksAble: boolean }> = {
-  claude: { label: 'team·max', ccdValid: true, hooksAble: true },
-  claude2: { label: 'alt·max', ccdValid: true, hooksAble: true },
-  'claude-corp': { label: 'team·shared', ccdValid: true, hooksAble: true },
-  gpt: { label: 'gpt', ccdValid: true, hooksAble: true },
-  'claude-dev0': { label: 'lab·dev0', ccdValid: true, hooksAble: true },
+const CCD_SIDE: Record<string, { label: string; ccdValid: boolean }> = {
+  claude: { label: 'team·max', ccdValid: true },
+  claude2: { label: 'alt·max', ccdValid: true },
+  'claude-corp': { label: 'team·shared', ccdValid: true },
+  gpt: { label: 'gpt', ccdValid: true },
+  'claude-dev0': { label: 'lab·dev0', ccdValid: true },
 };
 
 function buildMirror(): Record<string, CcdMirrorAccount> {
@@ -71,8 +75,8 @@ function buildMirror(): Record<string, CcdMirrorAccount> {
     const side = CCD_SIDE[a.id];
     if (!side) {
       throw new Error(
-        `ccdMirror: roster account "${a.id}" has no ccd-side entry. Add one (label/ccdValid/` +
-          'hooksAble) or the three ccd mirror tests silently stop covering it.',
+        `ccdMirror: roster account "${a.id}" has no ccd-side entry. Add one (label/ccdValid) ` +
+          'or wrapper-roster-fixture.test.ts silently stops covering it.',
       );
     }
     out[a.id] = {

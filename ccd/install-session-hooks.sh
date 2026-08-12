@@ -20,9 +20,23 @@ EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","Subag
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 
+# The default home list is the ROSTER's config dirs, read at run time from the
+# same generated file ccd sources — not a literal array kept in step with it by
+# hand and pinned by a fixture test. `_ccrc_cfg_dir` resolves $HOME per process,
+# so this installer's own $HOME is what the paths land under, which is what lets
+# the test harness point the whole run at a fixture home.
+#
+# EVERY account, not a hooks-able subset: there is no such concept. A box that
+# does not have some of the roster's wrappers is ordinary, and the loop below
+# already `continue`s past a directory that is not there.
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
-else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt" "$HOME/.claude-dev0"); fi
+else
+  # shellcheck source=/dev/null
+  source "$HOME/.ccrc/accounts.sh" \
+    || { echo "install-session-hooks: no account roster at $HOME/.ccrc/accounts.sh — generate it from ~/.ccrc/accounts.json first" >&2; exit 1; }
+  for _a in "${CCRC_ACCOUNTS[@]}"; do homes+=("$(_ccrc_cfg_dir "$_a")"); done
+fi
 
 # Sweep every managed entry (filename match, so stale paths get replaced
 # too), then insert exactly one managed entry per event — PreToolUse with

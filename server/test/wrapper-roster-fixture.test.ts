@@ -5,34 +5,38 @@
 // THIS FILE IS ON ITS WAY OUT, and knows it. The roster it used to compare
 // against — `shared/api.ts`'s `ACCOUNTS` — was deleted in Task 6 of the
 // stage-2a plan, because the roster is runtime data now
-// (`~/.ccrc/accounts.json`). ccd's bash does not read it until Task 8, and
-// this file is rewritten in Task 9 into a round-trip that GENERATES the bash
-// from a roster and executes it, with no literal on either side. Until then it
-// compares ccd's hand-written arrays and case arms against
-// `test/fixtures/ccdMirror.ts`, a literal transcription of the same five
-// accounts — because the thing on the other side of the comparison is still a
-// literal, and the guarantee is worth keeping alive in the meantime.
+// (`~/.ccrc/accounts.json`). Task 8 then made ccd SOURCE the generated
+// projection of it (`~/.ccrc/accounts.sh`, which `makeCcdHarness` writes into
+// every fixture home), so ccd no longer keeps copies at all: `VALID_WRAPPERS`
+// is gone, `_is_valid_wrapper` iterates `CCRC_ACCOUNTS`, and `_cfg_dir` /
+// `_id_wrapper` are one-line delegates to generated functions. What is left
+// for this file to compare is therefore a generated bash roster against a
+// hand-written TypeScript one — the same roster twice, which is why Task 9
+// rewrites it into a round-trip with no literal on either side and deletes
+// `ccdMirror.ts` with it.
 //
-// So: ccd keeps its own copies (`_cfg_dir`, `_id_wrapper`, `VALID_WRAPPERS`,
-// `_is_valid_wrapper`) for now, and what stops the two drifting apart is a
-// test that RUNS the bash and checks its answers, every suite run, rather than
-// a comment asking a future author not to.
+// Until that lands, what stops the two drifting is still a test that RUNS the
+// bash and checks its answers, every suite run, rather than a comment asking a
+// future author not to.
 //
 // EVERY comparison below is bidirectional (a `toEqual` between two sets),
 // not "each roster member gets a matching ccd answer" — that weaker form was
 // this file's own first draft, and it has a hole: it only ever asks ccd
-// about wrappers the mirror already knows, so a lane ccd grows on its own
-// (`_is_valid_wrapper`'s established idiom is a literal appended after
-// `${VALID_WRAPPERS[@]}`, plus new `_cfg_dir`/`_id_wrapper` case arms, per
-// `gpt`'s own precedent — never touching `VALID_WRAPPERS` itself) is invisible
-// to it. Every describe below instead PARSES OR ENUMERATES ccd's own answer
-// space — the full arm set of a case statement, the full token list of a for
-// loop — and compares that set, both directions, against
-// `WRAPPERS.filter(w => CCD_MIRROR[w]!.ccdValid)` (or `.homeAble` /
-// `.hooksAble`, per map). A wrapper ccd knows and the roster does not now
-// fails exactly as loudly as the reverse.
+// about wrappers the mirror already knows, so a lane ccd grew on its own was
+// invisible to it. That used to be a live hazard — the established idiom for
+// adding an opt-in lane was a literal appended after `${VALID_WRAPPERS[@]}`
+// plus new `_cfg_dir`/`_id_wrapper` case arms, per `gpt`'s own precedent —
+// and it is now structurally impossible, because there is nowhere in ccd to
+// append one. The bidirectional form stays anyway: it is what NOTICES that,
+// and one of the describes below asserts that the tail after
+// `${CCRC_ACCOUNTS[@]}` is empty for exactly that reason. Every describe
+// PARSES OR ENUMERATES ccd's own answer space — the full arm set of a case
+// statement, the full token list of a for loop — and compares that set, both
+// directions, against `WRAPPERS.filter(w => CCD_MIRROR[w]!.ccdValid)` (or
+// `.homeAble`).
 //
-// `_cfg_dir`, `_id_wrapper`, `VALID_WRAPPERS` and `_is_valid_wrapper` are
+// `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `CCRC_HOME_ABLE` and
+// `_is_valid_wrapper` are
 // executed for real, via the isolated-HOME `sh()` idiom every other ccd test
 // file in this directory uses (see ccdWsHelpers.ts's own docstring for why
 // HOME is the isolation boundary and `cwd: home` matters). Where a function's
@@ -51,19 +55,11 @@
 // set comparison, same as every other describe in this file.
 //
 // `install-session-hooks.sh`'s and `install-coordinator-skill.sh`'s default
-// `homes` arrays are NOT in that category, and an earlier version of this
-// comment claimed they were — a claim disproved by this same commit's own
-// `install-session-hooks.test.ts` ("...default homes agree with
-// CCD_MIRROR.hooksAble, behaviourally") and `install-coordinator-skill.test.ts`
-// ("...default homes agree with CCD_MIRROR.hooksAble, behaviourally"): both
-// give a fixture HOME a config dir for EVERY roster wrapper first (not "every
-// one is skipped when it doesn't exist" — none is absent), run the installer
-// with no `--homes` argv (its real default), and assert the managed file
-// lands in exactly the `hooksAble` ones. That is a `--homes`-less invocation
-// whose effect is fully revealing, and it passes. The two `describe` blocks
-// immediately below are a second, cheaper pin on the identical claim — parsed
-// source text, no subprocess — not a substitute for one a fixture cannot
-// make revealing.
+// `homes` arrays were NOT in that category — an earlier version of this
+// comment claimed they were, and their own behavioural tests disproved it —
+// and the question has since dissolved: both installers source the same
+// generated roster ccd does, so there is no array left to parse. See the note
+// where the two parsed-source describes used to be, further down.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -86,9 +82,14 @@ let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-wrapper-roster-'); });
 afterEach(() => { h.cleanup(); });
 
-describe('ccd VALID_WRAPPERS agrees with CCD_MIRROR.homeAble', () => {
+describe('ccd CCRC_HOME_ABLE agrees with CCD_MIRROR.homeAble', () => {
   it('is exactly the home-able wrappers, in roster declaration order', () => {
-    const got = h.sh('echo "${VALID_WRAPPERS[@]}"').split(/\s+/).filter(Boolean);
+    // Was `VALID_WRAPPERS`, a literal in ccd, until ccd started sourcing the
+    // generated `~/.ccrc/accounts.sh` the harness writes. Declaration ORDER is
+    // still asserted (a plain toEqual, not a set): `_ws_least_loaded`'s
+    // tie-break is a strict `<`, so the first home-able account wins a tie,
+    // and two other suites pin that as `claude`.
+    const got = h.sh('echo "${CCRC_HOME_ABLE[@]}"').split(/\s+/).filter(Boolean);
     const want = WRAPPERS.filter((w) => CCD_MIRROR[w]!.homeAble);
     expect(got).toEqual(want);
   });
@@ -107,19 +108,19 @@ describe('ccd _is_valid_wrapper agrees with CCD_MIRROR.ccdValid', () => {
   });
 
   it("ccd -> roster: _is_valid_wrapper's own accepted set is exactly the mirror's ccd-valid set", () => {
-    // `_is_valid_wrapper`'s body (ccd:104) is `for v in "${VALID_WRAPPERS[@]}"
-    // gpt; do ... done` — VALID_WRAPPERS (home-able) plus zero or more literal
-    // EXTRAS appended after it, which is the established, reviewed idiom for
-    // adding an opt-in (non-home-able) ccd-valid lane, per `gpt`'s own
-    // precedent. Parsing that literal tail — rather than only ever asking
-    // `_is_valid_wrapper` about wrappers the mirror already lists — is what
-    // catches a lane ccd grows that the roster never heard of.
-    const homeAble = h.sh('echo "${VALID_WRAPPERS[@]}"').split(/\s+/).filter(Boolean);
+    // `_is_valid_wrapper`'s body used to be `for v in "${VALID_WRAPPERS[@]}"
+    // gpt; do ... done` — the home-able array plus literal EXTRAS appended
+    // after it, the established idiom for adding an opt-in ccd-valid lane —
+    // and this parsed that tail to catch a lane ccd grew that the roster never
+    // heard of. It now iterates CCRC_ACCOUNTS, which comes from the roster, so
+    // the tail must be EMPTY: a literal appended here would be exactly the
+    // copy this whole change removed.
     const body = h.sh('declare -f _is_valid_wrapper');
-    const m = /for v in "\$\{VALID_WRAPPERS\[@\]\}"([^;]*);/.exec(body);
-    expect(m, "_is_valid_wrapper's `for v in \"${VALID_WRAPPERS[@]}\" ...;` line").not.toBeNull();
+    const m = /for v in "\$\{CCRC_ACCOUNTS\[@\]\}"([^;]*);/.exec(body);
+    expect(m, "_is_valid_wrapper's `for v in \"${CCRC_ACCOUNTS[@]}\";` line").not.toBeNull();
     const extras = (m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean);
-    const got = sortedSet([...homeAble, ...extras]);
+    expect(extras, 'a literal wrapper name appended after the roster array').toEqual([]);
+    const got = sortedSet(h.sh('echo "${CCRC_ACCOUNTS[@]}"').split(/\s+/).filter(Boolean));
     const want = sortedSet(WRAPPERS.filter((w) => CCD_MIRROR[w]!.ccdValid));
     expect(got).toEqual(want);
   });
@@ -144,7 +145,11 @@ describe('ccd _cfg_dir agrees with CCD_MIRROR.configDirSuffix', () => {
     // shape below — so the pattern word IS the wrapper name directly.
     // Anchored to a whole trimmed line (`declare -f` puts one case arm per
     // line) so this can never also match an `echo "$HOME/..."` body line.
-    const body = h.sh('declare -f _cfg_dir');
+    // `_ccrc_cfg_dir`, not `_cfg_dir`: ccd's own function is a one-line
+    // delegate now, and the `case` it delegates to is generated from the
+    // roster into `~/.ccrc/accounts.sh`. Still `declare -f`, still executed
+    // bash, just one name further in.
+    const body = h.sh('declare -f _ccrc_cfg_dir');
     const arms = [...body.matchAll(/^\s*([a-z][a-z0-9-]*)\)\s*$/gm)].map((m) => m[1]);
     expect(arms.length).toBeGreaterThan(0); // the parse itself must find something, or this vacuously passes
     const got = sortedSet(arms);
@@ -169,7 +174,12 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
     // than relying on every `idPrefix` happening to equal `wrapper + '-'`,
     // which is true of every member today but isn't a rule this file should
     // assume elsewhere).
-    const body = h.sh('declare -f _id_wrapper');
+    // `_ccrc_id_wrapper` for the same reason `_cfg_dir` became
+    // `_ccrc_cfg_dir` above. Its generated default arm (`*) echo
+    // "$CCRC_UPSTREAM"`) does not match this pattern — the glob must start
+    // with a lowercase id — so it stays out of the answer set, which is
+    // right: it names no account of its own.
+    const body = h.sh('declare -f _ccrc_id_wrapper');
     const arms = [...body.matchAll(/^\s*[a-z][a-z0-9-]*-\*\)\s*\n\s*echo\s+(\S+)\s*$/gm)].map((m) => m[1]);
     expect(arms.length).toBeGreaterThan(0);
     const got = sortedSet(arms);
@@ -196,38 +206,19 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
   });
 });
 
-// Architecture doc increment 2: "the hooks install lane derives its homes
-// from the roster" — for a bash `homes=(...)` fallback that means "is pinned
-// against the roster by this fixture test", not "reads the roster at runtime"
-// (Task 8's job, not this file's — see the header). Two scripts now carry that exact
-// fallback shape — install-session-hooks.sh and, since PR J's install lane,
-// install-coordinator-skill.sh — and both are checked here rather than one
-// getting a second, duplicate describe block elsewhere in the tree.
-const parseDefaultHomes = (scriptRelPath: string): string[] => {
-  const src = readFileSync(path.join(ccrcRoot, ...scriptRelPath.split('/')), 'utf8');
-  const m = /else homes=\(([^)]*)\); fi/.exec(src);
-  expect(m, `${scriptRelPath}'s default \`homes=(...)\` fallback line`).not.toBeNull();
-  return [...(m as RegExpExecArray)[1].matchAll(/"\$HOME\/([^"]+)"/g)].map((mm) => mm[1]!);
-};
-const wantHooksAbleHomes = WRAPPERS.filter((w) => CCD_MIRROR[w]!.hooksAble).map((w) => CCD_MIRROR[w]!.configDirSuffix);
-
-describe('install-session-hooks.sh default homes agrees with CCD_MIRROR.hooksAble', () => {
-  // Not executed — see this file's header. Parses the literal `homes=(...)`
-  // array the script falls back to when no `--homes` argv is given.
-  it('installs into exactly the hooksAble config dirs, as literal $HOME/<suffix> paths, in roster order', () => {
-    expect(parseDefaultHomes('ccd/install-session-hooks.sh')).toEqual(wantHooksAbleHomes);
-  });
-});
-
-describe('install-coordinator-skill.sh default homes agrees with CCD_MIRROR.hooksAble', () => {
-  // Same fixture, same reason — a sixth account with `hooksAble: true` must
-  // land in BOTH default lists or it silently keeps its session hooks and
-  // loses the coordinator skill (or the reverse), a split nobody would notice
-  // outside this test.
-  it('installs into exactly the hooksAble config dirs, as literal $HOME/<suffix> paths, in roster order', () => {
-    expect(parseDefaultHomes('ccd/install-coordinator-skill.sh')).toEqual(wantHooksAbleHomes);
-  });
-});
+// Architecture doc increment 2 — "the hooks install lane derives its homes
+// from the roster" — used to be pinned HERE, by parsing each installer's
+// literal `homes=(...)` fallback with `/else homes=\(([^)]*)\); fi/` and
+// comparing it against `CCD_MIRROR.hooksAble`. Both describes are gone
+// because both literals are: each installer now sources the same generated
+// `~/.ccrc/accounts.sh` ccd does and covers every rostered account, so there
+// is no array to parse and no `hooksAble` subset to compare against. The
+// claim did not weaken — it moved to the behavioural pins that already
+// existed beside it (`install-session-hooks.test.ts`,
+// `install-coordinator-skill.test.ts`, both "default homes are the roster,
+// behaviourally"), which run each installer with no `--homes` argv against a
+// fixture HOME and now also assert that a box with NO roster is refused by
+// name rather than silently installing nowhere.
 
 // I8: `REQUIRED_REFS` (install-coordinator-skill.sh) is the OTHER hardcoded
 // literal this installer carries, and it exists for exactly the failure mode
@@ -258,32 +249,16 @@ describe('install-coordinator-skill.sh REQUIRED_REFS agrees with the real refere
   });
 });
 
-// Fix, review finding 15: the two pins directly above (and the behavioural
-// one in install-coordinator-skill.test.ts) all key on `hooksAble`, because
-// that is the field the installer's `homes=(...)` fallback is actually
-// derived from — bash cannot import a TypeScript roster, so this literal
-// array is the projection. But the SAFETY property Build 7's operator
-// ruling 2 actually depends on ("place the coordinator like any other
-// session, no pinned account") is about `ccdValid`: that is the set ccd's
-// own `_ws_least_loaded` can ACTUALLY land a session on. Nothing before this
-// test asserted `ccdValid ⊆ hooksAble` — the two sets only coincide today
-// because every wrapper in the roster happens to carry `hooksAble: true`.
-// Add a wrapper with `ccdValid: true, hooksAble: false` (a plausible
-// combination — e.g. a managed/corporate profile whose `settings.json` must
-// not be touched) and every pin above stays green, because all of them read
-// `hooksAble`; `_ws_least_loaded` can still land the coordinator there, on a
-// home with no `skills/ccrc-coordinator` at all — no contract, no clause 3
-// reap prohibition, no clause 9 `/clear` prohibition.
-describe('CCD_MIRROR: ccdValid is a subset of hooksAble (Build 7 operator ruling 2\'s own precondition)', () => {
-  it('every wrapper ccd can place a session on also gets the coordinator skill installed', () => {
-    for (const w of WRAPPERS) {
-      if (!CCD_MIRROR[w]!.ccdValid) continue;
-      expect(CCD_MIRROR[w]!.hooksAble,
-        `${w} is ccdValid (a placement target) but hooksAble is false — ` +
-          '_ws_least_loaded could place the coordinator on a home with no skill installed').toBe(true);
-    }
-  });
-});
+// Also gone with them: the `ccdValid ⊆ hooksAble` invariant (fix, review
+// finding 15). It existed because the two sets were kept by different hands —
+// `hooksAble` by the installers' literal arrays, `ccdValid` by ccd's own
+// `VALID_WRAPPERS` plus its appended literals — so nothing stopped an account
+// ccd could place a session on from being absent from the installers' lists,
+// leaving the coordinator on a home with no `skills/ccrc-coordinator` (Build 7
+// operator ruling 2 places it like any other session, with no pinned account).
+// One roster now feeds ccd's placement AND both installers, so the subset
+// relation is not an invariant to check but an identity: every account ccd can
+// place on is a rostered account, and the installers cover the roster.
 
 describe('ccd statusline-command.sh label maps agree with CCD_MIRROR', () => {
   // Not executed — this file's own header names it (not the two installers
