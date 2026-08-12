@@ -56,6 +56,28 @@ each cut from main after the previous merged.
   raced; the sweep answered draft-present twice, backed off, and delivered cleanly
   once the box emptied. The design behaved exactly as specified; recorded as a pass.
 
+## LIVE PROOF PASSED 2026-08-12 — the reference-nudge lane delivers to the corrupted box
+
+PR #40 (robust reference-nudge delivery) merged + deployed (server 6dd7be0).
+Acceptance test run against the WORST case — the wave-2 worker
+ccrc-pwa-amber-harbor, whose box carried accumulated [Pasted text #N]
+fragments AND whose hookstate was null/stale (the F6b deadlock).
+Sent a fresh coordination mail (delivery id 4). Result:
+  delivery 4 (new lane): state=acked, attempts=0, lastError=null
+  deliveries 1,3 (old lane): attempts=5, lastError=draft-present
+Delivered on the FIRST attempt, no draft-present, no verify-fail, worker
+acked — proving BOTH fixes live: F6b (live-idle gate delivered to a
+null-hookstate worker the old lane would skip forever) and F7 (dirty box
+cleared, tiny nudge landed clean, zero accumulation). The delivery-lane
+class of failures is closed.
+
+Note: the worker, on reading its wave-2 brief, correctly raised the F5
+concern itself — it is on feat/build4-w1-items while the run fingerprint
+re-measures the workspace branch ws/wave-1-worker-coordination-for-build4.
+Smart catch; confirms the SKILL's workspace-branch guidance is the right
+fix. This worker's context is polluted from the ordeal, so wave 2 proper
+should re-dispatch a FRESH worker on the now-reliable lane.
+
 ## F7 — LARGE MULTI-LINE BRIEFS ARE FRAGILE TO TYPE OVER tmux
 
 Live wave-2 delivery (after the hookstate was nudged fresh): attempt 1
