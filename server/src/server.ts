@@ -36,7 +36,8 @@ import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountsResponse, type AccountUsage, type FleetMsg, type FleetSession, type RunSummary,
+  type AccountsResponse, type AccountUsage, type CoordStatus, type FleetMsg, type FleetSession,
+  type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
 
@@ -296,6 +297,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n } satisfies FleetMsg));
     const onRuns = (runs: RunSummary[]) =>
       socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
+    const onCoord = (coord: CoordStatus) =>
+      socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
     // The `runs` cold start is chained AFTER `fleet`'s own, not fired
     // alongside it: `fleet` is itself async (`assembleFleet` awaits tmux/IO),
     // while a `coord.runs()` read is synchronous, so firing both
@@ -325,14 +328,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           console.warn(`ccrc-server: /ws/fleet cold-start runs() failed (${err instanceof Error ? err.message : String(err)})`);
         }
       }
+      // Chained after `runs` inside this SAME `.then`, for the reason above:
+      // the wire order every client and `fleetws.test.ts` rely on is hello,
+      // fleet, runs, coord. Unlike `runs` this needs no `try` — it is a field
+      // read off the watcher, no `node:sqlite` anywhere — and no `deps.coord`
+      // gate either: a pause is a fleet-host file, and a box with no
+      // coordination database still has one.
+      //
+      // A `null` current value sends NOTHING. That is the whole rule: this
+      // process has never measured, and a fabricated `clear` here would render
+      // "running" for a state nobody has looked at (Build 4, spec §4.2).
+      const coordNow = watcher?.currentCoord();
+      if (coordNow) onCoord(coordNow);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
     bus.on('runs', onRuns);
+    bus.on('coord', onCoord);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
+      bus.off('coord', onCoord);
     });
   });
 

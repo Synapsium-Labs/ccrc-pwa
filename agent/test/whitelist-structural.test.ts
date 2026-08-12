@@ -91,6 +91,14 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   'g6-ws-reap-wrong-flag.ts':     { what: "the same grant with a plausible WRONG token (--session)", codes: ['TS2322'] },
   'g7-ws-rm-readmitted.ts':       { what: 'the unguarded legacy delete, re-admitted', codes: ['TS2322'] },
   'g8-empty-prefix.ts':           { what: 'an empty prefix — the widest grant expressible, as the smallest diff', codes: ['TS2322'] },
+  // BUILD 4, D-B4-10's sibling finding: a two-token grant is only two tokens
+  // wide while its verb is ENROLLED in `REQUIRED_VERB_FLAG`. `isExecAllowed` is
+  // prefix-matching, so an unenrolled `['coord-pause']` still admits
+  // `ccd coord-pause <anything…>` and every subset test stays green.
+  'g9-coord-pause-without-state.ts': {
+    what: 'the plan-review mutant: a two-token grant whose verb was never enrolled',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -291,6 +299,18 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     // own length and nothing past it.
     expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session', '--expect']])))
       .toThrow(/only grantable with '--expect'/);
+  });
+
+  it('throws on a coord-pause grant with no --state — the flag is the whole grant', () => {
+    // BUILD 4. Unlike `ws-reap`, nothing here is destructive: `--state` is not
+    // a confirmation token, it is the verb's ENTIRE argument surface. A
+    // one-token grant would permit every positional form `coord-pause` might
+    // ever grow — for a route the PWA reaches with no token of any kind.
+    expect(() => auditExecWhitelist(withCcd([['coord-pause']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['coord-pause', '--session']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['coord-pause', '--state']]))).not.toThrow();
   });
 
   it('throws on an ungrantable verb at the head of a prefix', () => {

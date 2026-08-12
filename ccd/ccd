@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b587c0aa6ef2276cb0f1c0ff8db98dd48df41de4f94b59c28fabd7511728aaab
+# ccrc:generated 1 sha256=a0c1032db2f8239f1b2c4b535297b0b2b08ad8092f8dd63ed4c763e1da86c6f4
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -1755,6 +1755,7 @@ cmd_caps() {   # one verb name per line — what THIS copy of ccd implements.
 attach
 caps
 clip
+coord-pause
 enable
 ensure
 forget
@@ -1881,6 +1882,41 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     echo "released $id"
   else
     echo "not held $id"
+  fi
+}
+
+cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
+  # coordinator's pause marker. `$REG/coordinator-paused` is read by the
+  # server's dispatch path (`coord/dispatch.ts`) and by nothing else, and it
+  # is the ONE file that stops a program mid-flight. It had no writer in this
+  # tree at all: the operator was expected to `touch`/`rm` it by hand over
+  # ssh, which is not a control a phone can reach.
+  #
+  # Non-destructive and idempotent, exactly like `ws-hold`/`ws-release`, and
+  # granted on the same argument: a registry-file write/unlink that widens
+  # nothing that deletes. CHECKED on both arms, for `cmd_ws_hold`'s reason:
+  # ccd runs `set -uo pipefail` with NO `-e`, so an unchecked write that
+  # failed would fall straight through to the echo and report a pause that is
+  # not there — the polarity that matters most on this verb, since the caller
+  # then believes the fleet is stopped.
+  #
+  # The echoed word is for a human reading a journal. NOTHING parses it: the
+  # server learns the state by listing $REG, the same way `dispatchRun` always
+  # has (`dispatch.ts:106-109`), and for the reason that file's own comment
+  # gives about ccd's echoed sentences.
+  [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd coord-pause --state on|off"
+  local state=$2
+  [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+  local marker="$REG/coordinator-paused"
+  if [[ $state == on ]]; then
+    touch -- "$marker" || die "could not raise the pause marker — the fleet is NOT paused"
+    echo "paused"
+  else
+    if [[ -e $marker ]]; then
+      rm -f -- "$marker" || die "could not clear the pause marker — the fleet is STILL paused"
+    fi
+    echo "running"
   fi
 }
 
@@ -7478,9 +7514,10 @@ case "${1:-}" in
   ws-reap)   shift; cmd_ws_reap "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
+  coord-pause) shift; cmd_coord_pause "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi

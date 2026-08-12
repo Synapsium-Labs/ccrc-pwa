@@ -453,6 +453,62 @@ describe('readRegistryMeasured / RegistryRead', () => {
     expect(read).toEqual({ listed: false });
     expect(await readRegistry(localIO, cfg)).toEqual([]);
   });
+
+  // BUILD 4, D-B4-10. `watch.ts`'s `emitCoord` needs a NON-session fact out of
+  // this same directory — `coordinator-paused` and `mail-disabled`, neither of
+  // which is a `*.uuid` and so neither of which survives into `records`. A
+  // second `readdir` for that would be a second clock for one fact, and the two
+  // would disagree on exactly the ticks that matter.
+  it('carries the RAW listing it derived the records from, so a caller needing a non-session '
+     + 'fact out of the same directory shares the one readdir', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    writeFileSync(path.join(reg, 'coordinator-paused'), '');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const counted: FleetIO = {
+      ...localIO,
+      readdir: async (p) => { listings += 1; return localIO.readdir(p); },
+    };
+    const read = await readRegistryMeasured(counted, cfg);
+    expect(read.listed).toBe(true);
+    expect(read.listed && [...read.names].sort()).toEqual(
+      (await localIO.readdir(reg))!.sort(),
+    );
+    // The marker is IN it — the whole point, and the thing `records` cannot say.
+    expect(read.listed && read.names).toContain('coordinator-paused');
+    // …and it cost exactly the one listing this function always took.
+    expect(listings).toBe(1);
+  });
+
+  it('carries the FIRST listing even when the reap-race re-listing ran', async () => {
+    // The second read (`registry.ts`'s hold/identity resolution) exists to
+    // settle a per-row reap race, runs on SOME calls only, and hanging the
+    // markers' clock on it would make the pause banner's cadence depend on
+    // whether an unrelated session happened to be mid-reap.
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    writeFileSync(path.join(reg, 'coordinator-paused'), '');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const markerVanishesOnRelist: FleetIO = {
+      ...localIO,
+      readdir: async (p) => {
+        const names = await localIO.readdir(p);
+        if (names === null) return names;
+        listings += 1;
+        // The first listing is the honest one; the second drops the marker AND
+        // the row's `.uuid`, which is what forces the re-listing branch to run
+        // at all (an unmeasured identity triple + a twice-observed absence).
+        return listings === 1 ? names : names.filter((n) => n !== 'coordinator-paused' && !n.endsWith('.uuid'));
+      },
+      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+    };
+    const read = await readRegistryMeasured(markerVanishesOnRelist, cfg);
+    expect(listings).toBe(2);          // the re-listing really did run
+    expect(read.listed).toBe(true);
+    expect(read.listed && read.names).toContain('coordinator-paused');
+  });
 });
 
 describe('observability (warnOnce, escalation, the whole-fleet episode)', () => {
