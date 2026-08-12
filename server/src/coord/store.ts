@@ -176,13 +176,24 @@ const OUTSTANDING_OR_ABANDONED_SQL =
   "AND COALESCE(rr.state, '') NOT IN ('done','failed')))";
 
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
- *  read — they differ only in their WHERE clause, never in these columns. */
+ *  read — they differ only in their WHERE clause, never in these columns.
+ *
+ *  `d.id AS deliveryId` ALONGSIDE `m.id AS id` (blocking review finding,
+ *  re-opened D-41): `m.id` (`mail.id`) and `d.id` (`mail_deliveries.id`) are
+ *  two independent `AUTOINCREMENT` sequences (`schema.ts`) that only walk
+ *  together while every mail resolves to exactly one delivery. Both
+ *  `GET /api/mail/:id` (`deliveryEnvelope`) and `POST /api/mail/:id/ack`
+ *  (`coord.delivery`) key on the DELIVERY id, and the reference-nudge
+ *  protocol (`renderMailNudge`, `coord/envelope.ts`) sends a worker straight
+ *  from this listing into both of those routes — without this column the
+ *  only id on offer was `mail.id`, which resolves the WRONG row (or 404s)
+ *  the moment one mail fans out to more than one recipient. */
 const MAIL_ROW_COLUMNS =
-  'm.id AS id, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
+  'm.id AS id, d.id AS deliveryId, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
   'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state';
 
 interface MailRowDb {
-  id: number; at: number; fromId: string; toId: string; runId: number | null;
+  id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
   kind: string; subject: string; artifacts: string; state: string;
 }
 
@@ -856,6 +867,19 @@ export class CoordStore {
              state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
   }
 
+  /** The stored envelope for one delivery, for GET /api/mail/:id — the body
+   *  channel the reference nudge (robust-mail-delivery spec §1.1/1.2) points
+   *  at instead of a typed payload. Separate from `delivery()` so that route's
+   *  hot path keeps its narrow 4-column select; this one adds only the single
+   *  extra column a body-serving route needs. */
+  deliveryEnvelope(id: number): { id: number; toId: string; state: MailDeliveryState; envelope: string } | null {
+    const row = this.db.prepare('SELECT id, toId, state, envelope FROM mail_deliveries WHERE id = ?')
+      .get(id) as { id: number; toId: string; state: string; envelope: string } | undefined;
+    if (!row) return null;
+    return { id: row.id, toId: row.toId,
+             state: isMailDeliveryState(row.state) ? row.state : 'unknown', envelope: row.envelope };
+  }
+
   /**
    * Every delivery ADDRESSED TO `toId`, newest first, as `MailSummary` — the
    * read side of `GET /api/mail?to=<id>` (review finding 15: this route fell
@@ -922,7 +946,7 @@ export class CoordStore {
    *  how a row is read. */
   private hydrateMail(rows: readonly MailRowDb[]): MailSummary[] {
     return rows.map((r) => ({
-      id: r.id, at: r.at, fromId: r.fromId, toId: r.toId, runId: r.runId,
+      id: r.id, deliveryId: r.deliveryId, at: r.at, fromId: r.fromId, toId: r.toId, runId: r.runId,
       kind: isMailKind(r.kind) ? r.kind : 'unknown', subject: r.subject,
       artifacts: JSON.parse(r.artifacts) as string[],
       state: isMailDeliveryState(r.state) ? r.state : 'unknown',

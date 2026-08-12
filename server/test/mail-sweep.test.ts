@@ -18,7 +18,7 @@ import type { Deps } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { renderEnvelope } from '../src/coord/envelope.js';
+import { renderEnvelope, renderMailNudge } from '../src/coord/envelope.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
@@ -44,14 +44,26 @@ const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = 900_000; // watch.ts's own PR_BACKOFF_MAX_MS, mirrored — see its own comment
 const PAST_SWEEP_MS = MAIL_SWEEP_MS + 1_000; // clears the lane's own re-sweep gate
 
-const ENVELOPE = 'ccrc-mail test payload'; // 23 chars — under ECHO_NEEDLE(24), one line
+// The STORED envelope's own bytes — `mail_deliveries.envelope`, what
+// `queueTestDelivery` writes below. Under the reference-nudge lane
+// (robust-mail-delivery) this is no longer what gets TYPED — it is served
+// verbatim over `GET /api/mail/:id` instead (`mail-routes.test.ts`'s own
+// coverage) — so its content is arbitrary here; only its presence in the
+// `mail_deliveries` row matters to these tests.
+const ENVELOPE = 'ccrc-mail test payload';
+// The single-line reference the delivery lane actually types, for THIS
+// file's one recipient (`ID`). `renderMailNudge` is a pure function of
+// `toId` alone — the same bytes every test in this file that reaches a
+// successful send should see land in the pane, regardless of which
+// delivery triggered it (spec §1.1's "ID-AGNOSTIC… one nudge drains all").
+const NUDGE = renderMailNudge(ID);
 
 const emptyBox = '❯ \n';
 const echoedBox = (text: string): string => `❯ ${text}\n`;
 /** The exact three-capture script a clean `sendPrompt` success consumes:
  *  empty-draft check, echo verification, empty-after-Enter. Lifted from
  *  send.test.ts's own "happy path" fixture. */
-const HAPPY_PANES = [emptyBox, echoedBox(ENVELOPE), emptyBox];
+const HAPPY_PANES = [emptyBox, echoedBox(NUDGE), emptyBox];
 
 const seedRegistry = (home: string, id: string, uuid = UUID): void => {
   const reg = path.join(home, '.cc-sessions');
@@ -242,7 +254,7 @@ describe('sweepMail: the gate', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
     expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
@@ -301,30 +313,50 @@ describe('sweepMail: the gate', () => {
     expect(literalSends(h.calls)).toEqual([]);
   });
 
-  it('does NOT deliver on a STALE hookstate — an absent answer is not an idle one', async () => {
+  // Hard case (b) / F6b closed (robust-mail-delivery spec §2.1): this used to
+  // assert NO delivery — the OLD gate (`hs === null || hs.state !== 'done' ||
+  // hs.ask !== null`) treated a stale-therefore-null hookstate as proof of
+  // busy, forever. A resumed long-idle worker, or one whose `/clear` emitted
+  // no registered hook, has no fresh hookstate but is plainly deliverable —
+  // the live status file, read unconditionally four lines below in
+  // `sweepMail`, can see it is idle. The gate is relaxed to
+  // `hs !== null && hs.ask !== null`: a null/stale hookstate is now
+  // NON-BLOCKING, and idle authority moves wholly to the live signal
+  // (`readLiveState`/`liveSessionStatus` + `MAIL_QUIET_MS`, seeded idle+quiet
+  // below exactly as every other happy-path test in this file already does).
+  it('DELIVERS on a STALE/null hookstate when the LIVE signal affirmatively says idle+quiet — F6b closed', async () => {
     const h = harness({ panes: HAPPY_PANES });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
-    seedHookState(h.home, ID, { updatedAt: NOW - HOOKSTATE_FRESH_MS - 60_000 });
-    seedLiveState(h.home);
-    queueTestDelivery(coord, ID, ENVELOPE);
+    seedHookState(h.home, ID, { updatedAt: NOW - HOOKSTATE_FRESH_MS - 60_000 }); // readHookState -> null
+    seedLiveState(h.home); // affirmatively idle, quiet past MAIL_QUIET_MS
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
-  it('does NOT deliver while the hook says working', async () => {
+  // The second-order consequence of the same relaxation: `hs.state` is no
+  // longer read by the gate AT ALL — only `hs.ask`. A FRESH hookstate that
+  // says `working` (not `done`) used to `continue` unconditionally; it no
+  // longer does, on its own. This models the realistic disagreement window —
+  // the hook write raced the live file's own update — where the two signals
+  // briefly disagree and the live file (the newer, more authoritative read)
+  // wins.
+  it('a FRESH hookstate reporting `working` no longer blocks delivery by itself — only `ask` does; live-idle+quiet is sole authority now', async () => {
     const h = harness({ panes: HAPPY_PANES });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
     seedHookState(h.home, ID, { state: 'working' });
     seedLiveState(h.home);
-    queueTestDelivery(coord, ID, ENVELOPE);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
   it('does NOT deliver while an ask or a dialog is pending — never into a menu', async () => {
@@ -365,12 +397,12 @@ describe('sweepMail: the gate', () => {
     queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
 
     const { id: id2 } = queueTestDelivery(coord, ID, 'a second message, still within cooldown');
     advance(PAST_SWEEP_MS); // clears the lane gate; well under MAIL_COOLDOWN_MS (120s)
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]); // no second send
+    expect(literalSends(h.calls)).toEqual([NUDGE]); // no second send
     expect(deliveryRow(coord, id2).state).toBe('queued'); // untouched, still waiting
   });
 
@@ -431,12 +463,116 @@ describe('sweepMail: the gate', () => {
     expect(literalSends(h.calls)).toEqual([]);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  });
+});
+
+// robust-mail-delivery spec §4 / requirements (a)-(d): the hard cases the
+// design was written to pin explicitly, exercised end to end through
+// `sweepMail` — gate, injection and (for (c)) the residue clear all in one
+// pass, the same shape a real sweep runs.
+describe('sweepMail: hard cases', () => {
+  it('(a) a large multi-line body is delivered via the tiny nudge — the body itself is never typed, never wraps, never verify-fails', async () => {
+    // A real ~3KB, 80-line rendered envelope — the exact F7 shape ("a
+    // multi-line ~3KB brief verify-fails") the old typed-envelope lane could
+    // not deliver reliably. Stored as `mail_deliveries.envelope` (served
+    // later over `GET /api/mail/:id`) but never typed.
+    const bigBody = Array.from({ length: 80 }, (_, i) => `line ${i}: ${'x'.repeat(60)}`).join('\n');
+    const bigEnvelope = renderEnvelope({
+      id: 4242, fromId: FROM_ID, toId: ID, runId: null, program: null, wave: null, waveOf: null,
+      kind: 'finding', subject: 'a big finding', body: bigBody, artifacts: [],
+    });
+    expect(bigEnvelope.length).toBeGreaterThan(3000);
+    expect(bigEnvelope.split('\n').length).toBeGreaterThan(20);
+
+    // The ORDINARY 3-capture happy-path script, sized for a single-line
+    // nudge — if the 80-line body were what actually got typed, this script
+    // would starve (no M-Enter entries scripted, echo needle would never
+    // match) and the send would fail verification.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, bigEnvelope);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(literalSends(h.calls).some((s) => s.includes('line 0:'))).toBe(false);
+    // No M-Enter anywhere: a multi-line body would need one per line break;
+    // the nudge is one line, so `sendPrompt`'s join loop never fires.
+    expect(keyPresses(h.calls)).not.toContain('M-Enter');
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  // (c): the wave-2 acceptance walkthrough (spec §4) — a session whose box
+  // holds accumulated non-human paste-chip fragments from the OLD lane's
+  // failed retries (modelled on the already-corrupted `ccrc-pwa-amber-harbor`
+  // worker the orchestrator will re-run this proof against live), idle+quiet,
+  // with a PRIOR attempt on this delivery already on record. No human clears
+  // the box.
+  it('(c) a DIRTY box (accumulated non-human residue) on an idle+quiet worker with a prior attempt is CLEARED then delivered', async () => {
+    const dirtyBox = '❯ [Pasted text #1 +212 lines]\n';
+    const h = harness({ panes: [dirtyBox, emptyBox, echoedBox(NUDGE), emptyBox] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    // `prior` (watch.ts) = attempts>0 || deliveredAt!==null — model the
+    // corrupted worker's own history honestly instead of a first attempt.
+    coord.db.prepare('UPDATE mail_deliveries SET attempts = 3 WHERE id = ?').run(id);
+
+    await w.sweepMail();
+    // The chip was cleared (C-u), THEN the nudge was typed and submitted —
+    // never retyped over, never left stranded.
+    expect(keyPresses(h.calls)).toContain('C-u');
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('(c, continued) the SAME dirty box on a NEVER-attempted delivery is left untouched — clearMailResidue needs a prior attempt on record', async () => {
+    const dirtyBox = '❯ [Pasted text #1 +212 lines]\n';
+    const h = harness({ panes: [dirtyBox] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE); // attempts: 0, deliveredAt: null
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toEqual([]); // no C-u at all — never even attempted a clear
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.lastError).toBe('draft-present');
+  });
+
+  it('(d) a genuine human draft is STILL never cleared or typed over, even with a prior attempt on record — clearMailResidue does not widen what counts as human text', async () => {
+    const humanBox = '❯ can you also check the staging deploy\n';
+    const h = harness({ panes: [humanBox] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.db.prepare('UPDATE mail_deliveries SET attempts = 3 WHERE id = ?').run(id); // prior = true
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toEqual([]);
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.lastError).toBe('draft-present');
   });
 });
 
 describe('sweepMail: the send', () => {
-  it('injects through sendPrompt, inside the session KeyedQueue, with the STORED envelope', async () => {
+  it('injects through sendPrompt, inside the session KeyedQueue, with the NUDGE — never the stored envelope bytes', async () => {
     const h = harness({ panes: HAPPY_PANES });
     const coord = store(h.home);
     const { w, deps } = await primedWatcher(h, coord);
@@ -455,7 +591,7 @@ describe('sweepMail: the send', () => {
 
     release();
     await sweep;
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]); // the exact stored bytes, unaltered
+    expect(literalSends(h.calls)).toEqual([NUDGE]); // the tiny nudge, not d.envelope
   });
 
   it('does not double-inject when a second sweep starts before the first sweep\'s send has resolved (review findings 1/5)', async () => {
@@ -492,7 +628,7 @@ describe('sweepMail: the send', () => {
 
     release();
     await Promise.all([sweepA, sweepB]);
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]); // exactly ONE send, not two
+    expect(literalSends(h.calls)).toEqual([NUDGE]); // exactly ONE send, not two
     expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
@@ -571,7 +707,7 @@ describe('sweepMail: the send', () => {
 
     releaseGate();
     await Promise.all([sweepA, sweepB]);
-    expect(literalSends(h.calls), 'exactly ONE send, not two').toEqual([ENVELOPE]);
+    expect(literalSends(h.calls), 'exactly ONE send, not two').toEqual([NUDGE]);
     expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
@@ -593,18 +729,18 @@ describe('sweepMail: the send', () => {
     expect(deliveryRow(coord, id).lastError).toBe('draft-present');
   });
 
-  it('F3 / bug #21: resumes its OWN unsubmitted envelope rather than self-blocking with draft-present', async () => {
-    // REPRODUCES the dogfood self-block (build4.md's F3, live wave-1): a
-    // PRIOR sweep typed this exact envelope and its Enter was lost, so the
-    // box now holds OUR OWN text, byte for byte — the shape `echoedBox`
-    // fixtures throughout this file already model for a freshly-typed
-    // envelope. Pre-fix, `sendPrompt` (never passed `replaceDraft`) would
-    // read this as `draft-present` and back off — FOREVER, since nothing
-    // ever empties the box again. Post-fix, `resumeIfOwn` recognizes the
-    // marker row as this delivery's own text and finishes the submit: no
-    // C-u, no retyping (`literalSends` stays empty — it is never composed
-    // again), exactly one `Enter`.
-    const h = harness({ panes: [echoedBox(ENVELOPE), emptyBox] });
+  it('F3 / bug #21: resumes its OWN unsubmitted nudge rather than self-blocking with draft-present', async () => {
+    // REPRODUCES the dogfood self-block (build4.md's F3, live wave-1) under
+    // the reference-nudge lane: a PRIOR sweep typed the nudge and its Enter
+    // was lost, so the box now holds OUR OWN text, byte for byte — the shape
+    // `echoedBox` fixtures throughout this file already model for a
+    // freshly-typed nudge. Pre-fix, `sendPrompt` (never passed
+    // `replaceDraft`) would read this as `draft-present` and back off —
+    // FOREVER, since nothing ever empties the box again. Post-fix,
+    // `resumeIfOwn` recognizes the marker row as our own text and finishes
+    // the submit: no C-u, no retyping (`literalSends` stays empty — it is
+    // never composed again), exactly one `Enter`.
+    const h = harness({ panes: [echoedBox(NUDGE), emptyBox] });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
@@ -640,61 +776,43 @@ describe('sweepMail: the send', () => {
     expect(row.state).toBe('queued');
   });
 
-  it('F3 blocking finding: a DIFFERENT envelope stuck in the box is never mis-submitted under a later delivery\'s row', async () => {
-    // The reachable failure a real review caught: this file's own ENVELOPE
-    // fixture ('ccrc-mail test payload') and the 'hello world' fixture in
-    // send.test.ts both have a DISTINCTIVE marker row, so neither test above
-    // exercises the shape that actually breaks — `renderEnvelope`'s first
-    // rendered line is the SAME constant fence ("```ccrc-mail") on every
-    // real mail envelope, so a marker-row-only match cannot tell two
-    // DIFFERENT envelopes to the SAME session apart.
-    //
-    // Here the box already holds a REAL rendered envelope A, left un-
-    // submitted by a prior sweep's lost Enter (exactly the terminal
-    // `enter-ignored` shape the test above this one pins — the row rejects,
-    // but nothing ever clears the physical box). A second, unrelated
-    // envelope B is then queued for the SAME session and becomes the
-    // delivery THIS sweep actually attempts. Pre-fix, `resumeIfOwn` read
-    // A's marker row as proof it was B's own draft and pressed Enter,
-    // submitting A's bytes while marking B `delivered` though its own text
-    // was never typed anywhere.
-    const envelopeA = renderEnvelope({
-      id: 9001, fromId: FROM_ID, toId: ID, runId: null, program: null, wave: null, waveOf: null,
-      kind: 'finding', subject: 'first', body: 'the first message, stuck in the box', artifacts: [],
-    });
-    const boxOf = (envelope: string): string =>
-      envelope.split('\n').map((l, i) => (i === 0 ? `❯ ${l}` : `  ${l}`)).join('\n') + '\n';
-    // This harness's fake tmux answers `capture-pane` from a fixed script
-    // regardless of what keys are sent — the same convention every other
-    // test in this file uses — so a single scripted pane models a box that
-    // never changes, exactly what a stuck, un-submitted draft looks like.
-    const h = harness({ panes: [boxOf(envelopeA)] });
+  // SUPERSEDED by the reference-nudge lane, kept as a record of why the old
+  // per-delivery discrimination test no longer applies HERE: pre-nudge, the
+  // lane typed `renderEnvelope`'s own multi-line output, whose FIRST line is
+  // the SAME constant fence ("```ccrc-mail") on every envelope, so a
+  // marker-row-only match could not tell two DIFFERENT envelopes to the same
+  // session apart — a draft left by envelope A's lost Enter could be
+  // mis-submitted under envelope B's identity. `renderMailNudge` is a pure
+  // function of `toId` ALONE (no delivery id anywhere in it, spec §1.1's
+  // "ID-AGNOSTIC by design") — so within this lane there is no longer a
+  // second envelope for a stray draft to be confused WITH: whatever nudge
+  // sits in the box for this session, resuming it is always correct,
+  // regardless of which due delivery this sweep is actually attempting. The
+  // underlying `matchesOwnDraft` machinery this bug lived in is unchanged and
+  // still pinned directly, for a generic multi-line caller, in
+  // `send.test.ts`'s own "resumeIfOwn discriminates PER DELIVERY" suite.
+  it('a stale OWN nudge is resumed regardless of WHICH queued delivery this sweep actually attempts — nothing left to mis-attribute', async () => {
+    const h = harness({ panes: [echoedBox(NUDGE), emptyBox] });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
     seedHookState(h.home, ID);
     seedLiveState(h.home);
 
-    // Queued and rendered the same way `POST /api/mail` actually does it
-    // (coord/routes.ts): insert the mail row, queue the delivery so its own
-    // id exists, THEN render the envelope against the DELIVERY id.
-    const mailB = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId: ID, runId: null,
-      kind: 'finding', subject: 'second', body: 'a totally different second message', artifacts: [] });
-    const deliveryB = coord.queueDelivery(mailB.id, ID, '');
-    const envelopeB = renderEnvelope({
-      id: deliveryB.id, fromId: FROM_ID, toId: ID, runId: null, program: null, wave: null, waveOf: null,
-      kind: 'finding', subject: 'second', body: 'a totally different second message', artifacts: [],
-    });
-    coord.setDeliveryEnvelope(deliveryB.id, envelopeB);
+    // TWO separate deliveries queued for the same session — under the old
+    // lane these had two different rendered bodies; under the nudge lane
+    // both would produce the IDENTICAL typed text (`NUDGE`), so there is
+    // nothing for a stray draft to be mistaken for besides "ours".
+    queueTestDelivery(coord, ID, 'first queued delivery — unrelated stored envelope bytes');
+    const { id: secondId } = queueTestDelivery(coord, ID, 'a second, later delivery');
 
     await w.sweepMail();
-    // No Enter pressed on A's bytes, and B's own text is never composed
-    // again either (nothing was retyped) — refused as a foreign draft.
-    expect(keyPresses(h.calls)).toEqual([]);
+    // No C-u, no retype — only the resumed Enter.
+    expect(keyPresses(h.calls)).toEqual(['Enter']);
     expect(literalSends(h.calls)).toEqual([]);
-    const row = deliveryRow(coord, deliveryB.id);
-    expect(row.state).toBe('queued');            // NOT delivered
-    expect(row.lastError).toBe('draft-present');  // refused, not silently mis-submitted
+    // Only ONE row is attempted per session per sweep (`seen`) — the second
+    // stays queued, untouched by this sweep either way.
+    expect(deliveryRow(coord, secondId).state).toBe('queued');
   });
 
   it('backs off with exponential spacing on draft-present / dialog-open / verify-failed', async () => {
@@ -760,7 +878,7 @@ describe('sweepMail: the send', () => {
   it('parks IMMEDIATELY on enter-ignored — the text is in the box and a blind retry is forbidden', async () => {
     // Echoes on the first read, then NEVER clears — `submitted()` never sees
     // our text leave the box, on either Enter press.
-    const h = harness({ panes: [emptyBox, echoedBox(ENVELOPE)] });
+    const h = harness({ panes: [emptyBox, echoedBox(NUDGE)] });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
@@ -822,7 +940,12 @@ describe('sweepMail: the send', () => {
 });
 
 describe('sweepMail: replay until ack', () => {
-  it('replays the SAME BYTES after MAIL_REPLAY_MS, never a re-render', async () => {
+  // Hard case (e) — half of it: replay-until-ack keeps working, and every
+  // replay types the SAME nudge (`renderMailNudge` is a pure function of
+  // `toId` alone — never `d.envelope`, and never re-rendered from `mail.body`
+  // either, unlike the old lane where `renderEnvelope` ran once at queue time
+  // and the stored bytes had to be replayed verbatim).
+  it('replays the SAME NUDGE after MAIL_REPLAY_MS — insensitive to the mail body, never a re-render of anything', async () => {
     const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] }); // two full sends
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
@@ -832,17 +955,17 @@ describe('sweepMail: replay until ack', () => {
     const { id, mailId } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
     expect(deliveryRow(coord, id).state).toBe('delivered');
 
-    // What a RE-RENDER would have picked up, had the sweep called
-    // `renderEnvelope` again instead of replaying the stored bytes — proves
-    // the assertion below isn't vacuously true just because nothing changed.
+    // What a re-render (of either the envelope OR the nudge) could have
+    // picked up, had either been derived from `mail.body` — proves the
+    // assertion below isn't vacuously true just because nothing changed.
     coord.db.prepare('UPDATE mail SET body = ? WHERE id = ?').run('a completely different body', mailId);
 
     advance(MAIL_REPLAY_MS + 1_000);
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
   });
 
   it('stops replaying the moment the delivery is acked', async () => {
@@ -855,12 +978,12 @@ describe('sweepMail: replay until ack', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
     coord.markAcked(id, Date.now());
 
     advance(MAIL_REPLAY_MS + 1_000);
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]); // no second send — an acked row is never due
+    expect(literalSends(h.calls)).toEqual([NUDGE]); // no second send — an acked row is never due
   });
 
   it('records the UserPromptSubmit edge the moment it appears — long before the row would ever become due for replay (review finding 3)', async () => {
@@ -892,7 +1015,7 @@ describe('sweepMail: replay until ack', () => {
     seedHookState(h.home, ID, { state: 'working', event: 'UserPromptSubmit', updatedAt: edgeAt });
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);          // still no re-injection; not due
+    expect(literalSends(h.calls)).toEqual([NUDGE]);          // still no re-injection; not due
     const ingestedNow = () => (coord.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?')
       .get(id) as { ingestedAt: number | null }).ingestedAt;
     expect(ingestedNow()).toBe(edgeAt);                         // sampled immediately, not 600 s later
@@ -904,11 +1027,11 @@ describe('sweepMail: replay until ack', () => {
     seedHookState(h.home, ID); // the recipient goes idle again
     vi.setSystemTime(deliveredAt + MAIL_REPLAY_MS + 1_000);
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);          // deliveredAt+replay passed; edgeAt+replay has not
+    expect(literalSends(h.calls)).toEqual([NUDGE]);          // deliveredAt+replay passed; edgeAt+replay has not
 
     vi.setSystemTime(edgeAt + MAIL_REPLAY_MS + 1_000);
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]); // now due, from the EDGE's clock
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]); // now due, from the EDGE's clock
   });
 
   it('a REPLAY (a fresh markDelivered) advances the due-clock past a stale ingestedAt — the spacing does not collapse to cooldown (review findings 2/6)', async () => {
@@ -927,7 +1050,7 @@ describe('sweepMail: replay until ack', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();                                        // send #1 (initial delivery)
-    expect(literalSends(h.calls)).toEqual([ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
 
     // The UserPromptSubmit edge lands early, well inside the replay window.
     advance(PAST_SWEEP_MS);
@@ -942,14 +1065,14 @@ describe('sweepMail: replay until ack', () => {
     seedHookState(h.home, ID);
     vi.setSystemTime(edgeAt + MAIL_REPLAY_MS + 1_000);
     await w.sweepMail();                                        // send #2 (the replay)
-    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]);
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
 
     // Just past MAIL_COOLDOWN_MS since that replay — under the pre-fix
     // COALESCE clock (still pinned at `edgeAt`) this would already be due
     // again; under the fix it must not be, all the way out past cooldown.
     advance(MAIL_COOLDOWN_MS + 1_000);
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]); // still no third send
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]); // still no third send
 
     // Only once MAIL_REPLAY_MS has elapsed from the REPLAY's own deliveredAt
     // does the row become due a third time.
@@ -957,7 +1080,7 @@ describe('sweepMail: replay until ack', () => {
       'SELECT deliveredAt FROM mail_deliveries WHERE id = ?').get(id) as { deliveredAt: number };
     vi.setSystemTime(secondDeliveredAt + MAIL_REPLAY_MS + 1_000);
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE, ENVELOPE]); // send #3
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE, NUDGE]); // send #3
   });
 
   it('a SECOND, later UserPromptSubmit edge does not push the replay clock out again (review finding 31)', async () => {
@@ -998,7 +1121,7 @@ describe('sweepMail: replay until ack', () => {
     seedHookState(h.home, ID);   // idle again
     vi.setSystemTime(edge1At + MAIL_REPLAY_MS + 1_000);
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([ENVELOPE, ENVELOPE]);   // the replay fired
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);   // the replay fired
   });
 });
 
