@@ -77,6 +77,22 @@ route (clause 9); dispatch is the one writer of that step, and a coordinator
 that "helps" by clearing the pane itself is a second writer racing the
 first.
 
+**The brief must say: commit on the WORKSPACE branch — never a separate
+feature branch (F5, build4 dogfood wave 1).** `ws-add` creates the workspace
+on its own branch (`ws/<slug>`); §4's done-fingerprint re-measures THAT
+branch's tip (`record.branch`, the live registry's own field), never a
+branch the brief merely names. The ordinary per-PR SDD convention elsewhere
+in this codebase — "cut a fresh `feat/<name>` branch from main" — is WRONG
+here: a worker that follows it faithfully leaves the workspace branch
+unmoved, so every later `/advance`/`/close` re-measures a tip that never
+changes and refuses `stale-tip` forever, with no non-abandon path to close a
+run whose work is otherwise correct and reviewed. Every brief — wave 1's
+spawn and every reclaim after it — must say plainly: **"commit on this
+workspace's own branch; do not create or switch to a separate feature
+branch."** This is not optional phrasing left to judgement (clause 5's "the
+content is this session's judgement" does not cover it) — it is the one
+sentence that keeps the wave closeable at all.
+
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
 and that injection is your next turn.
