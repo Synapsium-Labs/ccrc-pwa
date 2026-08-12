@@ -394,12 +394,42 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   # projects dir Claude never writes. cmd_swap's transcript copy already
   # resolves for exactly this reason (its `readlink -f`), and the server's
   # `resolveTranscriptFile` resolves the same way; this was the last raw one.
-  local id="$1" wrapper cfg workdir uuid munged
+  #
+  # EXISTENCE-FIRST (spec §2.5). Resolving is necessary and was never
+  # sufficient: a session that moves relocates its transcript, and this
+  # function's answer is written into archive manifests and reap TOMBSTONES,
+  # which outlive the registry row they describe. An unchecked guess there is
+  # a permanent wrong address. So: the resolved munge if that file exists, then
+  # the raw munge if that one does, then the uuid itself — newest match under
+  # THIS account's config dir — and only then today's unchecked answer, so a
+  # session that has written nothing yet still records the canonical address
+  # rather than an empty string.
+  #
+  # Deliberately no live-cwd rung and no cross-account rung. These callers run
+  # at archive, audit and reap time, when the session is stopped or idle and the
+  # registry workdir is the durable fact; and a foreign account's copy needs a
+  # banner naming it (D4 rung 6), which a tombstone has nowhere to put.
+  local id="$1" wrapper cfg workdir uuid munged raw newest
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   cfg=$(_cfg_dir "$wrapper")
   [[ -n "$cfg" && -n "$workdir" && -n "$uuid" ]] || return 1
+  raw=$(printf '%s' "$workdir" | tr './_' '---')
   workdir=$(_ws_realpath "$workdir")
   munged=$(printf '%s' "$workdir" | tr './_' '---')
+  if [[ -f "$cfg/projects/$munged/$uuid.jsonl" ]]; then
+    printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"; return 0
+  fi
+  if [[ -f "$cfg/projects/$raw/$uuid.jsonl" ]]; then
+    printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$raw" "$uuid"; return 0
+  fi
+  # Newest by mtime among every project dir holding this uuid. `stat -c %Y` per
+  # candidate rather than `ls -t`: the paths are ccd-controlled but a project
+  # dir name is a munged workdir, and parsing `ls` output is how a space in one
+  # becomes a silently wrong answer.
+  newest=$(_transcript_matches "$cfg" "$uuid" \
+    | while IFS= read -r f; do printf '%s\t%s\n' "$(stat -c %Y "$f" 2>/dev/null || printf 0)" "$f"; done \
+    | LC_ALL=C sort -rn -k1,1 | head -1 | cut -f2-)
+  if [[ -n "$newest" ]]; then printf '%s\n' "$newest"; return 0; fi
   printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"
 }
 
