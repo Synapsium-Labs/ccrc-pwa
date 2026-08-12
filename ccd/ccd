@@ -28,6 +28,7 @@ LIMITS_DIR="$HOME/.cc-limits"   # per-account {"five":N,"seven":N,"ts":epoch} wr
 SWAP_THRESHOLD=90               # own 5h % that arms a pre-emptive swap
 SWAP_HEADROOM=30                # target must be at least this many points lower
 SWAP_COOLDOWN=900               # min seconds between swaps of one session
+SWAPBLOCK_COOLDOWN=1800         # min seconds before auto-swap retries a session whose last swap REFUSED
 SWAP_FRESH=1800                 # telemetry younger than this qualifies for pre-emptive swaps
 SWAP_QUIET=600                  # preempt only sessions quiet this long (any surface); rescue ignores
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
@@ -6729,10 +6730,18 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target hard_blocked=""
+  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
+  # A refused swap is not retried on the 5-second supervise tick. cmd_swap writes
+  # $REG/<id>.swapblocked as "<epoch> <reason>" when it cannot carry the conversation
+  # (spec §2.4); without this gate one refusal would produce 720 banners an hour, each
+  # one a notify.sh call and a swap.log line. The epoch is VALIDATED as digits rather
+  # than trusted: ccd runs under `set -u`, where `$(( now - garbage ))` on a hand-edited
+  # or half-written field emits an unbound-variable line on every single tick.
+  blocked=$(_reg_get "$id" swapblocked); bts="${blocked%% *}"
+  [[ "$bts" =~ ^[0-9]+$ && $((now - bts)) -lt "$SWAPBLOCK_COOLDOWN" ]] && return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
@@ -7238,20 +7247,84 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
   return 0
 }
 
-cmd_swap() {   # id target-wrapper — move a session to another account, conversation intact.
-  # Transcripts are plain JSONL with no account binding (validated 2026-07-03): copy the
-  # current transcript into the target config dir, flip the registry wrapper, restart.
+_swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot carry the
+  # conversation is refused, not completed (spec §2.4). A swap exists to MOVE a
+  # conversation; completing one with nothing found trades a session's entire history
+  # for a rate-limit reprieve, which is exactly the trade that made the 2026-08-11
+  # incident. Refusing keeps the session on an account that may be throttled but still
+  # holds its file, and puts a human in the loop.
+  #
+  # THREE channels, because the loudest one is the one nobody hears. The common
+  # invocation is from inside the session being swapped, where cmd_swap detaches a
+  # transient unit and returns 0 to its caller (see the systemd-run arm below) — the
+  # caller is dead, killed by this very swap, long before this function runs. So:
+  #   - $REG/<id>.swapblocked = "<epoch> <reason>" — the DURABLE one. On the fleet wire
+  #     within one 2s watcher tick and rendered on the row (spec M9). Survives nobody
+  #     watching, which /api/notify does not.
+  #   - $REG/notify.sh — the banner for whoever IS watching; the same hook the successful
+  #     swap already fires, so it rides a pipeline that is deployed and working.
+  #   - $REG/swap.log — the forensic trail beside every other swap decision.
+  #
+  # This refusal is deliberately NOT written in any of the four literal emission shapes
+  # server/test/wsaudit.test.ts harvests out of this file (its header lists them). Those
+  # belong to the workspace audit/reap protocol, which answers a MACHINE over a closed
+  # vocabulary that must have a matching sentence in wsaudit.ts, in both directions. A
+  # swap refusal answers a human. Pinned by server/test/ccd-swap-refuse.test.ts so the
+  # choice survives whoever edits this next.
+  local id="$1" cur="$2" target="$3" reason="$4" restart="${5:-0}"
+  _reg_set "$id" swapblocked "$(date +%s) $reason"
+  echo "$(date '+%F %T') swap-refused $id: $cur -> $target ($reason)" >> "$REG/swap.log"
+  [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap BLOCKED: $id stays on $cur — $reason" >/dev/null 2>&1
+  # NO `_reg_set lastswap` here, and the omission is load-bearing: _spawn reads lastswap
+  # and treats a spawn within 300s as the swap LANDING, answering the big-transcript
+  # resume gate with "resume from summary" — an auto-compaction. A refusal that stamped
+  # lastswap would compact the very history it refused in order to protect. lastswap is
+  # written only by a swap that completed.
+  if [[ "$restart" == 1 ]]; then
+    # Registry `wrapper` was never touched, so this puts the session back exactly where
+    # it was: same account, same unit, still holding its file. Same `|| cmd_ensure`
+    # fallback the successful swap's own tail uses for a box with no unit installed.
+    systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
+  fi
+  echo "ccd: refusing to swap $id: $reason — it stays on $cur. If there is genuinely nothing to carry: ccd swap --force $id $target" >&2
+  return 1
+}
+
+cmd_swap() {   # [--force] id target-wrapper — move a session to another account, conversation intact.
+  # Transcripts are plain JSONL with no account binding (validated 2026-07-03): carry the
+  # session's transcripts into the target config dir, flip the registry wrapper, restart.
   # Manual swaps may target ANY valid wrapper; the pool policy only constrains auto-swaps.
-  local id="${1:?usage: ccd swap <id> <target-wrapper>}" target="${2:?usage: ccd swap <id> <target-wrapper>}"
+  #
+  # Flags are stripped BEFORE the positional parse, so `ccd swap <id> <target> --force`
+  # and `ccd swap --force <id> <target>` mean the same thing and neither lets "--force"
+  # land in $1 or $2 — the same rule §4.1 needs for `ccd stop --surface`, applied here for
+  # the same reason. `--force` is an operator's word and stays one: _auto_swap_check never
+  # passes it and no CCD_ARGV entry builds it, so no server route can reach it; and
+  # _is_valid_wrapper rejects the literal, which is the second lock on the target slot.
+  local force="" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --)      shift; args+=("$@"); break ;;
+      *)       args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"    # bash >= 4.4 (the fleet host runs 5.2): an empty array here is
+                         # not an unbound-variable error under `set -u`.
+  local id="${1:?usage: ccd swap [--force] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${VALID_WRAPPERS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
   [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
   # Invoked from inside the session being swapped (Claude's own Bash tool)? The swap kills
-  # its caller mid-flight — detach an orphan to finish the job after we return.
+  # its caller mid-flight — detach an orphan to finish the job after we return. The
+  # detached process re-enters this function and runs the pre-flight itself; its refusal
+  # reaches the operator through swapblocked + notify.sh, never through this return code,
+  # which nothing is waiting for by then. --force rides along or the detached retry would
+  # silently drop the operator's decision.
   if [[ -n "${TMUX:-}" && "$(tmux display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
-    systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap '$id' '$target' >>'$REG/swap.log' 2>&1"
+    systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} '$id' '$target' >>'$REG/swap.log' 2>&1"
     echo "detached: $id will restart under $target in a few seconds (this session dies with the swap — that's expected)"
     return 0
   fi
@@ -7260,24 +7333,44 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
   srccfg=$(_cfg_dir "$cur"); dstcfg=$(_cfg_dir "$target")
   [[ -n "$srccfg" && -n "$dstcfg" ]] || die "no config-dir mapping for '$cur' -> '$target'"
   mdir=$(echo "$wd" | tr '/._' '---')
+  # PRE-FLIGHT — advisory, and it runs BEFORE the teardown. The glob is a read, so a
+  # refusal here costs nothing and leaves the session alive on the account that still
+  # holds its file; the pre-fix order looked only after stopping the unit and killing the
+  # pane, so a miss produced a session that was dead AND historyless. Advisory rather than
+  # authoritative because the file the swap actually carries is the one that exists after
+  # Claude Code has flushed below.
+  if [[ -z "$force" && -z "$(_transcript_matches "$srccfg" "$uuid")" ]]; then
+    _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur" 0
+    return 1
+  fi
   systemctl --user stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null
   sleep 1                                                  # let claude flush its final transcript entries
-  # Find the conversation by uuid, never by one guessed directory. Claude Code
-  # writes under the munge of ITS cwd; the line this replaces munged the
-  # REGISTRY workdir, and the two diverge the moment a session moves. On
-  # 2026-08-11 that miss cost a session its entire history and said so only in a
-  # log file nobody reads.
+  # AUTHORITATIVE. Two things changed across that sleep and both matter. The transcript
+  # gained the session's final entries — for a session being moved mid-turn, the most
+  # valuable lines in it, which is the whole reason the sleep exists. And the uuid may
+  # have ROTATED: a /clear does not delete the file, it mints a new uuid, and _sync_uuid
+  # writes that into the registry — so a swap that pre-flighted uuid-A can arrive here
+  # owning uuid-B. Re-read it; uuid-B is the one the resumed session will ask for.
+  #
   # gpt -> Anthropic: the Codex lane (via LiteLLM) writes assistant messages with
   # EMPTY text blocks, which the Anthropic API rejects on the next turn ("text
   # content blocks must be non-empty" -> every turn 400s). Fill them so the
   # resumed session is valid. Anthropic -> Anthropic and *-> gpt need no fixup.
   # The carry runs it on the COPY and BEFORE the hardlinks, because
   # _sanitize_anthropic rewrites through os.replace and that breaks links.
+  uuid=$(_reg_get "$id" uuid)
   local sanitize=0
   [[ "$cur" == gpt && "$target" != gpt ]] && sanitize=1
-  _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize" \
-    || echo "ccd: warn: transcript $uuid.jsonl not found under $cur config; session may resume without history" >&2
+  if ! _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize"; then
+    if [[ -z "$force" ]]; then
+      # Registry `wrapper` is still $cur — nothing has been flipped — so _swap_refuse's
+      # restart puts the session back on the account that still holds its history.
+      _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur after flush" 1
+      return 1
+    fi
+    echo "ccd: warn: no transcript for $uuid under $cur config; --force: $id resumes without history" >&2
+  fi
   # Unconditional, and separate: sidecars are globbed in their own right and
   # exist in project dirs that hold no .jsonl for this uuid at all.
   _swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"
@@ -7294,6 +7387,9 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
   fi
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
+  rm -f "$REG/$id.swapblocked"   # a completed swap supersedes an earlier refusal: a
+                                 # banner left standing on a row that just worked teaches
+                                 # the operator to ignore banners.
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
   systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   # Optional user notification (swap kills any attached remote session — give them a ping).
