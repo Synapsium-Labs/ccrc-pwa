@@ -1261,11 +1261,13 @@ interface AccountDef {
   homeAble: boolean;
   /** Accepted by ccd's `_is_valid_wrapper` (ccd:104: `VALID_WRAPPERS` plus a
    *  hardcoded `gpt`) — the set `ccd swap` / `ccd attach` / etc. will act on
-   *  BY NAME. All five are `true`: `claude-dev0`'s promotion added a
-   *  `claude-dev0-*)` arm to ccd's own case statements (`_cfg_dir`,
-   *  `_id_wrapper`), and `VALID_WRAPPERS` (ccd:14) now lists it too —
-   *  confirmed by this file's cross-language fixture test, not merely
-   *  asserted here. */
+   *  BY NAME. All five are `true`: `claude-dev0`'s promotion added an arm to
+   *  each of ccd's own case statements — an exact-match `claude-dev0)` in
+   *  `_cfg_dir` (ccd:6531, matching the wrapper NAME) and a glob
+   *  `claude-dev0-*)` in `_id_wrapper` (ccd:6669, matching an id PREFIX,
+   *  different shape on purpose) — and `VALID_WRAPPERS` (ccd:14) now lists
+   *  it too — confirmed by this file's cross-language fixture test, not
+   *  merely asserted here. */
   ccdValid: boolean;
   /** `install-session-hooks.sh`'s default `homes` array installs
    *  `session-hook.sh` here, AND — since PR J's install lane —
@@ -1292,11 +1294,16 @@ interface AccountDef {
  * `KNOWN_WRAPPERS`, `isWrapper`) is COMPUTED from this rather than a second
  * hand-typed copy.
  *
- * Declaration order is `claude`, `claude2`, `claude-corp` (ccd's own
- * `VALID_WRAPPERS` order, ccd:14), then `gpt` (ccd's hardcoded 4th lane,
- * `_is_valid_wrapper`, ccd:104), then `claude-dev0` (the 5th account, known
- * to this repo and to nothing under `ccd/`). `Object.keys` on a `Record`
- * keyed by non-numeric strings preserves insertion order, which
+ * Declaration order is `claude`, `claude2`, `claude-corp`, `gpt`, then
+ * `claude-dev0` — the order accounts were added to this roster, not a live
+ * mirror of ccd's own array. ccd's `VALID_WRAPPERS` (ccd:14) is now
+ * `(claude claude2 claude-corp claude-dev0)`, 4 wide, and `gpt` is not a
+ * member of it at all — `_is_valid_wrapper` (ccd:104) appends `gpt` to that
+ * array's iteration by hand, hardcoded, on every call. `claude-dev0` is no
+ * longer unknown to `ccd/`: `VALID_WRAPPERS` lists it, and both `_cfg_dir`
+ * and `_id_wrapper` carry arms for it (see the `ccdValid` field's own
+ * comment on `AccountDef`, above, for the exact syntax of both). `Object.keys`
+ * on a `Record` keyed by non-numeric strings preserves insertion order, which
  * `ACCOUNT_ORDER` below relies on for its own order — the same reasoning
  * `PR_REASONS`' own comment gives for doing this with `Object.keys`.
  */
