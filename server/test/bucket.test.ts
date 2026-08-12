@@ -209,6 +209,11 @@ describe('sessionBucket', () => {
   // attention", it has not run at all.
   it('F1: assembleFleet buckets a virgin SessionStart-done session as idle, not done', async () => {
     const home = mkTmp('ccrc-');
+    // Stage 2a: `loadConfig` reads `~/.ccrc/accounts.json` and refuses to boot
+    // without it, so every fixture home needs a roster before it is loaded.
+    // This test arrived on main while that branch was in flight, so it is the
+    // one call site the sweep could not have covered.
+    seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
