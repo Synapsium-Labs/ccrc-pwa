@@ -795,9 +795,12 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
   #
   # An existing destination sidecar is LEFT ALONE rather than merged — the
   # opposite of the transcript's unlink-first rule, because a tree can be
-  # half-merged where a single file is replaced in one step. The source path
-  # carries no trailing slash (`_sidecar_matches` strips it) and the destination
-  # does not exist yet, or `cp -a src/ dst` nests the sidecar inside itself.
+  # half-merged where a single file is replaced in one step. That `[[ -e ]]`
+  # check below is ALSO the whole anti-nesting guard, and the only one:
+  # measured on coreutils 9.4, `cp -al src/<uuid> dst/<uuid>` onto a dst that
+  # already exists produces `dst/<uuid>/<uuid>/…` whether or not either path
+  # carries a trailing slash. `_sidecar_matches` stripping the slash is
+  # hygiene; refusing an existing destination is protection.
   local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode
   local -a sidecars=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid")

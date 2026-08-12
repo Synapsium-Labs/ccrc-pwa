@@ -212,10 +212,11 @@ carried as a **hardlink tree** (`cp -al`, falling back to `cp -a` if linking fai
 devices). At 188MB per sidecar the difference between linking and
 copying is the difference between a swap that takes a moment and one that takes minutes and fills
 the disk; the contents are write-once artifacts, so sharing inodes between the two accounts is
-safe. An existing destination sidecar is left alone rather than merged, and the swap says so — and
-the copy is made with the source path stripped of its trailing slash into a destination that does
-not yet exist, because `cp -a src/ dst` onto a directory that was half-created by a previous
-attempt nests the sidecar inside itself.
+safe. **An existing destination sidecar is left alone rather than merged, and that check is the
+whole anti-nesting guard.** Measured on this box (coreutils 9.4): `cp -al src/<uuid> dst/<uuid>`
+where `dst/<uuid>` already exists produces `dst/<uuid>/<uuid>/…` — it nests *whether or not* either
+path carries a trailing slash. Stripping the slash is hygiene, not protection; only refusing to
+copy onto an existing destination is protection. The swap says which sidecars it skipped.
 
 **This is the one place a source inode is shared across accounts, and the asymmetry is deliberate.**
 §2.2 forbids aliasing the transcript because it is appended to. A sidecar's contents are
