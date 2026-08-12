@@ -167,6 +167,28 @@ describe('cmd_swap carries the sidecars', () => {
       .toBe('ALREADY THERE\n');
     expect(swapLog()).toContain('(kept)');
   });
+
+  it('falls back to a full copy without nesting when cp -al leaves a partial destination behind', () => {
+    // The fallback's own documented trigger, forced deterministically: a real
+    // cross-device `cp -al` builds the destination directory skeleton before
+    // it fails on the first unlinkable file (measured on this box, EXDEV), so
+    // `$dst` already EXISTS by the time the fallback runs. A stub that just
+    // fails `cp -al` cleanly would not exercise the fix at all — the bug only
+    // shows up when the fallback's `cp -a` lands on a PRE-EXISTING `$dst`, so
+    // the stub reproduces that shape: `-al` creates the destination and fails,
+    // anything else (the fallback's own `-a`, and every other cp in this swap:
+    // `-p --remove-destination`, `-r`) runs for real.
+    const mdir = seed('claude');
+    plant('.claude', mdir, 'HISTORY\n');
+    sidecar('.claude', mdir, 'tool-results/r.json', 'RESULT\n');
+    const CP_STUB = 'cp() { if [[ "$1" == "-al" ]]; then mkdir -p "$3"; return 1; fi; command cp "$@"; };';
+    h.sh(`${SWAP} ${CP_STUB} cmd_swap ${ID} claude-dev0`, { TMUX: '' });
+    const real = dstAt(mdir, path.join(UUID, 'tool-results/r.json'));
+    expect(fs.existsSync(real), 'the file must land at the real mirrored path, not nested').toBe(true);
+    expect(fs.readFileSync(real, 'utf8')).toBe('RESULT\n');
+    expect(fs.existsSync(dstAt(mdir, path.join(UUID, UUID))), 'a <uuid>/<uuid> nest must not exist').toBe(false);
+    expect(swapLog()).toContain('(copy)');
+  });
 });
 
 describe('cmd_swap keeps carrying the task list', () => {

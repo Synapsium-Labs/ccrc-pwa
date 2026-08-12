@@ -7165,20 +7165,42 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
   # An existing destination sidecar is LEFT ALONE rather than merged — the
   # opposite of the transcript's unlink-first rule, because a tree can be
   # half-merged where a single file is replaced in one step. `_sidecar_matches`
-  # strips the source's trailing slash; the real anti-nesting guard is that the
-  # destination `$dst` (the `<uuid>` directory itself, not just its parent)
-  # must not already exist before `cp -al`/`cp -a` runs — measured: `cp -al
-  # src/<uuid> dst/<uuid>` onto an ALREADY-EXISTING destination nests the tree
-  # inside itself regardless of either path's trailing slash. `mkdir -p` below
-  # only creates the PARENT (`$dstcfg/projects/$pdir`), never `$dst` itself, so
-  # the guard holds.
+  # strips the source's trailing slash; the anti-nesting guard is that `$dst`
+  # (the `<uuid>` directory itself, not just its parent) must not already
+  # exist before a copy attempt runs — measured: `cp -al src/<uuid> dst/<uuid>`
+  # (and `cp -a`, identically) onto an ALREADY-EXISTING destination nests the
+  # tree inside itself regardless of either path's trailing slash. `mkdir -p`
+  # below only creates the PARENT (`$dstcfg/projects/$pdir`), never `$dst`
+  # itself, so the FIRST attempt (`cp -al`) always starts clean.
+  #
+  # The SECOND attempt does not start clean on its own, and this is the
+  # subtle half of the guard: `cp -al` builds the destination directory
+  # skeleton before it fails on the first unlinkable file — measured on this
+  # box, a cross-device `$dst` gets every subdirectory created and every file
+  # missing, `cp` exits nonzero, and `$dst` now EXISTS where a moment ago it
+  # did not. Falling back to `cp -a "$src" "$dst"` against that survivor nests
+  # the whole tree one level down (`$dst/$uuid/…`) exactly as the top-of-loop
+  # case does, leaving the real path full of empty directories — and because
+  # `$dst` now exists, EVERY later swap onto this account hits the top-of-loop
+  # guard and logs `(kept)`, permanently, never repairing it. The fallback
+  # therefore clears any partial `$dst` immediately before it copies.
+  #
+  # Success is read from `cp`'s own exit status, not `[[ -d "$dst" ]]`: a
+  # same-device partial failure (one unreadable member, ENOSPC, EMLINK) can
+  # leave `$dst` populated as a directory before `cp -al` reports failure, so
+  # a directory-existence check would read a half-linked tree as a clean
+  # success — and log `(link)` for a tree that is only partly shared. Clearing
+  # `$dst` before the fallback and always doing a full `cp -a` on ANY first-
+  # attempt failure means the logged mode never overstates what is shared:
+  # `(link)` only when the whole tree is hardlinks to `$src`, `(copy)`
+  # whenever any part of it needed a real copy.
   #
   # C-collated sort: no destination is ever contested (each sidecar's `pdir`
   # comes from a distinct source project directory), so ordering never changes
   # WHAT is carried — only the order of the swap.log lines a human reads
   # afterward. Sorted anyway so that order is reproducible rather than a
   # function of glob/readdir order, which is locale- and filesystem-dependent.
-  local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode
+  local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc
   local -a sidecars=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
   (( ${#sidecars[@]} )) || return 0
@@ -7194,11 +7216,23 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
     fi
     mkdir -p "$dstcfg/projects/$pdir"
     mode=link
-    cp -al "$src" "$dst" 2>/dev/null || { mode=copy; cp -a "$src" "$dst" 2>/dev/null; }
-    if [[ -d "$dst" ]]; then
+    cp -al "$src" "$dst" 2>/dev/null; rc=$?
+    if (( rc != 0 )); then
+      mode=copy
+      # $dst may already exist here — a partial skeleton the failed `cp -al`
+      # left behind — and `cp -a` onto an existing $dst nests instead of
+      # landing at the real path. Clear it first every time, unconditionally.
+      [[ -e "$dst" ]] && rm -rf "$dst"
+      cp -a "$src" "$dst" 2>/dev/null; rc=$?
+    fi
+    if (( rc == 0 )); then
       echo "$(date '+%F %T') sidecar $uuid -> $dst ($mode)" >> "$REG/swap.log"
     else
       echo "ccd: warn: could not carry sidecar $src -> $dst" >&2
+      # Do not leave a half-built $dst behind on total failure either: the
+      # top-of-loop existence check would read it as "already carried" and
+      # this sidecar would never be retried by a later swap.
+      [[ -e "$dst" ]] && rm -rf "$dst" 2>/dev/null
     fi
   done
   return 0
