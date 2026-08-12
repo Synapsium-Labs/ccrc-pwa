@@ -42,6 +42,10 @@ export type CloseOutcome =
  *  two precondition checks, D-48's own ordering fix), never trusted off a
  *  TypeScript annotation the JSON parse cannot enforce. */
 export interface CloseRunBody {
+  /** `'abandon'` | absent (D-B4-1). The operator variant, validated as its OWN
+   *  shape below — an abandon that also carries close fields is refused rather
+   *  than half-honoured. */
+  intent?: unknown;
   fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
   final?: unknown; state?: unknown; archive?: unknown;
 }
@@ -56,11 +60,82 @@ export interface CloseRunBody {
  * commit, so a failed `ws-release` leaves the run exactly where it was,
  * never wedged terminal). The fleet act is a RELEASE (deviation D-5), never
  * an autonomous archive.
+ *
+ * `causedBy` is a PARAMETER with no default (D-B4-3/6): the coordinator's own
+ * close records `'coordinator'` and the operator's abandon records
+ * `'operator'`, and a default is exactly how the second would silently record
+ * the first. Both call sites pass it explicitly.
  */
-export async function closeRun(deps: CloseRunDeps, id: number, body: unknown): Promise<CloseOutcome> {
+export async function closeRun(
+  deps: CloseRunDeps, id: number, body: unknown,
+  causedBy: 'coordinator' | 'operator',
+): Promise<CloseOutcome> {
   const coord = deps.coord;
   const run = coord.run(id);
   if (!run) return { ok: false, kind: 'unknown-run' };
+
+  // The body is read HERE, above every precondition, because the abandon arm
+  // below branches on it — and the ordinary path's own validation is left
+  // exactly where it was, one `const b` shorter.
+  const b = (body ?? {}) as CloseRunBody;
+  const abandon = b.intent === 'abandon';
+  if (abandon && (b.fingerprint !== undefined || b.final !== undefined ||
+                  b.state !== undefined || b.archive !== undefined)) {
+    // A mixed shape is not a shape. An abandon asserts nothing about a branch,
+    // a PR or a wave boundary, so a body carrying those fields is a caller
+    // that has confused two acts — answered as `bad-request` rather than
+    // silently ignoring half of it.
+    return { ok: false, kind: 'bad-request' };
+  }
+
+  if (abandon) {
+    /**
+     * THE OPERATOR ABANDON, as ONE contiguous arm (D-B4-17). It returns; it
+     * never falls through into the ordinary close below.
+     *
+     * What is skipped is skipped BY CONSTRUCTION, not by four flags threaded
+     * through a hundred lines:
+     *   - the `not-dispatched` refusal below: a `planned` run with no session
+     *     is precisely the `ambiguous-dispatch` wedge this route exists for,
+     *     so there is nothing to refuse;
+     *   - the fingerprint validation and its derivations: an abandon carries
+     *     no claim, so `handoffCommit`/`final`/`state`/`archive` are
+     *     `null`/`false`/`'failed'`/`false` here and are not read from a body
+     *     at all (D-B4-1);
+     *   - `verifyDone` (step 1): D-49's own reasoning, reached from a second
+     *     door — there is no done-claim to re-measure;
+     *   - the `.prhistory` fold (step 2, D-B4-2): an unreadable ledger must
+     *     not disable the control that exists for a broken box;
+     *   - `wsArchive` (step 3): a release destroys nothing and this arm has no
+     *     archive branch to reach (D-B4-7 closes the other half at the route).
+     * Each of those is pinned by a negative test in `coord-abandon.test.ts`,
+     * and each is true because the call is ABSENT, not because a guard skipped
+     * it.
+     *
+     * Cost, named: ~14 lines of transition/fleet-act/commit shape appear twice
+     * inside one function. That is the price of the property.
+     */
+    const target: RunState = run.state === 'planned' ? 'failed' : 'closing';
+    if (!RUN_TRANSITIONS[run.state].includes(target)) {
+      return { ok: false, kind: 'bad-transition', from: run.state, to: target };
+    }
+    // The fleet act, AHEAD of the commit (D-48), and only when there is
+    // something to release: a `planned` run that never dispatched holds no
+    // workspace. Always `wsRelease`, never `wsArchive`.
+    if (run.sessionId !== null) {
+      const argv = CCD_ARGV.wsRelease(run.sessionId);
+      if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+    }
+    const closed = coord.closeRun({
+      runId: id, finalState: 'failed', causedBy, handoffCommit: null,
+      program: run.program, viaClosing: target === 'closing',
+    });
+    if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
+    return { ok: true, id, state: 'failed' };
+  }
+
   if (run.sessionId === null) {
     // Never dispatched: there is no worker session for `verifyDone` to
     // re-measure against and no worker to mail a rejection back to.
@@ -82,7 +157,6 @@ export async function closeRun(deps: CloseRunDeps, id: number, body: unknown): P
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'closing' };
   }
 
-  const b = (body ?? {}) as CloseRunBody;
   const fp = b.fingerprint;
   if (typeof fp !== 'object' || fp === null ||
       typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
@@ -168,7 +242,10 @@ export async function closeRun(deps: CloseRunDeps, id: number, body: unknown): P
   // re-measure against.
   const handoffCommit = HANDOFF_SHA.test(claim.handoffCommit) ? claim.handoffCommit : null;
   const closed = coord.closeRun({
-    runId: id, finalState: state, causedBy: 'coordinator', handoffCommit, program: run.program,
+    runId: id, finalState: state, causedBy, handoffCommit, program: run.program,
+    // The ordinary close always takes the `closing` hop it always took — the
+    // only path that skips it is the abandon arm above (D-B4-8).
+    viaClosing: true,
   });
   if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
 

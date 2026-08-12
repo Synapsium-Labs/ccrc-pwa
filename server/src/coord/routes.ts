@@ -817,7 +817,39 @@ export function registerCoordRoutes(
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
-    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body));
+    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body, 'coordinator'));
+    return sendCloseOutcome(reply, outcome);
+  });
+
+  /**
+   * `POST /api/runs/:id/abandon` — the operator's release valve for a wedged
+   * run. Same L1 decision as `POST .../close` (`close.ts`'s `closeRun`), same
+   * union→status map (`sendCloseOutcome`): increment 4's split is not
+   * duplicated for a second caller.
+   *
+   * THE REQUEST BODY IS NEVER READ (D-B4-7). `{intent:'abandon'}` is
+   * constructed here, so `archive` is not a field a caller can send — "the
+   * phone can abandon; the phone can never archive" is structural rather than
+   * a validation a later edit can loosen. Destruction keeps its existing
+   * ceremony (audit → reap, typed `expect`); a release destroys nothing, so
+   * the two-tap confirm in the sheet is the whole ceremony here.
+   *
+   * UNGATED, on the operator surface, for `POST /api/coord/pause`'s own reason
+   * (D-B4-9 and spec §4.1): the box token authenticates the fleet host and the
+   * coordinator holds it, so gating the release valve for a WEDGED COORDINATOR
+   * behind the coordinator's own key would leave the wedge with no door. The
+   * act names its cause — `causedBy: 'operator'`, never `'coordinator'`.
+   */
+  app.post('/api/runs/:id/abandon', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+
+    const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
+      fleetState: deps.fleetState };
+    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
     return sendCloseOutcome(reply, outcome);
   });
 

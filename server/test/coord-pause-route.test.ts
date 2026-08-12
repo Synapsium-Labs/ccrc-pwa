@@ -156,8 +156,14 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
 
   /** Routes that ride the PWA's unauthenticated surface on purpose (spec §4.1).
    *  Adding a name here is a deliberate act with an argument attached; every
-   *  other write route must carry the gate. */
-  const UNGATED = new Set(['/api/coord/pause']);
+   *  other write route must carry the gate.
+   *
+   *  `/api/coord/pause`: the box token is the coordinator's own key, and the
+   *  pause marker exists so the coordinator cannot unpause itself.
+   *  `/api/runs/:id/abandon`: the same door, for the same reason — a run wedged
+   *  because its coordinator is stuck cannot be released by a key that
+   *  coordinator holds. */
+  const UNGATED = new Set(['/api/coord/pause', '/api/runs/:id/abandon']);
 
   /** Each `app.post` handler's own text, from its route line to the next
    *  handler in the file. */

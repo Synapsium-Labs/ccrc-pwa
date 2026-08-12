@@ -378,11 +378,24 @@ export class CoordStore {
    */
   closeRun(input: {
     runId: number; finalState: 'done' | 'failed'; causedBy: string;
-    handoffCommit: string | null; program: string;
+    handoffCommit: string | null; program: string; viaClosing: boolean;
   }): AdvanceResult {
     return tx(this.db, () => {
-      const closingAdv = this.advanceInner(input.runId, 'closing', input.causedBy);
-      if (!closingAdv.ok) return closingAdv;
+      // `viaClosing: false` is the ABANDON of a `planned` run (D-B4-8).
+      // `RUN_TRANSITIONS.planned` has a `failed` edge and deliberately no
+      // `closing` one (`shared/api.ts`'s own docstring), and that table is NOT
+      // edited here — clients read it as a refusal vocabulary. So the hop is
+      // skipped rather than the table widened; every other statement in this
+      // transaction (the handoff write, the delivery cancellation, the
+      // program-retirement check) is unchanged and still one commit.
+      //
+      // No default, for the D-B4-6 reason applied to this parameter: a default
+      // is exactly how the abandon path would silently take the ordinary hop
+      // and 409 on every wedged `planned` run.
+      if (input.viaClosing) {
+        const closingAdv = this.advanceInner(input.runId, 'closing', input.causedBy);
+        if (!closingAdv.ok) return closingAdv;
+      }
       const finalAdv = this.advanceInner(input.runId, input.finalState, input.causedBy);
       if (!finalAdv.ok) return finalAdv;
       // Only a SHAPE-VALID handoff commit is ever written (fix — review
