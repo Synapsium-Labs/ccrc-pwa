@@ -19,15 +19,18 @@
 //     ccd owns is exactly what `useProjectedHome.ts`'s own docstring refuses
 //     ("Two implementations of one rule drift; that is what they do."). So
 //     this waits for the new session to show up in a real `/ws/fleet`
-//     snapshot and matches it on the two fields the server actually reports
-//     (`FleetSession.wrapper`/`.project`), never on a recomputed id.
-//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:7192-7202`): a second `start` for
-//     an already-running `${wrapper}-${project}` is a no-op that attaches to
-//     the session already there. A blind kickoff would inject a coordinator
-//     brief into a session that may be mid-task, so this sheet checks for
-//     that collision BEFORE the tap — same posture as the projection naming
-//     the account before the tap rather than guessing — and refuses with no
-//     confirm button at all when it finds one.
+//     snapshot and matches it on fields the server actually reports, never on
+//     a recomputed id. The two arms below match on DIFFERENT field sets and
+//     that is the point — see `liveMainCheckoutIn`/`startedSessionFor`, whose
+//     own docstrings carry the argument; do not fold them back into one
+//     predicate.
+//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:7192-7203`): a second `start` whose
+//     `_id()` is already `_alive` is a no-op that attaches to the session
+//     already there. A blind kickoff would inject a coordinator brief into a
+//     session that may be mid-task, so this sheet checks for that collision
+//     BEFORE the tap — same posture as the projection naming the account
+//     before the tap rather than guessing — and refuses with no confirm
+//     button at all when it finds one.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
@@ -74,45 +77,76 @@ export const kickoff = (slug: string, title: string): string =>
  *  a timeout chasing the happy path. */
 export const START_PROGRAM_WAIT_MS = 20_000;
 
-/** D-B4-18/19: the id `_id()` (`ccd/ccd:185`) would compute is never
- *  recomputed here — this matches on fields the server already reports for
- *  every session, never a re-derivation of the hash itself.
+/** A MAIN CHECKOUT of `project` — not one of its workspaces. The shared half
+ *  of both arms below, and the one C1 was about: `wrapper`+`project` alone is
+ *  not a main checkout, because `cmd_ws_add` writes BOTH fields onto every
+ *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:1164+`) that
+ *  `useProjectedHome` mirrors exactly (`server/src/limits.ts:96`) — so a
+ *  two-field match hits live workers on a box in its normal state.
+ *  `FleetSession.workspace` is server-reported and documented "null for a
+ *  project's main checkout" (`shared/api.ts:35-37`), so this costs NO id
+ *  arithmetic and D-B4-18's "never recompute the id" holds unchanged. */
+const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
+  s.project === project && s.workspace === null;
+
+/** D-B4-19's arm: "is a live main checkout already running in this project?"
  *
- *  THREE conjuncts, not two (whole-branch review, C1). `wrapper`+`project`
- *  alone is not the session `cmd_start` would collide with: `cmd_ws_add`
- *  writes `project` AND a `_ws_least_loaded` wrapper onto every WORKSPACE row
- *  (`ccd/ccd:1164+`), and `useProjectedHome`'s wrapper is the server's own
- *  mirror of that same `_ws_least_loaded` (`server/src/limits.ts:96`) — so the
- *  projected wrapper is exactly the wrapper workspaces cluster on, and a
- *  two-field match hits a live worker on a box in its NORMAL state. It also
- *  claimed something false: the id `_id()` computes for the projection is the
- *  MAIN checkout's (`claude2-ccrc-pwa`), a different id, not alive, one
- *  `cmd_start` would have spawned correctly. `FleetSession.workspace` is
- *  server-reported and documented as "null for a project's main checkout"
- *  (`shared/api.ts:35-37`), so it separates the two with NO id arithmetic —
- *  D-B4-18's "never recompute the id" holds unchanged.
+ *  WRAPPER-INDEPENDENT, and that is a correction, not an oversight (re-review
+ *  of the C1 fix). `cmd_swap` rewrites the registry's `wrapper` field and
+ *  KEEPS the id (`ccd/ccd:7307`, `_reg_set "$id" wrapper "$target"`), while
+ *  `cmd_start`'s collision test is `_alive "$(_id "$wrapper" "$project")"`
+ *  (`ccd/ccd:7202-7203`) — keyed on the ID, which a swap does not move. On the
+ *  live fleet 5 of 10 main checkouts already report a `wrapper` that differs
+ *  from their own id prefix (`claude-rp-llm` reports `wrapper=claude2`), so a
+ *  wrapper-scoped refusal MISSES a real collision: the row reports `Y`, the
+ *  projection says `W`, no match, the operator taps Start, `ccd start W P`
+ *  resolves `_id` to the live `W-P`, prints "already running" and exits 0 —
+ *  the HTTP call SUCCEEDS, the wrapper-scoped wait never matches, and the
+ *  sheet ends on "Started — the board just hasn't shown it yet" for a program
+ *  that never started. A dead end, reachable on half this fleet's projects.
  *
- *  `liveOnly` is ASYMMETRIC between the two arms, deliberately:
- *   * D-B4-19's refusal passes `true`. `cmd_start`'s idempotency test is
- *     `_alive` (tmux has-session), whose wire mirror is `status !== 'dead'`;
- *     a dead-but-unreaped row would otherwise refuse this sheet forever with
- *     copy false on both clauses, and `ws-reap` is human-only-at-a-terminal
- *     by contract, so there would be no way out from the phone.
- *   * D-B4-18's wait passes `false`. `cmd_start` writes the registry fields
- *     before tmux is necessarily up, so for a beat the session it just
- *     created is reported `dead`; excluding it there would time out a wait on
- *     a session that really did start. Not knowing yet is not "not there". */
-function existingSessionFor(
+ *  This arm cannot ask the exact question (`_alive(_id(W,P))`) without
+ *  recomputing the id, which D-B4-18 forbids. So it asks the WIDER one and
+ *  accepts over-refusing: when the live main checkout is one `cmd_start` would
+ *  NOT have collided with, this still refuses, and the copy says why in terms
+ *  that are true either way (a second coordinator in one project is its own
+ *  problem). Safe to widen: this arm renders no confirm button, it never acts
+ *  — refusing more is conservative, and there is no path by which a wider
+ *  match sends a kickoff anywhere. The arm that ACTS is the wrapper-scoped one
+ *  below.
+ *
+ *  `status !== 'dead'` is on THIS arm only: `cmd_start`'s idempotency test is
+ *  `_alive` (tmux has-session), whose wire mirror this is. Without it a
+ *  dead-but-unreaped row refuses the sheet forever with copy false on every
+ *  clause, and `ws-reap` is human-only-at-a-terminal by contract — no way out
+ *  from the phone. */
+function liveMainCheckoutIn(
+  sessions: readonly FleetSession[],
+  project: string,
+): FleetSession | null {
+  return sessions.find((s) => isMainCheckoutOf(s, project) && s.status !== 'dead') ?? null;
+}
+
+/** D-B4-18's arm: "has the session I just asked for appeared yet?"
+ *
+ *  WRAPPER-SCOPED, deliberately, and NOT to be widened to match the refusal
+ *  above. This one ACTS — it sends the coordinator kickoff and navigates — so
+ *  its question is genuinely "the session this sheet created", which is the
+ *  one at the wrapper it passed to `createSession`. Dropping `s.wrapper ===
+ *  wrapper` here would let a DIFFERENT live main checkout in the same project
+ *  (someone else's, or a swapped one) collect this sheet's kickoff: verbatim
+ *  the hijack D-B4-19 exists to prevent, arriving through the wait instead.
+ *
+ *  NO liveness conjunct, equally deliberately: `cmd_start` writes the registry
+ *  fields before tmux is necessarily up, so for a beat the session it just
+ *  created is reported `dead`. Excluding it would time out a wait on a session
+ *  that really did start — not knowing yet is not "not there". */
+function startedSessionFor(
   sessions: readonly FleetSession[],
   wrapper: string,
   project: string,
-  { liveOnly }: { liveOnly: boolean },
 ): FleetSession | null {
-  return sessions.find((s) =>
-    s.wrapper === wrapper
-    && s.project === project
-    && s.workspace === null
-    && (!liveOnly || s.status !== 'dead')) ?? null;
+  return sessions.find((s) => isMainCheckoutOf(s, project) && s.wrapper === wrapper) ?? null;
 }
 
 /** `createSession`'s own refusals. 400 is a client-authored mistake (an
@@ -211,7 +245,29 @@ export function StartProgramSheet({
   // it, so the false-collision suppression below holds for the entire
   // window from a successful `createSession` through navigation, not merely
   // while the wait is still nominally "in progress".
-  const myAttemptRef = useRef<{ wrapper: string; project: string } | null>(null);
+  //
+  // PROJECT ONLY, no wrapper (re-review of the C1 fix). It used to hold both
+  // and compare both, which was coherent while the refusal arm was itself
+  // wrapper-scoped. Now that `liveMainCheckoutIn` is wrapper-independent the
+  // two must agree, or the suppression stops covering its own case:
+  // `cmd_swap` moves a live session's `wrapper` while keeping its id
+  // (`ccd/ccd:7307`), so a session this sheet started at `W` can be reported
+  // at `Y` on any later frame — a wrapper-comparing ownership test then fails
+  // and the sheet renders "…is already running… may be mid-task" for the
+  // session it started ITSELF. That is the Important-2 defect exactly,
+  // resurrected through the swap path.
+  //
+  // Still BOUNDED, which is the property that matters here: this is non-null
+  // only after a `createSession` for THIS project SUCCEEDED in the sheet's
+  // current lifetime, and the pre-tap refusal proved no live main checkout
+  // existed in that project a moment before — so one appearing now is
+  // overwhelmingly this sheet's own doing. It is cleared on close, overwritten
+  // by a newer attempt, and compared on `project`, so choosing a DIFFERENT
+  // project drops the suppression on the same render (pinned by its own
+  // test). And the suppression can only ever hide a WARNING: the arm that
+  // ACTS is `startedSessionFor`, still wrapper-scoped, so widening the
+  // ownership test cannot send a kickoff anywhere it would not already go.
+  const myAttemptRef = useRef<{ project: string } | null>(null);
 
   const clearTimer = (): void => {
     if (timerRef.current !== null) {
@@ -282,10 +338,7 @@ export function StartProgramSheet({
     // from inside `start()`, synchronously after `createSession` resolves,
     // before the closure that captured `sessions` has had a chance to
     // re-render with a fresher value.
-    // `liveOnly: false` — see `existingSessionFor`'s own docstring (C1): the
-    // registry row can be written a beat before tmux is up, and this wait
-    // must resolve on that later tick rather than give up on it.
-    const found = existingSessionFor(fleet.getState().sessions, w.wrapper, w.project, { liveOnly: false });
+    const found = startedSessionFor(fleet.getState().sessions, w.wrapper, w.project);
     if (found !== null) finish(found, w);
   };
 
@@ -306,21 +359,23 @@ export function StartProgramSheet({
   // "whenever the target changes" (a different project picked, or the
   // projection itself moving) falls out of React's own render cycle rather
   // than a second piece of state tracking the same fact.
-  // `liveOnly: true` — see `existingSessionFor`'s own docstring (C1): this arm
-  // exists because `cmd_start` re-attaches to a LIVE session, and a dead row
-  // it would happily respawn must not refuse the sheet.
+  // Wrapper-independent — see `liveMainCheckoutIn`'s own docstring for why a
+  // wrapper-scoped refusal misses a real `cmd_start` collision on any session
+  // that has been swapped. `projected != null` is still required, but only
+  // because there is no point refusing a start that has no wrapper to place
+  // with in the first place (the D-B4-11 arm below handles saying so).
   const existing =
     project !== null && projected != null
-      ? existingSessionFor(sessions, projected.wrapper, project.name, { liveOnly: true })
+      ? liveMainCheckoutIn(sessions, project.name)
       : null;
   // Review fix round 1, Important 2: `existing` alone cannot tell "someone
   // else's session is in the way" apart from "the session I just started
   // has arrived" — both are `existing !== null`. `myAttemptRef` is the one
-  // fact that distinguishes them; see its own comment above `waitRef`.
+  // fact that distinguishes them; see its own comment above for why the
+  // comparison is on `project` alone and why that stays bounded.
   const isOwnAttempt =
     existing !== null
     && myAttemptRef.current !== null
-    && existing.wrapper === myAttemptRef.current.wrapper
     && existing.project === myAttemptRef.current.project;
 
   const start = async (): Promise<void> => {
@@ -346,7 +401,7 @@ export function StartProgramSheet({
     if (gen.current !== mine) return; // superseded while the create was in flight
 
     waitRef.current = { mine, wrapper, project: projectName, slug: slug.trim(), title: title.trim() };
-    myAttemptRef.current = { wrapper, project: projectName };
+    myAttemptRef.current = { project: projectName };
     clearTimer();
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
@@ -438,9 +493,20 @@ export function StartProgramSheet({
             // the ordinary branch below lets `timedOut`/`checkForMatch`
             // finish the job instead of lying that it belongs to someone
             // else's mid-task session.
+            // The copy names the SESSION, never the account: this arm is
+            // wrapper-independent, so the matched row's own `wrapper` may
+            // differ from the projected one (a swap moves it, `ccd/ccd:7307`)
+            // and naming an account here would state a fact the match never
+            // established. Both outcomes are covered rather than the one the
+            // wrapper-scoped version could assume: if this IS the row
+            // `cmd_start` resolves to, the kickoff lands in it mid-task; if it
+            // is not, the start succeeds and leaves the project with two
+            // coordinators. The sentence has to be true in both, because this
+            // arm cannot tell them apart without recomputing the id.
             <p className="program-start-existing">
               {`${existing.id} is already running in ${project.name} — open it, or pick another project. `
-                + 'Starting here would send the kickoff into a session that may be mid-task.'}
+                + 'Starting here would either send the kickoff into that session, which may be '
+                + 'mid-task, or leave the project running two coordinators.'}
             </p>
           ) : projected === null ? (
             // D-B4-11: the server's own "nothing is placeable" — refuse with

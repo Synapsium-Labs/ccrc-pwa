@@ -5,13 +5,26 @@
 //
 // D-B4-18/19 (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
 // controls.md`'s Deviations section) are both pinned here, alongside the
-// brief's own eleven cases: the sheet cannot know the new session's id from
+// brief's own eleven cases. The sheet cannot know the new session's id from
 // `createSession`'s own response (`{ok:true}`, no id — `server/src/
-// server.ts:593-596`), so it matches on `FleetSession.wrapper`/`.project`
-// once a `/ws/fleet` frame reports them, bounded by `START_PROGRAM_WAIT_MS`
-// (D-B4-18); and `cmd_start` is idempotent, so a session already running for
-// the target `wrapper`+`project` must refuse the sheet's own confirm button
-// entirely, before any tap (D-B4-19).
+// server.ts:593-596`), so it matches on fields a `/ws/fleet` frame reports,
+// never on a recomputed id — and the two arms match on DIFFERENT fields:
+//
+//   * D-B4-18's WAIT ("has the session I asked for appeared?") is
+//     wrapper-scoped — `wrapper` + `project` + `workspace === null`, no
+//     liveness — and bounded by `START_PROGRAM_WAIT_MS`. It ACTS (kickoff +
+//     navigate), so it must not resolve onto anyone else's session.
+//   * D-B4-19's REFUSAL ("is a live main checkout already running here?") is
+//     wrapper-INDEPENDENT — `project` + `workspace === null` + alive.
+//     `cmd_swap` rewrites a session's `wrapper` and keeps its id
+//     (`ccd/ccd:7307`) while `cmd_start` collides on the id, so a
+//     wrapper-scoped refusal misses a real collision and dead-ends the
+//     operator on "not shown yet". It only ever withholds a button, so
+//     over-refusing is the safe direction.
+//
+// Every one of those conjuncts is pinned below by a test that fails when it
+// is removed, in BOTH directions — widening the wait and narrowing the
+// refusal are each a red suite.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
@@ -585,6 +598,142 @@ describe('StartProgramSheet', () => {
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
     expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
+  // — Re-review of the C1 fix: `cmd_swap` breaks the wrapper↔id link, so the
+  // REFUSAL arm cannot be wrapper-scoped. `_reg_set "$id" wrapper "$target"`
+  // (`ccd/ccd:7307`) moves the field and keeps the id; `cmd_start` collides on
+  // `_alive "$(_id "$wrapper" "$project")"` (`ccd/ccd:7202-7203`), i.e. on the
+  // id. Measured on the live fleet: 5 of 10 main checkouts report a `wrapper`
+  // that differs from their own id prefix (`claude-rp-llm` → `wrapper=
+  // claude2`). —
+  it('refuses for a SWAPPED main checkout the projection no longer names — cmd_swap moves the wrapper and keeps the id (C1-swap)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const store = makeStore();
+    // The live `claude-rp-llm` shape: id says `claude`, the registry now says
+    // `claude2`. `ccd start claude ccrc-pwa` still resolves `_id` to this very
+    // session and finds it alive.
+    act(() => {
+      store.setState({ sessions: [sess({
+        id: 'claude-ccrc-pwa', wrapper: 'claude2', project: 'ccrc-pwa', workspace: null, status: 'idle',
+      })] });
+    });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
+
+    // Refused before the tap, naming the SESSION (not the account — the
+    // matched row's wrapper is not the projected one, and the copy must not
+    // claim otherwise).
+    const refusal = await screen.findByText(/claude-ccrc-pwa is already running/i);
+    expect(refusal.textContent).not.toMatch(/claude2/);
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it('never sends the kickoff to a foreign main checkout that appears mid-wait — the WAIT stays wrapper-scoped (C1-swap)', async () => {
+    // The other half of the asymmetry, and the reason the refusal may widen
+    // safely: the arm that ACTS must still only ever resolve onto the session
+    // THIS sheet asked for. Here nothing is live at tap time, and a different
+    // live main checkout in the same project (another wrapper — someone
+    // else's, or a swapped one) shows up while the sheet waits.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    history.pushState(null, '', '/runs');
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    act(() => {
+      store.setState({ sessions: [sess({
+        id: 'claude3-ccrc-pwa', wrapper: 'claude3', project: 'ccrc-pwa', workspace: null,
+      })] });
+    });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/runs');
+
+    // …and the sheet is still waiting for its own, which then lands.
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+  });
+
+  it("does not refuse its OWN attempt after a swap moves its wrapper — ownership is compared on project alone (C1-swap)", async () => {
+    // `myAttemptRef` must agree with the (now wrapper-independent) refusal
+    // arm. A session this sheet started at `claude` can be reported at
+    // `claude2` on any later frame; comparing wrappers there would render
+    // "…already running… may be mid-task" for the sheet's OWN session — the
+    // Important-2 defect, arriving through the swap path.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    const go = await screen.findByRole('button', { name: /^start build9-demo/i });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(go);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1_000); });
+      expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
+
+      // It lands — swapped away from the wrapper it was started on.
+      act(() => {
+        store.setState({ sessions: [sess({
+          id: 'claude-ccrc-pwa', wrapper: 'claude2', project: 'ccrc-pwa', workspace: null,
+        })] });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(screen.queryByText(/already running/i)).toBeNull();
+    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+  });
+
+  it('still refuses for a project it never started — the ownership suppression is bounded (C1-swap)', async () => {
+    // The negative half of the ruling above: project-only ownership must not
+    // become "suppress every refusal once any attempt has been made". After
+    // starting `alpha`, switching to `beta` — where someone else's live main
+    // checkout sits — must refuse exactly as if no attempt had happened.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const store = makeStore();
+    act(() => {
+      store.setState({ sessions: [sess({
+        id: 'claude3-beta', wrapper: 'claude3', project: 'beta', workspace: null,
+      })] });
+    });
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={createSession}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj({ name: 'alpha', workdir: '/w/alpha' }), proj({ name: 'beta', workdir: '/w/beta' })],
+      })} />);
+
+    await fillAndPick('build9-demo', 'Build 9 demo', /alpha/i);
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    // The create must have SUCCEEDED before the switch — that is what arms
+    // `myAttemptRef` and makes this a real test of the bound.
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    fireEvent.click(screen.getByRole('button', { name: /beta/i }));
+
+    expect(await screen.findByText(/claude3-beta is already running/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
   });
 
   // Whole-branch review, M3: `timedOut` described ONE attempt's target, but
