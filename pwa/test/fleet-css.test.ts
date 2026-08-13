@@ -377,7 +377,7 @@ describe('runs are not living panes', () => {
 // the same reason.
 describe('the coord banner is not a living pane, and its toggle is a real target', () => {
   it('no .coord-* rule glows, breathes or animates', () => {
-    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-toggle', '.coord-error']) {
+    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-toggle', '.coord-banner .coord-error']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');

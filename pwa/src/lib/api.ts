@@ -84,13 +84,24 @@ export const clipUrl = (id: string, name: string): string =>
     location.origin).href;
 
 /**
- * The one sentence for a fleet host whose `ccd` predates the verb being called.
+ * The one sentence for a fleet host whose `ccd` predates the verb being
+ * called — for the LIFECYCLE routes (`archive`/`restore`/PR sweep) only.
  *
  * `PrKeycap.tsx`'s `REASON_TEXT.unsupported` already owned it — it is what the
  * cap says when the PR SWEEP hits the same skew. This is the definition and
  * that map imports it, rather than the two spelling the same fact differently:
  * the reader who sees the greyed cap and the reader who taps Archive are
  * looking at one condition on one box.
+ *
+ * NOT the pause banner's own 501 text (`CoordBanner.tsx`'s
+ * `inlinePauseError`, spec §4.2's own literal "the fleet host needs the newer
+ * ccd"). That IS a third spelling of the same fact — a deliberate one, not
+ * the drift this docstring used to argue against: the spec quotes its own
+ * phrase verbatim and `coord-banner.test.tsx` pins it, so editing THIS
+ * constant does not change what the pause banner renders. If a fourth route
+ * ever needs the same refusal, prefer wiring it to whichever of the two
+ * existing strings its own spec/test actually names, rather than assuming
+ * this one is universal.
  */
 export const UNSUPPORTED_VERB_TEXT =
   'The fleet host is running a ccd that does not have this verb yet.';

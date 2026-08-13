@@ -661,19 +661,31 @@ describe('fleet store', () => {
       store.getState().disconnect();
     });
 
-    it('stays sticky across a reconnect — never reset the way `sessions`/`runs` never are either', () => {
+    it('stays sticky across a GENUINE reconnect — a fresh socket, not just a re-fired open event — never reset the way `sessions`/`runs` never are either', () => {
       const store = createFleetStore({ makeSocket });
       store.getState().connect();
       lastSocket().open();
       lastSocket().message(JSON.stringify({ type: 'coord', coord: { pause: 'set', mail: 'clear' } }));
       expect(store.getState().coordFrameSeen).toBe(true);
 
-      // A reconnect (server bounce) opens a NEW socket; the server only
+      // `disconnect()` then `connect()` — the same idiom the "connects
+      // without ?since=" test above uses to prove a real resume — tears down
+      // the old socket and asks `makeSocket` for a NEW one (`FakeSocket`'s own
+      // instance-tracking array proves it: `lastSocket()` after this returns
+      // a DIFFERENT object). A `coord.pause`/`coord.mail` reset hiding in
+      // EITHER `connect()`'s own init state OR `disconnect()`'s teardown would
+      // both be caught here, not only a reset inside the `onOpen` handler a
+      // same-socket re-fire would exercise on its own. The server only
       // re-sends `coord` when the value actually CHANGES (`emitCoord`'s own
-      // byte-equality guard) — so a reconnect that lands before the next
+      // byte-equality guard), so a reconnect that lands before the next
       // change must not un-flip a flag `CoordBanner` relies on to decide
       // whether to render at all.
+      const firstSocket = lastSocket();
+      store.getState().disconnect();
+      store.getState().connect();
+      expect(lastSocket()).not.toBe(firstSocket);
       lastSocket().open();
+
       expect(store.getState().coord).toEqual({ pause: 'set', mail: 'clear' });
       expect(store.getState().coordFrameSeen).toBe(true);
       store.getState().disconnect();

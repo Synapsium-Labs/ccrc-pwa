@@ -32,6 +32,22 @@ describe('the coord banner', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  // Task 11 review, Minor 2: `coord !== null` and `coordFrameSeen` happen to
+  // move together in the real store, so nothing above actually exercises the
+  // `!coordFrameSeen ||` half of the render gate on its own — a mutant that
+  // deletes that clause and leaves only `coord === null` would still pass
+  // every test above. `tap-targets.test.tsx:283`'s "reads unknown, not 'none
+  // active', before runsFrameSeen" is the precedent this mirrors: a payload
+  // can arrive without the sticky flag having been set by the real onMessage
+  // path, and the render decision has to key off the FLAG, not the payload's
+  // mere presence.
+  it('renders nothing when coord has arrived but coordFrameSeen is still false — the sticky flag gates the render, not the payload alone', () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coord({ pause: 'set' }), coordFrameSeen: false }); });
+    const { container } = render(<CoordBanner store={store} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it('renders two cues, word and glyph, from parallel tables — never colour alone', () => {
     const store = makeStore();
     act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
@@ -97,6 +113,34 @@ describe('the coord banner', () => {
 
       await act(async () => { await vi.advanceTimersByTimeAsync(COORD_CONFIRM_MS); });
       expect(screen.getByText('unconfirmed — check /runs')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Un-briefed behaviour, called out in the report and ruled "keep, but add
+  // the missing test" on review: a `coord` frame that lands AFTER the
+  // COORD_CONFIRM_MS timeout still resolves the outstanding tap, rather than
+  // leaving the banner stuck reading "unconfirmed" forever once a real
+  // (if late) answer has actually arrived.
+  it('a late-confirming coord frame clears "unconfirmed" — self-healing, never stuck', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = makeStore();
+      act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
+      const coordPause = vi.fn().mockResolvedValue(undefined);
+      render(<CoordBanner store={store} coordPause={coordPause} />);
+
+      fireEvent.click(screen.getByRole('button'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(COORD_CONFIRM_MS); });
+      expect(screen.getByText('unconfirmed — check /runs')).toBeInTheDocument();
+
+      // The confirming frame finally lands, late.
+      act(() => { store.setState({ coord: coord({ pause: 'set' }) }); });
+      expect(screen.queryByText('unconfirmed — check /runs')).toBeNull();
+      expect(screen.getByText('Resume')).toBeInTheDocument();
+      expect(screen.getByText(MARKER_WORD.set)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

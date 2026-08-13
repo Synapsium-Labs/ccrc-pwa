@@ -432,3 +432,36 @@ describe('the run board', () => {
     expect(finishedGroup).toHaveTextContent(/could not reach the server/i);
   });
 });
+
+// Task 11 review, Important 1: the only place `CoordBanner` is actually
+// mounted in production is `RunsScreen.tsx`, and before this test nothing
+// pinned that mount — `coord-banner.test.tsx` only pins the NEGATIVE half
+// (FleetScreen finds none) and `tap-targets.test.tsx` renders `RunsScreen`
+// with `coord: null`, so the banner is absent there by construction either
+// way. A merge conflict or a "clean up RunsScreen" pass could drop the
+// `<CoordBanner store={store} />` line and every existing test would stay
+// green while the pause readout silently stopped shipping.
+describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
+  it('renders .coord-banner once a coord frame has landed, ordered after .offline-banner', () => {
+    const store = makeStore();
+    act(() => {
+      store.setState({
+        conn: 'down', // also exercises the offline banner, so both can be ordered
+        coord: { pause: 'clear', mail: 'clear' },
+        coordFrameSeen: true,
+      });
+    });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+
+    const banner = container.querySelector('.coord-banner');
+    const offline = container.querySelector('.offline-banner');
+    expect(banner).not.toBeNull();
+    expect(offline).not.toBeNull();
+
+    // Brief, Step 5: "above the groups and below the Reconnecting… banner" —
+    // DOM order (not merely presence) is what that sentence actually asks
+    // for, so this checks order, not just membership.
+    const order = [...container.querySelectorAll('.offline-banner, .coord-banner')];
+    expect(order).toEqual([offline, banner]);
+  });
+});

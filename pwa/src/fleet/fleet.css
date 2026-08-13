@@ -1637,7 +1637,14 @@
 }
 .coord-toggle:active { transform: scale(0.96); }
 .coord-toggle:disabled { cursor: default; }
-.coord-error {
+/* Named-ancestor descendant of `.coord-banner` (self-grounded, above) — same
+   idiom as `.coord-banner .coord-glyph` a few lines up — so `design/audit.mjs`
+   can actually recover a ground for this pair and measure it, rather than
+   filing it under `uncovered` the way a bare `.coord-error { color: … }`
+   selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
+   5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
+   until this selector named its ancestor). */
+.coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;
   font-size: var(--text-2xs);
