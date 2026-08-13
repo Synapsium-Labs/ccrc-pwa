@@ -18,7 +18,7 @@
 
 ## Deviations found
 
-Seventeen. Three are the spec's own (D-B4-1/2/3, restated here so an executor never has to leave this file); fourteen were found while measuring the tree against the spec — the last three (D-B4-10 restated, D-B4-16, D-B4-17) by a blocking review of this plan's own first draft, which had credited two mechanisms that cannot kill their mutants, written a `coord` emitter against a variable that is not in scope on a path it can never reach, and put a transaction in a ring that holds no database handle anywhere else in the tree.
+Twenty-two. Three are the spec's own (D-B4-1/2/3, restated here so an executor never has to leave this file); fourteen were found while measuring the tree against the spec — three of those (D-B4-10 restated, D-B4-16, D-B4-17) by a blocking review of this plan's own first draft, which had credited two mechanisms that cannot kill their mutants, written a `coord` emitter against a variable that is not in scope on a path it can never reach, and put a transaction in a ring that holds no database handle anywhere else in the tree. The last five were found DURING EXECUTION and are dated by their wave: D-B4-18/19/20 in wave 3 (the start-a-program sheet's match, and the reversal of a rule a test had pinned), D-B4-21/22 in wave 4.
 
 ### D-B4-1 (spec) — an abandon carries no fingerprint
 
@@ -143,6 +143,21 @@ Each arm's conjuncts are pinned **on that arm**, individually — measured by de
 **Adaptation:** the wait arm gains `status !== 'dead'` **and** a freshness discriminator — alive now, and either absent from a pre-create snapshot of live ids or present in it but dead ("became live as a result of my create"). Freshness is deliberately *not* "an id I had not seen": a dead row `cmd_start` revives keeps its id and is a legitimate resolution. The pinning test was **replaced, not deleted** — it also carried the arm's `wrapper` coverage, so the replacement pins the corrected rule *and* still fails if `wrapper` is dropped. `startedSessionFor` is exported and unit-tested because the freshness conjunct is unreachable through the component. Full reasoning, the `cmd_swap` non-uniqueness and the sort-order chain live in D-B4-18/19 above; this entry exists so the reversal is discoverable from the index rather than only from inside the entry it corrects.
 
 **Trail:** raised by the implementer while applying the coordinator's review (which had ordered liveness on reasoning of its own that was also wrong about the freshness rule), and **accepted explicitly by the coordinator in review** — both the reversal and the corrected freshness definition. The general lesson, which cost two rounds here: **a test pinning a rule makes the rule durable, not correct** — when a pinned rule is found wrong, the pin is the thing that must be re-argued first, and replaced rather than removed if it also covers something else.
+
+### D-B4-21 (wave 4) — the fence has a SECOND holder, and it is recorded as a gap rather than fixed
+
+Task 15 Step 4 specifies the `single-definition` guard as "`'ccrc-mail'` appears as a literal in exactly one source file … and that file is `shared/api.ts`". Measured: it appears in two. `server/src/inject/send.ts`'s `isMailResidue` tests a DRAFT for a stranded envelope opener with `draft.startsWith('```') && draft.includes('ccrc-mail')` — a genuine second spelling of the same fact, and one that would drift with the fence exactly as the guard fears.
+
+**Adaptation:** the guard ships as a NAMED LIST (`['server/src/inject/send.ts', 'shared/api.ts']`) with the exclusion written down and its reason at the assertion — the `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom this very file already uses for `'mail-disabled'` one describe up. It is NOT fixed here, and that is the brief's own instruction rather than a preference: wave 4's dispatched brief forbids touching `inject/send.ts` by name (it is the hardened send path; this wave has no business inside it). Any NEW holder still fails, so the guard is a mechanism and not a comment. **The gap is real and is stated as such:** whoever next has a reason to edit that file should import `MAIL_ENVELOPE_FENCE` there and shorten the list to `shared/api.ts` alone.
+
+### D-B4-22 (wave 4) — two of this wave's own pins could not fail, and were found by applying the mutants rather than by reading them
+
+Task 19's mutation sweep is what caught both; neither was visible by inspection, and both had passed a full green suite.
+
+1. **The whole-turn rule's PWA pin was covering a different rule.** `mail-card.test.tsx`'s "leaves a turn that is one fenced block PLUS prose as an ordinary bubble" used a fixture with prose ABOVE the fence only. Prose above is refused by the OPENING-fence rule (line 0 is not a fence), so with the closing-fence rule mutated to accept a fence anywhere, the server suite went red and this test stayed **green**. Fixed by covering prose below and both, which is the case only the whole-turn rule can refuse.
+2. **The `'ccrc-mail'` literal scan was blind to the spelling the regression would actually use.** It scanned for the single-quoted literal; the realistic mutant — re-inlining the fence into `renderEnvelope`'s own template literal, `` `${fence}ccrc-mail\n` `` — carries no quotes at all, and left the scan green while only its sibling assertion caught it. Rewritten to scan the bare token in comment-stripped source, with the three non-fence spellings (`ccrc-mail.token`, `x-ccrc-mail-token`, and the nudge's `ccrc-mail: …` sentence) excluded by the character that follows them rather than by file name.
+
+**The lesson is the program's own standing one, earned a fourth time:** a pin that cannot fail is worse than no pin, because it is counted. Neither of these was a careless test — both read correctly and both named the right rule. What separated them from working pins was only that nobody had run the mutant. Every guard in this wave was subsequently applied-and-watched: eleven mutants, each observed RED at a named test and GREEN again after restore.
 
 ---
 

@@ -645,22 +645,38 @@ describe('Build 4 — one ccrc-mail fence', () => {
     expect(src).toContain('${fence}${MAIL_ENVELOPE_FENCE}');
   });
 
-  it("the 'ccrc-mail' literal survives in ONE other file, named here BY NAME", () => {
+  it('the fence spelling survives in ONE other file, named here BY NAME', () => {
     // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
     // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom this file already
     // uses for `'mail-disabled'` one describe up.
     //
-    // `inject/send.ts:327` (`isMailResidue`) tests a DRAFT for a stranded
-    // envelope opener and spells the info string itself. It is a genuine
-    // second copy of one fact and it is recorded as a gap rather than fixed
-    // here: Build 4's wave-4 brief forbids touching `inject/send.ts` by name
-    // (it is the hardened send path, and this wave has no business inside
-    // it). Whoever next has a reason to edit that file should import
-    // `MAIL_ENVELOPE_FENCE` and shorten this list to `shared/api.ts` alone.
+    // `inject/send.ts` (`isMailResidue`) tests a DRAFT for a stranded envelope
+    // opener and spells the info string itself. It is a genuine second copy of
+    // one fact and it is recorded as a gap rather than fixed here: Build 4's
+    // wave-4 brief forbids touching `inject/send.ts` by name (it is the
+    // hardened send path, and this wave has no business inside it). Whoever
+    // next has a reason to edit that file should import `MAIL_ENVELOPE_FENCE`
+    // and shorten this list to `shared/api.ts` alone.
     //
-    // Any NEW holder still fails — that is what makes this a mechanism and
-    // not a comment.
-    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'ccrc-mail'")).map(rel).sort();
+    // ANY QUOTING, NOT JUST `'…'` (Task 19 mutation sweep, and the reason this
+    // test was rewritten): the first draft scanned for the single-quoted
+    // literal only, and the realistic regression — re-inlining the fence into
+    // `renderEnvelope`'s own template literal, ``${fence}ccrc-mail\n`` — is
+    // spelled with no quotes at all. That mutant was applied and left this
+    // assertion GREEN while only the sibling test above caught it. The scan is
+    // now over the bare token in comment-stripped source, so the copy people
+    // would actually write is the copy it sees.
+    //
+    // Three non-fence spellings share these characters and are excluded by the
+    // character that follows them, not by a file name: `ccrc-mail.token` (the
+    // secret's filename), `x-ccrc-mail-token` (the header) and the nudge's own
+    // `ccrc-mail: you have new mail` sentence. None of them is the info
+    // string, and none of them would drift with it.
+    const noComments = (t: string): string =>
+      t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    const FENCE_SPELLING = /ccrc-mail(?![.\-:])/;
+    const holders = ALL.filter((f) => FENCE_SPELLING.test(noComments(readFileSync(f, 'utf8'))))
+      .map(rel).sort();
     expect(holders).toEqual([
       'server/src/inject/send.ts',   // isMailResidue's draft probe — named gap, see above
       'shared/api.ts',               // MAIL_ENVELOPE_FENCE (the definition)

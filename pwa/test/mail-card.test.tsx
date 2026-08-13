@@ -158,12 +158,23 @@ describe('MailCard', () => {
     // The whole-turn rule, and it lives in `parseMailEnvelope` — this file
     // holds no second copy of it. An operator quoting mail back at a session
     // is the operator's own words, and must read as such.
-    const quoted: ChatEvent = {
-      kind: 'user', uuid: 'm1', ts: TS, text: `here is what I got:\n${envelopeText()}`,
-    };
-    render(<ChatListInner id="s" events={[quoted]} pending={[]} />);
-    expect(card()).toBeNull();
-    expect(document.querySelector('.msg-user')).not.toBeNull();
+    //
+    // BOTH SIDES, and that is not symmetry for its own sake (Task 19 mutation
+    // sweep). Prose ABOVE is refused by the OPENING-fence rule — line 0 is not
+    // a fence — so an above-only fixture stays green with the whole-turn rule
+    // deleted and pins nothing. Prose BELOW is the case only the closing-fence
+    // rule can refuse, and it is what makes this test able to fail.
+    for (const text of [
+      `here is what I got:\n${envelopeText()}`,
+      `${envelopeText()}\nand that is what it said`,
+      `before\n${envelopeText()}\nafter`,
+    ]) {
+      cleanup();
+      const quoted: ChatEvent = { kind: 'user', uuid: 'm1', ts: TS, text };
+      render(<ChatListInner id="s" events={[quoted]} pending={[]} />);
+      expect(card(), text.slice(0, 24)).toBeNull();
+      expect(document.querySelector('.msg-user'), text.slice(0, 24)).not.toBeNull();
+    }
   });
 
   it('an ASSISTANT turn carrying the same text is never a mail card', () => {
