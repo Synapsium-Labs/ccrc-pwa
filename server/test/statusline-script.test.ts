@@ -30,10 +30,19 @@ const SCRIPT = path.resolve(__dirname, '../../ccd/statusline-command.sh');
 // Production-shaped: one upstream account, one `telemetry: 'none'` external
 // (the `gpt` case), and `zeta` — a free-form account with an id and a config
 // dir that no hand-written map in this repo's history ever named.
+//
+// The upstream account's `configDirSuffix` is `.upstream-cfg`, NOT `.claude`,
+// and that is load-bearing rather than arbitrary. `.claude` is also the
+// hardcoded no-roster fallback in the script (`cfg="$HOME/.claude"`), so a
+// fixture using it makes the roster-driven line and the fallback line produce
+// the same answer — and the test below claiming to cover "unset
+// CLAUDE_CONFIG_DIR resolves through the roster" would pass with that line
+// deleted. A box whose upstream account does not live in `~/.claude` is
+// exactly what free-form ids and `ccrc-adopt` make possible.
 const ROSTER = {
   version: 1,
   accounts: [
-    { id: 'claude', label: 'team·max', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'claude', label: 'team·max', configDirSuffix: '.upstream-cfg', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
     { id: 'zeta', label: 'zeta·one', configDirSuffix: '.zeta', exec: { kind: 'generated' }, homeAble: true, hue: 'amber', telemetry: 'anthropic' },
     { id: 'gpt', label: 'gpt', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
   ],
@@ -103,13 +112,44 @@ describe('statusline-command.sh reads the roster instead of a hand-written map',
     expect(out).not.toContain('.zeta');
   });
 
-  it('colours the account with its roster hue', () => {
-    const home = seed('ccrc-statusline-hue-');
-    // `amber` has no 16-colour equivalent left (33 is the yellow the limit
-    // bars already use), so it comes from the 256-colour cube — asserted here
-    // because a hue silently falling through to no colour is invisible to
-    // every text assertion in this file.
-    expect(run(home, path.join(home, '.zeta')).out).toContain('[38;5;214mzeta·one');
+  // All six of `HUES`, because the script's hue→ANSI `case` is a hand-written
+  // restatement of `shared/roster.ts`'s list and nothing else ties the two
+  // together. A hue whose arm is missing falls through to `hue_color=""` — the
+  // account still renders, just uncoloured, which no text assertion can see.
+  // `violet` and `amber` come from the 256-colour cube (35 is magenta and 33 is
+  // the yellow the limit bars already use), which is the pair most likely to be
+  // "simplified" into a 16-colour approximation that no longer matches
+  // `pwa/src/styles/tokens.css`.
+  it.each([
+    ['cyan', '[36m'],
+    ['violet', '[38;5;141m'],
+    ['blue', '[34m'],
+    ['magenta', '[35m'],
+    ['amber', '[38;5;214m'],
+    ['green', '[32m'],
+  ])('colours an account with its roster hue: %s', (hue, ansi) => {
+    const home = seed(`ccrc-statusline-hue-${hue}-`, {
+      version: 1,
+      accounts: [
+        { id: 'claude', label: 'up', configDirSuffix: '.upstream-cfg', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+        { id: 'hued', label: 'hued·acct', configDirSuffix: '.hued', exec: { kind: 'generated' }, homeAble: true, hue, telemetry: 'anthropic' },
+      ],
+    });
+    expect(run(home, path.join(home, '.hued')).out).toContain(`${ansi}hued·acct`);
+  });
+
+  it('renders a label that bash `echo` would have swallowed as an option', () => {
+    // `parseRoster` accepts `-n` — a label is display text, validated only as a
+    // non-empty string with no control characters. `echo "-n"` prints NOTHING,
+    // so an `_ccrc_label` built on `echo` gives that account a nameless chip.
+    const home = seed('ccrc-statusline-dashn-', {
+      version: 1,
+      accounts: [
+        { id: 'claude', label: 'up', configDirSuffix: '.upstream-cfg', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+        { id: 'dashn', label: '-n', configDirSuffix: '.dashn', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
+      ],
+    });
+    expect(plain(run(home, path.join(home, '.dashn')).out)).toContain('👤 -n');
   });
 
   it('writes NO limits row for an account the roster says has no telemetry', () => {
@@ -123,7 +163,13 @@ describe('statusline-command.sh reads the roster instead of a hand-written map',
     expect(limitsRow(home, 'gpt')).toBeNull();
   });
 
-  it('resolves an unset CLAUDE_CONFIG_DIR to the roster\'s upstream account', () => {
+  it('resolves an unset CLAUDE_CONFIG_DIR through the ROSTER, not the hardcoded default', () => {
+    // The fixture's upstream lives in `.upstream-cfg`, so `$HOME/.claude` — the
+    // no-roster fallback one line below in the script — is a directory NO
+    // account claims here. Deleting the roster-driven line therefore falls
+    // through to a config dir `_ccrc_dir_id` answers empty for: the chip would
+    // read `.claude` and no `~/.cc-limits/claude.json` would be written, which
+    // is the never-measured-never-placed failure this whole file exists for.
     const home = seed('ccrc-statusline-upstream-');
     const r = run(home);
     expect(plain(r.out)).toContain('👤 team·max');

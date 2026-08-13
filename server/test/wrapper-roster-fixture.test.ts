@@ -494,4 +494,20 @@ describe('statusline-command.sh carries no account map of its own', () => {
       expect(src, `statusline-command.sh no longer asks the roster for ${q}`).toContain(q);
     }
   });
+
+  it('derives the roster path from $HOME alone, with no environment override', () => {
+    // `ccd` sets the identical variable with no `:-` fallback on purpose
+    // (ccd:105, and README's "ccd has no such override on purpose: it derives
+    // the path from HOME alone, so a stray `Environment=` cannot run a live box
+    // against someone else's account list"). This file needs the rule MORE than
+    // ccd does, because it `source`s the result on every status-bar render of
+    // every session — an override would let an inherited variable choose which
+    // bash executes inside every live Claude Code session on the box.
+    //
+    // `CCRC_ACCOUNTS` overrides the SERVER's roster path and is a different
+    // variable in a different process; nothing here may grow a twin of it.
+    expect(src).toContain('CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"');
+    expect(src, 'statusline-command.sh took an environment override for the file it sources')
+      .not.toMatch(/CCRC_ACCOUNTS_SH="\$\{CCRC_ACCOUNTS_SH/);
+  });
 });

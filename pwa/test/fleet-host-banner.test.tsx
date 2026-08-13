@@ -46,7 +46,7 @@ describe('FleetHostBanner', () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(
       health({ connected: true, downSince: null, roster: 'divergent' }));
     render(<FleetHostBanner />);
-    expect(await screen.findByText(/rosters disagree/i)).toBeInTheDocument();
+    expect(await screen.findByText(/different account rosters/i)).toBeInTheDocument();
     // No action button: the fix is a deploy or an edit on one of the two
     // boxes, and offering a button that cannot do either is worse than none.
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
@@ -60,7 +60,7 @@ describe('FleetHostBanner', () => {
       health({ connected: true, downSince: null, roster: 'unknown' }));
     render(<FleetHostBanner />);
     await act(async () => {});
-    expect(screen.queryByText(/rosters disagree/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/different account rosters/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/unreachable/i)).not.toBeInTheDocument();
   });
 
@@ -68,7 +68,7 @@ describe('FleetHostBanner', () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ roster: 'divergent' }));
     render(<FleetHostBanner />);
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
-    expect(screen.queryByText(/rosters disagree/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/different account rosters/i)).not.toBeInTheDocument();
   });
 
   it('Reboot opens a confirm naming the rp-llm collateral, and only calls the API on confirm', async () => {

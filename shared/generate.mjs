@@ -184,8 +184,19 @@ export function generateAccountsSh(roster) {
     .map((a) => `    "$HOME/${dqEscape(a.configDirSuffix)}") echo ${a.id} ;;`)
     .join('\n');
 
+  // `printf '%s\\n'`, not `echo`, and ONLY here. Bash's `echo` builtin eats a
+  // first argument made entirely of `-` followed by `n`/`e`/`E` and treats it
+  // as options, printing nothing: `_ccrc_label` for a label of `-n` returns the
+  // empty string, and the statusline renders a nameless account. `parseRoster`
+  // accepts `-n` — a label is validated only as a non-empty string with no
+  // control characters, which is the right rule for display text.
+  //
+  // Every OTHER arm in this file keeps `echo`, because none of them can produce
+  // that shape: ids and `CCRC_UPSTREAM` are `ID_RE`-constrained to a leading
+  // lowercase LETTER, hues are one of six literal words, and `_ccrc_cfg_dir`'s
+  // bodies always contain a `/`.
   const labelArms = roster.accounts
-    .map((a) => `    ${a.id}) echo "${dqEscape(a.label)}" ;;`)
+    .map((a) => `    ${a.id}) printf '%s\\n' "${dqEscape(a.label)}" ;;`)
     .join('\n');
 
   const hueArms = roster.accounts

@@ -47,6 +47,18 @@ export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
  * agree and a `ccd` that behaves like neither. Digesting the projection sees
  * that; digesting the JSON does not.
  *
+ * WHAT `'divergent'` ACTUALLY MEANS, stated precisely because the obvious
+ * reading is narrower than the truth: the two boxes would run different
+ * `accounts.sh`. Usually that is a roster edit on one box only — but the
+ * generated body is a function of `shared/generate.mjs`'s CODE as well as of
+ * the roster, so a build in which the emitter changed (a new emission, a
+ * different arm layout) deployed to one box and not the other lands here too,
+ * with both `accounts.json` files identical. That is not a false positive —
+ * the boxes genuinely are running different projections, and `ccd` on one of
+ * them can behave differently from what the server assumes — but it does mean
+ * the operator-facing remedy is REDEPLOY BOTH first and reconcile the JSON
+ * second, which is the order `FleetHostBanner` states it in.
+ *
  * Three answers, not two, and the third is why this is a function rather than
  * an `===`. `'unknown'` means no evidence — local mode has no second box, an
  * older agent omits the field, and a fleet host with no readable projection

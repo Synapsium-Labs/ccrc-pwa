@@ -81,7 +81,16 @@ segments=()
 #      segment and nothing else. `_ccrc_dir_id` is checked by NAME rather than
 #      trusting the file's presence — an `accounts.sh` from a ccrc older than
 #      this script parses fine and simply doesn't define it.
-CCRC_ACCOUNTS_SH="${CCRC_ACCOUNTS_SH:-$HOME/.ccrc/accounts.sh}"
+#
+#      The path is derived from `$HOME` ALONE, with no environment override,
+#      exactly as `ccd` derives it (ccd:105) and for a stronger version of the
+#      same reason. ccd's rule is "a stray `Environment=` cannot run a live box
+#      against someone else's account list"; this file additionally SOURCES the
+#      result on every status-bar render of every session, so an override would
+#      be an inherited variable choosing which bash executes inside every live
+#      Claude Code session on the box. `CCRC_ACCOUNTS` overrides the SERVER's
+#      roster path — deliberately not this one.
+CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # shellcheck source=/dev/null
 [ -r "$CCRC_ACCOUNTS_SH" ] && . "$CCRC_ACCOUNTS_SH" 2>/dev/null
 roster=0

@@ -60,8 +60,8 @@ export function FleetHostBanner(): ReactNode {
     return (
       <div className="fleet-host-banner fleet-host-banner--warn" role="status">
         <span className="fleet-host-banner-msg">
-          Account rosters disagree — this server and the fleet host are running different
-          account lists. Redeploy, or reconcile <code>~/.ccrc/accounts.json</code> on both boxes.
+          This server and the fleet host are projecting different account rosters. Redeploy both
+          boxes; if it persists, reconcile <code>~/.ccrc/accounts.json</code> on each.
         </span>
       </div>
     );
