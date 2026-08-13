@@ -622,3 +622,48 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     expect(src).toMatch(/import \{ COORDINATOR_PAUSE_MARKER \} from '\.\/coord\/rundefs\.js'/);
   });
 });
+
+// — Build 4, Task 15: one envelope grammar —
+describe('Build 4 — one ccrc-mail fence', () => {
+  // The GRAMMAR is minted server-side (`renderEnvelope`) and parsed back
+  // (`parseMailEnvelope`); a second spelling of the info string is how those
+  // two would come to disagree about what opens an envelope — the renderer
+  // emitting a fence the parser does not recognise, and every delivered mail
+  // silently falling back to an ordinary bubble.
+  it('MAIL_ENVELOPE_FENCE is declared in exactly one file, and that file is shared/api.ts', () => {
+    const DECLARES = /export const MAIL_ENVELOPE_FENCE\s*=/;
+    const holders = ALL.filter((f) => DECLARES.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('envelope.ts reaches the fence through the shared constant, never a literal', () => {
+    // Not just "no second literal" — that is satisfied by deleting the
+    // renderer. The emitter must still reach the shared constant.
+    const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'coord', 'envelope.ts'), 'utf8');
+    expect(src).toContain('MAIL_ENVELOPE_FENCE');
+    expect(src).toMatch(/import \{ MAIL_ENVELOPE_FENCE, type MailKind \} from '\.\.\/\.\.\/\.\.\/shared\/api\.js'/);
+    expect(src).toContain('${fence}${MAIL_ENVELOPE_FENCE}');
+  });
+
+  it("the 'ccrc-mail' literal survives in ONE other file, named here BY NAME", () => {
+    // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
+    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom this file already
+    // uses for `'mail-disabled'` one describe up.
+    //
+    // `inject/send.ts:327` (`isMailResidue`) tests a DRAFT for a stranded
+    // envelope opener and spells the info string itself. It is a genuine
+    // second copy of one fact and it is recorded as a gap rather than fixed
+    // here: Build 4's wave-4 brief forbids touching `inject/send.ts` by name
+    // (it is the hardened send path, and this wave has no business inside
+    // it). Whoever next has a reason to edit that file should import
+    // `MAIL_ENVELOPE_FENCE` and shorten this list to `shared/api.ts` alone.
+    //
+    // Any NEW holder still fails — that is what makes this a mechanism and
+    // not a comment.
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'ccrc-mail'")).map(rel).sort();
+    expect(holders).toEqual([
+      'server/src/inject/send.ts',   // isMailResidue's draft probe — named gap, see above
+      'shared/api.ts',               // MAIL_ENVELOPE_FENCE (the definition)
+    ]);
+  });
+});

@@ -1826,6 +1826,174 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/** The info string on the fence `renderEnvelope` emits (`coord/envelope.ts`).
+ *  ONE definition, here in L0, imported by the renderer — the grammar is
+ *  minted server-side and parsed from the same constant, so the round-trip
+ *  test (`server/test/mail-envelope-parse.test.ts`) is a property of the
+ *  system rather than of two files agreeing. */
+export const MAIL_ENVELOPE_FENCE = 'ccrc-mail';
+
+/** A delivered envelope, read back out of a transcript turn. The same ten
+ *  fields `coord/envelope.ts`'s `EnvelopeInput` renders FROM — deliberately,
+ *  so `parse(render(x)) === x` is an object comparison and a field one side
+ *  silently drops cannot hide. */
+export interface MailEnvelope {
+  id: number; fromId: string; toId: string;
+  runId: number | null; program: string | null; wave: number | null; waveOf: number | null;
+  kind: MailKind; subject: string; artifacts: string[]; body: string;
+}
+
+/**
+ * A TYPED UNION, NEVER A BARE NULL.
+ *
+ * `not-mail` (this text is an ordinary message) and `malformed` (this text
+ * CLAIMS to be an envelope and is not) are two conditions a caller would
+ * handle differently, and collapsing them would be the overloaded null
+ * `architecture:99-100` bans. Today both render identically — an ordinary
+ * bubble — and that is a deliberate choice, pinned by a test asserting
+ * `malformed` never renders as a mail card. The seam keeps the distinction
+ * the renderer does not yet need.
+ *
+ * `at` is the 0-based index into the trimmed text's own lines — line 0 is the
+ * OPENING FENCE, so the first header line is 1. Counting from the text rather
+ * than from the header means the number names a line an operator can find in
+ * what they are looking at.
+ */
+export type MailEnvelopeParse =
+  | { ok: true; envelope: MailEnvelope }
+  | { ok: false; why: 'not-mail' }
+  | { ok: false; why: 'malformed'; at: number };
+
+/**
+ * Parse a delivered envelope back out of a transcript turn.
+ *
+ * IT ASSERTS NOTHING ABOUT AUTHENTICITY. The transcript is a rank-3 source
+ * and a session can type a fake envelope into itself; the authoritative mail
+ * rows come from the database (`{type:'mail'}`, `GET /api/feed`). Consequence
+ * of a forgery: one bubble looks like mail. Named, accepted.
+ *
+ * It walks the header in `renderEnvelope`'s own order and refuses at the FIRST
+ * line that does not fit. Two structural rules are worth stating because they
+ * are what keep a forged or half-typed turn out of the card:
+ *
+ * - The fence must be the WHOLE text (after trimming): opening fence on line
+ *   0, the identical run of backticks on the last line, nothing outside. Prose
+ *   above or below is `not-mail`, not a mail card with commentary attached.
+ * - Everything after the `--` terminator is body, VERBATIM, including lines
+ *   that look like headers. The header walk stops at the `--` that closes the
+ *   `ack:` block, so a body containing its own `--` is not a second parse.
+ *
+ * Known, named limitation: an artifact path with LEADING whitespace does not
+ * round-trip (the renderer indents each path by two spaces and this reads that
+ * indent off again). Ingress caps paths but does not forbid such a path; the
+ * cost is one card rendering a path short by its own leading spaces, which is
+ * strictly less than refusing the whole envelope over it.
+ */
+export function parseMailEnvelope(text: string): MailEnvelopeParse {
+  const lines = text.trim().split('\n');
+  const opener = /^(`{3,})(.*)$/.exec(lines[0] ?? '');
+  if (!opener || opener[2] !== MAIL_ENVELOPE_FENCE) return { ok: false, why: 'not-mail' };
+  const fence = opener[1];
+  // The closing fence is EXACTLY the opener — that is what `fenceFor` emits.
+  // A shorter one does not close the block at all (Markdown's own rule) and a
+  // longer one is not this renderer's output; either way the text is not an
+  // envelope this parser is looking at.
+  const end = lines.length - 1;
+  if (end < 1 || lines[end] !== fence) return { ok: false, why: 'not-mail' };
+
+  const malformed = (at: number): MailEnvelopeParse => ({ ok: false, why: 'malformed', at });
+  let i = 1;
+  /** The current header line, or `null` once the walk has run into the closing
+   *  fence — which is itself a refusal, at the fence's own index. */
+  const cur = (): string | null => (i < end ? (lines[i] as string) : null);
+
+  const idLine = /^id: (\d+)$/.exec(cur() ?? '');
+  if (!idLine) return malformed(i);
+  const id = Number(idLine[1]);
+  i += 1;
+
+  const fromLine = /^from: (.+)$/.exec(cur() ?? '');
+  if (!fromLine) return malformed(i);
+  const fromId = fromLine[1] as string;
+  i += 1;
+
+  const toLine = /^to: (.+)$/.exec(cur() ?? '');
+  if (!toLine) return malformed(i);
+  const toId = toLine[1] as string;
+  i += 1;
+
+  // `run:` and its parenthetical are INDEPENDENTLY optional, mirroring
+  // `renderEnvelope`'s own three conditionals: no line at all when there is no
+  // run; `run: N` when the program is unknown; `run: N (program:S)` with the
+  // wave suffix only when there is a wave, and `/M` only when the total is
+  // known. A line that STARTS `run:` and does not fit is malformed rather than
+  // skipped — silently reading it as the `kind:` line would put a card on
+  // screen naming the wrong run.
+  let runId: number | null = null;
+  let program: string | null = null;
+  let wave: number | null = null;
+  let waveOf: number | null = null;
+  if ((cur() ?? '').startsWith('run:')) {
+    const runLine = /^run: (\d+)(?: \((.+)\))?$/.exec(cur() as string);
+    if (!runLine) return malformed(i);
+    runId = Number(runLine[1]);
+    if (runLine[2] !== undefined) {
+      const inner = /^program:(.+?)(?: wave (\d+)(?:\/(\d+))?)?$/.exec(runLine[2]);
+      if (!inner) return malformed(i);
+      program = inner[1] as string;
+      wave = inner[2] === undefined ? null : Number(inner[2]);
+      waveOf = inner[3] === undefined ? null : Number(inner[3]);
+    }
+    i += 1;
+  }
+
+  const kindLine = /^kind: (.+)$/.exec(cur() ?? '');
+  if (!kindLine || !isMailKind(kindLine[1])) return malformed(i);
+  const kind = kindLine[1];
+  i += 1;
+
+  // `(.*)`, not `(.+)`: an EMPTY subject is a legal envelope. The renderer
+  // emits `subject: ` for it and refusing that would make a card impossible
+  // for a message whose subject a sender simply left blank.
+  const subjectLine = /^subject: (.*)$/.exec(cur() ?? '');
+  if (!subjectLine) return malformed(i);
+  const subject = subjectLine[1] as string;
+  i += 1;
+
+  // The `artifacts:` marker is valid ONLY when at least one indented path
+  // follows it — the renderer never emits a bare marker. The refusal is
+  // reported AT THE MARKER, which is the line that made the promise the text
+  // does not keep.
+  const artifacts: string[] = [];
+  if (cur() === 'artifacts:') {
+    const marker = i;
+    i += 1;
+    while (cur() !== null && (cur() as string).startsWith('  ')) {
+      artifacts.push((cur() as string).slice(2));
+      i += 1;
+    }
+    if (artifacts.length === 0) return malformed(marker);
+  }
+
+  // The ack block: one `ack:` line plus its indented continuation, then the
+  // `--` terminator. The wording is NOT asserted here — that is
+  // `coord-envelope.test.ts`'s job, and pinning the copy in two places is how
+  // an edit to the instruction would start refusing real mail.
+  if (!(cur() ?? '').startsWith('ack: ')) return malformed(i);
+  i += 1;
+  while (cur() !== null && (cur() as string).startsWith('  ')) i += 1;
+  if (cur() !== '--') return malformed(i);
+  i += 1;
+
+  return {
+    ok: true,
+    envelope: {
+      id, fromId, toId, runId, program, wave, waveOf, kind, subject, artifacts,
+      body: lines.slice(i, end).join('\n'),
+    },
+  };
+}
+
 /**
  * The declared ledger's two caps (Build 4, spec §3.1). BYTES for the title,
  * for `MAIL_SUBJECT_MAX_BYTES`'s own reason one block up: a title is one line

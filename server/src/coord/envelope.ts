@@ -1,4 +1,4 @@
-import type { MailKind } from '../../../shared/api.js';
+import { MAIL_ENVELOPE_FENCE, type MailKind } from '../../../shared/api.js';
 
 export interface EnvelopeInput {
   /** The DELIVERY id (`mail_deliveries.id`), not the mail id (`mail.id`) —
@@ -81,7 +81,11 @@ export function renderEnvelope(m: EnvelopeInput): string {
   );
   const head = lines.join('\n');
   const fence = fenceFor(`${head}\n${m.body}`);
-  return `${fence}ccrc-mail\n${head}\n${m.body}\n${fence}`;
+  // The info string comes from `shared/api.ts`, not a literal here (Build 4
+  // Task 15): the same constant `parseMailEnvelope` reads the grammar back
+  // with, so `parse(render(x)) === x` is a property of the system rather than
+  // of two files happening to spell the same nine characters.
+  return `${fence}${MAIL_ENVELOPE_FENCE}\n${head}\n${m.body}\n${fence}`;
 }
 
 /** The single-line reference the delivery lane types instead of the body.
