@@ -457,6 +457,24 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     const r = new TranscriptResolver(localIO);
     expect((await r.resolve({ configDir: cfg, dir, registryWorkdir: dir, uuid: UUID })).path).toBe(a);
     expect((await r.resolve({ configDir: cfg, dir, registryWorkdir: dir, uuid: other })).path).toBe(b);
+
+    // Fix round 1 (task 14 follow-up, Row 71): the title's third claim,
+    // `dir`, was never actually exercised above — both calls share the SAME
+    // `dir` and only `uuid` varies, so a mutant dropping `dir` from the key
+    // survived. Proven here by holding `configDir` AND `uuid` fixed at the
+    // FIRST call's own values and varying only `dir`: `a` above is a rung-5
+    // (uuid-glob) hit, found by a `stranded()` path no munge of ANY `dir`
+    // produces, so it is not itself dir-dependent — which is exactly what
+    // makes it the right bait. `c` below sits at `dir2`'s own rung-1/2
+    // address, which ALWAYS outranks rung 5 on a genuine fresh ladder run.
+    // If the memo key omits `dir`, this call collides with the FIRST call's
+    // entry (same configDir+uuid), `a` still exists on disk, so the memo's
+    // own revalidation reports `stillTrue` and hands back the WRONG,
+    // already-cached `a` instead of ever laddering for `dir2` at all.
+    const dir2 = path.join(path.dirname(dir), 'other-dir');
+    mkdirSync(dir2, { recursive: true });
+    const c = plant(transcriptPath(cfg, dir2, UUID), 1000);
+    expect((await r.resolve({ configDir: cfg, dir: dir2, registryWorkdir: dir2, uuid: UUID })).path).toBe(c);
   });
 
   it('a fallback re-ladders only when its back-off expires — and then finds what appeared elsewhere', async () => {

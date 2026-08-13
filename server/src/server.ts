@@ -657,8 +657,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // identity.wrapper and ccd would recompute `<wrapper>-<project>` — a
     // DIFFERENT, live session, killed while the workspace kept running and
     // the PWA reported success. ccd stop's one-argument form takes the id
-    // whole.
-    if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id));
+    // whole. `--surface pwa` is hard-coded here, not threaded from the
+    // request: this route is the PWA's own stop button and has exactly one
+    // caller (grep confirms it — nothing else in server/ or pwa/ reaches
+    // CCD_ARGV.stopId/stopPair), so there is no other identity this
+    // declaration could honestly carry.
+    if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id, 'pwa'));
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
     // identity.wrapper, which a prior swap flips to the new account while the
@@ -666,7 +670,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
       : identity.wrapper;
-    return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project));
+    return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project, 'pwa'));
   });
 
   // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.

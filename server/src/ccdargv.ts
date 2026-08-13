@@ -1,4 +1,5 @@
 import type { FleetState } from './fleetstate.js';
+import type { StopSurface } from '../../shared/api.js';
 
 declare const CcdArgvBrand: unique symbol;
 
@@ -61,8 +62,15 @@ export const CCD_ARGV = {
    *  list, and because layer 3 fails if a grant nothing builds is left over. */
   enable:    (w: string, p: string, wd?: string) => argv(['enable', w, p, ...(wd ? [wd] : [])]),
   ensure:    (id: string) => argv(['ensure', id]),
-  stopId:    (id: string) => argv(['stop', id]),
-  stopPair:  (w: string, p: string) => argv(['stop', w, p]),
+  /** `surface` is required, not defaulted: the one caller (`POST
+   *  /api/sessions/:id/stop`) always knows who is asking, and a default here
+   *  would be how a second caller quietly inherits the wrong word. `--surface`
+   *  rides as an argv flag rather than an env var for the reason `README.md`'s
+   *  exec-whitelist section gives: the exec seam is `Runner = (cmd, args) =>
+   *  …` with no env, and a `CCD_SURFACE` variable would report the SERVER
+   *  PROCESS's own environment identically for every caller. */
+  stopId:    (id: string, surface: StopSurface) => argv(['stop', id, '--surface', surface]),
+  stopPair:  (w: string, p: string, surface: StopSurface) => argv(['stop', w, p, '--surface', surface]),
   /** Registry-only removal of a DEAD non-workspace session — the end-of-life
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */

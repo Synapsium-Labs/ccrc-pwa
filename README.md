@@ -738,13 +738,15 @@ general remote-shell:
   the caller's identity. The flag records a **declaration, not an
   authentication**: ccd validates it against the closed set (`cli`, `pwa`,
   `agent`, `ccd`) and normalizes anything else to `unknown`, but nothing
-  proves the caller is who the flag says. **As shipped on this tree, the
-  PWA's own `POST /api/sessions/:id/stop` route does not yet pass
-  `--surface pwa`** — `server/src/ccdargv.ts`'s `stopId`/`stopPair` builders
-  take no surface argument, so every stop reached through the API today
-  still records ccd's own default (`cli`), not `pwa`. The flag, the
-  validation and the row's rendering of it are real and tested; the one
-  caller that would actually declare `pwa` is not yet wired to it.
+  proves the caller is who the flag says. The PWA's own `POST
+  /api/sessions/:id/stop` route passes `--surface pwa` on every call —
+  `server/src/ccdargv.ts`'s `stopId`/`stopPair` builders take the surface as
+  a required argument, so every stop reached through the API records `pwa`,
+  not ccd's own `cli` default, which is reserved for a session stopping
+  itself from its own Bash tool. `stop`'s grant stayed a bare one-token
+  prefix through this change — nothing widened — because the flag rides
+  entirely inside the "everything after the verb" territory that prefix
+  already covered.
   Several OTHER verbs, unlike `stop`, require a longer prefix before
   anything after them is unconstrained: `pr-state` needs `--session` or
   `--project`, `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/

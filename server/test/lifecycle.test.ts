@@ -90,7 +90,7 @@ describe('lifecycle routes', () => {
     const { app, calls, cfg } = await makeApp();
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
     await app.close();
   });
 
@@ -117,7 +117,7 @@ describe('lifecycle routes', () => {
     const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
     // …but stop must still target claude2-cctest, not claude-cctest.
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'cctest']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'cctest', '--surface', 'pwa']]);
     await app.close();
   });
 
@@ -144,7 +144,7 @@ describe('lifecycle routes', () => {
     const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa', '--surface', 'pwa']]);
     await app.close();
   });
 

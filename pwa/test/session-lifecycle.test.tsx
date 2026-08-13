@@ -115,6 +115,25 @@ describe('lifecycleQualifier', () => {
   it('a stop with no stamp still says stopped', () => {
     expect(lifecycleQualifier({ lifecycle: 'stopped', stoppedBy: null }, 0)).toBe('stopped');
   });
+
+  // Fix round 1 (task 14 follow-up, Row 78): distinct from the test above.
+  // That one passes an EXPLICIT `stoppedBy: null`; this one deletes the key
+  // entirely, which is what a server that predates the field actually sends
+  // for a row whose OWN `lifecycle` field the caller DOES already have (the
+  // pre-existing "row from a server that predates the field" test at the
+  // component level deletes `lifecycle` too, so it returns at the function's
+  // FIRST guard and never reaches this branch at all — a mutant here
+  // survived that test undetected). `session.stoppedBy` is `undefined`, not
+  // `null`, when the key is genuinely absent; `by === null` must still be
+  // false-safe rather than reaching `by!.surface` on `undefined`. Kills
+  // `const by = session.stoppedBy;` (dropped `?? null`) with a REAL
+  // `TypeError: Cannot read properties of undefined`, not just a wrong
+  // string.
+  it('a stopped lifecycle with a genuinely MISSING stoppedBy key (not explicit null) still says stopped, and does not throw', () => {
+    const noStamp = { lifecycle: 'stopped' as const } as { lifecycle: 'stopped'; stoppedBy?: never };
+    expect(() => lifecycleQualifier(noStamp, 0)).not.toThrow();
+    expect(lifecycleQualifier(noStamp, 0)).toBe('stopped');
+  });
 });
 
 // — the row —
@@ -182,9 +201,22 @@ describe('the row says which kind of dead it is', () => {
   // M10's own hazard pointed the other way: a NEWER server minting a token
   // this build has never heard of. Kills `QUALIFIER[lc]!` and any throwing
   // default — same lesson runWords.ts's `runState` records.
+  //
+  // Fix round 1 (task 14 follow-up, Row 77): the ORIGINAL version of this
+  // test asserted only `screen.getByText('exited')` — the bucket's own state
+  // word, present regardless of the qualifier — so it never actually checked
+  // "renders no qualifier" despite the title's claim. `QUALIFIER[lc]!`
+  // returns `undefined` rather than throwing on a plain-object miss, so the
+  // "does not throw" half was ALSO never in danger from that mutant — this
+  // survived undetected under the old assertion. The `.sess-lifecycle` cell
+  // only renders at all when `qualifier !== null` (SessionLine.tsx), so its
+  // outright ABSENCE from the DOM is the precise, positive proof that an
+  // unmapped token degrades to nothing rather than to a stray `undefined`
+  // cell.
   it('a lifecycle this build has never heard of renders no qualifier and does not throw', () => {
     line(s({ status: 'dead', bucket: 'dead', lifecycle: 'quantum' as SessionLifecycle }));
     expect(screen.getByText('exited')).toBeInTheDocument();
+    expect(document.querySelector('.sess-lifecycle')).toBeNull();
   });
 
   // The live `fleet` frame is CAST, not revived (`stores/fleet.ts`'s
