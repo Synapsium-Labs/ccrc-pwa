@@ -1076,8 +1076,17 @@
 /* The program's claim, as its own meta cell — reuses .sess-ask's
    ink-tertiary token (below), so it needs no new contrast pair. Truncates
    like .sess-acct next door; the reason can run long ("program:x wave:2/4")
-   and the row has no room to wrap it. */
-.sess-held {
+   and the row has no room to wrap it.
+
+   .sess-lifecycle and .sess-swapblocked JOIN this selector rather than
+   minting rules of their own. They are the same kind of cell — a long,
+   truncating, ink-tertiary note whose full text lives in `title` — and a
+   separate rule would be a new colour pair for design/contrast-check.mjs to
+   price for no gain. If either ever needs its own ink it needs its own
+   audited pair first: do not fork the declarations and keep the token. */
+.sess-held,
+.sess-lifecycle,
+.sess-swapblocked {
   font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;

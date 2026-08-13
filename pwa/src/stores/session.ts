@@ -68,6 +68,17 @@ export interface SessionState {
    *  present and these streams never queue (`lib/ws.ts:12-17`). */
   mail: MailSummary[];
   missingFile: string | null; // backlog missing:true → the attempted transcript path
+  /** The OTHER account this transcript was read from — set only when the
+   *  resolver answered at its foreign-glob rung (§5.1 rung 6). Null on every
+   *  ordinary session, which is what "own account" looks like on the wire. */
+  strandedAccount: string | null;
+  /** Whether the resolver finished looking. False means a rung was SKIPPED
+   *  because the fleet host could not be read — rule (b): an unmeasured
+   *  absence is a different fact from a measured one, and collapsing them
+   *  would reproduce this whole spec's defect one seam further out. Absent on
+   *  the wire reads as `true`: every pre-ladder server did complete its
+   *  (shorter) search. */
+  searchComplete: boolean;
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
   apply(msg: SessionStreamMsg): void;
@@ -84,7 +95,7 @@ export interface SessionState {
 export type SessionSnapshot = Pick<
   SessionState,
   'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'mail'
-> & { missingFile: string | null };
+> & { missingFile: string | null; strandedAccount: string | null; searchComplete: boolean };
 
 // Locally minted system dividers (rotation markers, notices) — uuid-prefixed so
 // the reducer can tell them apart from transcript events.
@@ -134,6 +145,12 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         uuid: msg.uuid,
         offset: msg.offset,
         missingFile: msg.missing ? msg.file : null,
+        // Wire names are `foreignAccount`/`searchComplete` (shared/api.ts's
+        // `backlog` frame) — the store keeps `strandedAccount` as its own
+        // name for the same fact (D4, §5.2), so `msg.foreignAccount` is the
+        // one place the rename happens.
+        strandedAccount: msg.foreignAccount ?? null,
+        searchComplete: msg.searchComplete ?? true,
       };
     }
     case 'events':
@@ -200,6 +217,8 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   tasks: s.tasks,
   mail: s.mail,
   missingFile: s.missingFile,
+  strandedAccount: s.strandedAccount,
+  searchComplete: s.searchComplete,
 });
 
 /** Bare paths for dispatch/api.prompt — the only place attachments narrow
@@ -361,6 +380,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       tasks: [],
       mail: [],
       missingFile: null,
+      strandedAccount: null,
+      searchComplete: true,
       pending: [],
       conn: 'connecting',
 

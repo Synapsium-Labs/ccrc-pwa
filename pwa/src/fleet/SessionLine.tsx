@@ -23,6 +23,7 @@ import { unmeasuredFields, type FleetSession, type RosterWire, type SessionBucke
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { humanBytes } from '../screens/ArchiveScreen';
+import { lifecycleQualifier } from './lifecycleWords';
 import { sessionLabel } from './sessionLabel';
 import { TypedLabel } from './TypedLabel';
 import './fleet.css';
@@ -97,6 +98,13 @@ export function SessionLine({
       : [];
 
   const label = sessionLabel(session);
+
+  // The row's lifecycle qualifier (§4.4) and the swap refusal's durable
+  // marker (§2.4). Neither touches `state` above: the bucket ladder is
+  // untouched, a dead row stays `exited`, and these are cells beside it.
+  const qualifier = lifecycleQualifier(session);
+  const swapBlocked = session.swapBlocked ?? null;
+  const swapNote = swapBlocked === null ? null : `swap blocked — ${swapBlocked.reason}`;
 
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;
@@ -255,6 +263,35 @@ export function SessionLine({
           {session.held !== null && (
             <span className="sess-held" data-held="true" title={session.held}>
               {session.held}
+            </span>
+          )}
+
+          {/* WHICH KIND of dead, as a cell rather than a bucket (spec §4.4,
+              M10). Same quiet register as .sess-held next door — no new ink,
+              no new banner: the row already says the session is not running,
+              and this says why and what would fix it. Not gated on `dead`:
+              `running unsupervised` describes a LIVE pane with no supervisor,
+              which is precisely the state D2 exists to make visible. */}
+          {qualifier !== null && (
+            <span
+              className="sess-lifecycle"
+              data-lifecycle={session.lifecycle ?? undefined}
+              title={qualifier}
+            >
+              {qualifier}
+            </span>
+          )}
+
+          {/* The swap this session refused, still refused (§2.4). M9 is why
+              this is a registry-sourced ROW cell and not a notice: a notice
+              raised at 21:32 with no socket open is gone, and the operator
+              who was not watching is exactly the one who needs to know. THE
+              REASON STRING IS THE DISPLAY — rendered verbatim, never parsed,
+              `title` carrying the full text past the cell's own ellipsis,
+              same contract as .sess-held. */}
+          {swapNote !== null && swapBlocked !== null && (
+            <span className="sess-swapblocked" data-swapblocked="true" title={swapBlocked.reason}>
+              {swapNote}
             </span>
           )}
 

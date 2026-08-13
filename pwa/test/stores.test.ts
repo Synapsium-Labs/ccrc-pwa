@@ -57,6 +57,8 @@ const emptySnap = (): SessionSnapshot => ({
   tasks: [],
   mail: [],
   missingFile: null,
+  strandedAccount: null,
+  searchComplete: true,
 });
 
 const askFixture: HookAsk = {

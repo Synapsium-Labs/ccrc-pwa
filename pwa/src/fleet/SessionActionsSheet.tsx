@@ -232,6 +232,21 @@ export function SessionActionsSheet({
             {restarting ? 'Restarting…' : 'Restart session'}
           </button>
 
+          {/* §4.4: "what would revive it" is a sentence the row can print and
+              a button the operator already has. The button above posts
+              POST /api/sessions/:id/ensure (`restart()`, this file) — already
+              keyed by id, already whitelisted, already ungated by decision —
+              and §3.1 made `ensure` restore supervision, so it needs no new
+              argv, no new grant and no new caps line. The note names the
+              terminal spelling too, because §3.4's operator (the one who read
+              the account off the board and minted a DIFFERENT id) is exactly
+              who needs the one-argument form. */}
+          {session.lifecycle === 'orphan' && (
+            <p className="sess-sheet-note">
+              {`Nothing is watching this session — no supervisor, so no auto-swap, no auto-compact and no record when it dies. Restart session revives it: the same thing ccd start ${session.id} does at a terminal.`}
+            </p>
+          )}
+
           <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}>
             Swap account
           </button>
