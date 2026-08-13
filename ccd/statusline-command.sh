@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
 # ~/.claude/statusline-command.sh
 # Claude Code statusLine — custom status bar
-# Shared by all three accounts on server-box AND the Mac: each config dir's settings.json points here.
+#
+# ONE copy per box, shared by every account: each config dir's settings.json
+# points at this same path, and `$HOME` is the same for all of them (only
+# CLAUDE_CONFIG_DIR differs). That is what makes `~/.ccrc/accounts.sh` — the
+# roster projection ccrc generates — reachable from here at a fixed path, and
+# it is why this file no longer carries an account list of its own.
+#
+# It carries NO roster knowledge: which account a config dir belongs to, that
+# account's human label, its hue, and whether it reports rate limits at all
+# are four questions answered by `~/.ccrc/accounts.sh`. Before that projection
+# existed, all four were hand-written `case` arms here — the last copy of the
+# roster in the tree, and the reason free-form account ids were only half
+# delivered by stage 2a: an account those arms didn't name got no
+# `~/.cc-limits/<id>.json` written for it, ever, and `projectHome`'s
+# "unknown is not zero" rule then ranked it below every measured account
+# permanently. A free-form account was silently never placed and never
+# rescued. See `shared/generate.mjs` for the emitter.
 
 input=$(cat)
 
@@ -21,6 +37,16 @@ BLUE=$'\033[34m'
 DIM=$'\033[2m'
 RESET=$'\033[0m'
 SEP=" ${DIM}│${RESET} "
+
+# The six roster hues (shared/roster.ts's HUES), as terminal colors. This is a
+# HUE→ANSI table, not an account→color one: it is keyed on the closed set of
+# hue names, so adding an account never touches it. `violet` and `amber` have
+# no 16-color equivalent that isn't already spoken for (35 is magenta, 33 is
+# the yellow the limit bars use), so both come from the 256-color cube — which
+# is also what keeps this palette matching `pwa/src/styles/tokens.css`, where
+# the same six hues render as `--acct-<hue>`.
+VIOLET=$'\033[38;5;141m'
+AMBER=$'\033[38;5;214m'
 
 # ── make_bar <pct_int> <width> ───────────────────────────────────────────
 #   Renders a color-coded fill bar: filled cells colored by level
@@ -45,15 +71,53 @@ make_bar() {
 segments=()
 
 # ── 0. Account/config — CLAUDE_CONFIG_DIR is inherited from the wrapper
-#      (claude2/claude-corp export it; bare `claude` leaves it unset → ~/.claude).
-cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-case "$cfg" in
-  "$HOME/.claude")          acct="${CYAN}team·max${RESET}" ;;
-  "$HOME/.claude-personal") acct="${MAGENTA}alt·max${RESET}" ;;
-  "$HOME/.claude-corp")     acct="${BLUE}team·shared${RESET}" ;;
-  "$HOME/.claude-dev0")     acct="${GREEN}lab·dev0${RESET}" ;;
-  *)                        acct="$(basename "$cfg")" ;;
-esac
+#      (claude2/claude-corp export it; the upstream account leaves it unset).
+#
+#      Sourcing the roster projection is best-effort on purpose. This hook runs
+#      on EVERY render of EVERY session's status bar, so a box without ccrc
+#      installed (a laptop with the same dotfiles) must still get a status bar
+#      rather than an error: `-r` gates the source, and the script has no
+#      `set -e`, so a projection that somehow failed to parse costs the account
+#      segment and nothing else. `_ccrc_dir_id` is checked by NAME rather than
+#      trusting the file's presence — an `accounts.sh` from a ccrc older than
+#      this script parses fine and simply doesn't define it.
+CCRC_ACCOUNTS_SH="${CCRC_ACCOUNTS_SH:-$HOME/.ccrc/accounts.sh}"
+# shellcheck source=/dev/null
+[ -r "$CCRC_ACCOUNTS_SH" ] && . "$CCRC_ACCOUNTS_SH" 2>/dev/null
+roster=0
+declare -F _ccrc_dir_id >/dev/null 2>&1 && roster=1
+
+cfg="${CLAUDE_CONFIG_DIR:-}"
+# Unset CLAUDE_CONFIG_DIR means the upstream account, whose config dir the
+# roster names — `$HOME/.claude` is only Claude Code's own default, and it is
+# the fallback for a box with no roster, not the answer.
+[ -z "$cfg" ] && [ "$roster" = 1 ] && cfg=$(_ccrc_cfg_dir "$CCRC_UPSTREAM")
+[ -z "$cfg" ] && cfg="$HOME/.claude"
+# A trailing slash would miss every literal `case` pattern below and cost the
+# account its telemetry silently — the exact failure this file exists to stop.
+while [ "$cfg" != "/" ] && [ "${cfg%/}" != "$cfg" ]; do cfg="${cfg%/}"; done
+
+acct_id=""
+[ "$roster" = 1 ] && acct_id=$(_ccrc_dir_id "$cfg")
+
+if [ -n "$acct_id" ]; then
+  acct=$(_ccrc_label "$acct_id")
+  case "$(_ccrc_hue "$acct_id")" in
+    cyan)    hue_color="$CYAN" ;;
+    violet)  hue_color="$VIOLET" ;;
+    blue)    hue_color="$BLUE" ;;
+    magenta) hue_color="$MAGENTA" ;;
+    amber)   hue_color="$AMBER" ;;
+    green)   hue_color="$GREEN" ;;
+    *)       hue_color="" ;;
+  esac
+  [ -n "$hue_color" ] && acct="${hue_color}${acct}${RESET}"
+else
+  # No roster, or a config dir no account claims. The directory name is the
+  # most honest thing available and matches what this file did for an unknown
+  # config dir before the roster existed.
+  acct="$(basename "$cfg")"
+fi
 segments+=("👤 ${acct}")
 
 # ── 1. Model + reasoning effort ─────────────────────────────────────────
@@ -151,48 +215,31 @@ fi
 
 # ── Side-effect: publish this account's limit telemetry for `ccd` auto-swap ──
 #    Limits are account-scoped, so any session's report is valid for the whole
-#    account; last writer wins. Consumed by `ccd supervise` on server-box.
+#    account; last writer wins. Consumed by `ccd supervise` and by the server's
+#    `projectHome` (server/src/limits.ts).
 #
-#    KNOWN LIMITATION — the last hand-written roster copy in the tree, and the
-#    reason free-form account ids are only HALF delivered by stage 2a.
-#    Everything else that needed to know the roster now reads it as data (ccd
-#    and both installers `source` ~/.ccrc/accounts.sh; the server reads
-#    ~/.ccrc/accounts.json), but this file is a Claude Code statusline hook: it
-#    is handed a config dir and nothing else, runs per render, and has no ccrc
-#    context to source. So the map below is four literal arms, and an account
-#    NOT in it falls to `lbl=""` — which means NO ~/.cc-limits/<id>.json is
-#    ever written for it.
-#
-#    The consequence, stated plainly: an account added to ~/.ccrc/accounts.json
-#    by hand (or by `ccrc adopt`) with a config dir this case statement does not
-#    name is PERMANENTLY UNMEASURED. Combined with stage 2a's own "unknown is
-#    not zero" rule in `projectHome` (server/src/limits.ts) — an unmeasured
-#    account now ranks BELOW every measured one instead of beating them all at
-#    a fake score of 0 — such an account will never win a workspace placement,
-#    silently, forever. Auto-swap will not pick it either (`_avail` has nothing
-#    to read).
-#
-#    ZERO IMPACT ON TODAY'S FLEET: every account in
-#    deploy/accounts.migration.json is either in the map below or is `gpt`,
-#    which is `telemetry: "none"` in the roster precisely because it never
-#    reports rate limits and is excluded from placement scoring by design.
-#    Stage 2b is where this map becomes roster-driven. Until then: adding a
-#    free-form account means adding an arm here too.
-case "$cfg" in
-  "$HOME/.claude")          lbl="claude" ;;
-  "$HOME/.claude-personal") lbl="claude2" ;;
-  "$HOME/.claude-corp")     lbl="claude-corp" ;;
-  "$HOME/.claude-dev0")     lbl="claude-dev0" ;;
-  *)                        lbl="" ;;
-esac
-if [ -n "$lbl" ] && [ -n "${five_int:-}" ]; then
+#    Two gates, and they answer different questions. `$acct_id` non-empty means
+#    the roster recognises this config dir at all. `CCRC_MEASURED` membership
+#    means the roster says this account REPORTS rate limits — `gpt` does not
+#    (`telemetry: "none"`), and a `~/.cc-limits/gpt.json` would be
+#    indistinguishable from a real measurement of zero, which is precisely the
+#    fake zero that `telemetry` was added to keep out of placement scoring.
+#    An account off either gate is left unmeasured, which `projectHome` ranks
+#    below every measured account rather than above them.
+measured=0
+if [ -n "$acct_id" ]; then
+  for m in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
+    [ "$m" = "$acct_id" ] && { measured=1; break; }
+  done
+fi
+if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
   mkdir -p "$HOME/.cc-limits"
   # resets_at are unix-epoch seconds when each window rolls over (may be absent).
   five_reset=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.resets_at // "null"' 2>/dev/null)
   seven_reset=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.resets_at // "null"' 2>/dev/null)
   printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s}\n' \
     "$five_int" "${seven_int:-0}" "$(date +%s)" "${five_reset:-null}" "${seven_reset:-null}" \
-    > "$HOME/.cc-limits/.$lbl.tmp" && mv -f "$HOME/.cc-limits/.$lbl.tmp" "$HOME/.cc-limits/$lbl.json"
+    > "$HOME/.cc-limits/.$acct_id.tmp" && mv -f "$HOME/.cc-limits/.$acct_id.tmp" "$HOME/.cc-limits/$acct_id.json"
 fi
 
 # ── Assemble single-line output ───────────────────────────────────────────

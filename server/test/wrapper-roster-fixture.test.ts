@@ -422,56 +422,76 @@ describe('install-coordinator-skill.sh REQUIRED_REFS agrees with the real refere
 // relation is not an invariant to check but an identity: every account ccd can
 // place on is a rostered account, and the installers cover the roster.
 
-describe('ccd statusline-command.sh label maps agree with CCD_MIRROR', () => {
-  // Not executed — this file's own header names it (not the two installers
-  // above, which DO get a real subprocess pin now) as the one genuine
-  // "cannot be usefully executed in a fixture test" case: the script
-  // needs a real CLAUDE_CONFIG_DIR (it reads its OWN process's env, not an
-  // argv) plus a JSON stdin payload to produce anything at all. Parses the
-  // two `case "$cfg" in ... esac` blocks instead — one picks the human-facing
-  // `acct=` label (segment 0, the account chip), the other the `lbl=`
-  // filename fragment `~/.cc-limits/<lbl>.json` is written under.
-  //
-  // Both are verbatim duplicates of roster fields for the home-able three:
-  // `configDirSuffix -> label` for `acct=`, `configDirSuffix -> the roster
-  // KEY itself` for `lbl=`. `lbl=` is the load-bearing one — `lbl=""` (the
-  // `*)` fallback) skips the telemetry write entirely, so a home-able account
-  // missing from this map reports no usage, ever. Until Stage 2a's Task 6 that
-  // was a magnet: `projectHome` (server/src/limits.ts) scored an unmeasured
-  // account 0, so the `+` button projected every new workspace onto the one
-  // account nobody could see, forever. Unknown now ranks BELOW every measured
-  // account, which inverts the failure rather than removing it — such an
-  // account is now the LAST one placement will ever choose, and is placed on
-  // only when nothing at all has reported. Either way this map is what decides
-  // whether an account is visible to the routing rule at all.
+// `statusline-command.sh` used to be pinned here by two parsed-source
+// describes, because it held the last hand-written roster copy in the tree:
+// one `case "$cfg" in ... esac` mapping a config dir to a display label, and a
+// second mapping it to the `~/.cc-limits/<lbl>.json` filename. Those describes
+// compared both maps to `CCD_MIRROR`, in both directions, and were the only
+// thing keeping four literal arms in step with the roster.
+//
+// The maps are gone. The script sources the same generated
+// `~/.ccrc/accounts.sh` that ccd and both installers do, and asks it
+// `_ccrc_dir_id` / `_ccrc_label` / `_ccrc_hue` / `CCRC_MEASURED` — so there is
+// no second copy left to agree with, and the drift those describes detected
+// cannot occur. Their replacement is not a weaker version of the same check:
+// per-input BEHAVIOUR is now proven by executing the real script against a
+// fixture HOME (`server/test/statusline-script.test.ts`, which the old
+// describes' header called impossible — it is not; the script reads its own
+// process env, and `spawnSync` sets that), and what remains worth pinning
+// here is the structural claim those tests cannot make from the inside: that
+// no account map has come BACK.
+//
+// That claim is worth a test rather than a comment because the regression is
+// so cheap to make. Adding an arm to a `case` in a shell script is the
+// obvious local fix for "my new account has no label", it works for the
+// author's account, and it silently reintroduces exactly the failure stage 2a
+// existed to remove: an account absent from the map is never measured, and
+// `projectHome` (server/src/limits.ts) ranks an unmeasured account below every
+// measured one, so it is never placed. Silently. Forever.
+describe('statusline-command.sh carries no account map of its own', () => {
   const src = readFileSync(path.join(ccrcRoot, 'ccd', 'statusline-command.sh'), 'utf8');
-  const wantSuffixes = sortedSet(
-    WRAPPERS.filter((w) => CCD_MIRROR[w]!.homeAble).map((w) => CCD_MIRROR[w]!.configDirSuffix));
-  const suffixToWrapper = new Map(WRAPPERS.map((w) => [CCD_MIRROR[w]!.configDirSuffix, w] as const));
 
-  it('the acct= display-label map (segment 0) covers exactly the home-able config dirs, with matching labels', () => {
-    const arms = [...src.matchAll(/"\$HOME\/([^"]+)"\)\s+acct="([^"]*)"\s*;;/g)]
-      .map((mm) => [mm[1], mm[2]] as const);
-    expect(arms.length).toBeGreaterThan(0);
-    expect(sortedSet(arms.map(([suffix]) => suffix))).toEqual(wantSuffixes);
-    for (const [suffix, raw] of arms) {
-      const w = suffixToWrapper.get(suffix);
-      expect(w, suffix).toBeDefined();
-      // Strip the ANSI colour wrapper (`${CYAN}...${RESET}`) — the label
-      // text itself is what must match the roster, not the colour it's
-      // painted in (that's `colorVar`, a PWA-only concern with no bash twin).
-      const label = raw.replace(/^\$\{[A-Z]+\}/, '').replace(/\$\{RESET\}$/, '');
-      expect(label, suffix).toBe(CCD_MIRROR[w!]!.label);
+  it('has no `"$HOME/<dir>")` case arm — the shape every hand-written account map took', () => {
+    // Both deleted maps, and any third one, are this pattern. The one literal
+    // config dir the script may still name is the no-roster fallback
+    // (`cfg="$HOME/.claude"`), which is an ASSIGNMENT, not a case arm, and is
+    // Claude Code's own default rather than a roster claim.
+    const arms = [...src.matchAll(/"\$HOME\/[^"]*"\)/g)].map((m) => m[0]);
+    expect(arms, 'a config-dir case arm is back in statusline-command.sh — put the mapping in '
+      + 'shared/generate.mjs and read it through ~/.ccrc/accounts.sh instead').toEqual([]);
+  });
+
+  it('names no account label and no non-upstream config dir in CODE', () => {
+    // `CCD_MIRROR.label`'s last reader, repurposed: these are the strings the
+    // script must NOT contain. A label has no other business in a file that
+    // gets every display string from the roster.
+    //
+    // Full-line comments are stripped first, and that is not a loophole — a
+    // `case` arm cannot live inside one. It is a necessity: `gpt`'s label IS
+    // the string "gpt", which the script's prose names when explaining why a
+    // `telemetry: 'none'` account gets no `~/.cc-limits` row. A test that
+    // could not tell code from commentary would force that explanation out of
+    // the file, which is the opposite of what this file is for. (Trailing
+    // comments are deliberately NOT stripped: the script has none carrying an
+    // account name, and stripping from a bare `#` would need to know which
+    // ones sit inside a string.)
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    for (const w of WRAPPERS) {
+      const acct = CCD_MIRROR[w]!;
+      expect(code, `statusline-command.sh names ${w}'s label literally`).not.toContain(acct.label);
+      // The upstream account's suffix is exempt: `.claude` is the documented
+      // fallback for a box with no roster at all.
+      if (acct.configDirSuffix !== '.claude') {
+        expect(code, `statusline-command.sh names ${w}'s config dir literally`)
+          .not.toContain(acct.configDirSuffix);
+      }
     }
   });
 
-  it('the lbl= telemetry-filename map covers exactly the home-able config dirs, with lbl equal to the roster key', () => {
-    const arms = [...src.matchAll(/"\$HOME\/([^"]+)"\)\s+lbl="([^"]*)"\s*;;/g)]
-      .map((mm) => [mm[1], mm[2]] as const);
-    expect(arms.length).toBeGreaterThan(0);
-    expect(sortedSet(arms.map(([suffix]) => suffix))).toEqual(wantSuffixes);
-    for (const [suffix, lbl] of arms) {
-      expect(lbl, suffix).toBe(suffixToWrapper.get(suffix));
+  it('reads the roster projection instead — the four questions a statusline has', () => {
+    expect(src).toContain('.ccrc/accounts.sh');
+    for (const q of ['_ccrc_dir_id', '_ccrc_label', '_ccrc_hue', 'CCRC_MEASURED']) {
+      expect(src, `statusline-command.sh no longer asks the roster for ${q}`).toContain(q);
     }
   });
 });

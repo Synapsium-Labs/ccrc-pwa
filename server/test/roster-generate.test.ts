@@ -115,3 +115,82 @@ describe('generateAccountsSh', () => {
       .toBe(false);
   });
 });
+
+// The four emissions `ccd/statusline-command.sh` reads. Until they existed
+// that file held the last hand-written roster copy in the tree: a config dir
+// it did not name got no `~/.cc-limits/<id>.json`, and `projectHome`'s
+// "unknown is not zero" rule then ranked the account below every measured one
+// forever. These assertions are what make "the statusline has no account list"
+// a mechanism rather than a comment.
+describe('generateAccountsSh — the statusline projection', () => {
+  const home = mkTmp('roster-gen-statusline-');
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(home, '.ccrc', 'accounts.sh'), generateAccountsSh(roster));
+
+  it('lists only accounts whose telemetry is anthropic in CCRC_MEASURED', () => {
+    // `a-b` is telemetry:'none' — the `gpt` case. Writing a limits row for it
+    // would hand `projectHome` a measured zero, which is the exact fake the
+    // telemetry field exists to keep out of placement scoring.
+    expect(sh(home, 'echo "${CCRC_MEASURED[@]}"')).toBe('a a-b-c');
+  });
+
+  it('maps a config dir back to its account — the direction a statusline needs', () => {
+    for (const acc of roster.accounts) {
+      expect(sh(home, `_ccrc_dir_id "$HOME/${acc.configDirSuffix}"`)).toBe(acc.id);
+    }
+  });
+
+  it('answers empty at exit 0 for a config dir no account claims', () => {
+    // Same contract as `_ccrc_cfg_dir`: the caller decides what silence means.
+    // Here it means "leave this account unmeasured", which must not also mean
+    // "print an error into every status bar on the box".
+    expect(sh(home, '_ccrc_dir_id "$HOME/.nobody" ; echo "rc=$?"')).toBe('rc=0');
+  });
+
+  it('resolves an account to its label and hue', () => {
+    expect(sh(home, "_ccrc_label 'a-b-c'")).toBe('ABC');
+    expect(sh(home, "_ccrc_hue 'a-b-c'")).toBe('violet');
+    expect(sh(home, "_ccrc_label 'a'")).toBe('A');
+    expect(sh(home, "_ccrc_hue 'a'")).toBe('cyan');
+    expect(sh(home, "_ccrc_label 'nobody' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  // `_ccrc_dir_id`'s arms are the only ones in the generated file whose
+  // pattern contains an EXPANSION (`"$HOME/..."`) rather than a literal id, so
+  // they are the only ones where the quoting of the pattern itself decides
+  // whether bash matches literally or globs. A `$HOME` holding `[` is what
+  // separates the two: unquoted, `h[o]me` is a character class matching `home`
+  // and NOT the literal directory it came from, so every account on such a box
+  // would silently lose its telemetry.
+  it('matches a config dir literally even when $HOME contains glob metacharacters', () => {
+    const globHome = path.join(mkTmp('roster-gen-glob-'), 'h[o]me');
+    mkdirSync(path.join(globHome, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(globHome, '.ccrc', 'accounts.sh'), generateAccountsSh(roster));
+    expect(sh(globHome, '_ccrc_dir_id "$HOME/.a"')).toBe('a');
+  });
+
+  // The label's counterpart to the hostile-configDirSuffix case above, and the
+  // more exposed of the two: `parseRoster` constrains a suffix to
+  // `[A-Za-z0-9._-]`, but a LABEL is display text — it rejects only control
+  // characters, so `$(...)` is a perfectly valid label that reaches
+  // `_ccrc_label` verbatim. This roster therefore goes through the real
+  // `parseRoster`, not a hand-built object: the payload is not hypothetical.
+  // `_ccrc_label` is sourced by the statusline on every render under whatever
+  // account is running, so an unescaped label is command execution in every
+  // Claude Code session on the box.
+  it('escapes a hostile label as inert literal text, and the payload never runs', () => {
+    const labelHome = mkTmp('roster-gen-label-');
+    mkdirSync(path.join(labelHome, '.ccrc'), { recursive: true });
+    const canary = path.join(labelHome, 'canary-hit');
+    const hostileLabel = `x$(touch ${canary})\`touch ${canary}\`"; touch ${canary}; echo "y`;
+    const hostileRoster = parseRoster({ version: 1, accounts: [
+      { id: 'h', label: hostileLabel, configDirSuffix: '.h', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] });
+    writeFileSync(path.join(labelHome, '.ccrc', 'accounts.sh'), generateAccountsSh(hostileRoster));
+
+    expect(sh(labelHome, "_ccrc_label 'h'")).toBe(hostileLabel);
+    expect(existsSync(canary), 'a hostile label executed instead of round-tripping as inert text')
+      .toBe(false);
+  });
+});

@@ -361,21 +361,30 @@ bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts
   from `HOME` alone, so a stray `Environment=` cannot run a live box against
   someone else's account list.
 
+- **Limit telemetry is roster-driven too**, which is what makes free-form ids
+  real rather than half-delivered. `ccd/statusline-command.sh` is a Claude Code
+  statusline hook — it is handed a `CLAUDE_CONFIG_DIR` and nothing else — so it
+  sources `~/.ccrc/accounts.sh` and asks it four questions: `_ccrc_dir_id`
+  (which account owns this config dir), `_ccrc_label` and `_ccrc_hue` (how to
+  name and colour it), and `CCRC_MEASURED` (whether it reports rate limits at
+  all — `gpt` does not, and a `~/.cc-limits/gpt.json` would be
+  indistinguishable from a measured zero). One copy of the script serves every
+  account, because `$HOME` is shared and only `CLAUDE_CONFIG_DIR` differs.
+  A box with no roster still renders a status bar; it just falls back to the
+  config dir's own name and writes no telemetry.
+
+  This was the last hand-written roster copy in the tree, and it mattered:
+  an account its four `case` arms did not name was **never measured**, and
+  since an unmeasured account ranks below every measured one for placement
+  (stage 2a's "unknown is not zero" fix in `projectHome`,
+  `server/src/limits.ts` — an account nobody could see used to score 0 and
+  beat every real one), such an account would never receive a workspace,
+  silently and permanently. `server/test/statusline-script.test.ts` runs the
+  real script against a fixture `HOME` with a free-form account and goes red
+  if the map ever comes back.
+
 #### Known limitations
 
-- **Limit telemetry is still keyed by a hand-written map.**
-  `ccd/statusline-command.sh` publishes `~/.cc-limits/<id>.json` from a
-  four-arm `case` over the session's config dir — it is a Claude Code
-  statusline hook, handed a config dir and nothing else, with no ccrc context
-  to source a roster from. An account whose config dir is not in that map is
-  **never measured**, and since an unmeasured account now ranks below every
-  measured one for placement (stage 2a's "unknown is not zero" fix in
-  `projectHome`, `server/src/limits.ts` — an account nobody could see used to
-  score 0 and beat every real one), it would never receive a workspace. No impact on this fleet — every account in
-  `accounts.migration.json` is either in the map or is `gpt`, which is
-  `telemetry: 'none'` — but it means **free-form account ids are only half
-  delivered**: adding one today means adding a `case` arm there too. Making
-  that map roster-driven is stage 2b.
 - **`ccrc install` does not exist yet.** Nothing turns a roster entry into a
   wrapper script, a config dir or a systemd unit; the roster describes a box
   that was provisioned by hand or by an earlier deploy. `ccrc-adopt` is the

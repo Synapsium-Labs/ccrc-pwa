@@ -58,13 +58,16 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.package }}/package-lock.json
 
-      # tmux and git are real dependencies of the server suite: the ccd tests
-      # execute the real bash script against fixture HOMEs. They are contained,
-      # never reaching a real tmux server or a real remote, but the binaries
-      # must exist.
+      # tmux, git and jq are real dependencies of the server suite: the ccd and
+      # statusline tests execute the real bash scripts against fixture HOMEs.
+      # They are contained, never reaching a real tmux server or a real remote,
+      # but the binaries must exist. jq ships in the ubuntu-latest image today
+      # and is named here anyway — `statusline-command.sh` degrades to a bare
+      # `claude-code` line WITHOUT it, which is a pass for some assertions and
+      # a silent hole for the ones that matter.
       - name: Install system dependencies
         if: matrix.package == 'server'
-        run: sudo apt-get update && sudo apt-get install -y tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux jq
 
       - name: Install
         working-directory: ${{ matrix.package }}

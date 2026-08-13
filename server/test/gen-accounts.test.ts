@@ -144,6 +144,16 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],
     ['two accounts with the same id', roster(acct(), acct({ exec: { kind: 'generated' } }))],
+    // A label reaches a ONE-LINE status bar (`_ccrc_label`) that
+    // `server/src/pane/statusline.ts` parses back out of a tmux capture: an
+    // embedded newline splits that line and the parser reads the wrong branch
+    // off what is left, so the fleet view disagrees with the session itself.
+    ['a label containing a newline', roster(acct({ label: 'expo\nmax' }))],
+    ['a label containing an escape byte', roster(acct({ label: 'expo\u001b[31mmax' }))],
+    // `_ccrc_dir_id` maps a config dir back to ONE account. Two accounts on
+    // one dir resolves to whichever the emitter wrote first, and the loser is
+    // measured by nothing forever.
+    ['two accounts sharing one configDirSuffix', roster(acct(), acct({ id: 'twin', exec: { kind: 'generated' } }))],
     ['no upstream account', roster(acct({ exec: { kind: 'generated' } }))],
     ['two upstream accounts', roster(acct(), acct({ id: 'claude2', configDirSuffix: '.claude2' }))],
   ];

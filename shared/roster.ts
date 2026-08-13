@@ -194,6 +194,12 @@ export class RosterError extends Error {
  */
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/** C0 controls plus DEL — everything a one-line status bar cannot survive.
+ *  Deliberately NOT a whitelist of "printable" characters: real labels are
+ *  `team·max` and `alt·max`, so anything narrower than "no control bytes"
+ *  would reject the roster this repo actually ships. */
+const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
+
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
@@ -294,6 +300,26 @@ function parseAccount(raw: unknown, index: number): Draft {
     throw new RosterError(
       `account "${id}" has no label.`,
       `Add a non-empty "label" for account "${id}" in ${ROSTER_PATH}.`,
+    );
+  }
+  // A label is display text for a human, and it now reaches TWO renderers
+  // that a control character breaks differently. `pwa/` puts it in a DOM
+  // node, where a stray `\n` is invisible; `ccd/statusline-command.sh`
+  // prints it into a ONE-LINE terminal status bar, and `server/src/pane/
+  // statusline.ts` parses that line back out of a tmux capture. A newline
+  // there does not corrupt the label — it splits the status line in two, so
+  // the parser reads a truncated model/branch from what is left and the
+  // fleet view quietly disagrees with the session. Escape/CSI bytes are
+  // worse: the label would recolour everything printed after it.
+  //
+  // Rejected rather than stripped, deliberately: silently rewriting an
+  // operator's label is an adapter narrowing a distinction it received.
+  // The roster refuses to load and names the fix instead.
+  if (LABEL_UNSAFE_RE.test(label)) {
+    throw new RosterError(
+      `account "${id}" has a label containing a control character.`,
+      `Remove the tab, newline or escape character from "label" for account "${id}" in ` +
+        `${ROSTER_PATH} — a label is one line of display text.`,
     );
   }
 
@@ -501,6 +527,33 @@ export function parseRoster(json: unknown): Roster {
       );
     }
     seenIds.add(a.id);
+  }
+
+  // Two accounts may not share one config dir. Until `_ccrc_dir_id` existed
+  // (`shared/generate.mjs`) the map only ever ran id → dir, where a shared
+  // dir was merely odd; the REVERSE direction makes it ambiguous, and the
+  // ambiguity is resolved somewhere no one would look for it — a bash `case`
+  // arm order. Concretely: `ccd/statusline-command.sh` is handed a config dir
+  // and nothing else, and turns it into the account whose `~/.cc-limits`
+  // row it writes. Two accounts on one dir means both accounts' sessions
+  // publish their rate limits to whichever id the generator emitted first,
+  // and the other account is measured by nothing forever — the same silent
+  // never-placed failure `telemetry`/`projectHome` already guard the other
+  // approach to. A config dir is also a Claude Code identity (one
+  // credentials file, one set of limits), so two accounts sharing one is a
+  // roster that is lying about having two accounts.
+  const seenDirs = new Map<string, string>();
+  for (const a of drafts) {
+    const owner = seenDirs.get(a.configDirSuffix);
+    if (owner !== undefined) {
+      throw new RosterError(
+        `accounts "${owner}" and "${a.id}" share the configDirSuffix ` +
+          `${JSON.stringify(a.configDirSuffix)}.`,
+        `Give each account its own "configDirSuffix" in ${ROSTER_PATH} (e.g. ".${a.id}"), or ` +
+          'delete the duplicate account.',
+      );
+    }
+    seenDirs.set(a.configDirSuffix, a.id);
   }
 
   const upstreams = drafts.filter((a) => a.exec.kind === 'upstream');
