@@ -127,7 +127,7 @@ describe('write routes', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    // The shape `remote/io.ts` produces when one op of the ~17 a session's
+    // The shape `remote/io.ts` produces when one op of the ~21 a session's
     // readRegistry fires in parallel fails or times out: null, indistinguishable
     // at field() from a file that is not there (same idiom as hold-gate.test.ts's
     // `holdUnreadableIO`) — here on `workdir`, one of readRegistry's three

@@ -23,6 +23,7 @@ const session = (id: string): FleetSession => ({
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0', hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [],
+  lifecycle: null, stoppedBy: null, swapBlocked: null,
 });
 
 /** Scripted WebSocket stand-in (same shape the store tests use). */

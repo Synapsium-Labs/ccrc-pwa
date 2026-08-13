@@ -28,7 +28,8 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/clear-cove', tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
-  bucket: 'working', bucketSince: null, unmeasured: [], ...over,
+  bucket: 'working', bucketSince: null, unmeasured: [],
+  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
 });
 
 const makeStore = (): FleetStore => createFleetStore({

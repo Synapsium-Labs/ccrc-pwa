@@ -459,7 +459,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
   // C0.2: `knownId` gates 16 routes on this id (12 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) and previously called
-  // `readRegistry` — up to 409 agent-WS round trips on a 24-session fleet, in
+  // `readRegistry` — up to 505 agent-WS round trips on a 24-session fleet, in
   // remote mode, in front of every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
   // the real injection guard, and ccd re-checks `[[ -f "$REG/$id.uuid" ]]` on
@@ -471,7 +471,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (17 fields, each dropped whole on ANY single field read failing — see
+  // (21 fields, each dropped whole on ANY single field read failing — see
   // `registry.ts`'s "incomplete registry entry" comment), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.

@@ -307,7 +307,7 @@ describe('a degraded row must never fire the busy→idle "✓ Finished" push (bl
   // suppression set agreed with the assembled row by luck of the fixture.
   // `tick()` used to take TWO independent whole-fleet reads — its own, at the
   // top, which `unmeasuredIds` is computed from, and `assembleFleet`'s own,
-  // ~17 field reads per session later — and the gate only ever suppressed
+  // ~21 field reads per session later — and the gate only ever suppressed
   // rows the FIRST one could not measure. A drop landing in the SECOND
   // window (the "ordinary shape in remote mode" the ladder exists for) left
   // `unmeasuredIds` empty while `assembleFleet` emitted a wrapper-degraded

@@ -57,7 +57,8 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], ...over,
+  bucket: 'idle', bucketSince: null, unmeasured: [],
+  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
 });
 
 const prState = (over: Partial<PrState> = {}): PrState => ({

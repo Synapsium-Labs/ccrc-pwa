@@ -80,7 +80,7 @@ const forceDue = (w: FleetWatcher): void => {
 };
 
 /** `localIO` with every `<id>.hold` read failing and everything else real —
- *  the shape `remote/io.ts` produces when one op of the ~17 a session's
+ *  the shape `remote/io.ts` produces when one op of the ~21 a session's
  *  `readRegistry` fires in parallel times out: null, indistinguishable at
  *  `field()` from a file that is not there. */
 const holdUnreadableIO: FleetIO = {
@@ -227,6 +227,7 @@ describe('archiveMerged — merged AND unheld', () => {
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
+      stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'],
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,
@@ -360,7 +361,7 @@ describe('SessionRecord.held', () => {
   });
 
   it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
-    // `readRegistry` lists the directory, then fires ~17 field reads per
+    // `readRegistry` lists the directory, then fires ~21 field reads per
     // session. A `ccd ws-release` anywhere in that window leaves the name in
     // the listing with no bytes behind it — indistinguishable at `field()`
     // from a read that failed, so a perfectly ordinary release was reported as

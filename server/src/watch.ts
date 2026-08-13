@@ -602,7 +602,7 @@ export class FleetWatcher {
       // `records` PASSED IN, never re-read here: `assembleFleet` would
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
-      // in remote mode, ~17 field reads per session, ~409 round trips on a
+      // in remote mode, ~21 field reads per session, ~505 round trips on a
       // 24-session fleet, doubled for no reason. Sharing the read also keeps
       // `sweepHookStates`/`detectDialogs` (which already consumed `records`
       // above) and this assembly looking at the identical snapshot, which is

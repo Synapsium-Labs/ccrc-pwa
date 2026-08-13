@@ -113,6 +113,32 @@ export interface FleetSession {
    *  states for an empty frame: absent evidence proves nothing, and a guess
    *  persisted as fact defeats the one thing a last-known-good cache is for. */
   unmeasured: readonly IdentityField[];
+  /**
+   * WHY this row is not alive — spec §4.3's classification, computed by
+   * `sessionLifecycle` in `fleet.ts` from the pane plus three registry stamps.
+   *
+   * A NEW FIELD, NOT A NEW `SessionStatus`/`SessionBucket` MEMBER (M10). The
+   * bucket ladder is untouched: a dead row stays in the `dead` bucket and gains
+   * a qualifier — "stopped by pwa, 2d ago", "orphan — nothing is watching it",
+   * "running unsupervised".
+   *
+   * `null` means NO LIFECYCLE WAS RECORDED, which today is exactly one thing: a
+   * snapshot written before this build. It is never a fourth classification —
+   * `unmeasurable` is what "we could not measure" looks like, and it is a
+   * member of the union, not this null.
+   */
+  readonly lifecycle: SessionLifecycle | null;
+  /** The deliberate stop, as recorded (§4.1). Epoch MS — the timebase
+   *  `statusUpdatedAt`/`bucketSince` already use, NOT `archivedAt`'s seconds.
+   *  Null when no stop was recorded. The surface is a DECLARATION: it says the
+   *  caller claimed to be the PWA, not that anything authenticated it. */
+  readonly stoppedBy: { readonly at: number; readonly surface: StopSurface } | null;
+  /** The last swap refusal (§2.4), epoch MS and the reason verbatim. Null when
+   *  no refusal stands — cleared by a successful swap and by any deliberate
+   *  revival (`ccd start`/`enable`/`ensure`), because a revive control that
+   *  leaves the refusal banner standing on the row it just revived teaches the
+   *  operator to ignore banners. */
+  readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
 }
 
 /**
@@ -1048,6 +1074,30 @@ const BUCKETS: readonly string[] = ['attention', 'working', 'done', 'idle', 'cle
 // derived from the union. The comment above about casting the constant rather
 // than the input is exactly why a predicate is the right shape for it.
 
+/** `stoppedBy.surface` splits from `lifecycle` right below it, and takes the
+ *  `pr.phase` ruling rather than the `bucket` one: `StopSurface` HAS a
+ *  designated "we cannot say" member (`unknown`), so a surface from a newer ccd
+ *  degrades onto it instead of rejecting a whole fleet's cache. `lifecycle` has
+ *  no such member available — `null` there means "never recorded", an
+ *  affirmative claim about this build — so an unrecognised token rejects, the
+ *  same stance `bucket`/`hookState`/`checks` take three constants up. */
+const reviveStoppedBy = (o: RawObj, k: string): { at: number; surface: StopSurface } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  const surfaceRaw = optStr(s, 'surface');
+  return { at: reqNum(s, 'at'), surface: isStopSurface(surfaceRaw) ? surfaceRaw : 'unknown' };
+};
+
+/** No vocabulary to degrade onto: the reason is free text ccd wrote, and it IS
+ *  the display. Absent → null; present-but-malformed rejects the session. */
+const reviveSwapBlocked = (o: RawObj, k: string): { at: number; reason: string } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
+};
+
 function revivePr(raw: unknown): PrState {
   const o = asObj(raw, 'pr');
 
@@ -1174,6 +1224,16 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
     const bucketRaw = optStr(o, 'bucket');
     if (bucketRaw !== null && !BUCKETS.includes(bucketRaw)) throw new MalformedSnapshot('bucket');
 
+    // Absent → null (an older cache predates the field entirely — THE
+    // compatibility contract, pinned in fleetstate.test.ts). NOT derived the
+    // way `bucket` is: the ladder needs `alive` and a supervisor heartbeat no
+    // snapshot ever carried, and a classification computed from fields we do
+    // not have would be a claim, not a reading.
+    const lifecycleRaw = optStr(o, 'lifecycle');
+    if (lifecycleRaw !== null && !isSessionLifecycle(lifecycleRaw)) {
+      throw new MalformedSnapshot('lifecycle');
+    }
+
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
     // reading of `o`, which is how the two could drift apart.
@@ -1209,6 +1269,11 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
+      // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the
+      // guard above — no cast.
+      lifecycle: lifecycleRaw,
+      stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
+      swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server

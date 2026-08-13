@@ -7,10 +7,10 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, LifecycleInput, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket } from '../../shared/api.js';
+import { sessionBucket, sessionLifecycle } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
@@ -98,7 +98,7 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
   // over the rest of the fleet — so it reads just that id's row rather than
-  // the whole registry (readRegistry's 24-generation sweep, ~409 round trips
+  // the whole registry (readRegistry's 24-generation sweep, ~505 round trips
   // on a 24-session fleet in remote mode, for a question about one session).
   const read = await readSessionRecord(io, cfg, id);
   // A degraded row must never answer 'dead' — the interrupt route's own
@@ -170,7 +170,7 @@ export async function assembleFleet(
    * straight off THIS call's own return value (`sessions[i].unmeasured`), not
    * off a separately-read set of `SessionRecord`s. If this function took its
    * OWN read instead of the rows `tick()` already has, that would be a
-   * SEPARATE whole-fleet sweep, ~17 field reads per session, a few hundred ms
+   * SEPARATE whole-fleet sweep, ~21 field reads per session, a few hundred ms
    * after the one `tick()` used for `sweepHookStates`/`detectDialogs` — and a
    * row that read clean in tick()'s sweep and degraded in THIS one would
    * still land in `sessions` with `unmeasured` empty (wrong), or vice versa.
@@ -215,6 +215,50 @@ export async function assembleFleet(
     // three hook-derived fields below, and MUST NOT feed back into `status` —
     // that derivation is done the moment this line runs.
     const hs = hookStates?.get(r.id) ?? null;
+    // §4.3's ladder, on the evidence THIS assembly measured: the pane it just
+    // asked tmux about, plus the three registry stamps `buildRecord` read in
+    // the same pass — one observation, never two reads that could disagree
+    // (the same reasoning this function's `records` parameter already states).
+    //
+    // THE UNIT CONVERSION LIVES HERE AND NOWHERE ELSE. Registry stamps are
+    // epoch SECONDS (ccd writes `date +%s`, exactly as `archived` does);
+    // `LifecycleInput` is epoch MS. `now` is this call's own second-resolution
+    // clock, so the whole comparison happens on one timebase and a stale
+    // heartbeat cannot read as fresh because two operands disagreed by 1000x.
+    //
+    // `nowMs` DECISION (task-9-report.md carries the full reasoning): `now` is
+    // THIS PROCESS's own clock (`Date.now()`, `assembleFleet`'s own default
+    // parameter), not the fleet host's — `r.supervisedAt` can be written on a
+    // REMOTE box across `remote/io.ts`'s seam, with no clock in that protocol
+    // at all (`stat`'s `mtimeMs` is the nearest thing, and no caller threads it
+    // here). If the fleet host's clock runs far enough ahead, a genuinely
+    // fresh heartbeat can compute `nowMs - supervisedAt < 0` and read
+    // `unsupervised` — `sessionLifecycle`'s own docstring names exactly this
+    // guard and why it exists (matching ccd's shipped `_session_state`).
+    //
+    // Deliberately NOT compensated with a slack constant here. Three reasons:
+    // (1) no signal exists to size one — this seam carries no clock op, so any
+    // constant would be a guess with no measurement behind it, the opposite of
+    // this codebase's "degrade-and-heal for display, never guess and call it
+    // fact" stance (`FleetSession.unmeasured`'s own docstring); (2) it would
+    // reopen a BOUNDED version of the exact hole `sessionLifecycle`'s `>= 0`
+    // guard was hardened to close (task-8-report.md's own deviation record) —
+    // trusting a future stamp up to some threshold is still trusting a future
+    // stamp; (3) the blast radius today is a display-only qualifier that moves
+    // no bucket and nothing else consumes (M10) — a skewed box reads
+    // `unsupervised` instead of `running`, self-heals the moment the skew is
+    // fixed (never permanently masked the way a silently-widened window would
+    // be), and is the honest symptom that points an operator at the actual
+    // bug: the fleet host's clock, not this reader's arithmetic.
+    const lifecycleInput: LifecycleInput = {
+      alive,
+      supervisedAt: r.supervisedAt === null ? null : r.supervisedAt * 1000,
+      stoppedAt: r.stopped === null ? null : r.stopped.at * 1000,
+      stopSurface: r.stopped?.surface ?? null,
+      started: r.started,
+      unmeasured: r.lifecycleUnmeasured,
+      nowMs: now * 1000,
+    };
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
@@ -244,6 +288,26 @@ export async function assembleFleet(
       // SessionLine.tsx) and the offline/state-cache snapshots (Task 2) can
       // tell a degraded row from a measured one too.
       unmeasured: r.unmeasured,
+      // §4.4: a NEW FIELD, never a new `SessionStatus`/`SessionBucket` member
+      // (M10 — an unknown bucket reaches `RANK[bucket]` as a NaN comparator and
+      // `DOT[status].cls` THROWS in an already-deployed PWA). The bucket ladder
+      // two lines down is untouched, and `bucket.test.ts` pins that.
+      //
+      // Computed for EVERY row, archived ones included. `ws-archive`
+      // unsupervises through `_ws_unsupervise`, which stamps, so an archived
+      // workspace honestly reads `stopped`; the bucket ladder routes it to
+      // `archived`/`cleanup` and the renderer does not show the qualifier
+      // there. Suppressing the MEASUREMENT here would be a lie told to make a
+      // renderer simpler.
+      lifecycle: sessionLifecycle(lifecycleInput),
+      // Epoch MS on the wire — the timebase `statusUpdatedAt`/`bucketSince`
+      // already use and the PWA's relative-time helpers already read.
+      // `archivedAt` is the one exception, in seconds, because it shipped that
+      // way; a second exception would make the unit a coin toss at every site.
+      stoppedBy: r.stopped === null ? null : { at: r.stopped.at * 1000, surface: r.stopped.surface },
+      swapBlocked: r.swapBlocked === null
+        ? null
+        : { at: r.swapBlocked.at * 1000, reason: r.swapBlocked.reason },
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the
