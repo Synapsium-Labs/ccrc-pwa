@@ -71,6 +71,20 @@ export const LIFECYCLE_FIXTURE: readonly LifecycleFixtureRow[] = [
     alive: true, supervisedAgoSec: null, stoppedAgoSec: null, stopSurface: null,
     started: true, unmeasured: [], expect: 'unsupervised', serverOnly: null },
 
+  // Fix round 1 (task-8-report.md): this row and the "dead" one below are
+  // what closes the reviewer's Important finding. A NEGATIVE age is a
+  // future-dated stamp — clock skew, or a hand-edited registry — and the
+  // ladder's `>= 0` guard is what stops it reading fresh forever (see
+  // `sessionLifecycle`'s own docstring in shared/api.ts). Before this round
+  // the divergence this task discovered (ccd's shipped guard vs. the brief's
+  // draft) was pinned only in the TS-only "rungs one fixture row cannot
+  // state" describe and in the OLDER ccd-session-state.test.ts — never in
+  // THIS shared table, so a bash-side regression of the guard was invisible
+  // to the fixture that is supposed to be the single source of truth.
+  { name: 'alive with a future-dated heartbeat is unsupervised — clock skew must not read as fresh forever',
+    alive: true, supervisedAgoSec: -60, stoppedAgoSec: null, stopSurface: null,
+    started: true, unmeasured: [], expect: 'unsupervised', serverOnly: null },
+
   { name: 'a stop stamp on a dead row is stopped, and the row says who and when',
     alive: false, supervisedAgoSec: null, stoppedAgoSec: 90, stopSurface: 'pwa',
     started: true, unmeasured: [], expect: 'stopped', serverOnly: null },
@@ -89,6 +103,15 @@ export const LIFECYCLE_FIXTURE: readonly LifecycleFixtureRow[] = [
 
   { name: 'dead, unstopped, no heartbeat at all, started is orphan',
     alive: false, supervisedAgoSec: null, stoppedAgoSec: null, stopSurface: null,
+    started: true, unmeasured: [], expect: 'orphan', serverOnly: null },
+
+  // The freshness boolean feeds BOTH the alive branch above and this dead
+  // branch — the SAME `>= 0` guard, one computation, per `sessionLifecycle`'s
+  // ladder and ccd's own `fresh=` assignment. Pinning only the alive-branch
+  // row would leave a mutant that special-cases the guard to one branch (e.g.
+  // moving `>= 0` inside `if (alive)` only) undetected; this row closes that.
+  { name: 'dead, unstopped, with a future-dated heartbeat is orphan, not restarting — the same >= 0 guard',
+    alive: false, supervisedAgoSec: -60, stoppedAgoSec: null, stopSurface: null,
     started: true, unmeasured: [], expect: 'orphan', serverOnly: null },
 
   { name: 'dead, unstopped, no heartbeat, never started is never-started',

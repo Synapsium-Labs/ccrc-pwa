@@ -70,11 +70,19 @@ const plantAndAsk = (row: LifecycleFixtureRow): string => {
     `rm -f "$REG/${ID}".*`,
     row.alive ? '_alive() { return 0; }' : '_alive() { return 1; }',
   ];
+  // Parenthesized, not `now-${age}`: a NEGATIVE age (a future-dated stamp,
+  // clock skew) renders as `$((now--60))`, which bash parses as a decrement
+  // operator and rejects with a syntax error — so the stamp silently never
+  // gets written, `_reg_get` reads "no stamp", and ccd answers `unsupervised`
+  // for BOTH a correct and a mutated freshness guard, proving nothing. Fix
+  // found and confirmed by review round 1 (task-8-report.md): `$((now -
+  // (-60)))` parses as `now + 60` as intended, and a positive age is
+  // unaffected by the added parens.
   if (row.supervisedAgoSec !== null) {
-    lines.push(`printf '%s' "$((now-${row.supervisedAgoSec}))" > "$REG/${ID}.supervised"`);
+    lines.push(`printf '%s' "$((now - (${row.supervisedAgoSec})))" > "$REG/${ID}.supervised"`);
   }
   if (row.stoppedAgoSec !== null) {
-    lines.push(`printf '%s %s' "$((now-${row.stoppedAgoSec}))" '${row.stopSurface ?? 'ccd'}' > "$REG/${ID}.stopped"`);
+    lines.push(`printf '%s %s' "$((now - (${row.stoppedAgoSec})))" '${row.stopSurface ?? 'ccd'}' > "$REG/${ID}.stopped"`);
   }
   if (row.started) lines.push(`printf 1 > "$REG/${ID}.started"`);
   lines.push(`_session_state ${ID}`);
