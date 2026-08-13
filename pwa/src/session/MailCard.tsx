@@ -57,8 +57,12 @@ export function MailCard({ envelope }: { envelope: MailEnvelope }): ReactNode {
         // links: nothing on this card fetches anything, and a tappable path
         // would promise a fetch this surface does not have.
         <ul className="mail-card-artifacts">
-          {envelope.artifacts.map((p) => (
-            <li className="mail-card-artifact" key={p}>{p}</li>
+          {/* Keyed by INDEX, not by path: nothing upstream forbids a sender
+              listing the same path twice, and a duplicate key would drop a
+              row from a list whose whole job is to be complete. The list is
+              static per card, so the index is a stable key. */}
+          {envelope.artifacts.map((p, i) => (
+            <li className="mail-card-artifact" key={`${i}-${p}`}>{p}</li>
           ))}
         </ul>
       )}

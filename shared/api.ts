@@ -1912,7 +1912,17 @@ export type MailEnvelopeParse =
  * strictly less than refusing the whole envelope over it.
  */
 export function parseMailEnvelope(text: string): MailEnvelopeParse {
-  const lines = text.trim().split('\n');
+  const trimmed = text.trim();
+  // A cheap refusal BEFORE any splitting. `buildChatItems` calls this for
+  // every user turn in a backlog that can run to thousands of events, and the
+  // overwhelming majority are ordinary messages; splitting each one into lines
+  // to discover that is work proportional to the whole transcript on every
+  // rebuild. This rejects strictly less than the opener regex below — that
+  // regex requires three backticks at the start of line 0, which is the start
+  // of the trimmed text — so it changes no answer, only when the answer costs
+  // an allocation.
+  if (!trimmed.startsWith('```')) return { ok: false, why: 'not-mail' };
+  const lines = trimmed.split('\n');
   const opener = /^(`{3,})(.*)$/.exec(lines[0] ?? '');
   if (!opener || opener[2] !== MAIL_ENVELOPE_FENCE) return { ok: false, why: 'not-mail' };
   const fence = opener[1];

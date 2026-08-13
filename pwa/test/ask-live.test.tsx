@@ -24,7 +24,7 @@ import path from 'node:path';
 import type { ChatEvent, Dialog, HookAsk } from '../../shared/api';
 import { api } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
-import { ASK_GLYPH, ASK_WORD } from '../src/session/ToolCard';
+import { ASK_GLYPH, ASK_WORD, askState, type ToolResultEvent } from '../src/session/ToolCard';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
@@ -115,6 +115,16 @@ describe('the ask card is a three-state axis', () => {
     expect(document.querySelector('.tool-ask-out')).not.toBeNull();
     expect(stateRow()).toBeNull();
     expect(answerBtn()).toBeNull();
+  });
+
+  it('askState itself is total and result-first, tested where it is written', () => {
+    // The axis is exported and pinned DIRECTLY as well as through the card,
+    // so a later refactor that moves the derivation cannot carry the coverage
+    // away with it — the lesson D-B4-20 recorded, applied here pre-emptively.
+    expect(askState(undefined, true)).toBe('awaiting');
+    expect(askState(undefined, false)).toBe('unanswered');
+    expect(askState(askResult(ANSWERED) as ToolResultEvent, true)).toBe('answered');
+    expect(askState(askResult(ANSWERED) as ToolResultEvent, false)).toBe('answered');
   });
 
   it('a result landing beats a live envelope — the axis reads the result first', () => {
