@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
@@ -847,5 +849,60 @@ describe('fleet store', () => {
       expect(store.getState().blocked).toBe(false);
       store.getState().disconnect();
     });
+  });
+});
+
+// — Build 4 wave 4 gates: what this build did NOT add to the wire —
+//
+// The Global Constraint, verbatim: "No new session frame. No new `ChatEvent`
+// kind." Both were the obvious designs for mail-in-the-transcript and both are
+// refused (spec §2.2) — a second `{type:'mail_log'}` frame would put the same
+// message on the wire twice ordered by two different clocks, and a
+// `{kind:'mail'}` `ChatEvent` would render as a blank or broken bubble in
+// every older PWA, whose `buildChatItems` funnels unknown kinds into
+// `MessageBubble`. The house one-way rule is *old readers drop what they do
+// not know*; a variant on a union they already destructure is not that.
+//
+// These are TEXT scans of the two declarations, in the single-definition.test
+// idiom: they catch the ordinary way someone adds a member, which is the way
+// people actually add members.
+describe('Build 4 wave 4 — the wire additions that were refused', () => {
+  const sourceOf = (...seg: string[]): string =>
+    readFileSync(path.join(import.meta.dirname, '..', '..', ...seg), 'utf8');
+
+  it("applySessionMsg still carries its `satisfies never` default arm — no session frame was added", () => {
+    // Compile-time exhaustiveness AND the runtime shrug, both. If a later
+    // build adds a frame, `tsc` fails at that line rather than silently
+    // dropping it — which is only true while the line is there.
+    const src = sourceOf('pwa', 'src', 'stores', 'session.ts');
+    expect(src).toContain('msg satisfies never;');
+  });
+
+  it('and answers an unknown frame by shrugging, not corrupting', () => {
+    const s: SessionSnapshot = {
+      events: [user('a', 'hi')], offset: 12, uuid: 'u1', status: null,
+      statusUpdatedAt: null, dialog: null, ask: null, tasks: [], mail: [],
+      missingFile: null,
+    };
+    // A frame from a newer server this build was never compiled to know.
+    expect(applySessionMsg(s, { type: 'mail_log' } as unknown as SessionStreamMsg)).toBe(s);
+  });
+
+  it('ChatEvent gained no kind — the five members are exactly what they were', () => {
+    // Build 4 added an optional FIELD (`truncatedBytes`) to two existing
+    // members. A sixth member is the refused design, and this is what says so.
+    const src = sourceOf('shared', 'api.ts');
+    const decl = /export type ChatEvent =([\s\S]*?);\n/.exec(src)?.[1] ?? '';
+    expect(decl, 'ChatEvent declaration not found').not.toBe('');
+    const kinds = [...decl.matchAll(/\{\s*kind:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(kinds).toEqual(['user', 'assistant', 'tool_use', 'tool_result', 'system']);
+  });
+
+  it("the mail ChatItem is a RENDER-MODEL member, not a ChatEvent one", () => {
+    // The distinction the whole design rests on: `{kind:'mail'}` exists in
+    // `ChatList.tsx`'s `ChatItem`, which is PWA-local and derived per render,
+    // and nowhere in `shared/api.ts`, which is the wire.
+    expect(sourceOf('pwa', 'src', 'session', 'ChatList.tsx')).toContain("kind: 'mail'");
+    expect(sourceOf('shared', 'api.ts')).not.toContain("kind: 'mail'");
   });
 });

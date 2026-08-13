@@ -58,6 +58,14 @@ export function SessionScreen({
   const missingFile = useStore((s) => s.missingFile);
   const tasks = useStore((s) => s.tasks);
   const mail = useStore((s) => s.mail);
+  // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
+  // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
+  // hosted by the SAME sheet, so either one makes a resultless ask card
+  // answerable — and neither, on its own, says which question it belongs to,
+  // which is why the card's own `tool_result` wins over both.
+  const liveAsk = useStore((s) => s.ask);
+  const liveDialog = useStore((s) => s.dialog);
+  const askPending = liveAsk !== null || liveDialog !== null;
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
@@ -65,6 +73,10 @@ export function SessionScreen({
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  // D-B4-13's nonce. Bumped by the transcript's one `Answer` control; read by
+  // `DialogSheet` to clear a dismissal the reader had made. It carries no
+  // answer and cannot send — raising the sheet is the entire contract.
+  const [raise, setRaise] = useState(0);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
@@ -278,6 +290,8 @@ export function SessionScreen({
             busy={effectiveStatus === 'busy'}
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
+            askPending={askPending}
+            onAnswer={() => setRaise((n) => n + 1)}
           />
         )}
       </div>
@@ -304,7 +318,7 @@ export function SessionScreen({
         />
       </div>
 
-      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} />
+      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} />
       <PickSheet
         open={picker === 'model'}
         onClose={() => setPicker(null)}

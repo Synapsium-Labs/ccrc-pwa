@@ -1436,11 +1436,33 @@ export interface SlashCommand {
   kind: 'builtin' | 'skill';
 }
 
+/**
+ * `truncatedBytes` — THREE DOCUMENTED STATES, and the third is why the field
+ * is optional (Build 4, spec §2.2/§2.4):
+ *
+ * - **absent** — *this server did not report*. An old server can only ever
+ *   produce this, and it renders NO CUE. Never a claim of completeness: the
+ *   fragment is presented as a fragment of unknown size, which is the honest
+ *   thing a reader can act on.
+ * - **`0`** — not truncated. The whole payload is here.
+ * - **`>0`** — this many BYTES were cut off the end.
+ *
+ * Computed in `server/src/transcript/parse.ts`, not here (D-B4-12): L0 imports
+ * nothing, "not even `node:*`", so there is no `Buffer` in this file. The caps
+ * upstream are CHARACTER caps and this report is in BYTES, deliberately — a
+ * byte count is what an operator can compare against a file on disk.
+ *
+ * NO NEW `ChatEvent` KIND was added for this, and none may be: `buildChatItems`
+ * funnels every non-tool event into `MessageBubble`, so an unknown kind renders
+ * as a broken bubble in older PWAs rather than degrading honestly (spec §2.2).
+ * An optional field on an existing member is the additive shape old readers
+ * simply ignore.
+ */
 export type ChatEvent =
   | { kind: 'user'; uuid: string; ts: string; text: string }
   | { kind: 'assistant'; uuid: string; ts: string; text: string }
-  | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string }
-  | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean }
+  | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string; truncatedBytes?: number }
+  | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean; truncatedBytes?: number }
   | { kind: 'system'; uuid: string; ts: string; text: string };
 
 export interface AskOption { label: string; description?: string; preview?: string }
@@ -1825,6 +1847,240 @@ export const MAIL_BODY_MAX_BYTES = 8 * 1024;
 export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
+
+/** The info string on the fence `renderEnvelope` emits (`coord/envelope.ts`).
+ *  ONE definition, here in L0, imported by the renderer — the grammar is
+ *  minted server-side and parsed from the same constant, so the round-trip
+ *  test (`server/test/mail-envelope-parse.test.ts`) is a property of the
+ *  system rather than of two files agreeing. */
+export const MAIL_ENVELOPE_FENCE = 'ccrc-mail';
+
+/** A delivered envelope, read back out of a transcript turn. The same ten
+ *  fields `coord/envelope.ts`'s `EnvelopeInput` renders FROM — deliberately,
+ *  so `parse(render(x)) === x` is an object comparison and a field one side
+ *  silently drops cannot hide. */
+export interface MailEnvelope {
+  id: number; fromId: string; toId: string;
+  runId: number | null; program: string | null; wave: number | null; waveOf: number | null;
+  kind: MailKind; subject: string; artifacts: string[]; body: string;
+}
+
+/**
+ * A TYPED UNION, NEVER A BARE NULL.
+ *
+ * `not-mail` (this text is an ordinary message) and `malformed` (this text
+ * CLAIMS to be an envelope and is not) are two conditions a caller would
+ * handle differently, and collapsing them would be the overloaded null
+ * `architecture:99-100` bans. Today both render identically — an ordinary
+ * bubble — and that is a deliberate choice, pinned by a test asserting
+ * `malformed` never renders as a mail card. The seam keeps the distinction
+ * the renderer does not yet need.
+ *
+ * `at` is the 0-based index into the trimmed text's own lines — line 0 is the
+ * OPENING FENCE, so the first header line is 1. Counting from the text rather
+ * than from the header means the number names a line an operator can find in
+ * what they are looking at.
+ */
+export type MailEnvelopeParse =
+  | { ok: true; envelope: MailEnvelope }
+  | { ok: false; why: 'not-mail' }
+  | { ok: false; why: 'malformed'; at: number };
+
+/**
+ * Parse a delivered envelope back out of a transcript turn.
+ *
+ * IT ASSERTS NOTHING ABOUT AUTHENTICITY. The transcript is a rank-3 source
+ * and a session can type a fake envelope into itself; the authoritative mail
+ * rows come from the database (`{type:'mail'}`, `GET /api/feed`). Consequence
+ * of a forgery: one bubble looks like mail. Named, accepted.
+ *
+ * It walks the header in `renderEnvelope`'s own order and refuses at the FIRST
+ * line that does not fit. Two structural rules are worth stating because they
+ * are what keep a forged or half-typed turn out of the card:
+ *
+ * - The fence must be the WHOLE text (after trimming): opening fence on line
+ *   0, the identical run of backticks on the last line, nothing outside. Prose
+ *   above or below is `not-mail`, not a mail card with commentary attached.
+ * - Everything after the `--` terminator is body, VERBATIM, including lines
+ *   that look like headers. The header walk stops at the `--` that closes the
+ *   `ack:` block, so a body containing its own `--` is not a second parse.
+ *
+ * Known, named limitation: an artifact path with LEADING whitespace does not
+ * round-trip (the renderer indents each path by two spaces and this reads that
+ * indent off again). Ingress caps paths but does not forbid such a path; the
+ * cost is one card rendering a path short by its own leading spaces, which is
+ * strictly less than refusing the whole envelope over it.
+ */
+export function parseMailEnvelope(text: string): MailEnvelopeParse {
+  const trimmed = text.trim();
+  // A cheap refusal BEFORE any splitting. `buildChatItems` calls this for
+  // every user turn in a backlog that can run to thousands of events, and the
+  // overwhelming majority are ordinary messages; splitting each one into lines
+  // to discover that is work proportional to the whole transcript on every
+  // rebuild. This rejects strictly less than the opener regex below — that
+  // regex requires three backticks at the start of line 0, which is the start
+  // of the trimmed text — so it changes no answer, only when the answer costs
+  // an allocation.
+  if (!trimmed.startsWith('```')) return { ok: false, why: 'not-mail' };
+  const lines = trimmed.split('\n');
+  const opener = /^(`{3,})(.*)$/.exec(lines[0] ?? '');
+  if (!opener || opener[2] !== MAIL_ENVELOPE_FENCE) return { ok: false, why: 'not-mail' };
+  const fence = opener[1];
+  // The closing fence is EXACTLY the opener — that is what `fenceFor` emits.
+  // A shorter one does not close the block at all (Markdown's own rule) and a
+  // longer one is not this renderer's output; either way the text is not an
+  // envelope this parser is looking at.
+  const end = lines.length - 1;
+  if (end < 1 || lines[end] !== fence) return { ok: false, why: 'not-mail' };
+
+  const malformed = (at: number): MailEnvelopeParse => ({ ok: false, why: 'malformed', at });
+  let i = 1;
+  /** The current header line, or `null` once the walk has run into the closing
+   *  fence — which is itself a refusal, at the fence's own index. */
+  const cur = (): string | null => (i < end ? (lines[i] as string) : null);
+
+  const idLine = /^id: (\d+)$/.exec(cur() ?? '');
+  if (!idLine) return malformed(i);
+  const id = Number(idLine[1]);
+  i += 1;
+
+  const fromLine = /^from: (.+)$/.exec(cur() ?? '');
+  if (!fromLine) return malformed(i);
+  const fromId = fromLine[1] as string;
+  i += 1;
+
+  const toLine = /^to: (.+)$/.exec(cur() ?? '');
+  if (!toLine) return malformed(i);
+  const toId = toLine[1] as string;
+  i += 1;
+
+  // `run:` and its parenthetical are INDEPENDENTLY optional, mirroring
+  // `renderEnvelope`'s own three conditionals: no line at all when there is no
+  // run; `run: N` when the program is unknown; `run: N (program:S)` with the
+  // wave suffix only when there is a wave, and `/M` only when the total is
+  // known. A line that STARTS `run:` and does not fit is malformed rather than
+  // skipped — silently reading it as the `kind:` line would put a card on
+  // screen naming the wrong run.
+  let runId: number | null = null;
+  let program: string | null = null;
+  let wave: number | null = null;
+  let waveOf: number | null = null;
+  if ((cur() ?? '').startsWith('run:')) {
+    const runLine = /^run: (\d+)(?: \((.+)\))?$/.exec(cur() as string);
+    if (!runLine) return malformed(i);
+    runId = Number(runLine[1]);
+    if (runLine[2] !== undefined) {
+      const inner = /^program:(.+?)(?: wave (\d+)(?:\/(\d+))?)?$/.exec(runLine[2]);
+      if (!inner) return malformed(i);
+      program = inner[1] as string;
+      wave = inner[2] === undefined ? null : Number(inner[2]);
+      waveOf = inner[3] === undefined ? null : Number(inner[3]);
+    }
+    i += 1;
+  }
+
+  const kindLine = /^kind: (.+)$/.exec(cur() ?? '');
+  if (!kindLine || !isMailKind(kindLine[1])) return malformed(i);
+  const kind = kindLine[1];
+  i += 1;
+
+  // `(.*)`, not `(.+)`: an EMPTY subject is a legal envelope. The renderer
+  // emits `subject: ` for it and refusing that would make a card impossible
+  // for a message whose subject a sender simply left blank.
+  const subjectLine = /^subject: (.*)$/.exec(cur() ?? '');
+  if (!subjectLine) return malformed(i);
+  const subject = subjectLine[1] as string;
+  i += 1;
+
+  // The `artifacts:` marker is valid ONLY when at least one indented path
+  // follows it — the renderer never emits a bare marker. The refusal is
+  // reported AT THE MARKER, which is the line that made the promise the text
+  // does not keep.
+  const artifacts: string[] = [];
+  if (cur() === 'artifacts:') {
+    const marker = i;
+    i += 1;
+    while (cur() !== null && (cur() as string).startsWith('  ')) {
+      artifacts.push((cur() as string).slice(2));
+      i += 1;
+    }
+    if (artifacts.length === 0) return malformed(marker);
+  }
+
+  // The ack block: one `ack:` line plus its indented continuation, then the
+  // `--` terminator. The wording is NOT asserted here — that is
+  // `coord-envelope.test.ts`'s job, and pinning the copy in two places is how
+  // an edit to the instruction would start refusing real mail.
+  if (!(cur() ?? '').startsWith('ack: ')) return malformed(i);
+  i += 1;
+  while (cur() !== null && (cur() as string).startsWith('  ')) i += 1;
+  if (cur() !== '--') return malformed(i);
+  i += 1;
+
+  return {
+    ok: true,
+    envelope: {
+      id, fromId, toId, runId, program, wave, waveOf, kind, subject, artifacts,
+      body: lines.slice(i, end).join('\n'),
+    },
+  };
+}
+
+/**
+ * The same envelope, as a FETCH returns it — the live lane (W-1 / D-B4-23).
+ *
+ * WHY THIS EXISTS: spec §2.1's fact 2 measured a lane that typed the whole
+ * envelope into the recipient's pane, where it landed in the JSONL as a `user`
+ * turn. Commit 43b2737 — shipped mid-program, before this wave's own base —
+ * replaced that with the one-line reference nudge, so an envelope now reaches
+ * a transcript ONLY as the output of the worker's own `GET /api/mail/:id`,
+ * which the transcript parser maps to `tool_result`. `parseMailEnvelope`
+ * above is unchanged and stays the LEGACY user-turn parser; this is a
+ * separate, wider door for the live one.
+ *
+ * TWO SHAPES, both measured in real transcripts on the fleet box:
+ *   - the RAW FENCE — a fetch that piped the response through and printed the
+ *     `envelope` field, so the output IS the envelope text;
+ *   - the JSON RESPONSE `GET /api/mail/:id` actually sends,
+ *     `{ok, id, toId, state, envelope}` (`coord/routes.ts`), which is what a
+ *     bare curl leaves in the transcript.
+ *
+ * IT ASSERTS NOTHING ABOUT AUTHENTICITY, and the aperture here is WIDER than
+ * the user-turn door, so the caveat is worth restating rather than inheriting:
+ * a `tool_result` is command output. `cat`-ing a file whose whole content is a
+ * fenced envelope renders a card, as does any command whose entire output is
+ * one. That is the same rank-3 transcript this repo already refuses to treat
+ * as authority — authoritative mail rows come from the database
+ * (`{type:'mail'}`, `GET /api/feed`) — and the consequence is unchanged: one
+ * bubble looks like mail. Named, accepted. Do NOT write, here or at any call
+ * site, that a `tool_result` card is authenticated.
+ *
+ * `malformed` survives BOTH doors. Text that claims to be an envelope and is
+ * not keeps saying so whether it arrived raw or wrapped, so the seam the
+ * architecture doc's overloaded-null ban protects is not quietly lost on the
+ * way in.
+ */
+export function parseFetchedMailEnvelope(text: string): MailEnvelopeParse {
+  const direct = parseMailEnvelope(text);
+  // `malformed` is returned as-is, never retried as JSON: it already means
+  // "this text claims to be an envelope", which is an answer, not a miss.
+  if (direct.ok || direct.why === 'malformed') return direct;
+
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{')) return direct;
+  let body: unknown;
+  try {
+    body = JSON.parse(trimmed);
+  } catch {
+    return direct;
+  }
+  // Arrays and null are objects to `typeof`; only a plain object carries the
+  // route's `envelope` field, and only a string one is an envelope.
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return direct;
+  const envelope = (body as { envelope?: unknown }).envelope;
+  if (typeof envelope !== 'string') return direct;
+  return parseMailEnvelope(envelope);
+}
 
 /**
  * The declared ledger's two caps (Build 4, spec §3.1). BYTES for the title,
