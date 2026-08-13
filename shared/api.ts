@@ -1752,7 +1752,22 @@ export type HookAsk =
   | { approval: { tool: string; summary: string } };
 
 export type SessionStreamMsg =
-  | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean }  // missing=true → transcript file not found at `file`; UI shows a diagnostic banner
+  /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
+   *  banner. D4 (§5.2) adds the two facts that banner cannot be honest without,
+   *  both OPTIONAL so an older PWA build ignores them and an older server that
+   *  never sends them is not a protocol violation:
+   *    - `foreignAccount`: the account a rung-6 answer was found under — the
+   *      "stranded history, held by `claude`" banner. Null for every
+   *      own-account answer, which is all of them until a pre-fix swap's
+   *      residue is the only copy left.
+   *    - `searchComplete`: false when a `readdir` answered null, so rungs 5/6
+   *      never ran. `missing: true` with `searchComplete: false` is "can't read
+   *      the fleet host right now" — NEVER "no messages yet". Remote `readdir`
+   *      returns null for a missing directory, a forbidden path and a
+   *      disconnected agent alike, and this build refuses to render that
+   *      ambiguity as a confident empty chat. */
+  | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
+      foreignAccount?: string | null; searchComplete?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer

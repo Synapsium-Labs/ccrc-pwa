@@ -401,7 +401,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
-    const since = parseSince((req.query as { since?: string }).since);
+    const q = req.query as { since?: string; sinceFile?: string };
+    const since = parseSince(q.since, q.sinceFile);
     const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
     void stream.start();
     // A per-connection token, not the session id: one socket's close drops

@@ -5,11 +5,12 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
-import { nextDialogFrame, SessionStream, type DialogSeen } from '../src/sessionws.js';
+import { SessionStream, foreignConfigDirs, nextDialogFrame, shouldRepoint, type DialogSeen } from '../src/sessionws.js';
+import type { TranscriptResolution, TranscriptRung } from '../src/transcript/resolve.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { askKey } from '../src/askkey.js';
 import { Bus } from '../src/bus.js';
-import { loadConfig } from '../src/config.js';
+import { configDirFor, loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -153,6 +154,60 @@ describe('dialog frame gate', () => {
     expect(cleared.msg).toEqual({ type: 'dialog_cleared' });
     expect(cleared.seen).toEqual(NONE);
     expect(nextDialogFrame(cleared.seen, null).msg).toBeNull();
+  });
+});
+
+// §5.3: an open stream follows the answer when it changes. The re-point rule is
+// a pure decision, exported and table-tested here for the same reason
+// `nextDialogFrame` and `parseSince` are — the io-bound half (does the tailed
+// file still exist?) is the ONE fact the caller measures and passes in.
+describe('shouldRepoint (spec §5.3)', () => {
+  const found = (rung: TranscriptRung, p: string): TranscriptResolution =>
+    ({ kind: 'found', path: p, rung, account: null });
+
+  it('re-points to a strictly better rung even while the tailed file still exists', () => {
+    // THE case the uuid-only gate could never see: a swap lands, the exact
+    // address starts existing, and the stream must move off the glob answer.
+    expect(shouldRepoint(found('uuid-glob', '/a'), found('live-raw', '/b'), true)).toBe(true);
+  });
+
+  it('does not re-point to a WORSE rung while the tailed file is still there', () => {
+    // Kills the mutant that re-points on any difference: a transient glob
+    // answer must not drag a healthy stream off its exact-address transcript.
+    expect(shouldRepoint(found('live-raw', '/a'), found('uuid-glob', '/b'), true)).toBe(false);
+  });
+
+  it('re-points to a worse rung once the file being tailed is GONE', () => {
+    // The other half of the rule: a deleted/reaped transcript is not something
+    // to keep tailing just because its rung outranks the alternative.
+    expect(shouldRepoint(found('live-raw', '/a'), found('uuid-glob', '/b'), false)).toBe(true);
+  });
+
+  it('a same-rung, same-path answer changes nothing — the common case every tick', () => {
+    // Kills a mutant that re-points on object identity rather than on the
+    // answer: every open socket would resend its backlog every two seconds.
+    expect(shouldRepoint(found('live-raw', '/a'), found('live-raw', '/a'), true)).toBe(false);
+    expect(shouldRepoint(found('live-raw', '/a'), found('live-raw', '/a'), false)).toBe(false);
+  });
+
+  it('a same-rung DIFFERENT-path answer is a sideways move, not an improvement — it follows the same ' +
+     '"file gone" rule as a worse rung, never the "strictly better" one', () => {
+    // Found by mutation testing `<` -> `<=`: with no test pinning this shape,
+    // that mutant survived every other case in this suite. A same-rank glob
+    // re-pick (e.g. `pickNewest`'s tiebreak landing on a different candidate
+    // between polls) must not churn a healthy stream off a file that is still
+    // there — only a strictly BETTER rung, or the tailed file vanishing, earns
+    // a re-point.
+    expect(shouldRepoint(found('uuid-glob', '/a'), found('uuid-glob', '/b'), true)).toBe(false);
+    expect(shouldRepoint(found('uuid-glob', '/a'), found('uuid-glob', '/b'), false)).toBe(true);
+  });
+
+  it('a fallback ranks below every rung, and a fallback→fallback flip is not a re-point', () => {
+    // `complete` flipping (the fleet host became unreadable) is not a reason to
+    // rotate the client's chat.
+    const fb = (complete: boolean): TranscriptResolution => ({ kind: 'fallback', path: '/a', complete });
+    expect(shouldRepoint(fb(true), found('uuid-glob', '/b'), true)).toBe(true);
+    expect(shouldRepoint(fb(true), fb(false), true)).toBe(false);
   });
 });
 
@@ -592,6 +647,40 @@ describe('session WS', () => {
     ws.close();
   });
 
+  it('a `since` naming a DIFFERENT file resends the backlog instead of resuming at the offset', { timeout: 15_000 }, async () => {
+    // §5.3: one uuid can now resolve to different files, so an offset taken in
+    // one file replayed against another renders a transcript from its middle.
+    // RED against the old code, which honored any offset on a bare uuid match.
+    const offset = statSync(fileA).size;
+    const url = `ws://127.0.0.1:${port}/ws/session/${ID}`
+      + `?since=${UUID_A}:${offset}&sinceFile=${encodeURIComponent('/some/other/place.jsonl')}`;
+    const ws = new WebSocket(url);
+    const next = collect(ws);
+    await opened(ws);
+
+    const first = await nextIgnoringAsk(next, 6000);
+    expect(first.type).toBe('backlog');                    // NOT a silent resume
+    expect(first.file).toBe(fileA);
+    expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1', 'u2']);
+    ws.close();
+  });
+
+  it('a `since` naming the file it is about to tail resumes with no backlog', { timeout: 15_000 }, async () => {
+    // The other direction: the echo MATCHING must not cost a redundant backlog.
+    const offset = statSync(fileA).size;
+    const url = `ws://127.0.0.1:${port}/ws/session/${ID}`
+      + `?since=${UUID_A}:${offset}&sinceFile=${encodeURIComponent(fileA)}`;
+    const ws = new WebSocket(url);
+    const next = collect(ws);
+    await opened(ws);
+
+    appendFileSync(fileA, userLine('u9', 'after resume'));
+    const first = await nextIgnoringAsk(next, 6000);
+    expect(first.type).toBe('events');
+    expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u9']);
+    ws.close();
+  });
+
   it('delivers an ALREADY-pending dialog on connect (menu was up before the client joined)', { timeout: 15_000 }, async () => {
     // A real AskUserQuestion menu: numbered options with descriptions + footer.
     const menuPane =
@@ -688,6 +777,152 @@ const mkLadderDeps = (home: string, io: FleetIO): Deps => {
 const pollTimer = (s: SessionStream): unknown => (s as unknown as { poll: unknown }).poll;
 const streamUuid = (s: SessionStream): string | null => (s as unknown as { uuid: string | null }).uuid;
 const streamTailer = (s: SessionStream): unknown => (s as unknown as { tailer: unknown }).tailer;
+
+describe('foreignConfigDirs (spec §5.2)', () => {
+  it('lists every OTHER account in roster order, and never the session\'s own', () => {
+    // Kills two mutants: one that includes the own account (rung 6 would then
+    // shadow rung 5 on a tie) and one that hand-types the account list instead
+    // of reading the roster — which is how `claude-dev0`, the account holding
+    // the incident's recovered transcript, would silently drop out.
+    const home = mkTmp('ccrc-foreign-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const others = foreignConfigDirs(cfg, 'claude2');
+    expect(others.map((o) => o.account)).not.toContain('claude2');
+    expect(others.map((o) => o.account)).toContain('claude-dev0');
+    expect(others.map((o) => o.account)).toEqual(
+      cfg.roster.accounts.map((a) => a.id).filter((id) => id !== 'claude2'));
+    expect(others.every((o) => o.configDir === configDirFor(cfg, o.account))).toBe(true);
+  });
+});
+
+describe('the stream follows a changed answer (spec §5.3)', () => {
+  it('re-points and resends backlog when the SAME uuid resolves to a better rung', async () => {
+    // The transcript starts findable only by the uuid glob (rung 5) — a
+    // pre-fix swap's residue, or a session whose file moved inside its own
+    // account. When it lands at the exact address the stream must follow it,
+    // with the EXISTING `rotated` frame and a fresh backlog. RED against the
+    // old code, whose only re-point trigger was `data.uuid !== this.uuid`.
+    const home = mkTmp('ccrc-repoint-');
+    seedRoster(home);
+    seed(home);
+    const exact = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const glob = path.join(home, '.claude-personal', 'projects', '-elsewhere', `${UUID_A}.jsonl`);
+    rmSync(exact);
+    mkdirSync(path.dirname(glob), { recursive: true });
+    writeFileSync(glob, userLine('g1', 'stranded'));
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      const first = frames.find((f) => f.type === 'backlog');
+      expect(first.file).toBe(glob);
+      expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['g1']);
+      frames.length = 0;
+
+      // The carry lands at the address the resumed session actually reads.
+      rmSync(glob);
+      writeFileSync(exact, userLine('e1', 'carried'));
+      await pollOnce(stream);
+
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: UUID_A }]);
+      const second = frames.find((f) => f.type === 'backlog');
+      expect(second.file).toBe(exact);
+      expect(second.uuid).toBe(UUID_A);            // same uuid — a re-point, not a rotation
+      expect(second.events.map((e: { uuid: string }) => e.uuid)).toEqual(['e1']);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('an unchanged answer re-points NOTHING — same tailer instance, no frames', async () => {
+    // Kills the mutant that re-resolves and re-points unconditionally: this is
+    // what every tick of every healthy session does, ~43,000 times a day.
+    const home = mkTmp('ccrc-repoint-');
+    seedRoster(home);
+    seed(home);
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      const tailerBefore = streamTailer(stream);
+      frames.length = 0;
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'rotated' || f.type === 'backlog')).toEqual([]);
+      expect(streamTailer(stream)).toBe(tailerBefore);   // SAME instance, never rebuilt
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('the backlog frame carries the foreign account and search completeness', async () => {
+    // Task 12 renders both. Kills a mutant that drops `foreignAccount` (the
+    // banner disappears and another account's frozen history renders as this
+    // session's own) or hardcodes `searchComplete: true` (an unreadable fleet
+    // host renders as an empty chat).
+    const home = mkTmp('ccrc-foreignframe-');
+    seedRoster(home);
+    seed(home);
+    rmSync(path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`));
+    const held = path.join(home, '.claude-corp', 'projects', '-stranded', `${UUID_A}.jsonl`);
+    mkdirSync(path.dirname(held), { recursive: true });
+    writeFileSync(held, userLine('f1', 'another account holds this'));
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      const backlog = frames.find((f) => f.type === 'backlog');
+      expect(backlog.file).toBe(held);
+      expect(backlog.foreignAccount).toBe('claude-corp');
+      expect(backlog.searchComplete).toBe(true);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+
+    // And the unmeasured case: a null readdir must not read as an empty chat.
+    // Deliberately NOT the file-scoped `unlistableIO` (readdir -> null for
+    // EVERY path): `readSessionRecord` also calls `io.readdir` on the
+    // REGISTRY directory (registry.ts:592), so that fixture makes the whole
+    // session read `unmeasurable` before transcript resolution is ever
+    // reached — a different code path than the one this test targets. This
+    // fixture instead breaks only the own account's `projects` root (rung
+    // 5/6's readdir) AND the witness stat on the account root itself — the
+    // "genuinely unmeasured, flaky remote WS" case `globByUuid`'s own
+    // docstring names, which is what makes it `complete: false` rather than
+    // the measured-empty case a bare readdir failure would otherwise be.
+    const home2 = mkTmp('ccrc-foreignframe-');
+    seedRoster(home2);
+    seed(home2);
+    rmSync(path.join(home2, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`));
+    const cfgDir2 = path.join(home2, '.claude-personal');
+    const unmeasurableOwnAccountIO: FleetIO = {
+      ...localIO,
+      readdir: async (p) => (p === path.join(cfgDir2, 'projects') ? null : localIO.readdir(p)),
+      stat: async (p) => (p === cfgDir2 ? null : localIO.stat(p)),
+    };
+    const frames2: any[] = [];
+    const stream2 = new SessionStream(mkLadderDeps(home2, unmeasurableOwnAccountIO), new Bus(), ID, (m) => frames2.push(m));
+    try {
+      await stream2.start();
+      const backlog = frames2.find((f) => f.type === 'backlog');
+      expect(backlog).toBeDefined();
+      expect(backlog.missing).toBe(true);
+      expect(backlog.searchComplete).toBe(false);
+    } finally {
+      stream2.stop();
+      rmSync(home2, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task 2)', () => {
   it('start() sends a DISTINCT notice for unmeasurable (listed, unreadable uuid) — RED against the old ' +

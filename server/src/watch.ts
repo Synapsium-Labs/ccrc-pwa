@@ -25,7 +25,7 @@ import { UNCHECKED_PR } from '../../shared/api.js';
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
-import { resolveTranscriptFile } from './transcript/resolve.js';
+import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import { MAIL_REPLAY_CEILING_ERROR, toRunSummary } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
@@ -331,6 +331,11 @@ export class FleetWatcher {
    *  restart doesn't notify for every already-pending dialog / idle session. */
   private primed = false;
   private readonly cachePath: string;
+  /** The sixth lane's transcript memo (§5.4) — ONE per watcher, shared across
+   *  rows, keyed per `(configDir, uuid, dir)`. This lane resolves per eligible
+   *  row on a 10 s clock; without the memo, every row with no transcript at its
+   *  exact address would run a full uuid search on every sweep, forever. */
+  private readonly transcripts: TranscriptResolver;
   /** The set of projects with at least one non-dead session, as of the last
    *  completed `tick()` — feeds `pushOne`'s "name the project only when more
    *  than one is active" rule. `detectDialogs` and `sweepPr`/`archiveMerged`
@@ -423,6 +428,7 @@ export class FleetWatcher {
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
+    this.transcripts = new TranscriptResolver(deps.io);
   }
 
   start(): void {
@@ -1291,7 +1297,16 @@ export class FleetWatcher {
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
       const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
       if (!cfgDir) continue;
-      const file = await resolveTranscriptFile(this.deps.io, cfgDir, identity.workdir, identity.uuid);
+      // NO `foreign`: a derived branch name is written into the row with no
+      // banner attached to it, and a name taken from another account's frozen
+      // copy is exactly the quiet wrongness this spec removes (§5.2). Rungs 1-5
+      // are unconditional — a title should follow a transcript that moved
+      // inside its own account.
+      const file = (await this.transcripts.resolve({
+        configDir: cfgDir, dir: identity.workdir, registryWorkdir: identity.workdir, uuid: identity.uuid,
+      })).path;
+      // `claimTitleRead` already refuses a null stat, so a `fallback` path costs
+      // one stat and reads nothing — no extra branch needed here.
       if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
       const title = await readAiTitle(this.deps.io, file);
       if (title === null) continue;

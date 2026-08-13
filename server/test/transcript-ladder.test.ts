@@ -10,7 +10,7 @@ import { mkdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, MEMO_MAX, pickNewest, resolveTranscript, resolveTranscriptFile, RUNG_ORDER, rungRank,
+  collapseHits, MEMO_MAX, pickNewest, resolveTranscript, RUNG_ORDER, rungRank,
   transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -332,36 +332,15 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
   });
 });
 
-describe('resolveTranscriptFile — the wrapper is NOT a behavioural no-op, and that is pinned on purpose (review round 1, Important #1)', () => {
-  // The brief called this wrapper a faithful stand-in for today's resolver.
-  // It is not: today's `resolveTranscriptFile` tried exactly the resolved and
-  // raw munge of `dir` and gave up, but the wrapper now runs the FULL ladder
-  // with `registryWorkdir: dir` and no foreign accounts, so a session with
-  // neither exact munge but a stranded own-account copy (rung 5) now gets
-  // that copy back instead of the raw fallback path. All three callers
-  // (`sessionws.ts`, `watch.ts`, `commands.ts`) see this change starting
-  // today — most notably `watch.ts`'s name sweep, which can now derive a
-  // branch name and issue `ws-rename` from a transcript that used to be
-  // invisible to it. That direction is the intended fix (Task 11 is what lets
-  // each caller decide for itself whether it wants rung 5); this task's job
-  // is only to make the change explicit and tested, never silent.
-  it("now returns a stranded own-account uuid-glob match where the old resolver returned the raw fallback path", async () => {
-    const b = box();
-    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
-    const stray = plant(stranded(b.cfg), 1000, 'stranded but ours\n');
-    const oldRawFallback = transcriptPath(b.cfg, b.liveLink, UUID);
-    const file = await resolveTranscriptFile(localIO, b.cfg, b.liveLink, UUID);
-    expect(file).toBe(stray);
-    expect(file).not.toBe(oldRawFallback);
-  });
-
-  it('still returns the raw fallback path when nothing exists anywhere — unchanged for a truly missing transcript', async () => {
-    const b = box();
-    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
-    const raw = transcriptPath(b.cfg, b.liveLink, UUID);
-    expect(await resolveTranscriptFile(localIO, b.cfg, b.liveLink, UUID)).toBe(raw);
-  });
-});
+// The transitional `resolveTranscriptFile` wrapper this describe block used to
+// pin (review round 1, Important #1: "the wrapper is NOT a behavioural no-op")
+// is deleted in Task 11 — every caller now decides for itself what it accepts
+// by calling `resolveTranscript`/`TranscriptResolver` directly (`sessionws.ts`,
+// `watch.ts`, `commands.ts`). The property this block existed to pin — a
+// stranded own-account uuid-glob match (rung 5) beats the raw fallback path —
+// is still exercised, now against the real callers, by
+// `sessionws.test.ts`'s "the stream follows a changed answer" describe and by
+// `resolveTranscript`'s own rung-5 coverage two describes up in this file.
 
 describe('rung order and candidate collapse (spec §5.1)', () => {
   it('rungRank is strictly increasing in ladder order and a fallback ranks after every rung', () => {

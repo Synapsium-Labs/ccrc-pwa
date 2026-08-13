@@ -401,18 +401,3 @@ export class TranscriptResolver {
     }
   }
 }
-
-/**
- * TRANSITIONAL (removed in Task 11). The pre-ladder signature, answering the
- * ladder's path with `dir` doubling as the registry workdir and no foreign
- * accounts — so `sessionws.ts`, `watch.ts` and `commands.ts` keep compiling and
- * behaving as they do today while the ladder lands on its own. Task 11 moves
- * all three onto `resolveTranscript`, each deciding for itself what it will
- * accept, and deletes this.
- */
-export async function resolveTranscriptFile(
-  io: FleetIO, configDir: string, dir: string, uuid: string,
-): Promise<string> {
-  const r = await resolveTranscript(io, { configDir, dir, registryWorkdir: dir, uuid });
-  return r.path;
-}

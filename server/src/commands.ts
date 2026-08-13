@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import { readRegistry } from './registry.js';
 import { readLiveState } from './livestate.js';
-import { resolveTranscriptFile } from './transcript/resolve.js';
+import { resolveTranscript } from './transcript/resolve.js';
 import { configDirFor } from './config.js';
 import type { SlashCommand } from '../../shared/api.js';
 
@@ -62,7 +62,15 @@ export async function sessionCommands(deps: Deps, id: string): Promise<{ builtin
   }
   let skills: SlashCommand[] = [];
   if (cfgDir) {
-    const jsonl = await deps.io.readFile(await resolveTranscriptFile(deps.io, cfgDir, cwd, rec.uuid));
+    // One-shot per HTTP request, so the bare ladder rather than a memo — and no
+    // `foreign` for the same reason the name sweep passes none (§5.2). The
+    // registry workdir is passed alongside the live cwd, which is what gains
+    // this route rungs 3-5: a live session whose cwd moved into a worktree used
+    // to list no skills at all.
+    const res = await resolveTranscript(deps.io, {
+      configDir: cfgDir, dir: cwd, registryWorkdir: rec.workdir, uuid: rec.uuid,
+    });
+    const jsonl = await deps.io.readFile(res.path);
     if (jsonl !== null) skills = parseSkillListing(lastSkillListing(jsonl));
   }
   return { builtins: BUILTINS, skills };
