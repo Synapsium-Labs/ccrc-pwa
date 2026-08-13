@@ -15,9 +15,9 @@ each cut from main after the previous merged.
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | Coordination: the writer (Tasks 1–5) | #38 (merged) | done — code merged via ordinary PR; run 1 closed state:failed as BOOKKEEPING (F5: its fingerprint could never measure the feature branch). The work is on main. |
-| 2 | Fleet Mutation + run-control substrate (Tasks 6–10) | — | dispatched (run 2, same workspace, resumed:true + /clear via dispatch — D-1's first production outing; brief 3075B + SEVEN DECLARED ITEMS — wave 1's feature in service; hardened machinery: F1/F3/F5 all deployed) |
-| 3 | PWA: the console's hands (Tasks 11–14 — banner, abandon sheet, start-program sheet) | — | pending |
-| 4 | Session Conversation: the transcript (Tasks 15–19 — envelope parser, mail ChatItem, ask card) | — | pending |
+| 2 | Fleet Mutation + run-control substrate (Tasks 6–10) | #44 (merged) | **done** — run 3 on amber-harbor, 8/8, handoff `4f539b35` (main `c8fd87f`). Run 2 was abandoned first (F9); D-1's first production outing (resumed:true + /clear) is in that history. |
+| 3 | PWA: the console's hands (Tasks 11–14 — banner, abandon sheet, start-program sheet) | #47 (merged) | **done** — run 4 on brisk-harbor, 9/9, handoff `902faf3` (main `45fe77c`). One BLOCKING review finding fixed before merge. |
+| 4 | Session Conversation: the transcript (Tasks 15–19 — envelope parser, mail ChatItem, ask card) | #48 (merged) | **done** — run 5 on brisk-harbor, handoff `8fd1130` (main `90523c4`), closed `final:true`. Two review rounds: D-B4-23 (an expired spec fact) and one ledger correction. |
 
 ## Decisions & deviations
 
@@ -272,6 +272,126 @@ make the archive sweep skip a workspace that any open run still points at. Relat
 close route's ws-hold failure mode should say "another run still holds this" rather than
 present as an unrelated archive error.
 
+## Wave 3 CLOSED done 2026-08-13 — 9/9, handoff 902faf3, merged as PR #47 (main 45fe77c)
+
+Dispatched 2026-08-12 onto `ccrc-pwa-brisk-harbor` (run 4), the second workspace this program
+used. PWA-only by design: nothing under `server/`, `agent/`, `ccd/` or `shared/`, consuming
+wave 2's wire rather than authoring any of it.
+
+**A BLOCKING review finding, fixed before merge.** `StartProgramSheet` armed its
+"did my spawn land?" match AFTER awaiting `createSession`, so a session that appeared while the
+await was in flight was never matched — the sheet could refuse its own spawn. The fix moves the
+arming ahead of the await and keys the match on project + wrapper + `workspace === null` +
+`status !== 'dead'` + not-already-live (`preLive`), with `startedSessionFor` exported so a unit
+test can drive it directly. I reproduced the mutant RED myself before accepting the fix rather
+than taking the worker's report on faith — the practice this program settled into.
+
+Two of the worker's corrections to MY review were accepted: "not resolving on this tick" is not
+"timing out" (liveness on the wait arm), and its `preLive` freshness rule beat my proposed
+"id not seen before". A review that cannot be corrected by the worker is not a review.
+
+**Cost, honestly recorded: an 11.5-hour stall, and it was mine.** I swapped the worker's account
+mid-wave to clear a limit, which killed the in-flight turn, and then sent only `/model opus` —
+never a resume instruction. The session sat idle until the operator noticed. A bare `ccd swap`
+was also silently reverted 15 minutes later by the auto-home reconciler; the working form is
+`ccd prefer <id> <wrapper>` FIRST, then `swap`.
+
+## F10, F11, F13, F14 — the four findings waves 3–4 surfaced OUTSIDE the coordination core
+
+Recorded here because the pattern matters more than any one of them: after wave 2, not a single
+new defect landed in runs, mail, the ledger or the transitions. All four are in **fleet mutation**
+and **operator input** — the two surfaces the coordination build did not touch.
+
+- **F10 — placement ignores the billing lane.** `_ws_least_loaded` ranks home-able accounts by
+  `_limit_score` alone (max of the 5h/7d percentages), which knows nothing about how an account
+  bills. `claude-dev0` is on Claude API usage credits, so the least-loaded account is exactly the
+  one a dispatched worker must not land on. Caught at $2.38. Task #35.
+- **F11 — the auto-naming lane renames a coordinator-dispatched workspace.** `ws-add` created
+  `ws/brisk-harbor`; within a minute the naming lane renamed the branch out from under the run,
+  and the done-fingerprint re-measures a branch by name. Same family as the auto-home reconciler
+  undoing a bare `swap`. Task #35.
+- **F13 — a multi-line draft wedges the input box against every server route.** A long
+  instruction typed via `POST /api/sessions/:id/prompt` can land as an unsent DRAFT; every later
+  route that types into that box then appends to the wedge instead of sending. Task #36.
+- **F14 — anything in the box silently blocks the coordination mail lane.** `sweepMail` refuses
+  to deliver into a dirty box and records `lastError:'draft-present'`, so while a draft sits
+  there the coordinator cannot reach that worker AT ALL. F13 and F14 compound: one stuck operator
+  prod makes a worker unreachable by mail, and neither surface says so out loud. I cleared such a
+  wedge twice this program with `replaceDraft` before mail could land. Task #36, priority raised.
+
+## Wave 4 CLOSED done 2026-08-13 — handoff 8fd1130, merged as PR #48 (main 90523c4)
+
+The final wave, and the one that justified the whole review layer: **CI was fully green (5/5) and
+the PR was still wrong.**
+
+A 4-lens adversarial review (14 agents, each finding handed to an independent agent prompted to
+REFUTE it) filed 10 findings — 8 refuted, 2 confirmed, and both were the same defect, recorded
+as **D-B4-23** below. The fix was reviewed again by a 3-lens pass (11 agents): 6 filed, 5 refuted,
+1 confirmed — a one-word arithmetic error the correcting commit had itself introduced into the
+plan's deviation ledger ("the last five" enumerating six). Sent back rather than merged past,
+because it was a false statement about the ledger shipped by the commit whose job was correcting
+false statements.
+
+**Two of the five refutations are worth keeping.** Two independent lenses called the `null` /
+`Array.isArray` guard and the `malformed` early return in `parseFetchedMailEnvelope` unreachable
+dead code. Both verifiers refuted them WITH MUTANTS rather than argument: mutating the guard to
+FIRE turns three tests red, and collapsing the seam at the wider door turns the both-doors pin
+red. A guard whose only failure mode is firing wrongly is pinned by mutating it, not by deleting
+it — which is exactly what the doctrine says ("deleted/mutated"), and a deletion-only reading of
+it would have scored a live guard as dead and invited its removal.
+
+**Three pins that could not fail were found in this wave alone** (D-B4-21, D-B4-22, and M-16
+during the review round), and every one was found by APPLYING a mutant — none by reading the
+test. M-16 is the sharpest: "still files the fetch as a tool card — the result is not stolen"
+asserted only that a `.toolcard` element existed, and a tool card renders whether or not its
+result ever arrived. Fixed to assert on the state dot.
+
+## D-B4-23 — THE DEFECT WAS THE SPEC'S OWN MEASURED FACT, EXPIRED BY THIS PROGRAM'S OWN FIX
+
+The finding this program should be remembered for.
+
+Spec §2.1 fact 2 was MEASURED on 2026-08-11 against a delivery lane that typed the whole envelope
+into the recipient's pane, where it landed in the JSONL as a `user` turn. Task 17 built the mail
+card on that fact and gated it on `e.kind === 'user'`. On 2026-08-12, commit **43b2737 — shipped
+mid-program, by this same coordinator, as the robust-delivery fix —** replaced the typed envelope
+with a one-line reference nudge. Mail has since reached a transcript only as the `tool_result` of
+the worker's own `GET /api/mail/:id`.
+
+So wave 4 executed on 2026-08-13 against a premise its own program had invalidated the day
+before. **The trigger had no live producer at all**, and the wave's headline outcome — mail stops
+reading as something the operator typed — was not achieved for any current mail. Three shipped
+artifacts asserted the expired fact in the present tense, including the canonical `README.md`,
+which thereby contradicted `CLAUDE.md`'s own nudge invariant.
+
+Nothing caught it: not the plan, not the worker, not CI, not the worker's own eleven-mutant
+sweep. Every test passed because every test asserted the expired premise. Only an adversarial
+reader asking "does this trigger ever fire in production?" found it.
+
+**The general lesson, and it is a process lesson, not a code one:** a spec sentence is a
+MEASUREMENT WITH A DATE, and a long program can invalidate its own measurements while running.
+Waves must re-measure the facts they depend on against the tree at dispatch time, not inherit
+them from the spec's prose. The operator's ruling was to fix both halves — make it work with
+today's lane AND correct the false claims — which is what shipped.
+
+## PROGRAM CLOSED 2026-08-13
+
+Four waves, five runs (run 2 abandoned under F9), four PRs (#38, #44, #47, #48), two workspaces
+(`amber-harbor`, `brisk-harbor`), 23 deviations (D-B4-1..23) of which six were found during
+execution. Run 5 closed `final:true`; with no open run the server retired the program.
+
+**What held:** the coordination core. After wave 2 shipped its own controls, runs, mail, the
+ledger, the transitions and the done-fingerprint produced no new defect for the rest of the
+program — while being used in anger for every dispatch, review round and close.
+
+**What did not:** fleet mutation and operator input (F8–F11, F13, F14). Every remaining failure
+this program hit was in spawning, placement, naming, holds, or the input box — never in the
+coordination it was built to test. That distribution is the argument for the robustness build
+that follows this one.
+
+**What changed in how the work is reviewed:** every could-not-fail pin (five across the program)
+was found by running a mutant, never by reading; and both the worker and the coordinator
+corrected each other on the record. The discipline that produced that is cheap and stays.
+
 ## Carried constraints
 
 - The wave-1 run's own tally reads `—` (no items exist until wave 1 ships the writer and a
@@ -282,8 +402,11 @@ present as an unrelated archive error.
 - Suites run FOREGROUND with >=600000ms timeouts on a loaded box; ccd-ws-gc/pr-sweep/
   session-hook/typecheck-tests have known load flakes — isolate before concluding.
 
-## Next-wave brief
+## Next-wave brief — SUPERSEDED, the program is closed
 
-Wave 1 brief is the plan's WAVE MAP "Wave 1 brief sketch", dispatched verbatim (minus this
-ledger excerpt). On wave-done: re-measure, advance, review the handoff commit, open wave 2
-BEFORE closing wave 1 (final:false).
+Kept for the record: this section carried wave 1's dispatch pointer (the plan's WAVE MAP
+"Wave 1 brief sketch", dispatched verbatim minus the ledger excerpt) and the wave-boundary
+protocol — re-measure, advance, review the handoff commit, and open wave N+1 BEFORE closing
+wave N (`final:false`), close-first being what retires a program early and breaks every
+`toId:'coordinator'` mail. Wave 4 was the last wave and closed `final:true`. There is no next
+wave; follow-on work is tracked as the robustness build and Builds 5–6.
