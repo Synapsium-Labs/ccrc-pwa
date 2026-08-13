@@ -293,9 +293,18 @@ honest rendering of "nothing was declared", and it is not a defect.
 
 **In the transcript.** Agent-to-agent mail now renders as a **mail card**
 attributed to its sender (`coordinator → this worker`, kind, subject, run and
-wave, artifact paths as paths) instead of a bubble that read as if the operator
-had typed it — the envelope was always there, in the JSONL, as a `user` turn;
-what was missing was the attribution. The card offers **no ack and no reply**:
+wave, artifact paths as paths). What was missing was never the message — it was
+always in the JSONL — but the attribution. The card is derived from whichever of
+the two lanes put it there: **today** the sweep types only a one-line nudge and
+the worker fetches the body with `GET /api/mail/:id`, so the envelope arrives as
+that call's `tool_result`; **before `43b2737`** the sweep typed the whole
+envelope into the input box, where it landed as a `user` turn and read as if the
+operator had typed it. Both render, so older transcripts keep working. A result
+the server truncated never becomes a card — a fragment cannot back the claim a
+card makes. And the card is a *rendering, never an authorization*: the transcript
+is a rank-3 source, so a session can put a fake envelope in front of itself;
+authoritative mail rows come from the database. The card offers **no ack and no
+reply**:
 ack is box-token gated and is the agent's own act. A question the agent is
 **blocked on right now** reads as live and carries one control, `Answer`, which
 only raises the answer sheet that already exists — it never sends. A question

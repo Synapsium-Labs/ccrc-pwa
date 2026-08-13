@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import {
-  MAIL_ENVELOPE_FENCE, parseMailEnvelope,
+  MAIL_ENVELOPE_FENCE, parseFetchedMailEnvelope, parseMailEnvelope,
   type MailEnvelope, type MailEnvelopeParse,
 } from '../../shared/api.js';
 
@@ -288,5 +288,117 @@ describe('parseMailEnvelope: the union is total, and never a bare null', () => {
     // test and fail this one only if it drifted, so this pairs with
     // `single-definition.test.ts`'s literal scan rather than replacing it.
     expect(renderEnvelope(BASE).startsWith('```' + MAIL_ENVELOPE_FENCE + '\n')).toBe(true);
+  });
+});
+
+// — `parseFetchedMailEnvelope` (W-1, the live lane) —
+//
+// THE SPEC'S MEASURED FACT EXPIRED MID-PROGRAM. Spec §2.1 fact 2 was measured
+// on 2026-08-11 against a lane that typed the whole envelope into the
+// recipient's pane, so it landed in the JSONL as a `user` turn. Commit
+// 43b2737 — shipped 2026-08-12, EARLIER IN THIS SAME PROGRAM, and an ancestor
+// of wave 4's base — replaced that with the one-line reference nudge
+// (`renderMailNudge`). `watch.ts` says so in its own words: "the lane no
+// longer types the whole stored envelope into the pane."
+//
+// So today an envelope reaches a transcript only as the OUTPUT of the
+// worker's own `GET /api/mail/:id`, which the transcript parser maps to
+// `tool_result`. Two shapes occur in real transcripts and both must work:
+// the raw fence (a fetch that piped through and printed `envelope`) and the
+// JSON response the route actually sends (a bare curl).
+//
+// The strict `parseMailEnvelope` above is UNCHANGED and stays the legacy
+// user-turn path's parser. This is a separate, wider door, and the width is
+// stated rather than assumed.
+describe('parseFetchedMailEnvelope: the envelope as a fetch returns it', () => {
+  const FETCHED: EnvelopeInput = {
+    ...BASE, id: 17, fromId: 'coordinator', toId: 'ccrc-pwa-brisk-harbor',
+    runId: 5, program: 'build4', wave: 4, waveOf: 4,
+    kind: 'status', subject: 'wave-brief', body: 'Implement Tasks 15-19.',
+  };
+
+  it('takes the RAW FENCE shape — a fetch that printed the envelope field', () => {
+    const parsed = parseFetchedMailEnvelope(renderEnvelope(FETCHED));
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope).toEqual(expectedFrom(FETCHED));
+  });
+
+  it('takes the JSON-WRAPPED shape — the response `GET /api/mail/:id` actually sends', () => {
+    // The exact literal `coord/routes.ts` sends: {ok, id, toId, state, envelope}.
+    const body = JSON.stringify({
+      ok: true, id: 17, toId: 'ccrc-pwa-brisk-harbor', state: 'delivered',
+      envelope: renderEnvelope(FETCHED),
+    });
+    const parsed = parseFetchedMailEnvelope(body);
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope).toEqual(expectedFrom(FETCHED));
+  });
+
+  it('tolerates the response being pretty-printed, as a piped fetch leaves it', () => {
+    const body = JSON.stringify({ ok: true, envelope: renderEnvelope(FETCHED) }, null, 2);
+    expect(parseFetchedMailEnvelope(body).ok).toBe(true);
+  });
+
+  it('answers not-mail for ordinary command output — including output that MENTIONS the fence', () => {
+    // Measured on this worker's own transcript: twelve tool_results carried
+    // the characters `ccrc-mail` (greps, file reads, the README) and not one
+    // of them is an envelope. The whole-turn rule is what refuses them, and
+    // widening the door to tool_results does not widen that rule.
+    for (const t of [
+      'total 42\ndrwx------ 2 you you',
+      "server/src/coord/token.ts:20: * `deploy/ccrc-mail.token.example` ships as a comment block",
+      '84:  return `${fence}${MAIL_ENVELOPE_FENCE}\\n${head}\\n${m.body}\\n${fence}`;',
+      'ack: POST /api/mail/17/ack with header x-ccrc-mail-token (the value in',
+      `here is the mail:\n${renderEnvelope(FETCHED)}`,
+      '{"ok":false,"error":"not-found"}',
+      '{"error":"Bad Request","message":"Client Error","statusCode":400}',
+    ]) {
+      const parsed = parseFetchedMailEnvelope(t);
+      expect(parsed.ok, t.slice(0, 40)).toBe(false);
+      if (parsed.ok) continue;
+      expect(parsed.why, t.slice(0, 40)).toBe('not-mail');
+    }
+  });
+
+  it('answers not-mail for JSON whose envelope field is missing or not a string', () => {
+    for (const body of [
+      JSON.stringify({ ok: true, id: 17 }),
+      JSON.stringify({ ok: true, envelope: 42 }),
+      JSON.stringify({ ok: true, envelope: null }),
+      JSON.stringify([renderEnvelope(FETCHED)]),
+      '{"ok":true,"envelope":"unterminated',
+    ]) {
+      const parsed = parseFetchedMailEnvelope(body);
+      expect(parsed.ok, body.slice(0, 40)).toBe(false);
+      if (parsed.ok) continue;
+      expect(parsed.why, body.slice(0, 40)).toBe('not-mail');
+    }
+  });
+
+  it('keeps `malformed` distinct through BOTH doors — the seam is not lost on the way in', () => {
+    const broken = '```' + MAIL_ENVELOPE_FENCE + '\nid: not-a-number\nfrom: a\n--\nb\n```';
+    const direct = parseFetchedMailEnvelope(broken);
+    expect(direct.ok).toBe(false);
+    if (direct.ok) return;
+    expect(direct.why).toBe('malformed');
+
+    const wrapped = parseFetchedMailEnvelope(JSON.stringify({ ok: true, envelope: broken }));
+    expect(wrapped.ok).toBe(false);
+    if (wrapped.ok) return;
+    expect(wrapped.why).toBe('malformed');
+  });
+
+  it('does not widen the STRICT parser — parseMailEnvelope still refuses the JSON shape', () => {
+    // The legacy user-turn path must not start accepting a JSON response. A
+    // user turn is an envelope that was typed into the box; it is never a
+    // fetch's output, and keeping the two doors separate is what stops this
+    // fix from quietly widening the older one.
+    const body = JSON.stringify({ ok: true, envelope: renderEnvelope(FETCHED) });
+    const parsed = parseMailEnvelope(body);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.why).toBe('not-mail');
   });
 });

@@ -223,7 +223,7 @@ describe('MailCard', () => {
     expect(mail?.key).toBe('uuid-abc');
     // And carries the event it derived from, so nothing downstream has to go
     // looking for it again.
-    expect(mail?.kind === 'mail' && mail.event.uuid).toBe('uuid-abc');
+    expect(mail?.kind === 'mail' && mail.event.kind === 'user' && mail.event.uuid).toBe('uuid-abc');
   });
 
   it('goes still: no --glow, no animation, no box-shadow under .mail-card', () => {
@@ -253,5 +253,179 @@ describe('MailCard', () => {
     const all = document.body.textContent ?? '';
     expect(all).not.toMatch(/queued|delivered|acked|undeliverable/i);
     expect(document.querySelector('.mail-strip')).toBeNull();
+  });
+});
+
+// — W-1 / D-B4-23: the LIVE lane —
+//
+// The spec's measured fact expired mid-program. `sweepMail` no longer types
+// the envelope into the pane (43b2737, an ancestor of this wave's own base);
+// it types a one-line nudge, and the worker fetches the body with
+// `GET /api/mail/:id`. So today's mail reaches a transcript as a
+// `tool_result`, never a `user` turn, and the user-turn path above — which
+// still renders real cards for waves 1-2's transcripts — became the LEGACY
+// path the moment that commit landed.
+describe('MailCard from the live lane: a fetched envelope', () => {
+  const RAW = envelopeText();
+  const WRAPPED = JSON.stringify({
+    ok: true, id: 17, toId: 'ccrc-pwa-brisk-harbor', state: 'delivered', envelope: RAW,
+  });
+
+  /** The fetch as the transcript records it: a `tool_use` for the command and
+   *  the `tool_result` carrying what it printed. */
+  const fetchOf = (text: string, over: Partial<{ truncatedBytes: number; isError: boolean }> = {}): ChatEvent[] => ([
+    { kind: 'tool_use', uuid: 'u1', ts: TS, toolId: 'toolu_01', name: 'Bash', input: 'curl -s .../api/mail/17' },
+    { kind: 'tool_result', ts: TS, toolId: 'toolu_01', text, isError: over.isError ?? false,
+      ...(over.truncatedBytes === undefined ? {} : { truncatedBytes: over.truncatedBytes }) },
+  ]);
+
+  it('renders a card for the RAW FENCE shape — the fetch that printed the envelope', () => {
+    render(<ChatListInner id="s" events={fetchOf(RAW)} pending={[]} />);
+    expect(card()).not.toBeNull();
+    expect(document.querySelector('.mail-card-from')?.textContent ?? '').toContain('coordinator');
+    expect(textOf('.mail-card-subject')).toEqual(['wave-brief']);
+  });
+
+  it('renders a card for the JSON-WRAPPED shape — what a bare curl leaves behind', () => {
+    render(<ChatListInner id="s" events={fetchOf(WRAPPED)} pending={[]} />);
+    expect(card()).not.toBeNull();
+    expect(textOf('.mail-card-subject')).toEqual(['wave-brief']);
+  });
+
+  it('still files the fetch itself as a tool card — the card is ADDED, the result is not stolen', () => {
+    // The tool_use must still get its result, or the fetch would render as a
+    // tool still crunching, forever. The mail card joins it; it does not
+    // replace it.
+    render(<ChatListInner id="s" events={fetchOf(RAW)} pending={[]} />);
+    expect(document.querySelectorAll('.toolcard')).toHaveLength(1);
+    expect(card()).not.toBeNull();
+
+    // NOT just "the card exists" — that is satisfied by a tool card that
+    // never received its result, which is exactly the mutant this test is
+    // for (M-16, W-1 sweep: a `tool.result = e` skipped for envelope-bearing
+    // results left the fetch spinning forever and every other assertion here
+    // green). The dot is the discriminator: `--run` while a call is in
+    // flight, `--ok` once its result landed.
+    expect(document.querySelector('.tool-dot--run')).toBeNull();
+    expect(document.querySelector('.tool-dot--ok')).not.toBeNull();
+
+    // And the card comes AFTER the fetch that produced it, in transcript order.
+    const nodes = [...document.querySelectorAll('.toolcard, .mail-card')];
+    expect(nodes[0]?.className).toContain('toolcard');
+    expect(nodes[1]?.className).toContain('mail-card');
+  });
+
+  it('NEVER renders a card for a TRUNCATED result, even when the text still parses', () => {
+    // The sharpest new edge. A `tool_result` the server admits it cut cannot
+    // back the claim a card makes ("this is what was said"), and spec §2.4
+    // forbids a half-populated card. The parse would refuse MOST truncated
+    // envelopes on its own — the closing fence is the last line and the cut
+    // takes the tail — but "most" is not a property a card may rest on, so the
+    // guard is explicit. This fixture is the case that slips past the parse:
+    // a complete envelope whose trailing bytes were cut.
+    render(<ChatListInner id="s" events={fetchOf(RAW, { truncatedBytes: 900 })} pending={[]} />);
+    expect(card()).toBeNull();
+    expect(document.querySelectorAll('.toolcard')).toHaveLength(1);
+  });
+
+  it('renders a card at truncatedBytes 0, and when the field is absent', () => {
+    // 0 = not truncated. Absent = an older server did not report, which is
+    // exactly the state every transcript written before Task 16 is in — and
+    // refusing those would make the live path dead for all of them.
+    for (const events of [fetchOf(RAW, { truncatedBytes: 0 }), fetchOf(RAW)]) {
+      cleanup();
+      render(<ChatListInner id="s" events={events} pending={[]} />);
+      expect(card()).not.toBeNull();
+    }
+  });
+
+  it('renders no card for an ERRORED fetch', () => {
+    // A non-zero exit did not return an envelope; whatever is in the buffer,
+    // the fetch did not come back cleanly.
+    render(<ChatListInner id="s" events={fetchOf(RAW, { isError: true })} pending={[]} />);
+    expect(card()).toBeNull();
+  });
+
+  it('leaves every other kind of command output alone', () => {
+    // Measured on this worker's own transcript: twelve tool_results carried
+    // the characters `ccrc-mail` and not one was an envelope.
+    for (const text of [
+      'total 42\n-rw------- 1 you you 1453 Aug 12 20:04 ccrc-mail.token',
+      "server/src/coord/token.ts:20: * `deploy/ccrc-mail.token.example` ships as a comment block",
+      `here is the mail:\n${RAW}`,
+      '{"ok":false,"error":"not-found"}',
+      '```' + MAIL_ENVELOPE_FENCE + '\nid: not-a-number\n--\nb\n```',
+    ]) {
+      cleanup();
+      render(<ChatListInner id="s" events={fetchOf(text)} pending={[]} />);
+      expect(card(), text.slice(0, 30)).toBeNull();
+    }
+  });
+
+  it('does NOT widen the legacy door — a user turn carrying a JSON response stays a bubble', () => {
+    // The two doors are separate on purpose and the separation is pinned AT
+    // THE CALL SITE, not only inside `shared/`: a typed envelope is never a
+    // fetch's JSON output, so the older, narrower arm must keep using the
+    // strict parser. Without this, "use the wider parser everywhere, it's
+    // simpler" is a one-line change no test would notice.
+    const asUserTurn: ChatEvent = { kind: 'user', uuid: 'm1', ts: TS, text: WRAPPED };
+    render(<ChatListInner id="s" events={[asUserTurn]} pending={[]} />);
+    expect(card()).toBeNull();
+    expect(document.querySelector('.msg-user')).not.toBeNull();
+  });
+
+  it('keys on the toolId, so the virtual list is stable and the key cannot collide with the tool card', () => {
+    const items = buildChatItems(fetchOf(RAW), []);
+    const mail = items.find((i) => i.kind === 'mail');
+    const tool = items.find((i) => i.kind === 'tool');
+    expect(mail?.key).toBe('mail-toolu_01');
+    expect(tool?.key).toBe('toolu_01');
+    expect(mail?.key).not.toBe(tool?.key);
+  });
+
+  it('TWO fetches of the same delivery render TWO cards — the transcript is a record, not a set', () => {
+    // The ruling, stated so it is a decision and not an accident: a card
+    // answers "what was said to this session, and WHEN, relative to what it
+    // did next". Two fetches are two things the session did. De-duplicating
+    // would need cross-item state keyed on envelope id — the reconciliation
+    // problem spec §2.2 refused a second frame over — and would break the
+    // "derived from the event, mints nothing" property that lets the revival
+    // discipline stay unchanged.
+    const events: ChatEvent[] = [
+      ...fetchOf(RAW),
+      { kind: 'tool_use', uuid: 'u2', ts: TS, toolId: 'toolu_02', name: 'Bash', input: 'curl again' },
+      { kind: 'tool_result', ts: TS, toolId: 'toolu_02', text: WRAPPED, isError: false },
+    ];
+    render(<ChatListInner id="s" events={events} pending={[]} />);
+    expect(document.querySelectorAll('.mail-card')).toHaveLength(2);
+    const keys = buildChatItems(events, []).filter((i) => i.kind === 'mail').map((i) => i.key);
+    expect(keys).toEqual(['mail-toolu_01', 'mail-toolu_02']);
+  });
+
+  it('a legacy user turn and a fetch of the SAME mail both render — one per event, by construction', () => {
+    // The same ruling seen from the other side. There is no precedence rule
+    // between the two doors because there is no cross-event state to hold one
+    // in; each event answers only for itself.
+    const events: ChatEvent[] = [mailTurn('legacy-1'), ...fetchOf(RAW)];
+    render(<ChatListInner id="s" events={events} pending={[]} />);
+    expect(document.querySelectorAll('.mail-card')).toHaveLength(2);
+  });
+
+  it('mints nothing into the store on the live path either — a reconnect re-derives both cards', () => {
+    const empty: SessionSnapshot = {
+      events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
+      dialog: null, ask: null, tasks: [], mail: [], missingFile: null,
+    };
+    const backlog: SessionStreamMsg = {
+      type: 'backlog', uuid: 'u1', events: fetchOf(RAW), offset: 40,
+      file: '/t/u1.jsonl', missing: false,
+    };
+    const after = applySessionMsg(empty, backlog);
+    expect(after.events.map((e) => e.kind)).toEqual(['tool_use', 'tool_result']);
+
+    const first = buildChatItems(after.events, []);
+    const second = buildChatItems(applySessionMsg(after, backlog).events, []);
+    expect(first.filter((i) => i.kind === 'mail')).toHaveLength(1);
+    expect(second.map((i) => i.key)).toEqual(first.map((i) => i.key));
   });
 });

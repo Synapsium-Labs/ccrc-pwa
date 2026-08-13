@@ -2027,6 +2027,62 @@ export function parseMailEnvelope(text: string): MailEnvelopeParse {
 }
 
 /**
+ * The same envelope, as a FETCH returns it — the live lane (W-1 / D-B4-23).
+ *
+ * WHY THIS EXISTS: spec §2.1's fact 2 measured a lane that typed the whole
+ * envelope into the recipient's pane, where it landed in the JSONL as a `user`
+ * turn. Commit 43b2737 — shipped mid-program, before this wave's own base —
+ * replaced that with the one-line reference nudge, so an envelope now reaches
+ * a transcript ONLY as the output of the worker's own `GET /api/mail/:id`,
+ * which the transcript parser maps to `tool_result`. `parseMailEnvelope`
+ * above is unchanged and stays the LEGACY user-turn parser; this is a
+ * separate, wider door for the live one.
+ *
+ * TWO SHAPES, both measured in real transcripts on the fleet box:
+ *   - the RAW FENCE — a fetch that piped the response through and printed the
+ *     `envelope` field, so the output IS the envelope text;
+ *   - the JSON RESPONSE `GET /api/mail/:id` actually sends,
+ *     `{ok, id, toId, state, envelope}` (`coord/routes.ts`), which is what a
+ *     bare curl leaves in the transcript.
+ *
+ * IT ASSERTS NOTHING ABOUT AUTHENTICITY, and the aperture here is WIDER than
+ * the user-turn door, so the caveat is worth restating rather than inheriting:
+ * a `tool_result` is command output. `cat`-ing a file whose whole content is a
+ * fenced envelope renders a card, as does any command whose entire output is
+ * one. That is the same rank-3 transcript this repo already refuses to treat
+ * as authority — authoritative mail rows come from the database
+ * (`{type:'mail'}`, `GET /api/feed`) — and the consequence is unchanged: one
+ * bubble looks like mail. Named, accepted. Do NOT write, here or at any call
+ * site, that a `tool_result` card is authenticated.
+ *
+ * `malformed` survives BOTH doors. Text that claims to be an envelope and is
+ * not keeps saying so whether it arrived raw or wrapped, so the seam the
+ * architecture doc's overloaded-null ban protects is not quietly lost on the
+ * way in.
+ */
+export function parseFetchedMailEnvelope(text: string): MailEnvelopeParse {
+  const direct = parseMailEnvelope(text);
+  // `malformed` is returned as-is, never retried as JSON: it already means
+  // "this text claims to be an envelope", which is an answer, not a miss.
+  if (direct.ok || direct.why === 'malformed') return direct;
+
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{')) return direct;
+  let body: unknown;
+  try {
+    body = JSON.parse(trimmed);
+  } catch {
+    return direct;
+  }
+  // Arrays and null are objects to `typeof`; only a plain object carries the
+  // route's `envelope` field, and only a string one is an envelope.
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return direct;
+  const envelope = (body as { envelope?: unknown }).envelope;
+  if (typeof envelope !== 'string') return direct;
+  return parseMailEnvelope(envelope);
+}
+
+/**
  * The declared ledger's two caps (Build 4, spec §3.1). BYTES for the title,
  * for `MAIL_SUBJECT_MAX_BYTES`'s own reason one block up: a title is one line
  * an operator reads on a phone-width board, and a character count is not what

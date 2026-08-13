@@ -9,7 +9,7 @@ import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope } from '../../../shared/api';
-import { parseMailEnvelope } from '../../../shared/api';
+import { parseFetchedMailEnvelope, parseMailEnvelope } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import type { PendingAttachment, PendingSend } from '../stores/session';
@@ -25,14 +25,20 @@ export type ChatItem =
   | { kind: 'message'; key: string; event: MessageEvent; streaming: boolean }
   | { kind: 'tool'; key: string; use: ToolUseEvent; result?: ToolResultEvent }
   /** Delivered agent-to-agent mail (Build 4 Task 17, spec §2.3). EXACTLY ONE
-   *  new member, and it is DERIVED at render time from the `user` event that
-   *  is already in the store — nothing is minted into `s.events`, so the
-   *  revival discipline (`stores/session.ts`) needs no new clause and a
-   *  reconnect re-derives the same card from the same JSONL bytes. That is the
-   *  whole reason to build mail attribution this way rather than as a
-   *  synthesized row. `event` rides along so nothing downstream has to go
-   *  looking for the turn this came from. */
-  | { kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent }
+   *  new member, and it is DERIVED at render time from an event that is
+   *  already in the store — nothing is minted into `s.events`, so the revival
+   *  discipline (`stores/session.ts`) needs no new clause and a reconnect
+   *  re-derives the same card from the same JSONL bytes. That is the whole
+   *  reason to build mail attribution this way rather than as a synthesized
+   *  row.
+   *
+   *  `event` is the PROVENANCE, and it is a union because there are two doors
+   *  (W-1 / D-B4-23): a `user` turn is the LEGACY lane (mail typed into the
+   *  pane, before 43b2737), and a `tool_result` is the LIVE one (the worker's
+   *  own `GET /api/mail/:id`). Which door a card came through is a real
+   *  question about it, so the item carries the answer rather than discarding
+   *  it. */
+  | { kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent | ToolResultEvent }
   | { kind: 'pending'; key: string; send: PendingSend }
   | { kind: 'working'; key: 'working' };
 
@@ -65,6 +71,46 @@ export function buildChatItems(
     if (e.kind === 'tool_result') {
       const tool = toolByToolId.get(e.toolId);
       if (tool) tool.result = e; // orphan results (use before backlog) are dropped
+
+      // THE LIVE MAIL LANE (W-1 / D-B4-23). Spec §2.1's fact 2 measured a
+      // delivery lane that typed the whole envelope into the recipient's pane;
+      // 43b2737 — shipped mid-program, before this wave's base — replaced it
+      // with a one-line nudge, so an envelope now reaches a transcript only as
+      // the output of the worker's own `GET /api/mail/:id`. That is a
+      // `tool_result`, and without this arm the card below has no live
+      // producer at all.
+      //
+      // ADDED, NEVER SUBSTITUTED: the result is attached to its tool card
+      // above first, or the fetch would render as a call still crunching,
+      // forever. The card joins the fetch in transcript order; it does not
+      // replace it.
+      //
+      // TWO GUARDS, both about what a card CLAIMS:
+      //  - `isError` — a fetch that did not come back cleanly returned no
+      //    envelope, whatever is in its buffer.
+      //  - `truncatedBytes > 0` — the server has told us it cut this result,
+      //    and a card asserting "this is what was said" cannot rest on a
+      //    fragment (spec §2.4 bans the half-populated card). The parse would
+      //    refuse MOST truncated envelopes unaided, since the closing fence is
+      //    the last line and the cut takes the tail — but "most" is not a
+      //    property to build a claim on. ABSENT is not zero: an older server
+      //    did not report, which is every transcript written before Task 16,
+      //    and refusing those would make this whole path dead for them.
+      if (!e.isError && (e.truncatedBytes === undefined || e.truncatedBytes === 0)) {
+        const fetched = parseFetchedMailEnvelope(e.text);
+        if (fetched.ok) {
+          // Keyed on the API's own call id — the same identity the tool card
+          // keys on, in a distinct namespace so the two cannot collide. TWO
+          // FETCHES OF ONE DELIVERY MAKE TWO CARDS, deliberately: the card
+          // answers "what was said, and WHEN, relative to what the session did
+          // next", and two fetches are two things the session did.
+          // De-duplicating would need cross-item state keyed on envelope id —
+          // the reconciliation problem spec §2.2 refused a second frame over —
+          // and would break the derived-from-one-event property that lets the
+          // revival discipline stay unchanged.
+          items.push({ kind: 'mail', key: `mail-${e.toolId}`, envelope: fetched.envelope, event: e });
+        }
+      }
       continue;
     }
 
@@ -89,10 +135,21 @@ export function buildChatItems(
         // ordinary bubble below, which is spec §2.4's stated degradation:
         // never a half-populated card.
         //
-        // `user` ONLY, and that is not incidental: the delivery lane types the
-        // envelope into the recipient's INPUT BOX, so delivered mail can only
-        // ever arrive as a user turn. An assistant turn quoting an envelope is
-        // the agent's own words about mail, not mail.
+        // THE LEGACY LANE (corrected, W-1 / D-B4-23). This arm used to claim
+        // that "the delivery lane types the envelope into the recipient's
+        // INPUT BOX, so delivered mail can only ever arrive as a user turn".
+        // That was true when spec §2.1 measured it and false by the time this
+        // shipped: 43b2737 replaced the typed envelope with a one-line nudge,
+        // and `watch.ts` now says so in its own words. Mail delivered TODAY
+        // arrives as the `tool_result` of the worker's own fetch, handled in
+        // the branch above.
+        //
+        // This arm stays, and is not vestigial: transcripts written before
+        // that commit hold real fenced envelopes as user turns, and they still
+        // render as cards. `user` only — an assistant turn quoting an envelope
+        // is the agent's own words about mail, not mail. It is also the
+        // narrower of the two doors, and deliberately not widened to the fetch
+        // shapes: a typed envelope is never a JSON response.
         const parsed = parseMailEnvelope(e.text);
         if (parsed.ok) {
           items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e });
