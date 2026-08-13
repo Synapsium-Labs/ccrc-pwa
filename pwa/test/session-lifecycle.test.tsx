@@ -122,10 +122,15 @@ describe('lifecycleQualifier', () => {
 describe('the row says which kind of dead it is', () => {
   // Kills a mutant that prints the raw epoch, or drops the surface: this is
   // the 21:39:53 agent-surface stop, finally legible on the row it killed.
+  // The `title` assertion is the cell's ONLY tooltip on a phone, where the
+  // ellipsis is real — pinned the same way `.sess-swapblocked`'s already is
+  // below (review round 1, Minor: deleting `.sess-lifecycle`'s `title` had
+  // no test to catch it).
   it('a stopped row names the surface and how long ago', () => {
     const at = Date.now() - 2 * 24 * 60 * MIN;
     line(s({ status: 'dead', bucket: 'dead', lifecycle: 'stopped', stoppedBy: { at, surface: 'pwa' } }));
     expect(screen.getByText('stopped by pwa, 2d ago')).toBeInTheDocument();
+    expect(document.querySelector('.sess-lifecycle')?.getAttribute('title')).toBe('stopped by pwa, 2d ago');
   });
 
   // Kills a mutant that renders 'stopped' for orphan too — the whole point of
@@ -144,10 +149,13 @@ describe('the row says which kind of dead it is', () => {
   });
 
   // Kills a table that gives `running` a word: a healthy row has nothing to
-  // qualify, and a chip on every row is a chip nobody reads.
+  // qualify, and a chip on every row is a chip nobody reads. The regex names
+  // `running` explicitly (review round 1, Important 2) — without it,
+  // `QUALIFIER.running = 'running'` renders a real qualifier chip and this
+  // assertion still passes, because none of the OTHER words match either.
   it('a healthy running row says nothing', () => {
     line(s({ lifecycle: 'running' }));
-    expect(screen.queryByText(/unsupervised|nothing is watching|stopped by/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/running|unsupervised|nothing is watching|stopped by/)).not.toBeInTheDocument();
   });
 
   // Spec §4.3's hard rule, on the render surface: an unreadable registry must
@@ -156,6 +164,19 @@ describe('the row says which kind of dead it is', () => {
     line(s({ status: 'dead', bucket: 'dead', lifecycle: 'unmeasurable' }));
     expect(screen.getByText('lifecycle unreadable')).toBeInTheDocument();
     expect(screen.queryByText(/orphan/)).not.toBeInTheDocument();
+  });
+
+  // `unmeasurable` is the classifier's FIRST rung (spec §4.3), so it outranks
+  // directly observed facts: a live pane with a fresh heartbeat plus a
+  // leftover unreadable stop stamp classifies `unmeasurable` while ccd would
+  // answer a live word for the same session. Every fixture above pairs
+  // `unmeasurable` with `dead` — this is the ALIVE one (review round 1,
+  // Important 3): without it, `qualifier !== null && !(session.lifecycle ===
+  // 'unmeasurable' && session.status !== 'dead')` silences exactly the row
+  // this rung exists to keep visible, and the suite stays green.
+  it('a LIVE unmeasurable row still says the field is unreadable', () => {
+    line(s({ status: 'idle', bucket: 'idle', lifecycle: 'unmeasurable' }));
+    expect(screen.getByText('lifecycle unreadable')).toBeInTheDocument();
   });
 
   // M10's own hazard pointed the other way: a NEWER server minting a token
@@ -241,6 +262,21 @@ describe("the orphan row's control names what revives it", () => {
                                 open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByText(/ccd start/)).not.toBeInTheDocument();
   });
+
+  // The two tests above only ever use `orphan` and `running`, so
+  // `session.lifecycle === 'orphan'` and `session.lifecycle !== 'running'`
+  // read identically to both of them (review round 1, Minor). A deliberately
+  // STOPPED session — the fact this whole branch exists to keep distinct
+  // from `orphan` — is the row that tells the two guards apart: under the
+  // wrong one, a stopped session is told "Nothing is watching this session"
+  // and offered `ccd start`, exactly the conflation D2/D3 exist to end.
+  it('a stopped session (not orphaned) gets no revive note either', () => {
+    render(<SessionActionsSheet
+      session={s({ status: 'dead', bucket: 'dead', lifecycle: 'stopped', stoppedBy: { at: Date.now(), surface: 'pwa' } })}
+      open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByText(/ccd start/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nothing is watching/)).not.toBeInTheDocument();
+  });
 });
 
 // — the chat —
@@ -251,6 +287,13 @@ describe('a chat that had to look elsewhere says so', () => {
   // Kills a resolver answer whose `foreignAccount` is dropped on the way to
   // the UI. Field names are the wire's real ones (`shared/api.ts:1759-1770`)
   // — `foreignAccount`/`searchComplete`, not the brief's `account`/`complete`.
+  //
+  // `foreignAccount: 'claude2'`, deliberately NOT `'claude'`: this session's
+  // id is `claude:OpenClawHetzner`, so its OWN wrapper is `claude` — a
+  // foreign account of `'claude'` cannot distinguish "read from the OTHER
+  // account" from "read from the banner's own account" and would pass just
+  // as well under `accountLabel(roster, wrapper)` as under the correct
+  // `accountLabel(roster, strandedAccount)` (review round 1, Important 1).
   it('a transcript found under ANOTHER account is bannered by name', () => {
     const store = makeStore();
     const fleet = makeFleet();
@@ -258,9 +301,9 @@ describe('a chat that had to look elsewhere says so', () => {
     applyBacklog(store, {
       type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
       file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
-      foreignAccount: 'claude', searchComplete: true, events: [someEvent],
+      foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
     });
-    expect(screen.getByText(/Stranded history — read from team·max/)).toBeInTheDocument();
+    expect(screen.getByText(/Stranded history — read from alt·max/)).toBeInTheDocument();
     expect(screen.queryByText('No messages yet')).not.toBeInTheDocument();
   });
 
@@ -338,5 +381,31 @@ describe('a chat that had to look elsewhere says so', () => {
       foreignAccount: 'claude', searchComplete: true, events: [someEvent],
     });
     expect(screen.getByText(/Stranded history — read from claude,/)).toBeInTheDocument();
+  });
+
+  // The re-point path (an earlier task on this branch) makes a SECOND
+  // `backlog` frame for the same session routine, not exotic — an open
+  // stream that follows the transcript when the answer changes. No test
+  // applied two frames to one store before this (review round 1, Minor):
+  // `msg.foreignAccount ?? s.strandedAccount` carries the PREVIOUS banner
+  // forward on a later frame that omits the field, and it survived because
+  // every fixture here applied exactly one frame.
+  it('a later backlog frame with no foreignAccount clears a stranded banner', () => {
+    const store = makeStore();
+    const fleet = makeFleet();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
+      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
+    });
+    expect(screen.getByText(/Stranded history/)).toBeInTheDocument();
+
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'b7001948', offset: 130, missing: false,
+      file: '/home/rc/.claude/projects/x/b7001948.jsonl',
+      searchComplete: true, events: [someEvent],
+    } as Backlog);
+    expect(screen.queryByText(/Stranded history/)).not.toBeInTheDocument();
   });
 });
