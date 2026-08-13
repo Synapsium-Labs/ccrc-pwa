@@ -226,30 +226,40 @@ export async function assembleFleet(
     // clock, so the whole comparison happens on one timebase and a stale
     // heartbeat cannot read as fresh because two operands disagreed by 1000x.
     //
-    // `nowMs` DECISION (task-9-report.md carries the full reasoning): `now` is
-    // THIS PROCESS's own clock (`Date.now()`, `assembleFleet`'s own default
-    // parameter), not the fleet host's — `r.supervisedAt` can be written on a
-    // REMOTE box across `remote/io.ts`'s seam, with no clock in that protocol
-    // at all (`stat`'s `mtimeMs` is the nearest thing, and no caller threads it
-    // here). If the fleet host's clock runs far enough ahead, a genuinely
-    // fresh heartbeat can compute `nowMs - supervisedAt < 0` and read
-    // `unsupervised` — `sessionLifecycle`'s own docstring names exactly this
-    // guard and why it exists (matching ccd's shipped `_session_state`).
+    // `nowMs` DECISION (task-9-report.md carries the full reasoning, corrected
+    // in fix round 1 after MEASUREMENT — see below): `now` is THIS PROCESS's
+    // own clock (`Date.now()`, `assembleFleet`'s own default parameter), not
+    // the fleet host's — `r.supervisedAt` can be written on a REMOTE box
+    // across `remote/io.ts`'s seam, and that protocol carries no clock op at
+    // all (`stat`'s `mtimeMs` is the nearest thing, and no caller threads it
+    // here); both production callers (`server.ts`, `watch.ts`) confirm this by
+    // passing `undefined` and taking the default.
     //
-    // Deliberately NOT compensated with a slack constant here. Three reasons:
-    // (1) no signal exists to size one — this seam carries no clock op, so any
-    // constant would be a guess with no measurement behind it, the opposite of
-    // this codebase's "degrade-and-heal for display, never guess and call it
-    // fact" stance (`FleetSession.unmeasured`'s own docstring); (2) it would
-    // reopen a BOUNDED version of the exact hole `sessionLifecycle`'s `>= 0`
-    // guard was hardened to close (task-8-report.md's own deviation record) —
-    // trusting a future stamp up to some threshold is still trusting a future
-    // stamp; (3) the blast radius today is a display-only qualifier that moves
-    // no bucket and nothing else consumes (M10) — a skewed box reads
-    // `unsupervised` instead of `running`, self-heals the moment the skew is
-    // fixed (never permanently masked the way a silently-widened window would
-    // be), and is the honest symptom that points an operator at the actual
-    // bug: the fleet host's clock, not this reader's arithmetic.
+    // MEASURED (sampling a full 30s re-stamp cycle against
+    // `SUPERVISED_FRESH_MS`'s `>= 0` guard): the tolerance is ASYMMETRIC, not
+    // the roughly-symmetric window the 120s constant alone would suggest. A
+    // fleet host as little as 5s AHEAD already misreads part of every cycle,
+    // and by ~30s ahead the misclassification is PERMANENT (every re-stamp in
+    // the cycle is future-dated, so `>= 0` never passes again). A host BEHIND
+    // tolerates roughly 90-119s before the same permanent failure — the 120s
+    // window, minus one cycle's slop, working in its favor instead of against
+    // it.
+    //
+    // Left uncompensated HERE, deliberately: the fix for the asymmetry, if
+    // ever needed, is a SYMMETRIC freshness window inside `sessionLifecycle`
+    // itself (`age > -SUPERVISED_FRESH_MS` in place of `age >= 0`), which
+    // would cap false-fresh at 120s on the ahead side exactly as the behind
+    // side already is — not a slack constant grafted on at this call site.
+    // That changes the shared classifier's guard, which both
+    // `session-lifecycle.test.ts` and the bash twin
+    // (`ccd-session-lifecycle.test.ts`) pin to match ccd's shipped
+    // `_session_state` exactly; changing it here would break that parity, so
+    // it is a cross-task decision, not this one. The cost of leaving it as-is
+    // is real but bounded today: a display-only qualifier (M10 — no bucket or
+    // status ever moves) that nothing server-side reads yet. That bound
+    // expires at the PWA-rendering task later in this plan, which exists
+    // specifically to render this field — it is not a permanent argument, only
+    // this task's.
     const lifecycleInput: LifecycleInput = {
       alive,
       supervisedAt: r.supervisedAt === null ? null : r.supervisedAt * 1000,

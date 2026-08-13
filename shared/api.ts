@@ -1077,10 +1077,19 @@ const BUCKETS: readonly string[] = ['attention', 'working', 'done', 'idle', 'cle
 /** `stoppedBy.surface` splits from `lifecycle` right below it, and takes the
  *  `pr.phase` ruling rather than the `bucket` one: `StopSurface` HAS a
  *  designated "we cannot say" member (`unknown`), so a surface from a newer ccd
- *  degrades onto it instead of rejecting a whole fleet's cache. `lifecycle` has
- *  no such member available — `null` there means "never recorded", an
- *  affirmative claim about this build — so an unrecognised token rejects, the
- *  same stance `bucket`/`hookState`/`checks` take three constants up. */
+ *  degrades onto it instead of rejecting a whole fleet's cache.
+ *
+ *  `SessionLifecycle` DOES have its own designated-ignorance member —
+ *  `unmeasurable`, the exact counterpart to `unknown` above — but it means "we
+ *  tried to classify this row and the evidence was degraded," not "this is a
+ *  token from a build we do not understand." Landing an UNRECOGNISED token
+ *  (an 8th union member some future build ships) on `unmeasurable` would claim
+ *  a measurement attempt that never happened, the same reason `bucket` does
+ *  not launder an unrecognised token onto `idle`. So an unrecognised
+ *  `lifecycle` still rejects the whole snapshot, the same stance
+ *  `bucket`/`hookState`/`checks` take three constants up — `null` (absent) is
+ *  the only degrade this field has, and it means "never recorded", an
+ *  affirmative claim about THIS build, not "we couldn't tell." */
 const reviveStoppedBy = (o: RawObj, k: string): { at: number; surface: StopSurface } | null => {
   const v = o[k];
   if (v === undefined || v === null) return null;
@@ -1228,7 +1237,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
     // compatibility contract, pinned in fleetstate.test.ts). NOT derived the
     // way `bucket` is: the ladder needs `alive` and a supervisor heartbeat no
     // snapshot ever carried, and a classification computed from fields we do
-    // not have would be a claim, not a reading.
+    // not have would be a claim, not a reading. `unmeasurable` (the
+    // classifier's own designated-ignorance answer, `reviveStoppedBy`'s
+    // docstring above has the full reasoning) is not the right degrade either:
+    // it means the classifier RAN and its evidence was degraded, not that
+    // revival never ran the classifier at all — a different kind of "we do not
+    // know" than an absent field is.
     const lifecycleRaw = optStr(o, 'lifecycle');
     if (lifecycleRaw !== null && !isSessionLifecycle(lifecycleRaw)) {
       throw new MalformedSnapshot('lifecycle');

@@ -1,7 +1,9 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { isPrPhase, isStopSurface, type IdentityField, type PrPhase, type StopSurface } from '../../shared/api.js';
+import {
+  isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
+} from '../../shared/api.js';
 
 // `IdentityField` moved to shared/api.ts (Task 2): `FleetSession.unmeasured`
 // carries the SAME evidence onto the wire, and a second, server-only
@@ -117,7 +119,7 @@ export interface SessionRecord {
    *  present-but-unparseable `.stopped` to `stopped: null` would let
    *  `sessionLifecycle`'s `dead + started -> orphan` rung fire about a row
    *  bash confidently calls stopped — rule (b)'s exact prohibition. */
-  lifecycleUnmeasured: readonly string[];
+  lifecycleUnmeasured: readonly LifecycleField[];
 }
 
 /**
@@ -401,7 +403,7 @@ async function buildRecord(
   const spawnStamp = packedStamp(spawnRaw);
   const spawnRc = spawnStamp === null ? null : numOrNull(spawnStamp.rest);
 
-  const lifecycleUnmeasured: string[] = [];
+  const lifecycleUnmeasured: LifecycleField[] = [];
   for (const [f, raw] of [
     ['started', started], ['supervised', supervisedRaw],
   ] as const) {
