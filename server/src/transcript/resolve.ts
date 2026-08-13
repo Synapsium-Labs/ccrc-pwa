@@ -7,7 +7,8 @@ import { mungePath } from '../munge.js';
  * Caller passes the live `cwd` when available, else the registry `workdir`.
  *
  * Pure and symlink-blind, deliberately: it munges the string it is given.
- * `resolveTranscriptFile` below is the seam-aware caller-facing resolver.
+ * `resolveTranscript` below is the seam-aware, ladder-walking caller-facing
+ * resolver (`TranscriptResolver` is its memoized wrapper).
  */
 export function transcriptPath(configDir: string, dir: string, uuid: string): string {
   return path.join(configDir, 'projects', mungePath(dir), `${uuid}.jsonl`);

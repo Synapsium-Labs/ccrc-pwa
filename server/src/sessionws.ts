@@ -267,15 +267,22 @@ export class SessionStream {
     return true;
   }
 
-  /** §5.3's rule, with the one io-bound fact measured here. The stat is spent
-   *  ONLY when the answer actually differs — a same-rung, same-path answer is
-   *  every tick of every healthy session and must cost nothing extra. */
+  /** The io-bound half of §5.3's rule: the ONE fact `shouldRepoint` cannot
+   *  measure itself, gated the same way its own docstring promises — a stat
+   *  is spent ONLY when the answer actually differs, never on the common
+   *  case (a same-rung, same-path answer, every tick of every healthy
+   *  session). Fix round 1, Important #1: this used to re-implement
+   *  `shouldRepoint`'s rule inline rather than calling it, so `shouldRepoint`'s
+   *  own table tests were guarding a copy that never ran — three mutants
+   *  (dropping the "file gone" fallback, `<` -> `<=`, `&&` -> `||`) survived
+   *  the ENTIRE suite against the live path while dying instantly against
+   *  `shouldRepoint` in isolation. Delegating here closes that gap: mutating
+   *  `shouldRepoint` now mutates what `tick()` actually executes. */
   private async repointNeeded(next: TranscriptResolution): Promise<boolean> {
     const cur = this.tailed;
     if (cur === null) return false;
-    if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
-    if (rungRank(next) < rungRank(cur)) return true;
-    return (await this.deps.io.stat(cur.path)) === null;
+    if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;  // no stat
+    return shouldRepoint(cur, next, (await this.deps.io.stat(cur.path)) !== null);
   }
 
   /** Read the session's task list and send it when it differs from what this
@@ -526,9 +533,19 @@ export class SessionStream {
         await this.sendBacklogAndTail(data);
       } else if (await this.repointNeeded(data.resolution)) {
         // §5.3: the uuid did not move but the ANSWER did — a swap landed, or
-        // the file this stream was tailing is gone. The client is told with the
-        // frame it already understands.
-        this.send({ type: 'rotated', uuid: data.uuid });
+        // the file this stream was tailing is gone. Fix round 1, MY RULING
+        // (Important #3): this is deliberately NOT `rotated`. That frame's
+        // only PWA-side effect beyond `uuid`/`offset` bookkeeping is minting a
+        // "Session context reset" divider (pwa/src/stores/session.ts) — true
+        // for a real clear/compact/swap-onto-a-fresh-uuid, but false here: the
+        // uuid did not change, nothing was reset, the stream simply followed
+        // the SAME session's history to its new address. On the branch this
+        // spec exists to fix — a swap correctly recovering history — telling
+        // the operator their context was just reset is the single most
+        // alarming false sentence this build could print. `backlog` alone is
+        // self-describing (carries `file` and `offset`) and needs no frame
+        // beside it; an older client with no `sinceFile` support still just
+        // sees a fresh backlog, exactly as it does on first connect.
         await this.sendBacklogAndTail(data);
       }
       if (this.stopped) return;

@@ -797,12 +797,19 @@ describe('foreignConfigDirs (spec §5.2)', () => {
 });
 
 describe('the stream follows a changed answer (spec §5.3)', () => {
-  it('re-points and resends backlog when the SAME uuid resolves to a better rung', async () => {
+  it('re-points and resends backlog when the SAME uuid resolves to a better rung — with NO `rotated` frame', async () => {
     // The transcript starts findable only by the uuid glob (rung 5) — a
     // pre-fix swap's residue, or a session whose file moved inside its own
     // account. When it lands at the exact address the stream must follow it,
-    // with the EXISTING `rotated` frame and a fresh backlog. RED against the
-    // old code, whose only re-point trigger was `data.uuid !== this.uuid`.
+    // with a fresh backlog. RED against the old code, whose only re-point
+    // trigger was `data.uuid !== this.uuid`.
+    //
+    // Fix round 1, MY RULING (Important #3): deliberately NOT `rotated` — that
+    // frame mints the PWA's "Session context reset" divider (session.ts:168-
+    // 174), which is false here: the uuid never changed, nothing was reset,
+    // the stream just followed the SAME session's history to its new address.
+    // `backlog` alone is self-describing (carries `file`/`offset`) and needs
+    // no frame beside it.
     const home = mkTmp('ccrc-repoint-');
     seedRoster(home);
     seed(home);
@@ -827,7 +834,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       writeFileSync(exact, userLine('e1', 'carried'));
       await pollOnce(stream);
 
-      expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: UUID_A }]);
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([]);   // NOT a rotation — no divider
       const second = frames.find((f) => f.type === 'backlog');
       expect(second.file).toBe(exact);
       expect(second.uuid).toBe(UUID_A);            // same uuid — a re-point, not a rotation
