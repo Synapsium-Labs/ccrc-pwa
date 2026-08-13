@@ -137,17 +137,69 @@ function liveMainCheckoutIn(
  *  (someone else's, or a swapped one) collect this sheet's kickoff: verbatim
  *  the hijack D-B4-19 exists to prevent, arriving through the wait instead.
  *
- *  NO liveness conjunct, equally deliberately: `cmd_start` writes the registry
- *  fields before tmux is necessarily up, so for a beat the session it just
- *  created is reported `dead`. Excluding it would time out a wait on a session
- *  that really did start — not knowing yet is not "not there". */
-function startedSessionFor(
+ *  LIVENESS + FRESHNESS, both required (coordinator review B-2). An earlier
+ *  version of this docstring argued for NO liveness conjunct, on the grounds
+ *  that `cmd_start` writes the registry fields before tmux is up, so
+ *  "excluding a dead row would time out a wait on a session that really did
+ *  start". THAT REASONING WAS WRONG and is corrected here rather than
+ *  preserved: excluding a dead row does not time the wait out, it simply does
+ *  not resolve on THAT tick. `checkForMatch` re-runs on every later
+ *  `/ws/fleet` frame and the wait is bounded at `START_PROGRAM_WAIT_MS`, so
+ *  the row resolves the moment it is reported alive. "Not resolving yet" was
+ *  conflated with "timing out"; they are different facts.
+ *
+ *  Why liveness is needed: project + wrapper + `workspace === null` is NOT a
+ *  unique key, by the same `cmd_swap` fact that widened the refusal arm
+ *  (`ccd/ccd:7307` moves the wrapper, keeps the id). A main checkout
+ *  `claude-ccrc-pwa` swapped to `claude2` and since DEAD is skipped by the
+ *  refusal (`status !== 'dead'`), so Start is offered; the projection says
+ *  `claude2`, `cmd_start` spawns a NEW `claude2-ccrc-pwa`, and the next frame
+ *  carries both in registry-id sort order (`registry.ts:375`), where
+ *  `'claude-'` sorts before `'claude2'` (`-` 0x2D < `2` 0x32). Without
+ *  liveness `.find()` returns the DEAD swapped row — it satisfies project,
+ *  `workspace === null` and `wrapper === 'claude2'` — and the kickoff goes to
+ *  a dead session while the coordinator that actually started never gets its
+ *  brief.
+ *
+ *  Why liveness ALONE is not enough: `preLive` is the set of ids that were
+ *  already alive when `start()` snapshotted the store, immediately before the
+ *  create. The discriminator is "this row became live as a RESULT of my
+ *  create" — alive now, and either absent from that snapshot or present in it
+ *  but dead. That last clause is the subtle one and is deliberate: a DEAD row
+ *  with the same id that `cmd_start` will revive is a legitimate resolution
+ *  (the refusal skips dead rows, so Start is offered, and `ccd start`
+ *  respawns exactly that id), so freshness cannot be "an id I had not seen".
+ *
+ *  EXPORTED for its own unit test, deliberately. The `!preLive.has(s.id)`
+ *  conjunct is unreachable through the component: `start()` refuses to run at
+ *  all while `existing !== null`, and `existing` is any live main checkout in
+ *  the project — so no tap can produce a snapshot that already contains a
+ *  live matching row. Measured: deleting that conjunct alone left the whole
+ *  integration suite green. A guard no test can see is exactly what this
+ *  branch's mutation-table doctrine forbids, so rather than ship it
+ *  unpinned (or delete a guard the review ordered), the predicate is pure and
+ *  is tested directly. The component tests remain the primary pins for the
+ *  other three conjuncts. */
+export function startedSessionFor(
   sessions: readonly FleetSession[],
   wrapper: string,
   project: string,
+  preLive: ReadonlySet<string>,
 ): FleetSession | null {
-  return sessions.find((s) => isMainCheckoutOf(s, project) && s.wrapper === wrapper) ?? null;
+  return sessions.find((s) =>
+    isMainCheckoutOf(s, project)
+    && s.wrapper === wrapper
+    && s.status !== 'dead'
+    && !preLive.has(s.id)) ?? null;
 }
+
+/** The ids alive at a given instant — `startedSessionFor`'s `preLive`
+ *  snapshot. Taken from `fleet.getState()` (authoritative) rather than the
+ *  render-scoped `sessions`, and taken BEFORE the create, so "was already
+ *  running before I asked for anything" is a measurement and not an
+ *  inference. */
+const liveIdsIn = (sessions: readonly FleetSession[]): ReadonlySet<string> =>
+  new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
 
 /** `createSession`'s own refusals. 400 is a client-authored mistake (an
  *  unknown/empty project); apiErrorText's stderr-first priority already
@@ -230,7 +282,7 @@ export function StartProgramSheet({
   // NewSessionSheet.
   const gen = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const waitRef = useRef<{ mine: number; wrapper: string; project: string; slug: string; title: string } | null>(null);
+  const waitRef = useRef<{ mine: number; wrapper: string; project: string; slug: string; title: string; preLive: ReadonlySet<string> } | null>(null);
   // Review fix round 1, Important 2: the D-B4-18 timeout and the D-B4-19
   // collision refusal INTERACT — neither ruling could see this alone. A
   // timeout does not mean the create failed; it means the board hasn't
@@ -338,7 +390,7 @@ export function StartProgramSheet({
     // from inside `start()`, synchronously after `createSession` resolves,
     // before the closure that captured `sessions` has had a chance to
     // re-render with a fresher value.
-    const found = startedSessionFor(fleet.getState().sessions, w.wrapper, w.project);
+    const found = startedSessionFor(fleet.getState().sessions, w.wrapper, w.project, w.preLive);
     if (found !== null) finish(found, w);
   };
 
@@ -390,18 +442,44 @@ export function StartProgramSheet({
     setTimedOut(false);
     setError(null);
 
+    // B-1: armed BEFORE the await, not after. `myAttemptRef` records the
+    // sheet's INTENT TO CREATE, not a receipt for a completed one — and the
+    // window it has to cover starts the moment `ccd` is asked, not the moment
+    // it answers. `cmd_start` writes `$REG/<id>.uuid` and the rest of the
+    // fields, THEN `_spawn`s (`ccd/ccd:7203-7208`); the server lists a session
+    // on its `.uuid` file alone (`registry.ts:375` — `started` does not gate
+    // listing, and is written after `_spawn` anyway) and reports `status:
+    // 'idle'` as soon as tmux has the id (`fleet.ts:186-190`); the watcher
+    // ticks every 2 s (`watch.ts:424`) while the HTTP call is still blocked in
+    // `_accept_first_run_prompts`/`_inject_spawn_effort`. So a frame carrying
+    // the new session arrives MANY SECONDS before `createSession` resolves.
+    // Armed after the await, `isOwnAttempt` was false for that entire window
+    // and the D-B4-19 refusal rendered INSTEAD of the confirm fragment: the
+    // "Starting…" indicator vanished and the operator was told not to start a
+    // program they were already starting. Acting on that copy (closing the
+    // sheet) bumps `gen`, the post-await guard below returns, `waitRef` is
+    // never set — and the kickoff is never sent, leaving an un-briefed
+    // coordinator running. That is the Important-2 harm through another door.
+    const preLive = liveIdsIn(fleet.getState().sessions); // B-2, before anything is created
+    myAttemptRef.current = { project: projectName };
+
     try {
       await createSession({ wrapper, project: projectName, workdir: project.workdir });
     } catch (err) {
       if (gen.current !== mine) return; // superseded — the sheet has moved on
+      // B-1: a create that FAILED is not an outstanding attempt, and leaving
+      // the ref armed would suppress a genuine refusal for a session this
+      // sheet never started. Cleared only on this attempt's own failure —
+      // the superseded path above returns first, because a newer attempt (or
+      // a close) already owns the ref.
+      myAttemptRef.current = null;
       setStarting(false);
       setError(startErrorText(err));
       return;
     }
     if (gen.current !== mine) return; // superseded while the create was in flight
 
-    waitRef.current = { mine, wrapper, project: projectName, slug: slug.trim(), title: title.trim() };
-    myAttemptRef.current = { project: projectName };
+    waitRef.current = { mine, wrapper, project: projectName, slug: slug.trim(), title: title.trim(), preLive };
     clearTimer();
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
@@ -420,7 +498,11 @@ export function StartProgramSheet({
         setTimedOut(true);
       }
     }, START_PROGRAM_WAIT_MS);
-    checkForMatch(); // covers the (unusual) case where the row was already there
+    // Covers the case where the row landed DURING the create — common, per
+    // B-1's own timing note. It cannot bind a row that was already alive
+    // before the create: `preLive` was snapshotted above, and that is exactly
+    // the stale binding B-2 closed.
+    checkForMatch();
   };
 
   return (
@@ -550,17 +632,31 @@ export function StartProgramSheet({
                 </p>
               )}
               {error !== null && <p className="program-start-error">{error}</p>}
+              {/* B-3: `existing !== null` reaches this branch only when
+                  `isOwnAttempt` suppressed the refusal above — the sheet's own
+                  session has appeared and `finish()` is sending its kickoff.
+                  `start()` returns immediately on that state (`existing !==
+                  null`), so without this the control was permanently inert
+                  with no feedback: the same dead-tap class review round 1
+                  fixed for the placement-pending case, reopened by the
+                  suppression. Reachable whenever `prompt()` is slow after a
+                  D-B4-18 timeout has already set `starting` back to false. */}
               <button
                 type="button"
                 className="program-start-go"
-                disabled={slug.trim() === '' || title.trim() === '' || starting || projected === undefined}
+                disabled={
+                  slug.trim() === '' || title.trim() === '' || starting
+                  || projected === undefined || existing !== null
+                }
                 onClick={() => void start()}
               >
                 {starting
                   ? 'Starting…'
-                  : projected === undefined
-                    ? 'Checking placement…'
-                    : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, projected.wrapper)}`}
+                  : existing !== null
+                    ? 'Started — opening it…'
+                    : projected === undefined
+                      ? 'Checking placement…'
+                      : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, projected.wrapper)}`}
               </button>
             </>
           )

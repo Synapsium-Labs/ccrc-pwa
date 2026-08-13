@@ -34,7 +34,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { CoordStatus, FleetSession } from '../../shared/api';
-import { StartProgramSheet, kickoff, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { StartProgramSheet, kickoff, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -115,7 +115,69 @@ describe('kickoff — the one standing template, copied from the brief verbatim'
   });
 });
 
+// The wait arm as a pure predicate. Three of its four conjuncts are pinned
+// through the component below, which is where they belong — but `preLive` is
+// NOT reachable that way: `start()` refuses to run while `existing !== null`,
+// and `existing` is any live main checkout in the project, so no tap can
+// produce a snapshot that already holds a live matching row. Measured during
+// this round: deleting `!preLive.has(s.id)` alone left the whole integration
+// suite green (39/39). Rather than ship a guard the review ordered with no
+// test that can see it — the exact failure the previous round was about — the
+// predicate is pure and gets its own killer here.
+describe('startedSessionFor — the wait arm, directly (B-2)', () => {
+  const NONE: ReadonlySet<string> = new Set();
+  const main = (over: Partial<FleetSession> = {}): FleetSession =>
+    sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', project: 'ccrc-pwa', workspace: null, ...over });
+
+  it('takes a fresh live main checkout on the target wrapper', () => {
+    expect(startedSessionFor([main()], 'claude', 'ccrc-pwa', NONE)?.id).toBe('claude-ccrc-pwa');
+  });
+
+  it('skips a row that was ALREADY LIVE in the pre-create snapshot — freshness', () => {
+    // The conjunct with no reachable component-level path. Binding this row
+    // would post the kickoff into a session the sheet never created.
+    expect(startedSessionFor([main()], 'claude', 'ccrc-pwa', new Set(['claude-ccrc-pwa']))).toBeNull();
+  });
+
+  it('takes a row that was in the snapshot but DEAD and is now alive — a revival is my own create', () => {
+    // `preLive` holds only ids that were alive, so a dead row is absent from
+    // it by construction. This is why freshness is not "an id I had not seen".
+    expect(startedSessionFor([main({ status: 'idle' })], 'claude', 'ccrc-pwa', new Set(['other-id']))?.id)
+      .toBe('claude-ccrc-pwa');
+  });
+
+  it('skips a dead row, a workspace row, another wrapper and another project', () => {
+    expect(startedSessionFor([main({ status: 'dead' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
+    expect(startedSessionFor([main({ workspace: 'brisk-harbor' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
+    expect(startedSessionFor([main({ wrapper: 'claude3' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
+    expect(startedSessionFor([main({ project: 'rp-llm' })], 'claude', 'ccrc-pwa', NONE)).toBeNull();
+  });
+});
+
 describe('StartProgramSheet', () => {
+  // Coordinator review B-4: nothing pinned `useProjectedHome(open)`. The one
+  // test that could have caught its removal was widened to exclude
+  // `/api/accounts`, and its own comment conceded the exclusion was
+  // "defensive rather than currently load-bearing". This sheet is mounted
+  // UNCONDITIONALLY at RunsScreen level, so dropping the argument means
+  // `/runs` polls `/api/accounts` every 20 s whether or not the door is ever
+  // tapped — the exact shape `useProjectedHome`'s own docstring refuses.
+  it('does not poll /api/accounts while the door is closed — the open gate is real (B-4)', async () => {
+    const accounts = vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+
+    const { rerender } = render(<StartProgramSheet open={false} onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+    // Give the effect (and any immediate `load()`) a chance to run.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(accounts).not.toHaveBeenCalled();
+
+    // Opening it is what asks — otherwise this would pass against a hook that
+    // never polls at all.
+    rerender(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+    await waitFor(() => expect(accounts).toHaveBeenCalled());
+  });
+
   it('collects slug, title and project, and refuses an empty slug', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
@@ -585,15 +647,20 @@ describe('StartProgramSheet', () => {
     expect(screen.queryByText(/already running/i)).toBeNull();
   });
 
-  it("D-B4-18's own match carries NO liveness conjunct — a row written before tmux is up still resolves the wait (C1)", async () => {
-    // The asymmetry is deliberate and is the reason the two arms are not one
-    // predicate: `cmd_start` writes the registry fields before tmux is
-    // necessarily up, so for a beat the new session is reported `dead`. The
-    // D-B4-19 arm must ignore that row (above); the D-B4-18 arm must NOT, or
-    // the sheet times out on a session it successfully started.
-    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+  // REPLACES the old "D-B4-18's own match carries NO liveness conjunct" test
+  // (coordinator review B-2). That test pinned a rule that was WRONG, and its
+  // stated reason — "excluding a dead row would time out a wait on a session
+  // that really did start" — conflated "not resolving on this tick" with
+  // "timing out". The wait re-runs on every later frame and is bounded at 20 s,
+  // so a dead row simply resolves later, when it is alive. Deleting the test
+  // would have lost the wrapper coverage it also carried, so it is REPLACED:
+  // same shape, pinning the corrected rule, and still red if the wait's
+  // `wrapper` conjunct is dropped (the live `claude3-` row would be taken).
+  it('waits for its own row to be LIVE — a dead row does not resolve the wait, and does not end it either (B-2)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
+    history.pushState(null, '', '/runs');
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
       createSession={async () => {}} prompt={prompt}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
@@ -602,11 +669,163 @@ describe('StartProgramSheet', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
     await screen.findByRole('button', { name: /^starting…$/i });
 
-    act(() => { store.setState({ sessions: [sess({ status: 'dead' })] }); });
+    // Frame 1: this sheet's own row, still DEAD (registry written, tmux not
+    // up) — alongside a LIVE main checkout on another wrapper, which the
+    // wrapper conjunct must exclude even though it is the only live match.
+    act(() => {
+      store.setState({ sessions: [
+        sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', status: 'dead' }),
+        sess({ id: 'claude3-ccrc-pwa', wrapper: 'claude3', status: 'idle' }),
+      ] });
+    });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/runs');
+
+    // Frame 2: the same row, now alive. NOT resolving on frame 1 did not end
+    // the wait — this is the half the old rule's reasoning got wrong.
+    act(() => {
+      store.setState({ sessions: [
+        sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', status: 'idle' }),
+        sess({ id: 'claude3-ccrc-pwa', wrapper: 'claude3', status: 'idle' }),
+      ] });
+    });
 
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
     expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
+  it('never resolves the wait onto a STALE main checkout that pre-dated the create (B-2)', async () => {
+    // The B-2 chain end to end: `claude-ccrc-pwa` was swapped to `claude2`
+    // (`ccd/ccd:7307` moves the wrapper, keeps the id) and has since died, so
+    // the refusal skips it and Start is offered. The projection is `claude2`,
+    // so `cmd_start` spawns a NEW `claude2-ccrc-pwa` — and the next frame
+    // carries both in registry-id sort order, where `'claude-'` sorts BEFORE
+    // `'claude2'` (`-` 0x2D < `2` 0x32). Liveness alone stops this one; the
+    // ordering is what made it reachable rather than theoretical.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2'));
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    history.pushState(null, '', '/runs');
+    const stale = sess({ id: 'claude-ccrc-pwa', wrapper: 'claude2', status: 'dead' });
+    act(() => { store.setState({ sessions: [stale] }); });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    // The dead row does not refuse — that is what makes the wait reachable.
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    act(() => {
+      store.setState({ sessions: [
+        stale,                                                        // sorts first
+        sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2', status: 'idle' }),
+      ] });
+    });
+
+    // The kickoff goes to the session that was actually started, never the
+    // dead swapped row that merely satisfies the same three fields.
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude2-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
+  });
+
+  it('DOES resolve onto a dead row that its own create REVIVED — freshness is not "an id I had not seen" (B-2)', async () => {
+    // The subtle half of the discriminator, and the one a naive
+    // "id absent from the snapshot" rule would break. A dead main checkout is
+    // skipped by the refusal, so Start is offered; `ccd start` then respawns
+    // THAT EXACT ID (`_id(wrapper, project)` is unchanged). The row was in the
+    // pre-create snapshot — but DEAD, so it is not in `preLive`, and coming
+    // alive is precisely "became live as a result of my create".
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    history.pushState(null, '', '/runs');
+    act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'dead' })] }); });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'idle' })] }); });
+
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
+  // — Coordinator review B-1 (BLOCKING). The refusal fired for the sheet's
+  // OWN just-started session on the ORDINARY path, because `myAttemptRef` was
+  // armed only AFTER `await createSession(...)`. The window is seconds, not
+  // milliseconds: `cmd_start` writes `$REG/<id>.uuid` and the other fields
+  // then `_spawn`s (`ccd/ccd:7203-7208`), the server lists a session on its
+  // `.uuid` file ALONE (`registry.ts:375`) and reports `idle` as soon as tmux
+  // has the id (`fleet.ts:186-190`), and the watcher ticks every 2 s
+  // (`watch.ts:424`) while the HTTP call is still blocked in
+  // `_accept_first_run_prompts`. Every OTHER test in this file uses
+  // `mockResolvedValue` and pushes its frame after the create has already
+  // resolved, which is exactly why this went unpinned. —
+  it('never refuses its own attempt while the create is STILL IN FLIGHT — the spawn window is seconds (B-1)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    let resolveCreate: (() => void) | null = null;
+    const createSession = vi.fn(() => new Promise<void>((r) => { resolveCreate = r; }));
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    history.pushState(null, '', '/runs');
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={createSession} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    // The watcher sees the new session long before `POST /api/sessions`
+    // answers — `createSession` is deliberately still pending here.
+    act(() => { store.setState({ sessions: [sess()] }); });
+
+    // The refusal must NOT render…
+    expect(screen.queryByText(/already running/i)).toBeNull();
+    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    // …and the in-flight indicator must still be there. This is the half that
+    // makes it a real pin: the refusal replaces the WHOLE confirm fragment,
+    // so "Starting…" vanishing is what the operator actually sees.
+    expect(screen.getByRole('button', { name: /^starting…$/i })).toBeInTheDocument();
+    expect(createSession).toHaveBeenCalledTimes(1);
+
+    // And the attempt still completes once the create finally answers.
+    resolveCreate!();
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+  });
+
+  it('re-arms nothing when the create FAILS — a genuine refusal is not suppressed by a dead attempt (B-1)', async () => {
+    // The other side of arming before the await: the ref must not stay armed
+    // on a create that never happened, or it would suppress the D-B4-19
+    // refusal for a session this sheet did not start.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const createSession = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ccd: start: boom' }));
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    expect(await screen.findByText('ccd: start: boom')).toBeInTheDocument();
+
+    // Someone else's session turns up in the same project afterwards.
+    act(() => { store.setState({ sessions: [sess({ id: 'claude3-ccrc-pwa', wrapper: 'claude3' })] }); });
+
+    expect(await screen.findByText(/claude3-ccrc-pwa is already running/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
   });
 
   // — Re-review of the C1 fix: `cmd_swap` breaks the wrapper↔id link, so the
@@ -819,6 +1038,49 @@ describe('StartProgramSheet', () => {
 
     expect(await screen.findByText(/claude3-beta is already running/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  // Coordinator review B-3: when `isOwnAttempt` suppresses the refusal, the
+  // ordinary branch renders and its confirm button was ENABLED — while
+  // `start()` returns immediately on `existing !== null`. A permanently inert
+  // control with no feedback, the same dead-tap class review round 1 fixed
+  // for the placement-pending case. Reachable whenever `prompt()` is slow
+  // after a D-B4-18 timeout has already put `starting` back to false.
+  it('never leaves an ENABLED Start while its own started session is being opened — no dead tap (B-3)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const prompt = vi.fn(() => new Promise<void>(() => {})); // hangs — finish() is mid-flight
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    const go = await screen.findByRole('button', { name: /^start build9-demo/i });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(go);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      // Past the bounded wait: `starting` is false again, `timedOut` is true.
+      await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1_000); });
+      // …and only now does the session appear, so `finish()` fires and hangs
+      // in `prompt()`. `existing` is non-null and `isOwnAttempt` suppresses.
+      act(() => { store.setState({ sessions: [sess()] }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Queried by class, not by label — this pins that the control is not
+    // tappable, not the words it happens to use.
+    const control = document.querySelector('.program-start-go');
+    expect(control).not.toBeNull();
+    expect(control).toBeDisabled();
+    // Suppression is working (this is the state B-3 is about), and the tap
+    // that would have done nothing cannot be made.
+    expect(screen.queryByText(/already running/i)).toBeNull();
+    fireEvent.click(control as Element);
+    expect(prompt).toHaveBeenCalledTimes(1); // no second attempt fired
   });
 
   // Whole-branch review, M3: `timedOut` described ONE attempt's target, but
