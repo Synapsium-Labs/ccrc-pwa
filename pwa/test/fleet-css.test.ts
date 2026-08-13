@@ -393,6 +393,21 @@ describe('the coord banner is not a living pane, and its toggle is a real target
   it('.coord-banner itself clears the floor too — it is a status row, not just a label', () => {
     expect(declValue(ruleFor('.coord-banner'), 'min-height')).toBe('var(--tap-min)');
   });
+
+  // Task 14 gate: same self-grounded proof `.abandon-sheet`/`.program-start-
+  // sheet` already carry, applied here where the pattern was first used
+  // (Task 11) but never itself pinned as a unit test — `.coord-banner
+  // .coord-glyph`/`.coord-banner .coord-error` are only real, MEASURED pairs
+  // (`design/audit.mjs`'s descendant pass) because `.coord-banner` declares
+  // both `color` and `background` itself; losing either would silently drop
+  // its descendants back into the `hosts.size === 0` skip and out of the
+  // measured set, with `contrast.test.ts` staying green because there is
+  // nothing left to fail on.
+  it('.coord-banner is self-grounded — it declares its own color AND background', () => {
+    const rule = ruleFor('.coord-banner');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
+  });
 });
 
 // Task 12, spec §4.3: releasing a wedged run is a decision, not a living

@@ -15,9 +15,11 @@ import type { ProjectedHome } from '../../../shared/api';
 import { api } from '../lib/api';
 
 /**
- * `active` defaults to `true` so every caller that predates it — `ProjectCard`
- * calls `useProjectedHome()` with no argument — keeps polling exactly as
- * before, byte-identical. It exists for `StartProgramSheet` (Task 13, review
+ * `active` defaults to `true` so every caller that predates it — `FleetScreen`
+ * calls `useProjectedHome()` with no argument (`FleetScreen.tsx:145`) and
+ * passes the answer down to `ProjectCard` as a prop; `ProjectCard` itself
+ * never calls this hook — keeps polling exactly as before, byte-identical.
+ * It exists for `StartProgramSheet` (Task 13, review
  * fix round 1, Minor 2), which — like `useDisabledWrappers`'s own two callers
  * just below — is mounted UNCONDITIONALLY at screen level and uses `open`
  * only to toggle the inner `Sheet`'s visibility. Without `active` this would
@@ -31,7 +33,8 @@ export function useProjectedHome(active: boolean = true): ProjectedHome | null |
   // `undefined`: no answer yet — the first poll hasn't landed, or every poll
   // so far has failed. `null`: an answer HAS landed, and it is the server's
   // own "nothing is placeable" (every home-able lane disabled). These are
-  // different facts with different honest copy downstream (ProjectCard) —
+  // different facts with different honest copy downstream (`FleetScreen`
+  // passes this value to `ProjectCard`, which renders the copy) —
   // starting at `null` and letting a fetch error stay `null` would make
   // "I don't know" indistinguishable from "the fleet told me no", which is
   // the account-status equivalent of inventing a target.

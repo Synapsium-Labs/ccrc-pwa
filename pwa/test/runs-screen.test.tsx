@@ -332,6 +332,23 @@ describe('the run board', () => {
     expect(screen.getByRole('group', { name: /finished/i })).toBeInTheDocument();
   });
 
+  // Task 14 gate: `role="group"` is never a named landmark that can be
+  // empty (`RunsScreen.tsx`'s own comment, "seven named regions holding
+  // nothing turn the landmark rotor into dead ends"). Every OTHER test that
+  // finds the Finished group either has a genuine finished row or a real
+  // read failure to report (`coldFailed`) — none of them proves the
+  // ordinary, successful, truly-empty case renders no group at all. Active
+  // runs present, the cold read resolves `ok`, and finished is honestly
+  // empty: there must be nothing here for a screen reader's landmark list
+  // to land on and find empty.
+  it('renders no Finished group at all when the archive genuinely has none — an empty role=group is a dead end, not an honest state', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
+  });
+
   it('the group header states the program’s FURTHEST wave, never an arbitrary row’s own (finding 4)', () => {
     const store = makeStore();
     act(() => {
