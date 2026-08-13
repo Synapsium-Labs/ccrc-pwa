@@ -1596,6 +1596,28 @@
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
+/* Task 12, spec §4.3, D-B4-14: a SIBLING of `.run-open` inside `.run-row`'s
+   own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
+   why a nested button is the defect this shape avoids. Self-grounded via
+   `.run-row` (above, background+color both set), same nested idiom as
+   `.run-row .run-glyph`/`.run-row .run-state` a few lines up — a run row is
+   a record of a lifecycle position, not a living pane, so this control gets
+   no --glow/animation/box-shadow either (`fleet-css.test.ts`'s "runs are not
+   living panes"). */
+.run-row .run-abandon {
+  flex: none;
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: none;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-sm);
+  color: var(--ink-tertiary);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.run-row .run-abandon:active { transform: scale(0.94); color: var(--ink-secondary); }
 
 /* ------------------------------------------------------------------ *
  *  Coord banner — the pause readout and its toggle (Task 11, spec      *
@@ -1648,5 +1670,39 @@
   flex-basis: 100%;
   margin: 0;
   font-size: var(--text-2xs);
+  color: var(--status-dead-text);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Abandon sheet — the run board's release valve (Task 12, spec §4.3). *
+ *  No --glow, no animation, no box-shadow anywhere under .abandon-* —  *
+ *  a wedged run being released is a decision, not a living pane,      *
+ *  same discipline as the coord banner and the run rows above.       *
+ * ------------------------------------------------------------------ */
+/* Self-grounded (sets its own color AND background — the same pairing
+   `.coord-banner` uses just above), so `.abandon-sheet .abandon-error`
+   below is a named-ancestor DESCENDANT `design/audit.mjs` can actually
+   recover a ground for and measure, rather than a bare `.abandon-error {
+   color: … }` selector it would file under `uncovered` (the exact defect
+   `.coord-banner .coord-error`'s own docstring names and fixes, one
+   component over). `.qc-consequence`/`.qc-actions`/`.btn-primary`/
+   `.btn-ghost` (primitives.css) are reused as-is for the consequence line
+   and the two buttons — not reinvented, and already carry their own
+   `var(--tap-min)` floor. */
+.abandon-sheet {
+  display: grid;
+  gap: var(--sp-3);
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+/* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
+   `.coord-banner .coord-error` already uses (6.80:1 DARK / 5.73:1 LIGHT,
+   tokens.css's own comment), reused rather than a third rule re-deriving
+   the same ratio. */
+.abandon-sheet .abandon-error {
+  margin: 0;
+  font-size: var(--text-sm);
   color: var(--status-dead-text);
 }

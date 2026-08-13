@@ -363,7 +363,8 @@ describe('runs are not living panes', () => {
     // DIRECTION.md's refused list, by name: "glow on non-living things". A run
     // row is a record of a lifecycle position; the pane it names may be alive,
     // and THAT row (the fleet line) is where the lamp belongs.
-    for (const sel of ['.run-row', '.run-row .run-glyph', '.run-row .run-state', '.runs-group', '.fleet-runs-row']) {
+    for (const sel of ['.run-row', '.run-row .run-glyph', '.run-row .run-state', '.runs-group', '.fleet-runs-row',
+      '.run-row .run-abandon']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
@@ -391,6 +392,38 @@ describe('the coord banner is not a living pane, and its toggle is a real target
 
   it('.coord-banner itself clears the floor too — it is a status row, not just a label', () => {
     expect(declValue(ruleFor('.coord-banner'), 'min-height')).toBe('var(--tap-min)');
+  });
+});
+
+// Task 12, spec §4.3: releasing a wedged run is a decision, not a living
+// pane — the same discipline "runs are not living panes" and the coord
+// banner's own block above already hold.
+describe('the abandon sheet is not a living pane, and its own control is a real target', () => {
+  it('no .run-abandon or .abandon-* rule glows, breathes or animates', () => {
+    for (const sel of ['.run-row .run-abandon', '.abandon-sheet', '.abandon-sheet .abandon-error']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  it('.run-abandon is at least one tap tall AND wide, off the shared token', () => {
+    expect(declValue(ruleFor('.run-row .run-abandon'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleFor('.run-row .run-abandon'), 'min-width')).toBe('var(--tap-min)');
+  });
+
+  // The named-ancestor descendant pair itself (Task 12 review lesson,
+  // applied ahead of time — Task 11's own review Minor 3): `.abandon-sheet`
+  // sets BOTH its own `color` and `background`, so it is self-grounded and
+  // `.abandon-sheet .abandon-error` is a rule `design/audit.mjs`'s
+  // descendant pass can actually recover a ground for, rather than a bare
+  // `.abandon-error { color: … }` selector it would file under `uncovered`
+  // (`hosts.size === 0` → skipped, never measured).
+  it('.abandon-sheet is self-grounded — it declares its own color AND background', () => {
+    const rule = ruleFor('.abandon-sheet');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
   });
 });
 

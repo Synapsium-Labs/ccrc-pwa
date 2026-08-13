@@ -271,6 +271,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  one. */
     runs: (closed = false) =>
       getJson<{ runs: RunSummary[] }>(closed ? '/api/runs?closed=1' : '/api/runs'),
+    /** `POST /api/runs/:id/abandon` (spec §4.3, Task 12) — the operator's
+     *  release valve for a wedged run, from the phone. The route (`server/src
+     *  /coord/routes.ts:844`) reads NO body at all — `{intent:'abandon'}` is
+     *  built server-side, so `archive` is not a field this call could even
+     *  offer ("the phone can abandon; the phone can never archive" is
+     *  structural on the server, and this client sends nothing that could
+     *  smuggle it past that). Deliberately UNGATED, same reasoning as
+     *  `coordPause` just above: no box token on this call. */
+    abandonRun: (id: number) => post(`/api/runs/${id}/abandon`),
     /** The DURABLE feed. `catchUp` is the live tail and is volatile by
      *  construction (notifymark.ts advances the mark at receipt); this is the
      *  read that still has bodies after a deploy. */

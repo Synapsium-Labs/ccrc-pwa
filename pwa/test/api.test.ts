@@ -245,6 +245,43 @@ describe('coordPause (Task 11, spec §4.2)', () => {
   });
 });
 
+// Task 12 review lesson (Task 11's own review, applied ahead of time):
+// `AbandonSheet` always takes its `abandonRun` prop INJECTED in
+// `abandon-sheet.test.tsx`'s copy/refusal cases, so the real `api.abandonRun`
+// — the one the production sheet's default prop value actually calls — needs
+// its own pin here, same idiom as `coordPause` just above (`archive`/
+// `restore`'s own "no body" idiom too: the server route reads no body at
+// all, D-B4-7).
+describe('abandonRun (Task 12, spec §4.3)', () => {
+  it('POSTs to /api/runs/:id/abandon with no body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 3, state: 'failed' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.abandonRun(3);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/runs/3/abandon');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('throws ApiError on a non-2xx response — e.g. the 409 bad-transition for an already-closed run', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(409, { ok: false, error: 'bad-transition', from: 'done', to: 'failed' }),
+    );
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.abandonRun(3).then(
+      () => { throw new Error('expected abandonRun to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual({ ok: false, error: 'bad-transition', from: 'done', to: 'failed' });
+  });
+});
+
 // svc's round-4 residual, and the one composition hazard the fix creates.
 //
 // `apiErrorText` now maps a `body.error` CODE to a sentence when there is no

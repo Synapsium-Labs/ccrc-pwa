@@ -214,15 +214,15 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the fifteen on the token, never a bare 44px literal', () => {
+  it('keeps every one of the sixteen on the token, never a bare 44px literal', () => {
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
     // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,
-    // `.runs-back`, `.run-row`, `.run-open`), Task 6 (`.mail-strip-head`) and
-    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`) join the same loop
-    // rather than getting their own — one place where "every floored rule
-    // stays on the token" is checked, not a second copy of the assertion per
-    // branch.
+    // `.runs-back`, `.run-row`, `.run-open`), Task 6 (`.mail-strip-head`),
+    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`) and Task 12
+    // (`.run-abandon`) join the same loop rather than getting their own —
+    // one place where "every floored rule stays on the token" is checked,
+    // not a second copy of the assertion per branch.
     for (const rule of [
       ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
       ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
@@ -232,6 +232,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(chatCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
+      ruleIn(fleetCss, '.run-row .run-abandon'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -358,5 +359,28 @@ describe('.mail-strip-head — the session mail strip’s door to its rows', () 
   it('is the class the rendered head control actually carries', () => {
     render(<MailStrip mail={[mailItem()]} />);
     expect(screen.getByRole('button', { expanded: false })).toHaveClass('mail-strip-head');
+  });
+});
+
+// — Build 4, Task 12: the run row's own abandon control (spec §4.3, D-B4-14) —
+
+describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
+  it('is at least one tap tall AND wide, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.run-row .run-abandon'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.run-row .run-abandon'), 'min-width')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered row control actually carries', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
+  });
+  // D-B4-14's own reason for existing: an inert row (no session, so no
+  // .run-open) still gets the control — that IS the wedge shape.
+  it('is present on an inert row too, where .run-open is absent', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
   });
 });

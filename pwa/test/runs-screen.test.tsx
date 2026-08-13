@@ -465,3 +465,27 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
     expect(order).toEqual([offline, banner]);
   });
 });
+
+// Task 12 review lesson, applied ahead of time (Task 11's own review, finding
+// "Important 1"): a control that only ever renders in its OWN isolated test
+// file (`abandon-sheet.test.tsx`) ships missing the moment a merge or a
+// cleanup pass drops the line from `RunsScreen.tsx` — every OTHER test here
+// stays green because nothing else renders `RunsScreen` with a run and looks
+// for it. This pins the row control on a REAL row, in the file that already
+// owns every other row-level assertion (`.run-open`, the tally, the glyph).
+describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-B4-14)', () => {
+  it('renders .run-abandon as a sibling of .run-open, not nested inside it', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+
+    const abandon = screen.getByRole('button', { name: /abandon run 3/i });
+    expect(abandon).toHaveClass('run-abandon');
+    const open = screen.getByRole('button', { name: /clear-cove/i });
+    expect(open).toHaveClass('run-open');
+    // Siblings under the same <li>, never one nested in the other.
+    expect(open.parentElement).toBe(abandon.parentElement);
+    expect(open.contains(abandon)).toBe(false);
+    expect(abandon.contains(open)).toBe(false);
+  });
+});
