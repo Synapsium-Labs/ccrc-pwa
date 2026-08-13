@@ -35,6 +35,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
 import { RUN_GLYPH, RUN_WORD, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { CoordBanner } from '../fleet/CoordBanner';
 import { formatAge } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -299,6 +300,12 @@ export function RunsScreen({
           Reconnecting…
         </div>
       )}
+
+      {/* Task 11, spec §4.2: the coordination surface's own pause readout —
+          `/runs` and nowhere else (FleetScreen never mounts this). Renders
+          nothing until the first `{type:'coord'}` frame has arrived
+          (`CoordBanner`'s own `coordFrameSeen` gate). */}
+      <CoordBanner store={store} />
 
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not

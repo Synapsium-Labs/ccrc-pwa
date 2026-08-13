@@ -1596,3 +1596,50 @@
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
+
+/* ------------------------------------------------------------------ *
+ *  Coord banner — the pause readout and its toggle (Task 11, spec      *
+ *  §4.2). Lives on /runs only, above the groups. A paused fleet is a   *
+ *  STATE, not a living pane: no --glow, no animation, no box-shadow    *
+ *  anywhere under .coord-* — the same rule "runs are not living panes" *
+ *  already holds a few rules up, one screen over.                      *
+ * ------------------------------------------------------------------ */
+.coord-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+/* Same nested idiom as `.run-row .run-glyph` a few rules up, against the
+   identical --bg-surface ground — the quiet cue, never the only cue. */
+.coord-banner .coord-glyph { color: var(--ink-tertiary); flex: none; }
+.coord-word { flex: 1; min-width: 0; }
+/* Same self-grounded pair as `.sess-actions`/`.proj-card-add` — bg-raised
+   fill, edge-subtle hairline, ink-secondary ink — not reinvented. */
+.coord-toggle {
+  flex: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.coord-toggle:active { transform: scale(0.96); }
+.coord-toggle:disabled { cursor: default; }
+.coord-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--status-dead-text);
+}

@@ -19,13 +19,14 @@ import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { FleetSession, MailSummary, PrState, RunSummary, WsAudit } from '../../shared/api';
+import type { CoordStatus, FleetSession, MailSummary, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { MailScreen } from '../src/screens/MailScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
+import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { MailStrip } from '../src/session/MailStrip';
 import { PrKeycap } from '../src/session/PrKeycap';
@@ -91,6 +92,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   openedAt: Date.now() - 1_000_000, dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,
 });
+
+const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
 
 const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: Date.now() - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
@@ -211,14 +214,15 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the thirteen on the token, never a bare 44px literal', () => {
+  it('keeps every one of the fifteen on the token, never a bare 44px literal', () => {
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
     // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,
-    // `.runs-back`, `.run-row`, `.run-open`) and Task 6 (`.mail-strip-head`)
-    // join the same loop rather than getting their own — one place where
-    // "every floored rule stays on the token" is checked, not a second copy
-    // of the assertion per branch.
+    // `.runs-back`, `.run-row`, `.run-open`), Task 6 (`.mail-strip-head`) and
+    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`) join the same loop
+    // rather than getting their own — one place where "every floored rule
+    // stays on the token" is checked, not a second copy of the assertion per
+    // branch.
     for (const rule of [
       ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
       ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
@@ -227,6 +231,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.fleet-runs-row'), ruleIn(fleetCss, '.runs-back'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(chatCss, '.mail-strip .mail-strip-head'),
+      ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -321,6 +326,26 @@ describe('.run-row and .run-open — every row on the run board', () => {
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByRole('button', { name: /clear-cove/i })).toHaveClass('run-open');
+  });
+});
+
+// — Build 4, Task 11: the pause banner's own toggle —
+
+describe('.coord-toggle — the pause banner’s own toggle', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered toggle actually carries, once a coord frame has landed', () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coordStatus({ pause: 'set' }), coordFrameSeen: true }); });
+    render(<CoordBanner store={store} />);
+    expect(screen.getByRole('button')).toHaveClass('coord-toggle');
+  });
+  // The banner's own "frame not yet seen" gate (`CoordBanner.tsx`) — before
+  // any `coord` frame has landed, there is no toggle to find at all.
+  it('renders no toggle before any coord frame has landed', () => {
+    render(<CoordBanner store={makeStore()} />);
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });
 

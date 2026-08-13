@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type FleetMsg, type FleetSession, type NotifyEvent, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -94,6 +94,24 @@ export interface FleetState {
    *  live frame it should have deferred to says `[]` (fix round 1, task 5,
    *  findings 1 and 3). */
   runsFrameSeen: boolean;
+  /** Build 4, spec §4.2 (Task 11). The pause/mail marker readout, off the SAME
+   *  `{type:'coord'}` frame `runs`/`runsFrameSeen` above are the precedent
+   *  for. `null` means "no `coord` frame has ever arrived" — the CLIENT-side
+   *  fourth state `CoordBanner` renders as nothing at all, never as "not
+   *  paused" (a guess wearing the same typeface as a measurement). Once a
+   *  frame has arrived this is sticky, same as `runs`/`sessions` themselves:
+   *  the server only re-sends `coord` when the value actually changes
+   *  (`server/src/watch.ts`'s `emitCoord`, byte-equality guarded), so holding
+   *  the last value between emits is what makes it correct to read at all. */
+  coord: CoordStatus | null;
+  /** Has `/ws/fleet` ever actually sent a `{type:'coord'}` frame THIS store
+   *  instance's lifetime — `runsFrameSeen`'s own idiom, for `runsFrameSeen`'s
+   *  own stated reason: never reset, including across a reconnect. `coord !==
+   *  null` would answer the same question today (both flip together, below),
+   *  but this is the flag `CoordBanner` reads, for the same reason
+   *  `RunsScreen` reads `runsFrameSeen` rather than inferring "has arrived"
+   *  from the payload's own shape. */
+  coordFrameSeen: boolean;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -128,6 +146,13 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     return m as FleetMsg;
   }
   if (t === 'runs' && Array.isArray((m as { runs?: unknown }).runs)) {
+    return m as FleetMsg;
+  }
+  // Frame-level only, same depth as `fleet`/`runs` above — per-MEMBER
+  // tolerance (a `pause`/`mail` value this build has never heard of) is the
+  // renderer's job, via `markerState` (`fleet/coordWords.ts`), exactly as
+  // `runState`/`runItems` do for `runs`.
+  if (t === 'coord' && typeof (m as { coord?: unknown }).coord === 'object' && (m as { coord?: unknown }).coord !== null) {
     return m as FleetMsg;
   }
   // present-but-wrong-typed proto/min is rejected, not coerced — a `hello`
@@ -191,6 +216,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       blocked: false,
       runs: [],
       runsFrameSeen: false,
+      coord: null,
+      coordFrameSeen: false,
       roster: snapshot?.roster ?? [],
 
       connect() {
@@ -329,6 +356,13 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // `runsFrameSeen` flips once and stays flipped: the frame has
               // now genuinely spoken, even the FIRST time it says `[]`.
               set({ runs: msg.runs, runsFrameSeen: true });
+            } else if (msg.type === 'coord') {
+              // Shape-validated only at the frame level (`asFleetMsg`'s own
+              // `typeof … === 'object'` check) — `CoordBanner`'s own
+              // `markerState` is where a malformed MEMBER degrades.
+              // `coordFrameSeen` flips once and stays flipped, even the first
+              // time the frame arrives.
+              set({ coord: msg.coord, coordFrameSeen: true });
             }
           },
           onState: (conn) => set({ conn }),

@@ -265,6 +265,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  read that still has bodies after a deploy. */
     feed: (limit = 100) => getJson<{ events: NotifyEvent[] }>(`/api/feed?limit=${limit}`),
     interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
+     *  `{ok:true, requested}` on success (the field is `requested`, never
+     *  `paused`: the route ran a verb, it did not read the marker back).
+     *  `CoordBanner` ignores the response body entirely and waits for the
+     *  next `{type:'coord'}` frame to confirm instead — the whole point of
+     *  the toggle's own "not optimistic" rule (spec §4.2, `CoordBanner.tsx`).
+     *  Ungated (no box token): the route is deliberately open, the same way
+     *  every other same-origin PWA write is. */
+    coordPause: (paused: boolean) => post('/api/coord/pause', { paused }),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

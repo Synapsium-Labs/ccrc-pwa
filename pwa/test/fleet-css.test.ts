@@ -372,6 +372,28 @@ describe('runs are not living panes', () => {
   });
 });
 
+// Task 11, spec §4.2: a paused fleet is a STATE, not a living pane — the same
+// discipline "runs are not living panes" already holds a few rules up, for
+// the same reason.
+describe('the coord banner is not a living pane, and its toggle is a real target', () => {
+  it('no .coord-* rule glows, breathes or animates', () => {
+    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-toggle', '.coord-error']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  it('.coord-toggle is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleFor('.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it('.coord-banner itself clears the floor too — it is a status row, not just a label', () => {
+    expect(declValue(ruleFor('.coord-banner'), 'min-height')).toBe('var(--tap-min)');
+  });
+});
+
 describe('the hold composer', () => {
   it('declares its own placeholder colour — the block comment claims .proj-search verbatim', () => {
     // FIX-WAVE OBSERVATION. The comment above this block says `.sess-hold-input`
