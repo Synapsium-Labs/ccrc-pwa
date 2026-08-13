@@ -22,9 +22,13 @@
 //     operator on "not shown yet". It only ever withholds a button, so
 //     over-refusing is the safe direction.
 //
-// Every one of those conjuncts is pinned below by a test that fails when it
-// is removed, in BOTH directions — widening the wait and narrowing the
-// refusal are each a red suite.
+// Each conjunct is pinned below ON ITS OWN ARM: the killer was measured by
+// deleting that conjunct from that one function, never from the shared
+// `isMainCheckoutOf` helper. That distinction is the whole point — the first
+// version of this header claimed the coverage before it existed, because
+// while both arms shared one expression a single refusal-side test appeared
+// to cover both, and splitting them left three of the wait's own conjuncts
+// deletable with the suite fully green.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
@@ -492,7 +496,12 @@ describe('StartProgramSheet', () => {
   });
 
   // — D-B4-19: refuses before the tap when the target already exists —
-  it('refuses before the tap when a session already exists for that wrapper+project — no confirm button at all (D-B4-19)', async () => {
+  // Retitled (re-review): this said "for that wrapper+project", which the
+  // refusal arm has not matched on since the C1-swap correction — it passes
+  // only because the fixture happens to use the projected wrapper. What it
+  // actually pins is the arm's SHAPE: a live main checkout in the chosen
+  // project withholds the confirm button entirely, rather than disabling one.
+  it('refuses before the tap when a live main checkout already exists in that project — no confirm button at all (D-B4-19)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', project: 'ccrc-pwa' })] }); });
@@ -660,6 +669,82 @@ describe('StartProgramSheet', () => {
     expect(location.pathname).toBe('/runs');
 
     // …and the sheet is still waiting for its own, which then lands.
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+  });
+
+  // The sibling of the test above, varying `workspace` where that one varies
+  // `wrapper` — and a pin the two-named-function refactor OWED. While the two
+  // arms shared one `existingSessionFor` expression, one test over the
+  // refusal covered both; splitting them into `startedSessionFor`/
+  // `liveMainCheckoutIn` widened the mutation surface, and `s.workspace ===
+  // null` on the WAIT arm was left reachable only through the shared
+  // `isMainCheckoutOf` definition. Measured: deleting it from
+  // `startedSessionFor` alone left the suite fully green at 31/31 — a
+  // WORKSPACE row collecting the coordinator kickoff, which is C1's own
+  // consequence (2), with nothing red to say so.
+  it('never sends the kickoff to a WORKSPACE row on the projected wrapper — the WAIT wants a main checkout (C1-workspace)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    history.pushState(null, '', '/runs');
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    // Everything the wait matches on EXCEPT the main-checkout conjunct: the
+    // projected wrapper, the chosen project — a live worker, mid-task.
+    act(() => {
+      store.setState({ sessions: [sess({
+        id: 'ccrc-pwa-brisk-harbor', wrapper: 'claude', project: 'ccrc-pwa', workspace: 'brisk-harbor',
+      })] });
+    });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/runs');
+
+    // …and the sheet is still waiting for its own main checkout, which lands.
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+  });
+
+  // The THIRD conjunct of the same arm, found by the same measurement that
+  // produced the test above and closed in the same edit rather than left as a
+  // known gap: `s.project === project` reaches the wait only through the
+  // shared `isMainCheckoutOf`, and deleting it from `startedSessionFor` alone
+  // also left the suite green. Same consequence, one field over — the kickoff
+  // resolving onto a main checkout of a DIFFERENT project on the same
+  // wrapper, which on this fleet is simply the operator's other work.
+  it('never sends the kickoff to a main checkout of ANOTHER project on the same wrapper (C1-workspace)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    history.pushState(null, '', '/runs');
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    act(() => {
+      store.setState({ sessions: [sess({
+        id: 'claude-rp-llm', wrapper: 'claude', project: 'rp-llm', workspace: null,
+      })] });
+    });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/runs');
+
     act(() => { store.setState({ sessions: [sess()] }); });
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
     expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
