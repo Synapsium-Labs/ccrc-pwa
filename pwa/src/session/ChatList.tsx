@@ -8,10 +8,12 @@
 import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import type { ChatEvent } from '../../../shared/api';
+import type { ChatEvent, MailEnvelope } from '../../../shared/api';
+import { parseMailEnvelope } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import type { PendingAttachment, PendingSend } from '../stores/session';
+import { MailCard } from './MailCard';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
@@ -22,6 +24,15 @@ export type ChatItem =
   | { kind: 'divider'; key: string; label: string }
   | { kind: 'message'; key: string; event: MessageEvent; streaming: boolean }
   | { kind: 'tool'; key: string; use: ToolUseEvent; result?: ToolResultEvent }
+  /** Delivered agent-to-agent mail (Build 4 Task 17, spec §2.3). EXACTLY ONE
+   *  new member, and it is DERIVED at render time from the `user` event that
+   *  is already in the store — nothing is minted into `s.events`, so the
+   *  revival discipline (`stores/session.ts`) needs no new clause and a
+   *  reconnect re-derives the same card from the same JSONL bytes. That is the
+   *  whole reason to build mail attribution this way rather than as a
+   *  synthesized row. `event` rides along so nothing downstream has to go
+   *  looking for the turn this came from. */
+  | { kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent }
   | { kind: 'pending'; key: string; send: PendingSend }
   | { kind: 'working'; key: 'working' };
 
@@ -69,6 +80,25 @@ export function buildChatItems(
       toolByToolId.set(e.toolId, tool);
       items.push(tool);
     } else {
+      if (e.kind === 'user') {
+        // Only when the WHOLE turn is one fenced ccrc-mail block —
+        // `parseMailEnvelope` enforces that itself, so this file holds no
+        // second copy of the rule (the PWA holds no rule the server does not
+        // also hold; the grammar is one definition in `shared/`). A refusal of
+        // either kind — `not-mail` or `malformed` — falls through to the
+        // ordinary bubble below, which is spec §2.4's stated degradation:
+        // never a half-populated card.
+        //
+        // `user` ONLY, and that is not incidental: the delivery lane types the
+        // envelope into the recipient's INPUT BOX, so delivered mail can only
+        // ever arrive as a user turn. An assistant turn quoting an envelope is
+        // the agent's own words about mail, not mail.
+        const parsed = parseMailEnvelope(e.text);
+        if (parsed.ok) {
+          items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e });
+          continue;
+        }
+      }
       items.push({ kind: 'message', key: e.uuid, event: e, streaming: false });
     }
   }
@@ -274,6 +304,8 @@ function ChatItemView({
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
       return <ToolCard use={item.use} result={item.result} />;
+    case 'mail':
+      return <MailCard envelope={item.envelope} />;
     case 'pending':
       return <PendingBubble id={id} send={item.send} onRetry={onRetry} onDiscard={onDiscard} />;
     case 'working':

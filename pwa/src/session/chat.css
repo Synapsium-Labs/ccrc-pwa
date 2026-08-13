@@ -1488,6 +1488,98 @@ button.metachip:active {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Mail card — the machine's words, attributed (Build 4 Task 17).     *
+ * ------------------------------------------------------------------ *
+ * NO-GLOW GOVERNANCE, EXTENDED (spec §2.3): `/runs` banned --glow /
+ * animation / box-shadow on `.run-*` because a run is a RECORD, not a
+ * living pane. A mail card is a record of something that was said — it
+ * goes still, and `mail-card.test.tsx` scans every rule whose selector
+ * mentions `.mail-card` to keep it that way.
+ *
+ * Self-grounded (background + colour together, `design/audit.mjs` route
+ * 1) so every descendant below can be scoped `.mail-card .foo` and
+ * measured through route 2b, exactly as `.mail-strip` above is. */
+.mail-card {
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+  border: 1px solid var(--edge-subtle);
+  border-left: 3px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  display: grid;
+  gap: var(--sp-2);
+}
+/* The attribution line — the reason this card exists. Sender and
+   recipient are both named, because "who said this to whom" is the fact
+   a "you" bubble destroyed. */
+.mail-card .mail-card-from {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-ui);
+}
+.mail-card .mail-card-glyph,
+.mail-card .mail-card-arrow {
+  flex: none;
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.mail-card .mail-card-sender {
+  font-weight: var(--weight-semibold);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.mail-card .mail-card-recipient {
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+.mail-card .mail-card-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+}
+.mail-card .mail-card-kind {
+  flex: none;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-tertiary);
+}
+.mail-card .mail-card-subject {
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.mail-card .mail-card-run {
+  flex: none;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+/* PATHS, never payloads — and never links: nothing on this card fetches
+   anything, so nothing on it may look tappable. */
+.mail-card .mail-card-artifacts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.mail-card .mail-card-artifact {
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+.mail-card .mail-card-body {
+  margin: 0;
+}
+
+/* ------------------------------------------------------------------ *
  *  Composer — the prompt line, docked above the keyboard.             *
  * ------------------------------------------------------------------ */
 /* Plain measuring shell around <Composer> — Composer.tsx itself isn't in this
