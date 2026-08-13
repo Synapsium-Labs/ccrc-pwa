@@ -167,8 +167,9 @@ async function globByUuid(
  *   4. raw munge of the registry workdir;
  *   5. `<configDir>/projects/*​/<uuid>.jsonl`, newest wins, duplicates collapsed;
  *   6. the same glob across the OTHER accounts, pooled, newest winning globally
- *      — only when 1-5 all miss, and always carrying the account so the UI can
- *      banner it;
+ *      — only when 1-5 all miss AND rung 5 actually RAN (its own-account
+ *      `readdir` answered, not `null`; see the ruling below the own-account
+ *      glob), and always carrying the account so the UI can banner it;
  *   7. otherwise the raw munge of the directory given, as a fallback.
  *
  * THE ORDER IS LIVENESS-DEPENDENT ON PURPOSE. A live session's rungs 1-2 are
@@ -225,13 +226,35 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
   }
 
   const own = await globByUuid(io, o.configDir, o.uuid, null, 0);
-  let complete = own.complete;
   const bestOwn = pickNewest(own.hits);
   if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null };
 
+  // RULING (review round 1, Important #2): rung 6 requires rung 5 to have
+  // actually RUN, not merely to have found nothing. §5.1 says rung 6 is used
+  // "only when 1-5 all miss" — an own account that could not be LISTED did
+  // not miss, it is unmeasured, and answering with a foreign hit here would
+  // present that unmeasured account as an empty one. That is the exact error
+  // §5.5 names ("incomplete must never be read as absence"), one rung
+  // upstream of the fallback arm it was written for: a foreign-glob `found`
+  // would tell the PWA "stranded history, held by claude2" and render a
+  // months-old copy while the live transcript sits unread in the account
+  // that was never actually searched. So an incomplete own-account glob skips
+  // rung 6 outright and falls straight through to the rung-7 fallback with
+  // `complete: false` — the fallback arm already means exactly "here is the
+  // raw path, and the search did not finish," which is cheaper than carrying
+  // `complete` on the `found` arm too (the alternative considered and
+  // rejected): that would push "found, but don't trust it" onto every
+  // consumer of `TranscriptResolution` for a rung 6 was never going to answer
+  // anyway once its own account could not be read.
+  if (!own.complete) {
+    return { kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete: false };
+  }
+
   // Pooled across accounts, newest winning globally — M2's five copies of one
-  // uuid differ by weeks. Reached only when everything above missed.
+  // uuid differ by weeks. Reached only when the own account was FULLY
+  // searched (own.complete, just confirmed) and still missed.
   const pooled: GlobHit[] = [];
+  let complete = true;
   for (const [order, acct] of (o.foreign ?? []).entries()) {
     const g = await globByUuid(io, acct.configDir, o.uuid, acct.account, order);
     if (!g.complete) complete = false;

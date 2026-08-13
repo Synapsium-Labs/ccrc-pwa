@@ -10,7 +10,7 @@ import { mkdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, MEMO_MAX, pickNewest, resolveTranscript, RUNG_ORDER, rungRank,
+  collapseHits, MEMO_MAX, pickNewest, resolveTranscript, resolveTranscriptFile, RUNG_ORDER, rungRank,
   transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -101,6 +101,51 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const f = plant(transcriptPath(b.cfg, b.regLink, UUID), 1000);
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
       { kind: 'found', path: f, rung: 'registry-raw', account: null });
+  });
+
+  it('rung 1 beats rung 2 when BOTH exist — evaluation order, not just presence, decides (review round 1, Critical)', async () => {
+    // Every rung-N test above plants exactly ONE file, so a mutant that
+    // reorders which candidate is stat'd FIRST is invisible to them — only
+    // the label attached to the lone hit is checked, never which of several
+    // present files wins. This is the fixture that actually pins order: both
+    // the resolved and the raw munge of the live cwd exist, and only rung 1
+    // running before rung 2 explains the answer. Kills the mutant that moves
+    // `add(rawRung, raw)` ahead of the resolved candidate inside `pair()` —
+    // that mutant would answer `live-raw` here, i.e. a stale raw-munge
+    // residue rendered ahead of the file Claude Code is actually writing,
+    // which is the original incident restored.
+    const b = box();
+    const resolved = plant(transcriptPath(b.cfg, b.livePhys, UUID), 1000, 'resolved\n');
+    plant(transcriptPath(b.cfg, b.liveLink, UUID), 1000, 'raw\n');
+    expect(await resolveTranscript(localIO, opts(b))).toEqual(
+      { kind: 'found', path: resolved, rung: 'live-resolved', account: null });
+  });
+
+  it('rung 2 beats rung 3 when BOTH exist — the live rungs exhaust before crossing to the registry workdir (review round 1, Critical)', async () => {
+    // Same discrimination gap, at the live/registry boundary this time: with
+    // one file at each rung, a mutant that swaps rungs 2 and 3 in EVALUATION
+    // order (while leaving RUNG_ORDER and every label untouched) is
+    // undetectable, because whichever single file exists still gets its own
+    // correct label. Plant both the live-raw and the registry-resolved
+    // candidates, so only rung 2 actually running before rung 3 explains
+    // getting the live one back — the liveness-dependent preference §5.1
+    // calls "the correct preference, not a wobble", reversed by the mutant.
+    const b = box();
+    const liveRaw = plant(transcriptPath(b.cfg, b.liveLink, UUID), 1000, 'live raw\n');
+    plant(transcriptPath(b.cfg, b.regPhys, UUID), 1000, 'registry resolved\n');
+    expect(await resolveTranscript(localIO, opts(b))).toEqual(
+      { kind: 'found', path: liveRaw, rung: 'live-raw', account: null });
+  });
+
+  it('rung 3 beats rung 4 when BOTH exist — resolved wins within the registry pair too (review round 1, Critical)', async () => {
+    // `pair()` is shared code between the live and registry rungs, so the
+    // raw-before-resolved mutant above would answer `registry-raw` here too
+    // — this fixture is what makes that half of the same mutant observable.
+    const b = box();
+    const resolved = plant(transcriptPath(b.cfg, b.regPhys, UUID), 1000, 'resolved\n');
+    plant(transcriptPath(b.cfg, b.regLink, UUID), 1000, 'raw\n');
+    expect(await resolveTranscript(localIO, opts(b))).toEqual(
+      { kind: 'found', path: resolved, rung: 'registry-resolved', account: null });
   });
 
   it('rung 5: the uuid glob finds a transcript that moved inside its own account', async () => {
@@ -205,6 +250,27 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
   });
 
+  it("a foreign hit is refused when the OWN account's glob could not run — incomplete beats a foreign answer (review round 1, Important #2, the ruling)", async () => {
+    // §5.1 says rung 6 fires "only when 1-5 all miss" — an own account whose
+    // `readdir` answered null did not miss, it was never MEASURED. Kills a
+    // mutant that answers rung 6 whenever the own account's glob has no
+    // matches, without checking whether it could be listed at all: that
+    // mutant would render a foreign account's frozen copy under a confident
+    // "stranded history, held by claude2" banner while the live transcript
+    // sits unread in the very account the search could not reach.
+    const b = box();
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => (p === path.join(b.cfg, 'projects') ? null : localIO.readdir(p)),
+    };
+    const personal = path.join(b.root, '.claude-personal');
+    plant(stranded(personal), 3000, 'foreign, but the own account was never reachable\n');
+    const r = await resolveTranscript(io, opts(b, {
+      foreign: [{ account: 'claude2', configDir: personal }],
+    }));
+    expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
+  });
+
   it('remote mode (realpath always null) collapses 1 into 2 and 3 into 4, and the uuid glob still works (§5.5)', async () => {
     // Documented degradation, pinned rather than assumed: a transcript under
     // the PHYSICAL munge is unreachable by the exact rungs remotely, and rung 5
@@ -214,6 +280,37 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const phys = plant(transcriptPath(b.cfg, b.livePhys, UUID), 1000);
     const r = await resolveTranscript(remoteish, opts(b));
     expect(r).toEqual({ kind: 'found', path: phys, rung: 'uuid-glob', account: null });
+  });
+});
+
+describe('resolveTranscriptFile — the wrapper is NOT a behavioural no-op, and that is pinned on purpose (review round 1, Important #1)', () => {
+  // The brief called this wrapper a faithful stand-in for today's resolver.
+  // It is not: today's `resolveTranscriptFile` tried exactly the resolved and
+  // raw munge of `dir` and gave up, but the wrapper now runs the FULL ladder
+  // with `registryWorkdir: dir` and no foreign accounts, so a session with
+  // neither exact munge but a stranded own-account copy (rung 5) now gets
+  // that copy back instead of the raw fallback path. All three callers
+  // (`sessionws.ts`, `watch.ts`, `commands.ts`) see this change starting
+  // today — most notably `watch.ts`'s name sweep, which can now derive a
+  // branch name and issue `ws-rename` from a transcript that used to be
+  // invisible to it. That direction is the intended fix (Task 11 is what lets
+  // each caller decide for itself whether it wants rung 5); this task's job
+  // is only to make the change explicit and tested, never silent.
+  it("now returns a stranded own-account uuid-glob match where the old resolver returned the raw fallback path", async () => {
+    const b = box();
+    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
+    const stray = plant(stranded(b.cfg), 1000, 'stranded but ours\n');
+    const oldRawFallback = transcriptPath(b.cfg, b.liveLink, UUID);
+    const file = await resolveTranscriptFile(localIO, b.cfg, b.liveLink, UUID);
+    expect(file).toBe(stray);
+    expect(file).not.toBe(oldRawFallback);
+  });
+
+  it('still returns the raw fallback path when nothing exists anywhere — unchanged for a truly missing transcript', async () => {
+    const b = box();
+    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
+    const raw = transcriptPath(b.cfg, b.liveLink, UUID);
+    expect(await resolveTranscriptFile(localIO, b.cfg, b.liveLink, UUID)).toBe(raw);
   });
 });
 
@@ -373,16 +470,26 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     expect(await r.resolve(o)).toEqual({ kind: 'found', path: raw, rung: 'live-raw', account: null });
   });
 
-  it('the memo is bounded — a rotating uuid cannot grow it without limit', async () => {
+  it('the memo is bounded — a rotating uuid cannot grow it without limit, and eviction is oldest-first (review round 1, Minor)', async () => {
     // The watcher's sweep shares ONE resolver across every row, and a /clear
     // mints a fresh uuid on every rotation: an unbounded Map is a slow leak in
-    // a process that runs for weeks.
+    // a process that runs for weeks. `size <= MEMO_MAX` alone would also pass
+    // a mutant that calls `this.memo.clear()` instead of evicting one entry
+    // at a time — pin the real behavior: exactly MEMO_MAX entries survive,
+    // the newest resolve's key is one of them, and the very first key
+    // inserted is gone.
     const { cfg, dir } = flat();
     mkdirSync(path.join(cfg, 'projects'), { recursive: true });
     const r = new TranscriptResolver(localIO);
-    for (let i = 0; i < MEMO_MAX + 20; i += 1) {
-      await r.resolve({ configDir: cfg, dir, registryWorkdir: dir, uuid: `${i}`.padStart(36, '0') });
+    const uuidAt = (i: number): string => `${i}`.padStart(36, '0');
+    const keyFor = (uuid: string): string => `${cfg} ${uuid} ${dir}`;
+    const total = MEMO_MAX + 20;
+    for (let i = 0; i < total; i += 1) {
+      await r.resolve({ configDir: cfg, dir, registryWorkdir: dir, uuid: uuidAt(i) });
     }
-    expect((r as unknown as { memo: Map<string, unknown> }).memo.size).toBeLessThanOrEqual(MEMO_MAX);
+    const memo = (r as unknown as { memo: Map<string, unknown> }).memo;
+    expect(memo.size).toBe(MEMO_MAX);
+    expect(memo.has(keyFor(uuidAt(total - 1)))).toBe(true);  // the newest resolve survives
+    expect(memo.has(keyFor(uuidAt(0)))).toBe(false);         // the first inserted is evicted
   });
 });

@@ -640,10 +640,10 @@ Existence-first, in order, first hit wins:
    candidates);
 6. `<otherConfigDir>/projects/*/<uuid>.jsonl` across the other accounts in the roster — matches
    from all accounts **pooled**, newest mtime winning globally, same collapse — used **only** when
-   1-5 all miss, and always rendered with a banner naming the account that holds it. Pooled rather
-   than first-account-in-roster-order because M2's five copies of one uuid differ by weeks and the
-   newest is the one the operator means; ties break by roster declaration order, then by path, so
-   the answer is deterministic and a test can pin it;
+   1-5 all miss **and rung 5 actually ran** (below), and always rendered with a banner naming the
+   account that holds it. Pooled rather than first-account-in-roster-order because M2's five
+   copies of one uuid differ by weeks and the newest is the one the operator means; ties break by
+   roster declaration order, then by path, so the answer is deterministic and a test can pin it;
 7. the raw munge of the directory given, exactly as today, so a tailer pointed at a
    not-yet-existing path keeps working for a session that later writes there.
 
@@ -652,6 +652,23 @@ transcript moved within its own account; rung 6 is the safety net for history st
 that happened before D1 shipped — which, per M2, is 17 of 23 rows' worth of residue sitting on disk
 right now. The account list for rung 6 comes from the roster via `configDirFor`, never a literal
 list of account names in this module (architecture rule (a)).
+
+**RULING (review round 1 of Task 10, folded in here so the plan and the code agree): rung 6
+requires rung 5 to have actually run, not merely to have found nothing.** "1-5 all miss" means
+rung 5's own-account glob was *measured* and came back empty — never that its `readdir` answered
+`null`. An own account that could not be listed is unmeasured, not empty, and answering with a
+foreign hit in its place would present that unmeasured account as an empty one — precisely the
+error §5.5 names ("incomplete must never be read as absence"), one rung upstream of the fallback
+arm it was written for: a `found` at rung 6 would tell the PWA "stranded history, held by
+`claude2`" and render a months-old copy while the live transcript sits unread in the account the
+search never actually reached. So when rung 5's own-account `readdir` answers `null`, rung 6 is
+skipped outright and the ladder falls straight through to the rung-7 fallback with
+`complete: false` — the fallback arm already means exactly "here is the raw path, and the search
+did not finish." The alternative considered and rejected was carrying `complete` on the `found`
+arm too, so a foreign hit could still be returned but flagged unreliable; that pushes the decision
+onto every consumer of the outcome union, including a PWA sentence for "found, but don't trust
+it," for an answer rung 6 was never going to give once its own account could not be read. Refusing
+costs nothing rung 6 would otherwise have answered.
 
 **The order is liveness-dependent on purpose.** A live session's rungs 1-2 are the live cwd and its
 rungs 3-4 the registry workdir; a dead session's caller passes the registry workdir as `dir`, so
@@ -766,6 +783,15 @@ exists". That marking is the whole point: remote `readdir` returns `null` for a 
 a forbidden path and a disconnected agent alike (`remote/io.ts`), and this design refuses to turn
 that ambiguity into a confident empty chat.
 
+**The same refusal governs rung 6, and this is where a null `readdir` bites hardest.** When rung
+5's own-account `readdir` answers `null` — the ordinary shape of a dropped agent-WS round trip in
+remote mode — rung 6 is not attempted at all; the ladder falls straight through to the rung-7
+fallback with `complete: false` rather than pooling a foreign hit in the own account's place.
+Answering from the foreign pool there would be the exact same "incomplete read as absence" error
+this section is about, just one rung upstream of the fallback arm it was originally written for
+(§5.1's ruling). A remote host that cannot list the own account right now must never render another
+account's frozen history as if it were a confident answer.
+
 ## 6. Non-goals — rejected here so nobody relitigates them
 
 **No reconciler daemon, no timer unit, no `ccd doctor` verb.** A new gated verb costs a caps line, a
@@ -856,7 +882,7 @@ Each defect owes specific tests, and they are the ones a mutation sweep can actu
 | D2 | `stop` then `start` leaves the unit enabled; `ensure` inside the unit does not re-enter `systemctl start`; `attach` finds a live pane; a vanished pane returns rc 3 without waiting out the window; an exhausted window returns rc 4; a failed unit is revived by `start` (the `reset-failed` path) |
 | D3 | the stamp records epoch and a validated surface, and an unknown word normalizes; `_ws_unsupervise` stamps from every call site and `_ws_supervise` clears; the classification table, driven from one fixture through both the TypeScript function and the bash twin; an unreadable field yields `unmeasurable`, never `orphan` |
 | §2.5 | `_transcript_path` prefers an existing file over a guessed one; falls through to the uuid glob when neither munge exists; still prints the resolved munge when nothing exists anywhere; a tombstone written for a moved session names the file that holds the history |
-| D4 | each rung wins in its own fixture; the registry-workdir rungs rescue a live session whose cwd moved; the glob rung dedupes identical `(size, mtimeMs)` candidates; a foreign-config hit is bannered and never reached while an own-account answer exists; a null `readdir` yields an incomplete fallback rather than an absence; the memo re-validates with one stat and re-ladders when its winner disappears |
+| D4 | each rung wins in its own fixture, including a fixture per adjacent exact-rung pair (1v2, 2v3, 3v4) with BOTH candidates present, so evaluation order — not just label presence — is what the test pins; the registry-workdir rungs rescue a live session whose cwd moved; the glob rung dedupes identical `(size, mtimeMs)` candidates; a foreign-config hit is bannered and never reached while an own-account answer exists; a null `readdir` yields an incomplete fallback rather than an absence; rung 6 is refused (and the answer falls through incomplete) when rung 5's own-account glob could not run at all; the memo re-validates with one stat and re-ladders when its winner disappears |
 
 Every behavior above is proved by a test before it is written, the whole diff is mutation-swept with
 literal mutants, and the cross-package drift pins must stay green: `whitelist-subset` (whose
