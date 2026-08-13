@@ -624,6 +624,74 @@ describe('fleet store', () => {
     });
   });
 
+  // Build 4, Task 11, spec §4.2: additive on the same terms as `runs` above —
+  // an already-deployed PWA drops this frame silently, and this build accepts
+  // it once it knows the shape. `coordFrameSeen` is `runsFrameSeen`'s own
+  // sticky idiom, restated for the marker readout `CoordBanner` renders.
+  describe('the `coord` frame', () => {
+    it('accepts a well-formed coord frame and stores it', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+      lastSocket().message(JSON.stringify({ type: 'coord', coord: { pause: 'set', mail: 'clear' } }));
+      expect(store.getState().coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect(store.getState().coordFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('rejects a coord frame whose `coord` is missing or not an object — dropped silently, never thrown', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'coord' }))).not.toThrow();
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'coord', coord: null }))).not.toThrow();
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'coord', coord: 'set' }))).not.toThrow();
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+      store.getState().disconnect();
+    });
+
+    it('stays sticky across a GENUINE reconnect — a fresh socket, not just a re-fired open event — never reset the way `sessions`/`runs` never are either', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'coord', coord: { pause: 'set', mail: 'clear' } }));
+      expect(store.getState().coordFrameSeen).toBe(true);
+
+      // `disconnect()` then `connect()` — the same idiom the "connects
+      // without ?since=" test above uses to prove a real resume — tears down
+      // the old socket and asks `makeSocket` for a NEW one (`FakeSocket`'s own
+      // instance-tracking array proves it: `lastSocket()` after this returns
+      // a DIFFERENT object). A `coord.pause`/`coord.mail` reset hiding in
+      // EITHER `connect()`'s own init state OR `disconnect()`'s teardown would
+      // both be caught here, not only a reset inside the `onOpen` handler a
+      // same-socket re-fire would exercise on its own. The server only
+      // re-sends `coord` when the value actually CHANGES (`emitCoord`'s own
+      // byte-equality guard), so a reconnect that lands before the next
+      // change must not un-flip a flag `CoordBanner` relies on to decide
+      // whether to render at all.
+      const firstSocket = lastSocket();
+      store.getState().disconnect();
+      store.getState().connect();
+      expect(lastSocket()).not.toBe(firstSocket);
+      lastSocket().open();
+
+      expect(store.getState().coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect(store.getState().coordFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+  });
+
   // Review finding 18: `feed` used to have exactly two producers — the
   // catch-up tail (volatile: the mark it reads advances one-way at receipt,
   // so a reload landing after the tail already ran sees nothing left to ask

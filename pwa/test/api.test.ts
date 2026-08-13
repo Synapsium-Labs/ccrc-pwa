@@ -199,6 +199,134 @@ describe('PR lifecycle (Task 13)', () => {
   });
 });
 
+// Task 11 review, Important 2: `CoordBanner` always takes its `coordPause`
+// prop INJECTED in `coord-banner.test.tsx`, so the real `api.coordPause`
+// method — the one every shipped tap of the button actually calls — was
+// exercised by nothing anywhere in the suite. This pins its URL and body in
+// the same idiom every other write above already uses (`prompt`, `prOpen`,
+// `workspaceReap`), so a change to the path or the body key ships as a red
+// test rather than a live 400 the first time someone taps Pause.
+describe('coordPause (Task 11, spec §4.2)', () => {
+  it('POSTs {paused} as JSON to /api/coord/pause', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, requested: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.coordPause(true);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/pause');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ paused: true });
+  });
+
+  it('carries paused:false for a resume, the same route, no separate verb', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, requested: false }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.coordPause(false);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/pause');
+    expect(JSON.parse(init.body as string)).toEqual({ paused: false });
+  });
+
+  it('throws ApiError on a non-2xx response — e.g. the 501 an old ccd answers', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(501, { ok: false, error: 'unsupported' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.coordPause(true).then(
+      () => { throw new Error('expected coordPause to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(501);
+  });
+});
+
+// Task 12 review lesson (Task 11's own review, applied ahead of time):
+// `AbandonSheet` always takes its `abandonRun` prop INJECTED in
+// `abandon-sheet.test.tsx`'s copy/refusal cases, so the real `api.abandonRun`
+// — the one the production sheet's default prop value actually calls — needs
+// its own pin here, same idiom as `coordPause` just above (`archive`/
+// `restore`'s own "no body" idiom too: the server route reads no body at
+// all, D-B4-7).
+describe('abandonRun (Task 12, spec §4.3)', () => {
+  it('POSTs to /api/runs/:id/abandon with no body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 3, state: 'failed' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.abandonRun(3);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/runs/3/abandon');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('throws ApiError on a non-2xx response — e.g. the 409 bad-transition for an already-closed run', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(409, { ok: false, error: 'bad-transition', from: 'done', to: 'failed' }),
+    );
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.abandonRun(3).then(
+      () => { throw new Error('expected abandonRun to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual({ ok: false, error: 'bad-transition', from: 'done', to: 'failed' });
+  });
+});
+
+// Task 13 review lesson (Task 11/12's own reviews, applied here ahead of
+// time): `StartProgramSheet` always takes its `createSession`/`prompt` props
+// INJECTED in `start-program.test.tsx`'s copy/refusal cases, so the real
+// `api.createSession` — the one the production sheet's default prop value
+// actually calls — needs its own pin here, same idiom as `coordPause`/
+// `abandonRun` above. `prompt`'s own pin already exists at the top of this
+// file.
+describe('createSession (Task 13)', () => {
+  it('POSTs {wrapper, project, workdir} to /api/sessions', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'ccrc-pwa', workdir: '/w' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude', project: 'ccrc-pwa', workdir: '/w' });
+  });
+
+  it('omits workdir from the body when not passed', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'ccrc-pwa' });
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude', project: 'ccrc-pwa' });
+  });
+
+  it('throws ApiError on a non-2xx response — e.g. the 400 for a malformed request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(400, { ok: false, error: 'bad-request' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.createSession({ wrapper: 'claude', project: '' }).then(
+      () => { throw new Error('expected createSession to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(400);
+  });
+});
+
 // svc's round-4 residual, and the one composition hazard the fix creates.
 //
 // `apiErrorText` now maps a `body.error` CODE to a sentence when there is no

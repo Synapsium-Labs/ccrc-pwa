@@ -16,17 +16,20 @@
 //   - the RENDER proves a real element still carries the class, which is what
 //     a rule with no matching element would silently stop doing.
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { FleetSession, MailSummary, PrState, RunSummary, WsAudit } from '../../shared/api';
+import type { CoordStatus, FleetSession, MailSummary, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
+import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { MailScreen } from '../src/screens/MailScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
+import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
+import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import { MailStrip } from '../src/session/MailStrip';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
@@ -91,6 +94,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   openedAt: Date.now() - 1_000_000, dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,
 });
+
+const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
 
 const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: Date.now() - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
@@ -211,11 +216,13 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the thirteen on the token, never a bare 44px literal', () => {
+  it('keeps every one of the eighteen on the token, never a bare 44px literal', () => {
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
     // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,
-    // `.runs-back`, `.run-row`, `.run-open`) and Task 6 (`.mail-strip-head`)
+    // `.runs-back`, `.run-row`, `.run-open`), Task 6 (`.mail-strip-head`),
+    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`), Task 12
+    // (`.run-abandon`) and Task 13 (`.program-start-door`, `.program-start-go`)
     // join the same loop rather than getting their own — one place where
     // "every floored rule stays on the token" is checked, not a second copy
     // of the assertion per branch.
@@ -227,6 +234,9 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.fleet-runs-row'), ruleIn(fleetCss, '.runs-back'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(chatCss, '.mail-strip .mail-strip-head'),
+      ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
+      ruleIn(fleetCss, '.run-row .run-abandon'),
+      ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -324,6 +334,26 @@ describe('.run-row and .run-open — every row on the run board', () => {
   });
 });
 
+// — Build 4, Task 11: the pause banner's own toggle —
+
+describe('.coord-toggle — the pause banner’s own toggle', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered toggle actually carries, once a coord frame has landed', () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coordStatus({ pause: 'set' }), coordFrameSeen: true }); });
+    render(<CoordBanner store={store} />);
+    expect(screen.getByRole('button')).toHaveClass('coord-toggle');
+  });
+  // The banner's own "frame not yet seen" gate (`CoordBanner.tsx`) — before
+  // any `coord` frame has landed, there is no toggle to find at all.
+  it('renders no toggle before any coord frame has landed', () => {
+    render(<CoordBanner store={makeStore()} />);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
 // — Build 7, Task 6: the session mail strip's own collapsed head —
 
 describe('.mail-strip-head — the session mail strip’s door to its rows', () => {
@@ -333,5 +363,58 @@ describe('.mail-strip-head — the session mail strip’s door to its rows', () 
   it('is the class the rendered head control actually carries', () => {
     render(<MailStrip mail={[mailItem()]} />);
     expect(screen.getByRole('button', { expanded: false })).toHaveClass('mail-strip-head');
+  });
+});
+
+// — Build 4, Task 12: the run row's own abandon control (spec §4.3, D-B4-14) —
+
+describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
+  it('is at least one tap tall AND wide, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.run-row .run-abandon'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.run-row .run-abandon'), 'min-width')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered row control actually carries', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
+  });
+  // D-B4-14's own reason for existing: an inert row (no session, so no
+  // .run-open) still gets the control — that IS the wedge shape.
+  it('is present on an inert row too, where .run-open is absent', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
+  });
+});
+
+// — Build 4, Task 13: the run board's own door onto a new program, and the
+// start-a-program sheet's own confirm control (spec §4.4) —
+
+describe('.program-start-door — the only door onto a new program', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered footer control actually carries', () => {
+    const store = makeStore();
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+  });
+});
+
+describe('.program-start-go — the sheet’s own confirm control', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered confirm button actually carries', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
+    });
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
+    expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');
   });
 });

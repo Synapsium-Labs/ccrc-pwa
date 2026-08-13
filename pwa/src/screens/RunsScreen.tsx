@@ -35,6 +35,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
 import { RUN_GLYPH, RUN_WORD, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { AbandonSheet } from '../fleet/AbandonSheet';
+import { CoordBanner } from '../fleet/CoordBanner';
+import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { formatAge } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -66,6 +69,7 @@ function RunRow({
   run,
   nowSec,
   session,
+  onAbandon,
 }: {
   run: RunSummary;
   nowSec: number;
@@ -74,6 +78,8 @@ function RunRow({
    *  it yet). Looked up by the caller so this component stays a pure
    *  renderer of the one row it owns. */
   session: FleetSession | null;
+  /** Opens the AbandonSheet for this row (Task 12, spec §4.3, D-B4-14). */
+  onAbandon: (run: RunSummary) => void;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -109,16 +115,36 @@ function RunRow({
       )}
     </>
   );
+  // The abandon control, D-B4-14: a SIBLING of `.run-open` inside the `<li>`,
+  // never nested inside it — `RunsScreen.tsx:118-122` (pre-fix) wrapped the
+  // whole row body in `<button className="run-open">`, and a `<button>`
+  // inside a `<button>` is invalid HTML and unreachable to a screen reader.
+  // It renders on EVERY row, including the inert (no-session) one just below
+  // — an inert row is exactly the wedge shape (`ambiguous-dispatch`, a
+  // `planned` run with no session) this control exists to release
+  // (`abandon-sheet.test.tsx`'s own pin on that case).
+  const abandonButton = (
+    <button
+      type="button"
+      className="run-abandon"
+      aria-label={`Abandon run ${run.id}`}
+      onClick={() => onAbandon(run)}
+    >
+      Abandon
+    </button>
+  );
+
   // A run with no session has nothing to open. An inert row says that; a
   // button that navigates to a session that does not exist says something
   // false.
   return run.sessionId === null
-    ? <li className="run-row" data-inert="true">{body}</li>
+    ? <li className="run-row" data-inert="true">{body}{abandonButton}</li>
     : (
       <li className="run-row">
         <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
           {body}
         </button>
+        {abandonButton}
       </li>
     );
 }
@@ -146,6 +172,18 @@ export function RunsScreen({
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
+
+  // Task 12, spec §4.3: which run's AbandonSheet is open, or `null`. ONE
+  // sheet at screen level, reused across rows — the same shape
+  // `SessionActionsSheet`'s single actions sheet uses rather than mounting
+  // one sheet per row.
+  const [abandonTarget, setAbandonTarget] = useState<RunSummary | null>(null);
+
+  // Task 13, spec §4.4: the run board's own door onto a new program. ONE
+  // door, rendered unconditionally below — including at zero runs, the same
+  // "renders at zero runs too" rule `.fleet-runs-row` already holds one
+  // screen over.
+  const [startOpen, setStartOpen] = useState(false);
 
   // Held in a ref, not the effect's own dependency array — the same fix
   // `MailScreen` already applies to `loadFeed`: "once per mount" has to hold
@@ -276,6 +314,7 @@ export function RunsScreen({
       run={run}
       nowSec={nowSec}
       session={run.sessionId === null ? null : sessionById.get(run.sessionId) ?? null}
+      onAbandon={setAbandonTarget}
     />
   );
 
@@ -299,6 +338,19 @@ export function RunsScreen({
           Reconnecting…
         </div>
       )}
+
+      {/* Task 11, spec §4.2: the coordination surface's own pause readout —
+          `/runs` and nowhere else (FleetScreen never mounts this). Renders
+          nothing until the first `{type:'coord'}` frame has arrived
+          (`CoordBanner`'s own `coordFrameSeen` gate). */}
+      <CoordBanner store={store} />
+
+      {/* Task 13, spec §4.4: ONE door, rendered here regardless of the
+          board's own state below — a program starts before any run exists
+          to show. */}
+      <button type="button" className="program-start-door" onClick={() => setStartOpen(true)}>
+        Start a program
+      </button>
 
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not
@@ -375,6 +427,14 @@ export function RunsScreen({
           ) : null}
         </>
       )}
+
+      {/* Task 12, spec §4.3: `onDone` re-runs the screen's own `loadCold()`
+          (Step 5) so an abandoned run moves into Finished — the live frame's
+          own vanish-diff (above) also fires for the same close, and both
+          landing is harmless because they feed separate slices (`active`
+          from `live`, `finished` from `cold`, never merged). */}
+      <AbandonSheet run={abandonTarget} onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
+      <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store} />
     </div>
   );
 }

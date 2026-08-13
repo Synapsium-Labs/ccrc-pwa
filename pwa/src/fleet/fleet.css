@@ -1586,7 +1586,16 @@
    `.run-row`. */
 .run-row .run-open {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
-  width: 100%; min-height: var(--tap-min); padding: 0;
+  /* Task 12 review, Minor 3 (fix round 1): NOT `width: 100%` — `.run-row`
+     grew a SIBLING (`.run-abandon`, D-B4-14, below), and `.run-open` claiming
+     the row's full width forced that sibling onto its own flex line on
+     EVERY row, roughly doubling every row's height on the primary board.
+     `flex: 1 1 auto` + `min-width: 0` lets `.run-open` take the free space
+     next to `.run-abandon` (which stays `flex: none`) so both controls share
+     one line at ordinary phone widths, wrapping only if the row's own
+     content genuinely overflows — `fleet-css.test.ts` pins the absence of
+     `width: 100%` here so this cannot regress silently. */
+  flex: 1 1 auto; min-width: 0; min-height: var(--tap-min); padding: 0;
   background: none; border: 0; cursor: pointer; text-align: left;
   color: var(--ink-primary); font: inherit;
 }
@@ -1596,3 +1605,213 @@
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
+/* Task 12, spec §4.3, D-B4-14: a SIBLING of `.run-open` inside `.run-row`'s
+   own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
+   why a nested button is the defect this shape avoids. Self-grounded via
+   `.run-row` (above, background+color both set), same nested idiom as
+   `.run-row .run-glyph`/`.run-row .run-state` a few lines up — a run row is
+   a record of a lifecycle position, not a living pane, so this control gets
+   no --glow/animation/box-shadow either (`fleet-css.test.ts`'s "runs are not
+   living panes"). */
+.run-row .run-abandon {
+  flex: none;
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: none;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-sm);
+  color: var(--ink-tertiary);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.run-row .run-abandon:active { transform: scale(0.94); color: var(--ink-secondary); }
+
+/* ------------------------------------------------------------------ *
+ *  Coord banner — the pause readout and its toggle (Task 11, spec      *
+ *  §4.2). Lives on /runs only, above the groups. A paused fleet is a   *
+ *  STATE, not a living pane: no --glow, no animation, no box-shadow    *
+ *  anywhere under .coord-* — the same rule "runs are not living panes" *
+ *  already holds a few rules up, one screen over.                      *
+ * ------------------------------------------------------------------ */
+.coord-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+/* Same nested idiom as `.run-row .run-glyph` a few rules up, against the
+   identical --bg-surface ground — the quiet cue, never the only cue. */
+.coord-banner .coord-glyph { color: var(--ink-tertiary); flex: none; }
+.coord-word { flex: 1; min-width: 0; }
+/* Same self-grounded pair as `.sess-actions`/`.proj-card-add` — bg-raised
+   fill, edge-subtle hairline, ink-secondary ink — not reinvented. */
+.coord-toggle {
+  flex: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.coord-toggle:active { transform: scale(0.96); }
+.coord-toggle:disabled { cursor: default; }
+/* Named-ancestor descendant of `.coord-banner` (self-grounded, above) — same
+   idiom as `.coord-banner .coord-glyph` a few lines up — so `design/audit.mjs`
+   can actually recover a ground for this pair and measure it, rather than
+   filing it under `uncovered` the way a bare `.coord-error { color: … }`
+   selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
+   5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
+   until this selector named its ancestor). */
+.coord-banner .coord-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--status-dead-text);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Abandon sheet — the run board's release valve (Task 12, spec §4.3). *
+ *  No --glow, no animation, no box-shadow anywhere under .abandon-* —  *
+ *  a wedged run being released is a decision, not a living pane,      *
+ *  same discipline as the coord banner and the run rows above.       *
+ * ------------------------------------------------------------------ */
+/* Self-grounded (sets its own color AND background — the same pairing
+   `.coord-banner` uses just above), so `.abandon-sheet .abandon-error`
+   below is a named-ancestor DESCENDANT `design/audit.mjs` can actually
+   recover a ground for and measure, rather than a bare `.abandon-error {
+   color: … }` selector it would file under `uncovered` (the exact defect
+   `.coord-banner .coord-error`'s own docstring names and fixes, one
+   component over). `.qc-consequence`/`.qc-actions`/`.btn-primary`/
+   `.btn-ghost` (primitives.css) are reused as-is for the consequence line
+   and the two buttons — not reinvented, and already carry their own
+   `var(--tap-min)` floor. */
+.abandon-sheet {
+  display: grid;
+  gap: var(--sp-3);
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+/* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
+   `.coord-banner .coord-error` already uses (6.80:1 DARK / 5.73:1 LIGHT,
+   tokens.css's own comment), reused rather than a third rule re-deriving
+   the same ratio. */
+.abandon-sheet .abandon-error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--status-dead-text);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Start-a-program sheet — the run board's own door onto a new       *
+ *  program (Task 13, spec §4.4, D-B4-18/19). Composition, not a      *
+ *  compound route — see StartProgramSheet.tsx's own header. Opening  *
+ *  a program is a decision, not a living pane: no --glow, no         *
+ *  animation, no box-shadow anywhere under .program-start-*, same    *
+ *  discipline as the coord banner and the abandon sheet above.       *
+ * ------------------------------------------------------------------ */
+/* Same self-grounded pair as `.coord-toggle`/`.sess-actions` — bg-raised
+   fill, edge-subtle hairline, ink-secondary ink — not reinvented.
+   NO `flex: none` (review M6): it came across with the copy from
+   `.coord-toggle`, which sits in `.coord-banner`, a flex row. This door's own
+   parent is `.runs-screen` (`display: grid`, above), where a flex shorthand
+   is inert — a declaration that reads as load-bearing and decides nothing.
+   Pinned by `fleet-css.test.ts` so it cannot drift back in with the next
+   copy-paste. */
+.program-start-door {
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.program-start-door:active { transform: scale(0.96); }
+
+/* Self-grounded (sets its own color AND background — the same pairing
+   `.abandon-sheet`/`.coord-banner` use above), so every
+   `.program-start-sheet .program-start-*` rule below is a named-ancestor
+   DESCENDANT `design/audit.mjs` can recover a ground for and measure,
+   rather than a bare `.program-start-error { color: … }` selector it would
+   file under `uncovered`. */
+.program-start-sheet {
+  display: grid;
+  gap: var(--sp-2);
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+/* `--ink-tertiary` on `--bg-surface` — 5.77:1 DARK / 5.70:1 LIGHT
+   (tokens.css's own comments), clearing the 4.5 body floor: the informational
+   lines (the ledger path, and the "the run row arrives later" note), never a
+   claim of any kind. */
+.program-start-sheet .program-start-ledger,
+.program-start-sheet .program-start-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
+/* `--ink-secondary` on `--bg-surface` — 8.67:1 DARK / 7.41:1 LIGHT: the
+   D-B4-18 timeout copy is deliberately NOT the refusal red below — the
+   create almost certainly succeeded, the board just hasn't shown it yet, and
+   colouring "likely fine" the same as "refused" would be the false claim
+   this copy exists to avoid. */
+.program-start-sheet .program-start-timeout {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-secondary);
+}
+/* `--status-attention-text` on `--bg-surface` — 10.09:1 DARK / 5.92:1 LIGHT:
+   the pause warning, spec §4.4's own "warns and does not block" — caution,
+   not a hard stop, so it does not share the refusal red below either. */
+.program-start-sheet .program-start-warn {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--status-attention-text);
+}
+/* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
+   `.coord-banner .coord-error`/`.abandon-sheet .abandon-error` already use
+   (6.80:1 DARK / 5.73:1 LIGHT), reused rather than a fifth rule re-deriving
+   the same ratio. Three genuine refusals share this register: D-B4-19 (a
+   session already running), D-B4-11 (nothing placeable) and an ordinary
+   create failure. */
+.program-start-sheet .program-start-existing,
+.program-start-sheet .program-start-refuse,
+.program-start-sheet .program-start-error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--status-dead-text);
+}
+/* Same self-grounded pair as `.program-start-door` above — not reinvented. */
+.program-start-go {
+  min-height: var(--tap-min);
+  width: 100%;
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.program-start-go:active:not(:disabled) { transform: scale(0.98); }
+.program-start-go:disabled { cursor: default; }

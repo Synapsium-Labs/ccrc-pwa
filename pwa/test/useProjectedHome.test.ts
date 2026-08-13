@@ -47,4 +47,52 @@ describe('useProjectedHome', () => {
     await act(() => new Promise<void>((r) => setTimeout(r, 0)));
     expect(result.current).toBeUndefined();
   });
+
+  // Review fix round 1, Minor 2 (Task 13): `active` gates the poll for a
+  // caller (`StartProgramSheet`) mounted unconditionally at screen level,
+  // the same shape `useDisabledWrappers`'s own `active` param already
+  // covers one function down in the source file.
+  describe('active (Task 13 review fix round 1, Minor 2)', () => {
+    it('defaults to true — every pre-existing caller (no argument) keeps polling exactly as before', () => {
+      const accounts = vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+      renderHook(() => useProjectedHome());
+      expect(accounts).toHaveBeenCalledTimes(1);
+    });
+
+    it('never calls /api/accounts while inactive', async () => {
+      const accounts = vi.spyOn(api, 'accounts').mockResolvedValue({
+        accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
+      });
+      renderHook(() => useProjectedHome(false));
+      await act(() => new Promise<void>((r) => setTimeout(r, 0)));
+      expect(accounts).not.toHaveBeenCalled();
+    });
+
+    it('renders undefined while inactive — never the server\'s own null, which it never asked for', async () => {
+      vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
+      const { result } = renderHook(() => useProjectedHome(false));
+      await act(() => new Promise<void>((r) => setTimeout(r, 0)));
+      expect(result.current).toBeUndefined();
+    });
+
+    it('starts polling the moment active flips true, and stops the moment it flips back', async () => {
+      const accounts = vi.spyOn(api, 'accounts').mockResolvedValue({
+        accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
+      });
+      const { result, rerender } = renderHook(({ active }) => useProjectedHome(active), {
+        initialProps: { active: false },
+      });
+      expect(accounts).not.toHaveBeenCalled();
+
+      rerender({ active: true });
+      await waitFor(() => expect(result.current).toEqual({ wrapper: 'claude', score: 5 }));
+      expect(accounts).toHaveBeenCalledTimes(1);
+
+      rerender({ active: false });
+      expect(result.current).toBeUndefined();
+      const callsAtDeactivation = accounts.mock.calls.length;
+      await act(() => new Promise<void>((r) => setTimeout(r, 0)));
+      expect(accounts).toHaveBeenCalledTimes(callsAtDeactivation); // no further poll once inactive
+    });
+  });
 });
