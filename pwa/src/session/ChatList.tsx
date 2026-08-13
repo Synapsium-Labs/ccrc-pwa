@@ -290,12 +290,16 @@ function ChatItemView({
   id,
   onRetry,
   onDiscard,
+  askPending,
+  onAnswer,
 }: {
   item: ChatItem;
   /** Session id — threaded down to clip thumbnails (`clipUrl(id, name)`). */
   id: string;
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
+  askPending?: boolean;
+  onAnswer?: () => void;
 }): ReactNode {
   switch (item.kind) {
     case 'divider':
@@ -303,7 +307,9 @@ function ChatItemView({
     case 'message':
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} />;
     case 'tool':
-      return <ToolCard use={item.use} result={item.result} />;
+      return (
+        <ToolCard use={item.use} result={item.result} askPending={askPending} onAnswer={onAnswer} />
+      );
     case 'mail':
       return <MailCard envelope={item.envelope} />;
     case 'pending':
@@ -322,6 +328,13 @@ export interface ChatListProps {
   busy?: boolean;
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
+  /** The session is holding a live `ask` OR `dialog` (spec §2.3). One of the
+   *  two sources the ask card's state axis is derived from; the other is the
+   *  card's own `tool_result`. */
+  askPending?: boolean;
+  /** Raise the answer sheet. The transcript never answers anything itself —
+   *  `EnvelopeSheet` stays the one hardened sender. */
+  onAnswer?: () => void;
 }
 
 /** Plain-list renderer — the virtual list's item model without the viewport
@@ -333,13 +346,22 @@ export function ChatListInner({
   busy = false,
   onRetry,
   onDiscard,
+  askPending,
+  onAnswer,
 }: ChatListProps): ReactNode {
   const items = buildChatItems(events, pending, busy);
   return (
     <div className="chat-inner">
       {items.map((item) => (
         <div key={item.key} className="chat-item">
-          <ChatItemView item={item} id={id} onRetry={onRetry} onDiscard={onDiscard} />
+          <ChatItemView
+            item={item}
+            id={id}
+            onRetry={onRetry}
+            onDiscard={onDiscard}
+            askPending={askPending}
+            onAnswer={onAnswer}
+          />
         </div>
       ))}
     </div>
@@ -353,6 +375,8 @@ export function ChatList({
   busy = false,
   onRetry,
   onDiscard,
+  askPending,
+  onAnswer,
 }: ChatListProps): ReactNode {
   const items = useMemo(
     () => buildChatItems(events, pending, busy),
@@ -373,7 +397,14 @@ export function ChatList({
           if (!item) return null;
           return (
             <div className="chat-item">
-              <ChatItemView item={item} id={id} onRetry={onRetry} onDiscard={onDiscard} />
+              <ChatItemView
+                item={item}
+                id={id}
+                onRetry={onRetry}
+                onDiscard={onDiscard}
+                askPending={askPending}
+                onAnswer={onAnswer}
+              />
             </div>
           );
         }}

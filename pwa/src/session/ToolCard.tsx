@@ -171,6 +171,54 @@ function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
   );
 }
 
+/**
+ * The ask card's three-state axis (Build 4 Task 18, spec §2.3's table),
+ * derived from TWO sources at once — this card's own `result`, and whether the
+ * session is holding a live envelope at all.
+ *
+ * `unanswered` is the member that earns its keep: before it, a question the
+ * session moved past — or died holding — rendered the same as one the agent is
+ * blocked on right now. A dead session must not beg forever, so the word for
+ * "no answer ever came" is not the word for "waiting for you".
+ */
+export type AskState = 'awaiting' | 'unanswered' | 'answered';
+
+/** Total `Record`s over `AskState`, never a raw index — `runWords.ts`'s stated
+ *  rule, one directory over. Totality is not decorative here: `askState`
+ *  returns an `AskState` and the row below looks the word and glyph up BY THAT
+ *  VALUE, so a member missing from either table is a compile error rather than
+ *  an `undefined` painted onto the card. The `answered` entries are the arm
+ *  that renders TODAY'S card (the answers themselves are the cue), so their
+ *  copy is never shown — they exist because the lookup is typed. */
+export const ASK_WORD: Record<AskState, string> = {
+  awaiting: 'waiting for you',
+  unanswered: 'unanswered',
+  answered: 'answered',
+};
+export const ASK_GLYPH: Record<AskState, string> = {
+  awaiting: '❯',
+  unanswered: '·',
+  answered: '✓',
+};
+
+/** The class that carries each state's cue. `.ask-live` is the ONE rule in
+ *  this stylesheet permitted a live cue, and it is named by name in the
+ *  no-glow scan's exclusion (`ask-live.test.tsx`). */
+const ASK_STATE_CLASS: Record<AskState, string> = {
+  awaiting: 'ask-live',
+  unanswered: 'ask-unanswered',
+  answered: 'ask-answered',
+};
+
+/** THE RESULT WINS. `askPending` is a SESSION-wide fact — the store holds an
+ *  ask or a dialog — and says nothing about which question it belongs to. A
+ *  card whose own `tool_result` has landed is answered whatever else the
+ *  session is now asking, or a later ask would reopen an older card. */
+export function askState(result: ToolResultEvent | undefined, askPending: boolean): AskState {
+  if (result !== undefined) return 'answered';
+  return askPending ? 'awaiting' : 'unanswered';
+}
+
 /** An asked question, read as one: every question the ask put, each with its own
  *  answer once they land. No expander over the questions — unlike a tool call
  *  there is no hidden payload worth a tap; the questions and their answers are
@@ -182,12 +230,21 @@ function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
 function AskCard({
   questions,
   result,
+  askPending = false,
+  onAnswer,
 }: {
   questions: string[];
   result?: ToolResultEvent;
+  /** The session is holding a live `ask` OR `dialog` — spec §2.3's second
+   *  derivation source. Both shapes are hosted by the same sheet, so both
+   *  make this card answerable. */
+  askPending?: boolean;
+  /** Raise the answer sheet. NOT an answer — see the state row below. */
+  onAnswer?: () => void;
 }): ReactNode {
   const answers =
     result !== undefined && !result.isError ? askAnswers(result.text, questions) : null;
+  const state = askState(result, askPending);
   return (
     <div className="tool-ask">
       {questions.map((question, i) => (
@@ -199,6 +256,36 @@ function AskCard({
           {(answers?.[i] ?? '') !== '' && <span className="tool-ask-a">{answers?.[i]}</span>}
         </div>
       ))}
+      {/* `answered` renders exactly as it did before this build — the answers
+          above, or the outcome row below, ARE its cue. Only the two states
+          with no result get a word of their own. */}
+      {state !== 'answered' && (
+        <p className={`ask-state ${ASK_STATE_CLASS[state]}`}>
+          <span className="ask-glyph" aria-hidden="true">{ASK_GLYPH[state]}</span>
+          <span className="ask-word">{ASK_WORD[state]}</span>
+          {/* ONE CONTROL, ONE MEANING: `Answer` does not answer. It raises
+              `EnvelopeSheet` — the one hardened answer path (`inject/ask.ts`'s
+              `askKey` correspondence, `send.ts`'s settle-before-submit) — and
+              sends nothing itself. Build 7 D-2's rule applied where it would
+              be easiest to break, with a second mechanical reason: `ChatList`
+              is virtualized, so a row owning an in-flight answer could be
+              unmounted mid-send by an ordinary scroll.
+
+              Rendered only when there is a sheet to raise. A button whose
+              handler is absent would do nothing at all, which is worse than
+              no button. */}
+          {state === 'awaiting' && onAnswer !== undefined && (
+            <button
+              type="button"
+              className="ask-answer"
+              title="Open the answer sheet"
+              onClick={onAnswer}
+            >
+              Answer
+            </button>
+          )}
+        </p>
+      )}
       {result !== undefined && answers === null && <AskOutcome result={result} />}
     </div>
   );
@@ -207,13 +294,21 @@ function AskCard({
 export function ToolCard({
   use,
   result,
+  askPending,
+  onAnswer,
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
+  askPending?: boolean;
+  onAnswer?: () => void;
 }): ReactNode {
   if (use.name === 'AskUserQuestion') {
     const questions = askQuestions(use.input);
-    if (questions !== null) return <AskCard questions={questions} result={result} />;
+    if (questions !== null) {
+      return (
+        <AskCard questions={questions} result={result} askPending={askPending} onAnswer={onAnswer} />
+      );
+    }
   }
   return <GenericToolCard use={use} result={result} />;
 }

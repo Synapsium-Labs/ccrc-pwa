@@ -1488,6 +1488,57 @@ button.metachip:active {
 }
 
 /* ------------------------------------------------------------------ *
+ *  The ask card's state row (Build 4 Task 18, spec §2.3).             *
+ * ------------------------------------------------------------------ *
+ * NO-GLOW GOVERNANCE WITH ONE NAMED EXCEPTION — the
+ * `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `.ask-live` is the
+ * ONE rule under this prefix permitted a live cue, because it is the one
+ * state that IS live: the agent is blocked on this question right now.
+ * `.ask-unanswered` is a record of something that never happened and goes
+ * still, and `ask-live.test.tsx` scans every `.ask-` rule to keep the
+ * exception exactly one rule wide. */
+.ask-state {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-1) 0 0;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.ask-state .ask-glyph {
+  flex: none;
+}
+.ask-state.ask-live {
+  color: var(--status-attention-text);
+  /* The one live cue in this stylesheet, and the reason it is allowed: a
+     question the agent is blocked on is a LIVING state, not a record. */
+  text-shadow: var(--glow-attention);
+}
+.ask-state.ask-unanswered {
+  color: var(--ink-tertiary);
+}
+/* NOT a send. This button raises `EnvelopeSheet` — the one hardened answer
+   path — and does nothing else; see ToolCard.tsx's own comment at the
+   control. A real target, so it clears the tap floor. */
+.ask-answer {
+  margin-left: auto;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-ui);
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+.ask-answer:active {
+  background: var(--bg-surface);
+}
+
+/* ------------------------------------------------------------------ *
  *  Mail card — the machine's words, attributed (Build 4 Task 17).     *
  * ------------------------------------------------------------------ *
  * NO-GLOW GOVERNANCE, EXTENDED (spec §2.3): `/runs` banned --glow /
