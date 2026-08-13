@@ -21,7 +21,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MarkerState } from '../../../shared/api';
 import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD, markerState } from './coordWords';
-import { ApiError, api, apiErrorText } from '../lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
@@ -29,22 +29,28 @@ import './fleet.css';
 type Phase = 'idle' | 'pausing' | 'resuming' | 'unconfirmed';
 
 /** The 501/502 refusals render INLINE, in the banner itself — spec §4.2's own
- *  words, not `UNSUPPORTED_VERB_TEXT` (that constant is the *lifecycle
- *  routes'* sentence, a different one; this banner's own is the spec's
- *  literal phrase). `bad-request` (400) gets no bespoke string — the spec
+ *  words, held once in `COORD_UNSUPPORTED_TEXT` (`lib/api.ts`, review M2:
+ *  this file and `AbandonSheet`'s `ABANDON_COPY.unsupported` used to spell the
+ *  identical sentence as two separate literals). NOT `UNSUPPORTED_VERB_TEXT`
+ *  — that constant is the *lifecycle routes'* sentence, a deliberately
+ *  different third spelling argued for by name in its own docstring.
+ *  `bad-request` (400) gets no bespoke string — the spec
  *  says so explicitly ("no `bad-request` path worth a distinct string beyond
  *  the generic toast") — so that one path, and anything that is not even an
  *  `ApiError`, falls through to the ordinary global toast every other write
  *  in this app already uses. */
 function inlinePauseError(err: unknown): string | null {
   if (!(err instanceof ApiError)) return null;
-  if (err.status === 501) return 'the fleet host needs the newer ccd';
-  if (err.status === 502) {
-    const stderr = typeof err.body === 'object' && err.body !== null
-      ? (err.body as { stderr?: unknown }).stderr
-      : undefined;
-    return typeof stderr === 'string' && stderr.trim().length > 0 ? stderr.trim() : apiErrorText(err);
-  }
+  if (err.status === 501) return COORD_UNSUPPORTED_TEXT;
+  // Review, M1: this arm used to read `body.stderr` itself and fall back to
+  // `apiErrorText(err)` — but `apiErrorText` is ALREADY stderr-first
+  // (`lib/api.ts:149-160`, its own docstring: "prefer that"), so the extract-
+  // and-fallback was byte-equivalent to this one line and only looked like a
+  // second policy. What makes a 502 render INLINE is the status; what it
+  // SAYS is `apiErrorText`'s one decision, not a second copy of it.
+  // (`AbandonSheet`'s own 502 arm is NOT this shape and stays as it is — its
+  // fallback is `ABANDON_COPY['fleet-failed']`, a real second branch.)
+  if (err.status === 502) return apiErrorText(err);
   return null;
 }
 
@@ -85,6 +91,16 @@ export function CoordBanner({
   // an operator staring at "unconfirmed" for a genuinely-late frame deserves
   // to see it resolve, not stay stale forever.
   useEffect(() => {
+    // Review, M4: an inline refusal describes the tap that produced it, and a
+    // NEW `coord` frame is a fresh measurement of the very thing that refusal
+    // was about. Cleared only on the next tap, a 501 ("the fleet host needs
+    // the newer ccd") sat under a banner that had since flipped to "paused"
+    // off a real frame — two statements about one fleet that cannot both be
+    // current. Cleared here, the refusal lives exactly as long as the reading
+    // it belongs to. (Safe against the failure path itself: `coordPause`'s
+    // rejection sets `error` in a microtask; this effect runs only when
+    // `coord` actually changes identity, never merely because a tap failed.)
+    setError(null);
     if (wantedRef.current !== null && coord?.pause === wantedRef.current) {
       wantedRef.current = null;
       clearTimer();

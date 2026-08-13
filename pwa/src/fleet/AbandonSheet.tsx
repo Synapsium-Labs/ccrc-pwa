@@ -26,7 +26,7 @@ import type { ReactNode } from 'react';
 import { isRunState, type RunSummary } from '../../../shared/api';
 import { RUN_WORD } from './runWords';
 import { Sheet } from '../components/Sheet';
-import { ApiError, api } from '../lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
 import './fleet.css';
 
 /** The refusal vocabulary this sheet renders its OWN sentence for. A total
@@ -45,7 +45,11 @@ export const ABANDON_COPY: Record<
 > = {
   'unknown-run': 'that run is gone — the board will catch up',
   'bad-transition': 'this run already closed',
-  unsupported: 'the fleet host needs the newer ccd',
+  // Review, M2: this used to be a byte-identical literal of `CoordBanner`'s
+  // own 501 arm. One box, one skew, one sentence — see the constant's own
+  // docstring (`lib/api.ts`) for why it lives there and not in either
+  // component.
+  unsupported: COORD_UNSUPPORTED_TEXT,
   'fleet-failed': 'the release failed',
   unknown: 'the abandon was refused, for a reason this build does not recognise',
 };

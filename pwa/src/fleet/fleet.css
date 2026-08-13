@@ -1725,9 +1725,14 @@
  *  discipline as the coord banner and the abandon sheet above.       *
  * ------------------------------------------------------------------ */
 /* Same self-grounded pair as `.coord-toggle`/`.sess-actions` — bg-raised
-   fill, edge-subtle hairline, ink-secondary ink — not reinvented. */
+   fill, edge-subtle hairline, ink-secondary ink — not reinvented.
+   NO `flex: none` (review M6): it came across with the copy from
+   `.coord-toggle`, which sits in `.coord-banner`, a flex row. This door's own
+   parent is `.runs-screen` (`display: grid`, above), where a flex shorthand
+   is inert — a declaration that reads as load-bearing and decides nothing.
+   Pinned by `fleet-css.test.ts` so it cannot drift back in with the next
+   copy-paste. */
 .program-start-door {
-  flex: none;
   min-height: var(--tap-min);
   padding: 0 var(--sp-3);
   background: var(--bg-raised);

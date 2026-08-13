@@ -172,6 +172,49 @@ describe('the coord banner', () => {
     expect(document.querySelector('.toast')).toBeNull();
   });
 
+  // Whole-branch review, M1: the 502 arm used to extract `body.stderr` itself
+  // and fall back to `apiErrorText(err)` — but `apiErrorText` is ALREADY
+  // stderr-first (`lib/api.ts:149-160`), so the whole branch was byte-
+  // equivalent to `return apiErrorText(err)`. The stderr case above is the
+  // only one the suite exercised, which is why the redundancy could not be
+  // seen from the tests. This is the OTHER half of the branch: what makes a
+  // 502 inline is the STATUS, not the presence of stderr — deleting the arm
+  // drops this refusal into the ordinary toast, where a coordination write's
+  // failure is not what the banner is for.
+  it('renders a 502 with no stderr inline as well — the branch is the STATUS, not the stderr read (M1)', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
+    const coordPause = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, error: 'fleet-failed' }));
+    render(<><CoordBanner store={store} coordPause={coordPause} /><ToastHost /></>);
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText('fleet-failed')).toBeInTheDocument();
+    expect(document.querySelector('.coord-error')).not.toBeNull();
+    expect(document.querySelector('.toast')).toBeNull();
+  });
+
+  // Whole-branch review, M4: `error` was cleared only on the NEXT tap, so a
+  // 501/502 refusal stayed rendered under a banner that had since flipped to
+  // a different, freshly-measured state — the refusal describing a fleet the
+  // word above it no longer describes.
+  it('clears an inline refusal when a later coord frame lands — no stale 501 under a banner that has moved on (M4)', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
+    const coordPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    render(<CoordBanner store={store} coordPause={coordPause} />);
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText('the fleet host needs the newer ccd')).toBeInTheDocument();
+
+    // A real measurement arrives: the fleet IS paused now (someone else, or a
+    // box that has since been updated). The refusal above belonged to before.
+    act(() => { store.setState({ coord: coord({ pause: 'set' }) }); });
+
+    expect(screen.queryByText('the fleet host needs the newer ccd')).toBeNull();
+    expect(document.querySelector('.coord-error')).toBeNull();
+    expect(screen.getByText(MARKER_WORD.set)).toBeInTheDocument();
+  });
+
   it('a generic (non-501/502) failure falls through to the ordinary toast, not the inline banner', async () => {
     const store = makeStore();
     act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });

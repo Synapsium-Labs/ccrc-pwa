@@ -35,6 +35,7 @@ import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { accountLabel } from '../lib/accounts';
+import { markerState } from './coordWords';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -74,15 +75,44 @@ export const kickoff = (slug: string, title: string): string =>
 export const START_PROGRAM_WAIT_MS = 20_000;
 
 /** D-B4-18/19: the id `_id()` (`ccd/ccd:185`) would compute is never
- *  recomputed here — this matches on the two fields the server already
- *  reports for every session (`FleetSession.wrapper`/`.project`), the same
- *  pair `_id()` hashes together, not a re-derivation of the hash itself. */
+ *  recomputed here — this matches on fields the server already reports for
+ *  every session, never a re-derivation of the hash itself.
+ *
+ *  THREE conjuncts, not two (whole-branch review, C1). `wrapper`+`project`
+ *  alone is not the session `cmd_start` would collide with: `cmd_ws_add`
+ *  writes `project` AND a `_ws_least_loaded` wrapper onto every WORKSPACE row
+ *  (`ccd/ccd:1164+`), and `useProjectedHome`'s wrapper is the server's own
+ *  mirror of that same `_ws_least_loaded` (`server/src/limits.ts:96`) — so the
+ *  projected wrapper is exactly the wrapper workspaces cluster on, and a
+ *  two-field match hits a live worker on a box in its NORMAL state. It also
+ *  claimed something false: the id `_id()` computes for the projection is the
+ *  MAIN checkout's (`claude2-ccrc-pwa`), a different id, not alive, one
+ *  `cmd_start` would have spawned correctly. `FleetSession.workspace` is
+ *  server-reported and documented as "null for a project's main checkout"
+ *  (`shared/api.ts:35-37`), so it separates the two with NO id arithmetic —
+ *  D-B4-18's "never recompute the id" holds unchanged.
+ *
+ *  `liveOnly` is ASYMMETRIC between the two arms, deliberately:
+ *   * D-B4-19's refusal passes `true`. `cmd_start`'s idempotency test is
+ *     `_alive` (tmux has-session), whose wire mirror is `status !== 'dead'`;
+ *     a dead-but-unreaped row would otherwise refuse this sheet forever with
+ *     copy false on both clauses, and `ws-reap` is human-only-at-a-terminal
+ *     by contract, so there would be no way out from the phone.
+ *   * D-B4-18's wait passes `false`. `cmd_start` writes the registry fields
+ *     before tmux is necessarily up, so for a beat the session it just
+ *     created is reported `dead`; excluding it there would time out a wait on
+ *     a session that really did start. Not knowing yet is not "not there". */
 function existingSessionFor(
   sessions: readonly FleetSession[],
   wrapper: string,
   project: string,
+  { liveOnly }: { liveOnly: boolean },
 ): FleetSession | null {
-  return sessions.find((s) => s.wrapper === wrapper && s.project === project) ?? null;
+  return sessions.find((s) =>
+    s.wrapper === wrapper
+    && s.project === project
+    && s.workspace === null
+    && (!liveOnly || s.status !== 'dead')) ?? null;
 }
 
 /** `createSession`'s own refusals. 400 is a client-authored mistake (an
@@ -207,6 +237,22 @@ export function StartProgramSheet({
 
   useEffect(() => () => clearTimer(), []);
 
+  // Review, M3: `timedOut` is a statement about ONE attempt's target
+  // ("started `build9-demo` in ccrc-pwa on claude; the board hasn't shown it
+  // yet"), and it used to be reset only by `start()` and by close — so
+  // picking a different project left it rendered above a Start button aimed
+  // somewhere else, claiming that target had been started when it never had.
+  // Keyed on the two facts that NAME the target: the operator's project pick
+  // and the projection's wrapper. Not `projected` itself — that object is
+  // rebuilt by the accounts poll every 20 s, which would clear an honest
+  // timeout on a tick rather than on a change. `waitRef` is deliberately NOT
+  // touched here: the wait keeps watching for the session it really did start
+  // (D-B4-18, review fix round 1 Important 2) — only this SENTENCE, which has
+  // stopped being true of what is on screen, is withdrawn.
+  useEffect(() => {
+    setTimedOut(false);
+  }, [project?.workdir, projected?.wrapper]);
+
   // Sends the kickoff and navigates — the ONLY place either happens. `w.mine`
   // is checked again after the prompt call settles: a close during the
   // (short) prompt round-trip must not navigate a screen the operator is no
@@ -236,7 +282,10 @@ export function StartProgramSheet({
     // from inside `start()`, synchronously after `createSession` resolves,
     // before the closure that captured `sessions` has had a chance to
     // re-render with a fresher value.
-    const found = existingSessionFor(fleet.getState().sessions, w.wrapper, w.project);
+    // `liveOnly: false` — see `existingSessionFor`'s own docstring (C1): the
+    // registry row can be written a beat before tmux is up, and this wait
+    // must resolve on that later tick rather than give up on it.
+    const found = existingSessionFor(fleet.getState().sessions, w.wrapper, w.project, { liveOnly: false });
     if (found !== null) finish(found, w);
   };
 
@@ -257,9 +306,12 @@ export function StartProgramSheet({
   // "whenever the target changes" (a different project picked, or the
   // projection itself moving) falls out of React's own render cycle rather
   // than a second piece of state tracking the same fact.
+  // `liveOnly: true` — see `existingSessionFor`'s own docstring (C1): this arm
+  // exists because `cmd_start` re-attaches to a LIVE session, and a dead row
+  // it would happily respawn must not refuse the sheet.
   const existing =
     project !== null && projected != null
-      ? existingSessionFor(sessions, projected.wrapper, project.name)
+      ? existingSessionFor(sessions, projected.wrapper, project.name, { liveOnly: true })
       : null;
   // Review fix round 1, Important 2: `existing` alone cannot tell "someone
   // else's session is in the way" apart from "the session I just started
@@ -398,9 +450,26 @@ export function StartProgramSheet({
             </p>
           ) : (
             <>
-              {coord?.pause === 'set' && (
+              {/* Review, I1: read through `markerState`, the TOTAL door Task
+                  11 minted for this (`coordWords.ts:43`) — `coord.pause` is
+                  shape-validated at FRAME level only (`stores/fleet.ts`) and
+                  reaches a renderer as a raw string, so a `=== 'set'` test
+                  narrowed a distinction this component RECEIVED (the
+                  architecture doc's highest-yield rule) and stayed silent for
+                  `unmeasurable` — the ONE state where the coordinator is
+                  guaranteed to be refused at its first dispatch, and the one
+                  `CoordBanner` one element above already reports correctly.
+                  `coord !== null` is checked separately and first: that is
+                  the FOURTH, client-side state (no frame has arrived yet),
+                  and `markerState(undefined)` is `'unmeasurable'`, so wrapping
+                  `coord?.pause` alone would warn about a fleet nothing has
+                  reported anything about. Warns, never blocks — spec §4.4. */}
+              {coord !== null && markerState(coord.pause) !== 'clear' && (
                 <p className="program-start-warn">
-                  The fleet is paused — the coordinator will be refused at its first dispatch until it is resumed.
+                  {markerState(coord.pause) === 'set'
+                    ? 'The fleet is paused — the coordinator will be refused at its first dispatch until it is resumed.'
+                    : 'The registry could not be read — dispatch fails shut on that, so the coordinator '
+                      + 'would be refused at its first dispatch just as a pause refuses it.'}
                 </p>
               )}
               <p className="program-start-ledger">

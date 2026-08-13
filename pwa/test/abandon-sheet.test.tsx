@@ -17,8 +17,9 @@ import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { RunSummary } from '../../shared/api';
 import { AbandonSheet } from '../src/fleet/AbandonSheet';
+import { CoordBanner } from '../src/fleet/CoordBanner';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { ApiError } from '../src/lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -127,6 +128,38 @@ describe('AbandonSheet — the copy and the refusals', () => {
     render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
     fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
     expect(await screen.findByText('the fleet host needs the newer ccd')).toBeInTheDocument();
+  });
+
+  // Whole-branch review, M2: this sentence shipped as TWO byte-identical
+  // literals in source — `ABANDON_COPY.unsupported` here and
+  // `inlinePauseError`'s own 501 arm in `CoordBanner.tsx` — with
+  // `UNSUPPORTED_VERB_TEXT` (`lib/api.ts`) a third, DELIBERATELY different
+  // spelling for the lifecycle routes. The two coordination sites now read
+  // one constant. This renders BOTH surfaces at 501 and compares what the
+  // operator actually sees, so a re-inlined literal at either site is caught
+  // however it happens to be spelled — a per-file literal assertion (the two
+  // that already exist, one in each file) cannot see the pair drifting apart.
+  it('the two coordination surfaces render ONE 501 sentence, from one home (M2)', async () => {
+    const abandonRun = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    const fromSheet = (await screen.findByText(COORD_UNSUPPORTED_TEXT)).textContent;
+
+    cleanup();
+
+    const store = makeStore();
+    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear' }, coordFrameSeen: true }); });
+    const coordPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    render(<CoordBanner store={store} coordPause={coordPause} />);
+    fireEvent.click(screen.getByRole('button'));
+    const fromBanner = (await screen.findByText(COORD_UNSUPPORTED_TEXT)).textContent;
+
+    expect(fromSheet).toBe(fromBanner);
+    expect(fromSheet).toBe(COORD_UNSUPPORTED_TEXT);
+    // …and it stays DISTINCT from the lifecycle routes' own sentence: that
+    // third spelling is argued for by name in `lib/api.ts`'s own docstring,
+    // not drift, and collapsing the three into one is not what this pins.
+    expect(fromSheet).not.toBe(UNSUPPORTED_VERB_TEXT);
   });
 
   it("renders a 502's stderr verbatim and leaves the sheet open to retry", async () => {

@@ -16,7 +16,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import type { FleetSession } from '../../shared/api';
+import type { CoordStatus, FleetSession } from '../../shared/api';
 import { StartProgramSheet, kickoff, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
@@ -317,6 +317,65 @@ describe('StartProgramSheet', () => {
     expect(screen.getByRole('button', { name: /^start build9-demo/i })).not.toBeDisabled();
   });
 
+  // — Whole-branch review, I1: the warning reads `coord.pause` through
+  // `markerState`, the TOTAL door Task 11 minted for exactly this, not a raw
+  // `=== 'set'`. `coord` is shape-validated at FRAME level only
+  // (`stores/fleet.ts`), so `coord.pause` reaches this renderer as a raw
+  // string; `markerState` degrades anything it does not recognise to
+  // `unmeasurable`, never `clear`, mirroring `dispatchRun`'s own fail-shut.
+  // Reading it with `===` narrowed a distinction this component RECEIVED —
+  // and it silenced the one state where the coordinator is GUARANTEED to be
+  // refused at its first dispatch, while `CoordBanner` one element above was
+  // correctly saying so. —
+  it('warns for an UNMEASURABLE registry too — the one state dispatch is guaranteed to refuse (I1)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const store = makeStore();
+    act(() => { store.setState({ coord: { pause: 'unmeasurable', mail: 'clear' }, coordFrameSeen: true }); });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    const warn = await screen.findByText(/registry could not be read/i);
+    // It must not claim the fleet IS paused — that is a different measurement,
+    // and this one is precisely "we could not measure it".
+    expect(warn.textContent).not.toMatch(/is paused/i);
+    // Warns, never blocks — same posture as the `set` case above.
+    expect(screen.getByRole('button', { name: /^start build9-demo/i })).not.toBeDisabled();
+  });
+
+  it('warns for a MarkerState this build has never heard of — markerState degrades unknown to unmeasurable, never clear (I1)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const store = makeStore();
+    const fromNewerBuild = { pause: 'quarantined', mail: 'clear' } as unknown as CoordStatus;
+    act(() => { store.setState({ coord: fromNewerBuild, coordFrameSeen: true }); });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(/registry could not be read/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^start build9-demo/i })).not.toBeDisabled();
+  });
+
+  it('says NOTHING about the pause when no coord frame has arrived — absence is not a warning (I1)', async () => {
+    // The FOURTH, client-side state `CoordBanner`'s own header names: no
+    // `coord` frame has arrived this store instance's lifetime. `markerState
+    // (undefined)` is `'unmeasurable'`, so a naive `markerState(coord?.pause)
+    // !== 'clear'` wrap would warn here — about a fleet nothing has reported
+    // anything about yet.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    await screen.findByRole('button', { name: /^start build9-demo/i });
+    expect(screen.queryByText(/registry could not be read/i)).toBeNull();
+    expect(screen.queryByText(/fleet is paused/i)).toBeNull();
+    expect(document.querySelector('.program-start-warn')).toBeNull();
+  });
+
   it('renders unknown project as 400 copy and a spawn failure as its stderr', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession400 = vi.fn().mockRejectedValue(new ApiError(400, { ok: false, error: 'bad-request' }));
@@ -450,6 +509,113 @@ describe('StartProgramSheet', () => {
     fireEvent.click(await screen.findByRole('button', { name: /beta/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toBeInTheDocument();
     expect(screen.queryByText(/already running/i)).toBeNull();
+  });
+
+  // — Whole-branch review, C1: `wrapper`+`project` alone is not the target
+  // `cmd_start` would collide with. `cmd_ws_add` writes `project` AND a
+  // `_ws_least_loaded` wrapper onto every WORKSPACE row (`ccd/ccd:1164+`),
+  // and `useProjectedHome`'s wrapper is the server's own mirror of that same
+  // `_ws_least_loaded` (`server/src/limits.ts:96`) — so the projected wrapper
+  // is exactly the wrapper workspaces cluster on, and on a box running ~11
+  // sessions the D-B4-19 refusal fired for the fleet's NORMAL state, with no
+  // path forward from the phone. It was also false on the facts: the id
+  // `_id()` would compute for the projection is the MAIN checkout's, a
+  // different, not-alive id `cmd_start` would have spawned correctly.
+  //
+  // `FleetSession.workspace` is server-reported and documented as "null for a
+  // project's main checkout" (`shared/api.ts:35-37`), so it separates the two
+  // with NO id arithmetic — D-B4-18's "never recompute the id" still holds. —
+  it('does NOT refuse for a WORKSPACE session on the projected wrapper — only a main checkout is what cmd_start would collide with (C1)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const store = makeStore();
+    // The live registry's own shape, measured: workspace `ccrc-pwa-brisk-
+    // harbor` carries `project=ccrc-pwa`, the projected wrapper, and a
+    // non-null `workspace`.
+    act(() => {
+      store.setState({ sessions: [sess({
+        id: 'ccrc-pwa-brisk-harbor', wrapper: 'claude', project: 'ccrc-pwa', workspace: 'brisk-harbor',
+      })] });
+    });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /^start build9-demo on/i })).toBeInTheDocument();
+    expect(screen.queryByText(/already running/i)).toBeNull();
+    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+  });
+
+  it("does NOT refuse for a DEAD session — cmd_start's own idempotency test is `_alive`, and ws-reap is human-only (C1)", async () => {
+    // `cmd_start` re-attaches only when `_alive` (tmux has-session) says so;
+    // the wire's mirror of that is `status !== 'dead'`. A dead-but-unreaped
+    // row would otherwise refuse this sheet forever — and `ws-reap` is
+    // human-only-at-a-terminal by contract, so there is no way out from here.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const store = makeStore();
+    act(() => { store.setState({ sessions: [sess({ status: 'dead' })] }); });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /^start build9-demo on/i })).toBeInTheDocument();
+    expect(screen.queryByText(/already running/i)).toBeNull();
+  });
+
+  it("D-B4-18's own match carries NO liveness conjunct — a row written before tmux is up still resolves the wait (C1)", async () => {
+    // The asymmetry is deliberate and is the reason the two arms are not one
+    // predicate: `cmd_start` writes the registry fields before tmux is
+    // necessarily up, so for a beat the new session is reported `dead`. The
+    // D-B4-19 arm must ignore that row (above); the D-B4-18 arm must NOT, or
+    // the sheet times out on a session it successfully started.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    act(() => { store.setState({ sessions: [sess({ status: 'dead' })] }); });
+
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
+  // Whole-branch review, M3: `timedOut` described ONE attempt's target, but
+  // only `start()` and close ever reset it — so picking a different project
+  // left "Started — the board just hasn't shown it yet" sitting above a Start
+  // button aimed somewhere else entirely.
+  it('forgets a timeout when the target changes — "not shown yet" never sits above a Start aimed elsewhere (M3)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      createSession={async () => {}}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj(), proj({ name: 'MekWarLive', workdir: '/w/mek' })],
+      })} />);
+
+    await fillAndPick();
+    const go = await screen.findByRole('button', { name: /^start build9-demo/i });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(go);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1_000); });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /MekWarLive/i }));
+
+    await waitFor(() => expect(screen.queryByText(/board just hasn't shown it yet/i)).toBeNull());
   });
 
   // — Lesson 5 (Task 12's own review, applied here ahead of time): the sheet

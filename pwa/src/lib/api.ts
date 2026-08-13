@@ -93,18 +93,44 @@ export const clipUrl = (id: string, name: string): string =>
  * the reader who sees the greyed cap and the reader who taps Archive are
  * looking at one condition on one box.
  *
- * NOT the pause banner's own 501 text (`CoordBanner.tsx`'s
- * `inlinePauseError`, spec §4.2's own literal "the fleet host needs the newer
- * ccd"). That IS a third spelling of the same fact — a deliberate one, not
- * the drift this docstring used to argue against: the spec quotes its own
- * phrase verbatim and `coord-banner.test.tsx` pins it, so editing THIS
- * constant does not change what the pause banner renders. If a fourth route
- * ever needs the same refusal, prefer wiring it to whichever of the two
- * existing strings its own spec/test actually names, rather than assuming
- * this one is universal.
+ * NOT the COORDINATION surfaces' 501 text (`COORD_UNSUPPORTED_TEXT`, just
+ * below — spec §4.2's own literal "the fleet host needs the newer ccd").
+ * That IS a second spelling of the same fact — a deliberate one, not the
+ * drift this docstring used to argue against: the spec quotes its own phrase
+ * verbatim and `coord-banner.test.tsx` pins it, so editing THIS constant does
+ * not change what the pause banner or the abandon sheet renders.
+ *
+ * TWO constants, THREE call sites, and this names all three (review M2, which
+ * found the previous wording had reasoned about exactly this question and then
+ * listed only two of them, missing the one the same wave shipped):
+ *   1. lifecycle routes (`PrKeycap.tsx`'s `REASON_TEXT.unsupported`,
+ *      `PrSheet`'s archive/restore toasts) → THIS constant;
+ *   2. the pause banner (`CoordBanner.tsx`'s `inlinePauseError`) → and
+ *   3. the abandon sheet (`AbandonSheet.tsx`'s `ABANDON_COPY.unsupported`)
+ *      → both `COORD_UNSUPPORTED_TEXT`.
+ * If a fourth route ever needs the same refusal, wire it to whichever of the
+ * two its own spec/test actually names — neither is universal.
  */
 export const UNSUPPORTED_VERB_TEXT =
   'The fleet host is running a ccd that does not have this verb yet.';
+
+/**
+ * The same fact as `UNSUPPORTED_VERB_TEXT`, in the COORDINATION surfaces'
+ * words — spec §4.2's literal phrase, pinned verbatim by
+ * `coord-banner.test.tsx` and `abandon-sheet.test.tsx`.
+ *
+ * It lives here rather than in either component because it has TWO renderers
+ * and they are in different files: `CoordBanner`'s 501 arm and
+ * `AbandonSheet`'s `ABANDON_COPY.unsupported` shipped it as two byte-identical
+ * literals (review M2). One box, one skew, one sentence — a reader who taps
+ * Pause and a reader who taps Abandon on the same stale host must not be told
+ * two different things, and two literals is how that starts.
+ *
+ * Lower-case and un-terminated on purpose: both sites render it as inline
+ * refusal copy inside their own surface, not as a standalone sentence the way
+ * `UNSUPPORTED_VERB_TEXT` reaches a toast.
+ */
+export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
 
 /**
  * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),

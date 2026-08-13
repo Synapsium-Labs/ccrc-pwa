@@ -456,18 +456,46 @@ describe('the abandon sheet is not a living pane, and its own control is a real 
 // start-a-program sheet — same discipline "runs are not living panes" and the
 // coord banner/abandon sheet blocks above already hold.
 describe('the program-start door and sheet are not living panes, and every real target clears the tap floor', () => {
+  // Whole-branch review, M5: this gate was a HAND-ENUMERATED list of eight
+  // selectors, and it shipped already missing two of its own siblings —
+  // `.program-start-ledger` and `.program-start-note`, which share a rule and
+  // were simply never typed out. A glow added there passed the gate. The list
+  // is now a SCAN: every rule in the file whose selector mentions
+  // `.program-start-` is checked, so a future sibling cannot be missed by
+  // forgetting to add it here. The floor assertion is what stops the scan
+  // passing vacuously if the block is ever renamed out from under it — a
+  // regex that matches nothing satisfies a bare `for` loop perfectly.
   it('no .program-start-* rule glows, breathes or animates', () => {
-    for (const sel of [
-      '.program-start-door', '.program-start-sheet', '.program-start-go',
-      '.program-start-sheet .program-start-existing', '.program-start-sheet .program-start-refuse',
-      '.program-start-sheet .program-start-warn', '.program-start-sheet .program-start-timeout',
-      '.program-start-sheet .program-start-error',
-    ]) {
-      const rule = norm(stripComments(ruleIn(css, sel)));
+    const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((m) => (m[1] ?? '').includes('.program-start-'));
+    // Ten today: door, door:active, sheet, ledger+note, timeout, warn,
+    // existing+refuse+error, go, go:active, go:disabled.
+    expect(rules.length).toBeGreaterThanOrEqual(10);
+    for (const m of rules) {
+      const sel = norm(m[1] ?? '');
+      const rule = norm(m[2] ?? '');
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
     }
+    // The two the enumerated version missed, named explicitly as well: the
+    // scan above is the mechanism, and this is the regression it was written
+    // for, so it stays visible rather than living only in a comment.
+    for (const sel of ['.program-start-sheet .program-start-ledger',
+                       '.program-start-sheet .program-start-note']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  // Whole-branch review, M6: `.program-start-door` was copy-pasted from
+  // `.coord-toggle`, which lives in a flex row (`.coord-banner`). The door's
+  // own parent is `.runs-screen`, `display: grid` — `flex: none` there is
+  // inert, a declaration that reads as load-bearing and does nothing.
+  it('.program-start-door declares no flex — its parent .runs-screen is a grid', () => {
+    expect(declValue(ruleFor('.runs-screen'), 'display')).toBe('grid');
+    expect(declValue(ruleFor('.program-start-door'), 'flex')).toBeNull();
   });
 
   it('.program-start-door is at least one tap tall, off the shared token', () => {
