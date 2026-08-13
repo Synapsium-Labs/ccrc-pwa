@@ -14,7 +14,12 @@
 export interface LeastLoadedCase {
   name: string;
   /** Per-wrapper file bytes under ~/.cc-limits. An ABSENT key means no file at
-   *  all — which both sides must read as unknown, and unknown scores 0. */
+   *  all — which both sides must read as UNKNOWN, and unknown now ranks below
+   *  every measured account instead of scoring 0 and beating them all (Stage
+   *  2a, Task 6: `projectHome`'s `measured()` and `_ws_least_loaded`'s
+   *  `[[ -z "$sc" ]] && continue`). Unknown is still not unplaceable: when NO
+   *  account is measured, both sides fall back to the first home-able one at
+   *  score 0 — see the `projectHome edge cases` describe in the runner. */
   files: Record<string, string>;
   /** Wrappers carrying a `<w>-disabled` marker (ccd's `$REG`, the server's
    *  registryDir — same directory, same filename, on purpose: it is the one
@@ -55,11 +60,17 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         + 'even when every account is pinned. The headroom display is what warns the user',
     },
     {
+      // THE placement magnet, in both languages. `claude-corp` and
+      // `claude-dev0` have no telemetry file at all; before Task 6 both sides
+      // scored them 0 and handed the workspace to `claude-corp`, beating two
+      // accounts that had honestly reported 70 and 60. The account nobody could
+      // see was simply the emptiest-looking one.
       name: 'missing-file',
       files: { claude: fresh(70, 70), claude2: fresh(60, 60) },
-      expect: { wrapper: 'claude-corp', score: 0 },
-      why: 'no telemetry file at all reads as unknown, and unknown scores 0 — so an '
-        + 'account nobody has measured looks free to both sides alike',
+      expect: { wrapper: 'claude2', score: 60 },
+      why: 'no telemetry file at all reads as unknown, and unknown ranks BELOW every '
+        + 'measured account — the cheapest MEASURED account wins, not the one nobody '
+        + 'has ever measured',
     },
     {
       name: 'tie',
@@ -75,8 +86,9 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         gpt: c({ five: null, seven: 0, ts: now - 60, fiveResetAt: null, sevenResetAt: now + 400000 }),
       },
       expect: { wrapper: 'claude-corp', score: 60 },
-      why: 'gpt is a 4th lane, opt-in only (ccd:11-16) and absent from VALID_WRAPPERS — '
-        + 'it must never win, however free it looks',
+      why: 'gpt is not home-able, so it is an opt-in lane a session reaches only by having it '
+        + 'as HOME (ccd\'s roster header) and it is absent from CCRC_HOME_ABLE, the array '
+        + '_ws_least_loaded iterates — it must never win, however free it looks',
     },
     {
       name: 'disabled-lane-skipped',

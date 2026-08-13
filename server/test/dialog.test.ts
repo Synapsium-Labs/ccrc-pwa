@@ -13,6 +13,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { tasksDir } from '../src/tasks/read.js';
 import type { Dialog, FleetSession, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 
 const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
 const fixture = (name: string) => readFileSync(path.join(panesDir, name), 'utf8');
@@ -232,6 +233,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 describe('FleetWatcher dialog detection', () => {
   it('emits dialog once, marks dialogPending, then clears', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude2-MekWarLive', 'claude2');
     let pane = fixture('ask-user-question.txt');
     const run: Runner = async (_cmd, args) => {
@@ -279,6 +281,7 @@ describe('FleetWatcher hookstate wiring', () => {
   // either side, alone, cannot see.
   it('a tick reads a fresh hookstate.json and the emitted fleet frame carries hookState/askSummary/dialogPending', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const uuid = '1'.repeat(36);
     seedSession(home, 'claude2-MekWarLive', 'claude2'); // writes this same uuid
     const run: Runner = async (_cmd, args) => {
@@ -334,6 +337,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
      'prunes a genuinely reaped id — RED against a naive full rebuild, which drops any id readHookState ' +
      'cannot re-identify by uuid', async () => {
     const home = mkTmp('ccrc-retain-');
+    seedRoster(home);
     const id = 'claude2-MekWarLive';
     seedSession(home, id, 'claude2');
     writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
@@ -374,10 +378,11 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
   it('sweepTasks keeps a degraded row\'s last-known task tally instead of blanking it, and STILL prunes a ' +
      'genuinely reaped id — RED against a naive full rebuild, which drops any id configDirFor cannot map', async () => {
     const home = mkTmp('ccrc-retain-');
+    seedRoster(home);
     const id = 'claude2-MekWarLive';
     seedSession(home, id, 'claude2');
     const cfg = loadConfig({ CCRC_HOME: home });
-    const cfgDir = configDirFor(cfg.home, 'claude2')!;
+    const cfgDir = configDirFor(cfg, 'claude2')!;
     const dir = tasksDir(cfgDir, HOOK_UUID);
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, '1.json'), JSON.stringify({
@@ -432,6 +437,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
   it('tick() leaves hookStates/taskProgress untouched and broadcasts NO frame (not even an empty one) ' +
      'while the registry directory cannot be listed, and heals on the next successful tick', async () => {
     const home = mkTmp('ccrc-collapse-');
+    seedRoster(home);
     const id = 'claude2-MekWarLive';
     seedSession(home, id, 'claude2');
     writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
@@ -484,6 +490,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
      'production code through today is tests, but the method stays independently callable) also retains ' +
      'through an unlistable directory', async () => {
     const home = mkTmp('ccrc-collapse-');
+    seedRoster(home);
     const id = 'claude2-MekWarLive';
     seedSession(home, id, 'claude2');
     writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
@@ -520,10 +527,11 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
   it('sweepTasks\' own separate read leaves taskProgress untouched while the registry directory cannot be ' +
      'listed', async () => {
     const home = mkTmp('ccrc-collapse-');
+    seedRoster(home);
     const id = 'claude2-MekWarLive';
     seedSession(home, id, 'claude2');
     const cfg = loadConfig({ CCRC_HOME: home });
-    const cfgDir = configDirFor(cfg.home, 'claude2')!;
+    const cfgDir = configDirFor(cfg, 'claude2')!;
     const dir = tasksDir(cfgDir, HOOK_UUID);
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, '1.json'), JSON.stringify({

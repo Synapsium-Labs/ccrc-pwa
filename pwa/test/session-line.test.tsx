@@ -6,6 +6,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
+import { TEST_ROSTER } from './rosterFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself
 // (see test/message-links.test.tsx et al.) — without this, rerender/multi-render
@@ -231,7 +232,7 @@ describe('away from home', () => {
 
   it('says so for assistive tech, which cannot see a colour', () => {
     render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
-                        onOpen={() => {}} onActions={() => {}} />);
+                        onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText('running on alt·max, pinned to team·max')).toBeInTheDocument();
   });
 

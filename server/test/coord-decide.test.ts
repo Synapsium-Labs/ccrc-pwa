@@ -221,7 +221,9 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
     const abandon = { fingerprint: { branchTip: 'x', prNumber: null, prPhase: 'open', handoffCommit: 'x' },
       final: true, state: 'failed' };
     const closeDeps: CloseRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: undefined };
-    const refused = await closeRun(closeDeps, opened.id, abandon);
+    // `causedBy` is a required parameter with no default (Build 4, D-B4-3/6):
+    // this is the COORDINATOR's own close, and it says so.
+    const refused = await closeRun(closeDeps, opened.id, abandon, 'coordinator');
     expect(refused).toMatchObject({ ok: false, kind: 'fleetFailed', stderr: 'ws-release failed' });
     expect(sickCalls.some((c) => c[0] === 'ws-release')).toBe(true);
     // D-48: the fleet act runs AHEAD of the transition commit. A run this
@@ -239,7 +241,7 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
     const retryBase = testDeps(home, healthyRun);
     const retryDeps: CloseRunDeps = { coord, io: retryBase.io, cfg: retryBase.cfg,
       runCcd: retryBase.runCcd, fleetState: undefined };
-    const closed = await closeRun(retryDeps, opened.id, abandon);
+    const closed = await closeRun(retryDeps, opened.id, abandon, 'coordinator');
     expect(closed).toMatchObject({ ok: true, id: opened.id, state: 'failed' });
     expect(healthyCalls.some((c) => c[0] === 'ws-release')).toBe(true);
     expect(coord.run(opened.id)!.state).toBe('failed');

@@ -1069,9 +1069,9 @@ button.metachip:active {
   letter-spacing: var(--tracking-caps);
   color: var(--callout-hue);
 }
-.msg-assist .callout[data-callout='note']      { --callout-hue: var(--acct-corp);            --callout-tint: var(--acct-corp-tint); }
+.msg-assist .callout[data-callout='note']      { --callout-hue: var(--acct-blue);            --callout-tint: var(--acct-blue-tint); }
 .msg-assist .callout[data-callout='tip']       { --callout-hue: var(--status-busy-text);     --callout-tint: var(--accent-tint); }
-.msg-assist .callout[data-callout='important'] { --callout-hue: var(--acct-claude2);          --callout-tint: var(--acct-claude2-tint); }
+.msg-assist .callout[data-callout='important'] { --callout-hue: var(--acct-violet);           --callout-tint: var(--acct-violet-tint); }
 .msg-assist .callout[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--status-attention-tint); }
 /* caution's tint is the ONE alpha value in the five (--status-dead-tint, 12%),
    so it alone let the page ground through and its ::before label measured 4.44

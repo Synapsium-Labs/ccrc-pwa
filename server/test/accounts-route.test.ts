@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { AccountUsage, ProjectedHome } from '../../shared/api.js';
+import type { AccountsResponse, AccountUsage } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -25,12 +25,15 @@ function seedLimits(files: Record<string, unknown>): string {
   return home;
 }
 
-async function getPayload(home: string): Promise<{ accounts: AccountUsage[]; projected: ProjectedHome | null }> {
+/** `AccountsResponse`, not a fourth hand-written copy of the same object shape
+ *  — the wire type is the contract, and a field the handler forgets is then a
+ *  compile error here rather than a value that silently never arrives. */
+async function getPayload(home: string): Promise<AccountsResponse> {
   const app = await buildServer(testDeps(home));
   try {
     const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(res.statusCode).toBe(200);
-    return res.json() as { accounts: AccountUsage[]; projected: ProjectedHome | null };
+    return res.json() as AccountsResponse;
   } finally {
     await app.close();
   }
@@ -118,6 +121,62 @@ describe('GET /api/accounts', () => {
 
     const accounts = await getAccounts(home);
     expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
+  });
+
+  // `rank()`'s unknown-wrapper fallback (`i < 0 ? 99`), which is load-bearing
+  // and easy to lose when the ranking is rebuilt: the roster is runtime data
+  // now, so a `.cc-limits/*.json` naming an account this box's roster does not
+  // have is an ordinary occurrence — a lane removed from accounts.json whose
+  // telemetry file outlives it, or a box mid-rollout. It must sort LAST and
+  // still be REPORTED: the accounts screen showing a stale lane is a diagnosis;
+  // silently dropping it is a mystery.
+  it('sorts a wrapper the roster does not have last, rather than dropping it', async () => {
+    const t = now();
+    const body = { five: 1, seven: 1, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 };
+    const home = seedLimits({ zzz: body, 'claude-dev0': body, ghost: body, claude: body });
+
+    const accounts = await getAccounts(home);
+    // Roster order first (claude, then claude-dev0), then the two unrostered
+    // names — which tie at rank 99 and fall back to alphabetical, so the order
+    // among them is defined rather than whatever readdir returned.
+    expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude-dev0', 'ghost', 'zzz']);
+  });
+
+  // The fourth field of the wire contract (Stage 2a): the roster itself. Without
+  // it the PWA has no way to label or colour an account that telemetry has never
+  // mentioned — `accounts` above is built from `.cc-limits/*.json`, so an
+  // account nothing has ever run on has no row there at all.
+  //
+  // `claude2` carries a label that is NOT its id (`alt·max`, its real one in
+  // `deploy/accounts.migration.json`) — see `DEFAULT_TEST_ROSTER`. Every
+  // fixture account used to label itself with its own id, which made this
+  // assertion unable to fail on the very confusion it exists to catch: a
+  // handler emitting `a.id` into `label` passed it byte for byte, and `label`
+  // is what the PWA actually renders.
+  it('carries the roster, including accounts telemetry has never mentioned', async () => {
+    const home = seedLimits({ claude: { five: 2, seven: 3 } });
+    const { accounts, roster } = await getPayload(home);
+
+    expect(accounts.map((a) => a.wrapper)).toEqual(['claude']);
+    expect(roster).toEqual([
+      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true },
+      { id: 'claude2', label: 'alt·max', hue: 'violet', homeAble: true },
+      { id: 'claude-corp', label: 'claude-corp', hue: 'blue', homeAble: true },
+      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false },
+      { id: 'claude-dev0', label: 'claude-dev0', hue: 'green', homeAble: true },
+    ]);
+  });
+
+  // The server's half of the roster's own secret-keeping: `configDirSuffix`,
+  // `exec` (which carries a `~/.cc-secrets` path for a generated account) and
+  // `telemetry` describe how the SERVER launches and measures an account. A
+  // browser has no use for any of them, and `RosterWire` is where that line is
+  // drawn — this asserts the line is real on the wire, not just in the type.
+  it('ships no launch or secrets detail to the browser', async () => {
+    const { roster } = await getPayload(seedLimits({ claude: { five: 2, seven: 3 } }));
+    for (const entry of roster) {
+      expect(Object.keys(entry).sort()).toEqual(['homeAble', 'hue', 'id', 'label']);
+    }
   });
 
   // The handler rebuilds each AccountUsage field by field, so a field it forgets

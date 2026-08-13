@@ -205,7 +205,7 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
 
 /**
  * Verbs that are only ever grantable WITH a mandatory flag immediately after
- * them. Two entries, for two different reasons.
+ * them. Three entries, for three different reasons.
  *
  * `ws-reap` is the destructive one: it deletes a workspace, its branch and its
  * clips, and `--expect <fingerprint>` is the token ccd re-proves against the
@@ -223,11 +223,23 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * two tokens wide, and makes losing it both a compile error and a boot
  * refusal.
  *
+ * `coord-pause` (Build 4) is the third entry and the first NON-destructive one,
+ * so the table's own reasoning is widened rather than stretched: the flag is
+ * not a confirmation token here, it is the whole argument surface. A one-token
+ * `['coord-pause']` grant would permit `ccd coord-pause <anything…>` — every
+ * positional form the verb might ever grow — for a route the PWA reaches with
+ * NO token of any kind (D-B4-9). Enrolment is what makes dropping `--state` a
+ * compile error on `LAWFUL_EXEC_WHITELIST` and a boot refusal, instead of a
+ * green diff: `isExecAllowed` is prefix-matching ("tokens after the prefix are
+ * unconstrained"), so no subset test can tell the two grants apart.
+ *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
  * different questions) is the one to avoid while fixing P1.
  */
-export const REQUIRED_VERB_FLAG = { 'ws-reap': '--expect', 'ws-rename': '--session' } as const;
+export const REQUIRED_VERB_FLAG = {
+  'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
+} as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
 /**
@@ -336,6 +348,19 @@ export const EXEC_WHITELIST = {
     // ever REFUSES ws-rm/ws-reap — granting them widens nothing that deletes.
     ['ws-hold',    '--session'],
     ['ws-release', '--session'],
+    // The pause marker's writer (Build 4, spec §4.2), granted on the pair's own
+    // argument: `$REG/coordinator-paused` is a registry-file write/unlink,
+    // non-destructive, and granting it widens nothing that deletes. The server
+    // may write only `~/.cc-clips` on the fleet host and `FleetIO` has no
+    // unlink at all, so raising or clearing that marker is not a mutation that
+    // exists server-side — the same gap `ws-hold`/`ws-release` were minted for.
+    //
+    // And the sentence that pair does not have: this verb is ENROLLED in
+    // `REQUIRED_VERB_FLAG` above. `--state` is not a confirmation token, it is
+    // the verb's whole argument surface, and a one-token grant would permit
+    // every positional form it might ever grow — reached from a route that
+    // carries no token of any kind (D-B4-9).
+    ['coord-pause', '--state'],
     // Unattended caller (FleetWatcher's naming sweep): the flag is what keeps
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what
     // makes losing it a boot refusal rather than a widening nobody notices.
@@ -533,8 +558,9 @@ export function auditExecWhitelist(
       if (required !== undefined && second !== required) {
         refuseToBoot(
           `EXEC_WHITELIST['${key}'] grants '${tokens.join(' ')}', but '${verb!}' is only ` +
-          `grantable with '${required}' immediately after it. A ${verb!} without ` +
-          `'${required}' is an UNCONFIRMED destructive call, not a narrower grant.`,
+          `grantable with '${required}' immediately after it. Dropping the flag widens the ` +
+          `grant to the verb's whole positional argv surface — for ws-reap that is an ` +
+          `UNCONFIRMED destructive call; for every gated verb it is an argv surface nobody declared.`,
         );
       }
     }

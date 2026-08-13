@@ -306,6 +306,29 @@ function matchesOwnDraft(ansiPane: string, parts: readonly string[]): boolean {
 }
 
 /**
+ * Draft shapes only THIS system's OLD typed-envelope lane could ever have
+ * produced: a Claude Code paste-chip collapse of a multi-line envelope it
+ * typed (`[Pasted text #N …]`), or a stranded ```ccrc-mail fence opener —
+ * `renderEnvelope`'s own first rendered line — left un-submitted by a lost
+ * Enter. The reference-nudge lane (robust-mail-delivery spec §1) never types
+ * a multi-line payload again, so once every corrupted box has been migrated
+ * past, this matches nothing new — it exists to recover what the old lane
+ * already left behind, not to widen what counts as "ours" going forward.
+ *
+ * Deliberately narrow: a genuine human draft matches NEITHER shape — no
+ * human mid-sentence thought starts with a literal `[Pasted text #` chip or
+ * opens a ```ccrc-mail fence — so `clearMailResidue`'s gate on this function
+ * can never clear a human's own text (F2).
+ */
+const MAIL_RESIDUE_CHIP = /^\[Pasted text #\d+/;
+export function isMailResidue(draft: string): boolean {
+  if (draft === '') return false;
+  if (MAIL_RESIDUE_CHIP.test(draft)) return true;
+  if (draft.startsWith('```') && draft.includes('ccrc-mail')) return true;
+  return false;
+}
+
+/**
  * Inject a prompt into the session's Claude Code input box, serialized per
  * session through the KeyedQueue. Refuses to clobber a half-typed draft
  * unless `replaceDraft`, verifies the pane echoed the text before Enter, and
@@ -318,12 +341,21 @@ function matchesOwnDraft(ansiPane: string, parts: readonly string[]): boolean {
  * did not land — if so, finish submitting it rather than refusing it as a
  * foreign draft." See the `draft` branch below for the discrimination this
  * buys, and its own limit.
+ *
+ * `clearMailResidue` (robust-mail-delivery spec §2.2): a caller that sets
+ * this is stating "if the box holds MACHINE residue this system's own old
+ * lane left behind (`isMailResidue`), clear it and proceed — never a human
+ * draft, which `isMailResidue` structurally cannot match." Checked AFTER
+ * `resumeIfOwn` (an own stale nudge is resumed, not cleared and retyped) and
+ * BEFORE the ordinary `replaceDraft`/`draft-present` fork, so a caller that
+ * sets both gets: resume own draft > clear+type over recognized residue >
+ * replace (if asked) > refuse.
  */
 export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean } = {},
+  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean; clearMailResidue?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   // Computed up front, from `text`/`attachments` alone — independent of the
@@ -388,18 +420,34 @@ export function sendPrompt(
       if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
         return pressEnterAndConfirm(d, id, sleep, needle);
       }
-      if (!opts.replaceDraft) return { ok: false, error: 'draft-present', draft };
-      // A single C-u could never clear a draft of two or more lines (see
-      // clearBox), so "replace" failed with draft-clear-failed on any user
-      // draft that had a line break in it. No blind floor is available here —
-      // draftOf sees the box's first row only, so the draft's size is unknown —
-      // so every press is paid for with a look, bounded by the clear's budget.
-      const cleared = await clearBox(d, id, sleep, { blind: 1, look: REPLACE_MAX_PRESSES - 1 });
-      if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
-      // A menu that opened while we were clearing owns the keyboard exactly as
-      // one that was up before we started does, and gets the same answer.
-      if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
-      if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
+      // `clearMailResidue`: the box holds MACHINE residue this system's OLD
+      // typed-envelope lane left behind (a paste-chip collapse or a stranded
+      // ```ccrc-mail fence — `isMailResidue`'s own docstring), and the caller
+      // has said it is safe to clear it. Checked before the ordinary
+      // `replaceDraft`/`draft-present` fork so a residue-aware caller need not
+      // also pass `replaceDraft` — clearing recognized machine debris is not
+      // the same permission as clearing whatever a human is mid-typing.
+      if (opts.clearMailResidue && isMailResidue(draft)) {
+        const cleared = await clearBox(d, id, sleep, { blind: 1, look: REPLACE_MAX_PRESSES - 1 });
+        if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
+        if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
+        if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
+        // cleared.state === 'cleared' → fall through to the type loop below.
+      } else if (!opts.replaceDraft) {
+        return { ok: false, error: 'draft-present', draft };
+      } else {
+        // A single C-u could never clear a draft of two or more lines (see
+        // clearBox), so "replace" failed with draft-clear-failed on any user
+        // draft that had a line break in it. No blind floor is available here —
+        // draftOf sees the box's first row only, so the draft's size is unknown —
+        // so every press is paid for with a look, bounded by the clear's budget.
+        const cleared = await clearBox(d, id, sleep, { blind: 1, look: REPLACE_MAX_PRESSES - 1 });
+        if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
+        // A menu that opened while we were clearing owns the keyboard exactly as
+        // one that was up before we started does, and gets the same answer.
+        if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
+        if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
+      }
     }
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await d.tmux.sendKey(id, 'M-Enter');

@@ -99,6 +99,34 @@ describe('_swap_target: disabled excludes a lane as a DESTINATION, never evacuat
     expect(sh('_swap_target claude-demo claude claude')).toBe('claude2');
   });
 
+  it('the must-leave candidate loop ranks an UNMEASURED candidate last, not first', () => {
+    // The magnet Task 6 removed from `_ws_least_loaded`, in the place it
+    // survived until review round 1: `: "${sc:=0}"` scored an account that has
+    // never reported as 0 — better than every account that honestly said how
+    // loaded it was — and since it never reports, it went on winning every
+    // rescue forever. `: "${sc:=100}"` is exact: `_avail` has already rejected
+    // everything at or above SWAP_CEILING (98), so a measured candidate that
+    // reaches the ranking line always outranks an unmeasured one.
+    writeLimits('claude', 99, 99);       // cur==home, over SWAP_CEILING: must leave
+    writeLimits('claude2', 50, 50);      // measured, and the worst measured score here
+    writeLimits('claude-dev0', 60, 60);  // measured, worse still
+    // claude-corp: NO limits file at all. Wholly unmeasured, and the old
+    // `:=0` made it the pick.
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude2');
+  });
+
+  it('...but an unmeasured candidate stays ELIGIBLE when it is all there is', () => {
+    // Ranking last must not become skipping: this loop is the escape route,
+    // and `_ws_least_loaded`'s "skip it" is only affordable because placement
+    // has an all-unmeasured fallback. A rescue that answered "" here would
+    // strand the session on the account it cannot stay on.
+    writeLimits('claude', 99, 99);   // cur==home, over the ceiling: must leave
+    // claude2 / claude-corp / claude-dev0: no telemetry whatsoever.
+    // First in roster declaration order wins the 100-way tie, same tie-break
+    // as _ws_least_loaded and projectHome.
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude2');
+  });
+
   it('the must-leave candidate loop still skips a candidate over the rate ceiling', () => {
     // _account_ok gates existence+enablement only; it must not swallow the
     // pre-existing pressure gate (_avail) the loop already had.

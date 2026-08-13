@@ -8,6 +8,7 @@ import {
   HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS,
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
@@ -17,6 +18,7 @@ describe('readRegistry', () => {
   let home: string;
   beforeEach(() => {
     home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   });
 
@@ -44,7 +46,9 @@ describe('readRegistry', () => {
   });
 
   it('returns [] when registry dir missing', async () => {
-    const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: path.join(home, 'nope') }));
+    const out = await readRegistry(localIO, loadConfig({
+      CCRC_HOME: path.join(home, 'nope'), CCRC_ACCOUNTS: path.join(home, '.ccrc', 'accounts.json'),
+    }));
     expect(out).toEqual([]);
   });
 
@@ -74,6 +78,7 @@ describe('workspace on the wire', () => {
   let home: string;
   beforeEach(() => {
     home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   });
 
@@ -100,6 +105,7 @@ describe('workspace on the wire', () => {
 describe('PR and archive fields', () => {
   it('reads base, prphase, prnumber, prcheckedat and archived off disk', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const put = (f: string, v: string): void => writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v);
@@ -120,6 +126,7 @@ describe('PR and archive fields', () => {
     // phase this build does not know must degrade to "unchecked", never leak a
     // string the PWA will switch on and render as nothing.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', '/w'], ['prphase', 'exploded']]) {
@@ -137,6 +144,7 @@ describe('PR and archive fields', () => {
     // JSON.stringify puts on the wire as `null` while the type still says
     // `number` — the silent lie the comment on numOrNull claims to prevent.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const put = (f: string, v: string): void => writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v);
@@ -151,6 +159,7 @@ describe('PR and archive fields', () => {
 
   it('leaves every new field null on a session that has none of them', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', '/w']]) {
@@ -171,6 +180,7 @@ describe('readSessionRecord', () => {
   let home: string;
   beforeEach(() => {
     home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   });
 
@@ -216,7 +226,9 @@ describe('readSessionRecord', () => {
   });
 
   it('answers {found:false, reason:\'unlistable\'} when the registry dir cannot be listed', async () => {
-    const cfg = loadConfig({ CCRC_HOME: path.join(home, 'nope') });
+    const cfg = loadConfig({
+      CCRC_HOME: path.join(home, 'nope'), CCRC_ACCOUNTS: path.join(home, '.ccrc', 'accounts.json'),
+    });
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'unlistable' });
   });
 
@@ -281,6 +293,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
   let home: string;
   beforeEach(() => {
     home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   });
 
@@ -417,6 +430,7 @@ describe('readRegistryMeasured / RegistryRead', () => {
   let home: string;
   beforeEach(() => {
     home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   });
 
@@ -432,10 +446,68 @@ describe('readRegistryMeasured / RegistryRead', () => {
 
   it('answers {listed:false} — the whole-fleet collapse — distinct from a registry that genuinely lists ' +
      'nobody, and readRegistry\'s old signature still collapses it to []', async () => {
-    const cfg = loadConfig({ CCRC_HOME: path.join(home, 'nope') });
+    const cfg = loadConfig({
+      CCRC_HOME: path.join(home, 'nope'), CCRC_ACCOUNTS: path.join(home, '.ccrc', 'accounts.json'),
+    });
     const read = await readRegistryMeasured(localIO, cfg);
     expect(read).toEqual({ listed: false });
     expect(await readRegistry(localIO, cfg)).toEqual([]);
+  });
+
+  // BUILD 4, D-B4-10. `watch.ts`'s `emitCoord` needs a NON-session fact out of
+  // this same directory — `coordinator-paused` and `mail-disabled`, neither of
+  // which is a `*.uuid` and so neither of which survives into `records`. A
+  // second `readdir` for that would be a second clock for one fact, and the two
+  // would disagree on exactly the ticks that matter.
+  it('carries the RAW listing it derived the records from, so a caller needing a non-session '
+     + 'fact out of the same directory shares the one readdir', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    writeFileSync(path.join(reg, 'coordinator-paused'), '');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const counted: FleetIO = {
+      ...localIO,
+      readdir: async (p) => { listings += 1; return localIO.readdir(p); },
+    };
+    const read = await readRegistryMeasured(counted, cfg);
+    expect(read.listed).toBe(true);
+    expect(read.listed && [...read.names].sort()).toEqual(
+      (await localIO.readdir(reg))!.sort(),
+    );
+    // The marker is IN it — the whole point, and the thing `records` cannot say.
+    expect(read.listed && read.names).toContain('coordinator-paused');
+    // …and it cost exactly the one listing this function always took.
+    expect(listings).toBe(1);
+  });
+
+  it('carries the FIRST listing even when the reap-race re-listing ran', async () => {
+    // The second read (`registry.ts`'s hold/identity resolution) exists to
+    // settle a per-row reap race, runs on SOME calls only, and hanging the
+    // markers' clock on it would make the pause banner's cadence depend on
+    // whether an unrelated session happened to be mid-reap.
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+    writeFileSync(path.join(reg, 'coordinator-paused'), '');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    let listings = 0;
+    const markerVanishesOnRelist: FleetIO = {
+      ...localIO,
+      readdir: async (p) => {
+        const names = await localIO.readdir(p);
+        if (names === null) return names;
+        listings += 1;
+        // The first listing is the honest one; the second drops the marker AND
+        // the row's `.uuid`, which is what forces the re-listing branch to run
+        // at all (an unmeasured identity triple + a twice-observed absence).
+        return listings === 1 ? names : names.filter((n) => n !== 'coordinator-paused' && !n.endsWith('.uuid'));
+      },
+      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+    };
+    const read = await readRegistryMeasured(markerVanishesOnRelist, cfg);
+    expect(listings).toBe(2);          // the re-listing really did run
+    expect(read.listed).toBe(true);
+    expect(read.listed && read.names).toContain('coordinator-paused');
   });
 });
 
@@ -445,6 +517,7 @@ describe('observability (warnOnce, escalation, the whole-fleet episode)', () => 
   let errorSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     home = mkTmp('ccrc-obs-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

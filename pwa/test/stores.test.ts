@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
+import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
+import { TEST_ROSTER } from './rosterFixture';
 
 // — fixtures —
 
@@ -62,7 +63,7 @@ const askFixture: HookAsk = {
 };
 
 const mailFixture: MailSummary = {
-  id: 1, at: 1_754_000_000_000, fromId: 'coordinator', toId: 's1', runId: 3,
+  id: 1, deliveryId: 1, at: 1_754_000_000_000, fromId: 'coordinator', toId: 's1', runId: 3,
   kind: 'question', subject: 'rebase before you start?', artifacts: [], state: 'delivered',
 };
 
@@ -488,6 +489,83 @@ describe('fleet store', () => {
     expect(() => lastSocket().message(JSON.stringify({ type: 'mystery' }))).not.toThrow();
     expect(store.getState().sessions).toEqual([]);
     store.getState().disconnect();
+  });
+
+  // Fix round 1, finding 2: `connect()` adds a `GET /api/accounts` poll (the
+  // roster field), a 20s interval, an `Array.isArray` guard, and a
+  // `clearInterval` in `disconnect()` — none of it had a test. `deps.fetchAccounts`
+  // is the same injection shape `deps.catchUp`/`deps.fetchFeed` already use.
+  describe('the roster poll', () => {
+    const accountsResponse = (roster: AccountsResponse['roster']): AccountsResponse => ({
+      accounts: [], projected: null, roster,
+    });
+
+    it('populates the roster from the poll', async () => {
+      const fetchAccounts = vi.fn().mockResolvedValue(accountsResponse(TEST_ROSTER));
+      const store = createFleetStore({ makeSocket, fetchAccounts });
+      store.getState().connect();
+
+      await vi.waitFor(() => expect(store.getState().roster).toEqual(TEST_ROSTER));
+      store.getState().disconnect();
+    });
+
+    it('a later malformed response does NOT clobber an already-good roster', async () => {
+      vi.useFakeTimers();
+      try {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        let calls = 0;
+        const fetchAccounts = vi.fn().mockImplementation(async () => {
+          calls += 1;
+          // First poll: a real roster. Every poll after: a malformed one —
+          // the exact shape a stub answering an unmatched route with bare
+          // `{}` hands back (`r.roster === undefined`).
+          return calls === 1
+            ? accountsResponse(TEST_ROSTER)
+            : ({ accounts: [], projected: null } as unknown as AccountsResponse);
+        });
+        const store = createFleetStore({ makeSocket, fetchAccounts });
+        store.getState().connect();
+
+        // Flushes the first poll's microtask without advancing real OR fake
+        // time — `vi.waitFor`'s own internal polling assumes real timers,
+        // which this test cannot use once `vi.useFakeTimers()` is active.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetchAccounts).toHaveBeenCalledTimes(1);
+        expect(store.getState().roster).toEqual(TEST_ROSTER);
+
+        // The 20s interval fires the second, malformed poll.
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(fetchAccounts).toHaveBeenCalledTimes(2);
+        // Preserved, not clobbered with `[]` — the last GOOD roster survives
+        // a single bad read.
+        expect(store.getState().roster).toEqual(TEST_ROSTER);
+        // And it said so (finding 6) — a genuine protocol break otherwise has
+        // no signal anywhere; every consumer just quietly reverts to raw ids.
+        expect(warn).toHaveBeenCalled();
+
+        store.getState().disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('disconnect() stops the interval — no further polling after it', async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchAccounts = vi.fn().mockResolvedValue(accountsResponse(TEST_ROSTER));
+        const store = createFleetStore({ makeSocket, fetchAccounts });
+        store.getState().connect();
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetchAccounts).toHaveBeenCalledTimes(1);
+        store.getState().disconnect();
+
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(fetchAccounts).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // Build 7 / Task 10: additive, so no FLEET_PROTO bump — an already-deployed

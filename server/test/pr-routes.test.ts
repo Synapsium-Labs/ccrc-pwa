@@ -137,8 +137,8 @@ describe('GET /api/sessions/:id/pr', () => {
 
   it('folds the session\'s real task list into the draft — prTasks reads through cfgDir/uuid, not an empty stand-in', async () => {
     // seedWorkspace's own registry writes wrapper:'claude', uuid:'u', so
-    // prTasks resolves cfgDir = deps.cfg.wrappers.claude (home/.claude) and
-    // reads home/.claude/tasks/u/*.json (tasks/read.ts's own tasksDir). Every
+    // prTasks resolves cfgDir = configDirFor(deps.cfg, 'claude') (home/.claude)
+    // and reads home/.claude/tasks/u/*.json (tasks/read.ts's own tasksDir). Every
     // OTHER test in this file leaves that directory absent, so readTasks
     // there already answers [] — indistinguishable from prTasks answering
     // null outright, which is why this is its own fixture: without a real

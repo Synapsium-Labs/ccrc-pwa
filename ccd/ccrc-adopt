@@ -1,0 +1,528 @@
+#!/usr/bin/env bash
+# ccrc-adopt — rediscovers a hand-built box's Claude Code accounts FROM DISK
+# and writes ~/.ccrc/accounts.json. Task 11 of the stage-2a
+# roster-becomes-data plan, and the last one: it runs against a codebase
+# where the roster is already the only source of truth (Tasks 1-10), so it
+# exists purely to bootstrap that file on a box nobody generated one for yet
+# — every account here was hand-built with `touch`/`vi`, long before
+# `~/.ccrc/accounts.json` existed as a concept.
+#
+# SCOPE, deliberately narrow: this writes accounts.json and NOTHING else. No
+# wrappers, no systemd units, no hooks, no config. `ccrc install` (not written
+# yet — see ccd:71) is the verb that goes the other direction, roster -> disk;
+# this one only ever goes disk -> roster.
+#
+# ── WHAT IT LOOKS AT ─────────────────────────────────────────────────────
+# Every entry directly under $HOME/.local/bin whose name is a legal account id
+# (shared/roster.ts's ID_RE: ^[a-z][a-z0-9-]{0,31}$ — this alone drops the
+# ccd.bak-<date> / claude2.bak-<date> backups this box accumulates, since a
+# dot never appears in a real id).
+#
+#   - A non-script file that some OTHER candidate `exec`s -> the upstream
+#     account (shared/roster.ts's exec.kind "upstream"). Its config dir is
+#     "$HOME/.claude" — that default lives in the claude binary itself, not
+#     in anything this script reads, because upstream is by definition
+#     invoked with CLAUDE_CONFIG_DIR unset.
+#   - A script whose content, once blank lines and comments are stripped, is
+#     BYTE-FOR-BYTE the known 2- or 3-line generated shape -> "generated",
+#     with configDirSuffix and (if present) secretsFile read back out of it.
+#   - Any other script that sets CLAUDE_CONFIG_DIR -> "external". ccrc never
+#     writes this file; a later `ccrc install` must not either.
+#
+# The direction of every uncertain call is "external" — see classify() below
+# for why that is the only safe default: mis-reading a bespoke launcher as
+# "generated" is the one mistake in this whole file that a future `ccrc
+# install` could turn into data loss (overwriting someone's hand-written
+# script with a 4-line template). Mis-reading a real generated wrapper as
+# "external" only costs an account its `secretsFile` auto-detection — visible
+# immediately (the account gets a `[ -r ...]` line no one manages) and fixed
+# by hand.
+#
+# ── WHAT IT NEVER DOES ──────────────────────────────────────────────────
+# It never reads a candidate whole. The one file in play that matters here is
+# 300+ MB (the claude binary itself): classification only ever looks at a
+# candidate's first two bytes (script vs. binary) before deciding whether to
+# read it as text at all, and only actual small SCRIPTS get `read`. It also
+# never writes to $HOME/.local/bin — every path below is read-only until the
+# very last step, which is the one write this tool is allowed: accounts.json,
+# and only when it does not already exist (or --force says to overwrite it).
+set -euo pipefail
+# Locale-independent byte ordering for glob expansion, `sort` and regex
+# matching: en_US.UTF-8's collation (measured on this box) sorts
+# "claude-corp" AFTER "claude2" — punctuation is collated differently from
+# digits — so without this, the declaration order of the accounts below (and
+# therefore their hue assignment, which is positional) would silently depend
+# on the operator's locale rather than on the bytes in $HOME/.local/bin.
+export LC_ALL=C
+
+PROG=ccrc-adopt
+HUES=(cyan violet blue magenta amber green)
+ID_RE='^[a-z][a-z0-9-]{0,31}$'
+# Mirrors shared/roster.ts's second, independent gate on configDirSuffix: the
+# safe set an id's config dir suffix is allowed to use once the leading "."
+# is stripped. Kept here, not derived from the TypeScript, for the same
+# reason deploy/gen-accounts.mjs keeps its own copy (see that file's header)
+# — a bare bash script cannot import shared/roster.ts either.
+SUFFIX_SAFE_RE='^\.[A-Za-z0-9._-]+$'
+
+usage() {
+  cat <<EOF
+usage: $PROG [--out PATH] [--force]
+
+Rediscovers this box's Claude Code accounts from \$HOME/.local/bin and prints
+the resulting accounts.json to stdout. Writes it to PATH (default
+\$HOME/.ccrc/accounts.json) unless PATH already exists, in which case it
+prints the proposal and refuses to overwrite — pass --force to overwrite
+anyway.
+EOF
+}
+
+OUT=""
+FORCE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) OUT="${2:?--out requires a path}"; shift 2 ;;
+    --out=*) OUT="${1#--out=}"; shift ;;
+    --force) FORCE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+[ -n "$OUT" ] || OUT="$HOME/.ccrc/accounts.json"
+
+BIN_DIR="$HOME/.local/bin"
+[ -d "$BIN_DIR" ] || { echo "$PROG: $BIN_DIR does not exist — nothing to adopt" >&2; exit 1; }
+
+# Where deploy/gen-accounts.mjs lives relative to THIS script, not relative to
+# $PWD — adopt is meant to be run as `bash ccd/ccrc-adopt` from anywhere
+# inside a checkout. Used at the very end to validate this script's own
+# output (see the "SELF-VALIDATION" section) rather than re-implementing
+# parseRoster's rules a third time (shared/roster.ts is #1, gen-accounts.mjs
+# is #2 — see that file's header for why a bare interpreter can't import the
+# TypeScript directly).
+HERE="$(cd "$(dirname "$0")" && pwd)"
+GEN_ACCOUNTS="$HERE/../deploy/gen-accounts.mjs"
+
+# ── first bytes, without ever reading a whole candidate ───────────────────
+# `head -c 2` opens the file and stops after two bytes — it never loads the
+# rest, script or (crucially) 300+ MB binary, into anything. Symlinks are
+# followed transparently (open(2) does that for a content read; only `stat`
+# without -L would report the link's own tiny size instead).
+first_two_bytes() { head -c 2 -- "$1" 2>/dev/null || true; }
+is_script() { [ "$(first_two_bytes "$1")" = '#!' ]; }
+
+# ── pass 0: candidate names — regular files (symlinks OK), executable, and
+#    shaped like a legal account id. This one filter is what drops every
+#    ccd.bak-<date>, ccd.pre-flip and claude2.bak-<date> this box has lying
+#    around: a real id never contains ".", and none of those do without one. ─
+declare -a CAND=()
+shopt -s nullglob
+for f in "$BIN_DIR"/*; do
+  [ -f "$f" ] || continue
+  [ -x "$f" ] || continue
+  name="$(basename "$f")"
+  [[ "$name" =~ $ID_RE ]] || continue
+  CAND+=("$name")
+done
+shopt -u nullglob
+
+if [ "${#CAND[@]}" -eq 0 ]; then
+  echo "$PROG: no id-shaped executable under $BIN_DIR — nothing to adopt" >&2
+  exit 1
+fi
+
+# ── pass 0.5: drop symlink aliases of another candidate in the same
+#    directory. This box's own gpt -> ccgpt is the measured case: both names
+#    resolve to the identical script, so without this step adopt would
+#    propose two accounts fighting over one CLAUDE_CONFIG_DIR. The symlink's
+#    OWN name is kept (it is the public name an operator types); the target
+#    it points at is dropped, but only when that target is ALSO one of our
+#    own candidates — claude's own symlink target lives outside
+#    $HOME/.local/bin entirely and is untouched by this. ──────────────────
+declare -A DROPPED=()
+for name in "${CAND[@]}"; do
+  f="$BIN_DIR/$name"
+  [ -L "$f" ] || continue
+  target="$(readlink -f -- "$f" 2>/dev/null || true)"
+  [ -n "$target" ] || continue
+  tname="$(basename "$target")"
+  [ "$tname" != "$name" ] || continue
+  for other in "${CAND[@]}"; do
+    if [ "$other" = "$tname" ]; then
+      DROPPED["$tname"]="superseded by symlink alias \"$name\""
+      break
+    fi
+  done
+done
+if [ "${#DROPPED[@]}" -gt 0 ]; then
+  declare -a KEPT=()
+  for name in "${CAND[@]}"; do
+    if [ -n "${DROPPED[$name]:-}" ]; then
+      echo "$PROG: note: \"$name\" is $BIN_DIR/$name's own file, but another candidate symlinks straight to it — treating it as an implementation detail, not a second account (${DROPPED[$name]})" >&2
+      continue
+    fi
+    KEPT+=("$name")
+  done
+  CAND=("${KEPT[@]}")
+fi
+
+# ── pass 1: which candidates set CLAUDE_CONFIG_DIR at all? Only scripts can
+#    (a 300 MB ELF cannot contain a meaningful shell assignment we'd want to
+#    trust), so is_script gates the grep — the binary is_script rejects never
+#    gets read a second time. ──────────────────────────────────────────────
+declare -a CFG_SCRIPTS=()
+for name in "${CAND[@]}"; do
+  f="$BIN_DIR/$name"
+  is_script "$f" || continue
+  grep -qE '^[[:space:]]*export[[:space:]]+CLAUDE_CONFIG_DIR=' "$f" 2>/dev/null && CFG_SCRIPTS+=("$name")
+done
+
+if [ "${#CFG_SCRIPTS[@]}" -eq 0 ]; then
+  echo "$PROG: no script under $BIN_DIR sets CLAUDE_CONFIG_DIR — nothing to adopt" >&2
+  exit 1
+fi
+
+# ── pass 2: parse the generated SHAPE of every CLAUDE_CONFIG_DIR script,
+#    target-agnostic — this is deliberately ONE function used for two
+#    different questions (which binary is upstream, and which scripts are
+#    "generated"), because both questions depend on the exact same shape
+#    test and a second, looser copy of it is how the two would drift.
+#
+#    "Full shape match" means: the shebang line is EXACTLY
+#    `#!/usr/bin/env bash`; every remaining blank or comment-only line is
+#    stripped; what is left is EXACTLY two or three lines, in order — an
+#    export, an optional secrets-sourcing guard, and an exec of SOME local
+#    binary — with nothing else. Comments are the one thing this tolerates
+#    ANYWHERE in that gap: the two real generated wrappers measured on this
+#    box (claude2, claude-dev0) both carry an explanatory comment ahead of
+#    their secrets line, and a classifier that could not round-trip its own
+#    prior output would be useless for re-running adopt on a box it already
+#    touched.
+#
+#    The exec line's TARGET is captured but not yet judged — that happens
+#    once every script has been parsed and the votes are in (pass 3). A
+#    script with the right shape but the wrong target (a bespoke launcher
+#    that also happens to end `exec "$HOME/.local/bin/<something-else>"
+#    "$@"`) must never get a vote for the WRONG binary, which is what
+#    resolving the target here, before consensus exists, would risk.
+#
+#    Each significant line is checked by STRIPPING the known literal prefix
+#    and suffix (quoted, so no part of it is ever treated as a glob or
+#    regex) and then reconstructing the exact line adopt expects from what
+#    was captured, comparing the two strings whole. That is deliberate: a
+#    regex capturing two occurrences of the same path in one line is exactly
+#    the kind of pattern that is easy to write wrong in a way that silently
+#    accepts a mismatched pair; reconstruct-then-compare cannot make that
+#    mistake — it comes back with the reconstructed answer, or the line
+#    disagrees. Prints `ok\t<target>\t<suffix>\t<secrets>` or `no\t\t\t`. ──
+parse_shape() {
+  local f="$1"
+  local -a lines=()
+  mapfile -t lines < "$f"
+
+  if [ "${lines[0]:-}" != '#!/usr/bin/env bash' ]; then
+    printf 'no\t\t\t\n'; return
+  fi
+
+  local -a body=()
+  local i ln
+  for ((i = 1; i < ${#lines[@]}; i++)); do
+    ln="${lines[$i]}"
+    [[ "$ln" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$ln" =~ ^[[:space:]]*# ]] && continue
+    body+=("$ln")
+  done
+
+  local n="${#body[@]}"
+  if [ "$n" -ne 2 ] && [ "$n" -ne 3 ]; then
+    printf 'no\t\t\t\n'; return
+  fi
+
+  # Line 1: export CLAUDE_CONFIG_DIR="$HOME/<suffix>"
+  local exp_prefix='export CLAUDE_CONFIG_DIR="$HOME/'
+  ln="${body[0]}"
+  if [[ "$ln" != "$exp_prefix"* || "$ln" != *'"' ]]; then
+    printf 'no\t\t\t\n'; return
+  fi
+  # exp_prefix ends in "/", one character short of the suffix's own leading
+  # "." (the file reads `$HOME/.claude-personal`) — so `suffix` already
+  # starts with "." here. Do not prepend a second one.
+  local suffix="${ln#"$exp_prefix"}"
+  suffix="${suffix%\"}"
+  if [ "$suffix" = "." ] || [[ ! "$suffix" =~ $SUFFIX_SAFE_RE ]]; then
+    printf 'no\t\t\t\n'; return
+  fi
+
+  local secrets=""
+  local idx=1
+  if [ "$n" -eq 3 ]; then
+    local sec_prefix='[ -r "$HOME/'
+    ln="${body[1]}"
+    if [[ "$ln" != "$sec_prefix"*'"'* ]]; then
+      printf 'no\t\t\t\n'; return
+    fi
+    local rest="${ln#"$sec_prefix"}"
+    local path1="${rest%%\"*}"
+    local expected="$sec_prefix$path1"'" ] && . "$HOME/'"$path1"'"'
+    if [ "$ln" != "$expected" ]; then
+      printf 'no\t\t\t\n'; return
+    fi
+    secrets="$path1"
+    idx=2
+  fi
+
+  # exec "$HOME/.local/bin/<target>" "$@" — target not yet judged.
+  local exec_prefix='exec "$HOME/.local/bin/'
+  ln="${body[$idx]}"
+  if [[ "$ln" != "$exec_prefix"*'" "$@"' ]]; then
+    printf 'no\t\t\t\n'; return
+  fi
+  local rest="${ln#"$exec_prefix"}"
+  local target="${rest%'" "$@"'}"
+  [[ "$target" =~ $ID_RE ]] || { printf 'no\t\t\t\n'; return; }
+
+  printf 'ok\t%s\t%s\t%s\n' "$target" "$suffix" "$secrets"
+}
+
+# `export CLAUDE_CONFIG_DIR="$HOME/<suffix>"` value regardless of whether the
+# rest of the file matches the generated shape — every external account still
+# needs a configDirSuffix in its roster entry, and this is the one field a
+# bespoke script genuinely does declare in the open, in exactly this shape,
+# even when nothing else about the file is generated (measured: gpt does).
+extract_suffix_loose() {
+  local f="$1" ln
+  local exp_prefix='export CLAUDE_CONFIG_DIR="$HOME/'
+  while IFS= read -r ln; do
+    if [[ "$ln" == "$exp_prefix"*'"'* ]]; then
+      local rest="${ln#"$exp_prefix"}"
+      # Same "/" vs "." boundary as parse_shape: rest already starts with
+      # the suffix's own leading ".".
+      printf '%s' "${rest%%\"*}"
+      return
+    fi
+  done < "$f"
+}
+
+# Parse every CLAUDE_CONFIG_DIR script exactly once, target-agnostic, and
+# cache the result — pass 3 (voting) and pass 4 (final classification) both
+# read this cache rather than re-parsing.
+mapfile -t REST < <(printf '%s\n' "${CFG_SCRIPTS[@]}" | sort)
+declare -A SHAPE_OK=() SHAPE_TARGET=() SHAPE_SUFFIX=() SHAPE_SECRETS=()
+for name in "${REST[@]}"; do
+  IFS=$'\t' read -r ok target suffix secrets < <(parse_shape "$BIN_DIR/$name")
+  SHAPE_OK["$name"]="$ok"
+  SHAPE_TARGET["$name"]="$target"
+  SHAPE_SUFFIX["$name"]="$suffix"
+  SHAPE_SECRETS["$name"]="$secrets"
+done
+
+# ── pass 3: the upstream account. Only scripts whose shape ALREADY matched
+#    structurally (pass 2) cast a vote — a bespoke launcher whose unrelated
+#    final line happens to read `exec "$HOME/.local/bin/<x>" "$@"` never
+#    gets this far, because its body is not 2-3 significant lines to begin
+#    with (gpt's real 142-line body is nowhere close). The target with the
+#    most votes wins; a tie is genuinely ambiguous and adopt refuses to
+#    guess rather than pick one arbitrarily. ────────────────────────────────
+declare -A UPSTREAM_VOTES=()
+declare -A UPSTREAM_VOTERS=()
+for name in "${REST[@]}"; do
+  [ "${SHAPE_OK[$name]}" = ok ] || continue
+  target="${SHAPE_TARGET[$name]}"
+  UPSTREAM_VOTES["$target"]=$(( ${UPSTREAM_VOTES[$target]:-0} + 1 ))
+  UPSTREAM_VOTERS["$target"]="${UPSTREAM_VOTERS[$target]:-} $name"
+done
+
+if [ "${#UPSTREAM_VOTES[@]}" -eq 0 ]; then
+  echo "$PROG: no CLAUDE_CONFIG_DIR script has the generated shape (export + optional secrets + exec) — cannot find the upstream account; adopt this box by hand" >&2
+  exit 1
+fi
+UPSTREAM_ID=""
+best=-1
+tied=0
+for target in "${!UPSTREAM_VOTES[@]}"; do
+  v="${UPSTREAM_VOTES[$target]}"
+  if [ "$v" -gt "$best" ]; then best="$v"; UPSTREAM_ID="$target"; tied=0;
+  elif [ "$v" -eq "$best" ]; then tied=$((tied + 1)); fi
+done
+if [ "$tied" -gt 0 ]; then
+  echo "$PROG: ambiguous upstream — wrapper scripts are evenly split between different binaries (${!UPSTREAM_VOTES[*]}); refusing to guess" >&2
+  exit 1
+fi
+UPSTREAM_PATH="$BIN_DIR/$UPSTREAM_ID"
+
+if [ ! -e "$UPSTREAM_PATH" ]; then
+  echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} but $UPSTREAM_PATH does not exist" >&2
+  exit 1
+fi
+if is_script "$UPSTREAM_PATH"; then
+  echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, but it is itself a script — refusing to guess an upstream account" >&2
+  exit 1
+fi
+UPSTREAM_SIZE="$(stat -L -c%s -- "$UPSTREAM_PATH" 2>/dev/null || echo '?')"
+echo "$PROG: upstream account \"$UPSTREAM_ID\" -> $UPSTREAM_PATH ($UPSTREAM_SIZE bytes, non-script), exec'd by:${UPSTREAM_VOTERS[$UPSTREAM_ID]}" >&2
+
+# ── pass 4: finalize every script's kind now that UPSTREAM_ID is settled —
+#    "generated" iff its shape matched AND its target IS the winning
+#    upstream; everything else, including a shape-plausible script that
+#    lost the vote, is "external". ───────────────────────────────────────
+declare -a IDS=() LABELS=() SUFFIXES=() KINDS=() SECRETS=()
+
+IDS+=("$UPSTREAM_ID"); LABELS+=("$UPSTREAM_ID"); SUFFIXES+=(".claude"); KINDS+=(upstream); SECRETS+=("")
+if [ ! -d "$HOME/.claude" ]; then
+  echo "$PROG: note: $HOME/.claude does not exist yet — \"$UPSTREAM_ID\" has apparently never been run" >&2
+fi
+
+for name in "${REST[@]}"; do
+  [ "$name" = "$UPSTREAM_ID" ] && continue   # can't happen (upstream is non-script) but stay defensive
+  if [ "${SHAPE_OK[$name]}" = ok ] && [ "${SHAPE_TARGET[$name]}" = "$UPSTREAM_ID" ]; then
+    kind=generated; suffix="${SHAPE_SUFFIX[$name]}"; secrets="${SHAPE_SECRETS[$name]}"
+  else
+    kind=external
+    if [ "${SHAPE_OK[$name]}" = ok ]; then
+      suffix="${SHAPE_SUFFIX[$name]}"
+      echo "$PROG: note: \"$name\" has the generated shape but execs \"${SHAPE_TARGET[$name]}\", not the upstream \"$UPSTREAM_ID\" — kept as external" >&2
+    else
+      suffix="$(extract_suffix_loose "$BIN_DIR/$name")"
+    fi
+    secrets=""
+  fi
+  if [ -z "$suffix" ]; then
+    echo "$PROG: \"$name\" sets CLAUDE_CONFIG_DIR in an unrecognised shape — skipping it; adopt this account by hand" >&2
+    continue
+  fi
+  IDS+=("$name"); LABELS+=("$name"); SUFFIXES+=("$suffix"); KINDS+=("$kind"); SECRETS+=("$secrets")
+done
+
+echo "$PROG: label is id-as-written for every account below — none of these are the friendly names an operator picked (e.g. \"team·max\"), because nothing on disk records that. Edit \"label\" in $OUT by hand once it's written." >&2
+echo "$PROG: homeAble and telemetry are policy defaults inferred from exec kind (upstream/generated -> true/anthropic, external -> false/none), not facts read off disk — review and edit them in $OUT too." >&2
+
+# ── build the JSON ─────────────────────────────────────────────────────
+declare -a ACCOUNT_JSON=()
+n="${#IDS[@]}"
+for ((i = 0; i < n; i++)); do
+  hue="${HUES[$((i % ${#HUES[@]}))]}"
+  case "${KINDS[$i]}" in
+    upstream) exec_json='{"kind":"upstream"}'; homeAble=true; telemetry=anthropic ;;
+    generated)
+      if [ -n "${SECRETS[$i]}" ]; then
+        exec_json="$(jq -nc --arg s "${SECRETS[$i]}" '{kind:"generated", secretsFile:$s}')"
+      else
+        exec_json='{"kind":"generated"}'
+      fi
+      homeAble=true; telemetry=anthropic
+      ;;
+    external) exec_json='{"kind":"external"}'; homeAble=false; telemetry=none ;;
+  esac
+  ACCOUNT_JSON+=("$(jq -nc \
+    --arg id "${IDS[$i]}" --arg label "${LABELS[$i]}" --arg suffix "${SUFFIXES[$i]}" \
+    --argjson exec "$exec_json" --argjson homeAble "$homeAble" --arg hue "$hue" --arg telemetry "$telemetry" \
+    '{id:$id, label:$label, configDirSuffix:$suffix, exec:$exec, homeAble:$homeAble, hue:$hue, telemetry:$telemetry}')")
+done
+
+ROSTER_JSON="$(printf '%s\n' "${ACCOUNT_JSON[@]}" | jq -s '{version: 1, accounts: .}')"
+PRETTY="$(printf '%s' "$ROSTER_JSON" | jq '.')"
+
+if [ "${KINDS[0]}" != upstream ] || [ "${#KINDS[@]}" -eq 0 ]; then
+  echo "$PROG: internal error: no upstream account in the assembled roster" >&2
+  exit 1
+fi
+n_up=0
+for k in "${KINDS[@]}"; do [ "$k" = upstream ] && n_up=$((n_up + 1)); done
+if [ "$n_up" -ne 1 ]; then
+  echo "$PROG: internal error: assembled $n_up upstream accounts, expected exactly 1" >&2
+  exit 1
+fi
+
+# ── cross-check: report, never filter (design brief §"CLASSIFICATION
+#    RULES"). Three independent sources a real account usually also shows up
+#    in; disagreement is surfaced, not resolved by silently trusting one. ──
+cross_check() {
+  local label="$1"; shift
+  local -a have=("$@")
+  local x found
+  for x in "${have[@]}"; do
+    found=0
+    for id in "${IDS[@]}"; do [ "$id" = "$x" ] && { found=1; break; }; done
+    [ "$found" -eq 1 ] || echo "$PROG: cross-check: $label mentions \"$x\", which adopt did not discover in $BIN_DIR" >&2
+  done
+  for id in "${IDS[@]}"; do
+    found=0
+    for x in "${have[@]}"; do [ "$x" = "$id" ] && { found=1; break; }; done
+    [ "$found" -eq 1 ] || echo "$PROG: cross-check: adopt discovered \"$id\", which $label never mentions" >&2
+  done
+}
+
+declare -a LIMITS_IDS=()
+if [ -d "$HOME/.cc-limits" ]; then
+  for f in "$HOME"/.cc-limits/*.json; do
+    [ -f "$f" ] || continue
+    LIMITS_IDS+=("$(basename "$f" .json)")
+  done
+fi
+cross_check '$HOME/.cc-limits/*.json' "${LIMITS_IDS[@]}"
+
+declare -a REGISTRY_IDS=()
+if [ -d "$HOME/.cc-sessions" ]; then
+  # `.wrapper` files are written without a trailing newline (measured), so
+  # `cat *.wrapper | sort` would run every file's content together into one
+  # unsplit line — `printf '%s\n'` per file forces one line each regardless.
+  mapfile -t REGISTRY_IDS < <(
+    shopt -s nullglob
+    for wf in "$HOME"/.cc-sessions/*.wrapper; do
+      printf '%s\n' "$(cat "$wf")"
+    done | sort -u
+  )
+fi
+cross_check "the ~/.cc-sessions session registry" "${REGISTRY_IDS[@]}"
+
+declare -a CLAUDE_DIR_SUFFIXES=()
+shopt -s nullglob
+for d in "$HOME"/.claude*; do
+  [ -d "$d" ] || continue
+  CLAUDE_DIR_SUFFIXES+=("$(basename "$d")")
+done
+shopt -u nullglob
+for d in "${CLAUDE_DIR_SUFFIXES[@]}"; do
+  found=0
+  for s in "${SUFFIXES[@]}"; do [ "$s" = "$d" ] && { found=1; break; }; done
+  [ "$found" -eq 1 ] || echo "$PROG: cross-check: $HOME/$d exists but no discovered account claims it as configDirSuffix" >&2
+done
+for s in "${SUFFIXES[@]}"; do
+  found=0
+  for d in "${CLAUDE_DIR_SUFFIXES[@]}"; do [ "$d" = "$s" ] && { found=1; break; }; done
+  [ "$found" -eq 1 ] || echo "$PROG: cross-check: no $HOME/$s directory yet for a discovered account (never run)" >&2
+done
+
+# ── self-validation: the JSON above must parse cleanly through parseRoster
+#    before adopt writes (or even offers) it. gen-accounts.mjs is used rather
+#    than a third hand-rolled copy of parseRoster's rules — its own test
+#    suite (server/test/gen-accounts.test.ts) pins it to accept exactly what
+#    parseRoster accepts and reject everything parseRoster rejects, which
+#    makes "gen-accounts.mjs is happy" a faithful proxy for "parseRoster is
+#    happy" without re-deriving that proof here. ───────────────────────────
+if [ ! -f "$GEN_ACCOUNTS" ]; then
+  echo "$PROG: cannot self-validate: $GEN_ACCOUNTS is missing — is this a full ccrc-pwa checkout?" >&2
+  exit 1
+fi
+TMP_JSON="$(mktemp)"
+trap 'rm -f "$TMP_JSON"' EXIT
+printf '%s' "$PRETTY" > "$TMP_JSON"
+if ! GEN_ERR="$(node "$GEN_ACCOUNTS" "$TMP_JSON" 2>&1 >/dev/null)"; then
+  echo "$PROG: the roster this run assembled does not parse — this is a bug in $PROG, not your box. Nothing was written." >&2
+  echo "$PROG: $GEN_ERR" >&2
+  exit 1
+fi
+
+# ── the one write this tool ever makes ─────────────────────────────────
+printf '%s\n' "$PRETTY"
+
+if [ -e "$OUT" ] && [ "$FORCE" -ne 1 ]; then
+  echo "$PROG: $OUT already exists — printed the proposal above but did not touch it. Re-run with --force to overwrite." >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$OUT")"
+TMP_OUT="$OUT.tmp.$$"
+printf '%s\n' "$PRETTY" > "$TMP_OUT"
+mv -f "$TMP_OUT" "$OUT"
+echo "$PROG: wrote $OUT" >&2

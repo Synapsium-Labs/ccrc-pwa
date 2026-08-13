@@ -126,7 +126,95 @@ ship_secret() {
   fi
 }
 
+# The roster a box that has none gets SEEDED with. `~/.ccrc/accounts.json` is
+# USER-OWNED config (stage-2a design §5): ccrc creates it once and never
+# overwrites it, so an operator's edit on the box survives every later deploy.
+# That is the exact opposite rule to `install_atomic`, which is for ccrc-OWNED
+# files a deploy replaces wholesale — `~/.ccrc/accounts.sh`, the generated bash
+# projection of this file, goes through that path instead.
+#   deploy/accounts.migration.json — this fleet's five accounts, byte for byte,
+#     so the reference installation keeps its identity across the flip.
+#   deploy/accounts.default.json   — the single-`claude` roster a fresh,
+#     unrelated install should start from.
+# Point CCRC_ACCOUNTS_JSON at either, or at a roster of your own.
+ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-deploy/accounts.migration.json}"
+
+# `node` ON THE DEPLOYING MACHINE is NEW as of this branch — no earlier deploy
+# needed a local interpreter at all (the remote build runs node on the BOX).
+# Both branches below now run `deploy/gen-accounts.mjs` locally, and both
+# report any nonzero exit from it as "the roster is not one ccrc can use" —
+# including 127, `node: command not found`. That sends an operator to debug a
+# roster file that is perfectly fine, on a machine whose actual problem is a
+# missing interpreter (F2, final review). Ask the question separately, with
+# its own answer, and ask it BEFORE the first ssh so a workstation that cannot
+# run the deploy at all learns it without touching the box.
+require_node() {
+  command -v node >/dev/null 2>&1 || {
+    echo "deploy: FAILED — no \`node\` on PATH on THIS machine (the one running deploy.sh)." >&2
+    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node >=22.13.0 locally;" >&2
+    echo "  this is NOT a problem with $ACCOUNTS_JSON or with the roster on $BOX. Install node and re-run." >&2
+    exit 1
+  }
+}
+require_node
+
+# The roster `ship_roster` may be about to SEED, proven usable BEFORE it is
+# seeded (F1, final review). `~/.ccrc/accounts.json` is USER-OWNED and
+# create-if-missing (see the block above), so ccrc never overwrites a seed it
+# already placed: seeding an unusable roster onto a box that had none poisons
+# that box PERMANENTLY. The deploy would abort loudly at the read-back a few
+# lines further down — and so would every later deploy, until a human ssh'd in
+# and deleted the file by hand. Validate the LOCAL bytes here, where the only
+# cost of being wrong is an exit code.
+#
+# Callers guard on `[ -f "$ACCOUNTS_JSON" ]`: an absent local roster is a
+# legitimate deploy (the box already has one, which is what the guard beside
+# each call site allows), and it is the BOX's copy — read back over ssh — that
+# gets validated in that case.
+check_local_roster() {
+  node deploy/gen-accounts.mjs "$ACCOUNTS_JSON" >/dev/null \
+    || { echo "deploy: FAILED — local $ACCOUNTS_JSON is not a roster ccrc can use (see above); refusing to seed it onto $BOX, where it would be permanent" >&2; exit 1; }
+}
+
+ship_roster() {
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
+  if ! "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/accounts.json ]'; then
+    echo "seeding $ACCOUNTS_JSON -> $BOX:~/.ccrc/accounts.json (first install only; never overwritten again)"
+    "${SCP[@]}" "$ACCOUNTS_JSON" "$BOX:.ccrc/accounts.json"
+  fi
+}
+
 if [ "$TARGET" = "agent" ]; then
+  # THE ROSTER COMES FIRST, before this branch's first mutation — the same
+  # posture, for the same reason, as the server branch's ccrc.env guard far
+  # below. From the moment the new ccd lands it runs `[[ -r
+  # ~/.ccrc/accounts.sh ]] || die` on EVERY invocation, and the supervisor
+  # sweep at the bottom of this branch restarts every live claude-session@
+  # unit, each of which IS a long-running ccd. A roster problem discovered
+  # halfway down would be discovered with `rsync --delete` already run, the
+  # new ccd already installed, and no rollback path.
+  [ -f "$ACCOUNTS_JSON" ] || "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/accounts.json ]' \
+    || { echo "deploy: FAILED — no roster at $ACCOUNTS_JSON locally and no ~/.ccrc/accounts.json already on $BOX; ccd dies on every invocation without one" >&2; exit 1; }
+  # …and if there IS a local roster, it is the one `ship_roster` may seed onto
+  # a box that has none — permanently, since ccrc never overwrites it. Prove
+  # it parses before it can land. `[ ! -f X ] || …` (the file's own
+  # absent-source-is-the-only-skippable-case idiom): an absent local roster is
+  # handled by the guard above, a present-but-broken one must abort here.
+  [ ! -f "$ACCOUNTS_JSON" ] || check_local_roster
+  ship_roster
+  # Generated from the roster THE BOX WILL BOOT WITH — read back over ssh,
+  # never from the local file — so that the generated file's own first claim
+  # ("Generated from ~/.ccrc/accounts.json") is true on a box whose operator
+  # has since edited that file, and so ccd's routing can never disagree with
+  # what the server serves from that same box's copy. `ship_roster` above has
+  # just guaranteed the file exists. Generation runs HERE rather than beside
+  # the install below so that an unusable roster fails the deploy before
+  # anything is replaced; the resulting temp file is what gets installed.
+  BOX_ROSTER="$(mktemp)"
+  ACCOUNTS_SH="$(mktemp)"
+  "${SSH[@]}" "$BOX" 'cat ~/.ccrc/accounts.json' > "$BOX_ROSTER"
+  node deploy/gen-accounts.mjs "$BOX_ROSTER" > "$ACCOUNTS_SH" \
+    || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); refusing to ship a ccd that cannot read it" >&2; exit 1; }
   # Back up what the previous deploy left before rsync --delete rewrites it,
   # and before ccd/notify.sh/session-hook.sh are overwritten. cp -a keeps
   # modes and mtimes.
@@ -173,6 +261,26 @@ if [ "$TARGET" = "agent" ]; then
     agent shared deploy ccd "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
   ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token
+  # THE ROSTER LANDS BEFORE ccd, and that ordering is the whole point of this
+  # block. The ccd installed on the next line refuses to run AT ALL without
+  # ~/.ccrc/accounts.sh (its own `|| die`, naming the remedy), so shipping ccd
+  # first would kill every ccd invocation in the gap — including the ones the
+  # supervisor sweep at the bottom of this branch makes, across every live
+  # session on the box.
+  # `install_atomic` does NOT create its destination directory, and the only
+  # unconditional `mkdir -p ~/.ccrc` on this path lives inside the build-stamp
+  # helper, which runs AFTER ccd. The mkdir here is what this call depends on
+  # — not `ship_roster`'s earlier one, which belongs to a step that could move.
+  #
+  # agent/test/deploy-verify.test.ts pins the order by comparing these two
+  # `install_atomic` invocations, and this comment deliberately does NOT
+  # spell the build-stamp helper's name: two assertions there locate that
+  # helper's CALL with `indexOf(<name>, agentBranchStart)`, so any earlier
+  # mention of it in prose shadows the real invocation and fails the suite.
+  # Measured, on this exact comment, on this task's first run.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
+  install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644
+  rm -f "$ACCOUNTS_SH" "$BOX_ROSTER"
   # ccd installs BEFORE the agent restart, never after: the agent caches
   # `ccd caps` at boot (the 113-second lesson), so an agent restarted against
   # yesterday's ccd pins yesterday's verb set until someone restarts it again.
@@ -316,6 +424,28 @@ else
     "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/ccrc.env ]' \
       || { echo "deploy: FAILED — no deploy/ccrc.env locally and no ~/.ccrc/ccrc.env already on $BOX; refusing to ship a config-less unit" >&2; exit 1; }
   fi
+  # The same refusal for the roster, and a sharper one. `loadConfig`
+  # (server/src/config.ts) REFUSES TO BOOT without ~/.ccrc/accounts.json — by
+  # design, so a fleet never runs against a roster that is not the box's — and
+  # ccrc.service is Restart=always with RestartSec=3 and NO StartLimit. A
+  # post-restart health check would come too late BY CONSTRUCTION: this branch
+  # replaces dist/ and stamps build.json before the curl at the bottom runs,
+  # with no rollback, so a late failure leaves the box mutated and crash-looping
+  # every three seconds. Refuse first, seed second, and only then prove the
+  # roster the box will actually boot with parses — all before the PWA build
+  # and every mutation below it.
+  [ -f "$ACCOUNTS_JSON" ] || "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/accounts.json ]' \
+    || { echo "deploy: FAILED — no roster at $ACCOUNTS_JSON locally and no ~/.ccrc/accounts.json already on $BOX; the server refuses to boot without one" >&2; exit 1; }
+  # Same seed-time proof as the agent branch, for the same reason: a bad local
+  # roster seeded onto a fresh box is never overwritten again, so it has to be
+  # rejected while it is still only a local file (F1, final review).
+  [ ! -f "$ACCOUNTS_JSON" ] || check_local_roster
+  ship_roster
+  BOX_ROSTER="$(mktemp)"
+  "${SSH[@]}" "$BOX" 'cat ~/.ccrc/accounts.json' > "$BOX_ROSTER"
+  node deploy/gen-accounts.mjs "$BOX_ROSTER" > /dev/null \
+    || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); the server would crash-loop on it" >&2; exit 1; }
+  rm -f "$BOX_ROSTER"
   # The server serves whatever server/dist-pwa holds, and rsync's
   # `--exclude dist` never matched dist-pwa — which is how a green deploy
   # shipped a stale bundle twice. Build the PWA HERE, in this run, and refuse

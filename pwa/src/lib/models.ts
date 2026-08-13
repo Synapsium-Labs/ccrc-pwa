@@ -11,8 +11,13 @@ export interface PickOption {
 }
 
 /** Model chooser rows. `current` is the pane statusline display name
- *  ("Opus 4.8 (1M context)", "GPT-5.6 Sol") — matched loosely so the 1M suffix
- *  doesn't defeat the highlight. */
+ *  ("Opus 5 (1M context)", "GPT-5.6 Sol") — matched loosely so the 1M suffix
+ *  doesn't defeat the highlight.
+ *
+ *  Labels are the family's CURRENT latest (the `/model <alias>` command sends a
+ *  bare family alias, which the harness auto-resolves to the newest in that
+ *  family — `opus` → Opus 5 on Anthropic API as of CC v2.1.219+). Bump a label
+ *  when a family's newest name changes; the alias itself never needs touching. */
 export function modelOptions(wrapper: string, current: string | null): PickOption[] {
   const c = (current ?? '').toLowerCase();
   const row = (label: string, alias: string, key: string, sublabel?: string): PickOption => ({
@@ -26,7 +31,7 @@ export function modelOptions(wrapper: string, current: string | null): PickOptio
     ];
   }
   return [
-    row('Opus 4.8', 'opus', 'opus'),
+    row('Opus 5', 'opus', 'opus'),
     row('Sonnet 5', 'sonnet', 'sonnet'),
     row('Fable 5', 'fable', 'fable'),
     row('Haiku 4.5', 'haiku', 'haiku'),

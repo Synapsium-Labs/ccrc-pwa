@@ -38,6 +38,35 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // even though no test can tell this line apart from its own absence.
   'ws-audit': 90_000,
   'ws-reap': 240_000,
+  // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
+  // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
+  // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in
+  // `_accept_first_run_prompts` until the new pane renders a ready banner —
+  // i.e. a COLD Claude Code start against a freshly seeded workspace HOME. That
+  // is not a fleet operation whose cost this repo controls: it boots a node
+  // process, reads the wrapper's config, and dials every configured MCP server,
+  // and on the live fleet a workspace whose MCP servers were awaiting
+  // authentication was still not ready 90 s in.
+  //
+  // What the flat default did there is the whole reason these rows exist:
+  // `cmd_ws_add` writes the worktree and every registry row FIRST and calls
+  // `_spawn` LAST, so a kill at 90 s landed AFTER the workspace existed and
+  // BEFORE `_reg_set started 1` — leaving a fully-registered workspace with no
+  // session, bound to no run, while dispatch answered `fleetFailed` with an
+  // EMPTY stderr (a killed child writes nothing) and the run stayed `planned`.
+  // An orphan is the expensive failure: it costs a worktree, a branch and a
+  // registry identity that only a human may clear (`ws-rm`/`ws-reap` are
+  // human-only by contract), so this budget is set to the ceiling deliberately
+  // — being slow here costs one request, being short costs manual cleanup.
+  //
+  // NOT the whole fix, and the remaining half is stated so it is not mistaken
+  // for one: `_accept_first_run_prompts` waits up to ~900 s (450 * 2 s), which
+  // EXCEEDS the agent's 300 s ceiling, so a session slower than 300 s still
+  // cannot be spawned through this path at all — it can only ever be killed.
+  // Bounding ccd's own wait below this ceiling, and making `ws-add` recoverable
+  // rather than orphaning when it is hit, is tracked as the ccd-side half.
+  'ws-add': 300_000,
+  ensure: 300_000,
 };
 
 function timeoutMsFor(cmd: string, args: string[]): number {

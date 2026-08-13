@@ -13,12 +13,12 @@
 // beats coupling component trees that must not depend on each other mounting.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AccountUsage, ProjectedHome } from '../../../shared/api';
+import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
 import { Skeleton } from '../components/Skeleton';
 import { formatAge, formatReset } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, homeAbleLabelList, KNOWN_WRAPPERS } from '../lib/accounts';
+import { accountColorVar, accountLabel, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
@@ -28,15 +28,42 @@ import '../fleet/fleet.css';
 interface AccountsPoll {
   accounts: AccountUsage[] | null;               // null: no poll has landed yet
   projected: ProjectedHome | null | undefined;    // undefined: no poll has landed yet; null: landed, nothing placeable
+  roster: RosterWire[];                           // []: no poll has landed yet, same as accounts/projected
 }
 
 function useAccountsPoll(): AccountsPoll {
-  const [state, setState] = useState<AccountsPoll>({ accounts: null, projected: undefined });
+  const [state, setState] = useState<AccountsPoll>({ accounts: null, projected: undefined, roster: [] });
   useEffect(() => {
     let live = true;
     const load = (): void => {
       void api.accounts()
-        .then((r) => { if (live) setState({ accounts: r.accounts, projected: r.projected }); })
+        .then((r) => {
+          if (!live) return;
+          // `Array.isArray`, not a bare trust: a fetch stub answering an
+          // unmatched route with bare `{}` (several fixtures across this
+          // suite predate Task 7 and do exactly that) hands back `r.roster
+          // === undefined`, and `rowOrder` below does `roster.map(...)`
+          // unguarded — same reasoning as `stores/fleet.ts`'s own roster
+          // poll. `accounts`/`projected` need no equivalent guard: both
+          // already degrade a bare `undefined` to their own "no poll landed"
+          // branch (the falsy `!accounts` check, the three-state `projected`
+          // read) rather than indexing into it.
+          //
+          // Functional update, not a flat object literal (fix round 1,
+          // finding 5): the flat form clobbered an already-good roster with
+          // `[]` the instant one later poll came back malformed, while
+          // `stores/fleet.ts` and `AccountsStrip.tsx` both already preserved
+          // it by simply skipping the write. `prev.roster` is the same
+          // preservation here, where `accounts`/`projected` still need to
+          // update on every read regardless. Warn once on the malformed
+          // branch — a genuine protocol break has no other signal anywhere
+          // (finding 6).
+          setState((prev) => {
+            if (Array.isArray(r.roster)) return { accounts: r.accounts, projected: r.projected, roster: r.roster };
+            console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
+            return { accounts: r.accounts, projected: r.projected, roster: prev.roster };
+          });
+        })
         .catch(() => {});
     };
     load();
@@ -46,14 +73,24 @@ function useAccountsPoll(): AccountsPoll {
   return state;
 }
 
-/** ccd's rotation order first, then any wrapper the server has telemetry for
- *  that ccd doesn't know about — the same union SwapSheet's pickableWrappers
- *  uses, so a fifth account never goes missing from either surface. */
-function rowOrder(accounts: readonly AccountUsage[]): string[] {
-  // `string[]`, not the roster's `readonly Wrapper[]` — same reasoning as
-  // SwapSheet's `pickableWrappers`: a reported account outside the roster
-  // must still get a row, not a type error.
-  const order: string[] = [...KNOWN_WRAPPERS];
+/** The roster's declaration order first, then any wrapper the server has
+ *  telemetry for that the roster doesn't (yet) know about — the same union
+ *  SwapSheet's pickableWrappers uses, so a fifth account never goes missing
+ *  from either surface.
+ *
+ *  BEFORE THE FIRST POLL: `roster` and `accounts` arrive on the exact same
+ *  `GET /api/accounts` response, so they are unknown for exactly the same
+ *  instant — there is no wrapper id to key a row on yet, roster-derived or
+ *  not. Unlike the compile-time `KNOWN_WRAPPERS` this replaces (five ids,
+ *  always available, so `rowOrder` was never empty), an empty roster
+ *  genuinely has nothing to enumerate — `rowOrder` returns `[]` here, and the
+ *  loading branch below renders a plain, count-free skeleton instead of one
+ *  row per (unknown) account. That is the honest degrade this task's brief
+ *  asks for: guessing at a row count before the roster says what the
+ *  accounts ARE would be inventing accounts, the exact failure class this
+ *  whole stage exists to end. */
+function rowOrder(roster: readonly RosterWire[], accounts: readonly AccountUsage[]): string[] {
+  const order: string[] = rosterWrapperIds(roster);
   for (const a of accounts) if (!order.includes(a.wrapper)) order.push(a.wrapper);
   return order;
 }
@@ -79,12 +116,12 @@ function Bar({ label, pct, resetAt, nowSec, rolledOver }: {
 }
 
 export function AccountsScreen(): ReactNode {
-  const { accounts, projected } = useAccountsPoll();
+  const { accounts, projected, roster } = useAccountsPoll();
   const sessions = useFleetStore((s) => s.sessions);
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
 
-  const order = rowOrder(accounts ?? []);
+  const order = rowOrder(roster, accounts ?? []);
 
   // ccd's own rule, restated ("next workspace lands here — least-loaded"),
   // including the Rider B case where nothing is placeable. `undefined`
@@ -97,11 +134,21 @@ export function AccountsScreen(): ReactNode {
   // right below, so "all accounts disabled" would read as a claim about the
   // list under it that the server never actually checked. Naming the three
   // lanes individually is what ccd's own placement refusal already does.
+  //
+  // `homeAbleNames === ''` (fix round 1, finding 7): `projected` and `roster`
+  // arrive on the same poll response in the steady state, but a first
+  // response that lands with a valid `projected: null` and a malformed
+  // `roster` leaves `roster` at its `[]` default (`useAccountsPoll`
+  // preserves rather than clobbers on a malformed read — see its own
+  // comment) — same degenerate case ProjectCard's `addLabel` guards.
+  const homeAbleNames = homeAbleLabelList(roster);
   const projectionLine = projected === undefined
     ? null
     : projected === null
-      ? `Next workspace: ${homeAbleLabelList()} all disabled — nothing can take it`
-      : `Next workspace lands on ${accountLabel(projected.wrapper)} — least-loaded`;
+      ? homeAbleNames === ''
+        ? 'Next workspace: all disabled — nothing can take it'
+        : `Next workspace: ${homeAbleNames} all disabled — nothing can take it`
+      : `Next workspace lands on ${accountLabel(roster, projected.wrapper)} — least-loaded`;
 
   return (
     <div className="accounts-screen">
@@ -128,11 +175,18 @@ export function AccountsScreen(): ReactNode {
           // handed a bare `undefined` by a test fixture whose stub returns
           // `{}` for an unmatched route, despite the declared `T[] | null` —
           // `!accounts` degrades to this branch instead of crashing on it.
-          order.map((wrapper) => (
-            <section key={wrapper} className="accounts-row" data-loading="true">
-              <Skeleton lines={3} />
-            </section>
-          ))
+          //
+          // NOT one skeleton row per `order` entry any more: `order` is
+          // DERIVED from `roster`, which arrives on this same unlanded poll —
+          // before it lands there is no wrapper id to key a row on, roster or
+          // not (unlike the compile-time `KNOWN_WRAPPERS` this replaced,
+          // which always had five). Guessing a row count from the roster this
+          // screen has not received yet would be inventing accounts, so a
+          // single count-free skeleton block stands in for "loading" instead
+          // — see `rowOrder`'s own comment.
+          <section className="accounts-row" data-loading="true">
+            <Skeleton lines={3} />
+          </section>
         ) : order.map((wrapper) => {
           const a = accounts.find((x) => x.wrapper === wrapper) ?? null;
           const disabled = a?.disabled === true;
@@ -153,9 +207,9 @@ export function AccountsScreen(): ReactNode {
               <div className="accounts-row-head">
                 <span
                   className="account-gauge-label"
-                  style={{ color: disabled ? 'var(--ink-tertiary)' : `var(${accountColorVar(wrapper)})` }}
+                  style={{ color: disabled ? 'var(--ink-tertiary)' : `var(${accountColorVar(roster, wrapper)})` }}
                 >
-                  {accountLabel(wrapper)}
+                  {accountLabel(roster, wrapper)}
                 </span>
                 {/* Disabled lanes are shown switched off, never hidden — the
                     strip's compact filter (AccountsStrip.tsx) is right for an

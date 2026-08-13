@@ -440,3 +440,29 @@ derivable from `{runId, role}` — and `'coordinator'` already resolves exactly 
 
 Motivating scenario (operator's): two programmes in one project — routing already fails shut on
 ambiguity; the programme filter and role addressing are what make it *convenient* rather than merely safe.
+
+
+---
+
+## Operator rulings, 2026-08-11 (post-review — the two sharp questions settled)
+
+**Q1 — cross-run dependency edge: DISCIPLINE, not schema.** Ruled with the orchestrator's
+reasoning adopted: `work_items.blockedBy` already demonstrated the dead-schema class; the
+discipline is checkable, not aspirational — the SKILL gains the rule "before dispatching a
+consumer wave, GET /api/runs and read the producer run's state; not `done` → do not dispatch";
+and the door stays open additively (an optional `dependsOn` + one typed refusal) to be walked
+through only when a measured incident of the phased-cutover class justifies it. Evidence
+drives schema.
+
+**Q2 — `homeProject`: EXPLICIT AND REQUIRED, soon.** Ruled against this spec's provisional
+"defaulted": inference-from-wave-1 is the defect class that caused this fleet's worst
+outages — a load-bearing fact with no declared home, derived from an accident of context
+(the wrapper map, the four-homes drift). A programme legitimately opening with a
+foreign-repo wave would get a silently wrong home and every path derivation after it would
+be wrong without ever failing loudly. Cost is minimal today (one programme has ever run;
+the coordinator always knows its home). Mechanism: the proven one-deploy-generation idiom —
+`homeProject` accepted-and-logged-legacy when absent for one generation, then required on
+the first wave's POST /api/runs and stored on the programme row.
+
+The consistency between the rulings is the principle: evidence drives schema — Q1 refuses a
+relation no incident has justified; Q2 demands a field whose absence is a known incident class.

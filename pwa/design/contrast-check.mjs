@@ -46,14 +46,16 @@ const palette = (theme) => {
     dead: of('--status-dead'), deadText: of('--status-dead-text'), deadTintSolid: of('--status-dead-tint-solid'),
     done: of('--status-done'), doneText: of('--status-done-text'),
     cleanup: of('--status-cleanup'), cleanupText: of('--status-cleanup-text'),
-    claude: of('--acct-claude'), claudeT: of('--acct-claude-tint'),
-    claude2: of('--acct-claude2'), claude2T: of('--acct-claude2-tint'),
-    corp: of('--acct-corp'), corpT: of('--acct-corp-tint'),
-    gpt: of('--acct-gpt'), gptT: of('--acct-gpt-tint'),
+    cyan: of('--acct-cyan'), cyanT: of('--acct-cyan-tint'),
+    violet: of('--acct-violet'), violetT: of('--acct-violet-tint'),
+    blue: of('--acct-blue'), blueT: of('--acct-blue-tint'),
+    magenta: of('--acct-magenta'), magentaT: of('--acct-magenta-tint'),
+    amber: of('--acct-amber'), amberT: of('--acct-amber-tint'),
+    green: of('--acct-green'), greenT: of('--acct-green-tint'),
     track: of('--limit-track'), lOk: of('--limit-ok'), lWarn: of('--limit-warn'), lCrit: of('--limit-critical'),
     diffAdd: of('--diff-add'), diffDel: of('--diff-del'),
     accentOnWell: of('--accent-on-well'),
-    // --pr-merged (tokens.css) aliases --acct-claude2, so it resolves to that
+    // --pr-merged (tokens.css) aliases --acct-violet, so it resolves to that
     // same hex per theme rather than being a second colour to keep in sync.
     prMerged: of('--pr-merged'),
   };
@@ -146,17 +148,26 @@ const pairs = (T, name) => [
   // no longer mixes anything here; tokens.css owns the 12% and audit.mjs pins
   // the solid token against the translucent one it derives from.
   [`${name} dead-text / EXIT-badge pill (12% dead over surface)`, T.deadText, T.deadTintSolid, 4.5],
-  [`${name} acct claude / tint`, T.claude, T.claudeT, 4.5],
-  [`${name} acct claude2 / tint`, T.claude2, T.claude2T, 4.5],
-  [`${name} acct corp / tint`, T.corp, T.corpT, 4.5],
-  [`${name} acct gpt / tint`, T.gpt, T.gptT, 4.5],
+  [`${name} acct cyan / tint`, T.cyan, T.cyanT, 4.5],
+  [`${name} acct violet / tint`, T.violet, T.violetT, 4.5],
+  [`${name} acct blue / tint`, T.blue, T.blueT, 4.5],
+  [`${name} acct magenta / tint`, T.magenta, T.magentaT, 4.5],
+  // amber/green (Stage 2a Task 7): the roster is runtime data now, so an
+  // account can be assigned any of the six hues in shared/roster.ts's
+  // `HUES`, not only the original four "cool half of the wheel" ones —
+  // these two are measured on exactly the same footing as the first four,
+  // never guessed.
+  [`${name} acct amber / tint`, T.amber, T.amberT, 4.5],
+  [`${name} acct green / tint`, T.green, T.greenT, 4.5],
   // The fleet row's .sess-acct label takes the account hue directly (no
   // tint pill, unlike the pickers above) straight on the project card's
   // surface ground — a genuinely new combination this branch introduces.
-  [`${name} acct claude / surface (sess-acct)`, T.claude, T.surface, 4.5],
-  [`${name} acct claude2 / surface (sess-acct)`, T.claude2, T.surface, 4.5],
-  [`${name} acct corp / surface (sess-acct)`, T.corp, T.surface, 4.5],
-  [`${name} acct gpt / surface (sess-acct)`, T.gpt, T.surface, 4.5],
+  [`${name} acct cyan / surface (sess-acct)`, T.cyan, T.surface, 4.5],
+  [`${name} acct violet / surface (sess-acct)`, T.violet, T.surface, 4.5],
+  [`${name} acct blue / surface (sess-acct)`, T.blue, T.surface, 4.5],
+  [`${name} acct magenta / surface (sess-acct)`, T.magenta, T.surface, 4.5],
+  [`${name} acct amber / surface (sess-acct)`, T.amber, T.surface, 4.5],
+  [`${name} acct green / surface (sess-acct)`, T.green, T.surface, 4.5],
   // The PR keycap's merged dot (--pr-merged, tokens.css) on the keycap's own
   // background (--bg-raised). A non-text graphical object, so 3:1, not 4.5.
   [`${name} pr-merged / raised (UI 3:1)`, T.prMerged, T.raised, 3],

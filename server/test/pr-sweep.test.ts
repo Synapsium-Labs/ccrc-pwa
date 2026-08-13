@@ -696,9 +696,9 @@ describe('the unsupported-verb branch — a fleet that never advertised pr-state
 describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent ok', () => {
   it('a valid pid with no cfgDir for its wrapper is unknown, not ok', async () => {
     // Isolates `!pid || !cfgDir` from `||`-vs-`&&`: pid resolves fine, but
-    // the wrapper was never registered in cfg.wrappers, so cfgDir is
-    // undefined. `||` must short the whole check to 'unknown' BEFORE ever
-    // handing `undefined` to readLiveState.
+    // the wrapper is not in this box's roster (`cfg.roster`), so
+    // `configDirFor` answers undefined. `||` must short the whole check to
+    // 'unknown' BEFORE ever handing `undefined` to readLiveState.
     const home = seed(['demo-quiet-basin']);
     writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.wrapper'), 'ghost-wrapper');
     const calls: string[][] = [];
@@ -727,7 +727,7 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
   // now DEGRADED instead — `readSessionRecord` finds it — so `!rec` alone no
   // longer catches this case. Written FIRST and confirmed red against the
   // pre-gate code, which would fall through past the (now-added)
-  // `measuredIdentity` check straight to `configDirFor(cfg.home, rec.wrapper)`
+  // `measuredIdentity` check straight to `configDirFor(cfg, rec.wrapper)`
   // — `rec.wrapper` measured fine here, so it would have answered `'ok'`
   // for a row whose OWN `.workdir`/`.uuid` this read could not confirm at
   // all, preserving the pre-change behaviour for the previously-dropped row

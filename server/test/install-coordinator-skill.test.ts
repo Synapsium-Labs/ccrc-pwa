@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { ACCOUNTS, type Wrapper } from '../../shared/api.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { seedAccountsSh } from './ccdWsHelpers.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-coordinator-skill.sh');
 const SRC = path.resolve(__dirname, '../../ccd/coordinator-skill');
@@ -156,29 +157,44 @@ describe('install-coordinator-skill', () => {
   });
 });
 
-describe('install-coordinator-skill.sh default homes agree with ACCOUNTS.hooksAble, behaviourally', () => {
-  // wrapper-roster-fixture.test.ts pins this by PARSING the installer's
-  // source; this proves the same claim by actually RUNNING it — same shape
-  // as install-session-hooks.test.ts's own behavioural pin (fix-round
-  // finding: the two installers' default-homes fallback is NOT the "cannot
-  // be usefully executed" case that file's header used to claim for both —
-  // this test, and that one, are the disproof). A fixture HOME gets a config
-  // dir for every roster wrapper (hooksAble and not), the installer is
-  // invoked with NO --homes argv at all (its real default), and the skill
-  // must land in exactly the hooksAble ones.
-  const WRAPPERS = Object.keys(ACCOUNTS) as Wrapper[];
+describe('install-coordinator-skill.sh default homes are the roster, behaviourally', () => {
+  // Same shape, same reason, as install-session-hooks.test.ts's own
+  // behavioural pin: the installer sources the generated `~/.ccrc/accounts.sh`
+  // and installs into every rostered account's config dir, so this RUNS it
+  // with no --homes argv against a fixture HOME holding a config dir for each.
+  //
+  // Build 7 operator ruling 2 is what this protects: the coordinator is placed
+  // like any other session, with no pinned account, so a swap must never land
+  // it on a home without its skill. The old shape of that guarantee was
+  // "ccdValid ⊆ hooksAble", an invariant between two hand-kept sets; now both
+  // installers and ccd read ONE roster, so "every account ccd can place on
+  // also has the skill" is the same statement as "the installer covers the
+  // roster", which is what this asserts.
   let rosterHome: string;
   beforeEach(() => {
     rosterHome = mkTmp('ccrc-skillinstall-roster-');
-    for (const w of WRAPPERS) fs.mkdirSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix), { recursive: true });
+    seedAccountsSh(rosterHome);
+    for (const a of DEFAULT_TEST_ROSTER.accounts) {
+      fs.mkdirSync(path.join(rosterHome, a.configDirSuffix), { recursive: true });
+    }
   });
   afterEach(() => { fs.rmSync(rosterHome, { recursive: true, force: true }); });
 
-  it("touches exactly the roster's hooksAble config dirs when given no --homes argv", () => {
+  it("touches every rostered account's config dir when given no --homes argv", () => {
     execFileSync('bash', [INSTALLER], { env: { ...process.env, HOME: rosterHome, CCRC_SKILL_SRC: SRC } });
-    for (const w of WRAPPERS) {
-      const got = fs.existsSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix, 'skills', 'ccrc-coordinator', 'SKILL.md'));
-      expect(got, w).toBe(ACCOUNTS[w].hooksAble);
+    for (const a of DEFAULT_TEST_ROSTER.accounts) {
+      const got = fs.existsSync(path.join(rosterHome, a.configDirSuffix, 'skills', 'ccrc-coordinator', 'SKILL.md'));
+      expect(got, a.id).toBe(true);
+    }
+  });
+
+  it('refuses, naming the remedy, when the box has no roster at all', () => {
+    const bare = mkTmp('ccrc-skillinstall-noroster-');
+    try {
+      expect(() => execFileSync('bash', [INSTALLER],
+        { env: { ...process.env, HOME: bare, CCRC_SKILL_SRC: SRC }, stdio: 'pipe' })).toThrow(/no account roster/);
+    } finally {
+      fs.rmSync(bare, { recursive: true, force: true });
     }
   });
 });

@@ -24,14 +24,14 @@ describe('useProjectedHome', () => {
     // The server's own "nothing is placeable" — every home-able lane
     // disabled — must render as a DIFFERENT value than "not known yet",
     // because ProjectCard gives the two different copy.
-    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
     const { result } = renderHook(() => useProjectedHome());
     await waitFor(() => expect(result.current).toBeNull());
   });
 
   it('carries a real projection through unchanged', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [], projected: { wrapper: 'claude', score: 18 },
+      accounts: [], projected: { wrapper: 'claude', score: 18 }, roster: [],
     });
     const { result } = renderHook(() => useProjectedHome());
     await waitFor(() => expect(result.current).toEqual({ wrapper: 'claude', score: 18 }));

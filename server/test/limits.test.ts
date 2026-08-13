@@ -6,10 +6,12 @@ import { localIO } from '../src/io.js';
 import { readLimits } from '../src/limits.js';
 import { rolloverCases } from './fixtures/rollover.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 
 describe('readLimits', () => {
   it('reads fresh values and decays stale ones per ccd rules', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const dir = path.join(home, '.cc-limits');
     mkdirSync(dir, { recursive: true });
     const now = 1784600000;
@@ -30,6 +32,7 @@ describe('readLimits', () => {
 describe('readLimits — a window that has rolled over', () => {
   it('reports every rollover case exactly', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const dir = path.join(home, '.cc-limits');
     mkdirSync(dir, { recursive: true });
     const now = 1785231736;
@@ -45,6 +48,7 @@ describe('readLimits — a window that has rolled over', () => {
 
   it('a rolled-over zero is distinguishable from a measured zero', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const dir = path.join(home, '.cc-limits');
     mkdirSync(dir, { recursive: true });
     const now = 1785231736;
@@ -62,6 +66,7 @@ describe('readLimits — a window that has rolled over', () => {
 describe('disabled lanes', () => {
   it('marks an account whose ccd kill-switch file is present', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(path.join(home, '.cc-limits', 'gpt.json'), JSON.stringify({ five: 10, seven: 20 }));
@@ -74,6 +79,7 @@ describe('disabled lanes', () => {
 
   it('treats an absent kill-switch as enabled', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     writeFileSync(path.join(home, '.cc-limits', 'gpt.json'), JSON.stringify({ five: 10, seven: 20 }));
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
@@ -84,6 +90,7 @@ describe('disabled lanes', () => {
 
   it('leaves a malformed limits file enabled', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     writeFileSync(path.join(home, '.cc-limits', 'gpt.json'), 'not json');
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
@@ -96,6 +103,7 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
     // No claude2.json at all — the loop over `.cc-limits/*.json` would never
     // visit claude2, so this row exists only because the backfill added it.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(path.join(home, '.cc-sessions', 'claude2-disabled'), '');
@@ -115,6 +123,7 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
   // account. `bogus-lane-disabled` pins the general case, not just this one name.
   it('never fabricates an account row for a non-wrapper marker (autocompact-disabled, and any other)', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(path.join(home, '.cc-sessions', 'autocompact-disabled'), '');

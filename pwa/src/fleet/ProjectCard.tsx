@@ -13,7 +13,7 @@
 // so it survives navigation, and a pure card is what lets a test assert folding
 // without touching localStorage.
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome } from '../../../shared/api';
+import type { FleetSession, ProjectedHome, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, homeAbleLabelList } from '../lib/accounts';
 import type { FleetGroup } from './groupFleet';
 import { SessionLine } from './SessionLine';
@@ -30,6 +30,7 @@ export function ProjectCard({
   onToggle,
   onActions,
   archivedOpen = false,
+  roster = [],
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -56,6 +57,11 @@ export function ProjectCard({
    *  must start closed — under the composite `<project>::archived` key,
    *  presence means EXPANDED. */
   archivedOpen?: boolean;
+  /** The account roster (`stores/fleet.ts`'s `roster`, read by `FleetScreen`
+   *  and threaded down) — defaults to `[]` so a card rendered before the
+   *  first poll lands degrades to the same raw-name/neutral-ink fallback
+   *  `accountLabel`/`accountColorVar` already carry for an unknown wrapper. */
+  roster?: readonly RosterWire[];
 }): ReactNode {
   // Headroom, not load: "91% free" is the question being asked ("can this
   // workspace actually run?"), and the answer stays legible when the score is
@@ -74,10 +80,21 @@ export function ProjectCard({
   // blanket "all" would overstate what the server actually knows. A value:
   // name it. The button stays enabled in all three cases regardless, because
   // ccd's die at ws-add time is the authority, not this forecast.
+  // The roster can genuinely land AFTER `projected === null` already has
+  // (they poll independently — ProjectCard's own `projected` prop comes from
+  // `useProjectedHome`, `roster` from the fleet store's separate poll), so
+  // `homeAbleLabelList` can legitimately still return `''` here (fix round 1,
+  // finding 7): `roster.filter((a) => a.homeAble)` over an empty array is
+  // empty. Naming zero accounts individually read as "New workspace on demo
+  // — all disabled" (single space, no phantom list) rather than a name
+  // list gone missing mid-sentence.
+  const homeAbleNames = homeAbleLabelList(roster);
   const addLabel = projected
-    ? `New workspace on ${group.project} — ${accountLabel(projected.wrapper)}, ${headroom}% free`
+    ? `New workspace on ${group.project} — ${accountLabel(roster, projected.wrapper)}, ${headroom}% free`
     : projected === null
-      ? `New workspace on ${group.project} — ${homeAbleLabelList()} all disabled`
+      ? homeAbleNames === ''
+        ? `New workspace on ${group.project} — all disabled`
+        : `New workspace on ${group.project} — ${homeAbleNames} all disabled`
       : `New workspace on ${group.project}`;
 
   // Status never owns the card's perimeter except for attention (the one state
@@ -123,10 +140,10 @@ export function ProjectCard({
           <span
             className="proj-card-pin"
             data-mixed={group.pin === null || undefined}
-            aria-label={group.pin === null ? 'pinned accounts differ' : `pinned to ${accountLabel(group.pin)}`}
-            style={group.pin === null ? undefined : { color: `var(${accountColorVar(group.pin)})` }}
+            aria-label={group.pin === null ? 'pinned accounts differ' : `pinned to ${accountLabel(roster, group.pin)}`}
+            style={group.pin === null ? undefined : { color: `var(${accountColorVar(roster, group.pin)})` }}
           >
-            {group.pin === null ? 'mixed' : accountLabel(group.pin)}
+            {group.pin === null ? 'mixed' : accountLabel(roster, group.pin)}
           </span>
           {/* Collapsed or not: a fold must never be able to hide a pending
               dialog, which is the one thing this screen exists to surface. */}
@@ -176,6 +193,7 @@ export function ProjectCard({
               onOpen={onOpen}
               selected={s.id === selectedId}
               onActions={onActions}
+              roster={roster}
             />
           ))}
         </div>
@@ -199,7 +217,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} />
               ))}
             </div>
           )}

@@ -8,7 +8,9 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import type { HookState } from '../src/hookstate.js';
 import type { PrState } from '../../shared/api.js';
+import { parseRoster } from '../../shared/roster.js';
 import { mkTmp } from './tmpHelpers.js';
+import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -21,33 +23,61 @@ const mkHookState = (over: Partial<HookState> = {}): HookState =>
   ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false, ...over });
 
 describe('idHomeWrapper', () => {
+  const roster = parseRoster(DEFAULT_TEST_ROSTER);
+
   it('longest prefix wins', () => {
-    expect(idHomeWrapper('claude-corp-orchard-api')).toBe('claude-corp');
-    expect(idHomeWrapper('claude2-MekWarLive')).toBe('claude2');
-    expect(idHomeWrapper('claude-synapsium-platform')).toBe('claude');
-    expect(idHomeWrapper('gpt-foo')).toBe('gpt');
+    expect(idHomeWrapper(roster, 'claude-corp-orchard-api')).toBe('claude-corp');
+    expect(idHomeWrapper(roster, 'claude2-MekWarLive')).toBe('claude2');
+    expect(idHomeWrapper(roster, 'claude-synapsium-platform')).toBe('claude');
+    expect(idHomeWrapper(roster, 'gpt-foo')).toBe('gpt');
   });
 
-  // Prophylactic pin, not a record of an observed misattribution — see
-  // `idHomeWrapper`'s own docstring in `fleet.ts` for why `claude-dev0-*`
-  // cannot appear in the registry today (`ACCOUNTS['claude-dev0'].ccdValid`
-  // is `false`). The old prefix list (`['claude-corp', 'claude2', 'claude',
-  // 'gpt']`) never even MENTIONED `claude-dev0`, so `claude-dev0-quiet-basin`
-  // fell through to the bare `'claude-'` branch — this assertion was GREEN
-  // with the WRONG answer before the fix (confirmed against the exact
-  // pre-fix source: it returned `'claude'`). Longest-`idPrefix`-wins over the
-  // `ACCOUNTS` roster is the fix: `'claude-dev0-'` (12 chars) is tried before
-  // `'claude-'` (7 chars) — and is what keeps the answer correct if
-  // `claude-dev0` (or a future wrapper shaped like it) ever becomes
-  // ccd-valid.
+  // Not prophylactic: `claude-dev0-*` ids exist in the registry today. The old
+  // prefix list (a hand-typed, unordered array) never even MENTIONED
+  // `claude-dev0`, so `claude-dev0-quiet-basin` fell through to the bare
+  // `'claude-'` branch — this assertion was GREEN with the WRONG answer before
+  // the fix (confirmed against the exact pre-fix source: it returned
+  // `'claude'`). `roster.byIdLengthDesc` is what keeps it right: `claude-dev0`
+  // (11 chars) is tried before `claude` (6).
   it('resolves claude-dev0 sessions to claude-dev0, not to claude', () => {
-    expect(idHomeWrapper('claude-dev0-quiet-basin')).toBe('claude-dev0');
+    expect(idHomeWrapper(roster, 'claude-dev0-quiet-basin')).toBe('claude-dev0');
+  });
+
+  // The ordering property, isolated from the production names that happen to
+  // exhibit it — a roster of two accounts where one id is a strict prefix of
+  // the other, which is the collision `byIdLengthDesc` exists for. Free-form
+  // ids (the point of Stage 2a) make this reachable by anyone writing an
+  // `accounts.json`, not just by the five names that shipped.
+  it('resolves the longer id when one account id is a prefix of another', () => {
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'claude', label: 'c', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'claude-dev0', label: 'd', configDirSuffix: '.claude-dev0', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] });
+    expect(idHomeWrapper(r, 'claude-dev0-quiet-basin')).toBe('claude-dev0');
+    expect(idHomeWrapper(r, 'claude-quiet-basin')).toBe('claude');
+    // The fallback branch, which no test covered before: an id with no account
+    // prefix at all — a main checkout's id is the bare project name. It answers
+    // the roster's UPSTREAM account (the one running the Claude Code binary
+    // itself), not the literal string 'claude', which is only this roster's
+    // name for it.
+    expect(idHomeWrapper(r, 'zzz-quiet-basin')).toBe('claude');
+  });
+
+  it('falls back to the upstream account whatever it is called', () => {
+    // The same fallback on a roster where the upstream account is NOT named
+    // `claude` — the assertion above cannot tell the two rules apart.
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'work', label: 'w', configDirSuffix: '.work', exec: { kind: 'generated' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'main', label: 'm', configDirSuffix: '.main', exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] });
+    expect(idHomeWrapper(r, 'OpenClawHetzner')).toBe('main');
   });
 });
 
 describe('assembleFleet', () => {
   it('joins registry, live state, limits, and tmux aliveness', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude2-MekWarLive', 'claude2');
     seedSession(home, 'claude-dead-proj', 'claude');
     mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
@@ -89,6 +119,7 @@ describe('liveStatus', () => {
   it('answers busy for a session with an unmeasured (but IRRELEVANT to this question) workdir/uuid — ' +
      'never dead, never blind to a live pane because of a read failure on a field it does not even use', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-quiet-mesa', 'claude');
     const cfgDir = path.join(home, '.claude');
     mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
@@ -114,6 +145,7 @@ describe('liveStatus', () => {
 
   it('still answers dead for a session genuinely absent from the registry', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const status = await liveStatus(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-nope');
     expect(status).toBe('dead');
@@ -121,6 +153,7 @@ describe('liveStatus', () => {
 
   it('answers idle (never dead, never a throw) for an unmeasured WRAPPER — the existing !cfgDir fallback', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-quiet-mesa', 'claude');
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
@@ -139,6 +172,7 @@ describe('liveStatus', () => {
 describe('branch precedence', () => {
   const setup = (): { home: string; run: Runner } => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-quiet-mesa', 'claude', {
       project: 'demo', workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
     });
@@ -170,6 +204,7 @@ describe('branch precedence', () => {
 
   it('is null when neither source has one', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
@@ -180,6 +215,7 @@ describe('branch precedence', () => {
 describe('derived session handles', () => {
   const build = async (live: Record<string, unknown>) => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude2-MekWarLive', 'claude2');
     mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
     writeFileSync(
@@ -222,6 +258,7 @@ describe('PR state on the wire', () => {
     // The whole reason the fields are on disk: a server restart must degrade
     // to "merged, last checked 40 minutes ago", never to "no PR".
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-quiet-basin', 'claude');
     seedPr(home, 'demo-quiet-basin', {
       workspace: 'quiet-basin', branch: 'ws/quiet-basin',
@@ -237,6 +274,7 @@ describe('PR state on the wire', () => {
 
   it('gives a workspace that was never checked an unchecked phase, not null', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-still-cove', 'claude');
     seedPr(home, 'demo-still-cove', { workspace: 'still-cove' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
@@ -245,6 +283,7 @@ describe('PR state on the wire', () => {
 
   it('gives a MAIN CHECKOUT no pr object at all — no workspace, no cap', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'claude-demo')!.pr).toBeNull();
@@ -252,6 +291,7 @@ describe('PR state on the wire', () => {
 
   it('prefers a live swept state over the persisted one', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-quiet-basin', 'claude');
     seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', prphase: 'open', prnumber: '7' });
     const live = new Map<string, PrState>([['demo-quiet-basin', {
@@ -274,6 +314,7 @@ describe('PR state on the wire', () => {
 
   it('carries archivedAt straight through', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-quiet-basin', 'claude');
     seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', archived: '1785300123' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
@@ -290,6 +331,7 @@ describe('PR state on the wire', () => {
   // the registry field, verbatim, on the assembled session.
   it('carries held straight through, verbatim', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-quiet-basin', 'claude', {
       workspace: 'quiet-basin', hold: 'program:agent-evals wave:2/4',
     });
@@ -305,6 +347,7 @@ describe('PR state on the wire', () => {
 describe('archived size on the wire', () => {
   it('reads worktreeBytes out of the archive manifest ws-archive wrote', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-quiet-basin', 'claude');
     const reg = path.join(home, '.cc-sessions');
     writeFileSync(path.join(reg, 'demo-quiet-basin.workspace'), 'quiet-basin');
@@ -324,6 +367,7 @@ describe('archived size on the wire', () => {
   // manifest file, non-finite number), none of them this one.
   it('is null when the manifest explicitly writes worktreeBytes as JSON null — the failed-du shape ccd now emits', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-lone-creek', 'claude');
     const reg = path.join(home, '.cc-sessions');
     writeFileSync(path.join(reg, 'demo-lone-creek.workspace'), 'lone-creek');
@@ -338,6 +382,7 @@ describe('archived size on the wire', () => {
     // A missing figure must read as "unknown", never as 0 — a footer claiming
     // 0 GB would argue against a cleanup that would actually free gigabytes.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-still-cove', 'claude');
     const reg = path.join(home, '.cc-sessions');
     writeFileSync(path.join(reg, 'demo-still-cove.workspace'), 'still-cove');
@@ -356,6 +401,7 @@ describe('archived size on the wire', () => {
     // since seedSession() never writes this file for any other fixture in
     // this suite either.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-far-hollow', 'claude');
     const reg = path.join(home, '.cc-sessions');
     writeFileSync(path.join(reg, 'demo-far-hollow.workspace'), 'far-hollow');
@@ -372,6 +418,7 @@ describe('archived size on the wire', () => {
     // du fallback" case named in the task brief, and it must land on null,
     // never silently coerce `undefined` into a number.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-thin-reach', 'claude');
     const reg = path.join(home, '.cc-sessions');
     writeFileSync(path.join(reg, 'demo-thin-reach.workspace'), 'thin-reach');
@@ -388,6 +435,7 @@ describe('archived size on the wire', () => {
     // calls 'number' — exactly the shape numOrNull's own doc comment warns
     // about for NaN. Infinity is not a byte count either.
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'demo-far-shore', 'claude');
     const reg = path.join(home, '.cc-sessions');
     writeFileSync(path.join(reg, 'demo-far-shore.workspace'), 'far-shore');
@@ -402,6 +450,7 @@ describe('archived size on the wire', () => {
 describe('hook state on the wire', () => {
   it('a fresh hookstate carries hookState, askSummary and subagents onto the session', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     const hookStates = new Map<string, HookState>([
       ['claude-demo', mkHookState({
@@ -422,6 +471,7 @@ describe('hook state on the wire', () => {
 
   it('a hookless session carries all three fields as null', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     // No `hookStates` map at all — the shape every existing caller had before
     // this task, and still the shape a cold `/api/fleet` REST call can be.
@@ -436,6 +486,7 @@ describe('hook state on the wire', () => {
 
   it('dialogPending is true when only the pane detector says so', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     const pending = new Set(['claude-demo']);
     const fleet = await assembleFleet(
@@ -446,6 +497,7 @@ describe('hook state on the wire', () => {
 
   it('dialogPending is true when only the hook reports waiting — the pane never painted a menu', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'waiting' })]]);
     const fleet = await assembleFleet(
@@ -461,6 +513,7 @@ describe('hook state on the wire', () => {
 
   it('dialogPending is false when NEITHER source says so — a working hook is not a pending dialog', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'working' })]]);
     const fleet = await assembleFleet(
@@ -472,6 +525,7 @@ describe('hook state on the wire', () => {
 
   it('status is IDENTICAL with and without a hookstate for the same fixture — status is frozen against hook data', async () => {
     const home = mkTmp('ccrc-');
+    seedRoster(home);
     seedSession(home, 'claude2-MekWarLive', 'claude2');
     mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
     writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({

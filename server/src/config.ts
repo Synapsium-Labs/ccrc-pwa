@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
-import { ACCOUNTS, isWrapper, type Wrapper } from '../../shared/api.js';
+import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -15,13 +16,18 @@ export interface CcrcConfig {
   uploadsDir: string;
   ccdBin: string;
   projectsRoot: string;
-  /** One entry per `shared/api.ts` `ACCOUNTS` member — built by `loadConfig`
-   *  from `configDirFor`, below, so a wrapper cannot be added to the roster
-   *  without also gaining a config dir here. Index it through `configDirFor`
-   *  (an untrusted `SessionRecord.wrapper` needs the `undefined` case this
-   *  gives; a known `Wrapper` never does) rather than `wrappers[x]` — see
-   *  `single-definition.test.ts`. */
-  wrappers: Record<Wrapper, string>;
+  /** The parsed, validated account roster (`shared/roster.ts`) — one entry
+   *  per account this box knows about, in declaration order. `configDirFor`,
+   *  below, is the one place an entry's `configDirSuffix` becomes an actual
+   *  directory; nothing else should index `roster.byId` for that purpose
+   *  (`single-definition.test.ts` enforces it, the same way it enforced the
+   *  rule for the `wrappers` map this field replaces). */
+  roster: Roster;
+  /** Where `roster` was read from — `~/.ccrc/accounts.json` by default,
+   *  overridable via `CCRC_ACCOUNTS` (tests point this at a fixture without
+   *  needing a real `$HOME`). Kept on the config so a diagnostic can name
+   *  the file it came from. */
+  accountsPath: string;
   /** 'remote' drives the fleet through ccrc-agent instead of local node:fs/exec — see server/src/remote/. */
   fleetMode: FleetMode;
   agentUrl: string | null;
@@ -46,21 +52,93 @@ export interface CcrcConfig {
 /**
  * THE ONE place a wrapper becomes a directory — every other reader of an
  * account's config dir (`fleet.ts`, `server.ts`, `commands.ts`, `watch.ts`,
- * `sessionws.ts`) calls this instead of indexing the `wrappers` map on
- * `CcrcConfig` directly by wrapper name (`single-definition.test.ts`
- * enforces it). `undefined` for anything `isWrapper` rejects — a
- * `SessionRecord.wrapper` read off disk is an untrusted string (a stale
- * build, a hand-edited registry file, or the
+ * `sessionws.ts`) calls this instead of indexing `cfg.roster.byId` directly
+ * by wrapper name (`single-definition.test.ts` enforces it). `undefined` for
+ * any id the roster does not have — a `SessionRecord.wrapper` read off disk
+ * is an untrusted string (a stale build, a hand-edited registry file, or the
  * `'ghost-wrapper'` fixture `pr-sweep.test.ts` writes on purpose), and the
  * whole point of this function existing is that callers get one `undefined`
  * to check rather than a bare index into a map that might not have the key.
+ *
+ * The lookup is DATA, not a hand-typed table, and that is load-bearing: the
+ * account roster's 5th member (`claude-dev0`) was once missing from a
+ * hand-typed sibling of this map for its entire life (see this file's git
+ * history), because that map used to be a second literal kept BESIDE the
+ * roster instead of derived FROM it. Going through `cfg.roster.byId` — built
+ * once, by `loadConfig`, straight from `~/.ccrc/accounts.json` — closes that
+ * class of bug structurally: an account added to the roster gets a config
+ * dir here with no second edit, and none can be silently skipped the way a
+ * hand-typed table could be.
  */
-export function configDirFor(home: string, wrapper: string): string | undefined {
-  return isWrapper(wrapper) ? path.join(home, ACCOUNTS[wrapper].configDirSuffix) : undefined;
+export function configDirFor(cfg: CcrcConfig, wrapper: string): string | undefined {
+  const account = cfg.roster.byId.get(wrapper);
+  return account ? path.join(cfg.home, account.configDirSuffix) : undefined;
+}
+
+/**
+ * Reads and validates `accountsPath` — synchronously, on purpose:
+ * `server/src/index.ts` calls `loadConfig()` at module top level with no
+ * `await`, so this must never become async, and `readFileSync` is what keeps
+ * it that way.
+ *
+ * In remote fleet mode this still reads the LOCAL box's copy, unconditionally
+ * — the server may run on a different machine from the accounts it manages
+ * (that is the production topology), but deploy ships the same
+ * `accounts.json` to both boxes, so there is no agent round-trip to make
+ * here and no FleetIO indirection to add.
+ *
+ * Throws `RosterError` — never returns a partial or empty roster — when the
+ * file is missing, unreadable, not valid JSON, or fails `parseRoster`'s
+ * validation. MISSING and UNREADABLE are deliberately distinct outcomes,
+ * same discipline as the registry ladder's "not listed" vs "listed but
+ * unreadable": a `chmod 000` `accounts.json` plainly EXISTS, and reporting
+ * it as absent would send an operator to `ccrc install`, which overwrites
+ * nothing and fixes nothing — the actual fix is a permissions change on a
+ * file that was never missing.
+ */
+function loadRoster(accountsPath: string): Roster {
+  let raw: string;
+  try {
+    raw = readFileSync(accountsPath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new RosterError(
+        `no account roster at ${accountsPath}.`,
+        `Run \`ccrc install\` (or ship deploy/accounts.default.json to ${accountsPath}).`,
+      );
+    }
+    // EACCES (permission bits), EISDIR (accounts.json is a directory), or
+    // anything else `readFileSync` can throw for a path that DOES exist —
+    // none of these are "run the installer", they are "fix what's there".
+    throw new RosterError(
+      `${accountsPath} exists but could not be read: ${(err as Error).message}.`,
+      `Check permissions on ${accountsPath} (and that it is a regular file, not a directory) — ` +
+        'it must be readable by the ccrc server process.',
+    );
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    throw new RosterError(
+      `${accountsPath} is not valid JSON: ${(err as Error).message}.`,
+      `Fix the JSON syntax in ${accountsPath}, or reinstall ccrc to restore the shipped default.`,
+    );
+  }
+  return parseRoster(json);
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
+  // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line — which is
+  // exactly how deploy/ccrc.env.example ships this key, along with every other
+  // value whose default lives HERE rather than in that file (`CCRC_AGENT_URL`,
+  // `CCRC_PROJECTS_ROOT`, the VAPID trio, …) — yields an empty string, which
+  // `??` treats as "set" and `||` correctly treats the same as unset. The
+  // alternative silently resolves to `no account roster at .`, naming a path
+  // nobody wrote.
+  const accountsPath = env.CCRC_ACCOUNTS || path.join(home, '.ccrc', 'accounts.json');
+  const roster = loadRoster(accountsPath);
   return {
     host: env.CCRC_HOST ?? '127.0.0.1',
     port: Number(env.CCRC_PORT ?? 7788),
@@ -71,17 +149,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     uploadsDir: path.join(home, '.cc-clips', 'uploads'),
     ccdBin: path.join(home, '.local', 'bin', 'ccd'),
     projectsRoot: env.CCRC_PROJECTS_ROOT ?? '/data/projects',
-    // Every `ACCOUNTS` member gets an entry, DERIVED — the 5th account
-    // (`claude-dev0`) was missing here for its entire life (see the git
-    // history of this line) because this used to be a hand-typed literal
-    // beside the roster instead of built from it; that class of bug is what
-    // `configDirFor(home, w) as string` closes: `w` ranges over
-    // `Object.keys(ACCOUNTS)`, so a member added to the roster gets a
-    // config dir here with no second edit, and none can be silently
-    // skipped the way a hand-typed object literal could be.
-    wrappers: Object.fromEntries(
-      (Object.keys(ACCOUNTS) as Wrapper[]).map((w) => [w, configDirFor(home, w) as string]),
-    ) as Record<Wrapper, string>,
+    roster,
+    accountsPath,
     fleetMode: env.CCRC_FLEET === 'remote' ? 'remote' : 'local',
     agentUrl: env.CCRC_AGENT_URL ?? null,
     agentToken: env.CCRC_AGENT_TOKEN ?? null,

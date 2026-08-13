@@ -8,15 +8,15 @@
 # thing that makes that safe: a swap must never land the coordinator on a home
 # without its skill.
 #
-# The default `homes` fallback below is install-session-hooks.sh's own default
-# list (architecture doc increment 2: both installers' home lists are the
-# `ACCOUNTS` roster's `hooksAble` config dirs, `shared/api.ts`). Bash cannot
-# import that roster at runtime (out of scope by design — see
-# server/test/wrapper-roster-fixture.test.ts's own header), so the two literal
-# arrays are what the roster projects to, and a cross-language fixture test
-# keeps this one honest against `ACCOUNTS.hooksAble` the same way it already
-# does for install-session-hooks.sh's — not a comment asking a future author
-# to keep them in sync by hand.
+# The default `homes` fallback below is install-session-hooks.sh's, byte for
+# byte, and it now READS the roster rather than restating it: `~/.ccrc/
+# accounts.sh` — generated from `~/.ccrc/accounts.json`, and the same file ccd
+# itself sources — hands both installers every account's config dir. Until
+# 2026-08-12 both carried a literal five-element array instead, kept honest
+# against the TypeScript roster by a cross-language fixture test, because "bash
+# cannot import that roster at runtime" was taken as a given. It can; this is
+# what that looks like, and the fixture test that policed the copies has one
+# less copy to police.
 #
 # Deploy-time only (not a hook hot path): no timing budget here.
 set -euo pipefail
@@ -29,9 +29,17 @@ NAME=ccrc-coordinator
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 
+# EVERY account's config dir, not a hooks-able subset: there is no such concept.
+# The loop below already `continue`s past a home whose directory is absent, which
+# is the ordinary state of a box that does not run the whole roster.
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
-else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt" "$HOME/.claude-dev0"); fi
+else
+  # shellcheck source=/dev/null
+  source "$HOME/.ccrc/accounts.sh" \
+    || { echo "install-coordinator-skill: no account roster at $HOME/.ccrc/accounts.sh — generate it from ~/.ccrc/accounts.json first" >&2; exit 1; }
+  for _a in "${CCRC_ACCOUNTS[@]}"; do homes+=("$(_ccrc_cfg_dir "$_a")"); done
+fi
 
 # Refuse rather than degrade — ccd's own rule for a missing tool
 # (`ccd:2135-2139`: "refusing to run the destructive verb unserialised"). A

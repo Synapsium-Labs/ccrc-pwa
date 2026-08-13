@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { ACCOUNTS, type Wrapper } from '../../shared/api.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { seedAccountsSh } from './ccdWsHelpers.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
@@ -97,29 +98,45 @@ describe('install-session-hooks', () => {
   });
 });
 
-describe('install-session-hooks.sh default homes agree with ACCOUNTS.hooksAble, behaviourally', () => {
-  // wrapper-roster-fixture.test.ts pins this by PARSING the installer's
-  // source; this proves the same claim by actually RUNNING it — a fixture
-  // HOME gets a config dir for every roster wrapper (hooksAble and not), the
-  // installer is invoked with NO --homes argv at all (its real default), and
-  // hooks must land in exactly the hooksAble ones. Architecture doc increment
-  // 2, by name: a sixth account with `hooksAble: true` that the installer's
-  // hardcoded fallback array forgot would fail THIS, not just the
-  // source-text pin — the silent mail hole `claude-dev0` had, closed as a
-  // class rather than a one-off patch.
-  const WRAPPERS = Object.keys(ACCOUNTS) as Wrapper[];
+describe('install-session-hooks.sh default homes are the roster, behaviourally', () => {
+  // The installer no longer carries a literal home list to pin: it sources the
+  // same generated `~/.ccrc/accounts.sh` ccd does and installs into every
+  // account's config dir. So this is now the ONLY test of that default — the
+  // source-text pin in wrapper-roster-fixture.test.ts parsed a
+  // `homes=(...)` line that no longer exists — and it is the stronger of the
+  // two anyway: it RUNS the installer with no --homes argv (its real default)
+  // against a fixture HOME holding a config dir for every rostered account.
+  //
+  // There is no `hooksAble` subset any more, which is why the expectation is a
+  // flat `true` rather than a per-account flag. That concept only ever meant
+  // "in the hand-kept array", and its point — a sixth account that the array
+  // forgot, the silent mail hole `claude-dev0` had — is now impossible by
+  // construction rather than caught by a comparison.
   let rosterHome: string;
   beforeEach(() => {
     rosterHome = mkTmp('ccrc-hookinstall-roster-');
-    for (const w of WRAPPERS) fs.mkdirSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix), { recursive: true });
+    seedAccountsSh(rosterHome);
+    for (const a of DEFAULT_TEST_ROSTER.accounts) {
+      fs.mkdirSync(path.join(rosterHome, a.configDirSuffix), { recursive: true });
+    }
   });
   afterEach(() => { fs.rmSync(rosterHome, { recursive: true, force: true }); });
 
-  it("touches exactly the roster's hooksAble config dirs when given no --homes argv", () => {
+  it("touches every rostered account's config dir when given no --homes argv", () => {
     execFileSync('bash', [INSTALLER], { env: { ...process.env, HOME: rosterHome } });
-    for (const w of WRAPPERS) {
-      const got = fs.existsSync(path.join(rosterHome, ACCOUNTS[w].configDirSuffix, 'settings.json'));
-      expect(got, w).toBe(ACCOUNTS[w].hooksAble);
+    for (const a of DEFAULT_TEST_ROSTER.accounts) {
+      const got = fs.existsSync(path.join(rosterHome, a.configDirSuffix, 'settings.json'));
+      expect(got, a.id).toBe(true);
+    }
+  });
+
+  it('refuses, naming the remedy, when the box has no roster at all', () => {
+    const bare = mkTmp('ccrc-hookinstall-noroster-');
+    try {
+      expect(() => execFileSync('bash', [INSTALLER],
+        { env: { ...process.env, HOME: bare }, stdio: 'pipe' })).toThrow(/no account roster/);
+    } finally {
+      fs.rmSync(bare, { recursive: true, force: true });
     }
   });
 });

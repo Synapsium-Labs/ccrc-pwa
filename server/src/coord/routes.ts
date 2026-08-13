@@ -619,6 +619,13 @@ export function registerCoordRoutes(
    * history read for a caller that genuinely wants it (a debugging session,
    * an operator inspecting `/mail`) — `mailForRecipient` is not deleted, only
    * no longer the default a doc calls "outstanding".
+   *
+   * Each row's `id` is the MAIL id, not the delivery id (blocking review
+   * finding, re-opened D-41) — use `deliveryId` (`store.ts`'s
+   * `MAIL_ROW_COLUMNS`) for `GET /api/mail/:id` and `POST /api/mail/:id/ack`
+   * immediately below, both of which key on `mail_deliveries.id`. The
+   * reference nudge (`renderMailNudge`, `coord/envelope.ts`) that points a
+   * worker at this route tells it exactly that.
    */
   app.get('/api/mail', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -633,6 +640,38 @@ export function registerCoordRoutes(
     const all = q.all === '1' || q.all === 'true';
     const mail = all ? coord.mailForRecipient(q.to, limit) : coord.outstandingMailFor(q.to, limit);
     return reply.code(200).send({ ok: true, mail });
+  });
+
+  /**
+   * `GET /api/mail/:id` (robust-mail-delivery spec §1.2) — the body channel
+   * the reference nudge (`coord/envelope.ts`'s `renderMailNudge`) points a
+   * worker at instead of typing the envelope into its pane. Serves the
+   * STORED envelope verbatim (`coord.deliveryEnvelope`) — `renderEnvelope` is
+   * not called here and must never be: spec:176-177's "verbatim, never
+   * re-rendered" applies to every reader, not only the delivery lane that
+   * originally queued it.
+   *
+   * Token-only, matching `GET /api/mail?to=`'s own convention immediately
+   * above: this is a read with no attribution to check, so the box token
+   * alone is the gate — there is no sender identity to verify the way the
+   * ingress and ack routes do.
+   *
+   * A distinct path from `POST /api/mail/:id/ack` (`:id` vs `:id/ack`) —
+   * Fastify's router disambiguates on the literal `/ack` suffix, so there is
+   * no ordering hazard between the two route registrations.
+   */
+  app.get('/api/mail/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/mail/:id')) return;
+    const coord = deps.coord;
+
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+
+    const row = coord.deliveryEnvelope(id);
+    if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
+    return reply.code(200).send({ ok: true, id: row.id, toId: row.toId, state: row.state, envelope: row.envelope });
   });
 
   // ── runs (Task 9) ──────────────────────────────────────────────────────
@@ -778,7 +817,40 @@ export function registerCoordRoutes(
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
-    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body));
+    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body, 'coordinator'));
+    return sendCloseOutcome(reply, outcome);
+  });
+
+  /**
+   * `POST /api/runs/:id/abandon` — the operator's release valve for a wedged
+   * run. Same L1 decision as `POST .../close` (`close.ts`'s `closeRun`), same
+   * union→status map (`sendCloseOutcome`): increment 4's split is not
+   * duplicated for a second caller.
+   *
+   * THE REQUEST BODY IS NEVER READ (D-B4-7). `{intent:'abandon'}` is
+   * constructed here, so `archive` is not a field a caller can send — "the
+   * phone can abandon; the phone can never archive" is structural rather than
+   * a validation a later edit can loosen. Destruction keeps its existing
+   * ceremony (audit → reap, typed `expect`); a release destroys nothing, so
+   * the two-tap confirm in the sheet is the whole ceremony here.
+   *
+   * UNGATED — deliberately NOT behind `requireMailToken`, for
+   * `POST /api/coord/pause`'s own reason (D-B4-9 and spec §4.1): the box token
+   * authenticates the fleet host and the coordinator holds it, so gating the
+   * release valve for a run wedged BY a stuck coordinator behind that same
+   * coordinator's key would leave the wedge with no door at all. The act names
+   * its cause — `causedBy: 'operator'`, never `'coordinator'`.
+   */
+  app.post('/api/runs/:id/abandon', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+
+    const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
+      fleetState: deps.fleetState };
+    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
     return sendCloseOutcome(reply, outcome);
   });
 
@@ -904,6 +976,48 @@ export function registerCoordRoutes(
 
     const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
     return sendSettleItemsOutcome(reply, outcome);
+  });
+
+  /**
+   * `POST /api/coord/pause` — the OPERATOR's door, and one of the TWO routes in
+   * this file that are UNGATED: deliberately NOT behind `requireMailToken`
+   * (D-B4-9). The other is `POST /api/runs/:id/abandon` above, added by this
+   * same build and ungated for this same reason. Between them they are the
+   * WHOLE unauthenticated write surface of this file — a claim `coord-pause-
+   * route.test.ts`'s `UNGATED` set holds to exactly these two names, in both
+   * directions.
+   *
+   * The box token authenticates the FLEET HOST (build7:136-143) and the
+   * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
+   * so the coordinator CANNOT unpause itself — "no verb, no route, no way"
+   * (`rundefs.ts:47-52`). A pause route gated by that token would hand the
+   * coordinator its own unpause: the same key, both sides of a boundary that
+   * only means anything because the two callers are different. So this rides
+   * the PWA's existing unauthenticated surface, the same perimeter
+   * `hold`/`release`/`archive`/`reap`/`prompt`/`ask` have always ridden
+   * (`pwa/src/lib/api.ts` sends no token of any kind).
+   *
+   * Honesty clause, in the register of Build 7's own spec: on a single-uid box
+   * any session can `rm` this marker directly. This route removes no
+   * enforcement that ever existed — the skill's contract (clause 4) plus a
+   * recorded chokepoint is the boundary, and it is convention with a speed
+   * bump, named as exactly that.
+   *
+   * NO `notConfigured` ARM. Every other route here needs `deps.coord`; a pause
+   * is a file on the fleet host and a box with no coordination database can
+   * still be paused — answering 501 would be a lie about what the act needs.
+   */
+  app.post('/api/coord/pause', async (req, reply) => {
+    const body = (req.body ?? {}) as { paused?: unknown };
+    if (typeof body.paused !== 'boolean') return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const argv = CCD_ARGV.coordPause(body.paused ? 'on' : 'off');
+    if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    // `requested`, never `paused`: this route ran a verb, it did not READ the
+    // marker. The authoritative answer is the `{type:'coord'}` frame (Task 8),
+    // and the toggle settles on that — never on this response (spec §4.2).
+    return reply.code(200).send({ ok: true, requested: body.paused });
   });
 
   /** `GET /api/runs?closed=1` — cold start, and the archive of finished runs

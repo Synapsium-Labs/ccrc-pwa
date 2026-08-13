@@ -18,6 +18,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
 
 const ID = 'claude2-MekWarLive';
 const UUID_A = 'a'.repeat(36);
@@ -183,6 +184,7 @@ const streamWith = async (opts: {
   hookstateSequence?: readonly (unknown | null)[];
 }): Promise<{ frames: any[]; askReads: number }> => {
   const home = mkTmp('ccrc-ask-');
+  seedRoster(home);
   seed(home);
   const file = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
   // Scripted content for one poll. Rewriting identical bytes would bump mtime and
@@ -515,6 +517,7 @@ describe('session WS', () => {
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-');
+    seedRoster(home);
     seed(home);
     fileA = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
     fileB = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_B}.jsonl`);
@@ -690,6 +693,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
   it('start() sends a DISTINCT notice for unmeasurable (listed, unreadable uuid) — RED against the old ' +
      'code, which sent the identical "unknown session" sentence for both', async () => {
     const home = mkTmp('ccrc-ladder-');
+    seedRoster(home);
     seed(home);
     const deps = mkLadderDeps(home, withUnreadableField(ID, 'uuid'));
     const frames: { type: string; message?: string }[] = [];
@@ -708,6 +712,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
   it('start() also answers unmeasurable, with the SAME retry, when the WHOLE registry directory cannot be ' +
      'listed — the larger cousin of a degraded row, never conflated with a proven absence', async () => {
     const home = mkTmp('ccrc-ladder-');
+    seedRoster(home);
     seed(home);
     const deps = mkLadderDeps(home, unlistableIO);
     const frames: { type: string; message?: string }[] = [];
@@ -725,6 +730,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
   it('start() sends the truthful "unknown session" AND installs NO retry poll for a genuinely absent id — ' +
      'RED against the old code, which always installed the poll regardless', async () => {
     const home = mkTmp('ccrc-ladder-');
+    seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); // listable, but names nobody
     const deps = mkLadderDeps(home, localIO);
     const frames: { type: string; message?: string }[] = [];
@@ -742,6 +748,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
   it('an unmeasurable session at CONNECT time still heals through the existing appeared-branch once the ' +
      'registry clears — no spurious "rotated" frame for what is really a first resolve', async () => {
     const home = mkTmp('ccrc-ladder-');
+    seedRoster(home);
     seed(home);
     let broken = true;
     const io: FleetIO = { ...localIO, readFile: async (p) => (broken && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
@@ -770,6 +777,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
   it('tick() on an unmeasurable read touches NEITHER uuid NOR the tailer NOR status — a mid-stream blip is ' +
      'invisible to the operator, the open tail is left running exactly as it was', async () => {
     const home = mkTmp('ccrc-ladder-');
+    seedRoster(home);
     seed(home);
     let broken = false;
     const io: FleetIO = { ...localIO, readFile: async (p) => (broken && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
@@ -801,6 +809,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
   it('events keep arriving over the SAME tail while every registry read degrades — no rotated frame, no ' +
      'notice, the transcript stream is simply unaffected', { timeout: 20_000 }, async () => {
     const home = mkTmp('ccrc-sws-ladder-');
+    seedRoster(home);
     seed(home);
     const fileA = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
     let degrade = false;
@@ -849,6 +858,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
 describe('session WS — dead session behind a symlinked workdir', () => {
   it('finds the transcript under the physical munge', { timeout: 15_000 }, async () => {
     const home = mkTmp('ccrc-sws-sym-');
+    seedRoster(home);
     // The production chain in miniature: <home>/data-link -> <home>/volume,
     // registry workdir through the link, transcript under the physical munge.
     const volumeDir = path.join(home, 'volume', 'projects', 'MekWarLive');
@@ -905,6 +915,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-mail-');
+    seedRoster(home);
     seed(home);
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };

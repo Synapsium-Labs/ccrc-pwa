@@ -85,7 +85,17 @@ describe('per-verb timeouts', () => {
     [['ws-restore', '--session', 'x'], 60_000],
     [['ws-audit', '--session', 'x'], 90_000],
     [['ws-reap', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
-    [['ensure', 'x'], 90_000],                  // the unchanged ccd default
+    // The two SPAWNING verbs (F8, 2026-08-12). Both run `_spawn`, which blocks
+    // in `_accept_first_run_prompts` until the new pane renders a ready banner
+    // — a COLD Claude Code start in a fresh workspace HOME, which on the live
+    // fleet took well past 90 s (MCP servers awaiting authentication slow the
+    // boot). At the flat default the agent killed `ws-add` MID-SPAWN, after the
+    // worktree and the registry rows were written and before `_reg_set started
+    // 1`, orphaning a fully-registered workspace with no session and answering
+    // the dispatch with `fleetFailed` and an EMPTY stderr. These two rows are
+    // what stop that budget quietly reverting to the flat default.
+    [['ws-add', 'ccrc-pwa'], 300_000],
+    [['ensure', 'x'], 300_000],
   ])('sends %j with a %i ms budget', async (args, ms) => {
     seen.length = 0;
     await createRunner(client)('/home/u/.local/bin/ccd', args as string[]);

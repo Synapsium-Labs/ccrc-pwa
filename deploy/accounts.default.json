@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "claude",
+      "label": "claude",
+      "configDirSuffix": ".claude",
+      "exec": { "kind": "upstream" },
+      "homeAble": true,
+      "hue": "cyan",
+      "telemetry": "anthropic"
+    }
+  ]
+}

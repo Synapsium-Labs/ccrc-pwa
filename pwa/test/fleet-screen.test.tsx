@@ -9,6 +9,7 @@ import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '../src/components/Toast';
+import { TEST_ROSTER } from './rosterFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
 // never leak into the next's initial (expanded) expectation. `resetAcks` for
@@ -57,6 +58,18 @@ const stubFetch502 = (stderr: string): void => {
   );
 };
 
+/** A real `AccountsResponse` for `GET /api/accounts` — the reap-flow fetch
+ *  stubs below used to fall through to a bare `new Response('{}')` for it
+ *  (a wire shape the server never sends, since `accounts`/`projected`/
+ *  `roster` are none of them optional). AccountsStrip and the fleet store's
+ *  own roster poll both hit this route on every FleetScreen mount, so those
+ *  guards were load-bearing for this suite rather than a production-only
+ *  boundary check (fix round 1). */
+const accountsRoute = (): Response =>
+  new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
+    status: 200, headers: { 'content-type': 'application/json' },
+  });
+
 const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'claude:OpenClawHetzner',
   wrapper: 'claude',
@@ -101,6 +114,7 @@ describe('FleetScreen', () => {
     render(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
+      roster: TEST_ROSTER,
       sessions: [
         session({
           id: 'claude:OpenClawHetzner',
@@ -220,6 +234,7 @@ describe('FleetScreen', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
       accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false }],
       projected: { wrapper: 'claude', score: 0 },
+      roster: [],
     });
     const store = makeStore();
     render(<FleetScreen store={store} />);
@@ -533,6 +548,7 @@ describe('FleetScreen', () => {
         if (String(url).includes('/workspace/audit')) {
           return new Response(JSON.stringify(wsAudit), { status: 200, headers: { 'content-type': 'application/json' } });
         }
+        if (String(url).includes('/api/accounts')) return accountsRoute();
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
@@ -568,6 +584,7 @@ describe('FleetScreen', () => {
           return new Response(JSON.stringify({ reaped: 'a', branch: 'ws/quiet-mesa', attic: 1, sentence: '' }),
             { status: 200, headers: { 'content-type': 'application/json' } });
         }
+        if (String(url).includes('/api/accounts')) return accountsRoute();
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
@@ -629,6 +646,7 @@ describe('FleetScreen', () => {
           // leave it rendered under bravo's identity until this resolves.
           return new Promise<Response>((resolve) => { resolveBravoAudit = resolve; });
         }
+        if (String(url).includes('/api/accounts')) return accountsRoute();
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
@@ -929,8 +947,10 @@ describe('AccountsStrip', () => {
         { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false },
       ],
       // gpt is not home-able, so the projection names an Anthropic account
-      // regardless of what telemetry exists — see limits.ts HOME_ABLE.
+      // regardless of what telemetry exists — see `projectHome` in limits.ts,
+      // which filters `roster.homeAble`.
       projected: { wrapper: 'claude', score: 0 },
+      roster: [],
     });
     render(<AccountsStrip />);
     // one account gauge → two meters (5h + 7d)
