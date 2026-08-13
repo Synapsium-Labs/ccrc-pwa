@@ -21,7 +21,7 @@
 // confirmed-destroy ceremony (`ReapSheet.tsx`), a release destroys no data —
 // the worktree survives, the record stays — so the two-tap confirm naming
 // the run and its workspace IS the whole ceremony here, not a truncated one.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isRunState, type RunSummary } from '../../../shared/api';
 import { RUN_WORD } from './runWords';
@@ -72,6 +72,14 @@ function abandonErrorText(err: unknown): string {
       const word = isRunState(from) ? RUN_WORD[from] : null;
       return word === null ? ABANDON_COPY['bad-transition'] : `${ABANDON_COPY['bad-transition']} — it was already ${word}`;
     }
+    // Review fix round 1, Minor 4: `sendCloseOutcome`'s `advanceFailed` arm
+    // (`server/src/coord/routes.ts:141`) forwards `AdvanceResult`'s failure
+    // VERBATIM, and one of its two members is `{ok:false, error:'unknown-run'}`
+    // at 409 (not 404) — reachable if the run vanishes between
+    // `coord.run(id)` and the transaction commit. Without this branch that
+    // landed on the total map's `unknown` catch-all ("a reason this build
+    // does not recognise") instead of the accurate, already-defined sentence.
+    if (code === 'unknown-run') return ABANDON_COPY['unknown-run'];
     // A `409 {refused: RunRefuseCode}` shape — structurally unreachable on
     // this route today (see ABANDON_COPY's own docstring), but the client
     // does not get to assume the server can never send it; `unknown` is the
@@ -116,21 +124,56 @@ export function AbandonSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Review fix round 1, Important 1 — the same defect class `ReapSheet`
+  // already litigated (`session/ReapSheet.tsx:124-186`, findings 17-F1/F2)
+  // one directory over: this sheet is mounted UNCONDITIONALLY at screen
+  // level and `run === null` merely renders nothing (below) — it does not
+  // unmount, so `busy`/`error` used to survive every close and every switch
+  // of target. Two reachable bugs that followed: (1) abandon run 3 → 502 →
+  // Cancel → open run 7's sheet → run 7 opens already showing run 3's
+  // refusal; (2) abandon run 3 (in flight) → dismiss via scrim/Esc (NOT
+  // gated on `busy`, unlike the two buttons) → open run 7's sheet, which
+  // then rendered disabled/"Abandoning…" for a request it never made, and
+  // eventually had run 3's LATE response close it out from under the
+  // operator and fire `loadCold()` for a run they never touched.
+  //
+  // `gen`, ReapSheet's own idiom: the generation the sheet is currently
+  // willing to accept an answer for. `targetId` is the dependency (not
+  // `open`/`run` themselves — this sheet has no separate `open` prop,
+  // `run !== null` IS open) — every close (`run` → `null`) and every switch
+  // of target bumps it in the effect's OWN cleanup, and the effect's body
+  // resets `busy`/`error` for the (possibly new) target on the same tick.
+  // `confirm()` below captures the generation it was issued under and
+  // refuses to act if a newer one has since taken over — there is no path
+  // by which a superseded response reaches `setBusy`/`setError`/`onDone`/
+  // `onClose`.
+  const gen = useRef(0);
+  const targetId = run?.id ?? null;
+  useEffect(() => {
+    setBusy(false);
+    setError(null);
+    return () => { gen.current += 1; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId]);
+
   if (run === null) return null;
 
   const ws = run.workspace ?? run.branch ?? String(run.id);
 
   const confirm = (): void => {
     if (busy) return;
+    const mine = gen.current;
     setBusy(true);
     setError(null);
     void abandonRun(run.id).then(
       () => {
+        if (gen.current !== mine) return; // superseded — a different run's sheet is open now
         setBusy(false);
         onDone?.();
         onClose();
       },
       (err: unknown) => {
+        if (gen.current !== mine) return; // superseded — this refusal belongs to a run no longer shown
         setBusy(false);
         setError(abandonErrorText(err));
       },

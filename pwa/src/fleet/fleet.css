@@ -1586,7 +1586,16 @@
    `.run-row`. */
 .run-row .run-open {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
-  width: 100%; min-height: var(--tap-min); padding: 0;
+  /* Task 12 review, Minor 3 (fix round 1): NOT `width: 100%` — `.run-row`
+     grew a SIBLING (`.run-abandon`, D-B4-14, below), and `.run-open` claiming
+     the row's full width forced that sibling onto its own flex line on
+     EVERY row, roughly doubling every row's height on the primary board.
+     `flex: 1 1 auto` + `min-width: 0` lets `.run-open` take the free space
+     next to `.run-abandon` (which stays `flex: none`) so both controls share
+     one line at ordinary phone widths, wrapping only if the row's own
+     content genuinely overflows — `fleet-css.test.ts` pins the absence of
+     `width: 100%` here so this cannot regress silently. */
+  flex: 1 1 auto; min-width: 0; min-height: var(--tap-min); padding: 0;
   background: none; border: 0; cursor: pointer; text-align: left;
   color: var(--ink-primary); font: inherit;
 }

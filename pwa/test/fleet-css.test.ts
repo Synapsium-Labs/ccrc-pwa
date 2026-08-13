@@ -420,6 +420,16 @@ describe('the abandon sheet is not a living pane, and its own control is a real 
   // descendant pass can actually recover a ground for, rather than a bare
   // `.abandon-error { color: … }` selector it would file under `uncovered`
   // (`hosts.size === 0` → skipped, never measured).
+  // Fix round 1, Minor 3: `.run-open` claiming the row's full width forced
+  // its new sibling `.run-abandon` onto its own flex line on EVERY row,
+  // roughly doubling every row's height on the primary board. jsdom applies
+  // no layout engine, so this is pinned the same way every other rule here
+  // is — reading the declaration back as text — rather than a computed-size
+  // assertion no test in this suite can make.
+  it('.run-open does not claim width: 100% — .run-abandon needs room on the same line', () => {
+    expect(declValue(ruleFor('.run-row .run-open'), 'width')).toBeNull();
+  });
+
   it('.abandon-sheet is self-grounded — it declares its own color AND background', () => {
     const rule = ruleFor('.abandon-sheet');
     expect(declValue(rule, 'color')).not.toBeNull();

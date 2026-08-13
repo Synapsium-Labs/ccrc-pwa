@@ -12,7 +12,9 @@
 // ever exists in its own isolated test file ships missing the moment
 // someone drops the line from `RunsScreen`.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
+import type { ReactNode } from 'react';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { RunSummary } from '../../shared/api';
 import { AbandonSheet } from '../src/fleet/AbandonSheet';
 import { RunsScreen } from '../src/screens/RunsScreen';
@@ -36,6 +38,29 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
 });
+
+// Review fix round 1, Important 1: `AbandonSheet` is mounted UNCONDITIONALLY
+// at screen level (`RunsScreen.tsx`, no `key`), so the only way to exercise
+// "Cancel run 3, then open run 7" or "run 3's request resolves after run 7's
+// sheet is already open" is a stateful harness that actually SWITCHES the
+// `run` prop, the same way `RunsScreen` itself does — `AbandonSheet` alone,
+// rendered once with a fixed `run`, cannot reach either bug.
+function Harness({
+  abandonRun, onDone,
+}: {
+  abandonRun: (id: number) => Promise<void>;
+  onDone?: () => void;
+}): ReactNode {
+  const [target, setTarget] = useState<RunSummary | null>(run());
+  return (
+    <>
+      <button type="button" onClick={() => setTarget(run({ id: 7, workspace: 'far-mesa' }))}>
+        open run 7
+      </button>
+      <AbandonSheet run={target} onClose={() => setTarget(null)} onDone={onDone} abandonRun={abandonRun} />
+    </>
+  );
+}
 
 describe('AbandonSheet — the copy and the refusals', () => {
   it('names the run AND its workspace in the confirm line', () => {
@@ -80,6 +105,21 @@ describe('AbandonSheet — the copy and the refusals', () => {
     render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
     fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
     expect(await screen.findByText('that run is gone — the board will catch up')).toBeInTheDocument();
+  });
+
+  // Review fix round 1, Minor 4: `sendCloseOutcome`'s `advanceFailed` arm
+  // (`server/src/coord/routes.ts:141`) forwards `AdvanceResult`'s failure
+  // verbatim, and one of its two members is `{ok:false, error:'unknown-run'}`
+  // at 409 (not 404) — reachable if the run vanishes between `coord.run(id)`
+  // and the transaction commit. Before this fix that landed on the total
+  // map's `unknown` catch-all instead of the accurate, already-defined
+  // sentence — the same one the 404 case above renders.
+  it('renders a 409 {error:\'unknown-run\'} with the accurate sentence, not the generic catch-all', async () => {
+    const abandonRun = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'unknown-run' }));
+    render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    expect(await screen.findByText('that run is gone — the board will catch up')).toBeInTheDocument();
+    expect(screen.queryByText(/does not recognise/i)).toBeNull();
   });
 
   it('renders 501 as "the fleet host needs the newer ccd"', async () => {
@@ -159,5 +199,78 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     // session) is still there.
     expect(screen.queryByRole('button', { name: /clear-cove/i })).toBeNull();
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
+  });
+});
+
+// Review fix round 1, Important 1: `AbandonSheet` is mounted UNCONDITIONALLY
+// at screen level and `run === null` only renders nothing — it does not
+// unmount, so `busy`/`error` used to survive every close and every switch of
+// target. The `Harness` component above is what makes both reachable
+// scenarios actually reachable in a test: neither exists when `AbandonSheet`
+// is rendered once with a single fixed `run`.
+describe('per-target state (review fix round 1, Important 1)', () => {
+  it("clears a previous run's refusal when Cancel is tapped and a different run's sheet opens", async () => {
+    const abandonRun = vi.fn().mockRejectedValue(
+      new ApiError(502, { ok: false, stderr: 'ccd: ws-release: permission denied' }),
+    );
+    render(<Harness abandonRun={abandonRun} />);
+
+    // Abandon run 3 — it fails, and the refusal renders inline.
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    expect(await screen.findByText('ccd: ws-release: permission denied')).toBeInTheDocument();
+
+    // Cancel, then open a DIFFERENT run's sheet.
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open run 7/i }));
+
+    // Run 7's sheet must not open already showing run 3's refusal. Matching
+    // the consequence line specifically (not a bare /run 7/i, which also
+    // matches the harness's own "open run 7" trigger button still on
+    // screen) — same specificity `sheet.test-d.tsx`'s neighbours use.
+    expect(await screen.findByText(/^Abandon run 7 —/)).toBeInTheDocument();
+    expect(screen.queryByText('ccd: ws-release: permission denied')).toBeNull();
+  });
+
+  it("a superseded in-flight abandon cannot close or write into a different run's now-open sheet", async () => {
+    let resolveRun3: (() => void) | null = null;
+    const abandonRun = vi.fn((id: number) => {
+      if (id === 3) return new Promise<void>((resolve) => { resolveRun3 = resolve; });
+      return Promise.resolve();
+    });
+    const onDone = vi.fn();
+    render(<Harness abandonRun={abandonRun} onDone={onDone} />);
+
+    // Confirm run 3 — the request is deliberately left hanging.
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    expect(await screen.findByText(/abandoning…/i)).toBeInTheDocument();
+
+    // Dismissed via the SCRIM, not the (disabled-while-busy) Cancel button —
+    // the path the review found ungated on `busy`
+    // (`components/Sheet.tsx:45`, `Drawer.Root onOpenChange`).
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    // vaul/Radix's own dismissal is not always synchronous with the click —
+    // its underlying `Drawer.Root onOpenChange` can fire a beat later than
+    // the overlay's own `onClick`. Waiting for the FIRST sheet to actually
+    // be gone before reopening avoids racing a delayed vaul callback against
+    // the second sheet's own mount (a jsdom/vaul timing artifact, not the
+    // behaviour under test — the two-sheet race itself is exercised by the
+    // assertions below, once both are settled at a real DOM state each).
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^abandon$/i })).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: /open run 7/i }));
+
+    // A different run's sheet opens — it must not be stuck reading
+    // "Abandoning…" for a request it never made. Matching the consequence
+    // line specifically (not a bare /run 7/i, which also matches the
+    // harness's own "open run 7" trigger button still on screen).
+    expect(await screen.findByText(/^Abandon run 7 —/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^abandon$/i })).not.toBeDisabled();
+
+    // Run 3's request FINALLY resolves. It must not close run 7's sheet or
+    // fire onDone for a run the operator never touched.
+    resolveRun3!();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(onDone).not.toHaveBeenCalled();
+    expect(screen.getByText(/^Abandon run 7 —/)).toBeInTheDocument();
   });
 });
