@@ -653,22 +653,50 @@ that happened before D1 shipped — which, per M2, is 17 of 23 rows' worth of re
 right now. The account list for rung 6 comes from the roster via `configDirFor`, never a literal
 list of account names in this module (architecture rule (a)).
 
-**RULING (review round 1 of Task 10, folded in here so the plan and the code agree): rung 6
-requires rung 5 to have actually run, not merely to have found nothing.** "1-5 all miss" means
-rung 5's own-account glob was *measured* and came back empty — never that its `readdir` answered
-`null`. An own account that could not be listed is unmeasured, not empty, and answering with a
-foreign hit in its place would present that unmeasured account as an empty one — precisely the
-error §5.5 names ("incomplete must never be read as absence"), one rung upstream of the fallback
-arm it was written for: a `found` at rung 6 would tell the PWA "stranded history, held by
-`claude2`" and render a months-old copy while the live transcript sits unread in the account the
-search never actually reached. So when rung 5's own-account `readdir` answers `null`, rung 6 is
-skipped outright and the ladder falls straight through to the rung-7 fallback with
-`complete: false` — the fallback arm already means exactly "here is the raw path, and the search
-did not finish." The alternative considered and rejected was carrying `complete` on the `found`
-arm too, so a foreign hit could still be returned but flagged unreliable; that pushes the decision
-onto every consumer of the outcome union, including a PWA sentence for "found, but don't trust
-it," for an answer rung 6 was never going to give once its own account could not be read. Refusing
-costs nothing rung 6 would otherwise have answered.
+**RULING (review round 1 of Task 10, folded in here so the plan and the code agree; corrected in
+round 2 — see below): rung 6 requires rung 5 to have actually run, not merely to have found
+nothing.** "1-5 all miss" means rung 5's own-account glob was *measured* and came back empty —
+never that its `readdir` answered `null` with the account itself unreachable. Answering with a
+foreign hit while the own account is genuinely unmeasured would present that unmeasured account as
+an empty one — precisely the error §5.5 names ("incomplete must never be read as absence"), one
+rung upstream of the fallback arm it was written for: a `found` at rung 6 would tell the PWA
+"stranded history, held by `claude2`" and render a months-old copy while the live transcript sits
+unread in the account the search never actually reached. So when rung 5's own-account glob is
+unmeasured, rung 6 is skipped outright and the ladder falls straight through to the rung-7
+fallback with `complete: false` — the fallback arm already means exactly "here is the raw path,
+and the search did not finish." The alternative considered and rejected was carrying `complete` on
+the `found` arm too, so a foreign hit could still be returned but flagged unreliable; that pushes
+the decision onto every consumer of the outcome union, including a PWA sentence for "found, but
+don't trust it."
+
+**"Unmeasured" is not the same fact as "the `projects/` directory does not exist" (review round 2,
+item 2), and a null `readdir` answers both identically unless something discriminates them.** The
+gap the round-1 ruling opened, unnoticed until it was measured: a session swapped onto a
+freshly-enrolled account — D1's own scenario — has a real `<configDir>` but no `projects/`
+subdirectory yet, since nothing has ever run a session there. That account is genuinely, measurably
+empty, and rung 6 must still be allowed to rescue history stranded in the account the swap failed
+to leave. The fix asks one more question of a null `readdir(<configDir>/projects)`: is
+`<configDir>` itself reachable right now, via a witness `stat`? If it answers, the connection is up
+and the missing `projects/` directory is a real fact — `complete: true`, empty, and rung 6
+proceeds normally. If the witness stat ALSO answers null, nothing about the account could be
+measured and the ladder still refuses, exactly as the round-1 ruling specified. This is not proof
+against a connection that drops between the two calls and recovers before the second — no signal
+this flat a seam carries can rule that race out — but it is the strongest discrimination available
+without a new agent-protocol op, and it is confirmed against the case that actually matters: an
+outage that fails both calls together still refuses.
+
+**Refusing rung 6 has a real cost, and the first draft of this ruling claimed otherwise — that was
+wrong, and it is corrected here (review round 2, item 1).** When the own account is genuinely
+unmeasured (not the absent-directory case above) and a foreign account DOES hold a stranded hit,
+that hit is withheld for as long as the own account stays unreadable: an operator who would have
+seen a bannered foreign answer before this ruling now sees an incomplete fallback instead. The
+trade is made anyway, deliberately — a confident foreign `found` shown in that window would be a
+quiet WRONG answer, which is worse than an honest "can't read right now" — and it costs nothing
+specifically in *recovery speed*, because a `fallback` and a `foreign-glob` hit are equally "keep
+looking" answers under `TranscriptResolver`'s back-off (§5.4), so withholding the foreign hit does
+not delay how soon the next full ladder run gets a chance at the real answer. What it does cost is
+the foreign hit itself, for exactly as long as the own account cannot be measured — a real price,
+paid deliberately, not a free one.
 
 **The order is liveness-dependent on purpose.** A live session's rungs 1-2 are the live cwd and its
 rungs 3-4 the registry workdir; a dead session's caller passes the registry workdir as `dir`, so
@@ -777,20 +805,26 @@ Remote `realpath` answers `null` unconditionally, so rungs 1 and 3 collapse into
 today's documented behavior and it does not change. Rungs 5 and 6 need `readdir` and `stat`, which
 the remote io *does* implement and which `checkPath`'s `.claude*` glob permits for exactly these
 paths (`agent/src/whitelist.ts`'s `underClaudeGlob`), so the uuid search works remotely with no
-change to the read whitelist. Where `readdir` answers `null` the rung is skipped, the ladder
-continues, and the outcome is marked incomplete per §5.2 — it is never read as "no transcript
-exists". That marking is the whole point: remote `readdir` returns `null` for a missing directory,
-a forbidden path and a disconnected agent alike (`remote/io.ts`), and this design refuses to turn
-that ambiguity into a confident empty chat.
+change to the read whitelist. Where `readdir` answers `null`, the ladder asks one more question
+before deciding what that means (§5.1's absent-vs-unmeasured discrimination, review round 2): a
+witness `stat` of the account root itself. If the account is reachable, the missing directory is a
+real, measured fact — empty, not incomplete. Only when the witness stat ALSO answers `null` is the
+outcome marked incomplete per §5.2 — never read as "no transcript exists". That marking is the
+whole point: remote `readdir` returns `null` for a missing directory, a forbidden path and a
+disconnected agent alike (`remote/io.ts`), and this design refuses to turn *that particular*
+ambiguity — a genuinely disconnected agent — into a confident empty chat, while no longer paying
+for it when the directory is simply, measurably absent.
 
-**The same refusal governs rung 6, and this is where a null `readdir` bites hardest.** When rung
-5's own-account `readdir` answers `null` — the ordinary shape of a dropped agent-WS round trip in
-remote mode — rung 6 is not attempted at all; the ladder falls straight through to the rung-7
-fallback with `complete: false` rather than pooling a foreign hit in the own account's place.
-Answering from the foreign pool there would be the exact same "incomplete read as absence" error
-this section is about, just one rung upstream of the fallback arm it was originally written for
-(§5.1's ruling). A remote host that cannot list the own account right now must never render another
-account's frozen history as if it were a confident answer.
+**The same refusal governs rung 6, with the same discrimination underneath it.** When rung 5's
+own-account glob is genuinely unmeasured — the witness stat above also failing, the ordinary shape
+of a dropped agent-WS round trip in remote mode — rung 6 is not attempted at all; the ladder falls
+straight through to the rung-7 fallback with `complete: false` rather than pooling a foreign hit in
+the own account's place. Answering from the foreign pool there would be the exact same "incomplete
+read as absence" error this section is about, just one rung upstream of the fallback arm it was
+originally written for (§5.1's ruling). A remote host that cannot measure the own account right now
+must never render another account's frozen history as if it were a confident answer — but a remote
+host whose own account is simply, measurably empty (D1's freshly-enrolled-account case) must not be
+silenced by that same refusal, which is exactly what §5.1's discrimination now prevents.
 
 ## 6. Non-goals — rejected here so nobody relitigates them
 
@@ -882,7 +916,7 @@ Each defect owes specific tests, and they are the ones a mutation sweep can actu
 | D2 | `stop` then `start` leaves the unit enabled; `ensure` inside the unit does not re-enter `systemctl start`; `attach` finds a live pane; a vanished pane returns rc 3 without waiting out the window; an exhausted window returns rc 4; a failed unit is revived by `start` (the `reset-failed` path) |
 | D3 | the stamp records epoch and a validated surface, and an unknown word normalizes; `_ws_unsupervise` stamps from every call site and `_ws_supervise` clears; the classification table, driven from one fixture through both the TypeScript function and the bash twin; an unreadable field yields `unmeasurable`, never `orphan` |
 | §2.5 | `_transcript_path` prefers an existing file over a guessed one; falls through to the uuid glob when neither munge exists; still prints the resolved munge when nothing exists anywhere; a tombstone written for a moved session names the file that holds the history |
-| D4 | each rung wins in its own fixture, including a fixture per adjacent exact-rung pair (1v2, 2v3, 3v4) with BOTH candidates present, so evaluation order — not just label presence — is what the test pins; the registry-workdir rungs rescue a live session whose cwd moved; the glob rung dedupes identical `(size, mtimeMs)` candidates; a foreign-config hit is bannered and never reached while an own-account answer exists; a null `readdir` yields an incomplete fallback rather than an absence; rung 6 is refused (and the answer falls through incomplete) when rung 5's own-account glob could not run at all; the memo re-validates with one stat and re-ladders when its winner disappears |
+| D4 | each rung wins in its own fixture, including a fixture per adjacent exact-rung pair (1v2, 2v3, 3v4) with BOTH candidates present, so evaluation order — not just label presence — is what the test pins; the registry-workdir rungs rescue a live session whose cwd moved; the glob rung dedupes identical `(size, mtimeMs)` candidates; a foreign-config hit is bannered and never reached while an own-account answer exists; a null `readdir` yields an incomplete fallback rather than an absence; rung 6 is refused (and the answer falls through incomplete) when rung 5's own-account glob is genuinely unmeasured; a genuinely absent own `projects/` directory (the account root itself reachable) still reaches rung 6, and a constructed full outage — both the readdir and the witness stat failing together — still refuses it; the memo re-validates with one stat and re-ladders when its winner disappears |
 
 Every behavior above is proved by a test before it is written, the whole diff is mutation-swept with
 literal mutants, and the cross-package drift pins must stay green: `whitelist-subset` (whose

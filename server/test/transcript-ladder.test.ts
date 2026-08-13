@@ -268,6 +268,55 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const r = await resolveTranscript(io, opts(b, {
       foreign: [{ account: 'claude2', configDir: personal }],
     }));
+    // b.cfg itself is never created by this fixture, so globByUuid's witness
+    // stat of the account root ALSO answers null here — the whole account is
+    // unreachable, not merely its `projects` subdirectory, which is exactly
+    // the shape the round-2 discrimination still refuses (see the two tests
+    // below for the two cases it now tells apart).
+    expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
+  });
+
+  it("a genuinely absent own `projects/` directory still reaches rung 6 — D1's own scenario (review round 2, item 2)", async () => {
+    // The gap the round-1 ruling opened: a session swapped onto a
+    // freshly-enrolled account has a real `<configDir>` (the account exists)
+    // but no `projects/` subdirectory yet — nobody has started a session
+    // there. That is not an unmeasured account, it is a measured EMPTY one,
+    // and rung 6 must still be allowed to rescue history stranded in the old
+    // account. Kills a mutant that treats every null `readdir` the same
+    // regardless of whether the account root itself is reachable.
+    const b = box();
+    mkdirSync(b.cfg, { recursive: true });          // the account exists...
+    // ...but `b.cfg/projects` is deliberately never created.
+    const personal = path.join(b.root, '.claude-personal');
+    const foreignHit = plant(stranded(personal), 3000, 'rescued from the old account\n');
+    const r = await resolveTranscript(localIO, opts(b, {
+      foreign: [{ account: 'claude2', configDir: personal }],
+    }));
+    expect(r).toEqual({ kind: 'found', path: foreignHit, rung: 'foreign-glob', account: 'claude2' });
+  });
+
+  it('a genuine outage — BOTH the projects readdir and the account-root stat fail — still refuses rung 6 (review round 2, item 2, the constructed failure case)', async () => {
+    // The hard constraint the ruling: the discriminator must not mistake a
+    // dropped remote connection for an absent directory. `b.cfg` is planted
+    // FOR REAL on disk here (unlike the "genuinely absent" test above) — the
+    // account and its `projects/` dir both genuinely exist — and the fake io
+    // still forces both the readdir and the witness stat to null, exactly as
+    // a disconnected agent WS would regardless of what is really there.
+    // Confirm the answer is STILL the incomplete fallback, not a confident
+    // foreign `found`, i.e. the discriminator cannot be fooled into reading
+    // "the connection is down" as "the directory is empty".
+    const b = box();
+    mkdirSync(path.join(b.cfg, 'projects', 'has-real-content'), { recursive: true });
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => (p === path.join(b.cfg, 'projects') ? null : localIO.readdir(p)),
+      stat: async (p) => (p === b.cfg ? null : localIO.stat(p)),
+    };
+    const personal = path.join(b.root, '.claude-personal');
+    plant(stranded(personal), 3000, 'foreign, but the own account is mid-outage\n');
+    const r = await resolveTranscript(io, opts(b, {
+      foreign: [{ account: 'claude2', configDir: personal }],
+    }));
     expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
   });
 

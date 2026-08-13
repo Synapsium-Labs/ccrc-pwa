@@ -140,14 +140,49 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
   return best;
 }
 
-/** `<configDir>/projects/*​/<uuid>.jsonl`, existence-checked. `complete: false`
- *  means the directory could not be LISTED — never that it held nothing. */
+/**
+ * `<configDir>/projects/*​/<uuid>.jsonl`, existence-checked. `complete: false`
+ * means the directory could not be MEASURED — never that it held nothing.
+ *
+ * A null `readdir(root)` is ambiguous by construction (`FleetIO`'s contract,
+ * §5.5): "missing", "forbidden" and "disconnected agent" all collapse to the
+ * same `null`. Left undiscriminated, that ambiguity used to swallow exactly
+ * the case D1 exists for — a session swapped onto a freshly-enrolled account
+ * whose `<configDir>` is real but has never held a `projects/` subdirectory,
+ * so its own-account glob would refuse rung 6 and hide the very
+ * stranded-history banner the swap failure needs (review round 2, item 2).
+ *
+ * So a null `readdir(root)` gets one more question asked of it: is
+ * `configDir` ITSELF reachable right now? A witness `stat` of the account
+ * root sits under the identical whitelist rung as `root` (`underClaudeGlob`
+ * covers both, `agent/src/whitelist.ts`), so it costs nothing this seam does
+ * not already spend, and it answers a genuinely different question than
+ * re-asking about `root` would — restating the review's own warning: a naive
+ * "stat `root` instead of `readdir` it" gains nothing, because a dropped
+ * connection fails a stat on that same leaf exactly as it fails a readdir on
+ * it. Asking about the PARENT instead is what makes "reachable" and
+ * "genuinely absent" distinguishable at all: if the account root answers,
+ * the connection is up right now and the missing `projects/` dir is a real
+ * fact, not a symptom of the outage, so the glob is `complete: true` with no
+ * hits — measured-empty, exactly like an empty directory that DID list. If
+ * the account root ALSO answers null, nothing about this account could be
+ * measured, and it stays `complete: false` as before.
+ *
+ * HONEST LIMIT: this is not proof against a connection that drops during the
+ * `readdir` call and recovers before the `stat` — no signal this flat a seam
+ * carries can rule that race out — but it is the strongest discrimination
+ * `FleetIO` offers without a new op, and it is confirmed against the case
+ * that actually matters: a full outage fails BOTH calls, and still refuses.
+ */
 async function globByUuid(
   io: FleetIO, configDir: string, uuid: string, account: string | null, order: number,
 ): Promise<{ hits: GlobHit[]; complete: boolean }> {
   const root = path.join(configDir, 'projects');
   const names = await io.readdir(root);
-  if (names === null) return { hits: [], complete: false };
+  if (names === null) {
+    const acctReachable = (await io.stat(configDir)) !== null;
+    return { hits: [], complete: acctReachable };
+  }
   const hits: GlobHit[] = [];
   for (const name of names) {
     const p = path.join(root, name, `${uuid}.jsonl`);
@@ -229,23 +264,39 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
   const bestOwn = pickNewest(own.hits);
   if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null };
 
-  // RULING (review round 1, Important #2): rung 6 requires rung 5 to have
-  // actually RUN, not merely to have found nothing. §5.1 says rung 6 is used
-  // "only when 1-5 all miss" — an own account that could not be LISTED did
-  // not miss, it is unmeasured, and answering with a foreign hit here would
-  // present that unmeasured account as an empty one. That is the exact error
-  // §5.5 names ("incomplete must never be read as absence"), one rung
+  // RULING (review round 1, Important #2; cost claim corrected in round 2,
+  // item 1): rung 6 requires rung 5 to have actually RUN, not merely to have
+  // found nothing. §5.1 says rung 6 is used "only when 1-5 all miss" — an own
+  // account that could not be MEASURED (see globByUuid's own doc for what
+  // that now excludes) did not miss, and answering with a foreign hit here
+  // would present that unmeasured account as an empty one. That is the exact
+  // error §5.5 names ("incomplete must never be read as absence"), one rung
   // upstream of the fallback arm it was written for: a foreign-glob `found`
   // would tell the PWA "stranded history, held by claude2" and render a
   // months-old copy while the live transcript sits unread in the account
-  // that was never actually searched. So an incomplete own-account glob skips
-  // rung 6 outright and falls straight through to the rung-7 fallback with
-  // `complete: false` — the fallback arm already means exactly "here is the
-  // raw path, and the search did not finish," which is cheaper than carrying
-  // `complete` on the `found` arm too (the alternative considered and
-  // rejected): that would push "found, but don't trust it" onto every
-  // consumer of `TranscriptResolution` for a rung 6 was never going to answer
-  // anyway once its own account could not be read.
+  // that was never actually searched.
+  //
+  // THIS REFUSAL HAS A REAL COST, and the first draft of this comment (and
+  // of spec §5.1) claimed otherwise — wrong, corrected here. When the own
+  // account is genuinely unmeasured (a flaky remote WS, not the absent-
+  // directory case `globByUuid` now carves out) and a foreign account DOES
+  // hold a stranded hit, that hit is withheld for as long as the own account
+  // stays unreadable — an operator who would have seen a bannered foreign
+  // answer now sees an incomplete fallback instead. The trade is made
+  // anyway, deliberately: a confident foreign `found` shown in that window
+  // would be a quiet WRONG answer (rendering months-old history while the
+  // live transcript sits unread), which is worse than an honest "can't
+  // read right now" — and it costs nothing in RECOVERY SPEED specifically,
+  // because both a `fallback` and a `foreign-glob` hit are equally
+  // "keep looking" answers under `TranscriptResolver.staleByBackoff`, so
+  // withholding the foreign hit does not delay how soon the next full
+  // ladder run gets a chance to find the real answer. What it costs is the
+  // foreign hit itself, for exactly as long as the own account cannot be
+  // read — carrying `complete` on the `found` arm too (so a foreign hit
+  // could still be shown, flagged unreliable) was the alternative, and it
+  // was rejected because it pushes "found, but don't trust it" onto every
+  // consumer of `TranscriptResolution` to buy back a window that closes on
+  // its own the moment the own account can be measured again.
   if (!own.complete) {
     return { kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete: false };
   }
