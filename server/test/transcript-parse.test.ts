@@ -133,3 +133,84 @@ describe('parseTranscriptLine', () => {
     expect(parseTranscriptLine('null')).toEqual([]);
   });
 });
+
+// — Build 4 Task 16: a cut result says it was cut —
+//
+// `TOOL_RESULT_MAX`/`TOOL_INPUT_MAX` have always cut silently, and the PWA has
+// always rendered the fragment as if it were the whole thing. `truncatedBytes`
+// has THREE documented states and the third is the one that matters: absent =
+// *this server did not report*, `0` = not truncated, `>0` = this many bytes
+// were cut. An old server can only ever produce "absent", which renders no cue
+// — never a false claim of completeness.
+//
+// The caps are CHARACTER caps and the report is in BYTES (D-B4-12), because a
+// byte count is what an operator can compare against a file on disk. These
+// tests pin that difference directly: a multi-byte tail must report MORE bytes
+// than characters cut, which is the assertion a `s.length - max` mutant fails.
+describe('truncatedBytes', () => {
+  const resultLine = (text: string): string => JSON.stringify({
+    type: 'user', uuid: 'u1', timestamp: '2026-08-13T10:00:00Z',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: text }] },
+  });
+  const useLine = (input: unknown): string => JSON.stringify({
+    type: 'assistant', uuid: 'a1', timestamp: '2026-08-13T10:00:00Z',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input }] },
+  });
+
+  const resultOf = (text: string): Extract<ChatEvent, { kind: 'tool_result' }> =>
+    parseTranscriptLine(resultLine(text))[0] as Extract<ChatEvent, { kind: 'tool_result' }>;
+  const useOf = (input: unknown): Extract<ChatEvent, { kind: 'tool_use' }> =>
+    parseTranscriptLine(useLine(input))[0] as Extract<ChatEvent, { kind: 'tool_use' }>;
+
+  it('reports 0 on a result under the cap', () => {
+    const res = resultOf('tests: 41 passed');
+    expect(res.text).toBe('tests: 41 passed');
+    expect(res.truncatedBytes).toBe(0);
+  });
+
+  it('reports the BYTES cut, not the characters, on a multi-byte tail', () => {
+    // 20_000 ASCII chars fill the cap exactly; the tail is 500 three-byte
+    // characters, so 500 CHARACTERS were dropped and 1500 BYTES were cut. A
+    // `s.length - max` implementation reports 500 and passes every other
+    // assertion in this file.
+    const tail = '→'.repeat(500);
+    expect(Buffer.byteLength(tail, 'utf8')).toBe(1500);
+    const res = resultOf('a'.repeat(20_000) + tail);
+    expect(res.text.length).toBe(20_000);
+    expect(res.truncatedBytes).toBe(1500);
+    expect(res.truncatedBytes).not.toBe(500);
+  });
+
+  it('reports the plain byte count when the tail is ASCII', () => {
+    const res = resultOf('a'.repeat(20_000 + 37));
+    expect(res.truncatedBytes).toBe(37);
+  });
+
+  it('reports on tool_use input too', () => {
+    // `input` is the JSON of the call, capped at TOOL_INPUT_MAX (4000).
+    const small = useOf({ command: 'ls /' });
+    expect(small.truncatedBytes).toBe(0);
+
+    const big = useOf({ command: 'x'.repeat(5_000) });
+    expect(big.input.length).toBe(4_000);
+    expect(big.truncatedBytes).toBeGreaterThan(0);
+  });
+
+  it('never omits the field — absence can only come from an older server', () => {
+    // The field is OPTIONAL on the wire so an old server's silence is
+    // representable; THIS server always answers. A parser that emitted the
+    // field only when it cut something would make `0` and "did not report"
+    // indistinguishable, which is precisely the collapse the three states
+    // exist to prevent.
+    for (const ev of [resultOf(''), resultOf('short'), useOf({ a: 1 })]) {
+      expect(Object.hasOwn(ev, 'truncatedBytes'), ev.kind).toBe(true);
+      expect(typeof ev.truncatedBytes).toBe('number');
+    }
+  });
+
+  it('reports 0 at exactly the cap — the boundary is not a cut', () => {
+    const res = resultOf('a'.repeat(20_000));
+    expect(res.text.length).toBe(20_000);
+    expect(res.truncatedBytes).toBe(0);
+  });
+});

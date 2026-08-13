@@ -1436,11 +1436,33 @@ export interface SlashCommand {
   kind: 'builtin' | 'skill';
 }
 
+/**
+ * `truncatedBytes` — THREE DOCUMENTED STATES, and the third is why the field
+ * is optional (Build 4, spec §2.2/§2.4):
+ *
+ * - **absent** — *this server did not report*. An old server can only ever
+ *   produce this, and it renders NO CUE. Never a claim of completeness: the
+ *   fragment is presented as a fragment of unknown size, which is the honest
+ *   thing a reader can act on.
+ * - **`0`** — not truncated. The whole payload is here.
+ * - **`>0`** — this many BYTES were cut off the end.
+ *
+ * Computed in `server/src/transcript/parse.ts`, not here (D-B4-12): L0 imports
+ * nothing, "not even `node:*`", so there is no `Buffer` in this file. The caps
+ * upstream are CHARACTER caps and this report is in BYTES, deliberately — a
+ * byte count is what an operator can compare against a file on disk.
+ *
+ * NO NEW `ChatEvent` KIND was added for this, and none may be: `buildChatItems`
+ * funnels every non-tool event into `MessageBubble`, so an unknown kind renders
+ * as a broken bubble in older PWAs rather than degrading honestly (spec §2.2).
+ * An optional field on an existing member is the additive shape old readers
+ * simply ignore.
+ */
 export type ChatEvent =
   | { kind: 'user'; uuid: string; ts: string; text: string }
   | { kind: 'assistant'; uuid: string; ts: string; text: string }
-  | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string }
-  | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean }
+  | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string; truncatedBytes?: number }
+  | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean; truncatedBytes?: number }
   | { kind: 'system'; uuid: string; ts: string; text: string };
 
 export interface AskOption { label: string; description?: string; preview?: string }

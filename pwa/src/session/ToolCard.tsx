@@ -111,6 +111,24 @@ function askAnswers(text: string, questions: string[]): string[] | null {
   return marks.map((m, i) => answerFromSpan(body.slice(m.end, marks[i + 1]?.start ?? body.length)));
 }
 
+/**
+ * The truncation cue — ONE HOME for the sentence (Build 4 Task 16).
+ *
+ * Three states, and only one of them renders (spec §2.4): absent = *this
+ * server did not report* → nothing; `0` = not truncated → nothing; `>0` →
+ * this many bytes were cut. Absence must never render a completeness claim —
+ * an old server can only ever produce absence, and a fragment announced as
+ * whole is the exact lie this feature exists to remove.
+ *
+ * Still, deliberately: a truncation note is a RECORD, so `.tool-cut` carries
+ * no glow, no animation and no box-shadow (the no-glow governance `/runs`
+ * established, extended to the transcript).
+ */
+function TruncationCue({ bytes }: { bytes?: number }): ReactNode {
+  if (bytes === undefined || bytes <= 0) return null;
+  return <p className="tool-cut">+{bytes} bytes cut</p>;
+}
+
 /** An ask that produced no answer: declined, interrupted, or left to time out.
  *  The result text is the harness briefing the model — the decline preamble
  *  alone runs past 1 kB of it — so it goes behind a tap in the same capped,
@@ -145,6 +163,7 @@ function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
             <pre className="well tool-ask-well">
               {result.text === '' ? '(no output)' : result.text}
             </pre>
+            <TruncationCue bytes={result.truncatedBytes} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -244,10 +263,15 @@ function GenericToolCard({
             <div className="tool-body">
               <p className="tool-eyebrow">input</p>
               <pre className="well">{use.input}</pre>
+              {/* One cue PER WELL — the input and the result are cut against
+                  two different caps (TOOL_INPUT_MAX / TOOL_RESULT_MAX) and a
+                  single shared cue would report one number for two cuts. */}
+              <TruncationCue bytes={use.truncatedBytes} />
               {result !== undefined && (
                 <>
                   <p className="tool-eyebrow">result</p>
                   <pre className="well">{result.text === '' ? '(no output)' : result.text}</pre>
+                  <TruncationCue bytes={result.truncatedBytes} />
                 </>
               )}
               <p className="tool-meta">

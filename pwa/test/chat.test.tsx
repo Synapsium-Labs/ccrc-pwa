@@ -645,3 +645,115 @@ describe('SessionScreen', () => {
     expect(composerInput).not.toHaveFocus();
   });
 });
+
+// — Build 4 Task 16: the truncation cue —
+//
+// Three states, and the third is why the field is optional: absent = *this
+// server did not report*, 0 = not truncated, >0 = this many bytes were cut.
+// An old server can only produce "absent". The rule the renderer must hold is
+// that absent renders NOTHING — never a claim of completeness, which would be
+// a lie told on a fragment.
+describe('the truncation cue', () => {
+  const cut = (): string[] =>
+    [...document.querySelectorAll('.tool-cut')].map((n) => n.textContent ?? '');
+
+  const expand = (): void => {
+    fireEvent.click(screen.getByRole('button', { name: /Bash/ }));
+  };
+
+  it('renders no cue when the field is absent', () => {
+    render(
+      <ChatListInner
+        id="s"
+        events={[toolUse('t1', 'tool-1'), toolResult('tool-1', 'tests: 41 passed')]}
+        pending={[]}
+      />,
+    );
+    expand();
+    expect(cut()).toEqual([]);
+  });
+
+  it('renders no cue at 0', () => {
+    render(
+      <ChatListInner
+        id="s"
+        events={[
+          { ...toolUse('t1', 'tool-1'), truncatedBytes: 0 } as ChatEvent,
+          { ...toolResult('tool-1', 'tests: 41 passed'), truncatedBytes: 0 } as ChatEvent,
+        ]}
+        pending={[]}
+      />,
+    );
+    expand();
+    expect(cut()).toEqual([]);
+  });
+
+  it('renders "+N bytes cut" at >0, inside the expanded well', () => {
+    render(
+      <ChatListInner
+        id="s"
+        events={[
+          { ...toolUse('t1', 'tool-1'), truncatedBytes: 0 } as ChatEvent,
+          { ...toolResult('tool-1', 'a long result'), truncatedBytes: 1500 } as ChatEvent,
+        ]}
+        pending={[]}
+      />,
+    );
+
+    // Collapsed, the card says nothing about it — the cue lives with the text
+    // it is describing, not on the summary row.
+    expect(cut()).toEqual([]);
+    expand();
+    expect(cut()).toEqual(['+1500 bytes cut']);
+  });
+
+  it('cues the INPUT and the RESULT independently — each beside its own well', () => {
+    render(
+      <ChatListInner
+        id="s"
+        events={[
+          { ...toolUse('t1', 'tool-1'), truncatedBytes: 42 } as ChatEvent,
+          { ...toolResult('tool-1', 'a long result'), truncatedBytes: 1500 } as ChatEvent,
+        ]}
+        pending={[]}
+      />,
+    );
+    expand();
+    // Two cues, in document order: input first, result second — a single
+    // shared cue would report one number for two different cuts.
+    expect(cut()).toEqual(['+42 bytes cut', '+1500 bytes cut']);
+  });
+
+  it('cues a truncated ask outcome too — the well AskOutcome hides behind its tap', () => {
+    render(
+      <ChatListInner
+        id="s"
+        events={[askUse('Which colour?'), { ...askResult(ASK_TIMEOUT), truncatedBytes: 900 } as ChatEvent]}
+        pending={[]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /no answer/ }));
+    expect(cut()).toEqual(['+900 bytes cut']);
+  });
+
+  it('never says "complete" anywhere', () => {
+    // The failure this feature exists to prevent is a fragment presented as
+    // whole. No rendering of any of the three states may assert completeness.
+    for (const truncatedBytes of [undefined, 0, 1500]) {
+      cleanup();
+      render(
+        <ChatListInner
+          id="s"
+          events={[
+            toolUse('t1', 'tool-1'),
+            { ...toolResult('tool-1', 'a result'), ...(truncatedBytes === undefined ? {} : { truncatedBytes }) } as ChatEvent,
+          ]}
+          pending={[]}
+        />,
+      );
+      expand();
+      expect(document.body.textContent ?? '', String(truncatedBytes)).not.toMatch(/complete/i);
+      expect(document.body.textContent ?? '', String(truncatedBytes)).not.toMatch(/\bwhole\b/i);
+    }
+  });
+});

@@ -1383,6 +1383,16 @@ button.metachip:active {
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
+/* The truncation cue (Build 4 Task 16) — sits directly under the well whose
+   text it describes, so "what was cut" is read against the fragment rather
+   than as a property of the card. STILL: a truncation note is a record, so no
+   glow, no animation, no box-shadow. */
+.tool-cut {
+  margin-top: calc(var(--sp-1) * -1);
+  font: var(--weight-regular) var(--text-2xs) / 1.5 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
 .exit-badge {
   font: var(--weight-semibold) var(--text-2xs) / 1 var(--font-mono);
   letter-spacing: var(--tracking-caps);
