@@ -360,6 +360,26 @@ bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts
   the roster from. `ccd` has no such override on purpose: it derives the path
   from `HOME` alone, so a stray `Environment=` cannot run a live box against
   someone else's account list.
+- **The two boxes are checked against each other, continuously.** `accounts.json`
+  is user-owned and never overwritten, and the boxes are deployed by two
+  separate runs of `deploy.sh` — so an account added to one and not the other is
+  one hand-edit away, and the symptom (a session attributed to the wrong
+  account, a swap target ccd rejects) names nothing. The agent reports a
+  fingerprint of its **installed `~/.ccrc/accounts.sh`** on the `ready` frame;
+  the server compares it against the fingerprint of the projection its own
+  roster produces, and `GET /api/fleet/health` answers
+  `roster: 'agreed' | 'divergent' | 'unknown'`. The PWA shows an amber banner on
+  `divergent` and nothing on `unknown` — an older agent sends no fingerprint,
+  and absence of evidence must not render as evidence of absence.
+
+  It compares the **projections**, not the two JSON files, which catches
+  strictly more: a fleet host whose `accounts.json` was hand-edited but never
+  redeployed has two files that agree and a `ccd` that behaves like neither,
+  because `ccd` sources the generated `accounts.sh` and nothing reads
+  `accounts.json` at runtime. Each `deploy.sh` run also prints
+  `roster fingerprint on <box>: <sha256>`, which is the same value — that line
+  is the only signal in the agent-only and single-box cases, where there is no
+  server on the other end of a socket to disagree with.
 
 - **Limit telemetry is roster-driven too**, which is what makes free-form ids
   real rather than half-delivered. `ccd/statusline-command.sh` is a Claude Code

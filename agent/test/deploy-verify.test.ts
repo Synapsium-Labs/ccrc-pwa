@@ -39,6 +39,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -804,6 +805,38 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(scpAt, 'ship_roster never copies anything').toBeGreaterThan(-1);
     expect(scpAt, 'the seed copy must run only after the not-present test, never unconditionally')
       .toBeGreaterThan(testAt);
+  });
+
+  it('both branches print a roster fingerprint, and the way it is extracted still works', () => {
+    // The two boxes are deployed by two separate runs of this script, so this
+    // line is how an operator sees that the run they just did agrees with the
+    // run they did last time. (At runtime the server and agent compare the
+    // same digest continuously over the WS link — `rosterAgreement`,
+    // server/src/fleetstate.ts — but that needs both boxes up and a fleet in
+    // remote mode, and the agent-only and single-box cases have neither.)
+    for (const [label, branch] of [
+      ['agent', deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'))],
+      ['server', deploySh.slice(deploySh.indexOf('\nelse'))],
+    ] as const) {
+      expect(branch, `the ${label} branch never prints a roster fingerprint`)
+        .toContain('roster fingerprint on $BOX');
+    }
+
+    // `roster_fp` reads the digest straight out of the generated file's own
+    // marker line rather than recomputing it, which is only correct while
+    // `markGenerated` keeps writing that line in that place. Proven by running
+    // the extraction against a real marked file — a comment claiming the two
+    // agree would let a marker-layout change turn every deploy's fingerprint
+    // line silently blank.
+    const fn = /roster_fp\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no roster_fp() helper').toBeTruthy();
+    const marked = path.join(mkTmp('ccrc-roster-fp-'), 'accounts.sh');
+    const body = '#!/usr/bin/env bash\nCCRC_ACCOUNTS=(claude)\n';
+    writeFileSync(marked, markGenerated(body));
+    const r = spawnSync('bash', ['-c', `roster_fp() {${fn![1]!}\n}\nroster_fp "$1"`, 'bash', marked],
+      { encoding: 'utf8' });
+    expect(r.stdout.trim(), 'roster_fp does not extract the digest markGenerated wrote')
+      .toBe(bodyDigest(body));
   });
 
   it('the deploy proves the box now RUNS what it shipped — sha equality, not just 200 OK', () => {

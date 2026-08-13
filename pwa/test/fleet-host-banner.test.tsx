@@ -42,6 +42,35 @@ describe('FleetHostBanner', () => {
     expect(screen.getByRole('button', { name: 'Reboot' })).toBeInTheDocument();
   });
 
+  it('warns when the host is UP but the two boxes disagree about the roster', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(
+      health({ connected: true, downSince: null, roster: 'divergent' }));
+    render(<FleetHostBanner />);
+    expect(await screen.findByText(/rosters disagree/i)).toBeInTheDocument();
+    // No action button: the fix is a deploy or an edit on one of the two
+    // boxes, and offering a button that cannot do either is worse than none.
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('stays silent on an unknown roster answer — an older agent reports no digest', async () => {
+    // The distinction that makes `roster` a three-state and not a boolean. A
+    // banner that fires whenever nothing was checked is a banner nobody reads
+    // by the time something IS wrong.
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(
+      health({ connected: true, downSince: null, roster: 'unknown' }));
+    render(<FleetHostBanner />);
+    await act(async () => {});
+    expect(screen.queryByText(/rosters disagree/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unreachable/i)).not.toBeInTheDocument();
+  });
+
+  it('an unreachable host outranks a roster warning — nothing can be fixed until it is back', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ roster: 'divergent' }));
+    render(<FleetHostBanner />);
+    expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/rosters disagree/i)).not.toBeInTheDocument();
+  });
+
   it('Reboot opens a confirm naming the rp-llm collateral, and only calls the API on confirm', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(health());
     const reboot = vi.spyOn(api, 'rebootFleet').mockResolvedValue(undefined);

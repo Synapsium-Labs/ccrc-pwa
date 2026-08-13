@@ -14,6 +14,18 @@
 // package.json declaring ESM. agent/tsconfig.json has the identical include
 // shape and was exposed to the same bug; both are covered by the one
 // shared/package.json this asserts, so it is not duplicated over there.
+//
+// The include list now also carries `../shared/**/*.mjs` (with `allowJs`), so
+// that `shared/generate.mjs` and `shared/mark.mjs` reach `dist/shared/` —
+// `server/src/server.ts` imports the pair to fingerprint its own roster
+// projection, and without the emit the built server dies at startup on a
+// module it cannot resolve. Those two files are explicitly `.mjs` rather than
+// `.ts` (see `shared/mark.mjs`'s header: `deploy/deploy.sh` runs them under a
+// bare `node`, no build step), which is exactly why the CommonJS trap above
+// applies to them too and why they belong in COMPILED_ROOTS' coverage.
+//
+// NOTE: `server/tsconfig.json` is read back by JSON.parse below, so it must
+// stay strict JSON — tsc would accept comments in it, this test would not.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -58,10 +70,14 @@ describe('emitted module format', () => {
     ) as { include: string[] };
     // Guards the test itself: a new include entry must be added to COMPILED_ROOTS
     // or it goes unchecked and can reintroduce the CommonJS emit.
-    const roots = tsconfig.include
-      .map((glob) => glob.replace(/\/\*\*\/\*\.ts$/, ''))
-      .map((rel) => path.resolve(serverRoot, rel))
-      .sort();
+    //
+    // Deduplicated, because one root can legitimately appear twice — `shared/`
+    // is included once for its `.ts` and once for its `.mjs`. The EXTENSION is
+    // not what this test is about; the DIRECTORY is, since a package.json
+    // governs a directory and every file under it.
+    const roots = [...new Set(tsconfig.include
+      .map((glob) => glob.replace(/\/\*\*\/\*\.(ts|mjs)$/, ''))
+      .map((rel) => path.resolve(serverRoot, rel)))].sort();
     expect(roots).toEqual([...COMPILED_ROOTS].sort());
   });
 });

@@ -97,7 +97,7 @@ describe('POST /api/coord/pause', () => {
   it('answers 501 unsupported when the fleet ccd does not advertise the verb', async () => {
     const { run, calls } = makeRunner();
     const w = await openApp(run, {
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['start', 'ws-hold'] },
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['start', 'ws-hold'], rosterFp: null },
     }); app = w.app;
     const res = await postPause(app, { paused: true });
     expect(res.statusCode).toBe(501);

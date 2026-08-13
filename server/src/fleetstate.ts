@@ -20,9 +20,51 @@ export interface FleetState {
    *  evidence (local mode, or an agent old enough not to send it). Null is
    *  NOT "no verbs" — the server treats it as "do not block". */
   ccdVerbs: string[] | null;
+  /** `bodyDigest` of the roster projection installed on the fleet host, or
+   *  null when we have no evidence (local mode, an older agent, or a fleet
+   *  host with no readable `~/.ccrc/accounts.sh`). Null is NOT "divergent" —
+   *  see `rosterAgreement` for the three-way answer that keeps those apart. */
+  rosterFp: string | null;
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
+
+/**
+ * Do this box and the fleet host agree about which accounts exist?
+ *
+ * Compares the digest the agent reported for its INSTALLED
+ * `~/.ccrc/accounts.sh` against the digest of the projection this server's own
+ * roster produces. Both sides run `bodyDigest` over the output of the one
+ * generator, so equal digests mean the two boxes would run identical bash, and
+ * unequal ones mean they would not.
+ *
+ * The two `accounts.json` files are deliberately NOT what is compared, even
+ * though "the rosters diverged" is how the problem is usually described.
+ * `accounts.json` is user-owned and never overwritten, but nothing on the
+ * fleet host READS it at runtime — `ccd` sources the generated projection, and
+ * the deploy is what regenerates one from the other. So a fleet host whose
+ * `accounts.json` was hand-edited and never redeployed has two files that
+ * agree and a `ccd` that behaves like neither. Digesting the projection sees
+ * that; digesting the JSON does not.
+ *
+ * Three answers, not two, and the third is why this is a function rather than
+ * an `===`. `'unknown'` means no evidence — local mode has no second box, an
+ * older agent omits the field, and a fleet host with no readable projection
+ * cannot report one. None of those is disagreement, and a UI that rendered
+ * them as disagreement would cry wolf on every deploy of an older agent.
+ * Overloading `unknown` into `divergent` is exactly the collapsed distinction
+ * this codebase bans at a seam: the operator does something about
+ * `'divergent'` and nothing about `'unknown'`.
+ */
+export type RosterAgreement = 'agreed' | 'divergent' | 'unknown';
+
+export function rosterAgreement(
+  fleetFp: string | null | undefined,
+  ownFp: string,
+): RosterAgreement {
+  if (fleetFp === null || fleetFp === undefined) return 'unknown';
+  return fleetFp === ownFp ? 'agreed' : 'divergent';
+}
 
 /**
  * Cache lives on THIS box's disk — the one running ccrc-server — regardless

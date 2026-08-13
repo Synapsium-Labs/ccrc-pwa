@@ -178,7 +178,7 @@ describe('POST /api/runs/:id/abandon', () => {
     const home = mkTmp('ccrc-abandon-');
     const { run, calls } = makeRunner();
     const w = await openApp(home, run, {
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['start', 'ensure'] },
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['start', 'ensure'], rosterFp: null },
     }); app = w.app;
     const id = wedged(w.coord, home, 'dispatched', `${PROJECT}-old-agent`);
 

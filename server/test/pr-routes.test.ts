@@ -32,7 +32,7 @@ async function app(stdout = '', code = 0, stderr = '', ccdVerbs?: string[] | nul
   return {
     app: await buildServer(ccdVerbs === undefined
       ? deps
-      : { ...deps, fleetState: { connected: true, downSince: null, ccdVerbs } }),
+      : { ...deps, fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null } }),
     calls,
   };
 }

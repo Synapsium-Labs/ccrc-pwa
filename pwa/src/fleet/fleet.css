@@ -244,6 +244,21 @@
 .fleet-host-banner .btn-primary {
   flex: none;
 }
+/* Roster divergence: the host is UP, so this is not the "dead" language above
+   — it is the attention amber the fleet already uses for "waiting on you".
+   `--status-attention-tint` is a solid colour in both themes (unlike the dead
+   banner's 12%-alpha tint, which needed a pre-composited `-tint-solid`), and
+   the attention-text/attention-tint pair is already floored at 4.5 by
+   pwa/design/contrast-check.mjs, so this adds no new colour pairing. */
+.fleet-host-banner--warn {
+  background: var(--status-attention-tint);
+  border-color: var(--status-attention);
+  color: var(--status-attention-text);
+}
+.fleet-host-banner--warn code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
 
 /* ------------------------------------------------------------------ *
  *  Notices — dismissible fleet-wide banners (account moves etc.).     *

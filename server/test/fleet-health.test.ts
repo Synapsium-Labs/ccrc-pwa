@@ -8,7 +8,10 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { saveSnapshot, type FleetState } from '../src/fleetstate.js';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
+import { parseRoster } from '../../shared/roster.js';
+import { generateAccountsSh } from '../../shared/generate.mjs';
+import { bodyDigest } from '../../shared/mark.mjs';
 import type { FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -41,26 +44,64 @@ const session = (id: string): FleetSession => ({
   unmeasured: [],
 });
 
+/** The digest the SERVER computes for its own roster — derived through the
+ *  same two functions the route uses, never transcribed, so a change to either
+ *  moves both sides together instead of turning this into a pin on a stale
+ *  constant. */
+const OWN_FP = bodyDigest(generateAccountsSh(parseRoster(DEFAULT_TEST_ROSTER)));
+
 describe('GET /api/fleet/health', () => {
   it('local mode reports connected with no downSince, regardless of fleetState', async () => {
     const app = await buildServer(testDeps());
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ mode: 'local', connected: true, downSince: null });
+    // `roster: 'unknown'` and not `'agreed'` — local mode drives ccd off this
+    // same roster, so there is nothing to compare and nothing was compared.
+    expect(res.json()).toEqual({ mode: 'local', connected: true, downSince: null, roster: 'unknown' });
     await app.close();
   });
 
   it('remote mode + connected fleetState reports connected', async () => {
-    const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null }));
+    const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown' });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
-    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null }));
+    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000 });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown' });
+    await app.close();
+  });
+
+  it("agrees when the fleet host's installed projection digests to the same value", async () => {
+    const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: OWN_FP }));
+    expect((await app.inject({ method: 'GET', url: '/api/fleet/health' })).json())
+      .toMatchObject({ roster: 'agreed' });
+    await app.close();
+  });
+
+  it('reports divergent when the fleet host is running a different account list', async () => {
+    // The failure this whole path exists for: the link is UP and healthy, so
+    // nothing else on the dashboard is wrong, while the two boxes disagree
+    // about which accounts exist — sessions attributed to the wrong account, a
+    // swap target ccd rejects, and no error anywhere naming the cause.
+    const app = await buildServer(remoteDeps({}, {
+      connected: true, downSince: null, ccdVerbs: null, rosterFp: 'deadbeef'.repeat(8),
+    }));
+    expect((await app.inject({ method: 'GET', url: '/api/fleet/health' })).json())
+      .toMatchObject({ mode: 'remote', connected: true, roster: 'divergent' });
+    await app.close();
+  });
+
+  it('a fleet host that reports no digest is unknown, never divergent', async () => {
+    // An agent older than this field, or one whose box has no readable
+    // projection. Absence of evidence must not render as evidence of absence:
+    // a divergence banner on every older agent is a banner nobody reads.
+    const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }));
+    expect((await app.inject({ method: 'GET', url: '/api/fleet/health' })).json())
+      .toMatchObject({ roster: 'unknown' });
     await app.close();
   });
 });
@@ -72,7 +113,7 @@ describe('GET /api/fleet — degraded mode', () => {
     const cachedSessions = [session('claude-Cached')];
     await saveSnapshot(cachedSessions, cachePath);
 
-    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null }, cachePath);
+    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.statusCode).toBe(200);
@@ -83,7 +124,7 @@ describe('GET /api/fleet — degraded mode', () => {
   it('falls back to a live assemble (no stale flag) when disconnected but no cache exists yet', async () => {
     const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'never-written.json');
-    const deps = remoteDeps({}, { connected: false, downSince: Date.now(), ccdVerbs: null }, cachePath);
+    const deps = remoteDeps({}, { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.json()).toEqual({ sessions: [] });
@@ -106,7 +147,7 @@ describe('GET /api/fleet — degraded mode', () => {
       }],
     }));
 
-    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null }, cachePath);
+    const deps = remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     const body = res.json() as { sessions: FleetSession[]; stale: boolean; downSince: number };
@@ -129,7 +170,7 @@ describe('GET /api/fleet — degraded mode', () => {
     const cachePath = path.join(dir, 'state-cache.json');
     await saveSnapshot([session('claude-Stale')], cachePath);
 
-    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null }, cachePath);
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.json()).toEqual({ sessions: [] });
@@ -147,7 +188,7 @@ describe('POST /api/fleet/reboot', () => {
   });
 
   it('501s in remote mode with no Hetzner token/server id configured', async () => {
-    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1, ccdVerbs: null }));
+    const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null }));
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ ok: false, error: 'not-configured' });
@@ -160,7 +201,7 @@ describe('POST /api/fleet/reboot', () => {
     const app = await buildServer(
       remoteDeps(
         { CCRC_HETZNER_TOKEN: 'hetzner-secret', CCRC_FLEET_SERVER_ID: '12345' },
-        { connected: false, downSince: 1, ccdVerbs: null },
+        { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null },
       ),
     );
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });
@@ -180,7 +221,7 @@ describe('POST /api/fleet/reboot', () => {
     const app = await buildServer(
       remoteDeps(
         { CCRC_HETZNER_TOKEN: 'bad-token', CCRC_FLEET_SERVER_ID: '12345' },
-        { connected: false, downSince: 1, ccdVerbs: null },
+        { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null },
       ),
     );
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });
@@ -195,7 +236,7 @@ describe('POST /api/fleet/reboot', () => {
     const app = await buildServer(
       remoteDeps(
         { CCRC_HETZNER_TOKEN: 'token', CCRC_FLEET_SERVER_ID: '12345' },
-        { connected: false, downSince: 1, ccdVerbs: null },
+        { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null },
       ),
     );
     const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot' });
