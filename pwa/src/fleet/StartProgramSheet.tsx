@@ -52,12 +52,16 @@ interface Project {
  *  (`coord/routes.ts`'s open route: "PARSED BY NOTHING") and this sheet must
  *  not pretend to either — naming the path is exactly what that route already
  *  does in its own response, and this stops there. */
+const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;
+
+// Review fix round 1, Minor 3: `kickoff` used to build this path a second
+// time inline rather than calling `ledgerPath` — this file's own header
+// cites "Two implementations of one rule drift" as the reason it exists at
+// all, and had drifted into being an example of the thing it warns against.
 export const kickoff = (slug: string, title: string): string =>
   `You are the coordinator for program \`${slug}\` (${title}).\n` +
-  `Its ledger is \`docs/superpowers/programs/${slug}.md\`.\n` +
+  `Its ledger is \`${ledgerPath(slug)}\`.\n` +
   `Run the ccrc-coordinator skill and open the run for wave 1.`;
-
-const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;
 
 /** D-B4-18: how long the sheet waits for the freshly created session to
  *  appear in a `/ws/fleet` snapshot before giving up. Tied to the fleet
@@ -118,7 +122,12 @@ export function StartProgramSheet({
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
   const coord = fleet((s) => s.coord);
-  const projected = useProjectedHome();
+  // `active: open` — this sheet is mounted UNCONDITIONALLY at RunsScreen
+  // level (review fix round 1, Minor 2): without gating the poll, `/runs`
+  // would ask `/api/accounts` every 20s whether or not the door is ever
+  // tapped, the exact shape `useProjectedHome.ts`'s own docstring (citing
+  // `useDisabledWrappers`) warns against.
+  const projected = useProjectedHome(open);
 
   const [slug, setSlug] = useState('');
   const [title, setTitle] = useState('');
@@ -158,6 +167,21 @@ export function StartProgramSheet({
   const gen = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const waitRef = useRef<{ mine: number; wrapper: string; project: string; slug: string; title: string } | null>(null);
+  // Review fix round 1, Important 2: the D-B4-18 timeout and the D-B4-19
+  // collision refusal INTERACT — neither ruling could see this alone. A
+  // timeout does not mean the create failed; it means the board hasn't
+  // shown it YET. If the session then lands a moment later, `existing`
+  // (below) finds it — and without this ref, the sheet would render the
+  // D-B4-19 refusal ("…is already running… may be mid-task") for the
+  // session it JUST started itself, which is neither running anyone else's
+  // work nor true. `myAttemptRef` outlives the timeout (unlike `waitRef`,
+  // which `finish()` still nulls the instant a match is found, so a second
+  // `/ws/fleet` frame arriving mid-`prompt()` cannot fire a duplicate
+  // kickoff) — it is cleared only on close or by a NEWER attempt overwriting
+  // it, so the false-collision suppression below holds for the entire
+  // window from a successful `createSession` through navigation, not merely
+  // while the wait is still nominally "in progress".
+  const myAttemptRef = useRef<{ wrapper: string; project: string } | null>(null);
 
   const clearTimer = (): void => {
     if (timerRef.current !== null) {
@@ -171,6 +195,7 @@ export function StartProgramSheet({
     gen.current += 1;
     clearTimer();
     waitRef.current = null;
+    myAttemptRef.current = null;
     setSlug('');
     setTitle('');
     setProject(null);
@@ -236,6 +261,15 @@ export function StartProgramSheet({
     project !== null && projected != null
       ? existingSessionFor(sessions, projected.wrapper, project.name)
       : null;
+  // Review fix round 1, Important 2: `existing` alone cannot tell "someone
+  // else's session is in the way" apart from "the session I just started
+  // has arrived" — both are `existing !== null`. `myAttemptRef` is the one
+  // fact that distinguishes them; see its own comment above `waitRef`.
+  const isOwnAttempt =
+    existing !== null
+    && myAttemptRef.current !== null
+    && existing.wrapper === myAttemptRef.current.wrapper
+    && existing.project === myAttemptRef.current.project;
 
   const start = async (): Promise<void> => {
     if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
@@ -260,13 +294,21 @@ export function StartProgramSheet({
     if (gen.current !== mine) return; // superseded while the create was in flight
 
     waitRef.current = { mine, wrapper, project: projectName, slug: slug.trim(), title: title.trim() };
+    myAttemptRef.current = { wrapper, project: projectName };
     clearTimer();
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
       // Only this attempt's own timeout fires into it — a later attempt (or
-      // one already resolved) owns `waitRef` now.
+      // one already resolved) owns `waitRef` now. Review fix round 1,
+      // Important 2: `waitRef` is deliberately NOT nulled here — the wait
+      // does not give up, only the busy UI does. `checkForMatch` (below,
+      // driven by every later `/ws/fleet` frame) keeps watching for exactly
+      // this `mine`'s target, so a session that lands at t=25s after a
+      // 20s timeout still gets its kickoff sent and still navigates —
+      // "started, not shown yet" was true when it was said, and stays true
+      // rather than becoming a dead end the operator has to notice and
+      // finish by hand.
       if (waitRef.current?.mine === mine) {
-        waitRef.current = null;
         setStarting(false);
         setTimedOut(true);
       }
@@ -333,10 +375,17 @@ export function StartProgramSheet({
         )}
 
         {project !== null && (
-          existing !== null ? (
+          existing !== null && !isOwnAttempt ? (
             // D-B4-19: refuses BEFORE the tap — no confirm button rendered
             // at all, not merely a disabled one, so there is no control here
-            // that could hijack the running session.
+            // that could hijack the running session. `!isOwnAttempt` (review
+            // fix round 1, Important 2): a session that matches THIS sheet's
+            // own last attempt is not a collision to refuse — it is the
+            // create finally showing up, possibly after a D-B4-18 timeout
+            // already told the operator "not shown yet". Falling through to
+            // the ordinary branch below lets `timedOut`/`checkForMatch`
+            // finish the job instead of lying that it belongs to someone
+            // else's mid-task session.
             <p className="program-start-existing">
               {`${existing.id} is already running in ${project.name} — open it, or pick another project. `
                 + 'Starting here would send the kickoff into a session that may be mid-task.'}

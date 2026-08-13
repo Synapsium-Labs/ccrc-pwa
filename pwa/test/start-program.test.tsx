@@ -19,6 +19,7 @@ import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-libra
 import type { FleetSession } from '../../shared/api';
 import { StartProgramSheet, kickoff, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { ApiError, api } from '../src/lib/api';
+import { ToastHost } from '../src/components/Toast';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -149,6 +150,29 @@ describe('StartProgramSheet', () => {
     expect(createSession).toHaveBeenCalledWith({ wrapper: 'claude', project: 'ccrc-pwa', workdir: proj().workdir });
   });
 
+  // Review fix round 1, Important 1: the THIRD projection state
+  // (`projected === undefined`, "no answer yet") had no test anywhere in the
+  // suite — every other case stubs `api.accounts` with `mockResolvedValue`
+  // and then `findBy*`-waits past this window, so nothing ever observed the
+  // sheet while it was still pending. On a real phone the accounts poll
+  // takes ~200ms; a tap inside that window must not be a dead tap.
+  it('renders a disabled "checking placement…" control while the projection has not answered yet — no dead tap (Important 1)', async () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {})); // never resolves — the pending window
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    const go = await screen.findByRole('button', { name: /checking placement/i });
+    expect(go).toBeDisabled();
+    // Not merely disabled cosmetically — a tap in this state must not fire
+    // any request at all, so a mutant that dropped the `disabled` attribute
+    // but left `start()`'s own `projected == null` guard in place would
+    // still be a dead-tap regression the operator has no way to see.
+    fireEvent.click(go);
+    expect(screen.queryByRole('button', { name: /^starting…$/i })).toBeNull();
+  });
+
   it('navigates to the new session on success — matched by wrapper+project once a LATER fleet frame shows it (D-B4-18)', async () => {
     history.pushState(null, '', '/runs');
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
@@ -207,6 +231,38 @@ describe('StartProgramSheet', () => {
     expect(text).toContain('ccrc-coordinator');
   });
 
+  // Review fix round 1, Minor 5: `finish()`'s own `.catch` arm — deleting it
+  // loses the toast AND silently kills navigation (the rejection short-
+  // circuits `.then`, and `void` swallows it), with the rest of the suite
+  // staying green because every other test's injected `prompt` resolves.
+  it('a prompt failure toasts once, non-blocking — the session is real, so it still navigates', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    const prompt = vi.fn().mockRejectedValue(
+      new ApiError(502, { ok: false, stderr: 'ccd: prompt: pane busy' }),
+    );
+    const store = makeStore();
+    render(
+      <>
+        <StartProgramSheet open onClose={() => {}} fleet={store}
+          createSession={createSession} prompt={prompt}
+          loadProjects={async () => ({ roots: [], projects: [proj()] })} />
+        <ToastHost />
+      </>,
+    );
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+
+    expect(await screen.findByText(/kickoff prompt failed to send/i)).toBeInTheDocument();
+    expect(screen.getByText(/ccd: prompt: pane busy/i)).toBeInTheDocument();
+    // The session was really created — the failure is only that the nudge
+    // never landed, so the sheet still takes the operator there.
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
   it('never calls POST /api/runs', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const fetchImpl = vi.fn().mockResolvedValue(
@@ -228,8 +284,10 @@ describe('StartProgramSheet', () => {
 
     const urls = fetchImpl.mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes('/api/runs'))).toBe(false);
-    // And the two calls that DID happen are exactly the two composed routes
-    // — this is not merely "no /api/runs", it is "these two, and no third".
+    // Review fix round 1, Minor 4: the length check is what actually backs
+    // "these two, and no third" — two bare `toContain`s pass just as well
+    // with a third, unrelated call mixed in.
+    expect(urls).toHaveLength(2);
     expect(urls).toContain('/api/sessions');
     expect(urls).toContain('/api/sessions/claude-ccrc-pwa/prompt');
   });
@@ -314,6 +372,51 @@ describe('StartProgramSheet', () => {
     // Not stuck disabled either — the operator can watch the fleet screen and
     // still retry from here if it truly never landed.
     expect(screen.getByRole('button', { name: /^start build9-demo/i })).not.toBeDisabled();
+  });
+
+  // Review fix round 1, Important 2: D-B4-18's timeout and D-B4-19's
+  // collision refusal INTERACT, which neither ruling could see alone. A
+  // session that lands after the timeout is the create THIS sheet just
+  // asked for — not someone else's mid-task work — and the kickoff must
+  // still be sent, not silently abandoned.
+  it('a session that lands AFTER the D-B4-18 timeout is never shown as someone else\'s "mid-task" collision — and still gets its kickoff (Important 2)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={createSession} prompt={prompt}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    const go = await screen.findByRole('button', { name: /^start build9-demo/i });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(go);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      // Past the bounded wait, exactly like the D-B4-18 test above.
+      await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1_000); });
+      expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
+
+      // …and only THEN does the cold spawn finish: a later `/ws/fleet` frame
+      // reports the session this sheet itself started.
+      act(() => { store.setState({ sessions: [sess()] }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Never told this is someone else's session — the exact false claim
+    // the pre-fix shape rendered here.
+    expect(screen.queryByText(/already running/i)).toBeNull();
+    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+
+    // And the mission still completes, as if the timeout had never fired —
+    // the kickoff is sent, once, and the sheet navigates.
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
   // — D-B4-19: refuses before the tap when the target already exists —
