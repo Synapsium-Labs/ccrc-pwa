@@ -37,6 +37,7 @@ import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../s
 import { RUN_GLYPH, RUN_WORD, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
+import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { formatAge } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -177,6 +178,12 @@ export function RunsScreen({
   // `SessionActionsSheet`'s single actions sheet uses rather than mounting
   // one sheet per row.
   const [abandonTarget, setAbandonTarget] = useState<RunSummary | null>(null);
+
+  // Task 13, spec §4.4: the run board's own door onto a new program. ONE
+  // door, rendered unconditionally below — including at zero runs, the same
+  // "renders at zero runs too" rule `.fleet-runs-row` already holds one
+  // screen over.
+  const [startOpen, setStartOpen] = useState(false);
 
   // Held in a ref, not the effect's own dependency array — the same fix
   // `MailScreen` already applies to `loadFeed`: "once per mount" has to hold
@@ -338,6 +345,13 @@ export function RunsScreen({
           (`CoordBanner`'s own `coordFrameSeen` gate). */}
       <CoordBanner store={store} />
 
+      {/* Task 13, spec §4.4: ONE door, rendered here regardless of the
+          board's own state below — a program starts before any run exists
+          to show. */}
+      <button type="button" className="program-start-door" onClick={() => setStartOpen(true)}>
+        Start a program
+      </button>
+
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not
         // "no runs" — it is "no answer". `coldState === 'error'` only after
@@ -420,6 +434,7 @@ export function RunsScreen({
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `cold`, never merged). */}
       <AbandonSheet run={abandonTarget} onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
+      <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store} />
     </div>
   );
 }

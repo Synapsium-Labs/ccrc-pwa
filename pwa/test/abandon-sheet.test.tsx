@@ -155,11 +155,19 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     vi.stubGlobal('fetch', fetchImpl);
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
 
+    // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now,
+    // and its own `useProjectedHome` legitimately touches `/api/accounts` on
+    // mount, independent of this flow — the same poll `ProjectCard` already
+    // runs unconditionally elsewhere. So "nothing sent yet" below is scoped
+    // to the abandon route itself, not "zero network activity on the page".
+    const abandonCalls = (): [string, RequestInit][] =>
+      fetchImpl.mock.calls.filter(([url]) => String(url).includes('/api/runs/3/abandon')) as [string, RequestInit][];
+
     // First tap: the row's own control opens the sheet. Nothing has been
-    // sent to the server yet — opening is not confirming.
+    // sent to the abandon route yet — opening is not confirming.
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
     expect(await screen.findByText(/a release destroys nothing/i)).toBeInTheDocument();
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(abandonCalls()).toHaveLength(0);
 
     // Second tap: the sheet's OWN confirm button is what actually abandons,
     // through the real `api.abandonRun` (the default, uninjected here) —
@@ -167,8 +175,8 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     // (Task 11 review, lesson 2).
     fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(abandonCalls()).toHaveLength(1);
+    const [url, init] = abandonCalls()[0] as [string, RequestInit];
     expect(url).toBe('/api/runs/3/abandon');
     expect(init.method).toBe('POST');
     // The sheet closes on success.

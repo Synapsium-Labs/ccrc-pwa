@@ -1715,3 +1715,98 @@
   font-size: var(--text-sm);
   color: var(--status-dead-text);
 }
+
+/* ------------------------------------------------------------------ *
+ *  Start-a-program sheet — the run board's own door onto a new       *
+ *  program (Task 13, spec §4.4, D-B4-18/19). Composition, not a      *
+ *  compound route — see StartProgramSheet.tsx's own header. Opening  *
+ *  a program is a decision, not a living pane: no --glow, no         *
+ *  animation, no box-shadow anywhere under .program-start-*, same    *
+ *  discipline as the coord banner and the abandon sheet above.       *
+ * ------------------------------------------------------------------ */
+/* Same self-grounded pair as `.coord-toggle`/`.sess-actions` — bg-raised
+   fill, edge-subtle hairline, ink-secondary ink — not reinvented. */
+.program-start-door {
+  flex: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.program-start-door:active { transform: scale(0.96); }
+
+/* Self-grounded (sets its own color AND background — the same pairing
+   `.abandon-sheet`/`.coord-banner` use above), so every
+   `.program-start-sheet .program-start-*` rule below is a named-ancestor
+   DESCENDANT `design/audit.mjs` can recover a ground for and measure,
+   rather than a bare `.program-start-error { color: … }` selector it would
+   file under `uncovered`. */
+.program-start-sheet {
+  display: grid;
+  gap: var(--sp-2);
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+/* `--ink-tertiary` on `--bg-surface` — 5.77:1 DARK / 5.70:1 LIGHT
+   (tokens.css's own comments), clearing the 4.5 body floor: the informational
+   lines (the ledger path, and the "the run row arrives later" note), never a
+   claim of any kind. */
+.program-start-sheet .program-start-ledger,
+.program-start-sheet .program-start-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
+/* `--ink-secondary` on `--bg-surface` — 8.67:1 DARK / 7.41:1 LIGHT: the
+   D-B4-18 timeout copy is deliberately NOT the refusal red below — the
+   create almost certainly succeeded, the board just hasn't shown it yet, and
+   colouring "likely fine" the same as "refused" would be the false claim
+   this copy exists to avoid. */
+.program-start-sheet .program-start-timeout {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-secondary);
+}
+/* `--status-attention-text` on `--bg-surface` — 10.09:1 DARK / 5.92:1 LIGHT:
+   the pause warning, spec §4.4's own "warns and does not block" — caution,
+   not a hard stop, so it does not share the refusal red below either. */
+.program-start-sheet .program-start-warn {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--status-attention-text);
+}
+/* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
+   `.coord-banner .coord-error`/`.abandon-sheet .abandon-error` already use
+   (6.80:1 DARK / 5.73:1 LIGHT), reused rather than a fifth rule re-deriving
+   the same ratio. Three genuine refusals share this register: D-B4-19 (a
+   session already running), D-B4-11 (nothing placeable) and an ordinary
+   create failure. */
+.program-start-sheet .program-start-existing,
+.program-start-sheet .program-start-refuse,
+.program-start-sheet .program-start-error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--status-dead-text);
+}
+/* Same self-grounded pair as `.program-start-door` above — not reinvented. */
+.program-start-go {
+  min-height: var(--tap-min);
+  width: 100%;
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.program-start-go:active:not(:disabled) { transform: scale(0.98); }
+.program-start-go:disabled { cursor: default; }

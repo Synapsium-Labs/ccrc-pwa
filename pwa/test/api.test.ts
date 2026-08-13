@@ -282,6 +282,51 @@ describe('abandonRun (Task 12, spec §4.3)', () => {
   });
 });
 
+// Task 13 review lesson (Task 11/12's own reviews, applied here ahead of
+// time): `StartProgramSheet` always takes its `createSession`/`prompt` props
+// INJECTED in `start-program.test.tsx`'s copy/refusal cases, so the real
+// `api.createSession` — the one the production sheet's default prop value
+// actually calls — needs its own pin here, same idiom as `coordPause`/
+// `abandonRun` above. `prompt`'s own pin already exists at the top of this
+// file.
+describe('createSession (Task 13)', () => {
+  it('POSTs {wrapper, project, workdir} to /api/sessions', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'ccrc-pwa', workdir: '/w' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude', project: 'ccrc-pwa', workdir: '/w' });
+  });
+
+  it('omits workdir from the body when not passed', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'ccrc-pwa' });
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude', project: 'ccrc-pwa' });
+  });
+
+  it('throws ApiError on a non-2xx response — e.g. the 400 for a malformed request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(400, { ok: false, error: 'bad-request' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.createSession({ wrapper: 'claude', project: '' }).then(
+      () => { throw new Error('expected createSession to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(400);
+  });
+});
+
 // svc's round-4 residual, and the one composition hazard the fix creates.
 //
 // `apiErrorText` now maps a `body.error` CODE to a sentence when there is no

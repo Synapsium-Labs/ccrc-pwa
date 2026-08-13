@@ -489,3 +489,24 @@ describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-B4
     expect(abandon.contains(open)).toBe(false);
   });
 });
+
+// Task 13 review lesson, applied ahead of time (Task 11/12's own reviews,
+// "Important 1" both times): a control that only ever renders in its own
+// isolated test file (`start-program.test.tsx`) ships missing the moment a
+// merge or a cleanup pass drops the line from `RunsScreen.tsx` — every OTHER
+// test here stays green because nothing else renders `RunsScreen` and looks
+// for it. This pins the door on the REAL screen, including at zero runs
+// (spec §4.4: "one door, rendered at zero runs too").
+describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
+  it('renders even at zero runs — one door, always there', async () => {
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+  });
+
+  it('opens the sheet on tap', async () => {
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
+    expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
+  });
+});

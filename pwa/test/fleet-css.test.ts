@@ -437,6 +437,47 @@ describe('the abandon sheet is not a living pane, and its own control is a real 
   });
 });
 
+// Task 13, spec §4.4: the run board's own door onto a new program, and the
+// start-a-program sheet — same discipline "runs are not living panes" and the
+// coord banner/abandon sheet blocks above already hold.
+describe('the program-start door and sheet are not living panes, and every real target clears the tap floor', () => {
+  it('no .program-start-* rule glows, breathes or animates', () => {
+    for (const sel of [
+      '.program-start-door', '.program-start-sheet', '.program-start-go',
+      '.program-start-sheet .program-start-existing', '.program-start-sheet .program-start-refuse',
+      '.program-start-sheet .program-start-warn', '.program-start-sheet .program-start-timeout',
+      '.program-start-sheet .program-start-error',
+    ]) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  it('.program-start-door is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleFor('.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it('.program-start-go is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleFor('.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  // The named-ancestor descendant pair itself (Task 12 review lesson, applied
+  // ahead of time — same idiom `.abandon-sheet`'s own comment describes):
+  // `.program-start-sheet` sets BOTH its own `color` and `background`, so it
+  // is self-grounded and every `.program-start-sheet .program-start-*` rule
+  // above is one `design/audit.mjs`'s descendant pass can recover a ground
+  // for, rather than a bare `.program-start-error { color: … }` selector it
+  // would file under `uncovered` (`hosts.size === 0` → skipped, never
+  // measured).
+  it('.program-start-sheet is self-grounded — it declares its own color AND background', () => {
+    const rule = ruleFor('.program-start-sheet');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
+  });
+});
+
 describe('the hold composer', () => {
   it('declares its own placeholder colour — the block comment claims .proj-search verbatim', () => {
     // FIX-WAVE OBSERVATION. The comment above this block says `.sess-hold-input`

@@ -16,11 +16,12 @@
 //   - the RENDER proves a real element still carries the class, which is what
 //     a rule with no matching element would silently stop doing.
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
+import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
@@ -28,6 +29,7 @@ import { MailScreen } from '../src/screens/MailScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
+import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import { MailStrip } from '../src/session/MailStrip';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
@@ -214,15 +216,16 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the sixteen on the token, never a bare 44px literal', () => {
+  it('keeps every one of the eighteen on the token, never a bare 44px literal', () => {
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
     // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,
     // `.runs-back`, `.run-row`, `.run-open`), Task 6 (`.mail-strip-head`),
-    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`) and Task 12
-    // (`.run-abandon`) join the same loop rather than getting their own —
-    // one place where "every floored rule stays on the token" is checked,
-    // not a second copy of the assertion per branch.
+    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`), Task 12
+    // (`.run-abandon`) and Task 13 (`.program-start-door`, `.program-start-go`)
+    // join the same loop rather than getting their own — one place where
+    // "every floored rule stays on the token" is checked, not a second copy
+    // of the assertion per branch.
     for (const rule of [
       ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
       ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
@@ -233,6 +236,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(chatCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
+      ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -382,5 +386,35 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
     act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
+  });
+});
+
+// — Build 4, Task 13: the run board's own door onto a new program, and the
+// start-a-program sheet's own confirm control (spec §4.4) —
+
+describe('.program-start-door — the only door onto a new program', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered footer control actually carries', () => {
+    const store = makeStore();
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+  });
+});
+
+describe('.program-start-go — the sheet’s own confirm control', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered confirm button actually carries', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
+    });
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
+    expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');
   });
 });
