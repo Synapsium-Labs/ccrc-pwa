@@ -41,6 +41,18 @@ function elapsed(at: number, now: number): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
+/** The two halves of a stop stamp, each present only if the frame really
+ *  carries it. See `lifecycleQualifier` below for why a *typed* field needs
+ *  checking at all; this is where the checking lives so the sentence builder
+ *  reads as four cases rather than four guards. */
+function stampParts(by: unknown): { surface: string | null; at: number | null } {
+  const o = (typeof by === 'object' && by !== null ? by : {}) as { surface?: unknown; at?: unknown };
+  return {
+    surface: typeof o.surface === 'string' && o.surface !== '' ? o.surface : null,
+    at: typeof o.at === 'number' && Number.isFinite(o.at) ? o.at : null,
+  };
+}
+
 /**
  * The row's qualifier, or null when there is nothing to add.
  *
@@ -51,6 +63,20 @@ function elapsed(at: number, now: number): string {
  * types them as present. `unmeasuredFields`' own docstring in shared/api.ts
  * records what that cost the last time (a TypeError that took the renderer
  * down, not one cell). The parameter type is structural for the same reason.
+ *
+ * The same argument runs one level DEEPER than the `?? null`s, which is where
+ * the final review found it stopping. Tolerating a missing OBJECT while
+ * trusting its KEYS is only half a guard when the frame is cast and the two
+ * ends are versioned apart — ccd writes the stamp, the server reshapes it,
+ * this reads it, and all three ship separately. Measured against cast frames:
+ * `{surface:'pwa'}` rendered "stopped by pwa, NaNd ago" and `{at:…}` rendered
+ * "stopped by undefined, <1m ago". Neither threw, so the renderer-blanking
+ * hazard really was closed — but a row saying NaNd is a row nobody can act
+ * on, and "stopped by undefined" invents a surface nobody declared.
+ *
+ * So each half degrades on its own: say what the frame carries, and say
+ * nothing where it carries nothing. Collapsing a half-read stamp to bare
+ * `stopped` would be the other error — throwing away the half that WAS read.
  *
  * `now` is a parameter, not a `Date.now()` call inside: the ladder-shaped
  * decisions in this repo stay clock-free so their tests can be too.
@@ -63,9 +89,15 @@ export function lifecycleQualifier(
   if (lifecycle === null) return null;
   if (lifecycle === 'stopped') {
     const by = session.stoppedBy ?? null;
+    if (by === null) return 'stopped';
     // The surface is a DECLARATION, not an authentication (§4.1) — rendered
     // verbatim, the same rule `.sess-held` follows for the hold reason.
-    return by === null ? 'stopped' : `stopped by ${by.surface}, ${elapsed(by.at, now)} ago`;
+    const { surface, at } = stampParts(by);
+    const age = at === null ? null : `${elapsed(at, now)} ago`;
+    if (surface === null && age === null) return 'stopped';
+    if (age === null) return `stopped by ${surface}`;
+    if (surface === null) return `stopped, ${age}`;
+    return `stopped by ${surface}, ${age}`;
   }
   return QUALIFIER[lifecycle] ?? null;
 }

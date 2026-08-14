@@ -137,8 +137,28 @@ export class SessionStream {
     private readonly id: string,
     private readonly send: (m: SessionStreamMsg) => void,
     /** `file` is the transcript the client's `offset` was taken in (§5.3).
-     *  OPTIONAL: a client from before this build names no file, and gets
-     *  today's uuid-only resume — no worse than today, and Task 12 closes it. */
+     *
+     *  OPTIONAL, and the omission is a REAL exposure, not a shrug. A client
+     *  that names no file gets the uuid-only resume, and since §5.1's ladder
+     *  a uuid can resolve to several files — so this build honours a byte
+     *  offset against whatever the ladder answers NOW. Before the ladder one
+     *  uuid meant one file and that was safe; the ladder is what made it
+     *  unsafe, so "no worse than before" would be false. What it costs when
+     *  it goes wrong was measured: a resume at byte 6620 of a different file
+     *  stitches the tail of the carried copy onto the head of the stranded
+     *  one, in one continuous conversation, with the real messages before it
+     *  silently absent. It self-heals only when the new file is SMALLER than
+     *  the stale offset (the tailer's truncation check); a growing
+     *  conversation goes through in silence.
+     *
+     *  The PWA sends it (`pwa/src/stores/session.ts`'s `connect()`), so the
+     *  window is a browser holding a build from before that — one reload
+     *  wide, and this is why `start()` below refuses to trust a bare uuid
+     *  match when the echo is present and disagrees. An earlier version of
+     *  this comment said "Task 12 closes it": Task 12 is the PWA task on this
+     *  branch, its brief never mentioned `sinceFile`, and it shipped without
+     *  it. Nothing closed it until the final review found the client half
+     *  missing. */
     private readonly since?: { uuid: string; offset: number; file?: string | null },
   ) {
     this.transcripts = new TranscriptResolver(deps.io);

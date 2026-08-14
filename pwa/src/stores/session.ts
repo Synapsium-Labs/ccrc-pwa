@@ -68,6 +68,19 @@ export interface SessionState {
    *  present and these streams never queue (`lib/ws.ts:12-17`). */
   mail: MailSummary[];
   missingFile: string | null; // backlog missing:true → the attempted transcript path
+  /** The transcript `offset` above was taken in — kept from EVERY backlog,
+   *  found or missing, and echoed back as `?sinceFile=` on reconnect (§5.3).
+   *
+   *  Not the same field as `missingFile` next door and not derivable from it:
+   *  that one is gated on `missing:true` and exists to name a path in a
+   *  banner, this one is the address half of a resume. Since the ladder
+   *  (§5.1) one uuid can resolve to SEVERAL files, so a bare `uuid:offset`
+   *  resume is a byte offset with no file attached — the server honours it
+   *  against whatever it resolves to now, which after a swap carried the
+   *  transcript elsewhere is a different file. `null` only before the first
+   *  backlog and immediately after a `rotated`; the server reads a missing
+   *  echo as an older client and falls back to today's uuid-only resume. */
+  file: string | null;
   /** The OTHER account this transcript was read from — set only when the
    *  resolver answered at its foreign-glob rung (§5.1 rung 6). Null on every
    *  ordinary session, which is what "own account" looks like on the wire. */
@@ -95,7 +108,12 @@ export interface SessionState {
 export type SessionSnapshot = Pick<
   SessionState,
   'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'mail'
-> & { missingFile: string | null; strandedAccount: string | null; searchComplete: boolean };
+> & {
+  missingFile: string | null;
+  strandedAccount: string | null;
+  searchComplete: boolean;
+  file: string | null;
+};
 
 // Locally minted system dividers (rotation markers, notices) — uuid-prefixed so
 // the reducer can tell them apart from transcript events.
@@ -145,6 +163,12 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         uuid: msg.uuid,
         offset: msg.offset,
         missingFile: msg.missing ? msg.file : null,
+        // Unconditional, where `missingFile` above is gated: the file is the
+        // address this `offset` is measured in, and a reconnect has to echo
+        // it back (`connect()`'s `sinceFile`). `?? null` because this frame
+        // is CAST, not revived (`ReconnectingSocket`'s `onMessage`) — the
+        // same reason every other read on this path carries one.
+        file: msg.file ?? null,
         // Wire names are `foreignAccount`/`searchComplete` (shared/api.ts's
         // `backlog` frame) — the store keeps `strandedAccount` as its own
         // name for the same fact (D4, §5.2), so `msg.foreignAccount` is the
@@ -183,11 +207,27 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'ask_cleared':
       return { ...s, ask: null };
     case 'rotated':
+      // Four transcript facts die with the transcript. Final review, Minor 6:
+      // only `events`/`uuid`/`offset` were reset here, so a rotation left
+      // `strandedAccount` still naming the account the PREVIOUS file was
+      // stranded under and `searchComplete` still reporting the PREVIOUS
+      // search. The server normally follows `rotated` with a backlog on the
+      // next statement, so it is usually a one-frame window — but that send
+      // can fail and the socket can die between the two frames, and a banner
+      // that outlives its cause reads as a statement about what is on screen
+      // now. `missingFile` (the can't-find banner's path) and `file` (the
+      // resume echo) go with them for the same reason; carrying `file`
+      // forward in particular would echo a path belonging to the OLD uuid.
+      // Every one of the four is re-stated by the backlog that follows.
       return {
         ...s,
         events: [localDivider('Session context reset')],
         uuid: msg.uuid,
         offset: 0,
+        file: null,
+        missingFile: null,
+        strandedAccount: null,
+        searchComplete: true,
       };
     case 'notice':
       return { ...s, events: [...s.events, localDivider(msg.message)] };
@@ -219,6 +259,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
   searchComplete: s.searchComplete,
+  file: s.file,
 });
 
 /** Bare paths for dispatch/api.prompt — the only place attachments narrow
@@ -382,6 +423,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       missingFile: null,
       strandedAccount: null,
       searchComplete: true,
+      file: null,
       pending: [],
       conn: 'connecting',
 
@@ -395,12 +437,32 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       connect() {
         if (socket) return;
         socket = new ReconnectingSocket({
+          // Recomputed on EVERY attempt (`ReconnectingSocket`), so an
+          // automatic reconnect carries whatever the last frame left behind.
+          //
+          // `sinceFile` is not decoration: since §5.1's ladder one uuid can
+          // resolve to several files, so `uuid:offset` alone is a byte count
+          // with no file attached. Reproduced on this branch — backlog at
+          // offset 6620 of a stranded copy, socket drops, a swap carries the
+          // transcript to its exact address, and a uuid-only resume replays
+          // byte 6620 of a DIFFERENT file: messages 41-80 of the carried copy
+          // stitched onto 40 of the stranded one with the real 1-40 silently
+          // absent. It self-heals only when the new file is smaller than the
+          // stale offset; a growing conversation goes through silently.
+          // `sessionws.ts`'s `start()` compares this echo against the file it
+          // is about to tail and resends the backlog on a mismatch.
+          //
+          // Omitted, never sent empty, when there is no file yet (before the
+          // first backlog, and between a `rotated` and its backlog): the
+          // server reads an absent echo as a client that predates this and
+          // falls back to the uuid-only resume, which at those two moments is
+          // the correct answer rather than a compatibility shrug.
           url: () => {
-            const { uuid, offset } = get();
+            const { uuid, offset, file } = get();
             const base = wsUrl(`/ws/session/${encodeURIComponent(id)}`);
-            return uuid === null
-              ? base
-              : `${base}?since=${encodeURIComponent(uuid)}:${offset}`;
+            if (uuid === null) return base;
+            const since = `${base}?since=${encodeURIComponent(uuid)}:${offset}`;
+            return file === null ? since : `${since}&sinceFile=${encodeURIComponent(file)}`;
           },
           onMessage: (m) => get().apply(m as SessionStreamMsg),
           onState: (conn) => set({ conn }),

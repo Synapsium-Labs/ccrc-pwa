@@ -134,6 +134,47 @@ describe('lifecycleQualifier', () => {
     expect(() => lifecycleQualifier(noStamp, 0)).not.toThrow();
     expect(lifecycleQualifier(noStamp, 0)).toBe('stopped');
   });
+
+  // Final review, Minor 5. The guard above tolerates a missing OBJECT; it did
+  // not tolerate missing KEYS, and the live `fleet` frame is CAST, not revived
+  // (`stores/fleet.ts`'s `asFleetMsg`), with ccd and the server independently
+  // versioned either side of it. Measured against cast frames at HEAD:
+  // `{surface:'pwa'}` rendered "stopped by pwa, NaNd ago" and `{at:…}`
+  // rendered "stopped by undefined, <1m ago". Neither threw — the
+  // screen-blanking hazard really is closed — but a row that says NaNd is a
+  // row nobody can act on, and "stopped by undefined" invents a surface.
+  //
+  // The rule: say only what the frame actually carries. Four shapes, four
+  // sentences, and each half degrades independently — a fix that collapses a
+  // half-read stamp to bare 'stopped' throws away the half that WAS read.
+  const half = (by: unknown): string | null =>
+    lifecycleQualifier(
+      { lifecycle: 'stopped', stoppedBy: by } as unknown as { lifecycle: 'stopped' },
+      3 * 60 * MIN,
+    );
+
+  it('a stop stamp with no `at` names the surface and stops there — never NaNd', () => {
+    expect(half({ surface: 'pwa' })).toBe('stopped by pwa');
+    expect(half({ surface: 'pwa', at: 'yesterday' })).toBe('stopped by pwa');
+    expect(half({ surface: 'pwa', at: Number.NaN })).toBe('stopped by pwa');
+  });
+
+  it('a stop stamp with no surface gives the age and stops there — never "by undefined"', () => {
+    expect(half({ at: 1 * 60 * MIN })).toBe('stopped, 2h ago');
+    expect(half({ at: 1 * 60 * MIN, surface: '' })).toBe('stopped, 2h ago');
+    expect(half({ at: 1 * 60 * MIN, surface: 7 })).toBe('stopped, 2h ago');
+  });
+
+  it('a stop stamp carrying neither is just stopped', () => {
+    expect(half({})).toBe('stopped');
+    expect(half('stopped-by-a-string')).toBe('stopped');
+  });
+
+  // The whole-field case still works, so the degrade above cannot have been
+  // bought by weakening the ordinary answer.
+  it('a whole stamp still reads as it always did', () => {
+    expect(half({ at: 2 * 60 * MIN, surface: 'ccd' })).toBe('stopped by ccd, 1h ago');
+  });
 });
 
 // — the row —
@@ -267,11 +308,54 @@ describe('the row says which kind of dead it is', () => {
     line(s());
     expect(document.querySelector('.sess-swapblocked')).toBeNull();
   });
+
+  // Final review, Minor 5, same shape one cell over: measured at HEAD, a
+  // `swapBlocked` carrying only `at` rendered "swap blocked — undefined". The
+  // marker's PRESENCE is the durable fact §2.4 is about and must survive a
+  // reason this row could not read; the word `undefined` beside it is not a
+  // reason, it is a bug rendered as one.
+  it('a refusal with no readable reason still says a swap was blocked, without inventing one', () => {
+    const noReason = { at: Date.now() - 5 * MIN } as unknown as FleetSession['swapBlocked'];
+    line(s({ swapBlocked: noReason }));
+    const cell = document.querySelector('.sess-swapblocked');
+    expect(cell?.textContent).toBe('swap blocked');
+    expect(cell?.getAttribute('title')).toBe('swap blocked');
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
+  it('an empty reason string is no reason at all', () => {
+    line(s({ swapBlocked: { at: Date.now() - 5 * MIN, reason: '' } }));
+    expect(document.querySelector('.sess-swapblocked')?.textContent).toBe('swap blocked');
+  });
+
+  // Final review, Minor 4 — the pin behind a comment that used to claim the
+  // opposite. `server/src/fleet.ts` computes `lifecycle` for EVERY row,
+  // archived ones included, and justified it with "the renderer does not show
+  // the qualifier there". Measured: it does. `.sess-lifecycle` is gated on
+  // `qualifier !== null` and on nothing else — no bucket appears in that
+  // condition, deliberately (M10: a renderer that branches on a bucket token
+  // is a renderer an unknown token can break). So an archived row prints
+  // `stopped by ccd, 12d ago` beside its state word, and a `cleanup` row —
+  // which sits in the LIVE list — prints it too, where it is genuinely
+  // useful: stopped by ccd and stopped by an agent are different facts about
+  // a workspace queued for reaping. This pins the behaviour the comment now
+  // describes, so the two cannot drift apart again in either direction.
+  it('an archived row DOES show its qualifier — the renderer knows no buckets', () => {
+    line(s({ status: 'dead', bucket: 'archived', archivedAt: 1_700_000_000,
+             lifecycle: 'stopped', stoppedBy: { at: Date.now() - 12 * 24 * 60 * MIN, surface: 'ccd' } }));
+    expect(screen.getByText('stopped by ccd, 12d ago')).toBeInTheDocument();
+  });
+
+  it('a cleanup row shows it too, in the live list where it is worth reading', () => {
+    line(s({ status: 'dead', bucket: 'cleanup',
+             lifecycle: 'stopped', stoppedBy: { at: Date.now() - 3 * 24 * 60 * MIN, surface: 'ccd' } }));
+    expect(screen.getByText('stopped by ccd, 3d ago')).toBeInTheDocument();
+  });
 });
 
 // — the revive control —
 
-describe("the orphan row's control names what revives it", () => {
+describe("the row that can be revived says so, and names what revives it", () => {
   // §4.4: no new argv, no new grant, no new caps line — the button that
   // already exists becomes the revive button because §3.1 made `ensure`
   // restore supervision. Kills a mutant that mints a new route or a new verb.
@@ -287,12 +371,64 @@ describe("the orphan row's control names what revives it", () => {
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/api/sessions/demo-quiet-mesa/ensure');
   });
 
+  // Final review, Important 2 — the state D2 exists for, which had the note
+  // gated away from it. `unsupervised` is a LIVE pane with no supervisor, and
+  // on deploy day it is every pane a pre-fix `ccd start` minted. The ccd lane
+  // measured the contract that makes the affordance real: `ensure` on a
+  // live-but-unsupervised session emits `reset-failed` + `enable --now` (ccd's
+  // `_resupervise_live`) and the row afterwards reads `running`; on an
+  // already-supervised live session it stays the cheap no-op it always was.
+  // Before that fix the button answered success and changed nothing, which is
+  // this branch's own defect species — so the note ships only now.
+  it('a LIVE unsupervised row is offered the same revive control', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<SessionActionsSheet session={s({ status: 'idle', bucket: 'idle', lifecycle: 'unsupervised' })}
+                                open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.getByText(/ccd start demo-quiet-mesa/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Restart session'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('/api/sessions/demo-quiet-mesa/ensure');
+  });
+
+  // The wording has to be true of THIS state, not borrowed from the orphan's.
+  // An `unsupervised` pane is running: its conversation is intact, nothing is
+  // restarted, and `enable --now` adopts the pane rather than spawning beside
+  // it (ccd's `_resupervise_live`, measured). Telling that operator "nothing
+  // is watching this session" — the orphan's sentence, written for a pane
+  // that is GONE — would read as "your session is dead" over a live one, and
+  // "Restart session" beside it as "this will restart my work". Kills a fix
+  // that widens the gate and reuses the orphan copy.
+  it('says the pane is running and nothing supervises it — never the orphan sentence', () => {
+    render(<SessionActionsSheet session={s({ status: 'idle', bucket: 'idle', lifecycle: 'unsupervised' })}
+                                open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.getByText(/running, but nothing is supervising it/)).toBeInTheDocument();
+    expect(screen.getByText(/adopts the running pane/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing is watching this session/)).not.toBeInTheDocument();
+  });
+
+  // And the orphan keeps its own, for the opposite reason: that pane IS gone.
+  // Both directions, so neither sentence can be deleted in favour of one
+  // shared wording that is false of one of the two states.
+  it('an orphan keeps the sentence written for a pane that is gone', () => {
+    render(<SessionActionsSheet session={s({ status: 'dead', bucket: 'dead', lifecycle: 'orphan' })}
+                                open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.getByText(/Nothing is watching this session/)).toBeInTheDocument();
+    expect(screen.queryByText(/running, but nothing is supervising it/)).not.toBeInTheDocument();
+  });
+
   // Kills a note rendered unconditionally: a healthy session is not orphaned
-  // and telling its operator "nothing is watching this" would be a lie.
+  // and telling its operator "nothing is watching this" would be a lie. It is
+  // also the row `_resupervise_live` deliberately refuses to touch — a
+  // `systemctl --user enable --now` per click on a healthy fleet — so a note
+  // here would advertise a call the fleet host answers with nothing.
   it('a session nobody orphaned gets no revive note', () => {
     render(<SessionActionsSheet session={s({ lifecycle: 'running' })}
                                 open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByText(/ccd start/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nothing is supervising/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nothing is watching/)).not.toBeInTheDocument();
   });
 
   // The two tests above only ever use `orphan` and `running`, so
@@ -439,5 +575,72 @@ describe('a chat that had to look elsewhere says so', () => {
       searchComplete: true, events: [someEvent],
     } as Backlog);
     expect(screen.queryByText(/Stranded history/)).not.toBeInTheDocument();
+  });
+
+  // Final review, Minor 6, at the surface the operator actually reads. A
+  // `rotated` (clear/compact/swap onto a fresh uuid) used to leave the
+  // stranded banner standing, naming a foreign account for a transcript this
+  // client no longer reads. The server normally follows `rotated` with a
+  // backlog on the very next statement, so it is usually a one-frame window
+  // — but that send can fail and the socket can die between the two frames,
+  // and this banner is the one surface whose whole job is to be believed.
+  // Driven through the real reducer, one frame at a time, with NO backlog
+  // behind the rotation: exactly the window.
+  it('a rotation takes the stranded banner with it', () => {
+    const store = makeStore();
+    const fleet = makeFleet();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
+      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
+    });
+    expect(screen.getByText(/Stranded history — read from alt·max/)).toBeInTheDocument();
+
+    act(() => { store.getState().apply({ type: 'rotated', uuid: 'fresh-uuid' }); });
+    expect(screen.queryByText(/Stranded history/)).not.toBeInTheDocument();
+    expect(screen.getByText('Session context reset')).toBeInTheDocument();
+  });
+
+  // The same rotation, the other stale statement: the can't-find banner and
+  // its path. `missingFile` outliving a rotation names a file belonging to
+  // the previous uuid, under a divider that says the context was just reset.
+  it('a rotation takes the missing-transcript banner with it', () => {
+    const store = makeStore();
+    const fleet = makeFleet();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'b7001948', offset: 0, missing: true,
+      file: '/home/rc/.claude/projects/x/b7001948.jsonl', searchComplete: false, events: [],
+    });
+    expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
+
+    act(() => { store.getState().apply({ type: 'rotated', uuid: 'fresh-uuid' }); });
+    expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
+    expect(screen.queryByText("Can't find this session's transcript")).not.toBeInTheDocument();
+  });
+
+  // Final review, Minor 5, third instance of the same shape. `foreignAccount`
+  // is read through `?? null` and the banner is gated on `!== null`, so an
+  // EMPTY string is a foreign account as far as that gate is concerned and
+  // `accountLabel(roster, '')` falls back to the raw '' — measured at HEAD as
+  // "Stranded history — read from , not this session's own account."
+  //
+  // The banner is NOT suppressed for it. §5.2's rule is that stranded history
+  // is never rendered silently; a server saying "this came from somewhere
+  // else" but failing to say where is still a disclosure the operator needs,
+  // and dropping the banner would trade a cosmetic defect for the exact
+  // silence D4 is about. It degrades to an unnamed account instead.
+  it('a foreign account with no name still raises the banner, unnamed rather than blank', () => {
+    const store = makeStore();
+    const fleet = makeFleet();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'b7001948', offset: 120, missing: false,
+      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      foreignAccount: '', searchComplete: true, events: [someEvent],
+    });
+    expect(screen.getByText(/Stranded history — read from another account,/)).toBeInTheDocument();
+    expect(screen.queryByText(/read from ,/)).not.toBeInTheDocument();
   });
 });

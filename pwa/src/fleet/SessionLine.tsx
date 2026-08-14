@@ -104,7 +104,20 @@ export function SessionLine({
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
   const swapBlocked = session.swapBlocked ?? null;
-  const swapNote = swapBlocked === null ? null : `swap blocked — ${swapBlocked.reason}`;
+  // `?? null` on the object, and a type check on the KEY — the same one-level-
+  // deeper guard `lifecycleQualifier` carries, for the same reason (the fleet
+  // frame is cast, not revived, and ccd/server/PWA are versioned apart).
+  // Measured at HEAD: a marker carrying only `at` rendered "swap blocked —
+  // undefined". The marker's PRESENCE is the durable fact §2.4 is about and
+  // must outlive a reason this build could not read; `undefined` beside it is
+  // not a reason, so the cell drops the half it does not have and keeps the
+  // half it does.
+  const swapReason =
+    typeof swapBlocked?.reason === 'string' && swapBlocked.reason !== '' ? swapBlocked.reason : null;
+  const swapNote =
+    swapBlocked === null ? null
+    : swapReason === null ? 'swap blocked'
+    : `swap blocked — ${swapReason}`;
 
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;
@@ -290,7 +303,7 @@ export function SessionLine({
               `title` carrying the full text past the cell's own ellipsis,
               same contract as .sess-held. */}
           {swapNote !== null && swapBlocked !== null && (
-            <span className="sess-swapblocked" data-swapblocked="true" title={swapBlocked.reason}>
+            <span className="sess-swapblocked" data-swapblocked="true" title={swapReason ?? swapNote}>
               {swapNote}
             </span>
           )}

@@ -305,10 +305,22 @@ export async function assembleFleet(
       //
       // Computed for EVERY row, archived ones included. `ws-archive`
       // unsupervises through `_ws_unsupervise`, which stamps, so an archived
-      // workspace honestly reads `stopped`; the bucket ladder routes it to
-      // `archived`/`cleanup` and the renderer does not show the qualifier
-      // there. Suppressing the MEASUREMENT here would be a lie told to make a
-      // renderer simpler.
+      // workspace honestly reads `stopped`. Suppressing the MEASUREMENT here
+      // would be a lie told to make a renderer simpler.
+      //
+      // And the renderer DOES show it there — measured, correcting what this
+      // comment used to claim. `SessionLine.tsx` gates `.sess-lifecycle` on
+      // `qualifier !== null` and on nothing else: an `archived` row renders
+      // `archived · stopped by ccd, 12d ago · claude`, and a `cleanup` row —
+      // which sits in the LIVE list, not the archived fold — renders `stopped
+      // by ccd, 3d ago`. That is deliberate on the renderer's side (M10: a
+      // renderer that branches on a bucket token is one an unknown token can
+      // break) and it is left alone: on a cleanup row the qualifier is
+      // genuinely useful, since stopped-by-ccd and stopped-by-an-agent are
+      // different facts about a workspace queued for reaping, and on an
+      // archived row it is redundant but true. `pwa/test/session-lifecycle
+      // .test.tsx` pins both, so this paragraph cannot silently go stale the
+      // way its predecessor did.
       lifecycle: sessionLifecycle(lifecycleInput),
       // Epoch MS on the wire — the timebase `statusUpdatedAt`/`bucketSince`
       // already use and the PWA's relative-time helpers already read.

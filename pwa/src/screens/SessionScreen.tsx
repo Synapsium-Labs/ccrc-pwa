@@ -241,11 +241,22 @@ export function SessionScreen({
           where it was (M2: 17 of 23 rows carry residue like this on disk
           right now). It is real history and it renders; it is never rendered
           SILENTLY, because the operator has to know whose file this is before
-          reading it as this account's conversation. */}
+          reading it as this account's conversation.
+
+          The NAME degrades, the disclosure does not (final review, Minor 5).
+          `foreignAccount` arrives on a cast frame from an independently
+          versioned server, and an empty string sails through both the store's
+          `?? null` and this `!== null` gate — measured at HEAD as "read from
+          , not this session's own account." Suppressing the banner for it
+          would trade a cosmetic defect for the exact silence D4 is about: a
+          server saying "this came from somewhere else" but failing to say
+          where is still a disclosure the operator needs. `accountLabel`
+          already falls back to the raw id for a wrapper the roster does not
+          have; this is the one step past that, where there is no id either. */}
       {strandedAccount !== null && (
         <div className="chat-banner" data-stranded="true" role="status">
           <span className="banner-copy">
-            {`Stranded history — read from ${accountLabel(roster, strandedAccount)}, not this session's own account.`}
+            {`Stranded history — read from ${accountLabel(roster, strandedAccount).trim() || 'another account'}, not this session's own account.`}
           </span>
         </div>
       )}

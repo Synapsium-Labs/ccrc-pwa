@@ -730,6 +730,22 @@
 .sess-line--active .sess-acct-away,
 .sess-line--active .sess-ask,
 .sess-line--active .sess-subagent-row,
+/* The four ink-tertiary meta cells (.sess-held / .sess-lifecycle /
+   .sess-swapblocked share one rule; .sess-unmeasured has its own). Being
+   INSIDE .sess-meta is not enough for them: a child's own `color` beats the
+   colour it would inherit from its parent, so on the selected row they went
+   on painting --ink-tertiary on the --ink-primary slab — 2.72:1 dark /
+   2.91:1 light, against this file's 4.5:1 body floor, where --edge-strong
+   reads 9.27 / 9.91 (design/audit.mjs's resolver, the gate's own engine).
+   .sess-held shipped that way on main; .sess-lifecycle and .sess-swapblocked
+   joined its declarations later and inherited the omission with them, which
+   is what widened it — .sess-lifecycle renders on every non-running row.
+   No new pair for design/contrast-check.mjs: they join the pair this rule
+   already declares. */
+.sess-line--active .sess-held,
+.sess-line--active .sess-lifecycle,
+.sess-line--active .sess-swapblocked,
+.sess-line--active .sess-unmeasured,
 .sess-line--active .sess-meta > *:not(:first-child)::before {
   color: var(--edge-strong);
 }
@@ -1083,7 +1099,12 @@
    truncating, ink-tertiary note whose full text lives in `title` — and a
    separate rule would be a new colour pair for design/contrast-check.mjs to
    price for no gain. If either ever needs its own ink it needs its own
-   audited pair first: do not fork the declarations and keep the token. */
+   audited pair first: do not fork the declarations and keep the token.
+
+   The `color` below is UNSELECTED ink only. Setting a colour here at all is
+   what takes these cells out of .sess-meta's inheritance, so each one also
+   has to be named in .sess-line--active's achromatic group above — see the
+   comment on that rule for the ratios this cost while they were not. */
 .sess-held,
 .sess-lifecycle,
 .sess-swapblocked {

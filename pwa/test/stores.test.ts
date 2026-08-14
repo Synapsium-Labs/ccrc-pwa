@@ -59,6 +59,7 @@ const emptySnap = (): SessionSnapshot => ({
   missingFile: null,
   strandedAccount: null,
   searchComplete: true,
+  file: null,
 });
 
 const askFixture: HookAsk = {
@@ -175,6 +176,56 @@ describe('applySessionMsg', () => {
     const divider = s.events[0];
     expect(divider?.kind).toBe('system');
     expect(divider && 'text' in divider ? divider.text : '').toBe('Session context reset');
+  });
+
+  // Final review, Minor 6 — measured through this very reducer: a `rotated`
+  // used to leave `strandedAccount` and `searchComplete` exactly as the
+  // PREVIOUS transcript left them. The server normally follows `rotated` with
+  // a backlog immediately, so it is usually a one-frame window — but the send
+  // can fail and the socket can die between the two frames, and then the
+  // banner keeps naming a foreign account for a file this client no longer
+  // reads. `missingFile` and `file` are cleared by the same rule and for the
+  // same reason: all four are statements ABOUT the transcript that just went
+  // away, and `file` in particular is the one the next reconnect echoes back
+  // as `sinceFile` (see connect() below) — carrying the old file forward
+  // would name a file that belongs to a different uuid.
+  it('rotated drops every statement about the transcript it just left', () => {
+    let s = applySessionMsg(emptySnap(), {
+      type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 90,
+      file: '/t/claude2/u1.jsonl', missing: true,
+      foreignAccount: 'claude2', searchComplete: false,
+    });
+    expect(s.strandedAccount).toBe('claude2');
+    expect(s.searchComplete).toBe(false);
+    expect(s.missingFile).toBe('/t/claude2/u1.jsonl');
+    expect(s.file).toBe('/t/claude2/u1.jsonl');
+
+    s = applySessionMsg(s, { type: 'rotated', uuid: 'u2' });
+
+    expect(s.strandedAccount).toBeNull();
+    expect(s.searchComplete).toBe(true);
+    expect(s.missingFile).toBeNull();
+    expect(s.file).toBeNull();
+  });
+
+  // The other half of the same field: a backlog keeps `file` whether or not
+  // the transcript was missing. `missingFile` is gated on `missing` and must
+  // STAY gated (it drives the can't-find banner); `file` is the address the
+  // offset was taken in and is unconditional. Kills a fix that reuses
+  // `missingFile` as the resume echo.
+  it('backlog keeps the transcript path on every frame, missing or not', () => {
+    const found = applySessionMsg(emptySnap(), {
+      type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 120,
+      file: '/t/u1.jsonl', missing: false,
+    });
+    expect(found.file).toBe('/t/u1.jsonl');
+    expect(found.missingFile).toBeNull();
+
+    const absent = applySessionMsg(emptySnap(), {
+      type: 'backlog', uuid: 'u1', events: [], offset: 0, file: '/t/gone.jsonl', missing: true,
+    });
+    expect(absent.file).toBe('/t/gone.jsonl');
+    expect(absent.missingFile).toBe('/t/gone.jsonl');
   });
 
   it('the backlog that follows a rotation keeps the divider on top', () => {
@@ -432,7 +483,77 @@ describe('session store connect()', () => {
     });
     store.getState().disconnect();
     store.getState().connect();
-    expect(lastSocket().url).toBe('ws://localhost:3000/ws/session/s1?since=u1:64');
+    expect(lastSocket().url).toBe('ws://localhost:3000/ws/session/s1?since=u1:64&sinceFile=%2Ft%2Fu1.jsonl');
+    store.getState().disconnect();
+  });
+
+  // Final review, Important 1 — the branch's own reproduction. One uuid can
+  // now resolve to SEVERAL files (§5.1's ladder), so an offset is only
+  // meaningful together with the file it was taken in. Reproduced end to end:
+  // backlog of 40 events at offset 6620 from a uuid-glob-only transcript, the
+  // socket drops, a swap carries the transcript to its exact address and the
+  // residue is reaped — and a uuid-only resume then replays byte 6620 of a
+  // DIFFERENT file, stitching messages 41-80 of the carried copy onto 40
+  // messages of the stranded one with the real first 40 silently absent. It
+  // self-heals only when the new file is SMALLER than the stale offset (the
+  // tailer's truncation check); a growing conversation goes through silently.
+  //
+  // The server half shipped and is tested (`server/test/sessionws.test.ts`'s
+  // two `sinceFile` cases); this is the client that never sent it. The two
+  // parameter names are the ones `server/src/server.ts` reads off the query
+  // (`{ since, sinceFile }` -> `parseSince`), so this asserts the decoded
+  // pair rather than only the concatenated string.
+  it('resumes naming the FILE its offset was taken in, not just the uuid', () => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s1', { api: { prompt }, makeSocket });
+
+    store.getState().apply({
+      type: 'backlog', uuid: 'b7001948', events: [user('a', 'hi')], offset: 6620,
+      file: '/home/rc/.claude2/projects/-data-projects-x/b7001948.jsonl', missing: false,
+      foreignAccount: 'claude2', searchComplete: true,
+    });
+    store.getState().connect();
+
+    const q = new URL(lastSocket().url).searchParams;
+    expect(q.get('since')).toBe('b7001948:6620');
+    expect(q.get('sinceFile'))
+      .toBe('/home/rc/.claude2/projects/-data-projects-x/b7001948.jsonl');
+    store.getState().disconnect();
+  });
+
+  // A path with a space or a `&` in it must survive the query, and a uuid
+  // still gets its own encoding. Kills a fix that concatenates the raw path.
+  it('URL-encodes the file it echoes back', () => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s1', { api: { prompt }, makeSocket });
+
+    store.getState().apply({
+      type: 'backlog', uuid: 'u1', events: [], offset: 10,
+      file: '/t/a b&c/u1.jsonl', missing: false,
+    });
+    store.getState().connect();
+
+    expect(lastSocket().url).toContain('sinceFile=%2Ft%2Fa%20b%26c%2Fu1.jsonl');
+    expect(new URL(lastSocket().url).searchParams.get('sinceFile')).toBe('/t/a b&c/u1.jsonl');
+    store.getState().disconnect();
+  });
+
+  // The compatibility window from the other side: a uuid with no file is the
+  // one case that may still resume on the uuid alone (the server treats a
+  // null echo as an older client, `sessionws.ts`'s `start()`). It is reached
+  // by a `rotated` with no backlog behind it yet — offset 0, new uuid, no
+  // file — and the URL must NOT carry the previous transcript's path.
+  it('sends no sinceFile when a rotation left no file behind', () => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s1', { api: { prompt }, makeSocket });
+
+    store.getState().apply({
+      type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 64, file: '/t/u1.jsonl', missing: false,
+    });
+    store.getState().apply({ type: 'rotated', uuid: 'u2' });
+    store.getState().connect();
+
+    expect(lastSocket().url).toBe('ws://localhost:3000/ws/session/s1?since=u2:0');
     store.getState().disconnect();
   });
 
