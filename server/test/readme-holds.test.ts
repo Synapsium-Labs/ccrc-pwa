@@ -196,6 +196,27 @@ describe('README: the --surface bullet', () => {
     expect(localcaps).toMatch(/export async function readLocalCcdCaps/);
   });
 
+  // Fix round 5 (task 14 follow-up, Important #1 — rated Minor but named
+  // as the round's most important item): the round-4 pin above only
+  // asserted `index.ts` MENTIONS `readLocalCcdCaps` — true whether the
+  // call is awaited or not, so it caught nothing. Measured: re-adding
+  // `await` in front of the call left all three suites, including this
+  // one, green. This is the branch's recurring failure shape in
+  // miniature — the property everyone agrees is the point, guarded by
+  // nothing — so it gets both a fast, precise TEXT pin here (the literal
+  // regression the reviewer constructed) and a slow, real BEHAVIOURAL one
+  // in `server/test/boot.test.ts` (an actual subprocess boot of this
+  // exact file, timed, against a genuinely hung ccd — a text pin alone
+  // proves the SOURCE was not reverted, not that the PROPERTY holds).
+  it('does not await the local-caps read on the boot path — the literal round-4 regression', () => {
+    const indexTs = readFileSync(path.join(root, 'server', 'src', 'index.ts'), 'utf8');
+    expect(indexTs).not.toMatch(/await\s+readLocalCcdCaps/);
+    // And the call is still actually reachable, so this cannot pass by
+    // having deleted the call entirely.
+    const calls = indexTs.match(/readLocalCcdCaps\s*\(/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
   it('names the rollback window honestly — bounded, not zero', () => {
     // The one edge the inversion narrows but cannot close: an old ccd
     // exits 0 on the bad argv, so there is no failure to trigger an early
@@ -207,6 +228,40 @@ describe('README: the --surface bullet', () => {
     expect(bullet).not.toMatch(/\binstant(ly)?\b/i);
     const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
     expect(watchTs).toMatch(/CAPS_REFRESH_MS\s*=\s*60_000/);
+  });
+
+  // Fix round 5 (task 14 follow-up, Important #1): round 4's local-mode
+  // rollback correction (Important #2 that round) was the one README
+  // addition in this whole sequence that shipped with no pin at all —
+  // unlike every other correction in this describe block. The claim is
+  // sharp and easy to blur back into the bounded fleet-host figure above,
+  // which is exactly the failure this bullet exists to prevent a second
+  // time.
+  it('states local mode\'s rollback exposure has NO bound at all — not the fleet-host 60s figure', () => {
+    const bullet = execWhitelistBullet();
+    // The two phrases that must survive verbatim-in-substance: "no such
+    // timer" (there IS one on the fleet-host side, named two sentences
+    // earlier — this one must say the local side lacks it) and an
+    // explicit "no bound at all" / "unbounded" statement, plus "restart"
+    // as the ONLY stated trigger.
+    expect(bullet).toMatch(/no such timer/i);
+    expect(bullet).toMatch(/no bound at all/i);
+    expect(bullet).toMatch(/restart/i);
+    // And it must not accidentally inherit the 60s figure for the LOCAL
+    // sentence specifically — the fleet-host sentence above already
+    // contains "60"; this checks the LOCAL-mode sentence, split out on its
+    // own, does not also claim a numeric bound.
+    const localSentence = sentencesOf(bullet).find((s) => /no such timer/i.test(s) || /no bound at all/i.test(s));
+    expect(localSentence, 'the local-mode sentence must exist').toBeTruthy();
+    for (const s of sentencesOf(bullet)) {
+      if (/reopens the exact silent-success/i.test(s)) {
+        expect(s, 'the local-mode reopening sentence must not claim a numeric bound').not.toMatch(/\d+\s*seconds?/);
+      }
+    }
+    // Grounded in the real mechanism: one probe, at boot, no timer.
+    const localcaps = readFileSync(path.join(root, 'server', 'src', 'localcaps.ts'), 'utf8');
+    expect(localcaps).toMatch(/ONE exec, at startup|one probe/i);
+    expect(localcaps).not.toMatch(/setInterval/);
   });
 
   it('the grant it describes (a bare one-token `stop` prefix) is the grant that actually ships', () => {

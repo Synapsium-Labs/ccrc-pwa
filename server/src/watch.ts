@@ -1295,7 +1295,8 @@ export class FleetWatcher {
       // "an unsupported verb records no attempt" true of the stat gate as well
       // as of the attempted set. Skips silently, same self-healing caveat as
       // `archiveMerged`'s own `ws-archive` gate below (fix round 4, task 14,
-      // Minor #5): automatic on a re-probe (remote mode, `CAPS_REFRESH_MS`),
+      // Minor #5): automatic in remote mode, on THIS WATCHER's own 60s
+      // timer (`CAPS_REFRESH_MS`) — not the agent's, which has none —
       // requires a server restart in local mode (`localcaps.ts`, one probe
       // at boot, no timer).
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
@@ -1965,8 +1966,11 @@ export class FleetWatcher {
       // check, and being level-triggered it would re-fire for every merged
       // session on every sweep, forever. Skipping writes no state — the level
       // stays `merged`, so the archive happens on the first sweep after the
-      // host is upgraded — IN REMOTE MODE, where the agent re-probes `ccd
-      // caps` on its own timer (`CAPS_REFRESH_MS`) with no restart needed.
+      // host is upgraded — IN REMOTE MODE, where THIS WATCHER's own 60s
+      // timer (`CAPS_REFRESH_MS`, just above) re-asks the agent regardless
+      // of any signal from ccd; the agent itself has no timer, it answers
+      // when asked and re-execs only when ccd's mtime/size has changed —
+      // so no restart is needed.
       // In LOCAL MODE (fix round 4, task 14, Minor #5) `fleetState.ccdVerbs`
       // is read once, at boot (`localcaps.ts`), so a `ccdVerbs` that is
       // `null` (no evidence) or genuinely `[]` (measured, and this box's

@@ -17,6 +17,15 @@ export const LOCAL_CAPS_TIMEOUT_MS = 10_000;
  *  doc for why. */
 const MAX_BUFFER = 8 * 1024 * 1024;
 
+/** Grace period between the SIGTERM escalation and the SIGKILL that follows
+ *  it (fix round 5, task 14, Minor #2) — the standard two-step, long enough
+ *  for an ordinary process to unwind on SIGTERM, short enough that the
+ *  whole escalation stays well inside operator patience. Real `ccd` installs
+ *  no top-level TERM trap (checked), so this fires in production only for a
+ *  hang shape nobody has actually shipped — but the mechanism exists
+ *  precisely to cover shapes nobody has shipped YET. */
+export const KILL_GRACE_MS = 2_000;
+
 /**
  * Local mode's own evidence for `stopSurfaceSupported` and every other
  * capability check `verbSupported` makes (fix round 3, task 14, Important
@@ -60,6 +69,52 @@ const MAX_BUFFER = 8 * 1024 * 1024;
  * everything it spawned," confirmed by re-running the same `sleep 600`
  * reproduction and finding no surviving process afterward.
  *
+ * SIGTERM, THEN SIGKILL (fix round 5, task 14, Minor #2): a stub — or, one
+ * day, a real wrapper — that TRAPS `SIGTERM` returns `null` at the bound
+ * as designed (this function still resolves on time) but SURVIVES with its
+ * whole subtree, because nothing about a caught, ignored SIGTERM ends the
+ * process. That is the one hang shape a SIGTERM-only kill does not
+ * actually kill, which matters precisely because killing hang shapes is
+ * this mechanism's whole job. `KILL_GRACE_MS` after the SIGTERM, an
+ * unmaskable SIGKILL follows to the same group — scheduled independently
+ * of this function's own promise, so it still fires and still cleans up
+ * even though the CALLER already moved on at the timeout. Real `ccd`
+ * installs no top-level trap (checked before writing this), so this is
+ * defence for a shape nobody has shipped, not a fix for one that exists.
+ *
+ * A FAILED PROBE IS LOGGED (fix round 5, task 14, Minor #3): silent before
+ * this — no journal line, and in local mode the effect is not transient,
+ * it disables `--surface` for the rest of the process's life (one probe,
+ * at boot, no retry). One `console.warn`, naming which of the three
+ * failure shapes (spawn error, nonzero exit, timeout) fired, so an
+ * operator who notices every stop recording `cli` has something to grep
+ * for instead of a silent, permanent degrade.
+ *
+ * TWO RESIDUALS OF DETACHED SPAWNING, STATED RATHER THAN FIXED (fix round
+ * 5, task 14, Minor #5 — both inherent to the mechanism, both bounded to
+ * at most one child process for one server lifetime, neither a regression
+ * this function introduced beyond what detaching always costs):
+ *   1. A GROUP-DIRECTED signal to the SERVER itself (a terminal Ctrl-C, a
+ *      process-group-directed supervisor stop) kills the server but — a
+ *      detached child is, by construction, in a DIFFERENT process group —
+ *      leaves the probe process running, orphaned. Confirmed with a
+ *      control: a non-detached child dies under the identical signal, so
+ *      this is specifically the cost of `detached: true`, not a general
+ *      signal-handling gap. Production is covered regardless:
+ *      `deploy/ccrc.service` sets no `KillMode`, so systemd's DEFAULT
+ *      (`control-group`) still reaps the whole cgroup, probe included, on
+ *      `systemctl stop`. The exposed case is a foreground/dev run killed
+ *      by hand.
+ *   2. The server exiting WHILE a probe is in flight (a crash, a forced
+ *      exit, not a graceful stop) orphans the probe permanently — its own
+ *      10s timeout timer dies with the parent process before it ever
+ *      fires, so nothing later reaps it. Reproduced via `EADDRINUSE` (the
+ *      server process exiting on a bind failure while a probe was already
+ *      running).
+ *   Neither gets a shutdown hook: the blast radius is one process, once,
+ *   and building lifecycle machinery to close it would be a bigger surface
+ *   than the residual it removes — the plan owner's own ruling.
+ *
  * NON-BLOCKING at the caller: `index.ts` does not `await` this before
  * `app.listen()` — it seeds `fleetState.ccdVerbs: null` synchronously and
  * lets this resolve into it in the background, so even the bounded delay
@@ -91,29 +146,44 @@ const MAX_BUFFER = 8 * 1024 * 1024;
  *     sweep (`watch.ts`) simply skips the row, and `archiveMerged`'s
  *     auto-archive gate simply does not archive. Both comments' own
  *     "self-heals on the next sweep once the host is upgraded" premise is
- *     true in REMOTE mode (the agent re-reads `ccd caps` every
- *     `CAPS_REFRESH_MS`, no restart needed) but NOT in local mode, which
- *     reads once at boot: a `[]` (or a stale `null`) there self-heals only
- *     on the next server restart.
+ *     true in REMOTE mode — `FleetWatcher`'s OWN 60s timer (`watch.ts`'s
+ *     `CAPS_REFRESH_MS`) re-asks the agent regardless of any signal from
+ *     ccd; the agent itself has no timer, it answers when asked and
+ *     re-execs only when ccd's mtime/size on disk has changed — but NOT in
+ *     local mode, which reads once at boot: a `[]` (or a stale `null`)
+ *     there self-heals only on the next server restart.
  */
 export async function readLocalCcdCaps(
   ccdBin: string, timeoutMs: number = LOCAL_CAPS_TIMEOUT_MS,
 ): Promise<string[] | null> {
   const r = await execCapped(ccdBin, ['caps'], timeoutMs);
-  if (r.code !== 0) return null;
+  if (r.code !== 0) {
+    // The one log line this probe ever gets — see the function doc for
+    // why silence here is the wrong default on this branch specifically.
+    console.warn(
+      `ccrc-server: local ccd caps probe failed (${r.reason}) — --surface will be omitted from ` +
+      'every stop until this box\'s ccd answers "ccd caps" cleanly. In local mode there is no ' +
+      'periodic retry: this is re-probed only at the next server restart.',
+    );
+    return null;
+  }
   return parseCcdCaps(r.stdout);
 }
 
 /** The manual spawn+group-kill mechanism `readLocalCcdCaps` needs — see its
- *  own doc comment for why `execFile`'s built-in `timeout` is not enough. */
-function execCapped(cmd: string, args: string[], timeoutMs: number): Promise<{ code: number; stdout: string }> {
+ *  own doc comment for why `execFile`'s built-in `timeout` is not enough.
+ *  `reason` is populated on every non-zero `code`, human-readable, for the
+ *  one `console.warn` call site above. */
+function execCapped(
+  cmd: string, args: string[], timeoutMs: number,
+): Promise<{ code: number; stdout: string; reason: string | null }> {
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (code: number, stdout: string): void => {
+    const finish = (code: number, stdout: string, reason: string | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, stdout });
+      resolve({ code, stdout, reason });
     };
 
     let child;
@@ -126,8 +196,8 @@ function execCapped(cmd: string, args: string[], timeoutMs: number): Promise<{ c
       // same way `sleep` does), closed here structurally rather than left
       // to the timeout alone to cover.
       child = spawn(cmd, args, { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch {
-      resolve({ code: 1, stdout: '' });
+    } catch (err) {
+      resolve({ code: 1, stdout: '', reason: `could not spawn: ${(err as Error).message}` });
       return;
     }
 
@@ -143,20 +213,31 @@ function execCapped(cmd: string, args: string[], timeoutMs: number): Promise<{ c
 
     const timer = setTimeout(() => {
       if (typeof child.pid === 'number') {
-        try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already gone */ }
+        const pid = child.pid;
+        try { process.kill(-pid, 'SIGTERM'); } catch { /* already gone */ }
+        // Escalation, scheduled independently of `finish` below: the
+        // CALLER already gets its answer at the timeout regardless, but
+        // this timer keeps running on its own to guarantee the group is
+        // actually gone — a TERM-trapping stub survives the line above
+        // alone (verified: see localcaps.test.ts's dedicated test) and
+        // needs the unmaskable follow-up to actually die.
+        setTimeout(() => {
+          try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+        }, KILL_GRACE_MS);
       }
-      finish(1, '');
+      finish(1, '', `timed out after ${timeoutMs}ms`);
     }, timeoutMs);
 
-    child.on('error', () => finish(1, ''));
+    child.on('error', (err) => finish(1, '', `spawn error: ${err.message}`));
     child.on('close', (code) => {
       // A truncated read is not a trustworthy zero — `parseCcdCaps('')`
       // would otherwise answer `[]` ("measured, and this box has NONE",
       // per the return contract above) for output that was never actually
       // read in full. Forced to `code 1` (-> `null`, "no evidence")
       // regardless of the process's own exit status.
-      if (truncated) { finish(1, ''); return; }
-      finish(code ?? 1, Buffer.concat(chunks).toString('utf8'));
+      if (truncated) { finish(1, '', `stdout exceeded ${MAX_BUFFER} bytes`); return; }
+      if (code !== 0) { finish(code ?? 1, '', `exited ${code ?? 'with no code (signalled)'}`); return; }
+      finish(0, Buffer.concat(chunks).toString('utf8'), null);
     });
   });
 }

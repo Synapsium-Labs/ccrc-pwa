@@ -7,10 +7,10 @@
 // executable stub script on disk — the same idiom `agent/test/caps.test.ts`
 // uses for the remote side, so this proves the actual exec mechanism, not
 // just the string-parsing half.
-import { describe, it, expect } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, vi } from 'vitest';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { readLocalCcdCaps } from '../src/localcaps.js';
+import { KILL_GRACE_MS, readLocalCcdCaps } from '../src/localcaps.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const writeStubCcd = (home: string, body: string): string => {
@@ -129,5 +129,75 @@ describe('readLocalCcdCaps', () => {
     const home = mkTmp('ccrc-localcaps-');
     const ccdBin = writeStubCcd(home, 'sleep 0.3\necho start\necho stop\nexit 0');
     expect(await readLocalCcdCaps(ccdBin, 5000)).toEqual(['start', 'stop']);
+  });
+
+  // Fix round 5 (task 14 follow-up, Minor #2): the one hang shape the
+  // SIGTERM-only group kill did not actually kill — a stub that traps and
+  // discards SIGTERM survives with its whole subtree, because nothing
+  // about a caught signal ends the process. Real `ccd` installs no such
+  // trap (checked before this was written), so this defends a shape
+  // nobody has shipped, proven the same way the plain kill was: by
+  // recording the real PID and checking it directly, not by inferring
+  // survival from the function's own return.
+  it('escalates to SIGKILL when the group ignores SIGTERM — the one shape SIGTERM alone cannot kill', async () => {
+    const home = mkTmp('ccrc-localcaps-');
+    const pidFile = path.join(home, 'pid');
+    const ccdBin = writeStubCcd(home, `trap '' TERM\necho $$ > '${pidFile}'\nsleep 600`);
+    const result = await readLocalCcdCaps(ccdBin, 200);
+    expect(result).toBeNull(); // the caller is never blocked by the trap
+
+    const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
+    const isAlive = (): boolean => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    };
+
+    // Shortly after the bound: SIGTERM was sent and trapped away — the
+    // process is still here. Not a vacuous test: this proves the trap is
+    // genuinely in effect before the escalation gets credit for anything.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(isAlive(), 'the TERM-trapping process should still be alive right after SIGTERM alone').toBe(true);
+
+    // Past the SIGKILL grace period — unmaskable, so the trap cannot save it.
+    await new Promise((r) => setTimeout(r, KILL_GRACE_MS));
+    expect(isAlive(), 'the SIGKILL escalation must have ended the trapping process').toBe(false);
+  });
+
+  // Fix round 5 (task 14 follow-up, Minor #3): a failed probe used to be
+  // completely silent, and in local mode its effect is not transient — it
+  // disables `--surface` for the rest of the process's life. One
+  // `console.warn`, naming which failure shape fired, so an operator who
+  // notices every stop recording `cli` has something to grep for.
+  it('warns with the specific reason on every failure shape, and never on success', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const home = mkTmp('ccrc-localcaps-');
+
+      const goodBin = writeStubCcd(home, 'echo start\nexit 0');
+      await readLocalCcdCaps(goodBin);
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      const nonzeroBin = writeStubCcd(home, 'echo start\nexit 3');
+      await readLocalCcdCaps(nonzeroBin);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/exited 3/);
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/--surface will be omitted/);
+      warnSpy.mockClear();
+
+      // A missing binary surfaces through `spawn`'s async 'error' event
+      // (ENOENT), not the synchronous throw the try/catch around `spawn()`
+      // itself guards — measured, not assumed; both paths still land in
+      // the one `console.warn` call site.
+      await readLocalCcdCaps(path.join(home, 'no-such-ccd'));
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/spawn error/);
+      warnSpy.mockClear();
+
+      const hangBin = writeStubCcd(home, 'sleep 600');
+      await readLocalCcdCaps(hangBin, 200);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/timed out after 200ms/);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

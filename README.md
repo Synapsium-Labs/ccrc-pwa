@@ -779,10 +779,12 @@ general remote-shell:
   does nothing.
   Two honest edges the inversion narrows but does not close, and they are
   NOT the same size. On the fleet host, a **rollback** to an older
-  `~/ccrc-backups/<ts>/ccd` leaves the agent's cached verb list still
-  advertising `stop-surface` for up to 60 seconds — bounded, because the
-  agent re-probes on a timer (`CAPS_REFRESH_MS`) regardless of any signal
-  from ccd itself. **In local mode there is no such timer.** The probe
+  `~/ccrc-backups/<ts>/ccd` leaves the cached verb list still advertising
+  `stop-surface` for up to 60 seconds — bounded, because the SERVER's own
+  fleet watcher re-asks on a timer (`CAPS_REFRESH_MS`) regardless of any
+  signal from ccd itself; the agent has no timer of its own; it answers
+  when asked and re-execs only when ccd's mtime/size on disk has changed.
+  **In local mode there is no such timer.** The probe
   runs exactly once, at boot; swapping `~/.local/bin/ccd` for an older
   copy under a still-running server **reopens the exact silent-success
   hazard this work exists to close, with no bound at all**, because
@@ -791,6 +793,19 @@ general remote-shell:
   same silence that makes the underlying defect possible in the first
   place. It stays open until the server process is restarted; there is no
   other trigger.
+  The local probe hangs it might meet are handled — a hung process is
+  bounded (10s) and, if it ignores that first SIGTERM (real ccd does
+  not), an unmaskable SIGKILL follows two seconds later, to the whole
+  process group, not just the direct child. Two narrower residuals of
+  that same detached design are stated rather than fixed: a **terminal
+  Ctrl-C or a group-directed supervisor stop** kills the server but not
+  the (differently-grouped) probe — covered in production regardless,
+  since `deploy/ccrc.service` sets no `KillMode` and systemd's own
+  default still reaps the whole cgroup on `systemctl stop`; and a server
+  that **exits mid-probe** (a crash, not a graceful stop) orphans that one
+  probe permanently, since its own timeout timer dies with the parent.
+  Both are bounded to one process, once, per server lifetime; neither gets
+  a shutdown hook.
   `stop`'s grant stayed a bare one-token
   prefix through this change — nothing widened — because the flag rides
   entirely inside the "everything after the verb" territory that prefix
