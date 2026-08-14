@@ -203,15 +203,20 @@ non-goal precisely because it stops being reachable.)
   path at all; it can only be killed**. 240 s leaves room for the rest of `ws-add` under the ceiling,
   and is safe only *because* of §1.1: exceeding it is now a report, not an orphan.
 
-  **The bound must be per-caller, not global.** `_accept_first_run_prompts` is also reached from
-  `cmd_supervise` (systemd `ExecStart`, no ceiling) and from `ccd swap`, which detaches into a transient
-  unit (`ccd:7266`) and ends in `systemctl --user start … || cmd_ensure` (`ccd:7310`). Both take the
-  `fromswap=0` full-resume branch — exactly the "700k+-token resumes take minutes between gates" case
-  the docstring cites for its ~15 min window (`ccd:7088-7089`). A global 240 s would make every systemd
-  restart of a large session settle `unconfirmed`, which **suppresses `_inject_spawn_effort`** (so
-  `SPAWN_EFFORT` silently stops applying on the crash-restart path) and, under §1.6, lights a warning
-  chip on a healthy session. So: 240 s for the agent-reachable path, the existing ~900 s for
-  `fromswap=0` resumes.
+  **The bound must be per-caller — and an earlier draft had the discriminator exactly backwards.**
+  `_accept_first_run_prompts` is also reached from `cmd_supervise` (systemd `ExecStart`, no ceiling) and
+  from `ccd swap`. That draft keyed the two bounds off `fromswap`, on the belief that swap takes the slow
+  branch. **Measured false:** `cmd_swap` writes `lastswap` at `ccd:7308`, *two lines before* the restart
+  at `:7310`, and `_spawn` sets `fromswap=1` within 300 s of `lastswap` (`ccd:7146-7148`). So **swap
+  takes the FAST branch and a fresh `ws-add` is `fromswap=0`** — implemented literally, `ws-add` would
+  have got ~900 s and §1.2's whole bound would have evaporated.
+
+  So: **`_spawn_settle` takes its own bound parameter, defaulting to 240 s**, and `cmd_supervise` raises
+  it. Not `fromswap`. The distinction being drawn is "is there an agent ceiling above me", which no
+  existing flag encodes. A global 240 s is also wrong: it would make every systemd restart of a large
+  session settle `unconfirmed` — the "700k+-token resumes take minutes between gates" case the docstring
+  cites for its ~15 min window (`ccd:7088-7089`) — which **suppresses `_inject_spawn_effort`** and, under
+  §1.6, lights a warning chip on a healthy session.
 
 `_spawn_settle` branches on the verdict and records it in a new registry field `spawnstate`:
 `ready | login | unconfirmed | blocked`. On anything but `ready` it **must not** run
@@ -246,9 +251,21 @@ entirely, so `{code:1}` from "ccd exited 1" is byte-identical to `{code:1}` from
 the deadline". That is an overloaded value at a seam, and it is the reason the dispatch layer cannot
 tell a real failure from a timeout.
 
-`ExecRes` gains `killed?: boolean` and `signal?: string`; `CcdResult` (`server/src/lifecycle.ts:8`)
-gains `killed: boolean`. Additive, absence-permits, **no `FLEET_PROTO` bump** — an older agent omitting
-the field reads as `killed: false`, which is the safe direction.
+**There is no type called `ExecRes`** (grounding, §1.4 correction). The real seam is three hops, and the
+middle one is the problem: `ExecResult` (`server/src/exec.ts:3`), then `asExecResult`
+(`server/src/remote/runner.ts:83-90`) which **rebuilds the object field-by-field and therefore discards
+anything the agent sends beyond `code`/`stdout`/`stderr`** — the L3 "an adapter may not narrow a
+distinction it received" rule failing in exactly the place §1.4 depends on — then `ccd()`
+(`lifecycle.ts:14`), which would drop it one hop later.
+
+`ExecResult.killed` is **optional**; `CcdResult.killed` may be required. Optional is not a style choice:
+249 bare `{code, stdout, stderr}` literals across 32 test files make a required field a suite-wide break.
+Additive, absence-permits, **no `FLEET_PROTO` bump** — an older agent omitting it reads as `killed: false`,
+the safe direction.
+
+**And `killed` is structurally false in `local` mode:** `realRunner` (`exec.ts:6-12`) passes no `timeout`,
+so nothing ever kills ccd there and §1.5's adoption path is unreachable. Every test of it must inject a
+runner.
 
 ### 1.5 Dispatch adopts what a killed `ws-add` left behind
 
@@ -262,9 +279,15 @@ New behaviour on `!res.ok`: **run the AFTER diff anyway.**
 - **exactly 1 new candidate, AND `res.killed === true`, AND `winner.held === null`** → **adopt it.**
   Bind the run, place the hold, record `spawn-adopted:<spawnstate>` on the `run_events` row, and return
   `spawnState` so the coordinator knows the pane may not be ready.
-- **any other `!res.ok`** — `killed:false` (a clean refusal: disk floor, no account with headroom,
-  §1.3's `busy`), 0 candidates, ≥2 candidates, or a candidate that already carries a hold →
-  `fleetFailed` / `ambiguous-dispatch` exactly as today, claiming nothing on a guess.
+- **any other `!res.ok`** — `killed:false`, 0 candidates, ≥2 candidates, or a candidate that already
+  carries a hold → `fleetFailed` / `ambiguous-dispatch` exactly as today, claiming nothing on a guess.
+
+**`killed:false` does not mean "a clean refusal".** `runner.ts:110-112` returns `{code:1, stderr:
+e.message}` for any transport failure — dropped socket, client-side wait expiry — with no `killed`, and
+`runner.ts:7-9` documents that collapse. **Three facts sit on `code:1`, not two:** ccd refused, we killed
+ccd, and *we do not know because the link failed*. Not-adopting is the safe outcome for all three, so the
+gate is right — but the prose must not imply a two-way split, and a test must pin that a `killed:false`
+from the catch path does not adopt.
 
 **Adoption requires positive evidence that the candidate is the one THIS call created**, and the two
 gates are what supply it. `killed` (§1.4) separates "we SIGTERM'd a spawn in flight" from "ccd refused"
@@ -303,12 +326,29 @@ describe in that same Build-7-nouns idiom (`/^\s*export const SPAWN_STATES\b/m` 
 `['shared/api.ts']`, plus a derivation assertion, plus a member-enumeration scan — the four state
 tokens also appear in ccd's bash). Otherwise the guard this section leans on does not exist.
 
-The PWA renders one chip on a workspace whose `spawnState` is not `ready`. That is the detection the
-operator currently does not have; `swift-harbor` would have shown it for two days.
+The PWA renders one chip — and **the naive rule lights all 18 healthy sessions.** `spawnstate` is a new
+registry field, so every pre-existing row revives `spawnState: null`, and "not `ready`" is true of `null`.
+`null` means *not recorded*, explicitly, pinned by a fixture row with no `spawnstate` file.
+
+**The rule must also read `started`, and that arm is not optional:** `swift-harbor` — the specimen this
+build exists for — has **no `spawnstate` at all**, so `spawnState` can never flag it and `started` is the
+only signal its shape emits. Putting `started` on `FleetSession` with no reader would repeat, one ring
+out, the exact defect this section opens by complaining about.
+
+    spawnChip = dead                                         ? null
+              : spawnState !== null && spawnState !== 'ready' ? SPAWN_WORD[spawnState]
+              : started === false                             ? 'unstarted'
+              : null
+
+Placement, copy, tokens, and the two mechanical obligations it carries (the selected-row achromatic
+override and its membership test) are in Part II, "PWA surface". `swift-harbor` would have shown
+`unstarted` for two days.
 
 ## Wave 2 — a claim knows whose it is
 
-**Bounded context:** Coordination (server-side only — no ccd change, no new verb).
+**Bounded context:** Coordination. **Not server-only** — §2.3 falsifies a shipped `cmd_ws_release`
+comment, so Wave 2 edits `ccd/ccd`, is **agent-first**, and hits the provenance-marker gate like every
+other wave. No new verb.
 **Closes:** F9 proper, the by-hand archive variant, release-then-crash, the wrong-wave hold overwrite,
 and most of the sweep-blindness window.
 
@@ -332,6 +372,23 @@ places that hold both halves in one process are exactly `closeRun`, `dispatchRun
 - `CoordStore.openRunsForSession(sessionId, excludeRunId?)` →
   `SELECT id, program, wave, waveOf FROM runs WHERE sessionId = ? AND state NOT IN ('done','failed') AND id != ?`.
   Synchronous, like the rest of `CoordStore` — **do not wrap it async** (a stated concurrency invariant).
+- **A new index, and it must be `MIGRATIONS[1]`.** `runs` has exactly two indexes (`schema.ts:87-88`),
+  neither usable here: `sessionId` is unindexed and `state NOT IN (…)` is not seekable. Measured against
+  the v1 DDL in an in-memory `node:sqlite`, the plan is `SCAN runs`; with
+  `CREATE INDEX runs_by_session ON runs(sessionId)` it becomes `SEARCH … USING INDEX`. It **cannot** be
+  an amendment to `MIGRATIONS[0]`: `db.ts` runs `for (v = current; v < VERSION; v++)`, so an edit to
+  migration 0 never executes against a database already at `user_version 1` — and the server's copy is
+  live, having driven five runs through build4. `schema.ts:149-153` and `:199-201` both justify amending
+  v1 in place on the grounds that "coord.db has shipped to no box yet"; **that premise has expired** and
+  those two comments must be corrected in the same task.
+
+**No cache.** Measured N is not the record count: `sweepNames` narrows to **3** rows before the query
+(`watch.ts:1267` then `:1269`) and `archiveMerged` to **0**; the live `runs` table is **5 rows**. A
+per-tick cache is also *slower* than the index (both defeat the same predicate; benchmarked at 10k rows,
+indexed 0.27 ms vs cached 1.16 ms) and — decisively — a cached snapshot consulted at a destructive
+decision point is the shape `watch.ts:1931-1935` already fixed once. Put the twelfth condition
+immediately after `:1269` as `if (r.held !== null || coord.openRunsForSession(r.id).length > 0) continue;`
+so the free in-memory `held` short-circuits the query away for every claimed row.
 - `releaseIsSafe(openSiblings)` in L1 — pure, no `fs`, no reply. Trivial today; it exists so the decision
   has one home and one test.
 
@@ -375,6 +432,14 @@ longer sufficient to archive. Release-then-crash (the hold gone, the run still o
 run but not the workspace) and the archive-vs-hold race both stop mattering, because the sweep now asks
 the authoritative question.
 
+**The fourth fleet act is ungated, and it is in the function §2.2 rewrites.** `close.ts:210-214` —
+`state === 'failed' && archive` → `CCD_ARGV.wsArchive`, which its own comment at `:206-209` calls "the ONE
+explicit `wsArchive` call in the whole coordination lane" — takes neither the release nor the re-hold
+branch and is untouched by the design above. `ws-archive` has no hold rung in ccd. So closing run A as
+failed-with-archive while sibling run B is open **archives B's workspace and leaves B's `.hold` standing
+over it**: F9's harm through a different door. The sibling check must gate this arm too, or the wave
+closes three doors and leaves the fourth open in the same function.
+
 **One shipped ccd comment becomes false, and Wave 2 must edit it even though Wave 2 is otherwise
 server-only.** `cmd_ws_release` (`ccd:1859-1861`) states *"After this, the very next archiveMerged sweep
 may archive a merged workspace — the level re-arms itself, no edge to miss."* After this rung an absent
@@ -398,6 +463,11 @@ alone, which they could not during the F9 incident.
 
 **Bounded context:** Fleet Mutation + the naming sweep. **AGENT-FIRST deploy.**
 **Closes:** F11, F11b, F11c, F10c. **Cuts F10/F10b** — see §3.3.
+**Depends on Wave 2** — §3.1 and §3.2 both consume `openRunsForSession`, which §2.1 introduces. The stated
+order satisfies this, but a plan that parallelises the waves, or lands Wave 3 first because "it is just
+ccd", breaks. **The `fix/ccd-swap-jitter` merge gate belongs to this wave at least as much as Wave 1:**
+§3.3 edits `_auto_swap_check`, the caller of the machinery that branch changed, running on a 5 s tick
+across 18 processes.
 
 ### 3.1 The naming sweep will not rename a claimed workspace
 
@@ -419,9 +489,14 @@ right order.
 `ccd ws-rename` also grows a hold rung, matching `ws-rm`/`ws-reap`/`forget`, using `-e` not `-f` so an
 unreadable hold still refuses. Defence in depth: the sweep is not the only caller.
 
-With the freeze in place, `wave-lifecycle.md:99-111`'s claim that the branch is `ws/<slug>` **becomes
-true**, and the coordinator skill's nine verbatim-pinned clauses are untouched. The reference file gains
-one sentence saying the name is frozen for the life of the claim.
+The coordinator skill's nine verbatim-pinned clauses are untouched; the reference file gains one sentence
+saying the name is frozen for the life of the claim. **But `wave-lifecycle.md:99-111` is not wrong today
+and the freeze repairs no falsehood** — it says `ws-add` creates the workspace on `ws/<slug>` (true) and
+that the done-fingerprint re-measures `record.branch`, "the live registry's own field" (also true; that
+field follows a rename). Measured live, 8 of 14 workspaces sit off their born name and the instruction
+"commit on this workspace's own branch" holds under all of them. The freeze **adds a fact the file has
+never stated**. Say it that way, or a reviewer goes looking for a lie that is not there. *(C9 is
+correspondingly downgraded from "false" to "silent".)*
 
 ### 3.2 The done-fingerprint stops guessing at a renamed branch
 
@@ -508,8 +583,29 @@ states the clearing rule as universal. The PWA offers its `Send it` rescue only 
 only "The session never showed the text — open the terminal to check."
 
 Per the ruling: the text stays in the box, and `verify-failed` returns the `draft` so the rescue renders.
-`ChatList`'s condition widens to `enter-ignored | verify-failed`. The docstring at `:489-497` is corrected
-to describe what the two paths actually do.
+
+**Widening `ChatList`'s condition on `code` alone would ship a button that sends TRUNCATED prompts** —
+the sharpest defect the grounding pass found. The attachment path's `verify-failed`
+(`send.ts:512-521`) returns `...(cleared.state === 'residue' ? { draft: cleared.draft } : {})`, so its
+`draft` is **what a failed `clearBox` left behind — a fragment of the message, not the message**.
+`submitEnter` cannot catch it: its correspondence gate compares the box's marker row against `expect`,
+and the residue *is* what the box reads, so it matches, presses Enter, and submits the fragment. Two
+conditions a caller handles oppositely would ride one field — the overloaded-value-at-a-seam defect the
+ring rules name outright.
+
+So the gate widens on a **new additive field**, not on `code`: `submittable?: boolean`, set by the new
+ordinary-path `verify-failed` arm and by `enter-ignored`, and **not** set by the attachment path (which
+keeps `draft` for display only). The condition becomes
+`(code === 'enter-ignored' || code === 'verify-failed') && send.submittable === true && …`. An older
+server never sends the flag, so no button — today's behaviour, the safe direction.
+
+`pwa/test/send-it.test.tsx:34-40` is an intentional tripwire for exactly this: its comment says those
+cases "are kept because they are what fails if the `code` branch is ever widened", and `verify-failed` is
+in its list. It firing is the design working.
+
+`SEND_ERROR_TEXT['verify-failed']` — *"The session never showed the text — open the terminal to check."* —
+becomes false twice over (the text IS in the box, and §4.4 makes this fire more often) and is replaced
+with the register `enter-ignored` uses: *"Typed it, but the session never echoed it back."*
 
 The draft-conflict sheet also stops destroying work: it shows `draftOf`'s **single marker row** as though
 it were the whole draft, and "Append anyway" C-u's the box and retypes only that row plus the new text,
@@ -626,7 +722,7 @@ correction ships without a test run over the code it describes. Two exceptions:
 ## Assumptions I made
 
 The measurement pass produced twenty-one questions the code cannot answer. Four went to the operator —
-Q1 (which lanes bill credits, **still unanswered**), Q6 (roll back or keep — settled by the adopt ruling),
+Q1 (which lanes bill credits — **answered 2026-08-14: none today**), Q6 (roll back or keep — settled by the adopt ruling),
 Q17 (a failed send's text — ruled: leave it), and the scope question. These are the other eighteen,
 stated so any of them can be overturned in one sentence:
 
@@ -659,7 +755,24 @@ stated so any of them can be overturned in one sentence:
    guards. The honest-label alternative fixes the lying control for free. One word pulls it back in.
 3. **Q6, implicitly settled by the ruling:** "roll back" is off the table; `ws-add` never deletes its own
    fresh work.
-4. **When the widened guard (§4.2) finds a blank-marker wedge, may the system CLEAR it, or only
+4. **This build does NOT repair `swift-harbor`, and that contradicts the ruling it is built on.** Your
+   ruling was "adopt it — detect on the next verb, write `started`, enable the unit." But `cmd_start`
+   (`ccd:7202`) and `cmd_ensure` (`ccd:7215`) both return early on `_alive`, and an F8 orphan **has a live
+   pane** — that is C1's whole point. So no ccd verb in Wave 1 ever reaches `_spawn_start` for an
+   *existing* orphan. Wave 1 delivers prevention (§1.1), adoption of the workspace *this dispatch* created
+   (§1.5), and detection (§1.6). Grounding measured the residue class at **one member out of 24**, so
+   accepting this may well be right — but I will not leave your ruling standing as though the build
+   satisfied it. Accept, or add a repair path.
+5. **A standing risk this build did not create and does not fix, which you should know about.** The tmux
+   server (pid 1569) is the parent of all 21 fleet sessions, and it lives inside **one** session unit's
+   cgroup. `KillMode=process` in `claude-session@.service` is the only thing between
+   `try-restart 'claude-session@*'` — which the deploy runs — and the death of the entire fleet's
+   substrate. **Nothing pins it:** `grep -rn KillMode` finds the unit file, a comment in `deploy.sh`, and
+   one test that merely *mentions* it in a comment. Meanwhile `deploy.sh` copies that unit file and
+   `daemon-reload`s in the same run that sweeps, so a bad edit goes live and is exercised against 18
+   units with no window to notice. By this repo's own doctrine — "a comment is a request; a red suite is
+   a mechanism" — that is not a guard. Want it pinned as part of this build, or tracked separately?
+6. **When the widened guard (§4.2) finds a blank-marker wedge, may the system CLEAR it, or only
    refuse?** The spec as written only refuses. If refusal is the only outcome, a blank-marker wedge can
    be unstuck by nothing but a human at a terminal — and since the mail lane bounces off it
    (`draft-present`), that means one such wedge silences a wave until you intervene. If clearing is
@@ -667,13 +780,13 @@ stated so any of them can be overturned in one sentence:
    in the build where the two review lenses genuinely disagreed**, and it is a judgement about your own
    input box, so it is yours. My lean: refuse-only, because §4.1 now hands the text back and the PWA
    rescue makes recovery one tap.
-5. **Does the thundering-herd surface join this build, or stay separate?** `5bdc6dd` jittered
+7. **Does the thundering-herd surface join this build, or stay separate?** `5bdc6dd` jittered
    `_dispatch_swap`, which is the *dispatch* half. The half it does not address is that the
    SessionEnd/SessionStart hooks behind each swap each launch a ~2 GB telemetry scan with no
    concurrency bound — jitter spreads the herd but does not cap it, so a wide enough event still
    converges. A cap belongs to whoever owns that lane. It is **not** in Waves 1–4 as written, and I
    would rather it be a deliberate addition than an assumed one.
-6. **Merging `fix/ccd-swap-jitter` before Wave 1 ships ccd — treat this as a gate, not a note.** The fleet host is running that branch
+8. **Merging `fix/ccd-swap-jitter` before Waves 1 and 3 ship ccd — a gate, not a note.** The fleet host is running that branch
    unmerged, and its provenance marker is stale. Wave 1's agent-first deploy has to land on top of a
    clean marker, not underneath one — and it must not silently revert a fix that is already in
    production. Not my branch, so not my merge: flagging it, not touching it.
@@ -739,15 +852,29 @@ being called a break; CI on the quiet box is the arbiter.
 
 ## Deployment
 
-Waves 1, 3 and the ccd half of 4 touch `ccd/` and are **AGENT-FIRST** — the fleet host ships before the
-server, because the server reads what the hook writes and the agent caches `ccd caps` at boot. Wave 2 is
-server-only. Executables land via `install_atomic`; the server lane's final gate is `/health` reporting
-the shipped sha.
+**All four waves touch `ccd/` and all four are AGENT-FIRST** (Wave 2 included — §2.3 edits a
+`cmd_ws_release` comment). The full procedure, with its pre-flight census and post-deploy verification,
+is in Part II, "What shipping ccd does to a live fleet". Three facts from it belong here because they
+change the plan's shape:
 
-Wave 1 ships a ccd change and a server change that must land together in behaviour but not in time: the
-ccd half (§1.1–1.3) is safe alone — it strictly reduces orphaning — and the server half (§1.4–1.6) is
-inert until it sees a `spawnstate` field, which absence-permits handles. Ship ccd first, verify, then the
-server.
+1. **Wave 1 is a THREE-lane deploy, not two.** §1.4 lives in `agent/`, its own package with its own unit
+   and its own `deploy.sh agent` invocation, and restarting it drops the single authenticated WebSocket
+   the whole PWA runs over. `shared/` compiles into both lanes. The order is **ccd → agent → server**,
+   with a link outage in the middle.
+2. **The install is a `rename(2)` and running supervisors are safe — but they keep the OLD ccd.**
+   Measured: 15 of 18 `ccd supervise` processes hold a deleted inode byte-identical to repo `main`, and
+   `/proc/<pid>/fdinfo/255` shows `pos == size`, so bash has already read the script to EOF and has zero
+   bytes left to read. Natural turnover is **3 supervisors per 12 hours**. So **the deploy's restart
+   sweep is mandatory**: skip it and Wave 1's spawn invariant is false on most of the fleet for days,
+   because `cmd_ensure` inside a live supervisor *is* an unattended spawn path.
+3. **The `fix/ccd-swap-jitter` merge gate is a hard blocker for Waves 1 and 3.** Deploying either from a
+   main-based ref installs a ccd with no `SWAP_JITTER` — silently reverting the fix for the 2026-08-13
+   nine-hour outage — and the sweep then **arms the reverted binary on all 18 supervisors at once**,
+   converting a hazard currently dormant on 15 into one armed on 18. Merge at the branch **tip**
+   (`baf8e5b`), not `5bdc6dd`; gate on `git show <ref>:ccd/ccd | grep -c SWAP_JITTER` being non-zero.
+
+Within Wave 1 the ccd half (§1.1–1.3) is safe alone — it strictly reduces orphaning — and the server half
+(§1.4–1.6) is inert until it sees a `spawnstate` field, which absence-permits handles.
 
 ## What this spec has NOT designed
 
@@ -779,5 +906,533 @@ and the honest answer matters more than the findings:
   mutations keep riding already-granted `CcdArgv`. `prefer` is a fleet-mutation verb, not a coordination one.
 - Any `FLEET_PROTO` bump. Every wire change here is additive and absence-permitting.
 - Writing the `pool` registry field (it has a reader and no writer anywhere in ccd). Noted, not fixed.
-- Settling the NBSP question (§4.6) or the consumed-uuid question (§1.1) by experiment. Both fixes are
-  correct under every reading, so neither blocks.
+- Settling the consumed-uuid question (§1.1) by experiment; the fix is correct under every reading.
+  *(The NBSP question is no longer a non-goal — it was **settled read-only, in-tree**: `send.test.ts:87`'s
+  `LIVE_CU_FRAMES` is a verbatim `capture-pane -e` of a real **typed** three-line draft whose box row is
+  `'\x1b[39m❯\xa0AAA first line'` — NBSP followed directly by text — and the live empty box measures
+  `❯` + U+00A0 by `od -c`. Only the test **double** at `send.test.ts:146` says otherwise, contradicting
+  the capture sixty lines above it; §4.6 corrects the double in the same wave and stops hedging.)*
+
+---
+
+# Part II — grounding
+
+Part I is the design. Part II is what the design is measured against: a six-lens research pass run
+read-only against this repo and the live fleet host on 2026-08-14 18:33–19:05 UTC, with the three most
+consequential lenses independently crosschecked. **All three crosschecks overturned their own lens, every
+one of them in the dangerous direction** (an undercount) — so where Part II contradicts a lens, the
+crosscheck won and the corrected figure is what appears here.
+
+The design in Part I has been corrected against these findings; the audit trail at the end of Part II
+records every correction and is kept rather than deleted, because the pattern of what a design gets wrong
+is worth more to the next spec than a clean document is.
+
+## Live fleet, verified 2026-08-14
+
+Measured first-hand, read-only, on the fleet host (`openclaw`, `198.51.100.7`), 18:33–19:05 UTC. The repo is at `21fef2a`, `ccd/ccd` sha256 `44de6cd4…`, 7523 lines. The box runs a **different** ccd — 7544 lines, sha256 `d71024dc…`, mtime 2026-08-14 07:02:45 — so no repo line number below is taken from the installed file, and where I read the installed file I say so.
+
+### F8 is a one-off, not a standing condition
+
+**Exactly one of 24 registered ids is missing `.started`: `ccrc-pwa-swift-harbor`.** Every other row has it. `started` is only ever written, never removed (four writers in the repo ccd: `ccd:1257` `cmd_ws_add`, `:2353` `cmd_ws_restore`, `:7208` `cmd_start`, `:7217` `cmd_ensure` — verified by `grep -n '_spawn "' ccd/ccd`), so absence is unambiguous. There is no partially-registered row either: every session-shaped prefix in `~/.cc-sessions` has a `.uuid`.
+
+So the answer to the highest-value question is: **the F8 residue class has one member, and this build's detection surface should be sized for a rarity, not a population.** That does not weaken the prevention case — one orphan cost two days of a live pane doing nothing — but it does mean §1.6's chip and any `ccd doctor` census will spend almost all of their time reporting nothing.
+
+### Four divergence classes, of which the spec names one
+
+| Class | Count | Members |
+|---|---|---|
+| **F8 proper** — registered, alive, no `started` | **1** | `ccrc-pwa-swift-harbor` |
+| **Alive, never supervised** — no unit loaded at all | **3** | `swift-harbor`, `custom-tools-brisk-ridge`, `expoAI-assistant-warm-mesa` |
+| **Running but not boot-persistent** — unit `active/running`, no `default.target.wants` symlink | **3** | `ccrc-pwa-calm-mesa`, `data-internal-plain-harbor`, `data-internal-still-prairie` |
+| **Registered, `started=1`, no pane** | **3** | `ccrc-pwa-brisk-harbor`, `expoAI-assistant-clear-cove`, `expoAI-assistant-swift-delta` |
+
+Totals: 24 registry rows, 21 tmux sessions, **18** active units, **15** enabled symlinks. `systemctl --user list-units 'claude-session@*' --all` returns exactly 18 rows; the six ids absent from that list have no unit loaded in the manager, so `try-restart 'claude-session@*'` cannot touch them and `Restart=always` cannot resurrect them. (Note: `systemctl show` on an uninstantiated template *does* report `LoadState=loaded`, which is why a naive check misreads this — use `list-units`.)
+
+The fourth class matters most for Wave 1's design. C1 argues F8 cannot leave "a fully-registered workspace with no session" because the pane survives — correct for F8, and the class exists anyway from some other cause. **Adoption is the wrong repair for it:** those three already have `started`; what they lack is a process. Detection must separate *unclaimed pane* from *claimed row with no pane*, and the two repairs are opposite.
+
+### The specimen, re-measured
+
+Ten registry rows, `.started` absent, `.hold` absent, no unit, live pane (pid 1155964, `ps` elapsed 2d 00:27, started Wed Aug 12 18:10:02), zero transcript, `$0.0000`, wrapper `claude-dev0`. But three details change how it should be described:
+
+1. **Only eight of the ten are frozen at spawn** (all mtime `2026-08-12 18:10:03.286368465`). `.prphase` and `.prcheckedat` are sweep-written and rewrite themselves every few minutes — I watched the mtime move 18:33:14 → 18:37:14 → 18:57:15. "Ten frozen rows" is not a usable detection signature.
+2. **The splash is still painted.** Not "idle at an empty prompt" — never advanced past first paint. `tmux capture-pane` shows `Claude Code v2.1.228` / `Fable 5 with xhigh effort · Claude API` / `~/worktrees/ccrc-pwa/swift-harbor` / `⚠ 2 MCP servers need authentication · run /mcp` after two days.
+3. **The statusline is missing three segments every healthy session carries.** swift-harbor: `👤 lab·dev0 │ 🤖 Fable 5 · xhigh │ ⎇ ws/swift-harbor │ 🎯 ccrc-pwa │ 💲 $0.0000`. Sibling `claude-ccrc-pwa`: `… │ ▓ ctx ███░░░░░ 35% │ 💲 $307.5516 │ +948 -67 │ ⏳ limits 5h ░░░░░ 1% · 7d ████░ 80%`. No `ctx`, no diff counts, no `limits` — a never-turned session is identifiable from one `capture-pane`, cheaper and earlier than any registry read.
+
+The empty box's marker row is **measured** as `❯` + U+00A0: `od -c` on the captured row gives `342 235 257 302 240`. §4.6's premise about the empty box needs no experiment.
+
+`~/.claude-dev0/projects/-home-you-worktrees-ccrc-pwa-swift-harbor/` does not exist (never took a turn). `~/.claude-dev0/session-env/7f0a923c-f98d-4601-b617-058c2c55fd95` **does**, confirming §1.1's parenthetical first-hand. The full argv from `/proc/1155964/cmdline`:
+
+```
+/home/you/.local/bin/claude --remote-control ccrc-pwa-swift-harbor \
+  --session-id 7f0a923c-f98d-4601-b617-058c2c55fd95 --dangerously-skip-permissions
+```
+
+`--remote-control` is present, which the standing ruling of 2026-08-13 (dispatched workers spawn without it) says it should not be. Wave 1 rewrites this exact argv construction; the plan should state whether the ruling is unimplemented on this path or the spawn predates it.
+
+`ws/swift-harbor`'s reflog is a **single 192-byte line** — `branch: Created from origin/main`, never renamed, never committed. That is a first-class F8 tell: the naming sweep never fired because there was no turn to title from.
+
+### Where the spec's second-hand account differs
+
+**The `prphase` date is wrong, and the framing implies a change that did not happen.** The spec says `sweepPr` stamped `.prphase=no-commits` at 06:59 on 2026-08-14. The inode's **birth is 2026-08-12 18:11:26.771231033 UTC — 83 seconds after the workspace was created** — and the same inode has been rewritten in place ever since (birth 08-12, mtime today; no inode replacement, so `_reg_set` truncates rather than temp+rename). This workspace has been in `this.prStates` since minute two of its life. The conclusion is unaffected — `archiveMerged` reads `this.prStates.get(r.id)` at `watch.ts:1910` and skips at `:1912` on `pr?.phase !== 'merged'`, which `undefined` fails identically — but "It is also no longer invisible in one respect" implies a recent change and should be struck.
+
+**"No `.hold`" understates it: there are zero holds fleet-wide,** across all 24 rows. No program currently claims any workspace. Absence of a hold on swift-harbor is not discriminating, and every "held" branch in this build is currently unexercised in production.
+
+**`claude-dev0` is right, but the operator never sees that string.** `~/.ccrc/accounts.json` maps it to the label **`lab·dev0`**, which is what the pane prints. Use the label wherever the spec describes what an operator will recognise. Separately, **the id prefix no longer implies the wrapper**: `claude2-expoAI-assistant` and `claude2-OpenClawHetzner` run on `claude`; `claude-corp-custom-tools` runs on `claude-dev0`. Any code or prose inferring an account from a session id is wrong on 3 of 24 rows today.
+
+### Registry `.branch` is stale — but less dangerously than one lens reported
+
+Comparing each workspace row's `.branch` against `git -C <workdir> symbolic-ref --short HEAD`, **8 of 14 diverge**. That figure is correct, and it is the one the research reported. But **six of the eight are archived rows**, and only **two of the six live workspace rows** are stale:
+
+| ID | registry `.branch` | actual HEAD | state |
+|---|---|---|---|
+| `custom-tools-calm-river` | `ws/calm-river` | **`main`** | live |
+| `data-internal-quiet-summit` | `ws/review-data-room-sources-followup-spec` | `feat/cube-per-service-authorisation` | live |
+| `ccrc-pwa-calm-mesa` | `ws/fix-workspace-cleanup-issue` | `fix/roster-half-delivery` | archived |
+| `custom-tools-brisk-ridge` | `ws/remove-git-dependency-from-plugin` | `fix/dist-publisher-hardening` | archived |
+| `data-internal-plain-harbor` | `ws/plain-harbor` | `feat/claude-usage-dashboard-asks` | archived |
+| `data-internal-still-prairie` | `ws/still-prairie` | `ws/salary-per-unit` | archived |
+| `expoAI-assistant-swift-delta` | `ws/fix-guardrail-content-filtering-in` | `fix/kb-prefetch-degenerate-chunks` | archived |
+| `expoAI-assistant-warm-mesa` | `ws/evaluate-lightpanda-as-playwright` | **`main`** | archived |
+
+The done-fingerprint only ever runs against a live claimed workspace, so the live exposure is 2 rows, not 8 — and one of those two reads `main` on disk. That is still a real hazard for `handoffCommit === branchTip`, but it is a two-row hazard, not a third-of-the-fleet hazard, and the spec should say so at the honest size. Which source the fingerprint resolves the branch from I did not trace (see *Still ungrounded*).
+
+### Eight orphan worktrees, not seven
+
+Worktrees under `~/worktrees/` with no registry row pointing at them: `ccrc-pwa/robust-mail` (`fix/robust-mail-delivery`), `claude-skills/plugin-dist`, `custom-tools-alertwire`, `data-internal/bright-ledger`, `data-internal/dated-grain`, **`data-internal/host-alias`**, `data-internal/session-identity`, `expoAI-assistant/egress-cost`. The research missed `host-alias`. Note `custom-tools-alertwire` sits **flat** at `~/worktrees/`, not nested under a project dir — a detector globbing `~/worktrees/*/*/` misses it. There are no tmux sessions without a registry row; all 21 are `cc-<id>` for a registered id.
+
+### The naming-sweep timings are exact
+
+From `.git/logs/refs/heads/`, creation entry to `Branch: renamed`: `brisk-harbor` **82 s**, `calm-mesa` **31 s**, `quiet-mesa` **28 s**. C9's "28–82 s" is confirmed to the second. `calm-mesa` was renamed *twice* — to `ws/fix-workspace-cleanup-issue` on 08-10, and its worktree now sits on `fix/roster-half-delivery` — so a workspace's branch is not stable even after the sweep, which is the point §3.1 needs to make.
+
+### One more divergence the spec does not track
+
+`GET http://203.0.113.7:7788/health` reports `{"sha":"90523c4b…","ref":"main","builtAt":"2026-08-13T20:44:40Z"}`. `90523c4` is two commits behind `main` (`21fef2a`). So **all three artifacts are out of step with `main` in different directions**: the fleet ccd runs an unmerged branch's body, the fleet `build.json` says `c8fd87f` @ 2026-08-12, and the server says `90523c4` @ 2026-08-13. Wave 1's deploy is the first thing that will reconcile them, and the pre-flight census should record all three.
+
+---
+
+## What shipping ccd does to a live fleet
+
+### The install is a rename(2), and production proves it
+
+`install_atomic` (`deploy/deploy.sh:50-58`) is `scp` to `$dest.incoming-$TS`, `chmod`, then `mv -f` — same directory, so `rename(2)`: the directory entry is repointed and the old inode survives while any process holds it open.
+
+Measured right now: of 18 running `ccd supervise` processes, **15 hold `/home/you/.local/bin/ccd (deleted)` on fd 255** (inode `6943298`, 461245 bytes) and 3 hold the current inode `6924051` (462995 bytes). The deleted inode's sha256, read back out of `/proc/<pid>/fd/255`, is `44de6cd4…` — **byte-identical to `ccd/ccd` at repo `main`**. Fifteen live bash processes are executing an inode that no longer has a name, safely.
+
+The crosscheck sharpened this usefully: `/proc/<pid>/fdinfo/255` shows `pos` == file size for every supervisor sampled. Bash has already read ccd to EOF before the loop starts, because the dispatcher is a single `if…fi` compound near the end of the file that cannot be parsed without reading through EOF. So a running supervisor is not merely "not re-reading" — it has zero bytes left to read. That also relocates the failure mode `deploy.sh:37-49` records: the "correct result then exit 2 on a syntax error" class hits **short-lived verbs** (`ccd swap`, `ccd caps`, the agent's exec path), whose final read at top level would land in the tail of a larger in-place-overwritten file. `cmd_supervise` ends in `exit 1` and never issues that read.
+
+### Four re-exec triggers, and natural turnover is measured in days
+
+`cmd_supervise` (`ccd:7221-7227`) is `cmd_ensure "$id"` then a `while _alive` loop of `_sync_uuid` / `_auto_swap_check` / `_auto_compact_check` / `sleep 5`, then `exit 1`. Nothing re-reads the script, and the roster is `source`d once at top level. There is no mtime check and no self-re-exec anywhere in ccd; `daemon-reload` does not restart running units.
+
+It re-execs only on: (1) the deploy's own sweep (`deploy.sh:388-392`); (2) a swap of that session (`cmd_swap` stops at `ccd:7275`, starts at `:7310`); (3) session death (`exit 1` + `Restart=always`/`RestartSec=3`); (4) reboot — and only the 15 enabled units return from that.
+
+Measured turnover: the on-disk ccd landed 2026-08-14 07:02:45; **3 of 18** supervisors have picked it up in the ~12 h since (started 13:22:30, 18:40:49, 18:43:35 — all three via swaps). Eleven have been on the same inode since 2026-08-12 20:04:41. **Skipping the sweep leaves Wave 1's spawn invariant false on most of the fleet for days.**
+
+One genuinely mixed-version path: `_dispatch_swap` runs `systemd-run … exec '$HOME/.local/bin/ccd' swap` — a *path*, resolved fresh. An old supervisor's swap **decision** uses old in-memory logic while the swap it dispatches executes **new** code.
+
+### The deploy restarts supervisors, not sessions, and it verifies
+
+`SWEEP_CMD` (`deploy/deploy.sh:388-392`) runs `try-restart "claude-session@*"` then `verify-service.sh` per active unit, serially, aborting on the first failure. `verify-service.sh:60-61` sets `CCRC_VERIFY_SETTLE=3` and `CCRC_VERIFY_WINDOW=5`, so **8 s per unit × 18 = ~2.4 minutes** of verification on top of the restarts.
+
+Sessions survive: `KillMode=process` (`ccd/claude-session@.service:14`) plus `cmd_ensure`'s `_alive` early return (`ccd:7212-7219`) means the restarted supervisor attaches rather than respawns, and fires no SessionStart hooks. Evidence: tmux session `cc-claude-corp-orchard-api` was created 2026-08-09 19:28:04 and its supervisor's `ExecMainStartTimestamp` is 2026-08-12 20:04:41. Sharper still — the **tmux server itself** (pid 1569, started 2026-08-05 22:52:29, 12 s after boot) lives in `claude-session@claude-ccrc-pwa.service`'s cgroup and survived that unit's restart on 2026-08-14 13:22:30.
+
+That last fact is the least-defended thing on the box. All 21 sessions are children of pid 1569, and 1569 sits in one session unit's cgroup. `KillMode=process` is the only thing between `try-restart 'claude-session@*'` and the death of the whole fleet's substrate — and **nothing pins it**: `grep -rn KillMode` returns the unit file, a comment in `deploy/deploy.sh:375`, and `agent/test/deploy-verify.test.ts:393`, which only *mentions* it in a comment. Meanwhile `deploy.sh:313` copies that unit file and `:364` `daemon-reload`s in the same run that sweeps, so a bad edit goes live and is exercised against 18 units with no window to notice. By this repo's own doctrine — "a comment is a request; a red suite is a mechanism" — that is not a guard.
+
+### The provenance marker refuses nothing, and the real risk runs the other way
+
+`verifyMarker` (`shared/mark.mjs:132-140`) has exactly one caller in the tree: `server/test/ownership.test.ts:3`. `shared/mark.mjs:1-8` says so itself. `deploy.sh` never inspects it; `install_atomic` overwrites unconditionally. The *write* half `markGenerated` does have a deploy-path caller (`deploy/gen-accounts.mjs`), which is why `~/.ccrc/accounts.sh` verifies clean.
+
+The one enforced consequence is a repo gate: `ownership.test.ts:142-146` pins shebang-on-1 / marker-on-2, and `:148-152` asserts `verifyMarker(ccd) === 'ccrc-unmodified'` with the message "ccd/ccd was edited without re-stamping its provenance marker". **One byte changed in `ccd/ccd` reds this**, including a one-line comment edit — so all four waves hit it, and the re-stamp must ride in the same commit or every intermediate commit on the branch has a red suite.
+
+Verdicts measured today: `ccd/ccd` @ `main` → `ccrc-unmodified`; `~/.local/bin/ccd` → **`ccrc-edited`**. The cause is sharper than "someone forgot". `diff` against `git show fix/ccd-swap-jitter:ccd/ccd` yields exactly one changed line — the marker — and the live file is **byte-identical to `5bdc6dd:ccd/ccd`**, that branch's first commit. The branch has a second commit, `baf8e5b` (`chore(ccd): re-stamp the provenance marker after the jitter edit`), which is its tip and has never shipped. So the box does not need a hand-repaired marker; **it needs the branch tip.** And it did not come through `deploy.sh`: the newest `~/ccrc-backups` dir is `20260812-200414`, `build.json` is untouched at 2026-08-12T20:04, and every other shipped artifact still carries the Aug 12 20:04 mtime. Only `ccd` moved. Hand install.
+
+**The gating risk stands: `fix/ccd-swap-jitter` is unmerged** (`git merge-base --is-ancestor` → false; `grep -c SWAP_JITTER` on repo `main`'s ccd → **0**, on the live file → line 53 plus the jittered `_dispatch_swap` body). Deploying Wave 1 from any main-based ref installs a ccd with no jitter — silently reverting the fix for the 2026-08-13 nine-hour thundering-herd outage — and the sweep then **arms the reverted binary on all 18 supervisors at once**, converting a hazard currently dormant on 15 into one armed on 18.
+
+**One correction to the research, which the crosscheck caught and I re-verified:** the claim that the hotfix "has never once executed on this box" is now false. `grep -n dispatch ~/.cc-sessions/swap.log` returns two lines — `2026-08-14 18:40:25 dispatch claude-corp-custom-tools -> claude-corp (in 24s)` and `18:42:16 dispatch data-internal-quiet-summit -> claude-corp (in 79s)` — and both delays are observable downstream in the supervisor start times. The research's census ran seconds before the first of these appeared. The 2026-08-13 herd is still verbatim in the log (six `auto-home` lines across 21:00:03–21:00:05), and jitter is computed inside the **supervisor's own** process, so the 15 supervisors on the old inode still cannot jitter regardless of what is on disk.
+
+### Deploy procedure for Wave 1
+
+Wave 1 changes `_spawn`, `cmd_ensure`'s ordering, adds `spawnstate` and a `ws-add` lock. Those guarantees hold only in processes running the new ccd, and the unattended spawn path lives in an 18-process cohort that turns over ~3 per 12 hours on its own. **The sweep is mandatory.**
+
+**Pre-flight (blocking):**
+
+1. **Merge `fix/ccd-swap-jitter` at its tip `baf8e5b`** (not `5bdc6dd`), or rebase Wave 1 onto it. Gate: `git show <ref>:ccd/ccd | grep -c SWAP_JITTER` must be non-zero. Shipping without it is a silent revert of a live outage fix.
+2. Re-stamp `ccd/ccd` after Wave 1's edits (command in `server/test/ownership.test.ts:131-134`) and confirm the gate is green.
+3. Record the "before" census, read-only: `for p in $(pgrep -f "ccd supervise"); do stat -L -c %i /proc/$p/fd/255; done | sort | uniq -c`; `systemctl --user list-units 'claude-session@*' --all --plain --no-legend | wc -l`; `tmux list-sessions | wc -l`; `sha256sum ~/.local/bin/ccd`; `curl -s http://203.0.113.7:7788/health`.
+4. Pick a quiet moment. Confirm no swap is in flight (`tail ~/.cc-sessions/swap.log` — a swap inside its settle window is the H6 window below). Check the box: the deploy runs `npm ci && npm run build` here and then restarts 18 supervisors. Do not deploy onto a thrashing box.
+
+**Deploy (agent-first, human-run — every command mutates the live fleet):**
+
+5. `CCRC_SSH_KEY=$HOME/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7`. **The host argument is not optional** — `deploy.sh:8,21` defaults `$BOX` to the *server* box, so a bare `deploy.sh agent` ships fleet artifacts to the wrong machine.
+6. Let the sweep run to completion: ~2.4 min of serial verification plus the restarts. A half-swept fleet is the mixed-version state this whole section is about.
+
+**Post-deploy verification (read-only, and required — the built-in gate cannot see any of it):**
+
+7. Distinct inodes across `/proc/<pid>/fd/255` must be **1**, equal to `stat -c %i ~/.local/bin/ccd`. Any `(deleted)` entry is a supervisor the sweep missed.
+8. `sha256sum ~/.local/bin/ccd` must equal `git show <ref>:ccd/ccd | sha256sum`. `ccd version` reads `~/.ccrc/build.json` (written by `stamp_build` in the same run) and **never hashes ccd** — it proves a stamp landed, nothing more, which is exactly how today's divergence went unnoticed for 11 hours.
+9. `verifyMarker(~/.local/bin/ccd)` must be `ccrc-unmodified` — the first time it will be, and thereafter it is a cheap standing "is this box running unmerged ccd" probe.
+10. Unit and session counts must match the pre-flight census, and `tmux list-sessions` creation timestamps must be unchanged.
+11. Only then deploy the server lane (`bash deploy/deploy.sh`), whose `/health` sha gate is the documented final check.
+
+**Rollback:** `~/ccrc-backups/<TS>/ccd` is written before the install (`deploy.sh:230`); restoring it means temp+`mv`, never `cp` over the live path, followed by the same sweep — or the 18 supervisors keep running the version being rolled back.
+
+### Mixed-version hazards to state rather than discover
+
+- **H3 — `cmd_ensure` inside a live supervisor IS a spawn path.** `cmd_supervise` calls it, it calls `_spawn` then writes `started`, and `_spawn` has no lock. Until a supervisor restarts, its unattended respawn path keeps the **old** ordering, writes **no** `spawnstate`, and takes **no** lock. A new-ccd `ws-add` holding the new per-project lock and an old-ccd `cmd_ensure` are not mutually excluded; they are strangers.
+- **H4 — registry writes are truncate-and-write** (`_reg_set` is `printf '%s' … > "$REG/$1.$2"`). Any new field must be read absence-permitting, because a stale supervisor will never write it.
+- **H6 — the sweep's own window.** A supervisor SIGTERM'd mid-`_spawn` dies between `tmux new-session` and `_accept_first_run_prompts`/`_inject_spawn_effort`; the replacement's `cmd_ensure` sees `_alive` true and returns without finishing setup, leaving a session at an unaccepted trust prompt with no `/effort`. That is F8's residue class **reachable from the deploy itself**, and the deploy that ships Wave 1 is the last one that can still create it. The `_spawn_start`/`_spawn_settle` split should make the sweep safe at any moment, and the plan should assert that.
+- **H7 — a bounded window even on a clean deploy.** From `install_atomic ccd/ccd` to the sweep, the run does the agent build, `stamp_build`, two installers and the agent restart+verify. Minutes, during which fresh ccd invocations run the **new** ccd while all supervisors run the **old** one. Anything Wave 1 makes mutually exclusive across those callers is not mutually exclusive in that window.
+
+---
+
+## PWA surface
+
+Three of four waves reach the screen. Nothing below adds a colour token, and nothing adds an interactive element to a fleet row: the row's one interactive meta cell needed a 44×24 invisible overlay and 25 lines of CSS to be tappable (`pwa/src/fleet/fleet.css:999-1034`), and that is not worth a status chip. Every new control lives in a sheet.
+
+### Wave 1 — the §1.6 `spawnState` chip
+
+**There is no chip precedence mechanism.** `.sess-meta` (`fleet.css:935-942`) is `display: flex; align-items: center; font-size: var(--text-xs); color: var(--ink-secondary); overflow: clip; overflow-clip-margin: 12px` — **no `flex-wrap`, no `order`**. DOM order is visual order. Eight cells can render, in source order: `.sess-state`, `.sess-unmeasured`, `.sess-held`, `.sess-cleanup-fact` ×0–2, `.sess-tally`, `.sess-subagents` (the one `<button>`), `.sess-warn`, `.sess-acct`. Only `.sess-held` and `.sess-acct` are shrinkable; everything else is `flex: none`. So **adding a cell silently truncates the hold reason first** — and §2.4 lengthens that reason in the same build. The two changes compound and must be planned together.
+
+**Where it goes: position 2, immediately after `.sess-state`, `flex: none`.** It is a claim about whether this row is a working session at all, so it outranks "which fields we could not read" and "who claims it"; ahead of both shrinkable cells, it can never be the thing clipped away.
+
+**The condition must read `started`, not just `spawnState`.** One chip, never two, never on a dead row (the same exemption `critical` and `subagentList` already take):
+
+```
+spawnChip =
+  dead                                         ? null
+: spawnState !== null && spawnState !== 'ready' ? SPAWN_WORD[spawnState]
+: started === false                             ? 'unstarted'
+: null
+```
+
+The `started === false` arm is not optional. **`swift-harbor` — the live specimen this build exists for — has no `spawnstate` at all**, because the field did not exist when it was created. `spawnState: null` correctly renders nothing, and `started` is the only signal that shape ever emits. §1.6 opens by complaining that `SessionRecord.started` is measured every snapshot and thrown away; putting it on `FleetSession` with no reader repeats that defect one ring out.
+
+**This also fixes a false-positive that would otherwise light the whole fleet.** `spawnstate` is a new registry field, so every one of the 18 live sessions revives `spawnState: null` — and "not `ready`" is true of `null`. Writing the rule as "chip on anything not `ready`" ships a warning on every healthy row until each session is respawned. Treat `null` as *not recorded*, explicitly, and pin it with a fixture row that has no `spawnstate` file.
+
+Copy — one lowercase word in the `unreadable` register, sentence in `title`, `data-spawn="<state>"` for tests (the idiom `data-held`/`data-unmeasured` already use):
+
+| state | word | ink | `title` |
+|---|---|---|---|
+| `blocked` | `blocked` | `--status-dead-text` | a limit, spend or auth banner was up when this session started — swap accounts or open the terminal |
+| `login` | `login` | `--status-dead-text` | this session stopped at a login screen — open the terminal and sign in |
+| `unconfirmed` | `unconfirmed` | `--ink-tertiary` | ccrc could not confirm the prompt came up inside the spawn budget — a large resume can take longer; Restart session re-checks |
+| (`started === false`) | `unstarted` | `--status-dead-text` | no session was ever started in this workspace — Restart session adopts it |
+
+`unconfirmed` takes the quiet `--ink-tertiary` deliberately: a systemd restart of a large session legitimately settles `unconfirmed`, and painting a healthy session dead-red trains the operator to ignore the chip. Both tokens already exist; the contrast gate needs no new measurement.
+
+**Two mechanical obligations, and a pre-existing bug next door.** The new rule must join the selected-row achromatic override at `fleet.css:724-733` **and** the membership list at `pwa/test/fleet-css.test.ts:294-296`, whose comment says it exists "to catch a STRANDED cell when someone adds a new coloured element to `.sess-meta`". I opened both: the group lists `.sess-meta`, `.sess-state`, `.sess-tally`, `.sess-subagents`, `.sess-warn`, `.sess-acct`, `.sess-acct-away`, `.sess-ask`, `.sess-subagent-row` — and **not `.sess-held` or `.sess-unmeasured`**, which both set `--ink-tertiary`. On the desktop selected row that is tertiary ink on `--ink-primary`: roughly 2.7:1 dark / 2.9:1 light against a 4.5 floor, reachable exactly during a program. The gate cannot see it because both rules sit in the auditor's uncovered census. Fix them in the same wave, and give the new rule an `INHERITED_GROUNDS` entry so it is measured rather than joining that census.
+
+**No new control is needed.** `SessionActionsSheet`'s "Restart session" (`api.ensure`) *is* the adoption path §1.1 builds — `cmd_ensure` writes `started` between the two halves and therefore picks `resume`. Add a `.sess-sheet-note` per state in the idiom the `⚠` note already uses; for `blocked`/`login` point at "Swap account" and the terminal. Keep `SPAWN_WORD` private to `SessionLine.tsx` — a third presentational table over one field is the existing convention, and both existing tables carry a comment on why they are separate.
+
+**Also in Wave 1:** `NewSessionSheet` awaits `api.createSession` behind a "Starting…" button with no progress and no cancel. §1.1 raises `enable`/`start` to 300 s from a flat 90 s — today the sheet fails at 90 s; after this it can sit for five minutes. Minimum: after ~20 s the label should say what is happening. And `FleetScreen.tsx:118-125`'s comment ("ccd does not dedupe… guarded today only by React state that does not survive a reload") becomes false in Wave 1 and must be edited with it.
+
+### Wave 2 — the §2.3 `409 run-open` refusal
+
+**If nothing is designed, the operator sees the toast "Archiving failed — run-open".** I verified the whole path: `api.archive(id)` posts **no body** (`pwa/src/lib/api.ts:243`); `apiErrorText` (`:175-186`) is stderr-first, then `API_ERROR_TEXT`, then `err.message`; `API_ERROR_TEXT` has exactly one key, `unsupported` (`:165-167`); a 409 has no `stderr`, so it falls to `err.message`, which `ApiError`'s constructor sets from `body.error`. A bare slug in a toast is the precise defect `API_ERROR_TEXT`'s own docstring was written to close.
+
+**The route also does not know about coordination yet.** `server/src/server.ts:784-798` reads no body, holds no `deps.coord` reference, and runs outside `coordMutex`. Wave 2 must give it a coord read and decide whether a forced archive needs the mutex — a forced archive today can race an in-flight dispatch or close.
+
+**Use the `AbandonSheet` idiom, not a toast.** Three 409 idioms exist in the PWA; this is the second. `AbandonSheet.abandonErrorText` dispatches on status, reads a *second* body field so the sentence is a measurement rather than a guess, and **keeps the sheet open on refusal** — its own header records why `QuickConfirm` cannot host this: `QuickConfirm`'s confirm runs `onConfirm(); onClose();` unconditionally, so it closes on every tap, win or lose.
+
+So: refusal body `409 { error: 'run-open', runs: [{ id, program, wave, waveOf }] }`; a new `ArchiveConflictSheet` modelled line-for-line on `AbandonSheet`, wired into both doors (`PrSheet`'s "Archive now" and `SessionActionsSheet`'s "Archive workspace", replacing their `act()`/`archiveNow` toasts); title *This workspace is claimed*; body naming the run, degrading to *A run is still open on this workspace* if `runs` is absent — never invent an id. Buttons: **Archive anyway** · **Open the run** · **Cancel**. `api.archive` widens to `post(sid(id)+'/archive', opts?.force === true ? { force: true } : undefined)`, leaving the unforced call byte-identical on the wire. Any further refusal renders **inside** the sheet.
+
+Where `{force:true}` explicitly does not live, each with its reason: not a checkbox (a pre-commitment made before the operator has seen the refusal, and the refusal is the whole information); not a long-press (both `SessionActionsSheet` and `SessionLine` record removing exactly that gesture — "a hidden gesture is the wrong home for recovery"); not `QuickConfirm` (it closes on confirm). A second tap in a sheet that survives the refusal is the only shape that satisfies "the operator's own hands stay able to do it; they just have to mean it".
+
+**PrSheet's post-merge note now has three reasons, not two,** and the third needs **zero wire change**: the fleet store already carries the active run list, so filter it by `sessionId` with `isRunClosed` — gated on `runsFrameSeen`, degrading to today's two-reason sentence rather than asserting. **`released: boolean` needs a reader:** `AbandonSheet` currently discards the resolution, so an abandon that does *not* release because a sibling wave is open closes saying nothing. Toast on `released === false`.
+
+**§2.4's longer reason lands in five prose sites**, one of which is the most-clipped cell on the row: `SessionLine`'s `.sess-held`, `SessionActionsSheet`'s hold line and its `RELEASE_CONSEQUENCE`, and two long `PrSheet` sentences that interpolate it verbatim. Also stale: the hold composer's placeholder `program:name wave:2/4` now shows a format the server writes differently — decide whether a **hand** hold (which has no run) gets a `run:` suffix, and say so in the placeholder.
+
+### Wave 3 — naming, and the honest swap label
+
+**§3.1 changes what the whole fleet is called for the life of a claim, and the spec does not mention it.** `pwa/src/fleet/sessionLabel.ts:14-16` is `name ?? branch ?? workspace ?? id`, and its docstring justifies branch-over-slug precisely because "a workspace's branch gets renamed to something descriptive while `workspace` keeps the slug it was born with". Freeze the rename and every claimed worker row reads `ws/<random-slug>` for a whole wave instead of an ai-title. That is the widest-reaching visual change in the build, and the docstring becomes half-false in the same wave. Open question for the operator: should a claimed row fall back to its run's `program`/`wave` for a label? `RunSummary` carries both and the fleet store already has the runs.
+
+**§3.4's honest label has a blocker.** `SwapSheetProps.session` is `Pick<FleetSession, 'id' | 'wrapper' | 'project'>` — **`home` is not in the Pick** — so "moves back to {home} when {home} has room" requires widening it. (The file is `pwa/src/fleet/SwapSheet.tsx`, not `pwa/src/session/`.) Every caller already passes a full `FleetSession`, so the widening is free; it is just easy to miss.
+
+**§3.2's `branch-unmeasurable` needs no PWA copy, and this should be stated positively so nobody adds any.** No client surface reads `MailRejectCode`: `MailSummary` carries no `rejectCode`, `MailStrip` branches only on `state === 'rejected'`, and `ABANDON_COPY` is keyed on run-refusal codes, deliberately not on the mail set.
+
+### Wave 4 — the input box
+
+**§4.1's widening as written ships a button that sends truncated prompts.** This is the sharpest defect the research found and I verified both halves. The gate is `ChatList.tsx:331`:
+
+```
+send.code === 'enter-ignored' && send.draft !== undefined && send.draft.trim() !== ''
+```
+
+The attachment path's `verify-failed` (`server/src/inject/send.ts:512-521`) returns `...(cleared.state === 'residue' ? { draft: cleared.draft } : {})` — i.e. `draft` is **what a failed `clearBox` left behind**, a fragment of the message, not the message. `submitEnter` cannot catch it: its correspondence gate compares the box's marker row against `expect`, and the residue *is* what the box reads, so it matches, presses Enter, and submits a truncated prompt. Widening on `code` alone would put two conditions a caller handles oppositely onto one field — the overloaded-value-at-a-seam defect the ring rules name outright.
+
+**Fix: one additive field, absence-permits.** `submittable?: boolean`, set by the new ordinary-path `verify-failed` arm and by `enter-ignored`, **not** set by the attachment path (which keeps `draft` for display). Client: `PendingSend` gains it, `failureOf` reads it off the body beside `draft`, `retry`/`resolve` clear it alongside `code`/`draft`, and the gate becomes `(code === 'enter-ignored' || code === 'verify-failed') && send.submittable === true && …`. An older server never sends the flag, so no button — today's behaviour, the safe direction.
+
+Note that `pwa/test/send-it.test.tsx:34-40` is an intentional tripwire for exactly this: its comment says the cases "are kept because they are what fails if the `code` branch is ever widened", and `verify-failed` is in its list.
+
+**Copy.** `SEND_ERROR_TEXT['verify-failed']` is *"The session never showed the text — open the terminal to check."* That is false twice after this build: the text is in the box, and §4.4 makes the refusal fire more often. Replace with the register `enter-ignored` moved to — *"Typed it, but the session never echoed it back."* — and let the button's presence or absence carry the rest. Also worth stating rather than discovering: §4.4 raises the rate of red bubbles and `ChatList` has no grouping or cap, so each failed send is a permanent bubble until dismissed.
+
+**§4.2's blank-marker case does not reach `ChatList.tsx:331`.** The widened guard refuses as `draft-present`, and `PendingBubble` suppresses the error line and renders no rescue for `draft-present`. The consumers are the conflict sheet: `Composer.tsx:101` (`c.draft ?? ''`), `:300` (the well) and `:312` ("Append anyway", which builds `${conflict.draft}\n${conflict.text}`). The rule "never send `''`" stands; the cited surface does not. The fix needs three things together: the server sends every row it will replace, the well renders them, and `.draft-copy` says how many.
+
+**§4.5's MailStrip row: the pattern already exists twice.** I read the component — `.mail-strip-abandoned` (rendered on `state === 'rejected'`, text *"undeliverable — act on it directly"*) and `.mail-strip-artifacts` are both `flex-basis: 100%` spans inside the same `<li>`. The blocked line is a third of the same kind: one class, one existing token (`--status-attention-text`, already measured by the gate), **not** a new `<li>`. Place it between `.mail-strip-subject` and `.mail-strip-abandoned`, written as an explicit ternary against the rejected arm so two status lines can never render on one row.
+
+**Correction to the copy.** The spec's *"blocked — the recipient's input box has unsent text"* is written from the sender's viewpoint, but this strip renders mail addressed **to** the session whose screen you are on. The recipient *is* this session, and its Composer is twenty pixels below. Use:
+
+> `blocked · attempt 3 of 6 — this session's input box has unsent text`
+
+Naming the ceiling is what makes §4.5's title ("visible **before** it is lost") true. **The collapsed head must carry the flag too**, or §4.5 is invisible in its default state — `MailStrip` opens closed.
+
+**The widening is additive-safe by construction, and cheap.** I confirmed `MailSummary` (`shared/api.ts:2230-2253`) carries no `attempts`/`lastError` today. Nothing revives it on the client: the session socket casts, the store replaces `mail` wholesale, and `MailStrip` reads six fields by name. Server side it is three lines in one file (`MAIL_ROW_COLUMNS`, `MailRowDb`, `hydrateMail`) with **no migration** — both columns already exist on `mail_deliveries` — and `outstandingMailFor` needs no predicate change, since a `draft-present` back-off leaves the delivery `queued`. Type `lastError` as a raw `string | null` and branch on `=== 'draft-present'`; never a total `Record` lookup, which would be a fresh way for a new server value to break an old client. One consequence to state: `checkMail`'s dedupe is `JSON.stringify(outstanding)`, so carrying `attempts` makes the frame re-emit on every back-off tick — which is what makes the row live. Do not "optimise" it back.
+
+**The sender-side and park signals land in the feed** (`MailScreen`), not the strip, because the strip is recipient-side. Reuse an existing `NotifyEvent['kind']` — `KIND_WORD`/`KIND_GLYPH` are total maps, so a new kind means touching both plus `NOTIFY_KINDS`. Note `MailBadge` counts unseen feed events, so a blocked-mail record now bumps the fleet screen's badge — correct, and worth writing down.
+
+### Cross-cutting
+
+`reviveFleetSession` has **no `optBool`** — only `reqBool`, which on an absent `started` would reject the whole cached snapshot. Wave 1 needs a new helper and a documented degrade. And `stores/fleet.ts`'s `asFleetMsg` validates frames, not members: a live `fleet` frame is cast, never revived, so `SessionLine` must read `spawnState`/`started` defensively for a row from an older server — the same reason `unmeasuredFields` exists.
+
+---
+
+## Test blast radius, by wave
+
+Verdicts are read from assertions I opened, not from execution (read-only ground rules). Classes: **pin** = update it, the change is intended; **policy** = the test asserts the opposite in prose as well as code, so rewriting it is a decision; **regression** = if this reds, something is wrong; **compile** = invisible to `npm run test`; **vacuum** = stays green and stops testing the new thing.
+
+### Two gates every wave hits
+
+**Gate 1 — the provenance marker, on every commit that touches `ccd/ccd`.** `ownership.test.ts:148-152`. One byte reds it, including a comment edit. **All four waves** hit it, Wave 2 included (§2.3 edits `cmd_ws_release`'s comment). Put the re-stamp in the wave's definition of done, not a final cleanup task.
+
+**Gate 2 — `_spawn` is stubbed by name in EIGHT places, not four.** This is the largest mechanical hazard in the build, and the research undercounted it in the dangerous direction. `grep -rn "_spawn() *{" server/test agent/test pwa/test` returns:
+
+| File:line | Shape |
+|---|---|
+| `ccdWsHelpers.ts:50` | `WS_ADD` — `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };` (13 files hold the token) |
+| `ccd-hold.test.ts:67` | no-op |
+| `ccd-ws-reap.test.ts:13` | no-op |
+| `ccd-archive.test.ts:25` | **recording** — `echo "spawn $1 $2" >> "$HOME/ccd-calls"` |
+| `ccd-ws-audit.test.ts:12` | `ARCH`, no-op |
+| `ccd-ws-gc.test.ts:1087` | `ARCH`, no-op |
+| `ccd-ws-gc.test.ts:1274` | `ARCH`, no-op |
+| `ccd-prhistory.test.ts:60` | `ARCH_STUBS`, no-op |
+
+The first four cover the **ws-add** path; the last four shadow the **archive/restore** path and bite iff the split also touches `ccd:2353` (`cmd_ws_restore`), `:7208` (`cmd_start`) or `:7217` (`cmd_ensure`) — three of the four `_spawn` call sites. Once a call site names `_spawn_start`/`_spawn_settle`, its stub shadows a function nobody calls, the real `_spawn_settle` runs `_accept_first_run_prompts`, and `WS_ADD` stubs `tmux` but **not `sleep`** — so the loop's 450 iterations of `sleep 2` run against an empty pane. **The failure mode is a ~900 s hang, not an assertion.** `single-definition.test.ts` has no describe covering this stub, so nothing will tell you the copies exist.
+
+### Wave 1
+
+| Suite | What breaks | Class |
+|---|---|---|
+| `ccd-archive.test.ts:1149` | `expect(h.calls()).toContain('spawn demo-quiet-basin resume')` — the recording stub stops firing. Fix by recording the two new names. | regression |
+| `ccd-login-screen.test.ts:150-179` | **The ordering constraint the spec does not state.** The fixture is a live Bypass-Permissions gate whose pane *also* quotes `"Please run /login"` in restored scrollback, asserting `rc=0` and a `Down`-then-`Enter`. `_pane_hard_blocked` (`ccd:6952-6959`, regex on `:6958`) matches that string — pinned at `ccd-login-screen.test.ts:90-92`. If §1.2's new hard-block branch goes anywhere ahead of the gate branches, this pane returns 4, no keys are sent, and the session is parked one stray Enter from `1. No, exit` — verbatim the regression the test's comment at `:139-149` says the last ordering fix exists to prevent. `_pane_login_screen` is called LAST today, at `ccd:7126`. **The hard-block branch must go beside it.** | regression |
+| `lifecycle.test.ts:306-316` | Two whole-object `toEqual`s on `CcdResult`; a required `killed` reds both and nothing else (no test builds a `CcdResult` literal). | pin |
+| every `_spawn` stub consumer | Gate 2. | regression |
+
+*(Note on a citation the two lenses disagreed about: one read `:90-92` as a `ccd/ccd` anchor and corrected it to `ccd:6952`. Both are right about different files — `ccd-login-screen.test.ts:86-92` is where the two matches are pinned; `ccd:6952-6959` is the function. Cite both.)*
+
+**Green today, must not stay so (vacuum):** `remote-runner.test.ts`'s `it.each` timeout table is a subset check, so new `start`/`enable` rows red nothing — but the table's own comment states the discipline ("Without this row, deleting or changing the entry cannot fail a single test"). `ccd-workspaces.test.ts:117-119`'s `FIELDS` array wants `spawnstate`; it does **not** red without it, because `_reg_purge` filters on the single-dot suffix rather than a field allowlist (its comment says so: "future-proof against a field this file adds tomorrow"), so the terminal `${FIELDS.length + 2}:FREE` assertion still holds. Add the field so the fixture stays a full entry, and fix the stale anchor at `:225` (`ccd:497-503` → the guard is at `ccd:7142`) while you are there.
+
+**Compile lane.** `ExecResult` is at `server/src/exec.ts:3`; there is **no type called `ExecRes` anywhere** in the tree. The seam the spec omits is `asExecResult` (`server/src/remote/runner.ts:83-90`), which rebuilds the object field-by-field and therefore **discards** anything the agent sends beyond `code`/`stdout`/`stderr` — the L3 "an adapter may not narrow a distinction it received" rule failing in the exact place §1.4 depends on. A third narrowing follows at `lifecycle.ts:14`, where `ccd()` builds `CcdResult` from `ExecResult` and would drop the field one hop later. **Make `ExecResult.killed` optional** — 249 bare `{code, stdout, stderr}` literals across 32 test files make a required field a suite-wide break. Separately, `realRunner` (`exec.ts:6-12`) passes **no `timeout`**, so in `local` mode nothing ever kills ccd, `killed` is structurally always false, and §1.5's adoption path is unreachable there; every test of it must inject a runner.
+
+`FleetSession` gaining `started` + `spawnState` is a compile error until every path computes it (`reviveFleetSession` returns a literal). Runtime suites survive — the `Object.keys` assertions I checked use `arrayContaining` — but **~20 base `FleetSession` factories across 20 pwa test files spell every field**, not six. `pwa/test/seen.test.ts` uses an `as FleetSession` cast and is immune, which makes it the one place a missing field will not announce itself.
+
+**`SPAWN_STATES` gets no protection for free.** `single-definition.test.ts` is hand-written per concept — `ROOTS` at `:30-35`, a literal regex per describe, no generic scanner. Wave 1 must add a describe in the `Build 7 nouns` idiom, or the guard §1.6 leans on does not exist.
+
+### Wave 2
+
+| Suite | What breaks | Class |
+|---|---|---|
+| `run-routes.test.ts:190`, `:523`, `:733` | The **only three** assertions on `holdReason`'s output: exact ws-hold argv with `program:build4 wave:N/3`. | pin |
+| `ownership.test.ts:148` | Gate 1. | pin |
+
+Everything else that mentions `program:… wave:…` is a hand-written fixture — 63 occurrences across 20 files — and stays green. The agent whitelist grants `['ws-hold','--session']` as a **prefix**, and ccd's only constraint is non-whitespace-emptiness plus an arity check, so §2.4's longer format passes end to end unmodified.
+
+**`deps.coord` is optional, and that is load-bearing.** `hold-gate.test.ts` builds every watcher from `testDeps`, which supplies no `coord`; `watch.ts` already treats it as optional. §2.3's rung **must** be `this.deps.coord?.openRunsForSession(...)` — a non-optional call TypeErrors all fourteen `hold-gate` tests plus `pr-sweep`'s archive tests. Class: **regression if written wrong.** Pin the optional path with its own test so a future non-optional call reds one named test instead of fourteen unrelated ones.
+
+`coord-abandon.test.ts` and `run-routes.test.ts` assert `ws-release` *is* run on abandon/final-close; their fixtures carry one open run per session, so §2.2's sibling check finds nothing and they stay green. The two-open-run case has no test in either direction — and it is unreachable from live state (measured: **zero holds fleet-wide**, and all 7 merged workspaces already archived), so it needs a constructed fixture. Budget it explicitly; nobody will trip over this case by accident.
+
+**Prose pinned by a suite:** `readme-holds.test.ts` greps the `### Workspace holds & programs` section. §2.3 changes what the archive gate is, so that section will be rewritten — and the rewrite must keep `ws-rm`, `ws-reap`, `` `held === null` ``, `merged **and unheld**`, `bad-request`, `whitespace-only`. The failure message will point at the README, not at your diff.
+
+### Wave 3 — the two policy reversals
+
+| Suite | What breaks | Class |
+|---|---|---|
+| `name-sweep.test.ts:528-541` | `it('is indifferent to a hold, and touches no PR lineage')` — seeds a hold and asserts the rename still happens. Comment `:523-527` states the old ruling. | **policy** |
+| `ccd-ws-rename.test.ts:300-307` | `it('renames a HELD workspace, and leaves the hold and the prhistory alone')`, preceded by `:291-299`: *"A rename is not a destructive act and has no hold rung"*. §3.1 adds that rung. | **policy** |
+| `coord-fingerprint.test.ts:619-631` | Asserts `{ ok: true }` for exactly the record-present / `.branch`-absent case §3.2 makes refuse. | **policy** |
+| `coordinator-skill.test.ts:245-249` | Iterates `MAIL_REJECT_CODES` and requires each in `allSkillText`. | pin |
+| `mail-routes.test.ts:373-377` | Every declared code must appear as a quoted literal under `server/src/coord` — **RED on any commit that adds the code before the emitter lands.** Sequence them in one task. | pin / sequencing |
+
+`whitelist-subset.test.ts`, `agent/test/whitelist*.test.ts`, `caps.test.ts` and `verb-gate.test.ts` all stay green — §3.4 defers the `prefer` grant, no wave adds a verb, and `start`/`enable`/`ensure`/`ws-add` are already in `UNGATED_BY_DECISION`. `_auto_swap_check`'s hold rung (§3.3) is a **vacuum**: the only suite that drives that function tests the rescue arm, so the affinity-only defer reds nothing and ships untested unless a test is written. Put the rung on the affinity arm only — ahead of the rescue branch it would strand a wedged wave in production.
+
+### Wave 4
+
+| Suite | What breaks | Class |
+|---|---|---|
+| `pwa/test/send-it.test.tsx:34-40` | Iterates `['dialog-open','verify-failed','not-alive','draft-clear-failed']` asserting no `Send it` button. An intentional tripwire — its comment says so. Firing as designed. | pin |
+| `single-definition.test.ts:678-684` | The `ccrc-mail` fence holder list must equal exactly `['server/src/inject/send.ts','shared/api.ts']`. The comment at `:653-659` **invites** the very `inject/send.ts` edit Wave 4 makes; taking the invitation without shortening the array reds it as a mystery failure. | pin |
+| `ownership.test.ts:148` | Gate 1. | pin |
+
+**The NBSP question is already settled in-tree** — no keystroke needed. `send.test.ts:87`'s `LIVE_CU_FRAMES` is a verbatim `capture-pane -e` of a real three-line **typed** draft, and its first box row is `'\x1b[39m❯\xa0AAA first line'` — NBSP followed directly by text. The plain-space reading survives only in the test **double** at `:146` (`` `❯${lines[0] === '' ? NBSP : ' ' + lines[0]}` ``), which contradicts the capture sixty lines above it. I also measured the *empty* box on the live orphan: `❯` + U+00A0. So `grep -m1 "^❯ "` can never match a real typed draft's box row on any pane — it can only match a scrollback turn. The fix stays correct; the justification should stop hedging, the non-goal should be struck, and the double should be corrected in the same wave.
+
+**Vacuums to build, not reds to fix:** §4.2's widened guard (every `fakeTmux` fixture puts the marker last with nothing after it, so `continuationRows` returns `[]` and the widened guard changes no existing outcome — the blank-marker-with-content-below case has no fixture at all); §4.2's `clearBox` terminator (no fixture starts with a blank first row); §4.3's `composePrompt` strip (no test composes text with a leading newline — but say in the docstring that a strip on one side makes the `splitClipPaths` round-trip lossy); and the entire conflict sheet, which nothing in `pwa/test` renders.
+
+**Index-sensitive fixtures to re-derive** when §4.4 switches the ordinary echo path from `capture` to `captureAnsi` + `draftOf`: the poll-count comments and the `Array(14).fill(NONMATCH)` budget in `send.test.ts`. Class: regression if the count is wrong.
+
+### Suites listed as candidates that do NOT go red
+
+`node-floor.test.ts` (reads only `engines.node` and `node:sqlite`), `verb-gate.test.ts`, `whitelist-subset.test.ts`, `hold-gate.test.ts` (given the optional-coord call), `registry.test.ts` (its exact-equality assertions are on the result envelope, not the full field set), and `adopt.test.ts` — which is a **name collision only**: it tests `ccd/ccrc-adopt`, the roster bootstrapper, not §1.5's dispatch adoption. Do not schedule work against it.
+
+### The lane that is not a lane
+
+`server/test/typecheck-tests.test.ts` spawns `tsc` for **server/test and agent/test only**. `pwa/test` is typechecked by nothing in `cd pwa && npm run test` — only by `cd pwa && npm run build` (`tsc --noEmit && vite build`, with `"test"` in `pwa/tsconfig.json`'s `include`). **Every `FleetSession` and `MailSummary` widening therefore leaves the PWA suite green and breaks the PWA build.** Any wave touching `shared/api.ts`'s exported interfaces must run the pwa build, not just the pwa suite.
+
+---
+
+## Query load, measured
+
+**The index does not exist.** `runs` carries exactly two indexes (`server/src/coord/schema.ts:87-88`): `runs_by_state ON runs(state)` and `runs_by_program ON runs(program, wave)`. `sessionId` is a plain nullable column with no index, and `runs_by_state` cannot serve the query — `state NOT IN ('done','failed')` is negated set membership, not a seekable constraint. Measured against the exact v1 DDL rebuilt in an in-memory `node:sqlite` database: as shipped the plan is **`SCAN runs`**; with `CREATE INDEX runs_by_session ON runs(sessionId)` it becomes **`SEARCH runs USING INDEX runs_by_session (sessionId=?)`**. Dropping the optional `AND id != ?` arm does not change it, so the excludeRunId parameter is not what defeats the index.
+
+`openRunsForSession` does not exist yet anywhere in the tree — confirmed by grep across `server/`, `shared/` and `pwa/`.
+
+**The real number, and it is not 11.** Measured on the live registry: 24 records, 14 with a workspace, 8 archived, **0 holds**. `sweepNames` narrows before anything expensive — `watch.ts:1267` drops no-workspace/archived, `:1269` drops any row whose branch has moved off its born name. Six survive `:1267`; **three survive `:1269`**. So **N = 3** for `sweepNames`, every 10 s (`NAME_SWEEP_MS`). `archiveMerged` narrows harder: seven records carry `prphase=merged` and **all seven are already archived**, so all seven exit at `:1911` before `:1912`'s merged test. **N = 0**, every 30–120 s — and the spec puts the new rung *after* `archiveSafety`, by which point the code is already committed to a cross-box `ccd ws-archive` round trip, so the sqlite query is free by orders of magnitude.
+
+**The live table is five rows.** Read read-only over the tailnet with `curl -s 'http://203.0.113.7:7788/api/runs?closed=1'` (an ungated GET): ids 1–5, all `program:'build4'`, all closed, zero open. That is the project's complete program history. So the table-growth premise is real — `runs` has **no retention and no pruning**, and `store.ts:1306`'s `feed_events` prune is the only `DELETE` in the whole server — but the base is 5, and the extrapolated rate from one program over three days is order 10²/year, not 10⁴.
+
+**Verdict: no cache. Add the index.** Three reasons in ascending order of force.
+
+1. *A cache is slower than the alternative.* "One query returning all claimed sessionIds" is still a full scan, defeated by the same predicate. Benchmarked at 10 000 rows with a hypothetical N=11: unindexed 8.09 ms/tick, one cache query 1.16 ms, **indexed 0.27 ms** — the index beats the cache ~4×. At 100 000 rows: cache 11.67 ms vs indexed 3.28 ms, ~3.6×. (One research report labelled this "30×", which contradicts the numbers printed beside it; do not carry that figure into the plan.)
+2. *At the measured N the question is moot.* Three queries every ten seconds against five rows is below the noise floor of the timer.
+3. *Decisively: a snapshot at a destructive decision point is the shape this code already fixed once.* `watch.ts:1931-1935` reads verbatim — "The FRESH answer, at the decision point: verdict and hold from one registry read taken now, not from the snapshot above (findings 1/5)". A per-tick cache of open runs is a snapshot consulted at a decision point, for a decision whose whole purpose is to prevent a destructive act. The analogy is not literal — that comment governs *registry* freshness, not coord.db — but the staleness it introduces is the same class of window as F9.
+
+**The synchrony invariant is not threatened, and it is worth being precise about why.** `db.ts:229-241`'s docstring is about *atomicity through non-yielding*: "a whole transaction runs without yielding the event loop, so no route, sweep or socket can interleave inside one. `fn` must therefore never await." `openRunsForSession` is a single read **outside** any transaction. It does not lengthen a transaction and does not introduce an await inside one. What it introduces is a small event-loop stall N times per sweep — a latency question, unobservable at N=3. The invariant would only be threatened by the opposite move: wrapping the query async, which `CoordStore` explicitly rejects.
+
+**One migration hazard the research did not name, and it is now load-bearing.** `schema.ts:149-153` and `:199-201` both justify amending v1 in place on the grounds that "coord.db has shipped to no box yet". That premise **expired** — build4 drove five runs through the coordination routes and the server's copy is live. `db.ts` migrates with `for (let v = current; v < COORD_SCHEMA_VERSION; v++)`, so an edit to `MIGRATIONS[0]` would never run against a database already at `user_version 1`. **The index must land as `MIGRATIONS[1]`**, and those two comments must be corrected in the same task.
+
+**Also worth stating rather than implying:** where the twelfth condition goes in `sweepNames` changes the query count. Put it immediately after the born-name check at `watch.ts:1269`, written as `if (r.held !== null || coord.openRunsForSession(r.id).length > 0) continue;` — `held` is a free in-memory field that short-circuits the query away for every claimed workspace, and `:1269` is the cheapest large narrowing in the chain. Do not place it earlier.
+
+---
+
+## What the coordinator must be told
+
+The nine clauses pinned verbatim at `coordinator-skill.test.ts:68-78` say nothing about spawn state, hold release, branch naming, or mail delivery outcomes. **No wave in this build requires editing a pinned clause.** Every change below is additive text.
+
+Two other assertions in that suite do bind, and are easy to trip: the **destructive-verb census** (`ws-reap`/`ws-rm`/`ws-gc` may appear only as many times as clause 3 names them, counted across SKILL.md plus both references — so no new sentence may mention any of the three, not even to forbid them again), and the **route-completeness scan**, scoped to `server/src/coord/routes.ts`. Wave 2's `409` is on `POST /api/sessions/:id/archive` in `server.ts`, outside that scan — confirm when the route lands.
+
+**Wave 1 — a spawn may be adopted but unconfirmed.** The corpus has zero hits for `spawnState` and `started`, and `wave-lifecycle.md:50` presents `ambiguous-dispatch` as the only outcome of a spawn that did not cleanly succeed. §1.5 changes that: a killed `ws-add` that left exactly one unheld candidate is now adopted, dispatch answers `ok`, and the response carries `spawnState`. The coordinator must be told that an `ok` dispatch is no longer proof the pane is ready — what the values mean, whether the brief it just queued can be trusted to land, and when this is a report-to-operator rather than a proceed. Placement: `wave-lifecycle.md` §2's dispatch table and response shape. Nothing pinned.
+
+**Wave 2 — a final close may not release.** Two sentences become conditionally false, and I read both verbatim. `SKILL.md:216-218`: *"`POST /api/runs/:id/close` with `final:true` releases the hold and lets the ordinary sweep archive the workspace."* `wave-lifecycle.md:337-339`: closing the last wave's run *"closes this run `done`, and **releases** the hold (`ws-release`) instead of re-holding for a next wave."* Under §2.2's final arm, `final:true` releases *only* when no sibling open run names the session — and the protocol at `SKILL.md:207-215` deliberately manufactures exactly that sibling by requiring wave N+1's run be opened before wave N's is closed. Both must read the new `released: boolean` and say what `released:false` means (the program is not done; another run still owns the workspace). Neither string is asserted by any suite — verified by grep across `server/test` and `agent/test`.
+
+**Wave 3 — one table row, and a correction to the spec's premise.** `branch-unmeasurable` joins `MAIL_REJECT_CODES` and widens two `Extract<>` unions, which reds `coordinator-skill.test.ts:245-249`. **The fix is one row in `wave-lifecycle.md`'s refusal table, not an edit to SKILL.md's pinned refusal sentence.** The precedent is exact: `tip-unmeasurable` and `pr-unmeasurable` are members of the same list, are real refusals, and appear only in `wave-lifecycle.md` — never in SKILL.md's harvested sentence. That leaves both the sentence and the `codes.length >= 14` floor untouched.
+
+The premise correction: §3.1 says the freeze makes `wave-lifecycle.md:99-111`'s claim "become true". **That file is not wrong today.** It says `ws-add` creates the workspace on `ws/<slug>` (true) and that the done-fingerprint re-measures `record.branch`, "the live registry's own field" (also true — that field follows a rename). Measured live, 8 of 14 workspaces have branches off their born name and the instruction "commit on this workspace's own branch" stays correct under all of them. The freeze is not repairing a falsehood; it is adding a fact the file has never stated. Say it that way, or a reviewer will look for a lie that is not there.
+
+**Also settle the code's name before minting it.** §3.2's arm is reachable — `IdentityField` is `'uuid'|'wrapper'|'workdir'` only, so `measuredIdentity` stays non-null on a null branch — but the null it refuses on is itself **overloaded**: `branch` is read by plain `field(...)`, which returns null for "absent" and "listed but unreadable" alike, unlike the identity triple, which distinguishes them with `names.includes(...)`. A code named `-unmeasurable` asserts a distinction the record provably cannot make, against this tree's own "no overloaded null at a seam" rule. Either give `branch` the `names.includes` treatment, or choose a name that does not overclaim.
+
+**Wave 4 — the largest gap, and the one with no existing text to amend.** The spec says the corpus has zero hits for `undeliverable|rejected|blocked`. Measured: `undeliverable` **3**, `rejected` **4**, `blocked` **0** — and `MailStrip` already renders *"undeliverable — act on it directly"* for `state === 'rejected'`. Two of the three evidence sentences are wrong, and one would send an implementer to write skill text that already exists.
+
+The real gap is narrower and sharper: every existing passage is **recipient-side** (what becomes of mail addressed to *you*), and there is no sender-side procedure at all. That composes badly with clause 7. The wave brief is queued as a delivery (`rundefs.ts` → `queueDelivery`, `dispatch.ts` → `queueSystemMail`), so a recipient with a dirty input box blocks it with `draft-present` while dispatch still answers `ok` with `briefQueued` — and clause 7 then instructs the coordinator to end its turn and wait for mail that a never-delivered brief will never produce. `dispatch.ts:333-339` spells the mechanism out in its own words: on `enter-ignored` the literal `/clear` is left in the box, the lane hits `draft-present` "immediately and keep hitting it — parking the brief `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS`, with nothing surfacing WHY."
+
+Wave 4 must give the coordinator: `MailSummary.attempts`/`lastError` on `GET /api/mail`, what `lastError === 'draft-present'` means, what the first back-off and the park notifications each oblige it to do, and the explicit statement that a `briefQueued` dispatch is not a delivered brief.
+
+**A second silent path to the same wait-forever, which nothing has named:** `briefQueued = !resumed || clearedAt !== null`, so on a **resumed** wave with a refused `/clear` the brief is never queued at all. `briefQueued` appears exactly once in the corpus (the response-shape line) with no prose telling a coordinator what a `false` means, and `clearError` — a real field of that response — has **zero** corpus hits and is missing from the documented shape entirely. The skill's own response shape is already stale before Wave 4 touches it.
+
+---
+
+## Residual risk and what this build does not close
+
+**Ruling 1's own text is not implemented by any wave.** "Detect on the next verb, write `started`, enable the unit; the workspace becomes ordinary." But `cmd_start` (`ccd:7202`) and `cmd_ensure` (`ccd:7215`) both return early on `_alive` — and F8's residue *has* a live pane, which is C1's whole point. So no ccd verb in Wave 1 ever reaches `_spawn_start` for an existing orphan. Wave 1 delivers prevention (§1.1), adoption of the workspace *this dispatch* created (§1.5), and a chip (§1.6). **`swift-harbor`-class residue stays unrepaired**, which contradicts the ruling the build says it is built on. If that is acceptable — and with N=1 it may be — say so; do not leave the ruling standing as though the build satisfies it.
+
+**`cmd_enable` has no seam to reorder into.** §1.1 says it moves its `systemctl --user enable --now` from after `cmd_start` to before the settle. But `cmd_enable` calls `cmd_start` as a whole verb and the enable sits outside `cmd_start`'s body entirely. Reordering requires restructuring — a flag, an env, or a third function — which the spec does not design.
+
+**`ws-restore` is a fifth F8-class path with a tighter budget.** `cmd_ws_restore` (`ccd:2353`) is the identical `_spawn` → `_reg_set started 1` → `_ws_supervise` ordering, against an agent budget of **60 s** — five times tighter than the `ws-add` budget whose expiry caused F8. §1.1 converts restore to the split form but the timeout paragraph adds rows only for `start` and `enable`.
+
+**`killed: false` is not "a clean refusal".** `runner.ts:110-112` returns `{code:1, stderr: e.message}` for any transport failure — dropped socket, client-side wait expiry — with no `killed`, and `runner.ts:7-9` documents that collapse. Three facts sit on `code:1`, not two: ccd refused, we killed ccd, and *we do not know because the link failed*. Today's outcome is the safe one, but the prose is the kind a later change trusts. Pin that a `killed:false` from the catch path does not adopt.
+
+**§1.2's two new verdicts collide with the existing one.** `_pane_hard_blocked`'s regex (`ccd:6958`) and `_pane_login_screen`'s both carry `Invalid API key` and `Please run /login`, and `_spawn` keys the operator warning and the effort injection off `prompt_rc == 2`. Which verdict an auth-loss pane should carry is a policy call, and it must be decided and pinned rather than discovered.
+
+**The fourth fleet act is ungated.** `close.ts:210-214` — `state === 'failed' && archive` → `CCD_ARGV.wsArchive`, which its own comment at `:206-209` calls "the ONE explicit `wsArchive` call in the whole coordination lane" — is untouched by Wave 2, takes neither the release nor the re-hold branch, and `ws-archive` has no hold rung in ccd. Closing run A as failed-with-archive while sibling run B is open archives B's workspace **and leaves B's `.hold` file standing over it**. That is F9's harm through a different door, in the exact function §2.2 rewrites.
+
+**Wave 3 depends on Wave 2 and the document never says so.** `openRunsForSession` is introduced in §2.1; §3.1's twelfth condition and §3.2 both consume it. The stated order happens to satisfy the dependency, but a plan that parallelises waves — or lands Wave 3 first because it is "just ccd" — breaks. And Open decision 6's merge gate is written for Wave 1 only: §3.3 edits `_auto_swap_check`, the *caller* of the machinery `fix/ccd-swap-jitter` changed, running on every 5 s supervise tick across 18 processes. **The merge gate belongs to Wave 3 at least as much as Wave 1.**
+
+**Wave 1 is a three-lane deploy described as two.** §1.4 is `agent/src/server.ts` — its own package, its own systemd unit, its own `deploy.sh agent` invocation, and a restart that drops the single authenticated WebSocket the whole PWA runs over. `shared/` compiles into both lanes. The real order is ccd → agent → server, with a link outage in the middle.
+
+**F7 is open, is in Wave 4's surface, and §4.4 makes it worse.** `build4.md` records that echo-verify is flaky on a large multi-line paste and is "NOT addressed by submit-proof; a distinct robustness gap". §4.4 replaces the ordinary path's whole-pane check with the strictly narrower box-scoped one — correct in principle, and it will refuse **more often** on exactly the payload shape already documented as flaky. Each refusal leaves the mangled partial in the box, which `sweepMail` then bounces off as `draft-present` — F14's compounding, which the operator has already had to clear by hand twice. §4.5 makes it visible; nothing in this build reduces it.
+
+**§4.1 widens `ChatList`'s gate against that file's own stated reason.** `ChatList.tsx:318-330` explains why the gate is `enter-ignored`-only: "a button that submits an unproven box is the hazard this whole route is gated against — so the operator gets the sentence and the terminal, not a tap that might send someone else's text." `verify-failed` is by construction the case where the box content was never proven. The `submittable` discriminator answers it, but the spec should engage the argument it is overturning rather than step around it.
+
+**`CLAUDE.md`'s three "Open on `main`" items are untouched** though Waves 2–4 sit on all three: `MailDeliveryState` terminality is incomplete (Wave 4 adds a writer to the mail lane), `FleetIO.readFile`'s `// null = missing` docstring is false (Waves 1–3 read the registry ladder constantly), and "account = wrapper" still has no single type (§3.3 and §3.4 are entirely about accounts).
+
+**Accepted and stated elsewhere:** the thundering-herd surface, the `prefer` grant, the cross-box input-box serialiser, the dormant `pool` registry field, and deleting `swift-harbor`.
+
+---
+
+## Grounding audit trail — corrections found, and where they landed
+
+| Where | What it says now | What it should say |
+|---|---|---|
+| Live specimen | "`sweepPr` stamped `.prphase=no-commits` onto it at 06:59 on 2026-08-14… no longer invisible in one respect" | The `.prphase` inode's **birth is 2026-08-12 18:11:26 UTC — 83 s after workspace creation**, rewritten in place every sweep. It has been in `prStates` since minute two. Strike the "no longer" framing; the conclusion is unaffected. |
+| Live specimen | "ten registry rows" as a static signature | Ten, but only **eight** are frozen at spawn. `.prphase`/`.prcheckedat` mutate every few minutes, so "ten frozen rows" is not a detection signature. |
+| Live specimen | "a live tmux pane at an idle prompt" | Never advanced past first paint: the v2.1.228 splash and the MCP warning are still on screen after two days, and the statusline is missing `ctx`, diff counts and `limits`. Those absences detect it in one `capture-pane`. |
+| Live specimen | "on the `claude-dev0` lane" | Correct, but the operator sees the label **`lab·dev0`**. Also: the id prefix no longer implies the wrapper (3 of 24 rows). |
+| Live specimen | "no `.hold`" | **Zero holds fleet-wide** across all 24 rows. Absence of a hold on swift-harbor is not discriminating. |
+| C1 | implies "fully-registered workspace with no session" does not exist | It exists today from another cause — 3 rows are `started=1`, tmux dead, no unit. Adopt-and-enable is the **wrong** repair for them. |
+| §1.4 | "`ExecRes` gains `killed?`/`signal?`" | **No type called `ExecRes` exists.** The sites are `ExecResult` (`server/src/exec.ts:3`), `asExecResult` (`server/src/remote/runner.ts:83-90`, which discards unknown fields), and `ccd()` (`lifecycle.ts:14`). Make `ExecResult.killed` **optional**; `CcdResult.killed` may be required. Also note `realRunner` passes no `timeout`, so `killed` is structurally false in `local` mode. |
+| §1.5 | "`killed:false` (a clean refusal…)" | `runner.ts:110-112` also produces `killed:false` for a transport failure, and `runner.ts:7-9` documents that collapse. Three meanings on `code:1`, not two. |
+| §1.2 | "Both take the `fromswap=0` full-resume branch… 240 s for the agent-reachable path, the existing ~900 s for `fromswap=0` resumes" | **Measured false.** `cmd_swap` writes `lastswap` at `ccd:7308`, two lines before the restart at `:7310`, and `_spawn` sets `fromswap=1` within 300 s of `lastswap` (`ccd:7146-7148`). Swap takes the **fast** branch; a fresh `ws-add` is `fromswap=0`. Implemented literally, `ws-add` gets ~900 s and §1.2's bound evaporates. Give `_spawn_settle` its own bound parameter (default 240 s) and have `cmd_supervise` raise it. |
+| §1.3 | lock "spans slug selection through the last registry write (`:1242`)" | The last registry writes are `branch` at `ccd:1243` and `_ws_seed_home` at `:1244` — the two fields a racing second `ws-add` would most visibly corrupt. |
+| §1.6 | registry field needs `_reg_purge`'s list extended | `_reg_purge` filters on the single-dot **suffix**, not a field allowlist, and says so ("future-proof against a field this file adds tomorrow"). `spawnstate` is purged automatically; the FIELDS fixture is a vacuum to close, not a red to fix. |
+| §1.6 | chip on "anything not `ready`" | `spawnState: null` (every pre-existing row) satisfies that. Treat `null` as *not recorded* and add the `started === false → unstarted` arm, or the chip lights all 18 live sessions. |
+| §2.3 | reads as though the archive route knows about coordination | `server/src/server.ts:784-798` reads no body, holds no `deps.coord`, and runs outside `coordMutex`. Wave 2 must add the coord read and decide the mutex question. And the rung in `archiveMerged` **must** be `this.deps.coord?.` — `testDeps` supplies no `coord`. |
+| Wave 2 header / Deployment | "server-side only — no ccd change" / "Wave 2 is server-only" | §2.3 already concedes the `cmd_ws_release` comment edit. Wave 2 is **agent-first** and hits the provenance gate like every other wave. Reconcile all three statements. |
+| §2.1 | "N synchronous queries per tick… at ~11 rows almost certainly negligible" | N is not the record count: **3** for `sweepNames`, **0** for `archiveMerged`, measured. The live `runs` table is **5 rows**. But the query is a `SCAN` today, and the index must land as `MIGRATIONS[1]` — `schema.ts:149-153`'s "shipped to no box yet" premise has expired. |
+| §3.1 | `wave-lifecycle.md:99-111`'s claim "**becomes true**" | That file is not wrong today — it already says the fingerprint re-measures `record.branch`, "the live registry's own field", which follows a rename. The freeze adds a fact the file has never stated; it repairs nothing. |
+| §3.2 | "record present, `branch` null → refuse `branch-unmeasurable`" | The arm is reachable, but that null is itself overloaded — `field(...)` cannot distinguish absent from listed-but-unreadable. Either give `branch` the `names.includes` treatment or rename the code. |
+| §3.4 | the honest swap label | `SwapSheetProps.session` is `Pick<FleetSession,'id'|'wrapper'|'project'>` — **`home` is not in the Pick**. The file is `pwa/src/fleet/SwapSheet.tsx`. |
+| §4.1 | "`ChatList`'s condition widens to `enter-ignored \| verify-failed`" | Widening on `code` alone ships a button that submits **truncated** prompts: the attachment path's `verify-failed` carries `draft` = `clearBox` residue (`send.ts:512-521`), and `submitEnter`'s gate matches the residue and presses Enter. Add an additive `submittable?: boolean`; absence = no button. |
+| §4.2 | blank-marker `''` "would silently disarm `ChatList.tsx:331`" | It never reaches that gate — the widened guard refuses as `draft-present`, for which `PendingBubble` renders no rescue. The consumers are the conflict sheet (`Composer.tsx:101`, `:300`, `:312`). Rule stands; surface does not. |
+| §4.5 | "The coordinator skill has zero hits for `undeliverable\|rejected\|blocked`" | `undeliverable` **3**, `rejected` **4**, `blocked` **0** — and `MailStrip` already renders "undeliverable — act on it directly". The real gap is that all existing text is **recipient**-side; there is no sender-side procedure. |
+| §4.5 | MailStrip copy "the recipient's input box" | The strip renders mail addressed **to** this session. Use `blocked · attempt N of 6 — this session's input box has unsent text`, and add the flag to the collapsed head. |
+| §4.5 | `MailSummary` widening as a change of unstated cost | Three lines in one server file, **no migration** (both columns already exist on `mail_deliveries`), no `outstandingMailFor` predicate change, and **no client revivers exist** — the widening is additive-safe by construction. |
+| §4.6 / non-goals | typed-draft NBSP "unsettled… needs a keystroke"; "Settling the NBSP question by experiment" listed as a non-goal | Settled in-tree, read-only: `send.test.ts:87`'s verbatim live capture of a **typed** draft is `'\x1b[39m❯\xa0AAA first line'`. Only the test double at `:146` says otherwise. Strike the non-goal; correct the double. |
+| C8 | `send.ts:489-497` "states the clearing rule as universal" | That comment is inside the `attachments.length > 0` branch and says "a bare **clip path**" — correctly scoped. The real gap is the opposite: §4.1's "a failed send leaves the text in the box" contradicts the attachment path's blind clear floor, and the spec never says whether that path changes. |
+| C9 | `wave-lifecycle.md:99-111` listed as a false shipped claim | Overstated — the rename breaks only the `run.branch` fallback, which is §3.2's own finding. Downgrade from "false" to "silent". |
+| Documentation corrections | C1/C2's false sentences located in `runner.ts:54-56` and `build4.md` | They also live verbatim in a **test**: `remote-runner.test.ts:88-96`. Wave 1 edits that file anyway for the timeout rows. |
+| Assumptions preamble | "Q1 (which lanes bill credits, **still unanswered**)" | Four other places state it was answered on 2026-08-14. Leftover from the pre-cut draft. |
+| Goal / Wave 3 "Closes:" | names four failure modes; Wave 3 cites F10b, F11b, F11c | The waves claim ~ten between them, and Wave 2's "**most of** the sweep-blindness window" is the only partial closure in the document — what remains outside it is never described. F10b/F11b/F11c are defined nowhere; `build4.md` names F6–F14 with no such entries. |
+| Testing | eight candidate suites | Four of them red for no wave (`node-floor`, `verb-gate`, `whitelist-subset`, `hold-gate`). Missing and red: `ccd-archive:1149`, `ccd-login-screen:150`, `lifecycle:306-316`, `name-sweep:528`, `ccd-ws-rename:300`, `coord-fingerprint:619`, `run-routes:190/523/733`, `send-it.test.tsx:34`, `mail-routes:373`, and `ownership:148` four times over. Add `mail-routes.test.ts` to the list — it pins `MAIL_REJECT_CODES` in both directions. |
+| Minor drift | — | `archiveMerged` is `watch.ts:1900-1969`, not `:1900-1963`. `deps.coord` appears on eight lines of `watch.ts`, not four. `single-definition.test.ts`'s `Build 7 nouns` describe contains a **nested** coord-ring scanner that fires if any wave adds a coord file holding the DB handle. |
+
+---
+
+## Still ungrounded
+
+Everything below could not be settled read-only from this box. Each entry names the exact command and what it blocks.
+
+**1. Whether the ccd suite HANGS (rather than fails) once `_spawn` splits.** I read the eight stubs, the 450-iteration loop and the `tmux` stub, but did not execute. *Settle:* `cd server && timeout 120 ./node_modules/.bin/vitest run test/ccd-workspaces.test.ts` on a branch where `cmd_ws_add` calls `_spawn_start`. **Blocks:** knowing whether Wave 1's first task fails loudly or silently eats a CI run.
+
+**2. Whether §1.2's wall-clock settle bound is testable under the existing harness at all.** `SPAWN_STUB` in `ccd-login-screen.test.ts` defines `sleep() { :; }`, so a bound read from `date +%s` never advances and can never fire. A `SECONDS`-based bound or an injectable clock may be required. *Settle:* write the pin first (TDD red) and run `cd server && ./node_modules/.bin/vitest run test/ccd-login-screen.test.ts -t 'settle'`. **Blocks:** whether §1.2 ships with a mechanism or a comment.
+
+**3. `_accept_first_run_prompts`'s full if/elif chain.** I read the tail (`ccd:7126-7134`) and the two classifiers, but not every branch between `:7075` and `:7126`. *Settle:* `sed -n '7075,7135p' /srv/projects/ccrc-pwa/ccd/ccd`. **Blocks:** confirming that "put the hard-block branch last" has no other collision.
+
+**4. Which source the done-fingerprint resolves the workspace branch from.** This decides whether the two stale live `.branch` rows are a live defect or cosmetic. *Settle:* `grep -rn '\.branch\|branchTip\|handoffCommit' server/src/coord/ server/src/watch.ts`. **Blocks:** sizing the branch-staleness risk, and whether §3.1's freeze needs a reconciliation rung.
+
+**5. Whether `mail-sweep.test.ts` asserts the ABSENCE of push/notify calls on a `draft-present` back-off.** §4.5 adds a notification on the first back-off, which would red such an assertion. *Settle:* `grep -n "notify\|push\|pushOne\|toHaveBeenCalledTimes" server/test/mail-sweep.test.ts`. **Blocks:** knowing whether §4.5's notification is additive or a pin update.
+
+**6. The exact capture-count change when §4.4 switches the ordinary echo read.** Several `send.test.ts` fixtures are index-sensitive (the twelve-pane script, the `Array(14).fill(NONMATCH)` budget). *Settle:* make the change and run `cd server && ./node_modules/.bin/vitest run test/send.test.ts`. **Blocks:** a regression that looks like a flake.
+
+**7. Whether any pwa test asserts an EXACT `FleetSession` key set.** I checked three `Object.keys` sites; there are 28 `FleetSession` annotations across pwa/test. *Settle:* `grep -rn "Object.keys\|toStrictEqual" pwa/test/*.ts pwa/test/*.tsx | grep -i sess`. **Blocks:** the true size of Wave 1's compile break.
+
+**8. Whether any coord fixture creates TWO open runs naming one session.** That would flip §2.2's sibling check and turn a green `ws-release` assertion red. *Settle:* `grep -n "POST /api/runs\|openRun\|app.inject" server/test/coord-abandon.test.ts`. **Blocks:** whether §2.2 is a pure addition or a pin update.
+
+**9. Whether a new `.sess-spawn` rule lands as a contrast FAIL or merely in the uncovered census.** Depends on the exact selector. *Settle, after the rule is written:* `cd pwa && node design/contrast-check.mjs --uncovered | grep sess-spawn`. **Blocks:** whether Wave 1's CSS task needs an `INHERITED_GROUNDS` entry to go green or only to be honest.
+
+**10. The exact contrast figures for `.sess-held`/`.sess-unmeasured` on the selected slab.** My ~2.7:1 / ~2.9:1 are computed by hand from `tokens.css` with the WCAG formula, **not** emitted by the auditor — both rules are in its uncovered census. *Settle:* add an `INHERITED_GROUNDS` entry for `fleet.css .sess-line--active .sess-held` and re-run `node design/contrast-check.mjs`. **Blocks:** whether the adjacent fix is a measured bug or a suspected one.
+
+**11. Whether `try-restart` really leaves tmux sessions alive.** Inferred from `KillMode=process` plus strong historical evidence (a session created 2026-08-09 whose supervisor restarted 2026-08-12; the tmux server itself surviving its own unit's restart today), **not** from an observed restart. *Settle (MUTATING, human-only, one unit):* `systemctl --user restart claude-session@data-internal-still-prairie.service && sleep 10 && tmux has-session -t cc-data-internal-still-prairie && echo SURVIVED`. **Blocks:** signing off the deploy procedure's step 6 as safe rather than believed-safe.
+
+**12. Whether the jittered `_dispatch_swap` behaves correctly under a real herd.** It has now fired twice (18:40:25, 18:42:16), so the code path executes — but never against a simultaneous multi-session rollover. *Settle, in a FIXTURE HOME only, never the live `$HOME`:* drive `_dispatch_swap` under `makeCcdHarness` with `SWAP_JITTER=5` and several ids. **Blocks:** Open decision 5's confidence that the herd surface is closed.
+
+**13. Whether a supervisor SIGTERM'd mid-`_spawn` really leaves a half-initialised session (H6).** Reasoned from `ccd:7153-7173` plus `cmd_ensure`'s `_alive` shortcut, not reproduced. *Settle, in a fixture HOME:* start `ccd supervise <id>` against a fixture registry, SIGTERM during `_accept_first_run_prompts`, restart, and assert the trust prompt is still unaccepted and `/effort` was never injected. **Blocks:** whether the `_spawn_start`/`_spawn_settle` split can be asserted to make the sweep safe at any moment.
+
+**14. Why the three dead-but-registered rows lost their panes.** No unit exists for any of them, so there is no journal. *Settle:* `journalctl --user -S -7d | grep -E 'brisk-harbor|clear-cove|swift-delta'` and `ls -la --time-style=full-iso ~/.cc-sessions/ccrc-pwa-brisk-harbor.*`. **Blocks:** designing the right repair for the fourth divergence class.
+
+**15. Why 3 units are active-but-not-enabled and 3 tmux sessions have no unit.** Deliberate (a manual `ccd start`, which does not supervise) or drift — unknown. *Settle:* `journalctl --user -u 'claude-session@*' --since '2026-08-05' | grep -i enable`. **Blocks:** whether the boot-persistence repair is a bug fix or a policy change.
+
+**16. Whether the splash's "· Claude API" means credit-billed.** `CLAUDE_CODE_OAUTH_TOKEN` is present in the orphan's environ (names only, no values read) and a sibling on the same wrapper shows subscription limit bars — which points at OAuth and makes "Claude API" a render artifact — but that is inference. *Settle:* `tmux capture-pane -t cc-claude-synapsium-platform -p -S - | grep -n 'with .* effort ·'` (a `-S -8000` attempt found the splash already scrolled out of retained history on all three `claude-dev0` siblings). **Blocks:** finalising ruling 4 and the F10 scope cut.
+
+**17. The `ls` / `ws-audit` verb outputs the live-specimen section quotes.** Not re-verified — I did not first confirm those verbs are write-free, and `ws-gc`/`ensure` are forbidden outright. *Settle:* read `cmd_ls` and `cmd_ws_audit` for any `_reg_set` or redirect, then run them. **Blocks:** nothing structural; the quotes are illustrative.
+
+**18. Which process rewrites `.prphase`/`.prcheckedat`.** I watched the mtime advance three times but did not trace the writer. *Settle:* `journalctl --user -u ccrc-agent -S -10m | grep -i prphase`, or `fuser -v ~/.cc-sessions/ccrc-pwa-swift-harbor.prphase` during a sweep. **Blocks:** nothing; noted so the "83 seconds" correction is not over-read as a claim about the writer.
+
+**19. Every ccd line number's applicability to the box.** All ccd anchors above are from the repo at `21fef2a` (sha256 `44de6cd4…`, 7523 lines). The installed file is `d71024dc…`, 7544 lines, and I read it only to compare hashes, count lines and grep for `SWAP_JITTER`. Offsets are not uniform — they run 0 near the top, ~+11 through the middle, ~+21 below `_dispatch_swap`. *Settle before applying any anchor to the box:* `sha256sum ~/.local/bin/ccd` against `git show <ref>:ccd/ccd | sha256sum`, and re-derive offsets with `diff`.
