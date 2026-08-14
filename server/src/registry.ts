@@ -448,8 +448,13 @@ async function buildRecord(
     held: holdRaw === null
       ? (holdListed ? HOLD_UNREADABLE : null)
       : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
-    // The surface is validated on READ as well as on write (`cmd_stop`
-    // validates its `--surface` argv). Both, not either: this box runs a ccd
+    // The surface is validated on READ as well as on write. The write-side
+    // check is `_ws_unsupervise`'s own `case "$surface" in cli|pwa|agent|ccd)
+    // ;; *) surface=unknown ;;` — NOT `cmd_stop`, which this comment used to
+    // name (final review, Minor #6): `cmd_stop` only parses the flag
+    // (`surface="$2"`) and hands the word on unchecked, so every other caller
+    // of `_ws_unsupervise` is covered by the same single check rather than by
+    // the verb. Both sides, not either: this box runs a ccd
     // that is routinely a deploy ahead of or behind the server, so a word from
     // a vocabulary this build does not have is the ordinary case, not the
     // exotic one. `unknown` is a real member, so there is somewhere honest to

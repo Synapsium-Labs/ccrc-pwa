@@ -169,20 +169,51 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
  * the account root ALSO answers null, nothing about this account could be
  * measured, and it stays `complete: false` as before.
  *
+ * AND THE ACCOUNT ROOT NEEDS THE SAME QUESTION ASKED OF IT (final review,
+ * Important #1). The witness above splits absent from unreachable for
+ * `projects/` — but for `configDir` ITSELF both answers were `null` and both
+ * read as `complete: false`. `foreign` is the ROSTER, the same list for every
+ * session on the box, so one account enrolled in `accounts.json` before its
+ * first session (or one whose directory was removed) made EVERY
+ * transcript-less session render "Can't read the fleet host right now", in
+ * local mode, where the host is plainly readable. That is the §5.5 rule
+ * running backwards: incomplete must never be read as absence, and absence
+ * must not be read as incomplete either.
+ *
+ * `livenessWitness` is how the two are told apart: a path this io is KNOWN to
+ * hold, stat'd fresh, only when both calls above have already answered null.
+ * It answers → this io is answering right now → the account root really is
+ * not there → measured empty. It answers null too → nothing here can be
+ * measured → refuse, exactly as before. Callers that have no such path pass
+ * `null` and keep today's refusal.
+ *
+ * The foreign pool's witness is the session's OWN `configDir`, and it is a
+ * proof rather than a guess: this function is only called for a foreign
+ * account after the own-account glob returned `complete: true`, which happens
+ * only via a non-null `readdir` of `<own>/projects` or a non-null `stat` of
+ * `<own>` — both of which establish that `<own>` EXISTS. So a null stat of it
+ * one call later is about the connection, never about the directory. The own
+ * account itself gets no witness (`null`): the only path above it is `$HOME`,
+ * which the agent read whitelist deliberately excludes (`underClaudeGlob`
+ * requires a first segment starting `.claude`), and widening that whitelist to
+ * buy a diagnostic is not a trade this seam should make.
+ *
  * HONEST LIMIT: this is not proof against a connection that drops during the
  * `readdir` call and recovers before the `stat` — no signal this flat a seam
  * carries can rule that race out — but it is the strongest discrimination
  * `FleetIO` offers without a new op, and it is confirmed against the case
- * that actually matters: a full outage fails BOTH calls, and still refuses.
+ * that actually matters: a full outage fails EVERY call, and still refuses.
  */
 async function globByUuid(
   io: FleetIO, configDir: string, uuid: string, account: string | null, order: number,
+  livenessWitness: string | null,
 ): Promise<{ hits: GlobHit[]; complete: boolean }> {
   const root = path.join(configDir, 'projects');
   const names = await io.readdir(root);
   if (names === null) {
-    const acctReachable = (await io.stat(configDir)) !== null;
-    return { hits: [], complete: acctReachable };
+    if ((await io.stat(configDir)) !== null) return { hits: [], complete: true };
+    if (livenessWitness === null) return { hits: [], complete: false };
+    return { hits: [], complete: (await io.stat(livenessWitness)) !== null };
   }
   const hits: GlobHit[] = [];
   for (const name of names) {
@@ -261,7 +292,7 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
     }
   }
 
-  const own = await globByUuid(io, o.configDir, o.uuid, null, 0);
+  const own = await globByUuid(io, o.configDir, o.uuid, null, 0, null);
   const bestOwn = pickNewest(own.hits);
   if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null };
 
@@ -308,7 +339,11 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
   const pooled: GlobHit[] = [];
   let complete = true;
   for (const [order, acct] of (o.foreign ?? []).entries()) {
-    const g = await globByUuid(io, acct.configDir, o.uuid, acct.account, order);
+    // `o.configDir` is the liveness witness: `own.complete` was just confirmed
+    // true, which is only possible if this io answered non-null ABOUT that
+    // directory, so it exists — see `globByUuid`'s own doc for why that makes
+    // a later null stat of it evidence about the connection and not the disk.
+    const g = await globByUuid(io, acct.configDir, o.uuid, acct.account, order, o.configDir);
     if (!g.complete) complete = false;
     pooled.push(...g.hits);
   }
@@ -373,7 +408,18 @@ export class TranscriptResolver {
   }
 
   async resolve(o: ResolveOpts): Promise<TranscriptResolution> {
-    const key = `${o.configDir} ${o.uuid} ${o.dir}`;
+    // NUL separates the three fields because no path or uuid can contain one,
+    // so no pair of distinct triples can collide. Written as the ESCAPE `\0`,
+    // never as a literal 0x00 byte (final review, Important #4): a literal one
+    // makes `grep` classify the whole FILE as binary and report nothing —
+    // `grep -rn TranscriptResolver server/src` silently omitted the module that
+    // declares it — and it puts the file one paragraph away from tripping git's
+    // 8000-byte binary heuristic, which would turn `git diff`/`git log -p` on
+    // the most complex module here into "Binary files differ". A search
+    // reporting nothing while the data exists is this branch's own defect
+    // shape; it does not belong in the review surface itself. The escape is
+    // byte-identical at runtime (`Map` keys compare by string content).
+    const key = `${o.configDir}\0${o.uuid}\0${o.dir}`;
     const held = this.memo.get(key);
     if (held !== undefined && !this.staleByBackoff(held)) {
       const st = await this.io.stat(held.answer.path);

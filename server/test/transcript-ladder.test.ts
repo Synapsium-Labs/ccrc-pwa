@@ -6,12 +6,16 @@
 // already establishes for this module; `FleetIO` spread-fakes (the
 // `unlistableIO` shape from `sessionws.test.ts`) cover the seams disk cannot.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, MEMO_MAX, pickNewest, resolveTranscript, RUNG_ORDER, rungRank,
-  transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
+  collapseHits, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS, RUNG_ORDER,
+  rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -198,9 +202,16 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     expect(r).toEqual({ kind: 'found', path: own, rung: 'uuid-glob', account: null });
   });
 
-  it('a foreign mtime tie breaks by roster declaration order, then by path — deterministic, so a test can pin it', async () => {
+  it('two foreign copies with the SAME bytes and mtime collapse to one, and the roster-first account is the survivor', async () => {
     // Kills a mutant that leaves the tie to readdir/Map order. `cp -p` carries
     // mtime AND size across accounts (§2.2), so exact ties are ordinary.
+    //
+    // WHAT THIS ACTUALLY PINS (final review, Minor #5): both files here are
+    // byte-identical with equal mtimes, so `collapseHits` folds them and
+    // `pickNewest` never sees a tie at all — this is the COLLAPSE survivor
+    // rule, not the pick tiebreak its old title claimed, and the expected
+    // account also happens to win on path order. The test below is the one
+    // where roster order is genuinely the deciding term.
     const b = box();
     const first = path.join(b.root, '.claude-first');
     const second = path.join(b.root, '.claude-second');
@@ -211,6 +222,26 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
       foreign: [{ account: 'first', configDir: first }, { account: 'second', configDir: second }],
     }));
     expect(r).toEqual({ kind: 'found', path: a, rung: 'foreign-glob', account: 'first' });
+  });
+
+  it('roster DECLARATION ORDER, not the alphabet, decides a foreign mtime tie (final review, Minor #5)', async () => {
+    // The fixture the test above could not be: the two stranded copies differ
+    // in SIZE, so nothing collapses and `pickNewest` really does arbitrate a
+    // tie — and the roster's FIRST account is the alphabetically LAST
+    // directory, so `order` is the only term that explains the answer. Kills
+    // `pickNewest`'s `>` -> `>=` at the ladder level, which would hand back
+    // the second account's copy (and banner the wrong account name at the
+    // operator, which is the one thing the rung-6 banner exists to get right).
+    const b = box();
+    const zeta = path.join(b.root, '.claude-zeta');
+    const alpha = path.join(b.root, '.claude-alpha');
+    const wanted = plant(stranded(zeta), 5000, 'declared first, sorts last\n');
+    plant(stranded(alpha), 5000, 'declared second, sorts first, and a different size entirely\n');
+    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
+    const r = await resolveTranscript(localIO, opts(b, {
+      foreign: [{ account: 'zeta', configDir: zeta }, { account: 'alpha', configDir: alpha }],
+    }));
+    expect(r).toEqual({ kind: 'found', path: wanted, rung: 'foreign-glob', account: 'zeta' });
   });
 
   it('rung 7: nothing anywhere is a COMPLETE fallback at the raw munge of the directory given', async () => {
@@ -236,18 +267,75 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     });
   });
 
-  it('a foreign account that cannot be listed also marks the answer incomplete', async () => {
-    // Kills a mutant that only tracks completeness for the own-account glob.
+  it('a foreign account that cannot be MEASURED still marks the answer incomplete — the dangerous direction stays shut ' +
+     '(final review, Important #1)', async () => {
+    // Kills a mutant that only tracks completeness for the own-account glob,
+    // AND the naive form of the fix below it: "the own account answered, so
+    // treat every later null as absence" would read a connection that dropped
+    // mid-run as a measured-empty foreign account and print a confident "no
+    // messages yet" over history this search never reached.
+    //
+    // FIXTURE REPAIRED (final review, Important #1). This test used to break
+    // only the foreign `readdir` and never create `.claude-personal` at all,
+    // so what it actually pinned was an ABSENT account — the very case that is
+    // now measured-empty — while its title claimed an unlistable one. Plant
+    // the account for real, then take away everything the resolver could use
+    // to prove the io still answers: the foreign `projects` readdir, the
+    // foreign root stat, and the own config dir that serves as the liveness
+    // witness. That is a connection which died after the own-account glob
+    // succeeded, and it must still refuse.
     const b = box();
+    const personal = path.join(b.root, '.claude-personal');
+    mkdirSync(path.join(personal, 'projects'), { recursive: true });   // the account really is there
+    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
     const io: FleetIO = {
       ...localIO,
       readdir: async (p) => (p.includes('.claude-personal') ? null : localIO.readdir(p)),
+      stat: async (p) => (p === personal || p === b.cfg ? null : localIO.stat(p)),
     };
-    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
     const r = await resolveTranscript(io, opts(b, {
-      foreign: [{ account: 'claude2', configDir: path.join(b.root, '.claude-personal') }],
+      foreign: [{ account: 'claude2', configDir: personal }],
     }));
     expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
+  });
+
+  it('a foreign account whose root was NEVER CREATED is measured EMPTY, not unreachable (final review, Important #1)', async () => {
+    // THE REPORTED HARM. `foreign` comes from the roster, so it is the same
+    // list for every session on the box: one account enrolled in
+    // `accounts.json` before its first session — or one whose `~/.claude-<x>`
+    // was removed — used to answer `complete: false` here, and a single such
+    // row turned EVERY transcript-less session's chat into a permanent
+    // "Can't read the fleet host right now" (`SessionScreen` suppresses the
+    // empty state on `searchComplete: false`), in LOCAL mode, where the host
+    // is plainly readable. The rung-6 witness distinguished absent from
+    // unreachable for `projects/` but nothing distinguished it for the
+    // account root itself, so "incomplete must never be read as absence" was
+    // running inverted: absence read as incomplete.
+    const b = box();
+    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });   // own account: listable, empty
+    const neverUsed = path.join(b.root, '.claude-never-used');      // enrolled; no directory on disk
+    const r = await resolveTranscript(localIO, opts(b, {
+      foreign: [{ account: 'claude-never-used', configDir: neverUsed }],
+    }));
+    expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: true });
+  });
+
+  it('an absent foreign root does not suppress a hit held by another account, and does not dirty its completeness', async () => {
+    // The pooled case of the same fact: the never-used account must be a
+    // no-op, not a veto — it contributes neither a hit nor an incompleteness,
+    // and the sweep goes on to the account that actually holds the history.
+    // Measured mutant: stopping the sweep at the first account with nothing
+    // to show (`if (g.hits.length === 0) break`) fails here.
+    const b = box();
+    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
+    const held = plant(stranded(path.join(b.root, '.claude-corp')), 3000, 'stranded here\n');
+    const r = await resolveTranscript(localIO, opts(b, {
+      foreign: [
+        { account: 'claude-never-used', configDir: path.join(b.root, '.claude-never-used') },
+        { account: 'claude-corp', configDir: path.join(b.root, '.claude-corp') },
+      ],
+    }));
+    expect(r).toEqual({ kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp' });
   });
 
   it("a foreign hit is refused when the OWN account's glob could not run — incomplete beats a foreign answer (review round 1, Important #2, the ruling)", async () => {
@@ -365,6 +453,33 @@ describe('rung order and candidate collapse (spec §5.1)', () => {
     // The survivor of a collapsed group is the lowest (order, path) — stable,
     // so the rendered path does not wander between ticks.
     expect(collapsed.map((h) => h.path).sort()).toEqual(['/a.jsonl', '/d.jsonl']);
+
+    // Final review, Minor #5 — two mutants the fixture above cannot see.
+    //
+    // (a) THE SYMMETRIC HALF OF THE IDENTITY KEY. The comment above claims a
+    // kill on "size alone", and gets it; the mtime-alone key survived it,
+    // because every pair it separates differs in MTIME. Two genuinely
+    // different files written in the same millisecond would fold into one and
+    // the other would be discarded before `pickNewest` ever saw it.
+    const sameMillisecond = collapseHits([
+      hit({ path: '/small.jsonl', size: 70, mtimeMs: 42 }),
+      hit({ path: '/large.jsonl', size: 70_000, mtimeMs: 42 }),
+    ]);
+    expect(sameMillisecond.map((h) => h.path).sort()).toEqual(['/large.jsonl', '/small.jsonl']);
+
+    // (b) THE `h.order < kept.order` TERM. Above, the group's members all
+    // share `order: 0`, so only the path tiebreak is ever exercised and
+    // dropping the order term survives. `cp -p` carries size AND mtime across
+    // accounts, so a collapsed group routinely spans the roster — and when
+    // its members arrive worst-order-first, the term is the only thing that
+    // keeps the rendered path on the account the roster declared first
+    // instead of on whichever name readdir happened to yield.
+    const acrossAccounts = collapseHits([
+      hit({ path: '/a-second-account.jsonl', size: 70, mtimeMs: 42, order: 1 }),
+      hit({ path: '/z-first-account.jsonl', size: 70, mtimeMs: 42, order: 0 }),
+    ]);
+    expect(acrossAccounts).toHaveLength(1);
+    expect(acrossAccounts[0]!.path).toBe('/z-first-account.jsonl');
   });
 
   it('pickNewest: newest mtime wins, ties by roster order, then by path', () => {
@@ -381,6 +496,22 @@ describe('rung order and candidate collapse (spec §5.1)', () => {
     expect(pickNewest([
       hit({ path: '/zzz', mtimeMs: 5, size: 2, order: 0 }),
       hit({ path: '/aaa', mtimeMs: 5, size: 1, order: 0 }),
+    ])!.path).toBe('/aaa');
+
+    // Final review, Minor #5: `>` -> `>=` survived every case above. That
+    // mutant overwrites `best` on every tie, so it answers whichever tied hit
+    // comes LAST in input order — and in all three cases above the correct
+    // answer happens to BE the last one, which bypasses the whole
+    // `(order, path)` tiebreak the docstring says this function guarantees
+    // and makes the rendered file depend on readdir order. Pin the shape it
+    // gets wrong: the correct winner FIRST, a losing tie behind it.
+    expect(pickNewest([
+      hit({ path: '/first', mtimeMs: 5, size: 1, order: 0 }),
+      hit({ path: '/second', mtimeMs: 5, size: 2, order: 1 }),
+    ])!.path).toBe('/first');
+    expect(pickNewest([
+      hit({ path: '/aaa', mtimeMs: 5, size: 1, order: 0 }),
+      hit({ path: '/zzz', mtimeMs: 5, size: 2, order: 0 }),
     ])!.path).toBe('/aaa');
   });
 });
@@ -493,13 +624,85 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     const readdirs = n.readdir;
 
     const f = plant(stranded(cfg), 1000);   // a swap lands somewhere the exact rungs cannot see
-    clock += 29_000;
+    // The boundary is `elapsed >= backoffMs`, and it is pinned AT the boundary
+    // (final review, Minor #5): the old fixture stepped 29 s -> 31 s and
+    // jumped straight over it, so `>=` -> `>` survived. One millisecond short
+    // is still the memo; exactly `backoffMs` re-ladders.
+    clock += 29_999;
     expect((await r.resolve(o)).kind).toBe('fallback'); // still inside the back-off
     expect(n.readdir).toBe(readdirs);
 
-    clock += 2_000;
+    clock += 1;                              // elapsed === backoffMs exactly
     expect(await r.resolve(o)).toEqual({ kind: 'found', path: f, rung: 'uuid-glob', account: null });
     expect(n.readdir).toBe(readdirs + 1);
+  });
+
+  it('the DEFAULT back-off is RESOLVER_BACKOFF_MS — the constant every other test injects past', async () => {
+    // Every back-off test above passes `backoffMs`, so both the constant's
+    // value and the `?? RESOLVER_BACKOFF_MS` that wires it survived mutation
+    // (final review, Minor #5). Production constructs the resolver with NO
+    // options at all (`sessionws.ts:144`, `watch.ts:431`), so the default is
+    // the only back-off the fleet ever runs. Pin the value, then pin that the
+    // default constructor actually uses it.
+    expect(RESOLVER_BACKOFF_MS).toBe(30_000);
+    const { cfg, dir } = flat();
+    mkdirSync(path.join(cfg, 'projects'), { recursive: true });
+    let clock = 1_000_000;
+    const { io, n } = counting();
+    const r = new TranscriptResolver(io, { now: () => clock });   // no backoffMs
+    const o: ResolveOpts = { configDir: cfg, dir, registryWorkdir: dir, uuid: UUID };
+
+    expect((await r.resolve(o)).kind).toBe('fallback');
+    const readdirs = n.readdir;
+    const f = plant(stranded(cfg), 1000);
+    clock += RESOLVER_BACKOFF_MS - 1;
+    expect((await r.resolve(o)).kind).toBe('fallback');
+    expect(n.readdir).toBe(readdirs);
+    clock += 1;
+    expect((await r.resolve(o)).path).toBe(f);
+    expect(n.readdir).toBe(readdirs + 1);
+  });
+
+  it('a FOREIGN-account hit re-ladders on the back-off too — the swap that brings history home is not memoized away ' +
+     '(final review, Important #2)', async () => {
+    // `staleByBackoff`'s `|| e.answer.rung === 'foreign-glob'` was deleted
+    // against the whole suite and NOTHING went red: no test memoized a rung-6
+    // answer and then advanced the clock. What the term prevents is the
+    // branch's own headline recovery, silently not taken:
+    //
+    //   `ccd swap` COPIES the transcript — which is precisely why rung 6
+    //   exists — so the foreign file a stream is rendering under the
+    //   "stranded history" banner STILL EXISTS after the swap lands. Without
+    //   the term a rung-6 answer is not a "keep looking" answer, so the memo's
+    //   single revalidating stat stays true forever, the full ladder never
+    //   re-runs, and the session renders the frozen foreign copy for the life
+    //   of the socket while the real transcript sits at its own address.
+    const { cfg, dir } = flat();
+    mkdirSync(path.join(cfg, 'projects'), { recursive: true });   // own account: listable, empty
+    const foreignCfg = path.join(path.dirname(cfg), '.claude-corp');
+    const held = plant(stranded(foreignCfg), 3000, 'stranded in the old account\n');
+    let clock = 1_000_000;
+    const { io, n } = counting();
+    const r = new TranscriptResolver(io, { backoffMs: 30_000, now: () => clock });
+    const o: ResolveOpts = {
+      configDir: cfg, dir, registryWorkdir: dir, uuid: UUID,
+      foreign: [{ account: 'claude-corp', configDir: foreignCfg }],
+    };
+    expect(await r.resolve(o)).toEqual(
+      { kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp' });
+    const readdirs = n.readdir;
+
+    // The swap lands and carries the history home. The foreign copy is NOT
+    // removed — a copy, not a move — which is exactly what keeps the memo's
+    // revalidating stat true and would keep a rung-6 answer alive forever.
+    const home = plant(transcriptPath(cfg, dir, UUID), 4000, 'carried home\n');
+    clock += 29_999;
+    expect((await r.resolve(o)).path).toBe(held);   // inside the back-off: still the memo
+    expect(n.readdir).toBe(readdirs);
+
+    clock += 1;
+    expect(await r.resolve(o)).toEqual({ kind: 'found', path: home, rung: 'live-raw', account: null });
+    expect(existsSync(held)).toBe(true);            // and the foreign copy never went anywhere
   });
 
   it('a fallback whose own path appears re-ladders immediately, back-off or not', async () => {
@@ -528,7 +731,7 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     mkdirSync(path.join(cfg, 'projects'), { recursive: true });
     const r = new TranscriptResolver(localIO);
     const uuidAt = (i: number): string => `${i}`.padStart(36, '0');
-    const keyFor = (uuid: string): string => `${cfg} ${uuid} ${dir}`;
+    const keyFor = (uuid: string): string => `${cfg}\0${uuid}\0${dir}`;
     const total = MEMO_MAX + 20;
     for (let i = 0; i < total; i += 1) {
       await r.resolve({ configDir: cfg, dir, registryWorkdir: dir, uuid: uuidAt(i) });
@@ -537,5 +740,67 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     expect(memo.size).toBe(MEMO_MAX);
     expect(memo.has(keyFor(uuidAt(total - 1)))).toBe(true);  // the newest resolve survives
     expect(memo.has(keyFor(uuidAt(0)))).toBe(false);         // the first inserted is evicted
+  });
+
+  it('eviction is LRU, not FIFO — a re-laddered entry moves to the BACK of the queue (final review, Minor #5)', async () => {
+    // `remember()`'s `memo.delete(key)` before the `set` is the whole of the
+    // policy: `Map.set` on an existing key leaves insertion order alone, so
+    // without the delete the order is arrival, not recency, and the test
+    // above stays green — it never re-resolves a key it already holds, so it
+    // cannot distinguish the two policies its own comment names.
+    //
+    // A memo HIT deliberately does not re-remember (`resolve` returns the held
+    // answer untouched), so the entry whose recency actually moves is one that
+    // RE-LADDERED — a fallback past its back-off, i.e. exactly the
+    // long-running, still-unresolved session the watcher's shared resolver
+    // keeps re-measuring across sweeps. Under FIFO that session is evicted on
+    // its original arrival position however recently it was measured, and pays
+    // a full ladder run again on the next tick.
+    const { cfg, dir } = flat();
+    mkdirSync(path.join(cfg, 'projects'), { recursive: true });
+    let clock = 1_000_000;
+    const r = new TranscriptResolver(localIO, { backoffMs: 30_000, now: () => clock });
+    const uuidAt = (i: number): string => `${i}`.padStart(36, '0');
+    const keyFor = (uuid: string): string => `${cfg}\0${uuid}\0${dir}`;
+    const at = (i: number): ResolveOpts =>
+      ({ configDir: cfg, dir, registryWorkdir: dir, uuid: uuidAt(i) });
+
+    for (let i = 0; i < MEMO_MAX; i += 1) await r.resolve(at(i));   // exactly full, nothing evicted yet
+    clock += 30_000;                 // every entry is now past its back-off
+    await r.resolve(at(0));          // the OLDEST key re-ladders — and re-inserts at the back
+    await r.resolve(at(MEMO_MAX));   // one new key: exactly one eviction
+
+    const memo = (r as unknown as { memo: Map<string, unknown> }).memo;
+    expect(memo.size).toBe(MEMO_MAX);
+    expect(memo.has(keyFor(uuidAt(0)))).toBe(true);    // touched most recently — survives
+    expect(memo.has(keyFor(uuidAt(1)))).toBe(false);   // now the oldest — evicted in its place
+  });
+});
+
+describe('the memo key is written as an ESCAPE, never a literal NUL byte (final review, Important #4)', () => {
+  it('no file under server/src or server/test contains a 0x00 byte', () => {
+    // `resolve.ts` used a literal 0x00 as the memo-key separator and this file
+    // mirrored it. Runtime-identical, and invisible to the review method this
+    // branch runs on: `grep` classifies a file holding a NUL as binary and
+    // reports NOTHING for it — `grep -rn TranscriptResolver server/src` listed
+    // `sessionws.ts` and `watch.ts` and silently omitted the module that
+    // DECLARES the class. The first NUL also sat at byte 19554 of 20714, one
+    // added paragraph away from crossing git's 8000-byte binary heuristic and
+    // turning `git diff` on the branch's most complex new module into "Binary
+    // files differ". A search reporting nothing while the data exists is this
+    // branch's own defect shape; it does not belong in the review surface.
+    const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const offenders: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (e.name !== 'node_modules') walk(p); continue; }
+        if (!/\.(ts|tsx|js|mjs|json|md)$/.test(e.name)) continue;
+        if (readFileSync(p).includes(0)) offenders.push(path.relative(root, p));
+      }
+    };
+    walk(path.join(root, 'src'));
+    walk(path.join(root, 'test'));
+    expect(offenders).toEqual([]);
   });
 });

@@ -277,7 +277,18 @@ export class SessionStream {
    *  (dropping the "file gone" fallback, `<` -> `<=`, `&&` -> `||`) survived
    *  the ENTIRE suite against the live path while dying instantly against
    *  `shouldRepoint` in isolation. Delegating here closes that gap: mutating
-   *  `shouldRepoint` now mutates what `tick()` actually executes. */
+   *  `shouldRepoint` now mutates what `tick()` actually executes.
+   *
+   *  The pre-filter below is the one line that stayed outside that fix, and
+   *  it is a half-copy of the same rule, so it needs its own pin (final
+   *  review, Important #3): dropping its `cur.path === next.path` conjunct
+   *  passed the whole suite while making a same-rung DIFFERENT-path answer
+   *  unreachable — the stream would keep tailing a deleted transcript
+   *  forever. `sessionws.test.ts`'s "follows a SAME-RUNG answer to a
+   *  different path once the tailed file is gone" is that pin; it must fail
+   *  if this line is ever weakened again. It cannot simply be deleted in
+   *  favour of always calling `shouldRepoint`: skipping the stat on the
+   *  same-rung/same-path case is what keeps a healthy tick free. */
   private async repointNeeded(next: TranscriptResolution): Promise<boolean> {
     const cur = this.tailed;
     if (cur === null) return false;

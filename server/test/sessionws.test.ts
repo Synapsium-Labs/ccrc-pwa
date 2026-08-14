@@ -845,6 +845,56 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     }
   });
 
+  it('follows a SAME-RUNG answer to a different path once the tailed file is gone — the stream never freezes on a ' +
+     'deleted transcript (final review, Important #3)', async () => {
+    // `repointNeeded`'s pre-filter is the second, untested half of §5.3's
+    // rule: dropping its `cur.path === next.path` conjunct passed the FULL
+    // suite. `shouldRepoint`'s own table has the same-rung/different-path row
+    // (both `tailedExists` values), but the pre-filter runs BEFORE it and
+    // short-circuits on rank alone, so that row was guarding a decision the
+    // live path never reached — the identical shape as the round-1 finding
+    // that made `repointNeeded` delegate in the first place, left one line
+    // outside the fix.
+    //
+    // The mutant's effect, which this fixture reproduces: a rung-5 answer
+    // whose file is deleted and re-created under a different project dir (a
+    // reap, a re-munge, a carry that landed elsewhere) is a same-rung,
+    // different-path answer — so the stream stops re-pointing and keeps
+    // tailing a path that no longer exists, for the life of the socket.
+    const home = mkTmp('ccrc-repoint-sideways-');
+    seedRoster(home);
+    seed(home);
+    const projects = path.join(home, '.claude-personal', 'projects');
+    rmSync(path.join(projects, MUNGED, `${UUID_A}.jsonl`));   // no exact address: rung 5 is the answer
+    const globA = path.join(projects, '-elsewhere-a', `${UUID_A}.jsonl`);
+    const globB = path.join(projects, '-elsewhere-b', `${UUID_A}.jsonl`);
+    mkdirSync(path.dirname(globA), { recursive: true });
+    writeFileSync(globA, userLine('a1', 'first address'));
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(globA);
+      frames.length = 0;
+
+      rmSync(globA);
+      mkdirSync(path.dirname(globB), { recursive: true });
+      writeFileSync(globB, userLine('b1', 'same rung, different address'));
+      await pollOnce(stream);
+
+      const second = frames.find((f) => f.type === 'backlog');
+      expect(second).toBeDefined();
+      expect(second.file).toBe(globB);                      // it followed
+      expect(second.events.map((e: { uuid: string }) => e.uuid)).toEqual(['b1']);
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([]);  // still not a rotation
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('an unchanged answer re-points NOTHING — same tailer instance, no frames', async () => {
     // Kills the mutant that re-resolves and re-points unconditionally: this is
     // what every tick of every healthy session does, ~43,000 times a day.
