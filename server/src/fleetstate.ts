@@ -16,9 +16,17 @@ import { reviveFleetSessions, type FleetSession } from '../../shared/api.js';
 export interface FleetState {
   connected: boolean;
   downSince: number | null;
-  /** What `ccd caps` printed on the fleet host, or null when we have no
-   *  evidence (local mode, or an agent old enough not to send it). Null is
-   *  NOT "no verbs" — the server treats it as "do not block". */
+  /** What `ccd caps` printed on the box that actually runs it — the fleet
+   *  host in remote mode, THIS box in local mode (`localcaps.ts`'s
+   *  `readLocalCcdCaps`, fix round 3, task 14: local mode measures for
+   *  real now, it does not merely go without) — or null when even that
+   *  probe found no evidence (a remote agent old enough not to send it, or
+   *  either side's local exec failing). Null is NOT "no verbs", but it is
+   *  also not universally "do not block": `verbSupported` treats it as
+   *  permit (guessing wrong about an ordinary VERB is loud — ccd's own
+   *  usage refusal, never a lie), while `stopSurfaceSupported` inverts
+   *  that for the one capability where guessing wrong is a SILENT success
+   *  — see its own comment in `ccdargv.ts` for why the two must disagree. */
   ccdVerbs: string[] | null;
 }
 

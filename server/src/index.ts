@@ -16,6 +16,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { readMailToken } from './coord/token.js';
 import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
+import { readLocalCcdCaps } from './localcaps.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -86,9 +87,21 @@ if (cfg.fleetMode === 'remote') {
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
+  // Fix round 3 (task 14, Important #3): real evidence, not an absent
+  // `fleetState` — `stopSurfaceSupported` (and any future capability that
+  // adopts its inverted, refuse-on-no-evidence default) would otherwise be
+  // permanently dead in this, the DEFAULT deployment mode. One exec at
+  // boot, on the same box, the exact shape `readLocalCcdCaps` documents.
+  const ccdVerbs = await readLocalCcdCaps(realRunner, cfg.ccdBin);
   deps = {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
+    // `connected`/`downSince` are inert for local mode — every reader of
+    // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
+    // watch.ts) — so `true`/`null` are placeholders, never read as a claim
+    // about remote fleet reachability. `ccdVerbs` is the one field this
+    // object exists to carry.
+    fleetState: { connected: true, downSince: null, ccdVerbs },
   };
 }
 

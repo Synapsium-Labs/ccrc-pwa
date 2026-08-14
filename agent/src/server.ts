@@ -24,6 +24,7 @@ import type {
   TailReset,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
+import { parseCcdCaps } from '../../shared/agent-protocol.js';
 import { readB64, readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
@@ -378,7 +379,7 @@ async function readCcdVerbs(home: string): Promise<string[] | null> {
   // it does no I/O, and 10s already matches the rest of the file's defaults.
   const res = await runExec(resolveSpawnCmd('ccd', home), ['caps'], 10_000);
   if (res.code !== 0) return null;
-  return res.stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
+  return parseCcdCaps(res.stdout);
 }
 
 /** The list `readCcdVerbs` last produced, plus the stat of the script that

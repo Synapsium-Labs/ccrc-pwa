@@ -18,6 +18,21 @@ export interface AgentHello { t: 'hello'; token: string }
  *  is the sibling mechanism for the PWA↔server pair, wired because that pair
  *  has no per-capability negotiation to fall back on the way this one does. */
 export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[] }
+
+/** `ccd caps` output -> the list both readers keep: one token per non-empty
+ *  line shaped like a bash identifier (`/^[a-z][a-z-]*$/`) — verbs AND
+ *  capability tokens alike (`stop-surface` is deliberately chosen to match
+ *  this exact shape, task 14 fix round 2, so it needs no second parser).
+ *  SINGLE DEFINITION (fix round 3, task 14, Important #3): the agent (which
+ *  reads the DEPLOYED fleet-host ccd, `agent/src/server.ts`'s
+ *  `readCcdVerbs`) and the server's own local-mode reader (which reads its
+ *  own box's ccd, `server/src/localcaps.ts`) must never drift on what
+ *  counts as a line worth keeping — two copies of this one regex is exactly
+ *  the shape that drifts silently, the same class `single-definition.test.ts`
+ *  polices for `SessionLifecycle` elsewhere in this tree. */
+export function parseCcdCaps(stdout: string): string[] {
+  return stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
+}
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
 export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number }

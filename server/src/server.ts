@@ -82,12 +82,21 @@ export interface Deps {
    *  type is the enforcement now — see task 13S and `CcdArgv`. */
   runCcd: (argv: CcdArgv) => Promise<CcdResult>;
   tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
-  /** Remote-mode reachability, straight from `connectFleet().state` — absent
-   *  (or ignored) in local mode, where the fleet is always "connected". */
+  /** Remote-mode reachability, straight from `connectFleet().state` — its
+   *  `connected`/`downSince` fields are ignored in local mode (the fleet is
+   *  always "connected" there; every reader gates on `cfg.fleetMode ===
+   *  'remote'` first). `ccdVerbs`, though, is populated in BOTH modes as of
+   *  fix round 3 (task 14): `index.ts`'s local branch measures its own
+   *  box's `ccd caps` at boot (`localcaps.ts`) rather than leaving this
+   *  whole object absent, which is what made `stopSurfaceSupported`'s
+   *  inverted no-evidence default a dead feature in local mode before this
+   *  fix. Genuinely absent only if a caller builds `Deps` some OTHER way
+   *  (a test, mainly) and omits it outright. */
   fleetState?: FleetState;
-  /** Remote mode only. Local mode reads ccd directly and has nothing to
-   *  refresh, so its absence is the mode test — the same shape `fleetState`
-   *  already uses. */
+  /** Remote mode only — local mode measures its ccd ONCE, at boot
+   *  (`index.ts`), rather than on a timer, so it has nothing to refresh;
+   *  its absence is still the local/remote mode test for THIS field, even
+   *  though `fleetState` itself is no longer the same tell. */
   refreshCaps?: () => Promise<void>;
   /** The ONE per-session write queue for the process. Built in `index.ts` and
    *  handed to both `buildServer` and `FleetWatcher`, because the naming

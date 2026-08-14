@@ -99,19 +99,30 @@ const execWhitelistBullet = (): string => {
   return readme.slice(start, end);
 };
 
+/** Sentence-split, not the whole bullet — an absolute word ("every"/"all")
+ *  used correctly three paragraphs away from `pwa`/`cli` must not trip a
+ *  check aimed at one specific false pairing. Split on `.`/`:` followed by
+ *  whitespace, which is coarse but keeps each claim in its own window. */
+const sentencesOf = (text: string): string[] => text.split(/(?<=[.:])\s+/);
+
 describe('README: the --surface bullet', () => {
-  it('does not claim every API-reached stop records pwa', () => {
-    // The original round-2 draft said "every stop reached through the API
-    // records `pwa`" — false for ws-rm/ws-reap/forget/archiveMerged, which
-    // all reach `_ws_unsupervise` directly with no surface and record its
-    // own default, `ccd` (ccd/ccd's `_ws_unsupervise` signature, grepped
-    // below). An operator archiving a workspace from the PWA sees "stopped
-    // by ccd" on that row — this sentence must not promise `pwa` there.
+  // Fix round 3 (task 14 follow-up, Minor #4): round 2's two negative pins
+  // matched the exact WRONG SENTENCE, not the underlying claim — a
+  // reworded re-overclaim ("all API stops record pwa", "cli is exclusive
+  // to a self-stop") would have sailed past both while still being false.
+  // Rewritten to catch the CLAIM: any absolute statement tying `pwa` to
+  // API-reached stops must carry its exception in the same breath, and any
+  // sentence naming `cli` must not use an exclusivity word at all — neither
+  // check depends on round 2's specific phrasing surviving verbatim.
+  it('does not claim every/all API-reached stops record pwa, in ANY phrasing', () => {
     const bullet = execWhitelistBullet();
-    expect(bullet).not.toMatch(/every stop reached through the API records/i);
-    // And it has to actually NAME the other paths, not just avoid the false
-    // absolute — a corrected sentence that goes silent on the exception is
-    // still an overclaim by omission.
+    for (const s of sentencesOf(bullet)) {
+      if (/\b(every|all|any)\b/i.test(s) && /\bpwa\b/i.test(s) && /\brecord/i.test(s)) {
+        expect(s, `unqualified absolute claim: "${s.trim()}"`).toMatch(/ws-rm/);
+      }
+    }
+    // And the exception is still actually named somewhere — a corrected
+    // sentence that goes silent on it is still an overclaim by omission.
     expect(bullet).toMatch(/ws-rm/);
     expect(bullet.toLowerCase()).toMatch(/reap/);
     expect(bullet).toMatch(/forget/);
@@ -120,14 +131,13 @@ describe('README: the --surface bullet', () => {
     expect(ccd).toMatch(/surface="\$\{2-ccd\}"/);
   });
 
-  it('does not claim cli is reserved for a session stopping itself', () => {
-    // The original round-2 draft said ccd's `cli` default "is reserved for a
-    // session stopping itself from its own Bash tool" — an exclusivity claim
-    // the code does not make: `cli` is whatever ANY flagless invocation
-    // records (cmd_stop's own default, ccd/ccd), self-stop included but not
-    // exclusive to it.
-    const bullet = execWhitelistBullet();
-    expect(bullet).not.toMatch(/reserved for/i);
+  it('does not claim cli is reserved/exclusive/only for a session stopping itself, in ANY phrasing', () => {
+    for (const s of sentencesOf(execWhitelistBullet())) {
+      if (/\bcli\b/i.test(s)) {
+        expect(s, `possible exclusivity claim: "${s.trim()}"`)
+          .not.toMatch(/\b(reserved|exclusive(ly)?|only)\b/i);
+      }
+    }
   });
 
   it('states the check is CONDITIONAL on the deployed ccd advertising the capability', () => {
@@ -143,6 +153,42 @@ describe('README: the --surface bullet', () => {
     expect(ccd).toMatch(/echo stop-surface/);
     const ccdargv = readFileSync(path.join(root, 'server', 'src', 'ccdargv.ts'), 'utf8');
     expect(ccdargv).toMatch(/export function stopSurfaceSupported/);
+  });
+
+  // Fix round 3, Important #2/#3 — the two corrections that made "never a
+  // call that silently does nothing" (kept, deliberately, from round 2's
+  // text) actually true. Grounded in the real inverted default and the
+  // real local-mode probe, not merely asserted in prose.
+  it('states the no-evidence default is INVERTED for this capability, and says why', () => {
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/opposite/i);
+    expect(bullet).toMatch(/silent success/i);
+    const ccdargv = readFileSync(path.join(root, 'server', 'src', 'ccdargv.ts'), 'utf8');
+    const fn = ccdargv.slice(ccdargv.indexOf('export function stopSurfaceSupported'));
+    expect(fn, 'the no-evidence branch must refuse, not permit').toMatch(/if \(verbs === null\) return false;/);
+  });
+
+  it('states local mode measures its OWN ccd, not merely the remote one', () => {
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/local/i);
+    expect(bullet).toMatch(/boot/i);
+    const indexTs = readFileSync(path.join(root, 'server', 'src', 'index.ts'), 'utf8');
+    expect(indexTs).toMatch(/readLocalCcdCaps/);
+    const localcaps = readFileSync(path.join(root, 'server', 'src', 'localcaps.ts'), 'utf8');
+    expect(localcaps).toMatch(/export async function readLocalCcdCaps/);
+  });
+
+  it('names the rollback window honestly — bounded, not zero', () => {
+    // The one edge the inversion narrows but cannot close: an old ccd
+    // exits 0 on the bad argv, so there is no failure to trigger an early
+    // re-probe. The bullet must say "60" (CAPS_REFRESH_MS) and must NOT
+    // claim the window is instant or the gate is total.
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/rollback/i);
+    expect(bullet).toMatch(/60/);
+    expect(bullet).not.toMatch(/\binstant(ly)?\b/i);
+    const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
+    expect(watchTs).toMatch(/CAPS_REFRESH_MS\s*=\s*60_000/);
   });
 
   it('the grant it describes (a bare one-token `stop` prefix) is the grant that actually ships', () => {

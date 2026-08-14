@@ -149,14 +149,39 @@ export function verbSupported(
  * does not mark `stop`'s own call sites as gated — they still are not,
  * correctly, since the verb always goes through.
  *
- * Reuses `verbSupported`'s exact mechanism and its exact null-permits
- * policy: `ccd caps` prints `stop-surface` as one more line in the same
- * list `verbSupported` already reads, chosen verb-shaped on purpose so
- * nothing new has to parse, carry or cache it (see `ccd/ccd`'s own comment
- * on the token, and `ccd-archive.test.ts`'s caps<->dispatcher parity check,
- * which pins it as a known non-dispatchable capability rather than letting
- * it silently pass as an undocumented verb).
+ * `ccd caps` prints `stop-surface` as one more line in the exact list
+ * `verbSupported` reads, chosen verb-shaped on purpose so nothing new has
+ * to parse, carry or cache it (see `ccd/ccd`'s own comment on the token,
+ * and `ccd-archive.test.ts`'s caps<->dispatcher parity check, which pins it
+ * as a known non-dispatchable capability rather than letting it silently
+ * pass as an undocumented verb) — the membership test below is the same
+ * shape `verbSupported` uses for that reason.
+ *
+ * THE NO-EVIDENCE DEFAULT IS DELIBERATELY THE OPPOSITE OF `verbSupported`'s
+ * (fix round 3, task 14, Important #2 — the plan owner's ruling, recorded
+ * here rather than merely applied): for every OTHER gated verb, guessing
+ * wrong when `ccdVerbs` is null costs a LOUD failure — ccd's own `die
+ * "usage: …"`, a 502, never a lie — so permitting on no evidence is the
+ * safe default there, and stays unchanged; `verbSupported` itself must NOT
+ * be touched. For `--surface`, guessing wrong costs a SILENT SUCCESS: an
+ * old ccd parses `stop <id> --surface pwa` as a two-argument stop of a
+ * session literally named `<id>---surface`, exits 0, and the real session
+ * is never touched — `runCcdOr502` then answers `200 {ok:true}` for a stop
+ * that did nothing. Same "no evidence" input, categorically different
+ * blast radius on the wrong guess: refusing costs a `cli` stamp instead of
+ * `pwa`; permitting wrongly costs a control that lies about success. The
+ * asymmetry is why this function does not delegate its null case to
+ * `verbSupported` — it re-implements the same membership check with the
+ * opposite default instead.
+ *
+ * This default is only sound because local mode ALSO now measures real
+ * evidence at boot (`localcaps.ts`, `index.ts`) rather than leaving
+ * `ccdVerbs` permanently null there — otherwise inverting this default
+ * would have killed the surface feature outright in local mode, the
+ * DEFAULT deployment mode (`deploy/ccrc.env.example`'s `CCRC_FLEET=local`).
  */
 export function stopSurfaceSupported(state: Pick<FleetState, 'ccdVerbs'> | undefined): boolean {
-  return verbSupported(state, ['stop-surface']);
+  const verbs = state?.ccdVerbs ?? null;
+  if (verbs === null) return false;
+  return verbs.includes('stop-surface');
 }

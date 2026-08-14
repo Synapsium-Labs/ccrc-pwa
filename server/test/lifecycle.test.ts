@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
-import { Tmux, type Runner } from '../src/exec.js';
+import { Tmux, realRunner, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner, listProjects } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
+import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -97,7 +98,12 @@ describe('lifecycle routes', () => {
   });
 
   it('POST /api/sessions/:id/stop derives wrapper+project from the registry', async () => {
-    const { app, calls, cfg } = await makeApp();
+    // ccdVerbs explicit here (fix round 3): this test is about the
+    // wrapper/project derivation, not the capability gate, so it states a
+    // capability-granted fleet outright rather than relying on the
+    // no-evidence default's polarity, which is what the dedicated
+    // asymmetric-default test below exists to pin.
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap', 'stop-surface'] });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
@@ -150,17 +156,24 @@ describe('lifecycle routes', () => {
     await app.close();
   });
 
-  // `null` (no evidence — local mode, or an agent that has not reported
-  // caps yet) permits, matching `verbSupported`'s own policy for every
-  // OTHER gated verb in this codebase: an absent list must never grey out
-  // the fleet. This is a DELIBERATE, pre-existing risk the whole verb-gate
-  // architecture already accepts, not a new one this fix introduces — see
-  // `stopSurfaceSupported`'s own comment in ccdargv.ts.
-  it('no evidence at all (ccdVerbs: null) still sends --surface pwa — consistent with every other gated verb', async () => {
+  // Fix round 3 (task 14 follow-up, Important #2): REVERSED from round 2's
+  // version of this test. The plan owner's ruling: for every OTHER gated
+  // verb, guessing wrong on no evidence costs a LOUD failure (ccd's own
+  // usage refusal, a 502) — permitting is the safe default there. For
+  // `--surface`, guessing wrong costs a SILENT SUCCESS (old ccd parses
+  // `--surface pwa` as a second positional and "stops" a session named
+  // `<id>---surface`, exit 0, the real session untouched). Asymmetric
+  // costs demand an asymmetric default: `stopSurfaceSupported` answers
+  // `false` on no evidence, `verbSupported`'s own null-permits policy is
+  // UNCHANGED for everything else (this test's neighbours below still
+  // exercise ordinary verb gates the old way).
+  it('no evidence at all (ccdVerbs: null) sends the bare argv, never --surface — asymmetric cost, asymmetric default', async () => {
     const { app, calls, cfg } = await makeApp({ ccdVerbs: null });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    // Still 200 — the bare argv is one every ccd generation understands, so
+    // the stop still genuinely happens. Only the DECLARATION is withheld.
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
     await app.close();
   });
 
@@ -183,7 +196,12 @@ describe('lifecycle routes', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    // ccdVerbs explicit (fix round 3): this test is about wrapper-prefix
+    // resolution, not the capability gate.
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'] },
+    });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
     // …but stop must still target claude2-cctest, not claude-cctest.
@@ -211,7 +229,12 @@ describe('lifecycle routes', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+    // ccdVerbs explicit (fix round 3): this test is about workspace-id
+    // handling, not the capability gate.
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'] },
+    });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa', '--surface', 'pwa']]);
@@ -247,6 +270,116 @@ describe('lifecycle routes', () => {
     });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, stderr: 'boom' });
+    await app.close();
+  });
+});
+
+// Fix round 3 (task 14 follow-up, Important #1-#3): the LOCAL-MODE skew
+// case, requested end to end by the plan owner — NEW server composition,
+// OLD-shaped ccd, `CCRC_FLEET` left UNSET (the documented default,
+// `deploy/ccrc.env.example:19`). Before this round, local mode built no
+// `fleetState` at all, so `stopSurfaceSupported(undefined)` answered off
+// `verbSupported`'s null-permits policy — the SAME hazard fix round 2
+// closed for remote mode, unclosed here because local mode had no evidence
+// to gate on. This describe block drives the REAL local-caps probe
+// (`readLocalCcdCaps`, a genuine `execFile` via `realRunner` against a
+// real executable file on disk — the exact call `index.ts`'s local branch
+// makes) through the exact same route the PWA hits, with `CCRC_HOME` set
+// and `CCRC_FLEET` never mentioned, so `loadConfig`'s own default
+// (`config.ts:154`) is what selects local mode, not a test-only shortcut.
+//
+// The mechanism this closes was independently verified for real against
+// `origin/main`'s actual pre-flag ccd binary (task-14-report.md, fix round
+// 2): `cmd_stop <id> --surface pwa` there parses as a two-argument stop of
+// a session literally named `<id>---surface`, exit 0, the real session
+// left running with its unit enabled. That is what a `--surface` in the
+// argv below would have risked; the assertion is that it is never there.
+describe('local mode: the stop route with REAL local-caps evidence (fix round 3, task 14)', () => {
+  const writeStubCcd = (dir: string, name: string, body: string): string => {
+    mkdirSync(dir, { recursive: true });
+    const p = path.join(dir, name);
+    writeFileSync(p, `#!/bin/sh\n${body}\n`);
+    chmodSync(p, 0o755);
+    return p;
+  };
+
+  it('an old-shaped local ccd (no stop-surface) omits --surface, and the stop still succeeds honestly', async () => {
+    const home = mkTmp('ccrc-local-skew-');
+    seedRoster(home);
+    seedDefault(home);
+    const ccdBin = writeStubCcd(
+      path.join(home, 'ccdbin'), 'ccd-old',
+      'echo start\necho enable\necho ensure\necho stop\necho swap\nexit 0',
+    );
+    // The REAL probe, against the REAL file — sanity-checked before it
+    // ever reaches the route, so a failure here points at the probe, not
+    // the route's use of its result.
+    const ccdVerbs = await readLocalCcdCaps(realRunner, ccdBin);
+    expect(ccdVerbs).toEqual(['start', 'enable', 'ensure', 'stop', 'swap']);
+
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home }); // CCRC_FLEET genuinely unset
+    expect(cfg.fleetMode).toBe('local');
+    // The rest of this composition mirrors index.ts's local branch: real
+    // evidence carried in `fleetState`, exactly as the fix requires.
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs },
+    });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    // The load-bearing assertion: 200 BECAUSE the argv sent is the bare
+    // shape every ccd generation understands, not a 200 papering over an
+    // argv an old ccd would have silently misparsed.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    await app.close();
+  });
+
+  it('a new-shaped local ccd (advertises stop-surface) sends --surface pwa', async () => {
+    const home = mkTmp('ccrc-local-skew-');
+    seedRoster(home);
+    seedDefault(home);
+    const ccdBin = writeStubCcd(
+      path.join(home, 'ccdbin'), 'ccd-new',
+      'echo start\necho enable\necho ensure\necho stop\necho swap\necho stop-surface\nexit 0',
+    );
+    const ccdVerbs = await readLocalCcdCaps(realRunner, ccdBin);
+    expect(ccdVerbs).toContain('stop-surface');
+
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    expect(cfg.fleetMode).toBe('local');
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs },
+    });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    await app.close();
+  });
+
+  it('a local ccd probe that fails (missing binary) also omits --surface — no evidence, not a lucky guess', async () => {
+    const home = mkTmp('ccrc-local-skew-');
+    seedRoster(home);
+    seedDefault(home);
+    const missingCcdBin = path.join(home, 'ccdbin', 'does-not-exist');
+    const ccdVerbs = await readLocalCcdCaps(realRunner, missingCcdBin);
+    expect(ccdVerbs).toBeNull();
+
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs },
+    });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
     await app.close();
   });
 });
