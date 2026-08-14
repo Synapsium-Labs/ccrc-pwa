@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a0c1032db2f8239f1b2c4b535297b0b2b08ad8092f8dd63ed4c763e1da86c6f4
+# ccrc:generated 1 sha256=2c164b4304797e49128b27e412c34467bd0d2c5c18ac4580a9b67edc618910ff
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
