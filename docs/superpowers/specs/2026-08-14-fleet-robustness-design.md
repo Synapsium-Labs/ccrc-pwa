@@ -6,11 +6,15 @@
 
 ## Goal
 
-Close the six production failures that Build 4 surfaced *outside* the coordination core — F8 (spawn
-orphans), F9 (the hold's identity), F10 (billing-blind placement), F11 (auto-rename under a claim),
-F13/F14 (the input box) — plus the four failure modes the measurement pass found that no one had
-named: **false-success spawn**, **double-spawn**, **vacuous submit proof**, and **the invisible
-blank-marker wedge**.
+Close the production failures that Build 4 surfaced *outside* the coordination core — F8 (spawn
+orphans), F9 (the hold's identity), F11 (auto-rename under a claim), F13/F14 (the input box) — plus
+the four failure modes the measurement pass found that no one had named: **false-success spawn**,
+**double-spawn**, **vacuous submit proof**, and **the invisible blank-marker wedge**.
+
+**F10 (billing-blind placement) is deliberately NOT in this build.** The operator's answer to Q1 —
+no lane bills usage credits today — removed the condition it guards against. What survives from that
+surface is F10c, which was never about money: a claimed, mid-wave worker can be relocated between
+accounts by a 5-second poll that never looks at the hold (§3.3).
 
 One sentence for the whole build: **the fleet must never end up in a state that only a human at a
 terminal can recognise or repair.**
@@ -21,20 +25,29 @@ Every claim below comes from a five-agent measurement pass run on 2026-08-14 aga
 (four surface agents + a synthesizer that re-verified citations and flagged inter-report disagreements).
 The full pack is not committed; its verified conclusions are reproduced inline with `file:line` citations.
 
-**Every `ccd/ccd` citation here was re-derived by grep against `baf8e5b`, not copied from the pack.**
-The pack measured at `871215b` and asserted the repo and installed copies were byte-identical — true
-when it ran, false forty minutes later: `5bdc6dd` and `baf8e5b` landed on `main` at 07:23 and 07:32
-while the synthesis was being read, shifting everything below `_pane_hard_blocked` by 21 lines and
-everything below `cmd_ws_add` by 11. Any line number in this document that disagrees with the pack is
-deliberate. **Trust shipped source's own comments over any document, including this one.**
+**Every `ccd/ccd` citation here was re-derived by grep against `main` (`21fef2a`, ccd `871215b`,
+sha256 `44de6cd4…`), not copied from the pack** — and then re-derived a second time, because the first
+pass was wrong. The sequence is worth recording, because it is the same failure this whole document is
+about:
 
-Two live facts that follow from the same check, and that the pack could not have seen:
+The pack asserted the repo and installed ccd were byte-identical, with a sha. True when it ran. Hours
+later `5bdc6dd` and `baf8e5b` were briefly committed to `main`, shifting everything below
+`_pane_hard_blocked` by 21 lines; I re-derived every citation against that tree and "corrected" the
+pack. Then the session that made those commits **reset `main` and moved the work to
+`origin/fix/ccd-swap-jitter`** — correct hygiene — which silently un-corrected all of them. The numbers
+here are now verified against the merge target. **A line number is a claim with a shelf life. Trust
+shipped source's own comments over any document, including this one.**
 
-- **The fleet host is one commit behind `main` on ccd.** Installed = `5bdc6dd`; `main` = `baf8e5b`.
-  `ccd version` still reports `c8fd87f (built 2026-08-12T20:04:29Z)`, i.e. a stale provenance marker —
-  exactly what `baf8e5b` was written to re-stamp, and exactly the state its own commit message says
-  makes ccd "report `ccrc-edited` on every box forever, which is the verdict that tells the stage-2b
-  installer NOT to replace it." This build's Wave 1 must not ship ccd until that is reconciled.
+Two live facts that follow, and that the pack could not have seen:
+
+- **The fleet host is running unmerged ccd.** Installed = `5bdc6dd` (`fix/ccd-swap-jitter`, pushed but
+  not merged); `main` = `871215b`. So the box is *ahead* of `main`, not behind, and every ccd line
+  number in this document is off by +21 below `_pane_hard_blocked` **relative to what is actually
+  executing**. `ccd version` also still reports `c8fd87f (built 2026-08-12T20:04:29Z)` — a stale
+  provenance marker, which by `baf8e5b`'s own account makes ccd "report `ccrc-edited` on every box
+  forever, the verdict that tells the stage-2b installer NOT to replace it." **Wave 1 must not ship ccd
+  until `fix/ccd-swap-jitter` merges and the marker is re-stamped**, or the agent-first deploy lands
+  under a marker that refuses it.
 - **A fifth robustness surface exists and is already half-fixed by someone else.** `5bdc6dd` records
   that on 2026-08-13 a fleet-wide limit rollover dispatched six swaps in the same second; each
   SessionEnd/SessionStart hook pair launched a ~2 GB telemetry scan, and the box stalled for **9.7
@@ -49,23 +62,23 @@ prose; the citations below are against the code.
 
 | # | The claim | Where it is written | What the code does |
 |---|---|---|---|
-| C1 | F8 leaves "a fully-registered workspace with **no session**" | `server/src/remote/runner.ts:54-56`, `docs/…/programs/build4.md:150,161-162` | The pane **survives** the kill — `tmux new-session -d` (`ccd:7174`) completes before the blocking wait and the tmux server is not ccd's child. `ccd ls` prints the live orphan `ALIVE yes`. |
+| C1 | F8 leaves "a fully-registered workspace with **no session**" | `server/src/remote/runner.ts:54-56`, `docs/…/programs/build4.md:150,161-162` | The pane **survives** the kill — `tmux new-session -d` (`ccd:7153`) completes before the blocking wait and the tmux server is not ccd's child. `ccd ls` prints the live orphan `ALIVE yes`. |
 | C2 | "a killed child writes nothing" | `runner.ts:56` | `execFile` delivers whatever was buffered (`agent/src/server.ts:158-162`). stderr is empty because **no stderr-writing statement was reached** — a different fact, permitting a fix the stated reason forbids. |
-| C3 | "clear startup gates, then **CONFIRM** the main TUI is up" | `ccd:7096` (docstring) | On the exhaust path the last statement is `sleep 2` (`ccd:7153`) and nothing sits between `done` (`:7154`) and `}` (`:7155`) — the function **returns 0, indistinguishable from success**. |
-| C4 | An account with no limits file "reads as maximum headroom and is placed **first**, not skipped" | `README.md:509-513` | `_ws_least_loaded` does `[[ -z "$sc" ]] && continue` — it **skips** (`ccd:1149`); `_swap_target` does `: "${sc:=100}"` — it ranks **last** (`ccd:6967`). ccd's own comments record the `0` behaviour as removed. *(Half of the sentence survives: a **stale** sample really is rewritten to 0 and really does win — `ccd:6832-6842`. The README conflates absent with stale.)* |
-| C5 | "A hold has **exactly two** consumers" | `README.md:191` | Four ccd rungs (`ws-rm :1364`, `ws-release :1877`, `ws-reap :5072`, `forget :7412`) plus `archiveMerged` plus every PWA display. README then names three in the following paragraph. `forget` appears nowhere in README. |
-| C6 | `archivedreason` is decided by `_ws_gc_merged` (an ancestor check) | `docs/…/2026-08-04-worktree-ownership-design.md:158-161` | Decided by `prphase` + numeric `prnumber` (`ccd:2035-2037`). ccd states the deviation and its reason at `:2003-2017` — ancestor checks cannot see a squash merge. **The code is right and the spec is stale.** |
+| C3 | "clear startup gates, then **CONFIRM** the main TUI is up" | `ccd:7075` (docstring) | On the exhaust path the last statement is `sleep 2` (`ccd:7153`) and nothing sits between `done` (`:7154`) and `}` (`:7155`) — the function **returns 0, indistinguishable from success**. |
+| C4 | An account with no limits file "reads as maximum headroom and is placed **first**, not skipped" | `README.md:509-513` | `_ws_least_loaded` does `[[ -z "$sc" ]] && continue` — it **skips** (`ccd:1138`); `_swap_target` does `: "${sc:=100}"` — it ranks **last** (`ccd:6946`). ccd's own comments record the `0` behaviour as removed. *(Half of the sentence survives: a **stale** sample really is rewritten to 0 and really does win — `ccd:6811-6821`. The README conflates absent with stale.)* |
+| C5 | "A hold has **exactly two** consumers" | `README.md:191` | Four ccd rungs (`ws-rm :1353`, `ws-release :1866`, `ws-reap :5061`, `forget :7391`) plus `archiveMerged` plus every PWA display. README then names three in the following paragraph. `forget` appears nowhere in README. |
+| C6 | `archivedreason` is decided by `_ws_gc_merged` (an ancestor check) | `docs/…/2026-08-04-worktree-ownership-design.md:158-161` | Decided by `prphase` + numeric `prnumber` (`ccd:2024-2026`). ccd states the deviation and its reason at `:1992-2006` — ancestor checks cannot see a squash merge. **The code is right and the spec is stale.** |
 | C7 | `draft-present` "is a back-off, and the mail is **still there in two minutes**" | `server/src/watch.ts:1389-1394` | `rejectDelivery(id,'undeliverable',…)` parks the row permanently at attempt 6 for any never-delivered delivery (`watch.ts:1704-1717`). |
 | C8 | "A failed send must not stand a bare clip path in the live box" | `server/src/inject/send.ts:489-497` | Implemented on the **attachment path only**. Ordinary prose returns at `send.ts:529` with no `clearBox`, no `draft`. |
 | C9 | "the branch is `ws/<slug>`; §4's done-fingerprint re-measures THAT branch" | `ccd/coordinator-skill/references/wave-lifecycle.md:99-111` | The naming sweep renames it 28–82 s after creation (measured from three git reflogs). The skill has zero hits for `rename`/`ai-title`. |
-| C10 | "Don't clobber a half-typed message in the input box" | `ccd:7081`, `:7199-7200` | `grep -m1 "^❯ "` matches the **first** `❯` line with a **plain space** — a scrollback turn. It cannot match a live box row, which is `❯` + U+00A0. |
-| C11 | `_ws_least_loaded` picks "by session-count + disk only" | `build4.md:153-154` | `_account_ok` + `_limit_score` only (`ccd:1145-1153`). No session count, no disk. `build4.md:305-306` self-corrects 150 lines later. |
+| C10 | "Don't clobber a half-typed message in the input box" | `ccd:7060`, `:7178-7179` | `grep -m1 "^❯ "` matches the **first** `❯` line with a **plain space** — a scrollback turn. It cannot match a live box row, which is `❯` + U+00A0. |
+| C11 | `_ws_least_loaded` picks "by session-count + disk only" | `build4.md:153-154` | `_account_ok` + `_limit_score` only (`ccd:1134-1142`). No session count, no disk. `build4.md:305-306` self-corrects 150 lines later. |
 | C12 | F8 signature: "`.started` absent, unit `inactive(dead)` with ZERO journal entries" | `build4.md:161-162` | True but **uninformative**: `_ws_supervise` never ran, so the unit was never enabled. Two liveness signals disagreed and the ledger believed the one that cannot see a pane. |
 
 Plus four stale source anchors: `naming.ts:28` and `watch.ts:85` cite `_ws_branch_valid` at `ccd:1337-1347`
-(it is at `:1491-1501`); `watch.ts:1271` cites the 144-slug pool at `ccd:950-951` (it is at `:1024-1025`);
+(it is at `:1480-1490`); `watch.ts:1271` cites the 144-slug pool at `ccd:950-951` (it is at `:1013-1014`);
 `watch.ts:1398` cites `send.test.ts:642` (it is `:19-20` / `:880`); `ccd-workspaces.test.ts:226` anchors
-`_spawn`'s guard at `ccd:497-503` (it is at `:7163`).
+`_spawn`'s guard at `ccd:497-503` (it is at `:7142`).
 
 ### The live specimen
 
@@ -74,7 +87,7 @@ ten registry rows, **no `.started`**, **no systemd wants-symlink**, **no `.hold`
 at an idle prompt, zero transcript, `$0.0000` spent, on the `claude-dev0` lane. Every verb reports it
 healthy: `ls` → `ALIVE yes`; `ws-audit` → `not-archived` (and carries **no liveness field at all** —
 `_alive` appears nowhere in `cmd_ws_audit`); `ws-gc` → `tracked`, the one state the prune arm prints
-nothing for (`ccd:6225-6230`, `:6690-6691`); `ensure` → `alive: <id>`, exit 0, repairs nothing.
+nothing for (`ccd:6214-6219`, `:6679-6680`); `ensure` → `alive: <id>`, exit 0, repairs nothing.
 
 It is also no longer invisible in one respect that makes it worse: `sweepPr` stamped `.prphase=no-commits`
 onto it at 06:59 on 2026-08-14. `archiveMerged` skips anything whose phase is not `merged` (`watch.ts:1912`),
@@ -91,8 +104,10 @@ Given to the operator as the four questions the code cannot answer, 2026-08-14:
    workspace becomes ordinary. Not "detect and report only", not "roll back".
 2. **A failed send leaves the operator's text in the box**, and the PWA gains a `Send it` rescue for it.
 3. **All four surfaces, in blast-radius order** — one program, four waves, Build 4's shape.
-4. **Which accounts bill credits: unanswered.** This design therefore builds the *mechanism* (a roster
-   field and a placement constraint) and leaves the *values* as configuration. See "Open decisions".
+4. **Which accounts bill credits: none today** (answered after the first draft). Rather than ship a
+   roster field and ranking logic with no condition to act on, the billing half of F10 is **cut** —
+   see §3.3 for what survives and why. This is a scope reduction, so it is called out rather than
+   quietly absorbed.
 
 ## Wave 1 — a spawn is atomic, or it is honest
 
@@ -134,7 +149,7 @@ picks `resume`, which is correct.
 - **A distinct exhaust verdict.** Today it returns 0 on a ready marker, 2 on a login screen, and **0 on
   exhaust**. It will return `3` on exhaust. Its docstring stops claiming it confirms the TUI on a path
   where it does not.
-- **A hard-block branch.** `_pane_hard_blocked` (`ccd:6973-6980`) already matches
+- **A hard-block branch.** `_pane_hard_blocked` (`ccd:6952-6959`) already matches
   `limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|API Error: 429|rate limit|Please run /login`.
   Its only caller today is `_auto_swap_check`. The settle loop calls it and returns `4`. This is the
   recognizer `build4.md:172-173` asked for; it already exists one call away, which two measurement
@@ -159,7 +174,7 @@ lives in `spawnstate`, not in the exit code** — an adapter may not narrow a di
 ### 1.3 `ws-add` takes a per-project lock
 
 `flock -n "$REG/.ws-add-<project>.lock"` spans from slug selection through `_spawn_start`, and is
-released before the settle. ccd already uses `flock -n` twice (`:2355`, `:5139`), so the idiom and the
+released before the settle. ccd already uses `flock -n` twice (`:2344`, `:5128`), so the idiom and the
 non-blocking polarity are established. The loser refuses with
 `busy: another ws-add for <project> is in flight`.
 
@@ -283,10 +298,10 @@ above comes from `coord.db`, never from parsing this string — and a test pins 
 The point is that a human reading `~/.cc-sessions` can now answer "whose claim is this?" from the box
 alone, which they could not during the F9 incident.
 
-## Wave 3 — placement and naming respect a claim
+## Wave 3 — naming and relocation respect a claim
 
 **Bounded context:** Fleet Mutation + the naming sweep. **AGENT-FIRST deploy.**
-**Closes:** F10, F10b, F10c, F11, F11b, F11c.
+**Closes:** F11, F11b, F11c, F10c. **Cuts F10/F10b** — see §3.3.
 
 ### 3.1 The naming sweep will not rename a claimed workspace
 
@@ -294,7 +309,7 @@ alone, which they could not during the F9 incident.
 though `SessionRecord.held` is a field on the very array it iterates, carrying the run's own reason.
 Measured consequence: three ccrc-pwa workspaces renamed 82 s, 31 s and 28 s after creation, from git's
 own reflogs. `ccd ws-rename` has no hold rung either, unlike `ws-rm`, `ws-reap` and `forget`, and
-deliberately no busy guard (`ccd:1741-1744` — the naming moment is by definition a busy moment).
+deliberately no busy guard (`ccd:1730-1733` — the naming moment is by definition a busy moment).
 
 Twelfth condition: **skip when `r.held !== null` or an open run names the session.** Both halves are
 needed — `held` covers the ordinary dispatch, `openRunsForSession` covers a hand-created workspace
@@ -329,48 +344,52 @@ Two cases the code currently collapses into one:
 No overloaded null at a seam. §3.1 makes the rename-mid-run case unreachable anyway; this is the
 belt to that braces.
 
-### 3.3 Placement learns that a lane can cost money
+### 3.3 A claimed worker is not relocated for cosmetic reasons
 
-There is no billing, credit, cost or spend concept anywhere in `shared/`, `server/src`, `agent/src`,
-`pwa/src` or `ccd/` — a repo-wide grep returns only `SWAP_CEILING`'s overage comment,
-`_pane_hard_blocked`'s banner regex, and an aside in `naming.ts`. `_ws_least_loaded`'s entire ranking
-body is ten lines taking three inputs: home-ability, `_account_ok` (an executable bit and a kill-switch
-marker), and `_limit_score` (max of the 5h/7d percentages). Nothing on disk distinguishes
-`claude-dev0` from `claude2`: same `exec.kind`, same `*-oauth.env` shape, same `telemetry:"anthropic"`,
-both exporting exactly `CLAUDE_CODE_OAUTH_TOKEN`.
+**F10's billing half is CUT from this build.** The operator's answer to Q1 on 2026-08-14 was that **no
+lane bills usage credits today**. The roster field, the bash `CCRC_LAST_RESORT` array and the
+`_ws_least_loaded` / `_swap_target` ranking changes that were drafted here would therefore be
+mechanism with no condition to act on — speculative complexity in the most safety-critical file in the
+fleet, for a policy nobody is currently expressing. YAGNI. The roster already warns-and-ignores unknown
+fields (`shared/roster.ts:222-232`), so adding `placement` later is a small forward-compatible change
+with no lock-in cost to deferring; and the `<wrapper>-disabled` kill-switch marker (`ccd:118`, `:122`)
+already exists for the blunt case.
 
-**This is an external fact the roster must record, not derive.**
+What survives the answer is the part of F10 that was never about money. `_auto_swap_check` runs on a
+5-second supervise tick and **relocates a session between accounts with no reference to the hold**. Its
+two paths are already distinct in the shipped code (`ccd:6961-7010`):
 
-`AccountDef` gains one optional field: **`placement?: 'auto' | 'lastResort'`**, defaulting to `'auto'`.
-`ACCOUNT_KEYS` gains it (an unknown roster field warns and is ignored today, so this is
-forward-compatible in both directions). `accounts.sh` gains `CCRC_LAST_RESORT=(...)`, since bash cannot
-read the JSON.
+- **Rescue** — `_pane_hard_blocked` matched: a limit/spend banner is up or auth is lost. It swaps
+  *immediately*, deliberately bypassing the idle gate, because "the session is stuck anyway".
+- **Affinity** — returning home, or leaving because home hit `SWAP_CEILING`. Gated on a clean turn
+  boundary, but otherwise unconditional.
 
-- `_ws_least_loaded` ranks `auto` accounts. Only if **none** is available does it consider `lastResort`,
-  and when it does it writes one line to stderr:
-  `ccd: placing <id> on <acct> — last-resort lane, no ordinary account available`.
-- `_swap_target` applies the same ordering, so an auto-swap rescue does not quietly undo the policy.
-- `_ws_seed_home` already receives the pick, so `.home` — the durable field — follows automatically.
+The affinity path will **defer while `$REG/<id>.hold` exists**; the rescue path is untouched. A
+mid-wave worker must not have its session restarted and its transcript copied to another account
+because telemetry drifted — but a *blocked* mid-wave worker must still be rescued, or the hold becomes
+a way to strand a wedged wave. This is the honest reading of Q12 ("does a hold forbid relocation?"):
+**cosmetic relocation yes, rescue no.**
 
-**Why "place anyway and say so" rather than "refuse":** refusing when every ordinary lane is over
-ceiling would wedge the whole fleet, and a bill the operator can see is recoverable where a stalled
-fleet at 3am is not. This is an assumption, not a ruling — see "Open decisions".
+The rung uses `-e` not `-f`, matching the four existing hold readers, so an unreadable hold defers too.
 
-### 3.4 A correction can be made durable
+### 3.4 Deferred: making a lane choice durable
 
-`ccd swap` writes `.wrapper` and never `.home` (`ccd:7328-7329`), and `_auto_swap_check` polls every 5 s
-and returns the session home the moment home is usable (`ccd:6935`). So **every "move this worker off
-that lane" control reachable from the PWA today is cosmetic** — measured live in `swap.log`, in both
-directions. `ccd prefer` is the only `.home` writer, and it has no `CCD_ARGV` entry and no whitelist grant.
+Recorded here because it is measured and real, and **recommended for deferral** rather than inclusion.
 
-This wave adds both: `CCD_ARGV.prefer(id, wrapper)` and one exec-whitelist entry.
+`ccd swap` writes `.wrapper` and never `.home` (`ccd:7307-7308`), and `_auto_swap_check` returns the
+session home the moment home is usable (`ccd:6914`). So **the swap control the PWA ships today is
+cosmetic** — a deliberate lane change is silently reverted within ~15 minutes (measured live in
+`swap.log`, in both directions). `ccd prefer` is the only `.home` writer and is unreachable from the
+server: no `CCD_ARGV` entry, no exec-whitelist grant.
 
-**This is a new grant on the surface CLAUDE.md guards, so it is called out rather than slipped in.** The
-contrast with the entries that are deliberately absent: `gh` carries a repo-WRITE token with no cwd
-sandbox; `ws-rm` and `ws-gc` are on `UNGRANTABLE_VERBS` because they delete workspaces and branches.
-`prefer` writes exactly one registry field, deletes nothing, moves nothing, and its argv is pinned to
-`['prefer', <id>, <wrapper>]` with both operands validated by ccd. It is the smallest verb in the
-vocabulary. It still needs the operator's yes.
+Fixing it properly costs **one new exec-whitelist entry**, on the surface CLAUDE.md guards. With Q1
+answered, the strongest motivation for it — moving a worker off a billing lane — no longer exists, and
+what remains (durably pinning a session to an account) is a convenience. Against that: a whitelist
+entry is permanent attack surface, and there is a **zero-cost alternative** — label the PWA's swap
+sheet honestly ("temporary; this session returns to its home account when home has room"), which
+makes a working control out of a lying one without touching the boundary at all.
+
+Recommendation: **ship the honest label, defer the grant.** One word from the operator pulls it back in.
 
 ## Wave 4 — the input box tells the truth
 
@@ -491,16 +510,14 @@ stated so any of them can be overturned in one sentence:
 
 | # | Question | Decision |
 |---|---|---|
-| Q2 | Is a restricted lane excluded from auto-swap rescue too? | Yes — `_swap_target` uses the same ordering, else the reconciler undoes the policy. |
-| Q3 | When every permitted lane is over ceiling: refuse, or place anyway? | **Place anyway and say so.** A visible bill beats a stalled fleet. |
-| Q4 | May a caller name the account on `ws-add`? | No. Placement stays a policy ccd owns; the roster constrains it. |
+| Q2–Q4 | Placement policy: restricted lanes, over-ceiling behaviour, caller-named accounts. | **Moot.** Q1's answer (no lane bills credits today) removes the condition all three describe. Placement is unchanged by this build — see §3.3. |
 | Q5 | Max time `ws-add` may block? | 240 s, under the agent's 300 s ceiling. Safe only because §1.1 makes the timeout non-fatal. |
 | Q7 | Unrecognised gate: failure or wait? | Failure — stop, record `spawnstate`, report. Today it is neither. |
 | Q8 | Auto-clear an unbound, never-started workspace? | **Never.** Detect and surface; every clearance stays a human act. |
 | Q9 | Keep or kill a pane that survived a killed `ws-add`? | Keep — the operator's ruling, applied at both the ccd and dispatch layers. |
 | Q10 | May a branch be renamed while a program claims the workspace? | Never, for the life of the claim. |
 | Q11 | Is `runs.branch` frozen or followed? | Frozen — and §3.1 makes it accurate rather than merely stale. |
-| Q12 | Does a hold forbid relocation and renaming, or only deletion? | Renaming: yes (§3.1). Deletion: unchanged. Archive: unchanged, because README blesses the by-hand case — §2.3 gates it on **open runs** instead, which is the honest question. |
+| Q12 | Does a hold forbid relocation and renaming, or only deletion? | Renaming: **yes** (§3.1). Relocation: **cosmetic yes, rescue no** (§3.3). Deletion: unchanged. Archive: unchanged, because README blesses the by-hand case — §2.3 gates it on **open runs** instead, which is the honest question. |
 | Q13 | Hold per-session or per-run? | Per-session key, **run-aware server-side**. A refcount in ccd cannot work: the fleet host has no coord.db. |
 | Q14 | May the sweep archive under an open run? | Never. The by-hand route may, with `{force:true}`. |
 | Q15 | Should the abandon route stay ungated? | **Yes.** Its stated reason — a wedge caused *by* the coordinator must not be gated behind the coordinator's key — is untouched by F9, and §2.2 removes the harm. |
@@ -512,25 +529,24 @@ stated so any of them can be overturned in one sentence:
 
 ## Open decisions for the operator
 
-1. **Which accounts carry `placement: 'lastResort'`?** Unanswered on 2026-08-14. The build ships the
-   mechanism with **every account defaulting to `'auto'`**, i.e. behaviour identical to today until the
-   roster says otherwise. Labels suggest `claude-dev0` (`lab·dev0`) is the credit lane — it is the one
-   that billed $2.38 — while `team·max`, `alt·max` and `team·shared` read as subscriptions, and `gpt` is
-   already `homeAble:false`. **I will not guess this into a config file.**
-2. **The `prefer` exec grant (§3.4).** One new whitelist entry, on the surface CLAUDE.md guards. Without
-   it every lane correction the PWA offers is undone by the reconciler within 15 minutes.
-3. **Q3's polarity** — placing on a last-resort lane rather than refusing, when nothing else is available.
-4. **Q6, implicitly settled by the ruling:** "roll back" is off the table; `ws-add` never deletes its own
+1. ~~Which accounts bill credits~~ — **answered 2026-08-14: none today.** F10's billing half is cut
+   (§3.3). If a metered lane is ever added, the roster field this build declined to write is a small
+   forward-compatible change, and the `<wrapper>-disabled` kill-switch covers the blunt case meanwhile.
+2. **The `prefer` exec grant (§3.4) — I now recommend AGAINST it.** With Q1 answered its motivation is
+   convenience, not correctness, and it costs permanent attack surface on the boundary CLAUDE.md
+   guards. The honest-label alternative fixes the lying control for free. One word pulls it back in.
+3. **Q6, implicitly settled by the ruling:** "roll back" is off the table; `ws-add` never deletes its own
    fresh work.
-5. **Does the thundering-herd surface join this build, or stay separate?** `5bdc6dd` jittered
+4. **Does the thundering-herd surface join this build, or stay separate?** `5bdc6dd` jittered
    `_dispatch_swap`, which is the *dispatch* half. The half it does not address is that the
    SessionEnd/SessionStart hooks behind each swap each launch a ~2 GB telemetry scan with no
    concurrency bound — jitter spreads the herd but does not cap it, so a wide enough event still
    converges. A cap belongs to whoever owns that lane. It is **not** in Waves 1–4 as written, and I
    would rather it be a deliberate addition than an assumed one.
-6. **Reconciling the ccd deploy gap before Wave 1 ships.** `main` is one ccd commit ahead of the fleet
-   host and the installed copy's provenance marker is stale. That is another session's lane and I have
-   not touched it; Wave 1's agent-first deploy has to land on top of a clean marker, not underneath one.
+5. **Merging `fix/ccd-swap-jitter` before Wave 1 ships ccd.** The fleet host is running that branch
+   unmerged, and its provenance marker is stale. Wave 1's agent-first deploy has to land on top of a
+   clean marker, not underneath one — and it must not silently revert a fix that is already in
+   production. Not my branch, so not my merge: flagging it, not touching it.
 
 ## Testing
 
@@ -540,7 +556,7 @@ mode is *firing wrongly*, the mutant makes them fire.
 
 **The one structural obstacle, and the fix:** every `ws-add` test today sources ccd with
 `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };` (`ccdWsHelpers.ts:50`), so the ordering at
-`ccd:1268`, the pane-survives-the-kill property and the missing-`started` residue are **all outside the
+`ccd:1257`, the pane-survives-the-kill property and the missing-`started` residue are **all outside the
 mutation table** — which is precisely why F8 shipped. Wave 1 adds a harness variant that stubs only
 `tmux` and `_accept_first_run_prompts`, leaving `_spawn_start`/`_spawn_settle` real, so the invariant in
 §1.1 is mechanically pinned. Without that variant Wave 1 is untestable and must not ship.
