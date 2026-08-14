@@ -110,14 +110,32 @@ describe('README: the --surface bullet', () => {
   // matched the exact WRONG SENTENCE, not the underlying claim — a
   // reworded re-overclaim ("all API stops record pwa", "cli is exclusive
   // to a self-stop") would have sailed past both while still being false.
-  // Rewritten to catch the CLAIM: any absolute statement tying `pwa` to
-  // API-reached stops must carry its exception in the same breath, and any
-  // sentence naming `cli` must not use an exclusivity word at all — neither
-  // check depends on round 2's specific phrasing surviving verbatim.
-  it('does not claim every/all API-reached stops record pwa, in ANY phrasing', () => {
+  // Widened to catch a WIDER set of phrasings of the same two claims.
+  //
+  // STATED HONESTLY (fix round 4, task 14, Minor #5 — round 3's own comment
+  // here claimed these checks "do not depend on round 2's specific phrasing
+  // surviving verbatim", i.e. implied they were reword-proof; the reviewer
+  // then wrote a DIFFERENT overclaim — "always stamps … without exception",
+  // "belongs to … and to nothing else" — that used none of the words either
+  // regex looked for, and all 11 tests in this file stayed green against
+  // it). These are TEXT scans over a finite word list, exactly the class
+  // `single-definition.test.ts` names its own limit for: "these scan TEXT,
+  // deliberately… A determined author can evade [one]… The bar is 'a
+  // reasonable person adding a copy in the ordinary way is stopped before
+  // review', not 'unforgeable'." Same bar here, not a stronger one — the
+  // word lists below were widened once, with the specific words the
+  // reviewer's own bypass used, and will need widening again the next time
+  // someone finds a synonym neither list has yet.
+  it('does not claim every/all/always API-reached stops record/stamp pwa, in a wide set of phrasings', () => {
     const bullet = execWhitelistBullet();
     for (const s of sentencesOf(bullet)) {
-      if (/\b(every|all|any)\b/i.test(s) && /\bpwa\b/i.test(s) && /\brecord/i.test(s)) {
+      if (/\b(every|all|any|always)\b/i.test(s) && /\bpwa\b/i.test(s)
+          && (/\brecord/i.test(s) || /\bstamp/i.test(s))) {
+        expect(s, `unqualified absolute claim: "${s.trim()}"`).toMatch(/ws-rm/);
+      }
+      // "without exception" carries the same claim with neither trigger
+      // word above present.
+      if (/\bwithout exception\b/i.test(s) && /\bpwa\b/i.test(s)) {
         expect(s, `unqualified absolute claim: "${s.trim()}"`).toMatch(/ws-rm/);
       }
     }
@@ -131,11 +149,11 @@ describe('README: the --surface bullet', () => {
     expect(ccd).toMatch(/surface="\$\{2-ccd\}"/);
   });
 
-  it('does not claim cli is reserved/exclusive/only for a session stopping itself, in ANY phrasing', () => {
+  it('does not claim cli is reserved/exclusive/only/nothing-else for a session stopping itself', () => {
     for (const s of sentencesOf(execWhitelistBullet())) {
       if (/\bcli\b/i.test(s)) {
         expect(s, `possible exclusivity claim: "${s.trim()}"`)
-          .not.toMatch(/\b(reserved|exclusive(ly)?|only)\b/i);
+          .not.toMatch(/\b(reserved|exclusive(ly)?|only|nothing else|belongs to)\b/i);
       }
     }
   });

@@ -28,8 +28,17 @@ export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[] }
  *  `readCcdVerbs`) and the server's own local-mode reader (which reads its
  *  own box's ccd, `server/src/localcaps.ts`) must never drift on what
  *  counts as a line worth keeping — two copies of this one regex is exactly
- *  the shape that drifts silently, the same class `single-definition.test.ts`
- *  polices for `SessionLifecycle` elsewhere in this tree. */
+ *  the shape that drifts silently.
+ *
+ *  ACTUALLY POLICED, not merely asked nicely (fix round 4, task 14, Minor
+ *  #4 — an earlier version of this comment claimed a scanner existed here,
+ *  citing `SessionLifecycle` as precedent; neither the scanner nor that
+ *  precedent existed in `single-definition.test.ts`, and a comment is a
+ *  request, not a mechanism). `single-definition.test.ts`'s `describe('one
+ *  parseCcdCaps — the ccd-caps-line filter')` scans `shared/`, `server/src`,
+ *  `pwa/src` and `agent/src` for this exact regex used inside a
+ *  `.filter(...)` call and fails if it appears anywhere but this file, or
+ *  if either real reader stops importing it. */
 export function parseCcdCaps(stdout: string): string[] {
   return stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
 }

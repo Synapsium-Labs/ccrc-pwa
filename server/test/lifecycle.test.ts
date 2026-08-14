@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
-import { Tmux, realRunner, type Runner } from '../src/exec.js';
+import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner, listProjects } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
@@ -282,8 +282,8 @@ describe('lifecycle routes', () => {
 // `verbSupported`'s null-permits policy — the SAME hazard fix round 2
 // closed for remote mode, unclosed here because local mode had no evidence
 // to gate on. This describe block drives the REAL local-caps probe
-// (`readLocalCcdCaps`, a genuine `execFile` via `realRunner` against a
-// real executable file on disk — the exact call `index.ts`'s local branch
+// (`readLocalCcdCaps`, a genuine bounded `execFile` against a real
+// executable file on disk — the exact call `index.ts`'s local branch
 // makes) through the exact same route the PWA hits, with `CCRC_HOME` set
 // and `CCRC_FLEET` never mentioned, so `loadConfig`'s own default
 // (`config.ts:154`) is what selects local mode, not a test-only shortcut.
@@ -314,7 +314,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     // The REAL probe, against the REAL file — sanity-checked before it
     // ever reaches the route, so a failure here points at the probe, not
     // the route's use of its result.
-    const ccdVerbs = await readLocalCcdCaps(realRunner, ccdBin);
+    const ccdVerbs = await readLocalCcdCaps(ccdBin);
     expect(ccdVerbs).toEqual(['start', 'enable', 'ensure', 'stop', 'swap']);
 
     const calls: string[][] = [];
@@ -345,7 +345,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
       path.join(home, 'ccdbin'), 'ccd-new',
       'echo start\necho enable\necho ensure\necho stop\necho swap\necho stop-surface\nexit 0',
     );
-    const ccdVerbs = await readLocalCcdCaps(realRunner, ccdBin);
+    const ccdVerbs = await readLocalCcdCaps(ccdBin);
     expect(ccdVerbs).toContain('stop-surface');
 
     const calls: string[][] = [];
@@ -367,7 +367,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     seedRoster(home);
     seedDefault(home);
     const missingCcdBin = path.join(home, 'ccdbin', 'does-not-exist');
-    const ccdVerbs = await readLocalCcdCaps(realRunner, missingCcdBin);
+    const ccdVerbs = await readLocalCcdCaps(missingCcdBin);
     expect(ccdVerbs).toBeNull();
 
     const calls: string[][] = [];
@@ -380,6 +380,56 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    await app.close();
+  });
+
+  // Fix round 4 (task 14 follow-up, Important #1): boot must not block on
+  // the local-caps read at all — mirrors `index.ts`'s exact composition
+  // (seed `ccdVerbs: null`, kick off the read WITHOUT awaiting, mutate the
+  // same object in place once it resolves) rather than the earlier
+  // `await`-before-`deps` shape. A request handled BEFORE the real exec
+  // resolves must see "not yet known" as no evidence — the same safe
+  // default a genuinely-absent probe gives — and a request handled AFTER
+  // must see the real answer.
+  it('boot does not block on the local-caps read; a request racing it sees no-evidence, a later one sees the real answer', async () => {
+    const home = mkTmp('ccrc-local-skew-');
+    seedRoster(home);
+    seedDefault(home);
+    // Deliberately slow enough that the FIRST request below is certain to
+    // land before this resolves, without making the test itself slow.
+    const ccdBin = writeStubCcd(
+      path.join(home, 'ccdbin'), 'ccd-slow',
+      'sleep 0.15\necho start\necho stop\necho stop-surface\nexit 0',
+    );
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+
+    // index.ts's exact shape: seed null, fire-and-forget the read, mutate
+    // the SAME object in place once it resolves.
+    const fleetState = { connected: true, downSince: null, ccdVerbs: null as string[] | null };
+    const capsPromise = readLocalCcdCaps(ccdBin).then((verbs) => {
+      if (verbs !== null) fleetState.ccdVerbs = verbs;
+    });
+
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      fleetState,
+    });
+
+    // Racing the still-in-flight read: no evidence yet, so no --surface.
+    const early = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    expect(early.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+
+    await capsPromise; // now it has genuinely resolved
+    expect(fleetState.ccdVerbs).toContain('stop-surface');
+
+    calls.length = 0;
+    const late = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    expect(late.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+
     await app.close();
   });
 });

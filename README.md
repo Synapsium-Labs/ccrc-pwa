@@ -740,8 +740,10 @@ general remote-shell:
   `agent`, `ccd`) and normalizes anything else to `unknown`, but nothing
   proves the caller is who the flag says. The PWA's own `POST
   /api/sessions/:id/stop` route — the ONE place that route's two argv
-  builders are called — passes `--surface pwa`, so a stop the operator taps
-  from the PWA records `pwa`, not ccd's own `cli` default. That default is
+  builders are called — passes `--surface pwa` when the deployed ccd is
+  known to understand it (the conditional half is below), so a stop the
+  operator taps from the PWA records `pwa` in that case, not ccd's own
+  `cli` default. That default is
   not exclusive to it, though: `cli` is whatever an ORDINARY flagless
   invocation records, which is also what a session shelling `ccd stop`
   from its own Bash tool gets, among other callers. And `pwa` is not what
@@ -766,18 +768,29 @@ general remote-shell:
   whichever box runs it — the remote agent at handshake and every 60s
   thereafter, and, so the inverted default does not simply kill the feature
   in local mode (the documented default, `CCRC_FLEET=local`), the local
-  server too, which now execs its own `ccd caps` once at boot. With
+  server too, which now execs its own `ccd caps` once at boot — bounded
+  (10s, matching the remote agent's own exec ceiling for the identical
+  operation) and never on the boot path itself: the server starts
+  answering requests immediately, with "not yet known" read as no
+  evidence (the same safe default a genuinely absent probe gives) until
+  the read resolves in the background. With
   evidence either way, an older ccd still gets a stop it fully understands,
   just recorded under `cli` rather than `pwa` — never a call that silently
   does nothing.
-  One honest edge the inversion narrows but does not close: a **rollback**
-  to an older `~/ccrc-backups/<ts>/ccd` on the fleet host leaves the
-  agent's cached verb list still advertising `stop-surface` for up to 60
-  seconds, because an old ccd exits 0 on an argv it cannot parse — the same
-  silence that makes the underlying defect possible also means there is no
-  failure to trigger an early re-probe. Local mode's own probe runs once,
-  at boot, with no periodic refresh at all, so a local ccd replaced without
-  a server restart reads stale until the next one.
+  Two honest edges the inversion narrows but does not close, and they are
+  NOT the same size. On the fleet host, a **rollback** to an older
+  `~/ccrc-backups/<ts>/ccd` leaves the agent's cached verb list still
+  advertising `stop-surface` for up to 60 seconds — bounded, because the
+  agent re-probes on a timer (`CAPS_REFRESH_MS`) regardless of any signal
+  from ccd itself. **In local mode there is no such timer.** The probe
+  runs exactly once, at boot; swapping `~/.local/bin/ccd` for an older
+  copy under a still-running server **reopens the exact silent-success
+  hazard this work exists to close, with no bound at all**, because
+  nothing about a `stop` succeeding tells the server its evidence has gone
+  stale — an old ccd exits 0 on the argv it cannot parse, which is the
+  same silence that makes the underlying defect possible in the first
+  place. It stays open until the server process is restarted; there is no
+  other trigger.
   `stop`'s grant stayed a bare one-token
   prefix through this change — nothing widened — because the flag rides
   entirely inside the "everything after the verb" territory that prefix
