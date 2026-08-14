@@ -50,6 +50,26 @@ describe('caps op', () => {
       .toMatchObject({ ok: true, verbs: ['start', 'stop', 'ws-rename'] });
   });
 
+  // Fix round 2 (task 14 follow-up, item 1): proof that the AGENT-SIDE reader
+  // needs no code change to carry `ccd`'s new `stop-surface` capability
+  // token. This test changes nothing in `src/` — it exists to show the
+  // EXISTING `readCcdVerbs` regex (`/^[a-z][a-z-]*$/`) already accepts a
+  // verb-SHAPED capability token and passes it through the real WS `caps` op
+  // unmodified, exactly like any other line `cmd_caps` prints. That is the
+  // whole point of choosing this shape: zero new agent-side parsing, zero
+  // new wire field, zero new FleetState property — reusing plumbing that is
+  // already proven rather than building a parallel one.
+  it('carries a verb-shaped capability token (stop-surface) through unmodified — no new parsing needed', async () => {
+    fixture = makeFixture();
+    writeCcd(fixture.home, 'echo start\necho stop\necho stop-surface');
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+
+    expect(await client.req<CapsRes>(1, { op: 'caps' }))
+      .toMatchObject({ ok: true, verbs: ['start', 'stop', 'stop-surface'] });
+  });
+
   it('a caps read that fails after a working list retains that list, not []', async () => {
     // Review finding 1 (final whole-branch review): a failed exec used to be
     // written back as a confirmed `[]`, which then read as "unchanged" on

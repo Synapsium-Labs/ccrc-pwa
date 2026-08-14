@@ -12,7 +12,7 @@ import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome } from './limits.js';
 import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
-import { CCD_ARGV, verbSupported, type CcdArgv } from './ccdargv.js';
+import { CCD_ARGV, stopSurfaceSupported, verbSupported, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -652,17 +652,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
     }
     const rec = read.record;
+    // `pwa` is hard-coded here, not threaded from the request: this route is
+    // the PWA's own stop button and has exactly one caller (grep confirms
+    // it — nothing else in server/ or pwa/ reaches CCD_ARGV.stopId/
+    // stopPair), so there is no other identity this declaration could
+    // honestly carry. `null` — omit the flag — when the deployed ccd is not
+    // KNOWN to understand it (fix round 2, task 14, Important #1): a bare
+    // `['stop', id]` is what every ccd generation has always understood,
+    // where `['stop', id, '--surface', 'pwa']` against an old one parses as
+    // a stop of a session named `<id>---surface` — exit 0, nothing real
+    // touched, and `runCcdOr502` reads that as `200 {ok:true}`. This is the
+    // deploy-ordering hazard `deploy/deploy.sh` itself does not close (the
+    // agent target installs `ccd`; the default server target never does,
+    // and neither cross-checks the other's version), so the check has to
+    // live here instead of being a rollout note.
+    const surface = stopSurfaceSupported(deps.fleetState) ? 'pwa' : null;
     // A workspace id is `<project>-<slug>` and encodes no wrapper at all, so
     // there is nothing to reverse: the prefix rule below would fall through to
     // identity.wrapper and ccd would recompute `<wrapper>-<project>` — a
     // DIFFERENT, live session, killed while the workspace kept running and
     // the PWA reported success. ccd stop's one-argument form takes the id
-    // whole. `--surface pwa` is hard-coded here, not threaded from the
-    // request: this route is the PWA's own stop button and has exactly one
-    // caller (grep confirms it — nothing else in server/ or pwa/ reaches
-    // CCD_ARGV.stopId/stopPair), so there is no other identity this
-    // declaration could honestly carry.
-    if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id, 'pwa'));
+    // whole.
+    if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id, surface));
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
     // identity.wrapper, which a prior swap flips to the new account while the
@@ -670,7 +681,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
       : identity.wrapper;
-    return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project, 'pwa'));
+    return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project, surface));
   });
 
   // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.

@@ -127,7 +127,19 @@ describe('the dispatcher', () => {
 });
 
 describe('ccd caps', () => {
-  it('advertises exactly the verbs the dispatcher implements', () => {
+  // Fix round 2 (task 14 follow-up): `cmd_caps` now also advertises
+  // CAPABILITY tokens — verb-shaped strings that name a FLAG on an existing
+  // verb, not a second dispatchable command, so the server can ask "does
+  // this deployed ccd understand `--surface`" the exact same way it already
+  // asks "does this deployed ccd understand `ws-reap`" (`verbSupported`,
+  // reused rather than duplicated — see `ccd/ccd`'s own comment on the
+  // token). Named here, individually, so the exact-equality check below can
+  // still fail loudly on anything ELSE that drifts: a THIRD capability token
+  // added without updating this list is exactly as much a silent hole as an
+  // undispatched verb would be.
+  const KNOWN_CAPABILITY_TOKENS = ['stop-surface'];
+
+  it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
@@ -146,7 +158,13 @@ describe('ccd caps', () => {
     const dispatched = [...block.matchAll(/^ {2}([a-z][a-z|-]*)\)/gm)]
       .flatMap((m) => m[1]!.split('|'));
     const advertised = h.sh('cmd_caps').split('\n').filter(Boolean);
-    expect([...advertised].sort()).toEqual([...new Set(dispatched)].sort());
+    const verbs = advertised.filter((a) => !KNOWN_CAPABILITY_TOKENS.includes(a));
+    expect([...verbs].sort()).toEqual([...new Set(dispatched)].sort());
+    // The other half: the capability tokens actually advertised are EXACTLY
+    // the known set — neither a silently-dropped one nor an undocumented
+    // extra one hiding inside what the verb-parity check above now excludes.
+    const capabilities = advertised.filter((a) => KNOWN_CAPABILITY_TOKENS.includes(a));
+    expect(capabilities.sort()).toEqual([...KNOWN_CAPABILITY_TOKENS].sort());
   });
 });
 

@@ -739,11 +739,27 @@ general remote-shell:
   authentication**: ccd validates it against the closed set (`cli`, `pwa`,
   `agent`, `ccd`) and normalizes anything else to `unknown`, but nothing
   proves the caller is who the flag says. The PWA's own `POST
-  /api/sessions/:id/stop` route passes `--surface pwa` on every call —
-  `server/src/ccdargv.ts`'s `stopId`/`stopPair` builders take the surface as
-  a required argument, so every stop reached through the API records `pwa`,
-  not ccd's own `cli` default, which is reserved for a session stopping
-  itself from its own Bash tool. `stop`'s grant stayed a bare one-token
+  /api/sessions/:id/stop` route — the ONE place that route's two argv
+  builders are called — passes `--surface pwa`, so a stop the operator taps
+  from the PWA records `pwa`, not ccd's own `cli` default. That default is
+  not exclusive to it, though: `cli` is whatever an ORDINARY flagless
+  invocation records, which is also what a session shelling `ccd stop`
+  from its own Bash tool gets, among other callers. And `pwa` is not what
+  EVERY API-reachable path to a stopped session records — the several OTHER
+  routes and lanes that reach `_ws_unsupervise` directly (`ws-rm`, the
+  archive/reap verbs, `forget`, `FleetWatcher.archiveMerged`) pass no
+  surface at all and record `_ws_unsupervise`'s own default, `ccd` — an
+  operator archiving a workspace from the PWA sees "stopped by ccd" on that
+  row, correctly, because ccd itself did the unsupervising there, not the
+  stop route.
+  The capability is also conditional, not assumed: the server sends
+  `--surface` only when the deployed ccd advertises the `stop-surface`
+  token from `ccd caps` (`stopSurfaceSupported`, reusing the exact
+  `ccdVerbs`/`verbSupported` channel `pr-state`/`ws-reap`/etc. already use,
+  chosen verb-shaped so it needs no new wire field) — an older ccd still
+  gets a stop it fully understands, just recorded under `cli` rather than
+  `pwa`, never a call that silently does nothing.
+  `stop`'s grant stayed a bare one-token
   prefix through this change — nothing widened — because the flag rides
   entirely inside the "everything after the verb" territory that prefix
   already covered.

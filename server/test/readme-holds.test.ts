@@ -81,3 +81,76 @@ describe('README: workspace holds', () => {
     expect(ccd).toMatch(/\$\{reason\/\/\[\[:space:\]\]\/\}/);
   });
 });
+
+/**
+ * Fix round 2 (task 14 follow-up, Minor #2): the plan owner's own count —
+ * this branch has now caught prose overclaiming FOUR times, twice in text
+ * an implementer wrote. This section is what makes the fifth one a red
+ * suite instead of a reviewer's patience: the `--surface` bullet in "Agent
+ * security model" > Exec whitelist, pinned the same way the holds section
+ * above is — sliced by its own markers, checked against the code, not
+ * against a fixed sentence a future edit could silently falsify again.
+ */
+const execWhitelistBullet = (): string => {
+  const start = readme.indexOf('- **Exec whitelist**:');
+  expect(start).toBeGreaterThan(-1);
+  const end = readme.indexOf('- **Path whitelist**:', start);
+  expect(end).toBeGreaterThan(start);
+  return readme.slice(start, end);
+};
+
+describe('README: the --surface bullet', () => {
+  it('does not claim every API-reached stop records pwa', () => {
+    // The original round-2 draft said "every stop reached through the API
+    // records `pwa`" — false for ws-rm/ws-reap/forget/archiveMerged, which
+    // all reach `_ws_unsupervise` directly with no surface and record its
+    // own default, `ccd` (ccd/ccd's `_ws_unsupervise` signature, grepped
+    // below). An operator archiving a workspace from the PWA sees "stopped
+    // by ccd" on that row — this sentence must not promise `pwa` there.
+    const bullet = execWhitelistBullet();
+    expect(bullet).not.toMatch(/every stop reached through the API records/i);
+    // And it has to actually NAME the other paths, not just avoid the false
+    // absolute — a corrected sentence that goes silent on the exception is
+    // still an overclaim by omission.
+    expect(bullet).toMatch(/ws-rm/);
+    expect(bullet.toLowerCase()).toMatch(/reap/);
+    expect(bullet).toMatch(/forget/);
+    expect(bullet).toMatch(/archiveMerged/);
+    // Grounded in the real default `_ws_unsupervise` falls back to.
+    expect(ccd).toMatch(/surface="\$\{2-ccd\}"/);
+  });
+
+  it('does not claim cli is reserved for a session stopping itself', () => {
+    // The original round-2 draft said ccd's `cli` default "is reserved for a
+    // session stopping itself from its own Bash tool" — an exclusivity claim
+    // the code does not make: `cli` is whatever ANY flagless invocation
+    // records (cmd_stop's own default, ccd/ccd), self-stop included but not
+    // exclusive to it.
+    const bullet = execWhitelistBullet();
+    expect(bullet).not.toMatch(/reserved for/i);
+  });
+
+  it('states the check is CONDITIONAL on the deployed ccd advertising the capability', () => {
+    // The hazard this whole round exists to close: an unconditional
+    // `--surface` sent to an old ccd parses as a two-argument stop of a
+    // session named `<id>---surface` and exits 0 having touched nothing.
+    // The bullet must say the send is gated, name the mechanism, and the
+    // mechanism must actually exist in the source it claims.
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/conditional/i);
+    expect(bullet).toMatch(/stop-surface/);
+    expect(bullet).toMatch(/stopSurfaceSupported/);
+    expect(ccd).toMatch(/echo stop-surface/);
+    const ccdargv = readFileSync(path.join(root, 'server', 'src', 'ccdargv.ts'), 'utf8');
+    expect(ccdargv).toMatch(/export function stopSurfaceSupported/);
+  });
+
+  it('the grant it describes (a bare one-token `stop` prefix) is the grant that actually ships', () => {
+    const whitelist = readFileSync(path.join(root, 'agent', 'src', 'whitelist.ts'), 'utf8');
+    // Loose but load-bearing: `['stop']` appears as its own grant entry, not
+    // widened to require a flag the way ws-reap/ws-rename do.
+    expect(whitelist).toMatch(/\[\s*'stop'\s*\]/);
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/bare one-token/);
+  });
+});

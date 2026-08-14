@@ -29,8 +29,13 @@ const seedDefault = (home: string) =>
     started: '1',
   });
 
-/** Server over a seeded one-session registry; every exec succeeds (or fails with stderr 'boom'). */
-async function makeApp(opts: { fail?: boolean; projectsRoot?: string } = {}): Promise<{
+/** Server over a seeded one-session registry; every exec succeeds (or fails with stderr 'boom').
+ *  `ccdVerbs`, when given, seeds a real `fleetState` (mirroring
+ *  `coord-pause-route.test.ts`'s own pattern) — the shape a skew test needs
+ *  to prove the server's DECISION, not just its argv. */
+async function makeApp(
+  opts: { fail?: boolean; projectsRoot?: string; ccdVerbs?: string[] | null } = {},
+): Promise<{
   app: FastifyInstance;
   calls: string[][];
   cfg: CcrcConfig;
@@ -47,7 +52,12 @@ async function makeApp(opts: { fail?: boolean; projectsRoot?: string } = {}): Pr
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
   const cfg = loadConfig(env);
-  const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() });
+  const app = await buildServer({
+    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+    ...(opts.ccdVerbs !== undefined
+      ? { fleetState: { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs } }
+      : {}),
+  });
   return { app, calls, cfg, home };
 }
 
@@ -88,6 +98,66 @@ describe('lifecycle routes', () => {
 
   it('POST /api/sessions/:id/stop derives wrapper+project from the registry', async () => {
     const { app, calls, cfg } = await makeApp();
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    await app.close();
+  });
+
+  // Fix round 2 (task 14 follow-up, Important #1): the SKEW CASE the plan
+  // owner named directly. Round 1 sent `--surface pwa` unconditionally,
+  // measured against `origin/main`'s real pre-flag ccd (which this repo
+  // still deploys until BOTH `deploy/deploy.sh` targets have run, since only
+  // the agent target installs ccd and neither cross-checks the other's
+  // version): `ccd stop <id> --surface pwa` parses on that ccd as a
+  // TWO-ARGUMENT stop of a session literally named `<id>---surface`, exit 0,
+  // real session untouched. Reproduced directly (not just reasoned about,
+  // per DISPATCH-CONTEXT's own rule) against `origin/main:ccd/ccd` under a
+  // scratch HOME:
+  //   cmd_stop demo-quiet-mesa --surface pwa
+  //   -> systemctl --user disable --now claude-session@demo-quiet-mesa---surface
+  //   -> tmux kill-session -t cc-demo-quiet-mesa---surface
+  //   -> stopped demo-quiet-mesa---surface   rc=0
+  // and the SAME old binary given the fallback bare argv instead:
+  //   cmd_stop demo-quiet-mesa
+  //   -> systemctl --user disable --now claude-session@demo-quiet-mesa
+  //   -> tmux kill-session -t cc-demo-quiet-mesa
+  //   -> stopped demo-quiet-mesa   rc=0
+  // — the REAL session, correctly. `ccdVerbs` without `stop-surface` is
+  // exactly the shape the agent reports for that old ccd (it lists `stop`
+  // but never prints the new capability token), so this test drives the
+  // SAME decision the route makes in that real deployment window.
+  it('a fleet ccd that does not advertise stop-surface gets the bare argv old ccd understands (the skew case)', async () => {
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap'] });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    // The genuinely load-bearing assertion: this must be 200 because the
+    // bare argv sent is one old ccd ACTUALLY EXECUTES, not a 200 papering
+    // over a no-op — the whole point is that the fallback is a real stop,
+    // not a degraded failure.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    await app.close();
+  });
+
+  it('a fleet ccd that DOES advertise stop-surface still gets --surface pwa (the capability check is not a permanent regression)', async () => {
+    const { app, calls, cfg } = await makeApp({
+      ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap', 'stop-surface'],
+    });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    await app.close();
+  });
+
+  // `null` (no evidence — local mode, or an agent that has not reported
+  // caps yet) permits, matching `verbSupported`'s own policy for every
+  // OTHER gated verb in this codebase: an absent list must never grey out
+  // the fleet. This is a DELIBERATE, pre-existing risk the whole verb-gate
+  // architecture already accepts, not a new one this fix introduces — see
+  // `stopSurfaceSupported`'s own comment in ccdargv.ts.
+  it('no evidence at all (ccdVerbs: null) still sends --surface pwa — consistent with every other gated verb', async () => {
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: null });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);

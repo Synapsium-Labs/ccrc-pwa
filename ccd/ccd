@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0d8cabc9d623585eb803b3952a12f6c96305646ef88e361e3bffaa7d296ccb1b
+# ccrc:generated 1 sha256=c88cccce989ccc1acb223adb4d95a1d4e1d1f6f4f563bec5a7614e224e2dedd1
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -1909,6 +1909,20 @@ ws-rm
 version
 ls
 EOF
+  # `stop-surface` is a CAPABILITY token, not a dispatchable verb — `ccd
+  # stop-surface` is not a command. It rides this exact channel deliberately
+  # (fix round 2, task 14): the agent's caps reader, the wire's `ccdVerbs`
+  # list and the server's `verbSupported` lookup already exist, are already
+  # proven, and do a plain membership check with no assumption that every
+  # member is dispatchable — so a second capability channel would duplicate
+  # working plumbing for no reason. Shaped like a verb (lowercase + hyphens)
+  # on purpose, so it needs no new parsing anywhere: it passes the agent's
+  # existing `/^[a-z][a-z-]*$/` filter unchanged. Names the FLAG `cmd_stop`
+  # has carried since D3 (spec §4.1): `ccd stop [--surface <word>] <id>`.
+  # `server/test/ccd-archive.test.ts`'s caps<->dispatcher parity check knows
+  # this one token by name and requires it to stay exactly one token — a
+  # third one added here without updating that list fails loudly there.
+  echo stop-surface
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
