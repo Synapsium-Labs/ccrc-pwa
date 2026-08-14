@@ -266,6 +266,49 @@ describe('_swap_carry_jsonl', () => {
       .toBe(fs.statSync(dst('-data-projects-demo')).ino);
   });
 
+  it('answers rc 2 when copies land but NOT at mdir — the one slot that matters', () => {
+    // FINAL REVIEW. `(( carried > 0 )) || return 1` said "at least one copy
+    // landed", but §2.2's own docstring says mdir is "the directory the resumed
+    // process starts in, and the first address it reads". Measured before this
+    // fix: two distinct source inodes, mdir's destination unwritable — a
+    // warning on stderr, carried=1, rc 0, and cmd_swap went on to flip
+    // `wrapper` and print `swapped …`. The resumed session then munges its cwd
+    // to mdir, finds nothing, and reports no history: D1's exact symptom,
+    // behind a success report.
+    //
+    // The mdir destination is made unwritable rather than the copy stubbed out,
+    // so this is the real `cp`'s real EACCES.
+    plant(SRC, '-data-projects-demo', 'OLD\n', 1000);
+    plant(SRC, '-w-quiet-mesa', 'NEW\n', 2000);
+    const locked = path.join(h.home, DST, 'projects', '-mdir-elsewhere');
+    fs.mkdirSync(locked, { recursive: true });
+    fs.chmodSync(locked, 0o500);
+    try {
+      expect(carry('-mdir-elsewhere')).toBe('RC2');
+      // NOT a total failure — that is the whole point. The other two slots
+      // landed, which is exactly why `carried > 0` could not see this.
+      expect(read(dst('-data-projects-demo'))).toBe('OLD\n');
+      expect(read(dst('-w-quiet-mesa'))).toBe('NEW\n');
+      expect(fs.existsSync(path.join(locked, `${UUID}.jsonl`))).toBe(false);
+    } finally {
+      fs.chmodSync(locked, 0o700);
+    }
+  });
+
+  it('answers rc 0 when a HARDLINK — not a copy — is what fills the mdir slot', () => {
+    // The mutant this kills is the tempting one-liner: gate on `carried`
+    // per-slot. `carried` counts distinct INODES copied, so M1's production
+    // shape (one inode wearing several names) legitimately reports carried=1
+    // while every slot is correctly filled — and mdir's is a `ln -f`, never a
+    // `cp`. Reading the verdict off `carried` would refuse a perfect swap.
+    const a = plant(SRC, '-data-projects-demo', 'HISTORY\n');
+    linkAt(a, SRC, '-w-quiet-mesa');
+    expect(carry('-mdir-elsewhere')).toBe('RC0');
+    expect(read(dst('-mdir-elsewhere'))).toBe('HISTORY\n');
+    expect(fs.statSync(dst('-mdir-elsewhere')).ino)
+      .toBe(fs.statSync(dst('-data-projects-demo')).ino);
+  });
+
   it('answers rc 1 and writes nothing at all when the uuid has no transcript', () => {
     // §2.4's precondition: an empty glob must not read as an empty copy, and
     // the refusal Task 3 builds on top of this needs a destination account

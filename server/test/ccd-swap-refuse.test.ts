@@ -32,6 +32,39 @@ const SWAP_STUBS = `
   cmd_ensure() { echo "cmd_ensure $*" >> "$HOME/ccd-calls"; return 0; };
 `;
 
+/** SWAP_STUBS with the REAL `cmd_ensure`, because stubbing it is what hid the
+ *  critical defect below: the damage a refusal's restart used to do lived
+ *  entirely INSIDE that function. `_spawn` is stubbed in its place — it is the
+ *  real `cmd_ensure`'s own last resort when the unit will not come up, so its
+ *  appearance in the call log is proof the whole real path ran. */
+const REAL_ENSURE_STUBS = `
+  systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in has-session) return 1;; esac; return 0; };
+  sleep() { :; };
+  _spawn() { echo "_spawn $*" >> "$HOME/ccd-calls"; return 0; };
+`;
+
+/** Everything past `_auto_swap_check`'s cooldown gate, so a test is about the
+ *  gate alone: a hard-blocked pane (matched by the REAL `_pane_hard_blocked`),
+ *  a target, headroom, and a dispatch that LOGS instead of running systemd-run. */
+const AUTO_TICK_STUBS = `
+  tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
+  _swap_target() { echo claude2; }; _avail() { return 0; };
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
+`;
+
+/** The tmux a refusal fixture needs: the pane is DEAD — `cmd_swap` killed it
+ *  before the carry — and a `kill-session` rotates the registry uuid exactly as
+ *  `_sync_uuid` does after a /clear, which is what makes the post-flush look
+ *  find nothing. */
+const deadRotate = (id: string): string =>
+  `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
+     case "\${1:-}" in
+       kill-session) _reg_set ${id} uuid ${UUID_B} ;;
+       has-session)  return 1 ;;
+       capture-pane) echo "API Error: 429 Too Many Requests" ;;
+     esac; return 0; };`;
+
 const shFail = (snippet: string): { code: number; stderr: string; stdout: string } => {
   try { return { code: 0, stderr: '', stdout: h.sh(snippet) }; }
   catch (e) {
@@ -154,16 +187,97 @@ describe('a swap that cannot carry the conversation', () => {
     expect(h.calls().join('\n')).toContain(`--user start claude-session@${id}`);
   });
 
-  it('falls back to cmd_ensure when the unit will not start', () => {
-    // The same `|| cmd_ensure` tail the successful swap already carries at
-    // ccd:7064. A box with no unit installed still gets its session back.
+  it('falls back to the REAL cmd_ensure when the unit will not start, and the marker survives it', () => {
+    // FINAL REVIEW, CRITICAL — and the test that should have caught it was part
+    // of the defect. Its predecessor stubbed `cmd_ensure` in SWAP_STUBS and
+    // asserted only that the call happened, so the damage was stubbed away:
+    // the real `cmd_ensure` finds the pane DEAD (cmd_swap killed it two lines
+    // earlier), sails past its `_alive` early return, and `rm -f`s the
+    // `swapblocked` field `_swap_refuse` had just written — the field its own
+    // comment calls "the DURABLE one… Survives nobody watching". With both of
+    // `_auto_swap_check`'s gates then open (`lastswap` deliberately cleared,
+    // `swapblocked` erased) the next 5s supervise tick re-dispatched the swap;
+    // the storm that follows is the test below this one.
+    //
+    // So: `cmd_ensure` is NOT stubbed here. `_spawn` is instead, which is the
+    // real function's own last resort when the unit will not come up — its
+    // appearance in the call log is the proof that the whole real path ran.
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
-    const rotate = `tmux() { [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
-      echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };`;
-    shFail(`${SWAP_STUBS} ${noUnit} ${rotate} cmd_swap ${id} claude2`);
-    expect(h.calls().join('\n')).toContain(`cmd_ensure ${id}`);
+    shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    expect(h.calls().join('\n'), 'the real cmd_ensure did not run — this test is stubbed hollow')
+      .toContain(`_spawn ${id}`);
+    expect(h.reg(id, 'swapblocked'),
+      'the refusal erased the durable record it had just written')
+      .toContain(`no transcript found for ${UUID_B} under claude after flush`);
+  });
+
+  it('clears a FAILED unit before restarting it — the state this build made reachable', () => {
+    // Two realistic reasons that `systemctl start` fails here, and the second is
+    // this build's own doing: (a) no unit installed, which the `|| cmd_ensure`
+    // fallback above is for; (b) the unit is `failed` and rate-limited by §3.3's
+    // StartLimitIntervalSec=120/StartLimitBurst=5. `_supervised_start` was given
+    // a `reset-failed` for exactly (b); this arm had none, so a refusal on a
+    // crash-looped row left the session down.
+    const id = seed(UUID_A);
+    plantTranscript('.claude', '-x-projects-demo', UUID_A);
+    shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    const sys = h.calls().filter((c) => c.startsWith('systemctl '));
+    expect(sys).toEqual([
+      `systemctl --user stop claude-session@${id}`,
+      `systemctl --user reset-failed claude-session@${id}`,
+      `systemctl --user start claude-session@${id}`,
+    ]);
+  });
+
+  it('survives the SUPERVISOR that the restart brings back — a different process, seconds later', () => {
+    // The half the `|| cmd_ensure` fallback does not cover and which bites on
+    // every box that HAS a unit: `systemctl start` succeeds, the unit runs
+    // `cmd_supervise`, and that calls `cmd_ensure` with the pane still dead —
+    // erasing the marker from a process no `local` can reach. The discriminator
+    // is CCD_IN_UNIT: a supervisor re-entering its own unit is not the
+    // "deliberate revival" §2.4 says supersedes a refusal.
+    const id = seed(UUID_A);
+    plantTranscript('.claude', '-x-projects-demo', UUID_A);
+    shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    const blocked = h.reg(id, 'swapblocked');
+    expect(blocked).toContain('no transcript found');
+    // What the unit does next, in its own process.
+    shFail(`${REAL_ENSURE_STUBS} ${deadRotate(id)} CCD_IN_UNIT=1; cmd_ensure ${id}`);
+    expect(h.reg(id, 'swapblocked'), 'the supervisor erased the refusal it was sent to honour')
+      .toBe(blocked);
+  });
+
+  it('and a HUMAN revive still supersedes it — the clear did not simply move away', () => {
+    // The mutant this pair must both kill: "guard the clear everywhere". §2.4's
+    // sentence is about an operator act, and `POST /api/sessions/:id/ensure` —
+    // outside any unit, no CCD_KEEP_SWAPBLOCK — is exactly that act.
+    const id = seed(UUID_A);
+    h.sh(`_reg_set ${id} swapblocked "1754000000 stale refusal"`);
+    shFail(`${REAL_ENSURE_STUBS} cmd_ensure ${id}`);
+    expect(h.reg(id, 'swapblocked')).toBeNull();
+  });
+
+  it('does not re-dispatch on the next supervise tick, ten ticks running', () => {
+    // The whole point of keeping the marker, and the storm it prevents.
+    // Measured before the fix on this exact fixture: the marker was gone, both
+    // gates were open, and the tick dispatched again.
+    //
+    // THE REAL `cmd_ensure` AND A UNIT THAT WILL NOT START, deliberately: with
+    // `cmd_ensure` stubbed the marker survives even the unfixed ccd, so a
+    // fixture that stubbed it would pass against the very defect it is named
+    // for. `_dispatch_swap` LOGS rather than running, so the count is of
+    // decisions, not side effects, and `lastswap` is cleared before each tick
+    // so the ONLY thing that can gate them is the field the refusal wrote.
+    const id = seed(UUID_A);
+    plantTranscript('.claude', '-x-projects-demo', UUID_A);
+    const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
+    shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    expect(h.reg(id, 'swapblocked')).toContain('no transcript found');
+    h.sh(`${AUTO_TICK_STUBS} for i in 1 2 3 4 5 6 7 8 9 10; do
+      rm -f "$HOME/.cc-sessions/${id}.lastswap"; _auto_swap_check ${id}; done`);
+    expect(h.calls().filter((c) => c.startsWith('dispatch '))).toEqual([]);
   });
 
   it('a completed swap clears a standing refusal', () => {
@@ -175,6 +289,39 @@ describe('a swap that cannot carry the conversation', () => {
     h.sh(`${SWAP_STUBS} cmd_swap ${id} claude2`);
     expect(h.reg(id, 'swapblocked')).toBeNull();
     expect(h.reg(id, 'wrapper')).toBe('claude2');
+  });
+
+  it('refuses a PARTIAL carry that missed mdir, and says which slot failed', () => {
+    // FINAL REVIEW. The refusal machinery covered "every copy failed"; it did
+    // not cover "the copy that mattered failed". Measured: copies landed
+    // elsewhere, `carried` was 1, rc 0, and the swap completed — flipping
+    // `wrapper` onto an account whose mdir slot is empty, which is D1's symptom
+    // with a success line over it. The reason names mdir because an operator
+    // reading a banner at 2am must not be sent looking for a full disk.
+    const id = seed(UUID_A);
+    // A second match somewhere else, so at least one copy DOES land: without it
+    // this is the pre-existing "every copy failed" case and proves nothing new.
+    plantTranscript('.claude', '-x-projects-demo', UUID_A);
+    plantTranscript('.claude', '-y-projects-demo', UUID_A);
+    const mdir = fs.realpathSync(path.join(h.home, 'projects', 'demo')).replace(/[/._]/g, '-');
+    const locked = path.join(h.home, '.claude-personal', 'projects', mdir);
+    fs.mkdirSync(locked, { recursive: true });
+    fs.chmodSync(locked, 0o500);
+    try {
+      plantNotify();
+      const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+      expect(r.code).not.toBe(0);
+      expect(r.stdout, 'a partial carry printed a success line').not.toContain('swapped');
+      expect(h.reg(id, 'wrapper')).toBe('claude');
+      expect(h.reg(id, 'swapblocked')).toContain(`but the copy to ${mdir} failed`);
+      expect(notices()).toContain(`cc swap BLOCKED: ${id} stays on claude`);
+      // The arithmetic that exposes it was already being logged and simply
+      // never branched on — it stays logged, in front of the refusal.
+      expect(swapLog()).toMatch(/carry .*: 2 match\(es\), 2 copy\/copies, 3 destination\(s\)/);
+      expect(swapLog()).toContain(`swap-refused ${id}`);
+    } finally {
+      fs.chmodSync(locked, 0o700);
+    }
   });
 
   it('distinguishes "nothing found" from "found but the copy failed" in the reason', () => {
@@ -225,14 +372,7 @@ describe('ccd swap --force', () => {
 });
 
 describe('_auto_swap_check and a refused session', () => {
-  /** Everything past the cooldown gate, so the test is about the gate alone:
-   *  a hard-blocked pane (matched by the REAL _pane_hard_blocked), a target,
-   *  headroom, and a dispatch that logs instead of running systemd-run. */
-  const AUTO_STUBS = `
-    tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
-    _swap_target() { echo claude2; }; _avail() { return 0; };
-    _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
-  `;
+  const AUTO_STUBS = AUTO_TICK_STUBS;
 
   it('skips a refusal younger than 1800s and stops skipping at the boundary', () => {
     // The supervise loop ticks every 5 seconds. Without this gate one refusal

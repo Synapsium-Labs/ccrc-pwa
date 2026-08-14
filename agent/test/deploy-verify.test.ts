@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -283,6 +283,69 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const restartSec = Number(/^RestartSec=(\d+)$/m.exec(unit)![1]);
     expect(burst * restartSec, 'the burst cannot be spent inside the interval — the unit never fails')
       .toBeLessThan(interval);
+  });
+
+  it('the supervisor sweep survives a FAILED session unit — the state the start limit made reachable', () => {
+    // FINAL REVIEW, finding 6. The start limit above is what made `failed`
+    // reachable at all (before it, every unit ran systemd's default 10s window
+    // against RestartSec=3, so the burst could never be spent and a
+    // crash-looping session looped invisibly for ever). `systemctl list-units`
+    // INCLUDES failed units, and `try-restart` is a no-op on one — so the
+    // unfiltered sweep handed verify-service.sh a unit that was never restarted
+    // and could not be active. Reproduced with exactly the stubs below:
+    // `DEPLOY FAILED — claude-session@boom.service did not come up clean after
+    // restart`, exit 1, and `set -e` aborting the agent target AFTER ccd, the
+    // units, the hooks and the agent are installed but BEFORE the `ccd version`
+    // sha check — every subsequent deploy failing identically until somebody
+    // cleared the unit by hand.
+    //
+    // The SWEEP_CMD is extracted from deploy.sh and RUN, not read: a structural
+    // assertion about `--state=` would pass on a filter applied to the wrong
+    // loop, which is precisely the mistake being fixed.
+    const sweep = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    expect(sweep, 'the supervisor sweep is no longer a single quoted block').toBeTruthy();
+
+    const home = mkTmp('ccrc-agent-deploysweep-');
+    const bin = path.join(home, 'stubbin');
+    mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    // A box with one healthy session and one failed one. The stub answers the
+    // `--state=` filters the way systemd does, AND answers an unfiltered
+    // `list-units` with both — so a sweep that drops the filter sees the failed
+    // unit again and this test goes red.
+    writeFileSync(path.join(bin, 'systemctl'),
+      '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\n'
+      + 'case "$*" in\n'
+      + '  *list-units*)\n'
+      + '    case "$*" in\n'
+      + '      *--state=failed*) echo "claude-session@boom.service loaded failed failed x" ;;\n'
+      + '      *--state=active*) echo "claude-session@good.service loaded active running x" ;;\n'
+      + '      *) echo "claude-session@good.service loaded active running x"\n'
+      + '         echo "claude-session@boom.service loaded failed failed x" ;;\n'
+      + '    esac ;;\n'
+      + 'esac\nexit 0\n', { mode: 0o755 });
+    // Stands in for verify-service.sh, failing for anything not active exactly
+    // as the real script's first `is-active` check does.
+    writeFileSync(path.join(home, 'ccrc', 'deploy', 'verify-service.sh'),
+      '#!/bin/sh\necho "verify $1" >> "$HOME/calls"\n'
+      + 'case "$1" in *boom*) echo "## DEPLOY FAILED — $1" >&2; exit 1 ;; esac\n'
+      + 'echo "verified: $1"\n', { mode: 0o755 });
+
+    const r = spawnSync('bash', ['-c', sweep![1]!], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    expect(r.status, 'a pre-existing failed session unit still aborts the deploy').toBe(0);
+    const calls = readFileSync(path.join(home, 'calls'), 'utf8');
+    expect(calls, 'verify-service.sh was handed a unit that was never restarted')
+      .not.toContain('verify claude-session@boom.service');
+    expect(calls, 'the healthy supervisor stopped being verified — the sweep is now decorative')
+      .toContain('verify claude-session@good.service');
+    // Named, with the remedy: a failed session is not this deploy's doing and
+    // must not fail it, but silence would leave a dead session on the box with
+    // nothing anywhere saying so.
+    expect(r.stderr).toContain('claude-session@boom.service is FAILED');
+    expect(r.stderr).toContain('reset-failed');
   });
 
   it('every hand-copied script lands via scp-to-temp + mv, never an in-place overwrite', () => {

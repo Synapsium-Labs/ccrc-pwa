@@ -203,8 +203,8 @@ never left half-true:
 | Field | Shape | Written by |
 | --- | --- | --- |
 | `$REG/<id>.stopped` | `<epoch> <surface>` | `_ws_unsupervise` — the one choke point every stop path (`cmd_stop`, ws-rm, ws-archive, ws-reap, forget) routes through, so an archived workspace is never left reading `orphan` |
-| `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop |
-| `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap or a deliberate `ccd start`/`ccd ensure` revival |
+| `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop — and by `cmd_swap` **throughout** its carry, on the same 30s cadence, so a 188MB `cp -a` never leaves the row reading `orphan` mid-swap |
+| `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap, or by a deliberate `ccd start`/`ccd ensure` revival. **Not** by the refusal's own restart, and **not** by the supervisor re-entering its unit: neither is a human act, and both used to erase the record seconds after it was written |
 | `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
 
 A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
@@ -236,6 +236,18 @@ runaway swap — and an unattended process that tries to "fix" a fleet row is
 exactly the kind of component that could have fought that stop. Every
 lifecycle state above is read, never repaired automatically; reviving a row
 stays a human act (`ccd start <id>`), on purpose.
+
+That human act has to actually work on the row it is offered for. An
+`unsupervised` row is a **live** pane, and all three revive verbs used to
+return before they could do anything about it — `ccd ensure` early-returns on
+"already alive", and `ccd start`/`ccd enable` issued `enable` without `--now`,
+which promises a start at next boot and supervises nothing now. So the PWA
+rendered "running unsupervised" beside a Restart button that answered success
+and changed nothing, on what is D2's entire population the day the fix ships.
+All three now adopt such a pane: `systemctl --user reset-failed` then
+`enable --now`, whose unit re-enters through `cmd_ensure`, finds the pane
+already there, and watches it — no second spawn, and no change at all for a
+row that is already `running`, which stays the cheap no-op it has always been.
 
 ### Workspace holds & programs
 

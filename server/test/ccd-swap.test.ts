@@ -222,3 +222,102 @@ describe('cmd_swap keeps carrying the task list', () => {
     ]);
   });
 });
+
+describe('the detached self-swap answers for its own dispatch', () => {
+  // FINAL REVIEW. This is the COMMON invocation — a session swapping itself
+  // from its own Bash tool — and it is the one arm of the design with no test
+  // at all, because every other case in this file empties TMUX precisely to
+  // avoid it. Measured before the fix: `systemd-run` returns 1, ccd prints
+  // `detached: <id> will restart under <target> in a few seconds`, returns 0,
+  // and records NOTHING — no swap.log line, no swapblocked, no banner,
+  // `wrapper` unchanged. `_dispatch_swap`, the auto-path twin, has carried the
+  // matching `|| echo "… dispatch FAILED …"` guard all along.
+  //
+  // `tmux display-message` must answer with this session's own name for the
+  // branch to be taken at all; TMUX is set for the same reason.
+  const SELF = (runRc: number): string =>
+    `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; sleep() { :; };
+     tmux() { case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
+       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
+     systemd-run() { echo "systemd-run $*" >> "$HOME/ccd-calls"; return ${runRc}; };`;
+
+  const selfSwap = (runRc: number): { code: number; stdout: string; stderr: string } => {
+    try {
+      return { code: 0, stdout: h.sh(`${SELF(runRc)} cmd_swap ${ID} claude-dev0`, { TMUX: '/tmp/x,1,0' }), stderr: '' };
+    } catch (e) {
+      const err = e as { status?: number; stdout?: Buffer; stderr?: Buffer };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  it('reports failure, records it, and tears nothing down when systemd-run fails', () => {
+    const mdir = seed('claude');
+    plant('.claude', mdir, 'HISTORY\n');
+    const r = selfSwap(1);
+    expect(r.code).not.toBe(0);
+    expect(r.stdout, 'a failed dispatch printed the success line').not.toContain('detached:');
+    expect(r.stderr).toContain(`could not detach the swap of ${ID}`);
+    expect(swapLog()).toContain(`detach FAILED for ${ID}: claude -> claude-dev0`);
+    // Nothing was torn down and nothing moved — the session is untouched, which
+    // is why this arm reports through an rc instead of through `swapblocked`.
+    expect(h.calls().some((c) => c.includes('kill-session'))).toBe(false);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.reg(ID, 'swapblocked')).toBeNull();
+  });
+
+  it('still returns 0 with its one line when the dispatch is accepted', () => {
+    // The other side of the same branch: a successful detach really has handed
+    // the work to a transient unit and really is about to kill this caller, so
+    // the confident line is the correct answer THERE.
+    const mdir = seed('claude');
+    plant('.claude', mdir, 'HISTORY\n');
+    const r = selfSwap(0);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`detached: ${ID} will restart under claude-dev0`);
+    expect(swapLog()).not.toContain('detach FAILED');
+  });
+});
+
+describe('the swap heartbeats WHILE it carries, not just around the carry', () => {
+  // §4.2: "the swap re-stamps as it goes, and the window classifies as
+  // `restarting`" — motivated by §2.3's `cp -a` fallback over a 188MB sidecar
+  // taking longer than the 120s freshness window. What shipped was two stamps,
+  // one before the carry and one after, and nothing between. Measured against
+  // the shipped ladder with a 200s carry: `orphan` at 125s and at 180s — the
+  // row reading "nothing is watching it" MID-SWAP, with the PWA's revive
+  // affordance beside it, while `wrapper` still names the source account.
+  //
+  // Wall-clock, because that is the only thing the defect is made of: the beat
+  // interval is turned down to 1s and the first `cp` is slowed to ~4s. `sleep`
+  // is deliberately NOT stubbed here.
+  const SLOW = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };
+    SWAP_BEAT_INTERVAL=1
+    cp() { if [[ -z "\${SLOWED:-}" ]]; then SLOWED=1; command sleep 7; fi; command cp "$@"; };`;
+
+  it('re-stamps `supervised` during the carry, and stops the moment it is over', () => {
+    const mdir = seed('claude');
+    plant('.claude', mdir, 'HISTORY\n');
+    // TWO samples taken from INSIDE the carry, and the assertion is that they
+    // differ. Comparing a post-swap read against a pre-swap one would prove
+    // nothing: `cmd_swap`'s own closing stamp ("the carry may have taken
+    // minutes") already moves it, and did so before this fix too.
+    const out = h.sh(`${SLOW}
+      ( command sleep 2; _reg_get ${ID} supervised > "$HOME/beat-a"
+        command sleep 3; _reg_get ${ID} supervised > "$HOME/beat-b" ) &
+      sampler=$!
+      cmd_swap ${ID} claude-dev0 >/dev/null
+      wait $sampler
+      done=$(_reg_get ${ID} supervised)
+      command sleep 3
+      settled=$(_reg_get ${ID} supervised)
+      echo "$(cat "$HOME/beat-a") $(cat "$HOME/beat-b") $done $settled"`, { TMUX: '' });
+    const [a, b, done, settled] = out.split(' ').map(Number) as [number, number, number, number];
+    expect(b, 'the stamp did not move DURING the carry — it is bracketed, not covered')
+      .toBeGreaterThan(a);
+    // And the stamper is not still running three seconds after the verb
+    // returned — a heartbeat that outlives the swap is a worse lie than the one
+    // this fixes, since it claims a supervisor that does not exist.
+    expect(settled).toBe(done);
+  });
+});

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c88cccce989ccc1acb223adb4d95a1d4e1d1f6f4f563bec5a7614e224e2dedd1
+# ccrc:generated 1 sha256=db8438d6c5a5cc038903c38aef805cf4b2940331984402e1776f78315e3ae5ad
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -51,6 +51,13 @@ SWAP_QUIET=600                  # preempt only sessions quiet this long (any sur
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
 SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
+SWAP_BEAT_INTERVAL=30           # seconds between `supervised` re-stamps WHILE a swap carries files
+                                # (§4.2). Well inside `_session_state`'s 120s freshness window, and the
+                                # same cadence `cmd_supervise`'s own watch loop re-stamps on.
+SWAP_BEAT_MAX=240               # hard bound on those re-stamps: 2 hours at the interval above, after
+                                # which the stamper gives up even if `cmd_swap` never stopped it. A
+                                # carry that has run for two hours is not a swap in progress any more,
+                                # and a heartbeat is a claim that somebody is watching.
 SPAWN_GATE_TRIES=450            # capture-pane polls before the startup-gate window expires (~15 min
                                 # at the 2s tick). A plain shell variable with the production default,
                                 # deliberately NOT an env override — HOME is ccd's only isolation
@@ -2438,8 +2445,12 @@ sys.stdout.write(out)
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
   # No confirmation: it only creates. The one thing it must not do is leave the
-  # session unsupervised — `ccd ensure` does NOT re-supervise (ccd:1427-1434), so
-  # boot persistence would be silently lost.
+  # session unsupervised, so it calls `_ws_supervise` itself below rather than
+  # leaving that to whoever next runs a start verb. (The line-numbered claim
+  # this comment used to carry — "`ccd ensure` does NOT re-supervise" — was
+  # stale twice over: the numbers had drifted, and `cmd_ensure` now adopts a
+  # live-but-unsupervised pane via `_resupervise_live`. It restores nothing on
+  # THIS path regardless, because `_spawn` below has not run yet.)
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-restore --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
@@ -7454,6 +7465,43 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   return 1
 }
 
+_resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothing to adopt.
+  # THE REVIVE PATH FOR §4.3's `unsupervised` ROW, which until now had none.
+  # Every one of the three human-facing verbs returned before it could reach an
+  # `enable --now`: `cmd_ensure` early-returns on `_alive`, and `cmd_start`'s
+  # alive branch (which `cmd_enable` aliases through) issues `enable` WITHOUT
+  # `--now` — boot persistence, not a supervisor. So the PWA rendered "running
+  # unsupervised" beside a Restart button posting `/ensure`, which answered
+  # success and changed nothing, on what is the whole population of D2's defect:
+  # on deploy day every pane a pre-fix `ccd start` minted reads `unsupervised`.
+  #
+  # `enable --now` on a LIVE pane is not a second spawn. The unit runs
+  # `cmd_supervise`, which stamps `supervised` and then calls `cmd_ensure` with
+  # CCD_IN_UNIT set — that ensure finds the pane alive, returns, and the watch
+  # loop adopts it. Measured rather than assumed; `ccd-supervised-start.test.ts`
+  # pins the no-second-pane half.
+  #
+  # Scoped to the row that needs it, deliberately. `running` (a fresh heartbeat)
+  # must stay the cheap no-op `ensure` has always been — the PWA's revive button
+  # is reachable on any row, and a `systemctl --user enable --now` per click on
+  # a healthy fleet is a round-trip nobody asked for. And a DEAD pane is not this
+  # function's business at all: `_supervised_start` already owns that path.
+  local id="$1"
+  [[ "${CCD_IN_UNIT:-}" == 1 ]] && return 1   # the supervisor is the thing being asked for
+  _have_systemctl || return 1
+  [[ "$(_session_state "$id")" == unsupervised ]] || return 1
+  # §3.3 deliberately creates failed units and a failed one refuses to start
+  # until cleared — the same reset-failed `_supervised_start` carries, for the
+  # same reason, on the path that reaches systemd without going through it.
+  systemctl --user reset-failed "claude-session@$id" 2>/dev/null
+  if systemctl --user enable --now "claude-session@$id" 2>/dev/null; then
+    echo "re-supervised $id — a live pane with no supervisor; its unit has adopted it"
+  else
+    echo "ccd: warn: $id is alive but UNSUPERVISED and its unit would not start (unit installed? lingering?) — no auto-swap, no auto-compact, no uuid-sync" >&2
+  fi
+  return 0
+}
+
 cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # THE ONE-ARGUMENT FORM IS THE CORRECT ONE FOR ANYTHING THAT ALREADY EXISTS.
   # `<wrapper> <project>` recomputes `<wrapper>-<project>`, and a session keeps
@@ -7521,7 +7569,15 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     # calls. Reconcile unconditionally: idempotent, no `--now` (the same line cmd_supervise's own
     # self-heal uses), and never reached from the fresh-start branch below, which already ran
     # `enable --now` moments ago — so this never duplicates that call.
-    if _have_systemctl; then
+    #
+    # …EXCEPT that a bare `enable` promises a start at NEXT BOOT and supervises
+    # nothing now, so on the row §4.3 calls `unsupervised` — a live pane with no
+    # heartbeat, which is every pane a pre-fix `ccd start` minted — this branch
+    # was reconciling the symlink and leaving the actual defect in place.
+    # `_resupervise_live` is the `--now` for exactly that row and nothing else;
+    # when it declines (a `running` row, or no systemctl) the cheap boot-
+    # persistence line below is still the right and only act.
+    if _have_systemctl && ! _resupervise_live "$id"; then
       systemctl --user enable "claude-session@$id" 2>/dev/null \
         || echo "ccd: warn: could not enable boot-persistence for $id" >&2
     fi
@@ -7583,14 +7639,39 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
 cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
   local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
-  if _alive "$id"; then echo "alive: $id"; return 0; fi
+  if _alive "$id"; then
+    # A LIVE PANE IS NOT NECESSARILY A SUPERVISED ONE, and this early return used
+    # to treat the two as the same thing. `_resupervise_live` is the one place
+    # that discriminates; on a `running` row it does nothing at all, so `ensure`
+    # stays the cheap no-op it has always been for the ordinary case.
+    _resupervise_live "$id"
+    echo "alive: $id"; return 0
+  fi
   # A deliberate revival supersedes a refused swap's banner (§2.4, mirroring
   # cmd_start's matching line): `POST /api/sessions/:id/ensure` is the PWA's
   # actual revive route, so a refusal banner left standing on the row `ensure`
   # just revived would teach the operator to ignore banners. Placed AFTER the
   # already-alive no-op return above, so it fires only on an actual (re)start
   # attempt, exactly as cmd_start's own clear does.
-  rm -f "$REG/$id.swapblocked"
+  #
+  # TWO GUARDS, one per process that reaches this line, because a refusal's
+  # marker was measured surviving neither.
+  #   - CCD_IN_UNIT: `cmd_supervise` calls this function on entry, and on the
+  #     restart `_swap_refuse` itself performs the pane is still dead when it
+  #     does — so the supervisor coming back erased the very field the refusal
+  #     had just written, in a DIFFERENT process, seconds later. A supervisor
+  #     re-entering its own unit is not a human act, and §2.4's "a deliberate
+  #     revival supersedes" is about a human act. (`.stopped` below is NOT
+  #     guarded and must not be: it says "this session is not running because
+  #     somebody stopped it", which the session being alive again falsifies
+  #     whoever caused it. `swapblocked` says "this conversation could not be
+  #     moved", which a restart onto the SAME account leaves exactly as true.)
+  #   - CCD_KEEP_SWAPBLOCK: `_swap_refuse`'s `|| cmd_ensure` fallback reaches
+  #     this in-process, where dynamic scoping makes the caller's `local`
+  #     visible — the same idiom, and the same argument, as CCD_IN_UNIT itself.
+  if [[ "${CCD_IN_UNIT:-}" != 1 && "${CCD_KEEP_SWAPBLOCK:-}" != 1 ]]; then
+    rm -f "$REG/$id.swapblocked"
+  fi
   # And the mirror of cmd_start's stopped-clear (see its comment for the full
   # argument): `_spawn`'s success-only clear cannot reach the supervised path
   # when the unit itself never starts, since `_spawn` then runs in a different
@@ -7729,7 +7810,13 @@ _sidecar_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>/ sideca
     done )
 }
 
-_swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried, rc 1 nothing found.
+_swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
+  # rc 0 = carried, including the `mdir` slot; rc 1 = nothing found, or every
+  # copy failed; rc 2 = copies landed but NOT at `mdir`, the one slot the
+  # resumed session actually reads (see the verdict at the foot of this
+  # function). Every non-zero rc means the same thing to the caller — do not
+  # proceed with this swap — and they differ only in the sentence the refusal
+  # puts in front of a human.
   # Destination slots = each match's MIRRORED relative dir (so the target account
   # looks like where Claude Code actually had the file) plus `mdir`, the munge of
   # the resolved registry workdir — the directory the resumed process starts in,
@@ -7796,7 +7883,7 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried,
   local -a slots=()
   mapfile -t slots < <(printf '%s\n' "${!winner[@]}" | LC_ALL=C sort)
 
-  local -A copied=()
+  local -A copied=() placed=()
   local carried=0 slot src ino dst
   for slot in "${slots[@]}"; do
     src="${winner[$slot]}"; ino="${ino_of[$src]}"
@@ -7815,10 +7902,30 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1) -> rc 0 carried,
       [[ "$sanitize" == 1 ]] && _sanitize_anthropic "$dst"
       copied["$ino"]="$dst"; carried=$((carried + 1))
     fi
+    # Recorded on BOTH arms, because a hardlink into a slot is a landing as
+    # surely as a copy is — `carried` counts distinct INODES copied and can
+    # therefore be 1 while N slots are correctly filled. This records SLOTS.
+    placed["$slot"]=1
   done
   (( carried > 0 )) || return 1
+  # Logged before the mdir verdict below, not after: a partial carry is exactly
+  # the case whose forensic trail matters, and these three numbers are what say
+  # which part landed. (This line has always recorded fewer copies than
+  # destinations for the failure the verdict now catches — the arithmetic that
+  # exposes it was written all along and simply never branched on.)
   echo "$(date '+%F %T') carry $uuid: ${#matches[@]} match(es), $carried copy/copies, ${#slots[@]} destination(s)" \
     >> "$REG/swap.log"
+  # THE mdir SLOT IS NOT ONE DESTINATION AMONG SEVERAL. It is the munge of the
+  # resolved registry workdir — the directory the resumed process starts in and
+  # the first address it reads — so "at least one copy landed" is the wrong bar
+  # for it: measured, two distinct source inodes with an unwritable mdir
+  # destination gave a warning on stderr, carried=1, rc 0, and `cmd_swap` went
+  # on to flip `wrapper` and print `swapped …`. The resumed session then munges
+  # its cwd to mdir, finds nothing, and reports no history — D1's exact symptom,
+  # behind a success report. rc 2 rather than 1 so the caller can name the real
+  # cause: "every copy failed" and "the copy that mattered failed" want different
+  # sentences in the banner an operator reads at 2am.
+  [[ -z "$mdir" || -n "${placed[$mdir]:-}" ]] || return 2
   return 0
 }
 
@@ -7915,6 +8022,51 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
   return 0
 }
 
+_swap_beat() {   # id parent-pid — re-stamp `supervised` every SWAP_BEAT_INTERVAL while the carry runs.
+  # §4.2 says "the swap re-stamps AS IT GOES, and the window classifies as
+  # `restarting`", and it says so for a measured reason: §2.3's `cp -a` fallback
+  # over a 188MB sidecar can exceed the 120s freshness window. What shipped was
+  # two stamps, one before the carry and one after it, and nothing between —
+  # bracketing, not covering. Measured against the shipped ladder with a 200s
+  # carry: `restarting` while the window held, then `orphan` at 125s and again
+  # at 180s. So on exactly the carry the spec names, the row flipped to
+  # "orphan — nothing is watching it" MID-SWAP, with the PWA's revive
+  # affordance beside it — and a revive there
+  # runs `ccd ensure` -> `systemctl start` while `cmd_swap` is still copying and
+  # the registry `wrapper` still names the SOURCE account.
+  #
+  # A background stamper rather than a stamp inside the carry helpers, because
+  # the long pole is ONE `cp -a` call, not a loop: a per-file stamp would leave
+  # the 188MB copy exactly as uncovered as it is today.
+  #
+  # A LEAKED STAMPER WOULD BE A WORSE LIE THAN THE ONE IT FIXES — a row that
+  # heartbeats forever with nobody watching — so it is bounded twice over: it
+  # dies with its parent (`kill -0`, checked every tick, which covers a
+  # `cmd_swap` killed mid-carry where the explicit `_swap_beat_stop` never runs)
+  # and it gives up after SWAP_BEAT_MAX ticks regardless. Both bounds are the
+  # same argument as the `120` in `_session_state`: nothing may claim to be
+  # watching for longer than it plausibly is.
+  local id="$1" parent="$2" i=0
+  while (( i < SWAP_BEAT_MAX )); do
+    sleep "$SWAP_BEAT_INTERVAL"
+    kill -0 "$parent" 2>/dev/null || return 0
+    _reg_set "$id" supervised "$(date +%s)"
+    i=$((i + 1))
+  done
+}
+
+_swap_beat_stop() {   # pid — end the carry heartbeat. Safe on an empty/dead pid.
+  # `wait` after the kill so the shell reaps it rather than announcing
+  # "Terminated" into the middle of a swap's own output; both are swallowed
+  # because a stamper that already exited on its own bound is the normal case,
+  # not an error.
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 0
+}
+
 _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot carry the
   # conversation is refused, not completed (spec §2.4). A swap exists to MOVE a
   # conversation; completing one with nothing found trades a session's entire history
@@ -7926,13 +8078,14 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   # invocation is from inside the session being swapped, where cmd_swap detaches a
   # transient unit and returns 0 to its caller (see the systemd-run arm below) — the
   # caller is dead, killed by this very swap, long before this function runs. So:
-  #   - $REG/<id>.swapblocked = "<epoch> <reason>" — the DURABLE one. Meant to land on the
-  #     fleet wire within one 2s watcher tick and render on the row (spec M9) once the PWA
-  #     half of this plan wires that up, a LATER task — this comment describes intent, not
-  #     shipped behavior: today `server/src/registry.ts` does not read this field and
-  #     nothing under `server/` or `shared/` does either. What exists today is the file on
-  #     disk, read back by `_auto_swap_check`'s own back-off gate below. Survives nobody
-  #     watching, which /api/notify does not.
+  #   - $REG/<id>.swapblocked = "<epoch> <reason>" — the DURABLE one. It lands on the fleet
+  #     wire within one 2s watcher tick and renders on the row (spec M9): `readSession`
+  #     reads this field and `SessionRecord.swapBlocked` carries it (server/src/registry.ts).
+  #     Read back on this side too, by `_auto_swap_check`'s own back-off gate below.
+  #     Survives nobody watching, which /api/notify does not. (An earlier draft of this
+  #     comment said nothing under `server/` or `shared/` read the field — true when the
+  #     ccd half shipped first, false from the moment the server half landed on this same
+  #     branch, and flagged by two reviewers.)
   #   - $REG/notify.sh — the banner for whoever IS watching; the same hook the successful
   #     swap already fires, so it rides a pipeline that is deployed and working.
   #   - $REG/swap.log — the forensic trail beside every other swap decision.
@@ -7968,6 +8121,27 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
     # Registry `wrapper` was never touched, so this puts the session back exactly where
     # it was: same account, same unit, still holding its file. Same `|| cmd_ensure`
     # fallback the successful swap's own tail uses for a box with no unit installed.
+    #
+    # AND IT MUST NOT ERASE THE MARKER IT JUST WROTE. The pane is already dead —
+    # `cmd_swap` killed it two lines before calling this — so `cmd_ensure` sails
+    # past its own `_alive` early return straight into the `swapblocked` clear.
+    # Measured before this line existed: the field above was gone by the time
+    # this function returned, `lastswap` was deliberately cleared, BOTH of
+    # `_auto_swap_check`'s gates were therefore open, and the next supervise tick
+    # re-dispatched. Run against the real dispatcher rather than a logging stub,
+    # ten ticks gave ten refusals, ten banners, ten swap.log lines and ten rounds
+    # of `systemctl stop` + `tmux kill-session` on a live session — the exact
+    # storm SWAPBLOCK_COOLDOWN exists to prevent, plus a kill loop. Dynamically
+    # scoped, so the in-process `cmd_ensure` below sees it and nothing else does;
+    # the unit's own `cmd_supervise` -> `cmd_ensure`, a different process
+    # entirely, is covered by cmd_ensure's CCD_IN_UNIT guard instead.
+    local CCD_KEEP_SWAPBLOCK=1
+    # TWO realistic reasons that `start` fails, and the second is this build's own
+    # doing: (a) no unit installed — what the `|| cmd_ensure` fallback is for; and
+    # (b) the unit is `failed` and rate-limited by §3.3's StartLimitIntervalSec/
+    # StartLimitBurst, which is precisely why `_supervised_start` carries a
+    # reset-failed. A refusal's restart is a revival too, and needs the same key.
+    systemctl --user reset-failed "claude-session@$id" 2>/dev/null
     systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   fi
   echo "ccd: refusing to swap $id: $reason — it stays on $cur. If there is genuinely nothing to carry: ccd swap --force $id $target" >&2
@@ -8008,7 +8182,26 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   # which nothing is waiting for by then. --force rides along or the detached retry would
   # silently drop the operator's decision.
   if [[ -n "${TMUX:-}" && "$(tmux display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
-    systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} '$id' '$target' >>'$REG/swap.log' 2>&1"
+    # THE systemd-run's OWN EXIT STATUS IS THE ONLY EVIDENCE THIS ARM EVER GETS,
+    # and it used to be discarded: measured, `systemd-run` returning 1 printed
+    # the confident `detached: …` line below, returned 0, and recorded NOTHING —
+    # no swap.log line, no swapblocked, no banner, `wrapper` unchanged. This is
+    # the COMMON invocation (a session swapping itself from its own Bash tool),
+    # and `_dispatch_swap`, the auto-path twin, has carried the matching
+    # `|| echo "… dispatch FAILED …"` guard all along.
+    #
+    # Not routed through `_swap_refuse`, deliberately. Nothing was torn down —
+    # the pane is alive and the caller is READING THIS — so the strongest
+    # channel here is exactly the one the successful-detach case cannot use: a
+    # non-zero rc and a line on stderr. A `swapblocked` stamp would also be a
+    # lie about the cause (the conversation was never even looked for) and would
+    # gate a legitimate auto-rescue for the next SWAPBLOCK_COOLDOWN seconds over
+    # a failure that has nothing to do with carrying it.
+    if ! systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} '$id' '$target' >>'$REG/swap.log' 2>&1"; then
+      echo "$(date '+%F %T') detach FAILED for $id: $cur -> $target (systemd-run)" >> "$REG/swap.log"
+      echo "ccd: could not detach the swap of $id ($cur -> $target): systemd-run failed. Nothing was moved and this session is untouched — retry from OUTSIDE the session: ccd swap ${force:+--force }$id $target" >&2
+      return 1
+    fi
     echo "detached: $id will restart under $target in a few seconds (this session dies with the swap — that's expected)"
     return 0
   fi
@@ -8032,12 +8225,19 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
   # not alive and, after 120 seconds, would also stop looking watched — and
-  # §2.3's `cp -a` fallback over a 188MB sidecar can take that long. Re-stamped
-  # here and again below so the window classifies `restarting`, which is
-  # exactly what it is. Note the swap does NOT write `.stopped`: it is not a
-  # deliberate stop, which is why it goes round `_ws_unsupervise` rather than
-  # through it.
+  # §2.3's `cp -a` fallback over a 188MB sidecar can take that long. Stamped
+  # here, re-stamped every SWAP_BEAT_INTERVAL by `_swap_beat` for as long as the
+  # carry runs, and stamped once more below, so the window classifies
+  # `restarting` throughout — which is exactly what it is. Note the swap does
+  # NOT write `.stopped`: it is not a deliberate stop, which is why it goes
+  # round `_ws_unsupervise` rather than through it.
   _reg_set "$id" supervised "$(date +%s)"
+  # Started BEFORE the first byte moves and stopped on every path out of the
+  # carry — the success tail below, and the refusal arm inside the `if`, which
+  # stops it before `_swap_refuse` runs so a refused swap leaves nothing behind
+  # claiming to watch the row it just gave up on.
+  local beat=""
+  _swap_beat "$id" "$$" & beat=$!
   # AUTHORITATIVE. Two things changed across that sleep and both matter. The transcript
   # gained the session's final entries — for a session being moved mid-turn, the most
   # valuable lines in it, which is the whole reason the sleep exists. And the uuid may
@@ -8067,26 +8267,35 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   # PIPELINE it precedes, not to the `&&` list, so the inline form's precedence
   # is a thing a reader has to know rather than see. Behaviour verified below.
   if ! _is_home_able "$cur" && _is_home_able "$target"; then sanitize=1; fi
-  if ! _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize"; then
+  local carry_rc=0
+  _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize" || carry_rc=$?
+  if (( carry_rc != 0 )); then
+    local reason
+    # rc 1 covers two different causes it does not distinguish in its own return code:
+    # nothing matched this uuid at all, OR matches existed and every copy failed (a full
+    # disk, an EACCES). Ask _transcript_matches again — cheap, a read, and nothing on disk
+    # has changed since the carry attempt — so the operator reading swap.log/the banner is
+    # pointed at the right cause instead of always being told "not found" when the real
+    # problem was a copy that failed. rc 2 needs no such probe: the carry already knows
+    # exactly what happened and says so.
+    if (( carry_rc == 2 )); then
+      reason="transcript found for $uuid under $cur but the copy to $mdir failed — the directory the resumed session reads first"
+    elif [[ -n "$(_transcript_matches "$srccfg" "$uuid")" ]]; then
+      reason="transcript found for $uuid under $cur but every copy failed"
+    else
+      reason="no transcript found for $uuid under $cur after flush"
+    fi
     if [[ -z "$force" ]]; then
-      # _swap_carry_jsonl's rc 1 covers two different causes it does not distinguish in
-      # its own return code: nothing matched this uuid at all, OR matches existed and
-      # every copy failed (a full disk, an EACCES). Ask _transcript_matches again — cheap,
-      # a read, and nothing on disk has changed since the carry attempt — so the operator
-      # reading swap.log/the banner is pointed at the right cause instead of always being
-      # told "not found" when the real problem was a copy that failed.
-      local reason
-      if [[ -n "$(_transcript_matches "$srccfg" "$uuid")" ]]; then
-        reason="transcript found for $uuid under $cur but every copy failed"
-      else
-        reason="no transcript found for $uuid under $cur after flush"
-      fi
       # Registry `wrapper` is still $cur — nothing has been flipped — so _swap_refuse's
       # restart puts the session back on the account that still holds its history.
+      _swap_beat_stop "$beat"
       _swap_refuse "$id" "$cur" "$target" "$reason" 1
       return 1
     fi
-    echo "ccd: warn: no transcript for $uuid under $cur config; --force: $id resumes without history" >&2
+    # The forced warning carries the SAME sentence, for the same reason the refusal does:
+    # `--force` means the operator accepted a swap they were told about, and "no transcript
+    # for $uuid" was the wrong thing to tell them whenever a copy had in fact been found.
+    echo "ccd: warn: $reason; --force: $id resumes anyway" >&2
   fi
   # Unconditional, and separate: sidecars are globbed in their own right and
   # exist in project dirs that hold no .jsonl for this uuid at all.
@@ -8102,6 +8311,10 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
     cp -r "$srccfg/tasks/$uuid" "$dstcfg/tasks/" 2>/dev/null \
       || echo "ccd: warn: could not carry the task list across to $target" >&2
   fi
+  # THE CARRY IS OVER — every file that was going to move has moved — so the
+  # heartbeat stops here, before the registry is flipped. What follows is
+  # milliseconds of `_reg_set`, and the final stamp below covers the restart.
+  _swap_beat_stop "$beat"
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
   rm -f "$REG/$id.swapblocked"   # a completed swap supersedes an earlier refusal: a

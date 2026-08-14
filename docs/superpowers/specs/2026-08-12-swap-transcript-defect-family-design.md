@@ -301,6 +301,35 @@ within 300 seconds as a swap arrival, answering the big-transcript resume gate w
 summary" — an auto-compaction. A refusal that left `lastswap` fresh would therefore compact the
 very history it refused in order to protect.
 
+**And it must not erase the record it just wrote.** The pane is dead when the restart runs — the
+swap killed it — so `cmd_ensure` sails past its own already-alive early return and straight into
+the `swapblocked` clear, and the unit's own `cmd_supervise` re-enters the same function moments
+later from a different process. With `lastswap` deliberately cleared and `swapblocked` erased,
+*both* of `_auto_swap_check`'s gates stand open and the next 5-second tick re-dispatches the swap:
+measured, ten ticks produced ten refusals, ten banners, ten `swap.log` lines and ten rounds of
+`systemctl stop` + `tmux kill-session` on a live session. The clear therefore belongs to the human
+act §2.4 describes and to nothing else — not to the refusal's own restart, and not to a supervisor
+re-entering its unit — while a deliberate `ccd start`/`ccd ensure` still supersedes a standing
+refusal exactly as this section says. The same restart also runs `reset-failed` first, for §3.1's
+reason: after §3.3's start limit, "the unit is failed and rate-limited" is one of the two realistic
+ways its `systemctl start` fails.
+
+**"At least one copy landed" is the wrong bar for the copy that matters.** §2.2's `mdir` slot is
+the munge of the resolved registry workdir — the directory the resumed process starts in and the
+first address it reads. A carry that fills every other slot and fails at that one used to report
+success: measured, two distinct source inodes with an unwritable `mdir` destination gave a warning
+on stderr, one copy, rc 0, a flipped `wrapper` and a `swapped …` line, while the resumed session
+munged its cwd to `mdir`, found nothing, and showed no history — D1's exact symptom behind a
+success report. The carry answers a distinct rc for that case and the refusal names the slot, so
+the operator reading the banner is not sent looking for a full disk.
+
+**A dispatch that could not be dispatched is not a swap in progress.** The detached self-swap arm —
+the *common* invocation, a session swapping itself from its own Bash tool — discarded
+`systemd-run`'s exit status and printed its confident `detached: …` line regardless, recording
+nothing at all when the dispatch failed. It reports through an rc and stderr rather than through
+`swapblocked`, because on that path nothing was torn down and the caller is alive to read the
+answer — the exact inverse of the successful-detach case this section opens with.
+
 **Not writing it is not enough, and this is where the obvious statement of the rule was wrong.**
 `_auto_swap_check` stamps `lastswap` *before* it dispatches (ccd:6772 on the rescue arm, ccd:6791
 on the return-home arm), because a fire-and-forget transient unit cannot report back. So on the
@@ -410,6 +439,17 @@ Before `enable --now`, the start path runs `systemctl --user reset-failed claude
 §3.3 deliberately creates failed units — that is the point of the start limit — and a unit sitting
 in `failed` refuses to start again until its failure is cleared, so without this the very verb this
 spec advertises as "what revives it" would not.
+
+**A live pane is not a supervised one, and the revive verbs have to say so.** `cmd_ensure`
+early-returns on `_alive`, and `cmd_start`'s already-alive branch (which `cmd_enable` aliases
+through) issues `enable` *without* `--now` — boot persistence, not a supervisor. That leaves every
+one of the three verbs unable to repair §4.3's `unsupervised` row, which on deploy day is D2's
+entire population: every pane a pre-fix `ccd start` minted. All three route their alive branch
+through one helper that fires only when `_session_state` reads `unsupervised`, and then does
+`reset-failed` + `enable --now`. That is not a second spawn — the unit runs `cmd_supervise`, whose
+in-unit `cmd_ensure` finds the pane already there and returns, and the watch loop adopts it. A
+`running` row keeps the cheap no-op it has today, because the PWA's revive control is reachable on
+every row and a healthy fleet must not pay a systemd round-trip per click.
 
 ### 3.2 The recursion guard is an in-process variable, not `INVOCATION_ID`
 
@@ -538,6 +578,17 @@ watched. A 70MB `cp` does not take 120 seconds, but §2.3's `cp -a` fallback ove
 can, and "the fleet marked a session abandoned while it was being carefully moved" is the precise
 kind of dishonesty this section exists to remove. So the swap re-stamps as it goes, and the window
 classifies as `restarting` — which is exactly what it is.
+
+**"As it goes" means a stamper running beside the carry, not a stamp on either side of it.** The
+first implementation bracketed the carry — one stamp before, one after — which is not the same
+claim, and measured exactly as the arithmetic says: with a 200-second carry the row read `orphan`
+at 125s and at 180s, mid-swap, with the PWA's revive affordance beside it and the registry
+`wrapper` still naming the source account. A stamp inside the carry helpers would not have closed
+it either, because the long pole is one `cp -a` call rather than a loop. `cmd_swap` therefore
+starts `_swap_beat` before the first byte moves and stops it on every path out of the carry, the
+refusal included. It re-stamps on the same 30-second cadence the supervisor's own loop uses, and it
+is bounded twice — it dies with its parent and gives up after two hours regardless — because a
+stamper that outlived its swap would be a worse lie than the one it fixes.
 
 ### 4.3 One classification, two implementations, one fixture
 
@@ -893,6 +944,18 @@ the box lacks is broken:
    `cmd_ensure` re-attaches rather than spawning a second session, so the sweep stays a no-op for
    healthy rows — a property §3.1 must not break, since `cmd_ensure`'s in-unit path is exactly
    what the sweep re-enters.
+
+   **The start limit and that sweep interact, and the sweep is what had to change.** §3.3
+   celebrates the failed unit; this section leans on a verify loop over `list-units`; neither
+   noticed that `systemctl list-units` *includes* failed units while `try-restart` is a no-op on
+   one. So the first failed session unit on a box handed `verify-service.sh` something that was
+   never restarted and could not be active — `DEPLOY FAILED … did not come up clean after
+   restart`, `set -e`, and the agent target aborting after ccd, the units, the hooks and the agent
+   are installed but before the `ccd version` sha check, identically on every subsequent deploy
+   until somebody cleared the unit by hand. The verify loop is therefore filtered to
+   `--state=active`, and a separate `--state=failed` pass names each failed unit on stderr with its
+   remedy: a pre-existing crash-looped session is not the deploy's doing and must not fail it, but
+   it must not be silent either. No pre-deploy `reset-failed` step is required of anyone.
 2. **server + shared** (the lifecycle function and its fixture, the four new registry reads, the
    resolver ladder and its outcome union).
 3. **PWA** (the lifecycle qualifier on the row, the stranded-history banner).
