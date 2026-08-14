@@ -50,6 +50,17 @@ SWAP_QUIET=600                  # preempt only sessions quiet this long (any sur
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
 SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
+SWAP_JITTER=120                 # max seconds of random delay before a dispatched swap actually runs.
+                                # The supervise tick evaluates EVERY session in one pass, so a
+                                # fleet-wide condition (a limit window rolling over, a spend cap
+                                # tripping) dispatches every affected swap in the SAME second. On
+                                # 2026-08-13 that restarted 6 sessions at 21:00:0x; the SessionEnd +
+                                # SessionStart hooks behind them each launched a ~2 GB code-usage
+                                # scan, and once the box began thrashing no scan could finish, so
+                                # every later swap in the hour ratcheted more onto the pile (19
+                                # concurrent, 17.4 GB) until the box stalled for 9.7 hours.
+                                # Spreading restarts stops a fleet-wide event becoming a herd.
+                                # Set to 0 to dispatch immediately (old behaviour).
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -6749,8 +6760,18 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
   # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
   # never respawned — bit us 2026-07-05). systemd-run escapes the cgroup entirely.
+  # Jitter (2026-08-14): see SWAP_JITTER. Computed per call, so each session in a
+  # fleet-wide burst gets its own delay and the restarts spread out instead of
+  # landing on one second. The sleep runs INSIDE the transient unit, so dispatch
+  # itself stays non-blocking and the supervise tick is not held up.
+  # Cooldown is unaffected: callers stamp `lastswap` at dispatch time, and
+  # SWAP_COOLDOWN (900s) dwarfs the jitter window, so nothing re-dispatches while
+  # a delayed swap is still pending.
+  local jitter=0
+  [[ "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
+  echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
   systemd-run --user --collect --quiet \
-    bash -c "exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
+    bash -c "sleep $jitter; exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
     || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
 }
 
