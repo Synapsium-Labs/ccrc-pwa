@@ -755,7 +755,7 @@ describe('POST /api/runs/:id/close', () => {
       // `pr-state` stays supported — `verifyDone` has its OWN `verbSupported`
       // gate (`fingerprint.ts`) and must succeed here, so the 501 this test
       // proves is close's own fleet-act gate, not a verifyDone side effect.
-      { fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-add', 'ensure', 'ws-hold', 'pr-state'], rosterFp: null } });
+      { fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-add', 'ensure', 'ws-hold', 'pr-state'], rosterFp: null, build: null } });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toMatchObject({ ok: false, error: 'unsupported' });

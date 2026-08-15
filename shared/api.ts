@@ -1498,7 +1498,41 @@ export interface FleetHealth {
    * `'unknown'`.
    */
   roster?: 'agreed' | 'divergent' | 'unknown';
+  /**
+   * Whether the two boxes are running the same BUILD (`buildAgreement`,
+   * server/src/fleetstate.ts, which re-exports the union declared just below
+   * rather than restating it, so there is one vocabulary and not a wire copy).
+   *
+   * Same three-state rule as `roster`, for the same reason and with a different
+   * remedy: `'skewed'` means deploy the lagging box, agent-first; `'unknown'`
+   * means nobody could tell, and a reader must stay silent on it.
+   *
+   * Optional for the same absence-permits reason `roster` is — an older
+   * server's response omits it, and absent reads as `'unknown'`.
+   */
+  build?: BuildAgreement;
 }
+
+/**
+ * The two boxes' builds: same commit, different commits, or no evidence.
+ *
+ * DECLARED HERE, in L0, rather than beside `buildAgreement` in
+ * `server/src/fleetstate.ts` where the function lives, for the one reason that
+ * settles it: `FleetHealth` above is the wire shape, this file imports nothing
+ * and is imported by everything, and `shared/` may not import `server/src`. The
+ * alternative — the union spelled out inline on `FleetHealth.build` and again
+ * as a `type` in `fleetstate.ts` — is what `roster` did, and it is two
+ * declarations of one vocabulary that a third state would have to be added to
+ * twice. `fleetstate.ts` re-exports this name so the decision function still
+ * answers in the type its own module names (the same re-export shape
+ * `server/src/buildinfo.ts` uses for `BuildInfo`).
+ *
+ * `'skewed'` and not `'divergent'`: `roster` already owns that word for a
+ * different disagreement between the same two boxes, and a reader looking at
+ * `{roster: 'divergent', build: 'divergent'}` should be able to tell which
+ * sentence it is reading.
+ */
+export type BuildAgreement = 'agreed' | 'skewed' | 'unknown';
 
 /**
  * "An account" (the operator's word) and "a wrapper" (ccd's word) are the same

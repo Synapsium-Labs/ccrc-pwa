@@ -11,7 +11,7 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome } from './limits.js';
-import { defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
+import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
 // build step (see `shared/mark.mjs`'s header) — so reaching them from here
@@ -83,7 +83,11 @@ export interface Deps {
   cfg: CcrcConfig;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
    *  `cfg.buildInfoPath`). `null` on a dev checkout or an unstamped box;
-   *  absent has the same meaning — `/health` treats both as null. */
+   *  absent has the same meaning — `/health` treats both as null, and so does
+   *  `/api/fleet/health`, where this is now also the OWN side of the two-box
+   *  skew comparison (`buildAgreement`, against `fleetState.build`). Which is
+   *  why an unstamped server answers `'unknown'` rather than manufacturing a
+   *  disagreement with the fleet host out of a stamp it never had. */
   build?: BuildInfo | null;
   /** The ONLY path to `ccd`. There is deliberately no raw `run` here: with one,
    *  "every ccd argv is built in ccdargv.ts" is enforceable only by scanning
@@ -200,14 +204,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         connected: deps.fleetState.connected,
         downSince: deps.fleetState.downSince,
         roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp),
+        // `deps.build` is what THIS box's deploy stamped, read once at boot
+        // (`index.ts`); `fleetState.build` is what the fleet host said about
+        // itself on the last `ready`. `?? null` because `Deps.build` is
+        // optional for callers that build `Deps` some other way (tests,
+        // scripts) — an absent stamp and a null one are the same condition,
+        // exactly as `/health` treats them.
+        build: buildAgreement(deps.fleetState.build, deps.build ?? null),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
     // no second copy to disagree with, so the question does not arise. Said as
     // `'unknown'` rather than `'agreed'` on purpose — nothing was compared,
     // and a reader that later learns to show `'agreed'` as a green tick would
-    // otherwise be showing one for a check that never ran.
-    return { mode: deps.cfg.fleetMode, connected: true, downSince: null, roster: 'unknown' };
+    // otherwise be showing one for a check that never ran. The build answer is
+    // `'unknown'` for the identical reason, one box down: there is only one
+    // build here, and a box cannot be skewed against itself.
+    return {
+      mode: deps.cfg.fleetMode, connected: true, downSince: null,
+      roster: 'unknown', build: 'unknown',
+    };
   });
 
   // Fleet-host reboot: guarded to remote mode with Hetzner creds configured.

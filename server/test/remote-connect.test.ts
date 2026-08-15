@@ -28,11 +28,15 @@ describe('connectFleet — connection lifecycle', () => {
     agent = await bootAgent(fixture);
     fleet = connectToAgent(agent.port);
 
-    // `rosterFp: null` against a REAL agent, not a fake: the fixture home has
-    // no `~/.ccrc/accounts.sh`, so the agent omits the field and the client
-    // records no evidence. Absence-permits, proven across the actual wire.
+    // `rosterFp: null` and `build: null` against a REAL agent, not a fake: the
+    // fixture home has neither `~/.ccrc/accounts.sh` nor `~/.ccrc/build.json`,
+    // so the agent omits both fields and the client records no evidence for
+    // either. Absence-permits, proven across the actual wire. WHOLE-OBJECT
+    // equality on purpose — a field added to `FleetState` and never populated
+    // by `onReady` fails here, which is the only check that does not depend on
+    // someone remembering to assert the new field.
     await vi.waitFor(
-      () => expect(fleet!.state).toEqual({ connected: true, downSince: null, ccdVerbs: [], rosterFp: null }),
+      () => expect(fleet!.state).toEqual({ connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null }),
       { timeout: 3000 });
   });
 
@@ -200,5 +204,60 @@ describe('FleetClient.onReady — rosterFp keeps "no evidence" apart from a real
     // frame that carried no information at all.
     fleet = await connect(extra);
     expect(fleet.state.rosterFp).toBeNull();
+  });
+});
+
+describe('FleetClient.onReady — build is re-validated at the wire, never trusted', () => {
+  // The peer is an agent on another box, deployed on its own lane and possibly
+  // older, newer, or broken — so a stamp arriving on a frame is a claim, not a
+  // fact. `onReady` re-validates it through `parseBuildInfo`, the SAME
+  // definition of a well-formed stamp both boxes' disk readers use, rather than
+  // casting the frame field. A real `ccrc-agent` sends only stamps that already
+  // passed that check (`agent/test/build-fp.test.ts`), so a fake agent is the
+  // only way to reach these branches at all — and without them, replacing the
+  // parse with `frame.build as BuildInfo` would leave every suite green while
+  // putting a half-stamp into the skew comparison.
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
+    server = await fakeReadyAgent(extra);
+    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
+    return f;
+  };
+
+  const STAMP = { sha: 'abc1234', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false };
+
+  it('records a well-formed stamp verbatim, dirty flag and all', async () => {
+    fleet = await connect({ build: { ...STAMP, dirty: true } });
+    expect(fleet.state.build).toEqual({ ...STAMP, dirty: true });
+  });
+
+  it('an absent build (older agent) is null — which the route reads as unknown, not skewed', async () => {
+    fleet = await connect({});
+    expect(fleet.state.build).toBeNull();
+  });
+
+  it.each([
+    ['a half-stamp missing sha', { build: { ref: 'main', builtAt: 'x', dirty: false } }],
+    ['a stamp with a numeric sha', { build: { ...STAMP, sha: 42 } }],
+    ['a stamp with an EMPTY sha', { build: { ...STAMP, sha: '' } }],
+    ['a non-object', { build: 42 }],
+    ['an explicit null', { build: null }],
+  ])('%s is discarded as null rather than compared', async (_label, extra) => {
+    // The empty sha is the one that fails safe-looking: two boxes both
+    // reporting `sha: ''` compare EQUAL, so a trusted one would report
+    // "the builds agree" from two files neither box could read — silence
+    // exactly where this field exists to end silence.
+    fleet = await connect(extra);
+    expect(fleet.state.build).toBeNull();
   });
 });

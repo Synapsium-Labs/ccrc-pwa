@@ -10,7 +10,7 @@ import type { FleetState } from '../src/remote/client.js';
 // list, and a real list always replaces whatever was there.
 describe('makeRefreshCaps — the guard index.ts wires into Deps.refreshCaps', () => {
   it('null is no evidence — leaves a working list untouched', async () => {
-    const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'stop'], rosterFp: null };
+    const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'stop'], rosterFp: null, build: null };
     const refreshCaps = makeRefreshCaps({ caps: async () => null }, state);
 
     await refreshCaps();
@@ -19,7 +19,7 @@ describe('makeRefreshCaps — the guard index.ts wires into Deps.refreshCaps', (
   });
 
   it('a real list replaces whatever was there, including an empty one', async () => {
-    const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null };
+    const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null };
     const refreshCaps = makeRefreshCaps({ caps: async () => ['start', 'ws-rename'] }, state);
 
     await refreshCaps();

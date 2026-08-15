@@ -514,7 +514,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home);
     transcript(h.home, [TITLE('Fix the PR sheet')]);
-    const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'ws-reap'], rosterFp: null };
+    const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'ws-reap'], rosterFp: null, build: null };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), fleetState: state }, new Bus(), 2000);
 
     await w.sweepNames();
