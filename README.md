@@ -326,6 +326,67 @@ the **fleet host** — `server/test/reconstruction-drill.test.ts` is that
 procedure, executed against fixtures, naming by name what it recovers and
 what it cannot.
 
+### The board's three controls, and the transcript that stops lying (Build 4)
+
+**Three controls, all on `/runs`, all reached from a phone.**
+
+1. **Pause / resume the fleet.** The banner at the top of `/runs` reads
+   `$REG/coordinator-paused` on the **fleet host** — the same file
+   `dispatchRun` refuses on — and its toggle writes it through
+   `POST /api/coord/pause` → `ccd coord-pause --state on|off`. Four states,
+   and it is never optimistic: a tap shows `pausing…`/`resuming…` and settles
+   only on the next `{type:'coord'}` frame, rendering `unconfirmed — check
+   /runs` if none arrives. Before the first frame it renders **nothing** —
+   an unmeasured marker must not read as "running".
+2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
+   It **releases** the hold; it never archives, and there is no archive
+   control anywhere on the sheet. An abandon asserts nothing about PR
+   lineage — no fingerprint, no `.prhistory` fold, no `verifyDone` — because
+   the case it exists for is a run whose claim can no longer be measured.
+3. **Start a program.** Composition over existing routes, not a new one:
+   the projected account (`useProjectedHome`, the server's mirror of
+   `_ws_least_loaded`) is named *before* the tap, then `POST /api/sessions`
+   and one kickoff prompt. It never opens a run — the coordinator does that
+   itself — and it refuses outright when a live main checkout of that project
+   already exists, because `ccd start` is idempotent and would otherwise
+   inject a coordinator brief into a session that may be mid-task.
+
+**Rollout order is forced, and it is Build 7's:** ccd verb + agent whitelist +
+coordinator skill (fleet host) **first**, then the server, then the PWA. A PWA
+that ships before the verb renders a pause toggle that answers `501` for every
+tap. This is the standing "AGENT-FIRST" rule for anything touching `ccd/`.
+
+**The work-item tally is the coordinator's write, and it is made after the
+server re-measured.** Items are declared once, at dispatch, on the dispatch
+body — the ledger is fixed there and `total` never grows. They are settled
+through `POST /api/runs/:id/items`, which the coordinator calls only **after**
+`verifyDone` has re-measured the workspace branch and answered ok: done-authority
+is a fingerprint, not a claim, and the mail bus never routes on subject text.
+A wave whose brief declared no items reads `—`, not `0/0` — an em dash is the
+honest rendering of "nothing was declared", and it is not a defect.
+
+**In the transcript.** Agent-to-agent mail now renders as a **mail card**
+attributed to its sender (`coordinator → this worker`, kind, subject, run and
+wave, artifact paths as paths). What was missing was never the message — it was
+always in the JSONL — but the attribution. The card is derived from whichever of
+the two lanes put it there: **today** the sweep types only a one-line nudge and
+the worker fetches the body with `GET /api/mail/:id`, so the envelope arrives as
+that call's `tool_result`; **before `43b2737`** the sweep typed the whole
+envelope into the input box, where it landed as a `user` turn and read as if the
+operator had typed it. Both render, so older transcripts keep working. A result
+the server truncated never becomes a card — a fragment cannot back the claim a
+card makes. And the card is a *rendering, never an authorization*: the transcript
+is a rank-3 source, so a session can put a fake envelope in front of itself;
+authoritative mail rows come from the database. The card offers **no ack and no
+reply**:
+ack is box-token gated and is the agent's own act. A question the agent is
+**blocked on right now** reads as live and carries one control, `Answer`, which
+only raises the answer sheet that already exists — it never sends. A question
+the session moved past, or died holding, reads *unanswered* rather than
+*waiting for you*. And a tool result the server truncated says so, in bytes; a
+server too old to report says nothing, which is never the same as saying the
+output was complete.
+
 ### Dogfood: Build 4 is the first coordinated program
 
 By decision (spec §9), the first program run through the coordinator is Build 4,
@@ -434,22 +495,51 @@ bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts
   the roster from. `ccd` has no such override on purpose: it derives the path
   from `HOME` alone, so a stray `Environment=` cannot run a live box against
   someone else's account list.
+- **The two boxes are checked against each other, continuously.** `accounts.json`
+  is user-owned and never overwritten, and the boxes are deployed by two
+  separate runs of `deploy.sh` — so an account added to one and not the other is
+  one hand-edit away, and the symptom (a session attributed to the wrong
+  account, a swap target ccd rejects) names nothing. The agent reports a
+  fingerprint of its **installed `~/.ccrc/accounts.sh`** on the `ready` frame;
+  the server compares it against the fingerprint of the projection its own
+  roster produces, and `GET /api/fleet/health` answers
+  `roster: 'agreed' | 'divergent' | 'unknown'`. The PWA shows an amber banner on
+  `divergent` and nothing on `unknown` — an older agent sends no fingerprint,
+  and absence of evidence must not render as evidence of absence.
+
+  It compares the **projections**, not the two JSON files, which catches
+  strictly more: a fleet host whose `accounts.json` was hand-edited but never
+  redeployed has two files that agree and a `ccd` that behaves like neither,
+  because `ccd` sources the generated `accounts.sh` and nothing reads
+  `accounts.json` at runtime. Each `deploy.sh` run also prints
+  `roster fingerprint on <box>: <sha256>`, which is the same value — that line
+  is the only signal in the agent-only and single-box cases, where there is no
+  server on the other end of a socket to disagree with.
+
+- **Limit telemetry is roster-driven too**, which is what makes free-form ids
+  real rather than half-delivered. `ccd/statusline-command.sh` is a Claude Code
+  statusline hook — it is handed a `CLAUDE_CONFIG_DIR` and nothing else — so it
+  sources `~/.ccrc/accounts.sh` and asks it four questions: `_ccrc_dir_id`
+  (which account owns this config dir), `_ccrc_label` and `_ccrc_hue` (how to
+  name and colour it), and `CCRC_MEASURED` (whether it reports rate limits at
+  all — `gpt` does not, and a `~/.cc-limits/gpt.json` would be
+  indistinguishable from a measured zero). One copy of the script serves every
+  account, because `$HOME` is shared and only `CLAUDE_CONFIG_DIR` differs.
+  A box with no roster still renders a status bar; it just falls back to the
+  config dir's own name and writes no telemetry.
+
+  This was the last hand-written roster copy in the tree, and it mattered:
+  an account its four `case` arms did not name was **never measured**, and
+  since an unmeasured account ranks below every measured one for placement
+  (stage 2a's "unknown is not zero" fix in `projectHome`,
+  `server/src/limits.ts` — an account nobody could see used to score 0 and
+  beat every real one), such an account would never receive a workspace,
+  silently and permanently. `server/test/statusline-script.test.ts` runs the
+  real script against a fixture `HOME` with a free-form account and goes red
+  if the map ever comes back.
 
 #### Known limitations
 
-- **Limit telemetry is still keyed by a hand-written map.**
-  `ccd/statusline-command.sh` publishes `~/.cc-limits/<id>.json` from a
-  four-arm `case` over the session's config dir — it is a Claude Code
-  statusline hook, handed a config dir and nothing else, with no ccrc context
-  to source a roster from. An account whose config dir is not in that map is
-  **never measured**, and since an unmeasured account now ranks below every
-  measured one for placement (stage 2a's "unknown is not zero" fix in
-  `projectHome`, `server/src/limits.ts` — an account nobody could see used to
-  score 0 and beat every real one), it would never receive a workspace. No impact on this fleet — every account in
-  `accounts.migration.json` is either in the map or is `gpt`, which is
-  `telemetry: 'none'` — but it means **free-form account ids are only half
-  delivered**: adding one today means adding a `case` arm there too. Making
-  that map roster-driven is stage 2b.
 - **`ccrc install` does not exist yet.** Nothing turns a roster entry into a
   wrapper script, a config dir or a systemd unit; the roster describes a box
   that was provisioned by hand or by an earlier deploy. `ccrc-adopt` is the

@@ -757,7 +757,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     seedSession(home, ID, 'claude2');
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
-    const deps = { ...testDeps(home, run), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'] } };
+    const deps = { ...testDeps(home, run), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null } };
     const app = await buildServer(deps);
     const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason: 'w' } });
     expect(resHold.statusCode).toBe(501);

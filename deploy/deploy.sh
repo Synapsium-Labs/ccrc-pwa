@@ -176,6 +176,22 @@ check_local_roster() {
     || { echo "deploy: FAILED — local $ACCOUNTS_JSON is not a roster ccrc can use (see above); refusing to seed it onto $BOX, where it would be permanent" >&2; exit 1; }
 }
 
+# Prints the fingerprint of a generated accounts.sh — the digest of its BODY,
+# which is exactly what `markGenerated` (shared/mark.mjs) already wrote into
+# the file's own line 2. Extracted rather than recomputed: no second node
+# invocation, and no second definition of which bytes get hashed.
+#
+# Why it is printed at all, given the server and agent now compare these
+# continuously over the WS link (`rosterAgreement`, server/src/fleetstate.ts):
+# the two boxes are deployed by two separate runs of this script, minutes or
+# days apart, and this is the operator's read on whether the run they just did
+# agrees with the run they did last time — before the fleet is up to say so.
+# It is also the ONLY signal in the single-box and agent-only cases, where
+# there is no server on the other end of a socket to disagree with.
+roster_fp() {
+  sed -n '2s/^# ccrc:generated 1 sha256=//p' "$1"
+}
+
 ship_roster() {
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
   if ! "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/accounts.json ]'; then
@@ -215,6 +231,7 @@ if [ "$TARGET" = "agent" ]; then
   "${SSH[@]}" "$BOX" 'cat ~/.ccrc/accounts.json' > "$BOX_ROSTER"
   node deploy/gen-accounts.mjs "$BOX_ROSTER" > "$ACCOUNTS_SH" \
     || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); refusing to ship a ccd that cannot read it" >&2; exit 1; }
+  echo "roster fingerprint on $BOX: $(roster_fp "$ACCOUNTS_SH")"
   # Back up what the previous deploy left before rsync --delete rewrites it,
   # and before ccd/notify.sh/session-hook.sh are overwritten. cp -a keeps
   # modes and mtimes.
@@ -461,10 +478,18 @@ else
   [ ! -f "$ACCOUNTS_JSON" ] || check_local_roster
   ship_roster
   BOX_ROSTER="$(mktemp)"
+  SERVER_ACCOUNTS_SH="$(mktemp)"
   "${SSH[@]}" "$BOX" 'cat ~/.ccrc/accounts.json' > "$BOX_ROSTER"
-  node deploy/gen-accounts.mjs "$BOX_ROSTER" > /dev/null \
+  # Generated to a FILE rather than /dev/null. The server never installs an
+  # accounts.sh — it reads accounts.json directly — so this projection exists
+  # only to be validated and fingerprinted. The fingerprint is the point: it is
+  # the same value the agent lane prints for the fleet host, so two deploy runs
+  # print two lines an operator can compare, and it is what the running server
+  # computes for itself to compare against the agent's over the WS link.
+  node deploy/gen-accounts.mjs "$BOX_ROSTER" > "$SERVER_ACCOUNTS_SH" \
     || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); the server would crash-loop on it" >&2; exit 1; }
-  rm -f "$BOX_ROSTER"
+  echo "roster fingerprint on $BOX: $(roster_fp "$SERVER_ACCOUNTS_SH")"
+  rm -f "$BOX_ROSTER" "$SERVER_ACCOUNTS_SH"
   # The server serves whatever server/dist-pwa holds, and rsync's
   # `--exclude dist` never matched dist-pwa — which is how a green deploy
   # shipped a stale bundle twice. Build the PWA HERE, in this run, and refuse

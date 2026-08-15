@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
@@ -751,6 +753,74 @@ describe('fleet store', () => {
     });
   });
 
+  // Build 4, Task 11, spec §4.2: additive on the same terms as `runs` above —
+  // an already-deployed PWA drops this frame silently, and this build accepts
+  // it once it knows the shape. `coordFrameSeen` is `runsFrameSeen`'s own
+  // sticky idiom, restated for the marker readout `CoordBanner` renders.
+  describe('the `coord` frame', () => {
+    it('accepts a well-formed coord frame and stores it', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+      lastSocket().message(JSON.stringify({ type: 'coord', coord: { pause: 'set', mail: 'clear' } }));
+      expect(store.getState().coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect(store.getState().coordFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('rejects a coord frame whose `coord` is missing or not an object — dropped silently, never thrown', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'coord' }))).not.toThrow();
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'coord', coord: null }))).not.toThrow();
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'coord', coord: 'set' }))).not.toThrow();
+      expect(store.getState().coord).toBeNull();
+      expect(store.getState().coordFrameSeen).toBe(false);
+      store.getState().disconnect();
+    });
+
+    it('stays sticky across a GENUINE reconnect — a fresh socket, not just a re-fired open event — never reset the way `sessions`/`runs` never are either', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'coord', coord: { pause: 'set', mail: 'clear' } }));
+      expect(store.getState().coordFrameSeen).toBe(true);
+
+      // `disconnect()` then `connect()` — the same idiom the "connects
+      // without ?since=" test above uses to prove a real resume — tears down
+      // the old socket and asks `makeSocket` for a NEW one (`FakeSocket`'s own
+      // instance-tracking array proves it: `lastSocket()` after this returns
+      // a DIFFERENT object). A `coord.pause`/`coord.mail` reset hiding in
+      // EITHER `connect()`'s own init state OR `disconnect()`'s teardown would
+      // both be caught here, not only a reset inside the `onOpen` handler a
+      // same-socket re-fire would exercise on its own. The server only
+      // re-sends `coord` when the value actually CHANGES (`emitCoord`'s own
+      // byte-equality guard), so a reconnect that lands before the next
+      // change must not un-flip a flag `CoordBanner` relies on to decide
+      // whether to render at all.
+      const firstSocket = lastSocket();
+      store.getState().disconnect();
+      store.getState().connect();
+      expect(lastSocket()).not.toBe(firstSocket);
+      lastSocket().open();
+
+      expect(store.getState().coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect(store.getState().coordFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+  });
+
   // Review finding 18: `feed` used to have exactly two producers — the
   // catch-up tail (volatile: the mark it reads advances one-way at receipt,
   // so a reload landing after the tail already ran sees nothing left to ask
@@ -906,5 +976,60 @@ describe('fleet store', () => {
       expect(store.getState().blocked).toBe(false);
       store.getState().disconnect();
     });
+  });
+});
+
+// — Build 4 wave 4 gates: what this build did NOT add to the wire —
+//
+// The Global Constraint, verbatim: "No new session frame. No new `ChatEvent`
+// kind." Both were the obvious designs for mail-in-the-transcript and both are
+// refused (spec §2.2) — a second `{type:'mail_log'}` frame would put the same
+// message on the wire twice ordered by two different clocks, and a
+// `{kind:'mail'}` `ChatEvent` would render as a blank or broken bubble in
+// every older PWA, whose `buildChatItems` funnels unknown kinds into
+// `MessageBubble`. The house one-way rule is *old readers drop what they do
+// not know*; a variant on a union they already destructure is not that.
+//
+// These are TEXT scans of the two declarations, in the single-definition.test
+// idiom: they catch the ordinary way someone adds a member, which is the way
+// people actually add members.
+describe('Build 4 wave 4 — the wire additions that were refused', () => {
+  const sourceOf = (...seg: string[]): string =>
+    readFileSync(path.join(import.meta.dirname, '..', '..', ...seg), 'utf8');
+
+  it("applySessionMsg still carries its `satisfies never` default arm — no session frame was added", () => {
+    // Compile-time exhaustiveness AND the runtime shrug, both. If a later
+    // build adds a frame, `tsc` fails at that line rather than silently
+    // dropping it — which is only true while the line is there.
+    const src = sourceOf('pwa', 'src', 'stores', 'session.ts');
+    expect(src).toContain('msg satisfies never;');
+  });
+
+  it('and answers an unknown frame by shrugging, not corrupting', () => {
+    const s: SessionSnapshot = {
+      events: [user('a', 'hi')], offset: 12, uuid: 'u1', status: null,
+      statusUpdatedAt: null, dialog: null, ask: null, tasks: [], mail: [],
+      missingFile: null, strandedAccount: null, searchComplete: true, file: null,
+    };
+    // A frame from a newer server this build was never compiled to know.
+    expect(applySessionMsg(s, { type: 'mail_log' } as unknown as SessionStreamMsg)).toBe(s);
+  });
+
+  it('ChatEvent gained no kind — the five members are exactly what they were', () => {
+    // Build 4 added an optional FIELD (`truncatedBytes`) to two existing
+    // members. A sixth member is the refused design, and this is what says so.
+    const src = sourceOf('shared', 'api.ts');
+    const decl = /export type ChatEvent =([\s\S]*?);\n/.exec(src)?.[1] ?? '';
+    expect(decl, 'ChatEvent declaration not found').not.toBe('');
+    const kinds = [...decl.matchAll(/\{\s*kind:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(kinds).toEqual(['user', 'assistant', 'tool_use', 'tool_result', 'system']);
+  });
+
+  it("the mail ChatItem is a RENDER-MODEL member, not a ChatEvent one", () => {
+    // The distinction the whole design rests on: `{kind:'mail'}` exists in
+    // `ChatList.tsx`'s `ChatItem`, which is PWA-local and derived per render,
+    // and nowhere in `shared/api.ts`, which is the wire.
+    expect(sourceOf('pwa', 'src', 'session', 'ChatList.tsx')).toContain("kind: 'mail'");
+    expect(sourceOf('shared', 'api.ts')).not.toContain("kind: 'mail'");
   });
 });

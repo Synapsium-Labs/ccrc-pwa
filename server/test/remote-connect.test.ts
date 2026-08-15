@@ -28,7 +28,12 @@ describe('connectFleet — connection lifecycle', () => {
     agent = await bootAgent(fixture);
     fleet = connectToAgent(agent.port);
 
-    await vi.waitFor(() => expect(fleet!.state).toEqual({ connected: true, downSince: null, ccdVerbs: [] }), { timeout: 3000 });
+    // `rosterFp: null` against a REAL agent, not a fake: the fixture home has
+    // no `~/.ccrc/accounts.sh`, so the agent omits the field and the client
+    // records no evidence. Absence-permits, proven across the actual wire.
+    await vi.waitFor(
+      () => expect(fleet!.state).toEqual({ connected: true, downSince: null, ccdVerbs: [], rosterFp: null }),
+      { timeout: 3000 });
   });
 
   it('notifies onStateChange listeners as connectivity flips', async () => {
@@ -155,5 +160,45 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
     fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toEqual([]);
+  });
+});
+
+describe('FleetClient.onReady — rosterFp keeps "no evidence" apart from a real digest', () => {
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
+    server = await fakeReadyAgent(extra);
+    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
+    return f;
+  };
+
+  it('records a reported digest verbatim', async () => {
+    fleet = await connect({ rosterFp: 'a'.repeat(64) });
+    expect(fleet.state.rosterFp).toBe('a'.repeat(64));
+  });
+
+  it('an absent rosterFp (older agent) is null — which the route reads as unknown, not divergent', async () => {
+    fleet = await connect({});
+    expect(fleet.state.rosterFp).toBeNull();
+  });
+
+  it.each([
+    ['a non-string', { rosterFp: 42 }],
+    ['an empty string', { rosterFp: '' }],
+  ])('%s is discarded as null rather than compared', async (_label, extra) => {
+    // An empty string would compare unequal to every real digest, so trusting
+    // it would report DIVERGENT — the one answer an operator acts on — from a
+    // frame that carried no information at all.
+    fleet = await connect(extra);
+    expect(fleet.state.rosterFp).toBeNull();
   });
 });

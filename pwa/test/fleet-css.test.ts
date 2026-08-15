@@ -451,12 +451,161 @@ describe('runs are not living panes', () => {
     // DIRECTION.md's refused list, by name: "glow on non-living things". A run
     // row is a record of a lifecycle position; the pane it names may be alive,
     // and THAT row (the fleet line) is where the lamp belongs.
-    for (const sel of ['.run-row', '.run-row .run-glyph', '.run-row .run-state', '.runs-group', '.fleet-runs-row']) {
+    for (const sel of ['.run-row', '.run-row .run-glyph', '.run-row .run-state', '.runs-group', '.fleet-runs-row',
+      '.run-row .run-abandon']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
     }
+  });
+});
+
+// Task 11, spec §4.2: a paused fleet is a STATE, not a living pane — the same
+// discipline "runs are not living panes" already holds a few rules up, for
+// the same reason.
+describe('the coord banner is not a living pane, and its toggle is a real target', () => {
+  it('no .coord-* rule glows, breathes or animates', () => {
+    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-toggle', '.coord-banner .coord-error']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  it('.coord-toggle is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleFor('.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it('.coord-banner itself clears the floor too — it is a status row, not just a label', () => {
+    expect(declValue(ruleFor('.coord-banner'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  // Task 14 gate: same self-grounded proof `.abandon-sheet`/`.program-start-
+  // sheet` already carry, applied here where the pattern was first used
+  // (Task 11) but never itself pinned as a unit test — `.coord-banner
+  // .coord-glyph`/`.coord-banner .coord-error` are only real, MEASURED pairs
+  // (`design/audit.mjs`'s descendant pass) because `.coord-banner` declares
+  // both `color` and `background` itself; losing either would silently drop
+  // its descendants back into the `hosts.size === 0` skip and out of the
+  // measured set, with `contrast.test.ts` staying green because there is
+  // nothing left to fail on.
+  it('.coord-banner is self-grounded — it declares its own color AND background', () => {
+    const rule = ruleFor('.coord-banner');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
+  });
+});
+
+// Task 12, spec §4.3: releasing a wedged run is a decision, not a living
+// pane — the same discipline "runs are not living panes" and the coord
+// banner's own block above already hold.
+describe('the abandon sheet is not a living pane, and its own control is a real target', () => {
+  it('no .run-abandon or .abandon-* rule glows, breathes or animates', () => {
+    for (const sel of ['.run-row .run-abandon', '.abandon-sheet', '.abandon-sheet .abandon-error']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  it('.run-abandon is at least one tap tall AND wide, off the shared token', () => {
+    expect(declValue(ruleFor('.run-row .run-abandon'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleFor('.run-row .run-abandon'), 'min-width')).toBe('var(--tap-min)');
+  });
+
+  // The named-ancestor descendant pair itself (Task 12 review lesson,
+  // applied ahead of time — Task 11's own review Minor 3): `.abandon-sheet`
+  // sets BOTH its own `color` and `background`, so it is self-grounded and
+  // `.abandon-sheet .abandon-error` is a rule `design/audit.mjs`'s
+  // descendant pass can actually recover a ground for, rather than a bare
+  // `.abandon-error { color: … }` selector it would file under `uncovered`
+  // (`hosts.size === 0` → skipped, never measured).
+  // Fix round 1, Minor 3: `.run-open` claiming the row's full width forced
+  // its new sibling `.run-abandon` onto its own flex line on EVERY row,
+  // roughly doubling every row's height on the primary board. jsdom applies
+  // no layout engine, so this is pinned the same way every other rule here
+  // is — reading the declaration back as text — rather than a computed-size
+  // assertion no test in this suite can make.
+  it('.run-open does not claim width: 100% — .run-abandon needs room on the same line', () => {
+    expect(declValue(ruleFor('.run-row .run-open'), 'width')).toBeNull();
+  });
+
+  it('.abandon-sheet is self-grounded — it declares its own color AND background', () => {
+    const rule = ruleFor('.abandon-sheet');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
+  });
+});
+
+// Task 13, spec §4.4: the run board's own door onto a new program, and the
+// start-a-program sheet — same discipline "runs are not living panes" and the
+// coord banner/abandon sheet blocks above already hold.
+describe('the program-start door and sheet are not living panes, and every real target clears the tap floor', () => {
+  // Whole-branch review, M5: this gate was a HAND-ENUMERATED list of eight
+  // selectors, and it shipped already missing two of its own siblings —
+  // `.program-start-ledger` and `.program-start-note`, which share a rule and
+  // were simply never typed out. A glow added there passed the gate. The list
+  // is now a SCAN: every rule in the file whose selector mentions
+  // `.program-start-` is checked, so a future sibling cannot be missed by
+  // forgetting to add it here. The floor assertion is what stops the scan
+  // passing vacuously if the block is ever renamed out from under it — a
+  // regex that matches nothing satisfies a bare `for` loop perfectly.
+  it('no .program-start-* rule glows, breathes or animates', () => {
+    const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((m) => (m[1] ?? '').includes('.program-start-'));
+    // Ten today: door, door:active, sheet, ledger+note, timeout, warn,
+    // existing+refuse+error, go, go:active, go:disabled.
+    expect(rules.length).toBeGreaterThanOrEqual(10);
+    for (const m of rules) {
+      const sel = norm(m[1] ?? '');
+      const rule = norm(m[2] ?? '');
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+    // The two the enumerated version missed, named explicitly as well: the
+    // scan above is the mechanism, and this is the regression it was written
+    // for, so it stays visible rather than living only in a comment.
+    for (const sel of ['.program-start-sheet .program-start-ledger',
+                       '.program-start-sheet .program-start-note']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  // Whole-branch review, M6: `.program-start-door` was copy-pasted from
+  // `.coord-toggle`, which lives in a flex row (`.coord-banner`). The door's
+  // own parent is `.runs-screen`, `display: grid` — `flex: none` there is
+  // inert, a declaration that reads as load-bearing and does nothing.
+  it('.program-start-door declares no flex — its parent .runs-screen is a grid', () => {
+    expect(declValue(ruleFor('.runs-screen'), 'display')).toBe('grid');
+    expect(declValue(ruleFor('.program-start-door'), 'flex')).toBeNull();
+  });
+
+  it('.program-start-door is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleFor('.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it('.program-start-go is at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleFor('.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  // The named-ancestor descendant pair itself (Task 12 review lesson, applied
+  // ahead of time — same idiom `.abandon-sheet`'s own comment describes):
+  // `.program-start-sheet` sets BOTH its own `color` and `background`, so it
+  // is self-grounded and every `.program-start-sheet .program-start-*` rule
+  // above is one `design/audit.mjs`'s descendant pass can recover a ground
+  // for, rather than a bare `.program-start-error { color: … }` selector it
+  // would file under `uncovered` (`hosts.size === 0` → skipped, never
+  // measured).
+  it('.program-start-sheet is self-grounded — it declares its own color AND background', () => {
+    const rule = ruleFor('.program-start-sheet');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
   });
 });
 

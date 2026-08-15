@@ -56,7 +56,7 @@ async function makeApp(
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
     ...(opts.ccdVerbs !== undefined
-      ? { fleetState: { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs } }
+      ? { fleetState: { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs, rosterFp: null } }
       : {}),
   });
   return { app, calls, cfg, home };
@@ -200,7 +200,7 @@ describe('lifecycle routes', () => {
     // resolution, not the capability gate.
     const app = await buildServer({
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'] },
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null },
     });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
@@ -233,7 +233,7 @@ describe('lifecycle routes', () => {
     // handling, not the capability gate.
     const app = await buildServer({
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'] },
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null },
     });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
     expect(res.statusCode).toBe(200);
@@ -325,7 +325,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     // evidence carried in `fleetState`, exactly as the fix requires.
     const app = await buildServer({
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
-      fleetState: { connected: true, downSince: null, ccdVerbs },
+      fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     // The load-bearing assertion: 200 BECAUSE the argv sent is the bare
@@ -354,7 +354,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     expect(cfg.fleetMode).toBe('local');
     const app = await buildServer({
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
-      fleetState: { connected: true, downSince: null, ccdVerbs },
+      fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
@@ -375,7 +375,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
-      fleetState: { connected: true, downSince: null, ccdVerbs },
+      fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
@@ -407,7 +407,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
 
     // index.ts's exact shape: seed null, fire-and-forget the read, mutate
     // the SAME object in place once it resolves.
-    const fleetState = { connected: true, downSince: null, ccdVerbs: null as string[] | null };
+    const fleetState = { connected: true, downSince: null, ccdVerbs: null as string[] | null, rosterFp: null as string | null };
     const capsPromise = readLocalCcdCaps(ccdBin).then((verbs) => {
       if (verbs !== null) fleetState.ccdVerbs = verbs;
     });

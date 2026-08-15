@@ -82,7 +82,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * `remote/io.ts` (and, from T4, `remote/pty.ts`) build on.
  */
 export class FleetClient {
-  readonly state: FleetState = { connected: false, downSince: null, ccdVerbs: null };
+  readonly state: FleetState = { connected: false, downSince: null, ccdVerbs: null, rosterFp: null };
 
   private readonly cfg: ResolvedConfig;
   private socket: WebSocket | null = null;
@@ -298,6 +298,13 @@ export class FleetClient {
     this.state.ccdVerbs = Array.isArray(frame.ccdVerbs)
       && frame.ccdVerbs.every((v) => typeof v === 'string')
       ? (frame.ccdVerbs as string[]) : null;
+    // Same stance, same reason: a frame without a usable `rosterFp` — an older
+    // agent, or a fleet host with no readable projection — leaves us with NO
+    // evidence, which must not read as disagreement. Reset on every ready so a
+    // reconnect to a redeployed fleet host cannot keep answering with the
+    // digest of the roster it used to have.
+    this.state.rosterFp = typeof frame.rosterFp === 'string' && frame.rosterFp.length > 0
+      ? frame.rosterFp : null;
     // Only the SECOND+ successful handshake is a "reconnect" — `everConnected`
     // (unlike `state.connected`, which starts false) distinguishes "first
     // connect ever" from "came back after a drop".

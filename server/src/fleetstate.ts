@@ -28,9 +28,63 @@ export interface FleetState {
    *  that for the one capability where guessing wrong is a SILENT success
    *  — see its own comment in `ccdargv.ts` for why the two must disagree. */
   ccdVerbs: string[] | null;
+  /** `bodyDigest` of the roster projection installed on the fleet host, or
+   *  null when we have no evidence (local mode, an older agent, or a fleet
+   *  host with no readable `~/.ccrc/accounts.sh`). Null is NOT "divergent" —
+   *  see `rosterAgreement` for the three-way answer that keeps those apart. */
+  rosterFp: string | null;
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
+
+/**
+ * Do this box and the fleet host agree about which accounts exist?
+ *
+ * Compares the digest the agent reported for its INSTALLED
+ * `~/.ccrc/accounts.sh` against the digest of the projection this server's own
+ * roster produces. Both sides run `bodyDigest` over the output of the one
+ * generator, so equal digests mean the two boxes would run identical bash, and
+ * unequal ones mean they would not.
+ *
+ * The two `accounts.json` files are deliberately NOT what is compared, even
+ * though "the rosters diverged" is how the problem is usually described.
+ * `accounts.json` is user-owned and never overwritten, but nothing on the
+ * fleet host READS it at runtime — `ccd` sources the generated projection, and
+ * the deploy is what regenerates one from the other. So a fleet host whose
+ * `accounts.json` was hand-edited and never redeployed has two files that
+ * agree and a `ccd` that behaves like neither. Digesting the projection sees
+ * that; digesting the JSON does not.
+ *
+ * WHAT `'divergent'` ACTUALLY MEANS, stated precisely because the obvious
+ * reading is narrower than the truth: the two boxes would run different
+ * `accounts.sh`. Usually that is a roster edit on one box only — but the
+ * generated body is a function of `shared/generate.mjs`'s CODE as well as of
+ * the roster, so a build in which the emitter changed (a new emission, a
+ * different arm layout) deployed to one box and not the other lands here too,
+ * with both `accounts.json` files identical. That is not a false positive —
+ * the boxes genuinely are running different projections, and `ccd` on one of
+ * them can behave differently from what the server assumes — but it does mean
+ * the operator-facing remedy is REDEPLOY BOTH first and reconcile the JSON
+ * second, which is the order `FleetHostBanner` states it in.
+ *
+ * Three answers, not two, and the third is why this is a function rather than
+ * an `===`. `'unknown'` means no evidence — local mode has no second box, an
+ * older agent omits the field, and a fleet host with no readable projection
+ * cannot report one. None of those is disagreement, and a UI that rendered
+ * them as disagreement would cry wolf on every deploy of an older agent.
+ * Overloading `unknown` into `divergent` is exactly the collapsed distinction
+ * this codebase bans at a seam: the operator does something about
+ * `'divergent'` and nothing about `'unknown'`.
+ */
+export type RosterAgreement = 'agreed' | 'divergent' | 'unknown';
+
+export function rosterAgreement(
+  fleetFp: string | null | undefined,
+  ownFp: string,
+): RosterAgreement {
+  if (fleetFp === null || fleetFp === undefined) return 'unknown';
+  return fleetFp === ownFp ? 'agreed' : 'divergent';
+}
 
 /**
  * Cache lives on THIS box's disk — the one running ccrc-server — regardless

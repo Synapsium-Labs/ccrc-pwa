@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
     "strict": true, "outDir": "dist", "rootDir": "..", "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true, "allowJs": true
   },
-  "include": ["src/**/*.ts", "../shared/**/*.ts"]
+  "include": ["src/**/*.ts", "../shared/**/*.ts", "../shared/**/*.mjs"]
 }

@@ -21,3 +21,13 @@ export type MarkerStatus = 'ccrc-unmodified' | 'ccrc-edited' | 'foreign';
  * no path; only the text is ever inspected.
  */
 export function verifyMarker(text: string): MarkerStatus;
+
+/**
+ * The sha256 of `text` with any marker line stripped — the same bytes
+ * `markGenerated` hashes. Two boxes' generated files answer the same digest
+ * exactly when ccrc would generate the same file on both. Unlike
+ * `verifyMarker`, which trusts the file's own embedded claim, this recomputes
+ * from the body, so a hand-edited file gets a digest that reflects what it
+ * now SAYS rather than what it once was.
+ */
+export function bodyDigest(text: string): string;

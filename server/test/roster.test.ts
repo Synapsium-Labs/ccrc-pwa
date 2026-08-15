@@ -19,6 +19,21 @@ describe('parseRoster', () => {
     expect(r.byId.get('claude')!.configDirSuffix).toBe('.claude');
   });
 
+  // The label rule is a control-character ban, NOT a printable-ASCII
+  // whitelist, and the difference is not academic: every label this fleet
+  // actually runs carries U+00B7, and the emoji/box-drawing case is one
+  // `ccrc adopt` away. A rule tightened past this point rejects the roster
+  // the repo itself ships, on a box where a rejected roster means the server
+  // refuses to boot. `gen-accounts.test.ts`'s CASES list guards the other
+  // direction — that a control character is still refused by both sides.
+  it('accepts the punctuation real labels are made of, banning only control characters', () => {
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'a', label: 'team·max', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
+      { id: 'b', label: 'lab·dev0 🚀 — "quoted"', configDirSuffix: '.b', exec: { kind: 'generated' }, homeAble: true, telemetry: 'anthropic' },
+    ] });
+    expect(r.accounts.map((a) => a.label)).toEqual(['team·max', 'lab·dev0 🚀 — "quoted"']);
+  });
+
   it('orders byIdLengthDesc longest-first so a prefix id never wins over a longer one', () => {
     const r = parseRoster({ version: 1, accounts: [
       { id: 'a', label: 'a', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },

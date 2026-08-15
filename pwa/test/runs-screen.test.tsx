@@ -333,6 +333,23 @@ describe('the run board', () => {
     expect(screen.getByRole('group', { name: /finished/i })).toBeInTheDocument();
   });
 
+  // Task 14 gate: `role="group"` is never a named landmark that can be
+  // empty (`RunsScreen.tsx`'s own comment, "seven named regions holding
+  // nothing turn the landmark rotor into dead ends"). Every OTHER test that
+  // finds the Finished group either has a genuine finished row or a real
+  // read failure to report (`coldFailed`) — none of them proves the
+  // ordinary, successful, truly-empty case renders no group at all. Active
+  // runs present, the cold read resolves `ok`, and finished is honestly
+  // empty: there must be nothing here for a screen reader's landmark list
+  // to land on and find empty.
+  it('renders no Finished group at all when the archive genuinely has none — an empty role=group is a dead end, not an honest state', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
+  });
+
   it('the group header states the program’s FURTHEST wave, never an arbitrary row’s own (finding 4)', () => {
     const store = makeStore();
     act(() => {
@@ -431,5 +448,83 @@ describe('the run board', () => {
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     const finishedGroup = await screen.findByRole('group', { name: /finished/i });
     expect(finishedGroup).toHaveTextContent(/could not reach the server/i);
+  });
+});
+
+// Task 11 review, Important 1: the only place `CoordBanner` is actually
+// mounted in production is `RunsScreen.tsx`, and before this test nothing
+// pinned that mount — `coord-banner.test.tsx` only pins the NEGATIVE half
+// (FleetScreen finds none) and `tap-targets.test.tsx` renders `RunsScreen`
+// with `coord: null`, so the banner is absent there by construction either
+// way. A merge conflict or a "clean up RunsScreen" pass could drop the
+// `<CoordBanner store={store} />` line and every existing test would stay
+// green while the pause readout silently stopped shipping.
+describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
+  it('renders .coord-banner once a coord frame has landed, ordered after .offline-banner', () => {
+    const store = makeStore();
+    act(() => {
+      store.setState({
+        conn: 'down', // also exercises the offline banner, so both can be ordered
+        coord: { pause: 'clear', mail: 'clear' },
+        coordFrameSeen: true,
+      });
+    });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+
+    const banner = container.querySelector('.coord-banner');
+    const offline = container.querySelector('.offline-banner');
+    expect(banner).not.toBeNull();
+    expect(offline).not.toBeNull();
+
+    // Brief, Step 5: "above the groups and below the Reconnecting… banner" —
+    // DOM order (not merely presence) is what that sentence actually asks
+    // for, so this checks order, not just membership.
+    const order = [...container.querySelectorAll('.offline-banner, .coord-banner')];
+    expect(order).toEqual([offline, banner]);
+  });
+});
+
+// Task 12 review lesson, applied ahead of time (Task 11's own review, finding
+// "Important 1"): a control that only ever renders in its OWN isolated test
+// file (`abandon-sheet.test.tsx`) ships missing the moment a merge or a
+// cleanup pass drops the line from `RunsScreen.tsx` — every OTHER test here
+// stays green because nothing else renders `RunsScreen` with a run and looks
+// for it. This pins the row control on a REAL row, in the file that already
+// owns every other row-level assertion (`.run-open`, the tally, the glyph).
+describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-B4-14)', () => {
+  it('renders .run-abandon as a sibling of .run-open, not nested inside it', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+
+    const abandon = screen.getByRole('button', { name: /abandon run 3/i });
+    expect(abandon).toHaveClass('run-abandon');
+    const open = screen.getByRole('button', { name: /clear-cove/i });
+    expect(open).toHaveClass('run-open');
+    // Siblings under the same <li>, never one nested in the other.
+    expect(open.parentElement).toBe(abandon.parentElement);
+    expect(open.contains(abandon)).toBe(false);
+    expect(abandon.contains(open)).toBe(false);
+  });
+});
+
+// Task 13 review lesson, applied ahead of time (Task 11/12's own reviews,
+// "Important 1" both times): a control that only ever renders in its own
+// isolated test file (`start-program.test.tsx`) ships missing the moment a
+// merge or a cleanup pass drops the line from `RunsScreen.tsx` — every OTHER
+// test here stays green because nothing else renders `RunsScreen` and looks
+// for it. This pins the door on the REAL screen, including at zero runs
+// (spec §4.4: "one door, rendered at zero runs too").
+describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
+  it('renders even at zero runs — one door, always there', async () => {
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+  });
+
+  it('opens the sheet on tap', async () => {
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
+    expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
   });
 });

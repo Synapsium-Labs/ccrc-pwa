@@ -84,16 +84,53 @@ export const clipUrl = (id: string, name: string): string =>
     location.origin).href;
 
 /**
- * The one sentence for a fleet host whose `ccd` predates the verb being called.
+ * The one sentence for a fleet host whose `ccd` predates the verb being
+ * called — for the LIFECYCLE routes (`archive`/`restore`/PR sweep) only.
  *
  * `PrKeycap.tsx`'s `REASON_TEXT.unsupported` already owned it — it is what the
  * cap says when the PR SWEEP hits the same skew. This is the definition and
  * that map imports it, rather than the two spelling the same fact differently:
  * the reader who sees the greyed cap and the reader who taps Archive are
  * looking at one condition on one box.
+ *
+ * NOT the COORDINATION surfaces' 501 text (`COORD_UNSUPPORTED_TEXT`, just
+ * below — spec §4.2's own literal "the fleet host needs the newer ccd").
+ * That IS a second spelling of the same fact — a deliberate one, not the
+ * drift this docstring used to argue against: the spec quotes its own phrase
+ * verbatim and `coord-banner.test.tsx` pins it, so editing THIS constant does
+ * not change what the pause banner or the abandon sheet renders.
+ *
+ * TWO constants, THREE call sites, and this names all three (review M2, which
+ * found the previous wording had reasoned about exactly this question and then
+ * listed only two of them, missing the one the same wave shipped):
+ *   1. lifecycle routes (`PrKeycap.tsx`'s `REASON_TEXT.unsupported`,
+ *      `PrSheet`'s archive/restore toasts) → THIS constant;
+ *   2. the pause banner (`CoordBanner.tsx`'s `inlinePauseError`) → and
+ *   3. the abandon sheet (`AbandonSheet.tsx`'s `ABANDON_COPY.unsupported`)
+ *      → both `COORD_UNSUPPORTED_TEXT`.
+ * If a fourth route ever needs the same refusal, wire it to whichever of the
+ * two its own spec/test actually names — neither is universal.
  */
 export const UNSUPPORTED_VERB_TEXT =
   'The fleet host is running a ccd that does not have this verb yet.';
+
+/**
+ * The same fact as `UNSUPPORTED_VERB_TEXT`, in the COORDINATION surfaces'
+ * words — spec §4.2's literal phrase, pinned verbatim by
+ * `coord-banner.test.tsx` and `abandon-sheet.test.tsx`.
+ *
+ * It lives here rather than in either component because it has TWO renderers
+ * and they are in different files: `CoordBanner`'s 501 arm and
+ * `AbandonSheet`'s `ABANDON_COPY.unsupported` shipped it as two byte-identical
+ * literals (review M2). One box, one skew, one sentence — a reader who taps
+ * Pause and a reader who taps Abandon on the same stale host must not be told
+ * two different things, and two literals is how that starts.
+ *
+ * Lower-case and un-terminated on purpose: both sites render it as inline
+ * refusal copy inside their own surface, not as a standalone sentence the way
+ * `UNSUPPORTED_VERB_TEXT` reaches a toast.
+ */
+export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
 
 /**
  * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),
@@ -260,11 +297,29 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  one. */
     runs: (closed = false) =>
       getJson<{ runs: RunSummary[] }>(closed ? '/api/runs?closed=1' : '/api/runs'),
+    /** `POST /api/runs/:id/abandon` (spec §4.3, Task 12) — the operator's
+     *  release valve for a wedged run, from the phone. The route (`server/src
+     *  /coord/routes.ts:844`) reads NO body at all — `{intent:'abandon'}` is
+     *  built server-side, so `archive` is not a field this call could even
+     *  offer ("the phone can abandon; the phone can never archive" is
+     *  structural on the server, and this client sends nothing that could
+     *  smuggle it past that). Deliberately UNGATED, same reasoning as
+     *  `coordPause` just above: no box token on this call. */
+    abandonRun: (id: number) => post(`/api/runs/${id}/abandon`),
     /** The DURABLE feed. `catchUp` is the live tail and is volatile by
      *  construction (notifymark.ts advances the mark at receipt); this is the
      *  read that still has bodies after a deploy. */
     feed: (limit = 100) => getJson<{ events: NotifyEvent[] }>(`/api/feed?limit=${limit}`),
     interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
+     *  `{ok:true, requested}` on success (the field is `requested`, never
+     *  `paused`: the route ran a verb, it did not read the marker back).
+     *  `CoordBanner` ignores the response body entirely and waits for the
+     *  next `{type:'coord'}` frame to confirm instead — the whole point of
+     *  the toggle's own "not optimistic" rule (spec §4.2, `CoordBanner.tsx`).
+     *  Ungated (no box token): the route is deliberately open, the same way
+     *  every other same-origin PWA write is. */
+    coordPause: (paused: boolean) => post('/api/coord/pause', { paused }),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

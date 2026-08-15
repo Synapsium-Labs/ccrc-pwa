@@ -223,7 +223,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   });
 
   it('refuses to emit a verb the agent did not advertise, and permits everything when it said nothing', () => {
-    const state = { connected: true, downSince: null, ccdVerbs: ['start', 'pr-state'] };
+    const state = { connected: true, downSince: null, ccdVerbs: ['start', 'pr-state'], rosterFp: null };
     expect(verbSupported(state, CCD_ARGV.prStateSession('x'))).toBe(true);
     expect(verbSupported(state, CCD_ARGV.wsReap('a'.repeat(64), 'x'))).toBe(false);
     // Null is "no evidence", not "no verbs": local mode and an older agent
@@ -235,7 +235,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     // error invisible to every gate because server's tsconfig excludes
     // test/. Same runtime value either way; only the shape TS checks it
     // against changes.
-    const nullState = { connected: true, downSince: null, ccdVerbs: null };
+    const nullState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null };
     expect(verbSupported(nullState, CCD_ARGV.wsReap('a'.repeat(64), 'x'))).toBe(true);
     expect(verbSupported(undefined, CCD_ARGV.wsReap('a'.repeat(64), 'x'))).toBe(true);
   });
@@ -250,7 +250,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   // everything for the duration of a state that ought to grey the whole
   // feature out.
   it('an EMPTY ccdVerbs is not the same as null — the fleet reported no verbs, so refuse', () => {
-    const empty = { connected: true, downSince: null, ccdVerbs: [] };
+    const empty = { connected: true, downSince: null, ccdVerbs: [], rosterFp: null };
     expect(verbSupported(empty, CCD_ARGV.wsReap('a'.repeat(64), 'x'))).toBe(false);
     expect(verbSupported(empty, CCD_ARGV.ensure('x'))).toBe(false);
   });

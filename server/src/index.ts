@@ -102,7 +102,15 @@ if (cfg.fleetMode === 'remote') {
   // real read resolves and mutates this object in place — the exact
   // pattern `refreshcaps.ts`'s `makeRefreshCaps` already uses for the
   // remote-mode timer, applied once here instead of on a schedule.
-  const fleetState = { connected: true, downSince: null, ccdVerbs: null as string[] | null };
+  const fleetState = {
+    connected: true, downSince: null, ccdVerbs: null as string[] | null,
+    // `rosterFp` stays null in local mode BY MEASUREMENT, not by omission:
+    // there is no second box, so there is no installed projection to compare
+    // ours against, and `rosterAgreement` maps null to `'unknown'` — never
+    // `'divergent'`. Reporting a digest here would be reporting agreement
+    // with ourselves, which is the one answer the banner must not show.
+    rosterFp: null as string | null,
+  };
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
     if (verbs !== null) fleetState.ccdVerbs = verbs;
   });
@@ -113,7 +121,8 @@ if (cfg.fleetMode === 'remote') {
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim
     // about remote fleet reachability. `ccdVerbs` is the one field this
-    // object exists to carry.
+    // object exists to carry — `rosterFp` is inert here for the reason
+    // stated at its own initializer above.
     fleetState,
   };
 }
