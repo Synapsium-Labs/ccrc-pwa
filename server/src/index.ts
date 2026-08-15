@@ -16,6 +16,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { readMailToken } from './coord/token.js';
 import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
+import { readLocalCcdCaps } from './localcaps.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -86,9 +87,43 @@ if (cfg.fleetMode === 'remote') {
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
+  // Fix round 3 (task 14, Important #3): real evidence, not an absent
+  // `fleetState` — `stopSurfaceSupported` (and any future capability that
+  // adopts its inverted, refuse-on-no-evidence default) would otherwise be
+  // permanently dead in this, the DEFAULT deployment mode.
+  //
+  // NOT AWAITED (fix round 4, task 14, Important #1): `readLocalCcdCaps` is
+  // bounded (`LOCAL_CAPS_TIMEOUT_MS`), but bounded is still a delay on the
+  // boot path if this line blocks on it — measured against a `ccd` stub
+  // that merely sleeps: the whole point of NOT gating `app.listen()` on
+  // this is that the server should be answering `/health` immediately,
+  // with `ccdVerbs: null` (no evidence — the honest, already-safe answer
+  // both `verbSupported` and `stopSurfaceSupported` give it) until the
+  // real read resolves and mutates this object in place — the exact
+  // pattern `refreshcaps.ts`'s `makeRefreshCaps` already uses for the
+  // remote-mode timer, applied once here instead of on a schedule.
+  const fleetState = {
+    connected: true, downSince: null, ccdVerbs: null as string[] | null,
+    // `rosterFp` stays null in local mode BY MEASUREMENT, not by omission:
+    // there is no second box, so there is no installed projection to compare
+    // ours against, and `rosterAgreement` maps null to `'unknown'` — never
+    // `'divergent'`. Reporting a digest here would be reporting agreement
+    // with ourselves, which is the one answer the banner must not show.
+    rosterFp: null as string | null,
+  };
+  void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
+    if (verbs !== null) fleetState.ccdVerbs = verbs;
+  });
   deps = {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
+    // `connected`/`downSince` are inert for local mode — every reader of
+    // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
+    // watch.ts) — so `true`/`null` are placeholders, never read as a claim
+    // about remote fleet reachability. `ccdVerbs` is the one field this
+    // object exists to carry — `rosterFp` is inert here for the reason
+    // stated at its own initializer above.
+    fleetState,
   };
 }
 

@@ -1,9 +1,11 @@
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
-import { configDirFor } from './config.js';
+import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
-import { resolveTranscriptFile } from './transcript/resolve.js';
+import {
+  rungRank, TranscriptResolver, type TranscriptResolution,
+} from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { paneState, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
@@ -18,6 +20,10 @@ const BACKLOG_N = 50;
 interface Resolved {
   uuid: string;
   file: string;
+  /** The outcome `file` came off. §5.3's re-point rule compares RUNGS, not
+   *  paths, and the backlog frame reports the account and the completeness —
+   *  none of which a bare string can carry. */
+  resolution: TranscriptResolution;
   cfgDir: string;
   status: SessionStatus;
   statusUpdatedAt: number | null;
@@ -97,6 +103,13 @@ export class SessionStream {
    *  (fixing round 1, I1): `ask_cleared` at minimum, confirming to a
    *  possibly-stale client that there is truly nothing pending. */
   private lastAskJson: string | null | undefined = undefined;
+  /** One memo per stream (§5.4): steady state is ONE stat per tick for this
+   *  session, and a session with nothing at any exact address pays for a full
+   *  search on a back-off rather than every two seconds. */
+  private readonly transcripts: TranscriptResolver;
+  /** The outcome the open tailer was built from — the left-hand side of
+   *  §5.3's re-point comparison. Null until the first tailer exists. */
+  private tailed: TranscriptResolution | null = null;
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
   // This stream detects dialogs itself (start + every tick), so it always
@@ -123,8 +136,39 @@ export class SessionStream {
     private readonly bus: Bus,
     private readonly id: string,
     private readonly send: (m: SessionStreamMsg) => void,
-    private readonly since?: { uuid: string; offset: number },
-  ) {}
+    /** `file` is the transcript the client's `offset` was taken in (§5.3).
+     *
+     *  OPTIONAL, and the omission is a REAL exposure, not a shrug. A client
+     *  that names no file gets the uuid-only resume, and since §5.1's ladder
+     *  a uuid can resolve to several files — so this build honours a byte
+     *  offset against whatever the ladder answers NOW. Before the ladder one
+     *  uuid meant one file and that was safe; the ladder is what made it
+     *  unsafe, so "no worse than before" would be false. What it costs when
+     *  it goes wrong was measured: a resume at byte 6620 of a different file
+     *  stitches the tail of the carried copy onto the head of the stranded
+     *  one, in one continuous conversation, with the real messages before it
+     *  silently absent. It self-heals only when the new file is SMALLER than
+     *  the stale offset (the tailer's truncation check); a growing
+     *  conversation goes through in silence.
+     *
+     *  The PWA sends it (`pwa/src/stores/session.ts`'s `connect()`), so the
+     *  exposure was a browser holding a build from before that — one reload
+     *  wide — and `start()` below refuses to trust a bare uuid match when the
+     *  echo is present and disagrees. An earlier version of this comment said
+     *  "Task 12 closes it": Task 12 is the PWA task on this branch, its brief
+     *  never mentioned `sinceFile`, and it shipped without it. Nothing closed
+     *  it until the final review found the client half missing.
+     *
+     *  THAT WINDOW IS NOW CLOSED TOO, by the offset rather than by the echo:
+     *  `start()` honours a null echo only at offset 0, the only offset either
+     *  legitimate no-file moment can carry. A stale build's non-zero offset
+     *  gets the backlog. This is why the parameter is still optional and why
+     *  its absence is still not a mismatch — a client with no file is a real
+     *  state, and it is a state with no offset to protect. */
+    private readonly since?: { uuid: string; offset: number; file?: string | null },
+  ) {
+    this.transcripts = new TranscriptResolver(deps.io);
+  }
 
   async start(): Promise<void> {
     this.bus.on('notice', this.onNotice);
@@ -134,8 +178,24 @@ export class SessionStream {
     if (r.ok) {
       this.uuid = r.data.uuid;
       this.status = r.data.status;
-      if (this.since && this.since.uuid === r.data.uuid) {
-        this.startTailer(r.data.file, r.data.uuid, this.since.offset); // resume — no backlog
+      this.tailed = r.data.resolution;
+      const echoed = this.since?.file ?? null;
+      if (this.since && this.since.uuid === r.data.uuid
+        && (echoed === null ? this.since.offset === 0 : echoed === r.data.file)) {
+        // Resume — no backlog. A MATCHING echo proves the offset belongs to the
+        // file about to be tailed; a NULL echo is trusted only at offset 0,
+        // which is what closes §5.3's compatibility window rather than
+        // disclosing it (see the `since` parameter above). `parseSince` cannot
+        // tell "the parameter was absent" from "this client has no file" —
+        // both are `file: null` — but the two moments a client legitimately
+        // has none are both offset 0: before its first backlog there is no
+        // `since` at all, and between a `rotated` and its backlog the offset
+        // was reset to 0 and the server sends that backlog on its very next
+        // statement. So a non-zero offset with no file named is a client that
+        // HAD one and cannot say so — a stale build — and it gets the full
+        // backlog instead of an offset honoured against a file nobody agreed
+        // on. It costs a current client nothing.
+        this.startTailer(r.data.file, r.data.uuid, this.since.offset);
       } else {
         await this.sendBacklogAndTail(r.data);
       }
@@ -242,6 +302,35 @@ export class SessionStream {
     if (p !== null && p.file === file && p.id === id && p.size === st.size && p.mtimeMs === st.mtimeMs) return false;
     this.askProbe = { file, id, size: st.size, mtimeMs: st.mtimeMs };
     return true;
+  }
+
+  /** The io-bound half of §5.3's rule: the ONE fact `shouldRepoint` cannot
+   *  measure itself, gated the same way its own docstring promises — a stat
+   *  is spent ONLY when the answer actually differs, never on the common
+   *  case (a same-rung, same-path answer, every tick of every healthy
+   *  session). Fix round 1, Important #1: this used to re-implement
+   *  `shouldRepoint`'s rule inline rather than calling it, so `shouldRepoint`'s
+   *  own table tests were guarding a copy that never ran — three mutants
+   *  (dropping the "file gone" fallback, `<` -> `<=`, `&&` -> `||`) survived
+   *  the ENTIRE suite against the live path while dying instantly against
+   *  `shouldRepoint` in isolation. Delegating here closes that gap: mutating
+   *  `shouldRepoint` now mutates what `tick()` actually executes.
+   *
+   *  The pre-filter below is the one line that stayed outside that fix, and
+   *  it is a half-copy of the same rule, so it needs its own pin (final
+   *  review, Important #3): dropping its `cur.path === next.path` conjunct
+   *  passed the whole suite while making a same-rung DIFFERENT-path answer
+   *  unreachable — the stream would keep tailing a deleted transcript
+   *  forever. `sessionws.test.ts`'s "follows a SAME-RUNG answer to a
+   *  different path once the tailed file is gone" is that pin; it must fail
+   *  if this line is ever weakened again. It cannot simply be deleted in
+   *  favour of always calling `shouldRepoint`: skipping the stat on the
+   *  same-rung/same-path case is what keeps a healthy tick free. */
+  private async repointNeeded(next: TranscriptResolution): Promise<boolean> {
+    const cur = this.tailed;
+    if (cur === null) return false;
+    if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;  // no stat
+    return shouldRepoint(cur, next, (await this.deps.io.stat(cur.path)) !== null);
   }
 
   /** Read the session's task list and send it when it differs from what this
@@ -404,9 +493,18 @@ export class SessionStream {
         }
       }
     }
+    const resolution = await this.transcripts.resolve({
+      configDir: cfgDir,
+      dir: cwd,
+      registryWorkdir: identity.workdir,
+      uuid: identity.uuid,
+      // Only this caller asks for rung 6: it is the one surface that can show
+      // the operator a banner naming whose history it is rendering (§5.2).
+      foreign: foreignConfigDirs(this.deps.cfg, identity.wrapper),
+    });
     return {
       ok: true,
-      data: { uuid: identity.uuid, file: await resolveTranscriptFile(this.deps.io, cfgDir, cwd, identity.uuid), cfgDir, status, statusUpdatedAt },
+      data: { uuid: identity.uuid, file: resolution.path, resolution, cfgDir, status, statusUpdatedAt },
     };
   }
 
@@ -419,7 +517,12 @@ export class SessionStream {
     const missing = (await this.deps.io.stat(r.file)) === null;
     const { events, offset } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
-    this.send({ type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing });
+    this.tailed = r.resolution;
+    this.send({
+      type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing,
+      foreignAccount: r.resolution.kind === 'found' ? r.resolution.account : null,
+      searchComplete: r.resolution.kind === 'fallback' ? r.resolution.complete : true,
+    });
     this.startTailer(r.file, r.uuid, offset);
   }
 
@@ -475,6 +578,22 @@ export class SessionStream {
         const appeared = this.uuid === null; // record was unknown/unmeasurable at start
         this.uuid = data.uuid;
         if (!appeared) this.send({ type: 'rotated', uuid: data.uuid });
+        await this.sendBacklogAndTail(data);
+      } else if (await this.repointNeeded(data.resolution)) {
+        // §5.3: the uuid did not move but the ANSWER did — a swap landed, or
+        // the file this stream was tailing is gone. Fix round 1, MY RULING
+        // (Important #3): this is deliberately NOT `rotated`. That frame's
+        // only PWA-side effect beyond `uuid`/`offset` bookkeeping is minting a
+        // "Session context reset" divider (pwa/src/stores/session.ts) — true
+        // for a real clear/compact/swap-onto-a-fresh-uuid, but false here: the
+        // uuid did not change, nothing was reset, the stream simply followed
+        // the SAME session's history to its new address. On the branch this
+        // spec exists to fix — a swap correctly recovering history — telling
+        // the operator their context was just reset is the single most
+        // alarming false sentence this build could print. `backlog` alone is
+        // self-describing (carries `file` and `offset`) and needs no frame
+        // beside it; an older client with no `sinceFile` support still just
+        // sees a fresh backlog, exactly as it does on first connect.
         await this.sendBacklogAndTail(data);
       }
       if (this.stopped) return;
@@ -538,13 +657,59 @@ export function nextDialogFrame(
   };
 }
 
-/** Parse the `since=<uuid>:<offset>` query value; malformed → undefined. */
-export function parseSince(raw: string | undefined): { uuid: string; offset: number } | undefined {
+/**
+ * §5.3's re-point decision, pure: re-point when the answer CHANGED and either
+ * the new rung is strictly better or the file being tailed is gone.
+ *
+ * "Better" is §5.1's rung order, which is why the rung travels in the union
+ * rather than being recomputed here. A same-rung, same-path answer changes
+ * nothing — the common case every tick — and a worse rung never drags a healthy
+ * stream off an exact-address transcript that still exists.
+ */
+export function shouldRepoint(
+  cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean,
+): boolean {
+  if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
+  if (rungRank(next) < rungRank(cur)) return true;
+  return !tailedExists;
+}
+
+/**
+ * Every OTHER account's config dir, in roster declaration order — rung 6's
+ * input and its tiebreak (§5.1).
+ *
+ * Read off `cfg.roster.accounts`, which `loadConfig` DERIVES from
+ * `~/.ccrc/accounts.json` (see `config.ts`'s own comment on why: a hand-typed
+ * copy is how `claude-dev0` was missing for the account's entire life — and
+ * `~/.claude-dev0` is precisely where the incident's recovered transcript
+ * sits today). Never a literal list of account names in this module
+ * (architecture rule (a): config is data).
+ *
+ * ONLY the session stream builds one. `watch.ts`'s name sweep and
+ * `commands.ts` pass no `foreign` at all, because a derived name is written
+ * into the row with no banner attached to it (§5.2).
+ */
+export function foreignConfigDirs(
+  cfg: CcrcConfig, own: string,
+): { account: string; configDir: string }[] {
+  return cfg.roster.accounts
+    .filter((a) => a.id !== own)
+    .map((a) => ({ account: a.id, configDir: configDirFor(cfg, a.id)! }));
+}
+
+/** Parse `since=<uuid>:<offset>` plus its companion `sinceFile=<path>`;
+ *  malformed `since` → undefined. The file rides its OWN parameter rather than
+ *  a third colon-delimited field: a path may contain a colon, and the offset is
+ *  parsed off the LAST one. An absent file is `null`, meaning "this client did
+ *  not name one" — honored as today's uuid-only resume, never as a mismatch. */
+export function parseSince(
+  raw: string | undefined, rawFile?: string | undefined,
+): { uuid: string; offset: number; file: string | null } | undefined {
   if (!raw) return undefined;
   const i = raw.lastIndexOf(':');
   if (i <= 0) return undefined;
   const uuid = raw.slice(0, i);
   const offset = Number(raw.slice(i + 1));
   if (!Number.isFinite(offset) || offset < 0) return undefined;
-  return { uuid, offset };
+  return { uuid, offset, file: rawFile && rawFile !== '' ? rawFile : null };
 }

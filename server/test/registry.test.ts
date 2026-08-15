@@ -5,7 +5,7 @@ import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
   readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
-  HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS,
+  HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -13,6 +13,18 @@ import { seedRoster } from './helpers.js';
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
 };
+
+/** `localIO` with every read of `<id>.<field>` failing — the file is still
+ *  LISTED (a real, present file on disk), only its bytes never come back —
+ *  the shape `remote/io.ts` produces on one dropped agent-WS round trip among
+ *  the ~21 a session's read fires in parallel. Module scope (DISPATCH-CONTEXT
+ *  §6 / task-9 brief Step 1): shared by the identity ladder, the
+ *  observability suite and the D3 stamp suite below — two nested copies of
+ *  this were the drift a hoist exists to prevent. */
+const unreadableField = (id: string, field: string): FleetIO => ({
+  ...localIO,
+  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
+});
 
 describe('readRegistry', () => {
   let home: string;
@@ -172,7 +184,7 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 17 field reads instead of
+// narrowed to one id — one readdir plus that id's 21 field reads instead of
 // a whole-fleet sweep. These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
@@ -240,7 +252,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 17 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 21 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude2-MekWarLive', {
       wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -261,7 +273,10 @@ describe('readSessionRecord', () => {
     await readSessionRecord(countingIO, cfg, 'claude2-MekWarLive');
 
     expect(readdirCalls).toBe(1);
-    expect(fieldReads).toHaveLength(17);
+    // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn). The
+    // number is pinned rather than derived because it IS the remote-mode cost:
+    // one round trip each, per session, per 2-second tick.
+    expect(fieldReads).toHaveLength(21);
     expect(fieldReads.every((p) => p.includes('claude2-MekWarLive'))).toBe(true);
   });
 
@@ -295,15 +310,6 @@ describe('the identity ladder (unmeasured evidence)', () => {
     home = mkTmp('ccrc-');
     seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-  });
-
-  /** `localIO` with every read of `<id>.<field>` failing — the file is still
-   *  LISTED (a real, present file on disk), only its bytes never come back —
-   *  the shape `remote/io.ts` produces on one dropped agent-WS round trip
-   *  among the ~17 a session's read fires in parallel. */
-  const unreadableField = (id: string, field: string): FleetIO => ({
-    ...localIO,
-    readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
   });
 
   it('degrades — never drops — a row whose wrapper is listed but unreadable', async () => {
@@ -529,11 +535,6 @@ describe('observability (warnOnce, escalation, the whole-fleet episode)', () => 
     vi.useRealTimers();
   });
 
-  const unreadableField = (id: string, field: string): FleetIO => ({
-    ...localIO,
-    readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-  });
-
   it('warns once on entry to degraded, and stays silent on an immediate repeat within the cooldown', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'obs-warnonce-a', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
@@ -639,5 +640,134 @@ describe('observability (warnOnce, escalation, the whole-fleet episode)', () => 
     await readRegistry(listable, cfg);
     // No further exit logging on subsequent, already-recovered reads.
     expect(warnSpy.mock.calls.length).toBe(warnsBefore + 1);
+  });
+});
+
+// D3, spec §4.1/§4.2/§2.4/§3.1. Four stamps ccd writes and nothing read: the
+// deliberate stop (`<epoch> <surface>`), the supervisor heartbeat (`<epoch>`),
+// the swap refusal (`<epoch> <reason>`) and the last spawn verdict
+// (`<epoch> <rc>`). Epoch and payload share ONE field per stamp on purpose —
+// the registry is read per-field per-session on a 2s tick, and packing is what
+// keeps `stopped` one read instead of two.
+describe('the lifecycle stamps (D3)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    seed(reg, 'demo-quiet-basin', {
+      uuid: 'a'.repeat(36), wrapper: 'claude', workdir: '/w', project: 'demo',
+    });
+  });
+
+  const read = async (io = localIO) =>
+    (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+
+  it('reads all four stamps off disk, splitting epoch from payload', () => {
+    // Kills the mutant that reads the whole file as the epoch (NaN -> null,
+    // so every stamp in the fleet would vanish) and the one that reads the
+    // whole file as the payload (a surface of "1785300000 pwa").
+    seed(reg, 'demo-quiet-basin', {
+      stopped: '1785300000 pwa',
+      supervised: '1785300100',
+      swapblocked: '1785299000 no transcript found for uuid under claude',
+      spawn: '1785299500 4',
+    });
+    return read().then((r) => {
+      expect(r.stopped).toEqual({ at: 1785300000, surface: 'pwa' });
+      expect(r.supervisedAt).toBe(1785300100);
+      expect(r.swapBlocked).toEqual({
+        at: 1785299000, reason: 'no transcript found for uuid under claude',
+      });
+      expect(r.spawn).toEqual({ at: 1785299500, rc: 4 });
+      expect(r.lifecycleUnmeasured).toEqual([]);
+    });
+  });
+
+  it('normalizes a stop surface this build does not know, and one that is missing entirely, to `unknown`', async () => {
+    // §4.1: the word is text FROM THE WIRE being written into the registry, so
+    // it is validated on read as well as on write — a version-skewed ccd is the
+    // ordinary case on this box. `unknown` is a real member of the union, so
+    // there is somewhere honest to land; the epoch survives either way.
+    seed(reg, 'demo-quiet-basin', { stopped: '1785300000 slack' });
+    expect((await read()).stopped).toEqual({ at: 1785300000, surface: 'unknown' });
+    seed(reg, 'demo-quiet-basin', { stopped: '1785300000' });
+    expect((await read()).stopped).toEqual({ at: 1785300000, surface: 'unknown' });
+  });
+
+  it('nulls a stamp whose epoch is missing or non-numeric — a torn write is not a fact', async () => {
+    // An interrupted `_reg_set` leaves a zero-byte or half-written field.
+    // `Number('')` is 0, and `stoppedAt: 0` classifies a live session as
+    // stopped-in-1970 — the same silent lie `numOrNull` exists to refuse.
+    for (const bad of ['', '   ', 'pwa', 'notanepoch pwa']) {
+      seed(reg, 'demo-quiet-basin', { stopped: bad, supervised: bad });
+      const r = await read();
+      expect(r.stopped, JSON.stringify(bad)).toBeNull();
+      expect(r.supervisedAt, JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('gives a swap refusal with no reason a sentence, never an empty display string', async () => {
+    // Same ruling as HOLD_NO_REASON, for the same reason: the reason string IS
+    // the display (spec §2.4 — the field is the durable half of the refusal,
+    // rendered on the row), and `reason: ''` renders as a banner with nothing
+    // in it on every surface while every consumer still shows it.
+    seed(reg, 'demo-quiet-basin', { swapblocked: '1785299000' });
+    expect((await read()).swapBlocked).toEqual({ at: 1785299000, reason: SWAP_BLOCKED_NO_REASON });
+    seed(reg, 'demo-quiet-basin', { swapblocked: '1785299000    ' });
+    expect((await read()).swapBlocked).toEqual({ at: 1785299000, reason: SWAP_BLOCKED_NO_REASON });
+  });
+
+  it('nulls a spawn stamp whose rc is not a number — a verdict that does not parse is not a verdict', async () => {
+    seed(reg, 'demo-quiet-basin', { spawn: '1785299500 exploded' });
+    expect((await read()).spawn).toBeNull();
+    seed(reg, 'demo-quiet-basin', { spawn: '1785299500' });
+    expect((await read()).spawn).toBeNull();
+  });
+
+  it('marks a LISTED but unreadable lifecycle field unmeasured — never absent', async () => {
+    // The identity ladder's own evidence rule, applied to the three fields
+    // §4.3's classifier reads: the directory listing proves PRESENCE
+    // independently of whether the bytes came back. Without this the ladder
+    // sees "no stop stamp" for a stop that was recorded and prints `orphan` —
+    // rule (b)'s exact prohibition.
+    seed(reg, 'demo-quiet-basin', { stopped: '1785300000 pwa', supervised: '1785300100', started: '1' });
+    for (const f of ['stopped', 'supervised', 'started']) {
+      const r = await read(unreadableField('demo-quiet-basin', f));
+      expect(r.lifecycleUnmeasured, f).toEqual([f]);
+    }
+  });
+
+  it('leaves every stamp null and lifecycleUnmeasured empty on a session that has none of them', async () => {
+    // The overwhelming majority of rows the day this ships, and every row a
+    // pre-D3 ccd ever wrote. Absence is absence.
+    const r = await read();
+    expect([r.stopped, r.supervisedAt, r.swapBlocked, r.spawn]).toEqual([null, null, null, null]);
+    expect(r.lifecycleUnmeasured).toEqual([]);
+  });
+
+  // BINDING FINDING #1 from task-8's review (task-9-brief does not draft this
+  // case — routed here deliberately, DISPATCH context for task 9). ccd's own
+  // `_session_state` (ccd/ccd:377) tests ONLY `[[ -e "$REG/$id.stopped" ]]` —
+  // existence, never content — while `.supervised`'s bash reader (ccd/ccd:367)
+  // already guards with `^[0-9]+$` before trusting it, the same guard
+  // `numOrNull` gives it here. `.stopped` has no such guard on the bash side,
+  // and its own write (`printf '%s %s' "$(date +%s)" "$surface" > file`,
+  // ccd/ccd:336) is non-atomic — so a zero-byte or garbage `.stopped` is a
+  // PROVEN divergence: bash confidently answers `stopped` for this exact
+  // on-disk state. A reader that collapsed the same bytes to `stoppedAt: null`
+  // would let `dead + started -> orphan` fire about a row bash calls stopped —
+  // rule (b)'s exact prohibition, MEASURED (task-9-report.md): a dead, started
+  // row with a zero-byte `.stopped` made this exact reader answer `orphan`
+  // before this test and the ladder fix below existed.
+  it('routes a present-but-unparseable .stopped into lifecycleUnmeasured, never a bare null', async () => {
+    for (const bad of ['', 'garbage no epoch here']) {
+      seed(reg, 'demo-quiet-basin', { stopped: bad, started: '1' });
+      const r = await read();
+      expect(r.stopped, JSON.stringify(bad)).toBeNull();
+      expect(r.lifecycleUnmeasured, JSON.stringify(bad)).toEqual(['stopped']);
+    }
   });
 });

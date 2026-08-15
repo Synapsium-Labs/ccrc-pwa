@@ -2,7 +2,14 @@
 
 A mobile-first, installable PWA to view and drive the `ccd` fleet of
 `--remote-control` Claude Code sessions on server-box, over Tailscale. It follows
-sessions across account swaps — the thing the official claude.ai app can't do.
+sessions across account swaps — the thing the official claude.ai app can't do —
+and the swap now carries the *conversation itself*: the transcript is located
+**by uuid**, globally unique, across every project directory under the source
+account, rather than by one guessed path. A swap that finds nothing to carry
+**refuses** rather than completing and losing the history. The PWA also still
+finds history a pre-fix swap stranded on another account, banked wherever a
+prior swap left it — a chat that had to look elsewhere says so, under a banner
+naming the account.
 
 **Install URL (tailnet only):** `https://server-box.tailnet-example.ts.net:8443/`
 Add to home screen in Android Chrome / iOS Safari for the standalone app.
@@ -53,7 +60,12 @@ Add to home screen in Android Chrome / iOS Safari for the standalone app.
 - `deploy/` — `ccrc.service` / `ccrc-agent.service` (systemd user units),
   `ccrc.env.example` / `ccrc-agent.env.example` (env templates — copy to
   `ccrc.env` / `ccrc-agent.env`, gitignored, to supply real tokens),
-  `notify.sh` (ccd swap hook → `/api/notify`), `deploy.sh`.
+  `notify.sh` (ccd swap hook → `/api/notify`, now firing on a swap **refusal**
+  as well as a landing), `deploy.sh`. A refusal's durable half is not the
+  notice — a banner raised with no socket open is gone, and the operator who
+  was not watching is the one who needs to know — it is the registry field
+  `$REG/<id>.swapblocked`, read back on every fleet poll and rendered on the
+  row until a later swap or a deliberate revive clears it.
 
 HTTPS is fronted by `tailscale serve` on port 8443 (a secure context is required
 for the service worker + WebAPK install). 443 root is the claude-docserver
@@ -172,8 +184,70 @@ cleanup bucket permanently empty.
 remembered by the watcher, which would reset on every deploy and paint the whole
 fleet as freshly-unseen several times a day.
 
+A session's **lifecycle** (`running`, `unsupervised`, `stopped`, `restarting`,
+`orphan`, `never-started`, `unmeasurable`) is a new optional FIELD and a
+qualifier beside the row, not a bucket — **never** a new `SessionBucket`
+member and never a change to the ladder above. The live `fleet` frame is cast
+from the wire, not revived, so an unknown bucket token would crash an
+already-deployed PWA where an unknown lifecycle token simply renders no
+qualifier.
+
 `status` itself stays frozen and hook-blind; a test asserts it is identical with
 and without hook state present.
+
+### What a row's lifecycle reads off the registry
+
+Four registry fields, each written by a single choke point so a stamp is
+never left half-true:
+
+| Field | Shape | Written by |
+| --- | --- | --- |
+| `$REG/<id>.stopped` | `<epoch> <surface>` | `_ws_unsupervise` — the one choke point every stop path (`cmd_stop`, ws-rm, ws-archive, ws-reap, forget) routes through, so an archived workspace is never left reading `orphan` |
+| `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop — and by `cmd_swap` **throughout** its carry, on the same 30s cadence, so a 188MB `cp -a` never leaves the row reading `orphan` mid-swap |
+| `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap, or by a deliberate `ccd start`/`ccd ensure` revival. **Not** by the refusal's own restart, and **not** by the supervisor re-entering its unit: neither is a human act, and both used to erase the record seconds after it was written |
+| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
+
+A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
+**30 seconds**, so a live loop never drifts stale under its own steady
+state. Those four inputs — pane liveness, heartbeat freshness, the stop
+stamp, and whether the row was ever started — decide one of seven
+lifecycle states, evaluated in this order: `running` (alive, fresh
+heartbeat), `unsupervised` (alive, no fresh heartbeat — what a pre-fix `ccd
+start` minted: no auto-swap, no auto-compact, no uuid-sync, nothing to
+record its death), `stopped` (dead, a stop stamp present — checked BEFORE
+the heartbeat, so a stop taken inside the freshness window reads `stopped`
+immediately rather than `restarting`), `restarting` (dead, fresh heartbeat,
+no stop stamp — between `Restart=always` cycles, or mid-swap), `orphan`
+(dead, stale or absent heartbeat, a start on record — nothing is watching
+it), `never-started` (dead, no heartbeat, never started), and
+`unmeasurable` — a registry read that failed rather than came back empty,
+which wins over every other rung and is never laundered into `orphan`; ccd
+itself can never answer this one (it either reads `$REG` off local disk or
+the file is genuinely absent), so the bash twin's fixture rows for it are
+server-only, exempted by name, and the exemption is itself pinned.
+
+`ccd ls`'s `ALIVE` column is now `STATE`, printing the lifecycle word
+instead of the one bit that used to say the same `no` for a deliberate stop,
+an unwatched death and a session that never existed.
+
+There is deliberately no reconciler daemon and no `ccd doctor`. The
+2026-08-11 incident's stop was itself deliberate — an operator killing a
+runaway swap — and an unattended process that tries to "fix" a fleet row is
+exactly the kind of component that could have fought that stop. Every
+lifecycle state above is read, never repaired automatically; reviving a row
+stays a human act (`ccd start <id>`), on purpose.
+
+That human act has to actually work on the row it is offered for. An
+`unsupervised` row is a **live** pane, and all three revive verbs used to
+return before they could do anything about it — `ccd ensure` early-returns on
+"already alive", and `ccd start`/`ccd enable` issued `enable` without `--now`,
+which promises a start at next boot and supervises nothing now. So the PWA
+rendered "running unsupervised" beside a Restart button that answered success
+and changed nothing, on what is D2's entire population the day the fix ships.
+All three now adopt such a pane: `systemctl --user reset-failed` then
+`enable --now`, whose unit re-enters through `cmd_ensure`, finds the pane
+already there, and watches it — no second spawn, and no change at all for a
+row that is already `running`, which stays the cheap no-op it has always been.
 
 ### Workspace holds & programs
 
@@ -521,7 +595,18 @@ since been disabled. **The two "stay put" branches are unchanged on
 purpose**: disabled excludes a lane as a *destination*; it never evacuates a
 session already sitting there. Manual placement (`ccd start`, `ccd swap`,
 `ccd prefer`) bypasses the gate entirely — naming a wrapper by hand is an
-operator override by construction.
+operator override by construction. One correction to that override: `ccd
+start` no longer **rewrites** an existing row's account. For an id that
+already has a registry entry, the registry's own `wrapper` wins and a
+differing argument is only a warning naming the verb that would actually move
+it (`ccd swap`); `ccd swap` stays the only verb that moves a session between
+accounts. `ccd start <id>` and `ccd enable <id>` also take a one-argument
+form now, for exactly the reason this matters: a session keeps the id it was
+born with across every swap, so an operator reading the account off the board
+and typing it back into the two-argument form used to mint a *second* id for
+a session that already existed — the one-argument form takes the existing
+row's id whole and starts it under whichever account the registry says it is
+actually on.
 
 **Pressure alone still never refuses placement** — a fully pinned account is
 still the least-bad choice, and the headroom display is the warning, not a
@@ -576,6 +661,19 @@ warns, naming the session **and** the account (`_accept_first_run_prompts`
 only ever sees the tmux name, so `_spawn` is what emits this, once it has
 both back): `<id> is waiting for login on <wrapper> — attach and run
 /login`.
+
+The startup verdict is four-valued now, not the one non-zero code above: `0`
+a live marker appeared, `2` a login screen (unchanged, above), `3` the tmux
+session vanished mid-poll, `4` the window expired with no marker. `3` ends
+the wait **immediately** — a debounced second probe, not the ~15-minute wait
+a vanished pane used to cost. Every verdict, success included, is recorded in
+`$REG/<id>.spawn` as `<epoch> <rc>`, which is the one channel from a spawn
+that happened inside the supervisor unit to a `ccd start` polling from
+another process. The unit's `StartLimitIntervalSec`/`StartLimitBurst` turn an
+instant-death restart loop into a **failed** unit rather than a silent
+crash-loop — a failed unit heartbeats nothing, so it reads as `orphan` on the
+row, and `ccd start <id>` (which runs `reset-failed` before it re-enables the
+unit) is what revives it.
 
 Mid-session auth loss joins the same rescue lane a 429 uses: the
 hard-blocked pane grep that drives `_auto_swap_check`'s emergency swap now
@@ -731,8 +829,91 @@ general remote-shell:
   `capture-pane`, `send-keys`, `resize-window`) and `ccd`, matched against the
   exact bare command name (no path components) and an argv **prefix** — most
   `ccd` verbs are still a bare first token (`start`, `enable`, `ensure`,
-  `stop`, `swap`, `ws-add`), but several now require a longer prefix before
-  anything after it is unconstrained: `pr-state` needs `--session` or
+  `stop`, `swap`, `ws-add`) — a bare-token grant leaves everything after the
+  verb unconstrained, which is what lets `ccd stop <id> --surface <word>`
+  cross this seam with no widening: `stop`'s validated `--surface` flag is
+  the single enrolment the swap-transcript design costs, and it rides as an
+  argv flag rather than an env var because the exec seam is `Runner = (cmd,
+  args) => …` with no env, and the agent's wire `ExecReq` carries `{cmd,
+  args, timeoutMs}` and nothing else — a `CCD_SURFACE` variable would report
+  the *server process's own* environment identically for every caller, not
+  the caller's identity. The flag records a **declaration, not an
+  authentication**: ccd validates it against the closed set (`cli`, `pwa`,
+  `agent`, `ccd`) and normalizes anything else to `unknown`, but nothing
+  proves the caller is who the flag says. The PWA's own `POST
+  /api/sessions/:id/stop` route — the ONE place that route's two argv
+  builders are called — passes `--surface pwa` when the deployed ccd is
+  known to understand it (the conditional half is below), so a stop the
+  operator taps from the PWA records `pwa` in that case, not ccd's own
+  `cli` default. That default is
+  not exclusive to it, though: `cli` is whatever an ORDINARY flagless
+  invocation records, which is also what a session shelling `ccd stop`
+  from its own Bash tool gets, among other callers. And `pwa` is not what
+  EVERY API-reachable path to a stopped session records — the several OTHER
+  routes and lanes that reach `_ws_unsupervise` directly (`ws-rm`, the
+  archive/reap verbs, `forget`, `FleetWatcher.archiveMerged`) pass no
+  surface at all and record `_ws_unsupervise`'s own default, `ccd` — an
+  operator archiving a workspace from the PWA sees "stopped by ccd" on that
+  row, correctly, because ccd itself did the unsupervising there, not the
+  stop route.
+  The capability is also conditional, not assumed — and its no-evidence
+  default is the OPPOSITE of every other gated verb's. `stopSurfaceSupported`
+  reads the same `ccdVerbs` channel `verbSupported`
+  (`pr-state`/`ws-reap`/etc.) already uses — `ccd caps` prints `stop-surface`
+  as one more verb-shaped line, so nothing new has to parse, carry or cache
+  it — but where no evidence PERMITS an ordinary verb (guessing wrong there
+  is loud: ccd's own usage refusal, a 502, never a lie), no evidence REFUSES
+  `--surface`, because guessing wrong there is a *silent success*: an old
+  ccd parses `stop <id> --surface pwa` as a two-argument stop of a session
+  literally named `<id>---surface`, exits 0, and the real session is never
+  touched. Evidence comes from measuring the actual deployed ccd on
+  whichever box runs it — the remote agent at handshake and every 60s
+  thereafter, and, so the inverted default does not simply kill the feature
+  in local mode (the documented default, `CCRC_FLEET=local`), the local
+  server too, which now execs its own `ccd caps` once at boot — bounded
+  (10s, matching the remote agent's own exec ceiling for the identical
+  operation) and never on the boot path itself: the server starts
+  answering requests immediately, with "not yet known" read as no
+  evidence (the same safe default a genuinely absent probe gives) until
+  the read resolves in the background. With
+  evidence either way, an older ccd still gets a stop it fully understands,
+  just recorded under `cli` rather than `pwa` — never a call that silently
+  does nothing.
+  Two honest edges the inversion narrows but does not close, and they are
+  NOT the same size. On the fleet host, a **rollback** to an older
+  `~/ccrc-backups/<ts>/ccd` leaves the cached verb list still advertising
+  `stop-surface` for up to 60 seconds — bounded, because the SERVER's own
+  fleet watcher re-asks on a timer (`CAPS_REFRESH_MS`) regardless of any
+  signal from ccd itself; the agent has no timer of its own; it answers
+  when asked and re-execs only when ccd's mtime/size on disk has changed.
+  **In local mode there is no such timer.** The probe
+  runs exactly once, at boot; swapping `~/.local/bin/ccd` for an older
+  copy under a still-running server **reopens the exact silent-success
+  hazard this work exists to close, with no bound at all**, because
+  nothing about a `stop` succeeding tells the server its evidence has gone
+  stale — an old ccd exits 0 on the argv it cannot parse, which is the
+  same silence that makes the underlying defect possible in the first
+  place. It stays open until the server process is restarted; there is no
+  other trigger.
+  The local probe hangs it might meet are handled — a hung process is
+  bounded (10s) and, if it ignores that first SIGTERM (real ccd does
+  not), an unmaskable SIGKILL follows two seconds later, to the whole
+  process group, not just the direct child. Two narrower residuals of
+  that same detached design are stated rather than fixed: a **terminal
+  Ctrl-C or a group-directed supervisor stop** kills the server but not
+  the (differently-grouped) probe — covered in production regardless,
+  since `deploy/ccrc.service` sets no `KillMode` and systemd's own
+  default still reaps the whole cgroup on `systemctl stop`; and a server
+  that **exits mid-probe** (a crash, not a graceful stop) orphans that one
+  probe permanently, since its own timeout timer dies with the parent.
+  Both are bounded to one process, once, per server lifetime; neither gets
+  a shutdown hook.
+  `stop`'s grant stayed a bare one-token
+  prefix through this change — nothing widened — because the flag rides
+  entirely inside the "everything after the verb" territory that prefix
+  already covered.
+  Several OTHER verbs, unlike `stop`, require a longer prefix before
+  anything after them is unconstrained: `pr-state` needs `--session` or
   `--project`, `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename` need `--session`, and `ws-reap` needs
   `--expect` — a load-bearing confirmation token, so an unconfirmed reap can
@@ -752,7 +933,13 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), and the
-  fleet's projects root. Writes: `$HOME/.cc-clips/` only.
+  fleet's projects root. Writes: `$HOME/.cc-clips/` only. **This list did not
+  widen for the transcript resolver or the supervisor heartbeat**, and both
+  are worth saying out loud: the resolver's uuid search (rungs 5 and 6 of
+  its ladder) rides the existing `$HOME/.claude*` grant — no new read
+  permission — and the supervisor heartbeat exists specifically so the
+  server never has to ask systemd anything; nothing under
+  `~/.config/systemd` was added to reach it.
 - **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
   `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
 

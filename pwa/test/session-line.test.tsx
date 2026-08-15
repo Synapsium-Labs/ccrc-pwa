@@ -20,7 +20,8 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   version: null, model: null, effort: null, ultracode: false, branch: null,
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], ...over,
+  bucket: 'idle', bucketSince: null, unmeasured: [],
+  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
 });
 
 describe('label', () => {

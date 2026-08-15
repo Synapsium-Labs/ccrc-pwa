@@ -21,7 +21,7 @@ import { defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { CCD_ARGV, verbSupported, type CcdArgv } from './ccdargv.js';
+import { CCD_ARGV, stopSurfaceSupported, verbSupported, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -91,12 +91,21 @@ export interface Deps {
    *  type is the enforcement now — see task 13S and `CcdArgv`. */
   runCcd: (argv: CcdArgv) => Promise<CcdResult>;
   tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
-  /** Remote-mode reachability, straight from `connectFleet().state` — absent
-   *  (or ignored) in local mode, where the fleet is always "connected". */
+  /** Remote-mode reachability, straight from `connectFleet().state` — its
+   *  `connected`/`downSince` fields are ignored in local mode (the fleet is
+   *  always "connected" there; every reader gates on `cfg.fleetMode ===
+   *  'remote'` first). `ccdVerbs`, though, is populated in BOTH modes as of
+   *  fix round 3 (task 14): `index.ts`'s local branch measures its own
+   *  box's `ccd caps` at boot (`localcaps.ts`) rather than leaving this
+   *  whole object absent, which is what made `stopSurfaceSupported`'s
+   *  inverted no-evidence default a dead feature in local mode before this
+   *  fix. Genuinely absent only if a caller builds `Deps` some OTHER way
+   *  (a test, mainly) and omits it outright. */
   fleetState?: FleetState;
-  /** Remote mode only. Local mode reads ccd directly and has nothing to
-   *  refresh, so its absence is the mode test — the same shape `fleetState`
-   *  already uses. */
+  /** Remote mode only — local mode measures its ccd ONCE, at boot
+   *  (`index.ts`), rather than on a timer, so it has nothing to refresh;
+   *  its absence is still the local/remote mode test for THIS field, even
+   *  though `fleetState` itself is no longer the same tell. */
   refreshCaps?: () => Promise<void>;
   /** The ONE per-session write queue for the process. Built in `index.ts` and
    *  handed to both `buildServer` and `FleetWatcher`, because the naming
@@ -426,7 +435,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
-    const since = parseSince((req.query as { since?: string }).since);
+    const q = req.query as { since?: string; sinceFile?: string };
+    const since = parseSince(q.since, q.sinceFile);
     const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
     void stream.start();
     // A per-connection token, not the session id: one socket's close drops
@@ -484,7 +494,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
   // C0.2: `knownId` gates 16 routes on this id (12 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) and previously called
-  // `readRegistry` — up to 409 agent-WS round trips on a 24-session fleet, in
+  // `readRegistry` — up to 505 agent-WS round trips on a 24-session fleet, in
   // remote mode, in front of every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
   // the real injection guard, and ccd re-checks `[[ -f "$REG/$id.uuid" ]]` on
@@ -496,7 +506,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (17 fields, each dropped whole on ANY single field read failing — see
+  // (21 fields, each dropped whole on ANY single field read failing — see
   // `registry.ts`'s "incomplete registry entry" comment), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
@@ -676,13 +686,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
     }
     const rec = read.record;
+    // `pwa` is hard-coded here, not threaded from the request: this route is
+    // the PWA's own stop button and has exactly one caller (grep confirms
+    // it — nothing else in server/ or pwa/ reaches CCD_ARGV.stopId/
+    // stopPair), so there is no other identity this declaration could
+    // honestly carry. `null` — omit the flag — when the deployed ccd is not
+    // KNOWN to understand it (fix round 2, task 14, Important #1): a bare
+    // `['stop', id]` is what every ccd generation has always understood,
+    // where `['stop', id, '--surface', 'pwa']` against an old one parses as
+    // a stop of a session named `<id>---surface` — exit 0, nothing real
+    // touched, and `runCcdOr502` reads that as `200 {ok:true}`. This is the
+    // deploy-ordering hazard `deploy/deploy.sh` itself does not close (the
+    // agent target installs `ccd`; the default server target never does,
+    // and neither cross-checks the other's version), so the check has to
+    // live here instead of being a rollout note.
+    const surface = stopSurfaceSupported(deps.fleetState) ? 'pwa' : null;
     // A workspace id is `<project>-<slug>` and encodes no wrapper at all, so
     // there is nothing to reverse: the prefix rule below would fall through to
     // identity.wrapper and ccd would recompute `<wrapper>-<project>` — a
     // DIFFERENT, live session, killed while the workspace kept running and
     // the PWA reported success. ccd stop's one-argument form takes the id
     // whole.
-    if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id));
+    if (rec.workspace !== null) return runCcdOr502(reply, CCD_ARGV.stopId(id, surface));
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
     // identity.wrapper, which a prior swap flips to the new account while the
@@ -690,7 +715,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const originalWrapper = id.endsWith(`-${rec.project}`)
       ? id.slice(0, id.length - rec.project.length - 1)
       : identity.wrapper;
-    return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project));
+    return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project, surface));
   });
 
   // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.

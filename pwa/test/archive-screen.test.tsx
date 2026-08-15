@@ -11,7 +11,8 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: 1785300123,
   archivedBytes: 1_200_000_000, hookState: null, askSummary: null, subagents: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], ...over,
+  bucket: 'idle', bucketSince: null, unmeasured: [],
+  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
 });
 
 describe('archivedSummary', () => {

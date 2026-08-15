@@ -402,9 +402,28 @@ if [ "$TARGET" = "agent" ]; then
   # XDG_RUNTIME_DIR fails "Failed to connect to bus" on any box where
   # pam_systemd doesn't populate it — the same contingency both sibling
   # chains carry the export for. Review finding.
+  #
+  # THE VERIFY LOOP IS FILTERED TO `--state=active`, AND THAT FILTER IS LOAD-
+  # BEARING (final review, finding 6). `ccd/claude-session@.service` gained
+  # StartLimitIntervalSec=120/StartLimitBurst=5, which made `failed` a state a
+  # session unit can actually reach — before it, every unit ran the 10s default
+  # window against RestartUSec=3s, so the limit was unreachable and a
+  # crash-looping session looped invisibly for ever. `systemctl list-units`
+  # INCLUDES failed units (per its own man page), and `try-restart` is a no-op
+  # on one, so the unfiltered loop below handed verify-service.sh a unit that
+  # was never restarted and could not be active: reproduced with a stubbed
+  # systemctl — `DEPLOY FAILED — claude-session@boom.service did not come up
+  # clean after restart`, exit 1, and `set -e` aborting the agent target AFTER
+  # ccd, the units, the hooks and the agent are installed but BEFORE the
+  # `ccd version` sha check. Every subsequent deploy then failed identically
+  # until somebody cleared the unit by hand. A pre-existing failed session is
+  # not this deploy's doing and must not fail it — but it must not be silent
+  # either, so it is named first, with the remedy, on stderr.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user try-restart "claude-session@*" \
-    && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}"); do \
+    && for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk "{print \$1}"); do \
+         echo "deploy: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2; done \
+    && for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk "{print \$1}"); do \
          bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1; done'
   "${SSH[@]}" "$BOX" "$SWEEP_CMD"
   # The box's own statement of what it now runs, compared to what this run

@@ -10,7 +10,7 @@ import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { SwapSheet } from '../fleet/SwapSheet';
-import { accountHue } from '../lib/accounts';
+import { accountHue, accountLabel } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
@@ -56,6 +56,8 @@ export function SessionScreen({
   const uuid = useStore((s) => s.uuid);
   const conn = useStore((s) => s.conn);
   const missingFile = useStore((s) => s.missingFile);
+  const strandedAccount = useStore((s) => s.strandedAccount);
+  const searchComplete = useStore((s) => s.searchComplete);
   const tasks = useStore((s) => s.tasks);
   const mail = useStore((s) => s.mail);
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
@@ -158,7 +160,14 @@ export function SessionScreen({
   const effectiveStatus = status ?? live?.status ?? null;
   const dead = effectiveStatus === 'dead';
   const loading = uuid === null && missingFile === null;
-  const empty = !loading && events.length === 0 && pending.length === 0;
+  // An UNMEASURED absence is not an empty chat. When the resolver could not
+  // finish looking (§5.2's `searchComplete: false`, which §5.5 makes routine
+  // in remote mode) the banner below states the real fact and this screen
+  // says nothing further — "No messages yet" over a host nobody could read is
+  // exactly the confident empty chat this spec exists to delete. A COMPLETE
+  // search that found nothing keeps the empty state: there genuinely is no
+  // transcript, and that is worth saying.
+  const empty = !loading && events.length === 0 && pending.length === 0 && searchComplete;
 
   const restart = async (): Promise<void> => {
     if (restarting) return;
@@ -239,9 +248,42 @@ export function SessionScreen({
         </div>
       )}
 
+      {/* Rung 6 landed (§5.1, §5.2): the transcript being tailed lives under
+          ANOTHER account's config dir — history a pre-fix swap left frozen
+          where it was (M2: 17 of 23 rows carry residue like this on disk
+          right now). It is real history and it renders; it is never rendered
+          SILENTLY, because the operator has to know whose file this is before
+          reading it as this account's conversation.
+
+          The NAME degrades, the disclosure does not (final review, Minor 5).
+          `foreignAccount` arrives on a cast frame from an independently
+          versioned server, and an empty string sails through both the store's
+          `?? null` and this `!== null` gate — measured at HEAD as "read from
+          , not this session's own account." Suppressing the banner for it
+          would trade a cosmetic defect for the exact silence D4 is about: a
+          server saying "this came from somewhere else" but failing to say
+          where is still a disclosure the operator needs. `accountLabel`
+          already falls back to the raw id for a wrapper the roster does not
+          have; this is the one step past that, where there is no id either. */}
+      {strandedAccount !== null && (
+        <div className="chat-banner" data-stranded="true" role="status">
+          <span className="banner-copy">
+            {`Stranded history — read from ${accountLabel(roster, strandedAccount).trim() || 'another account'}, not this session's own account.`}
+          </span>
+        </div>
+      )}
+
+      {/* Two different facts, two different sentences. A COMPLETE search that
+          found nothing keeps today's wording. An INCOMPLETE one says the host
+          could not be read — never "there is no transcript", which is the
+          overloaded-null rule (b) forbids at a seam. */}
       {missingFile !== null && (
         <div className="chat-banner chat-banner--missing" role="status">
-          <span>Can't find this session's transcript</span>
+          <span>
+            {searchComplete
+              ? "Can't find this session's transcript"
+              : "Can't read the fleet host right now"}
+          </span>
           <span className="banner-path">{missingFile}</span>
           <button type="button" className="btn-ghost" onClick={openTerminal}>
             Open terminal

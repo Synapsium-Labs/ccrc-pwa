@@ -47,6 +47,9 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
+  // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
+  // the correct value here, not merely the one that compiles.
+  lifecycle: null, stoppedBy: null, swapBlocked: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], ...over,
 });
 

@@ -21,3 +21,9 @@ deploy/ccrc-mail.token
 .worktrees/
 .superpowers/
 .remember/
+
+# safety net: server/test/boot.test.ts's sensitivity control writes a
+# mutated copy of index.ts here (relative imports require it live beside
+# its siblings), always removed in a finally block — this is a backstop
+# for an interrupted run, not the normal cleanup path.
+server/src/__boot_control_mutant__.ts

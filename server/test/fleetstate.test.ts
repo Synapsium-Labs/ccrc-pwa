@@ -16,7 +16,7 @@ const session = (id: string): FleetSession => ({
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
-  unmeasured: [],
+  unmeasured: [], lifecycle: null, stoppedBy: null, swapBlocked: null,
 });
 
 describe('fleetstate', () => {
@@ -300,5 +300,78 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     writeFileSync(cachePath, JSON.stringify({ sessions: { a: 1 }, savedAt: 1 }));
     expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `lifecycle`/`stoppedBy`/`swapBlocked` — absent degrades to null, and the CACHE STILL REVIVES', async () => {
+    // THE COMPATIBILITY CONTRACT, spec §4.4: "Snapshot revival treats an absent
+    // lifecycle as null, which is what every cached row written before this
+    // build will carry." The load-bearing assertion is the first one — every
+    // state-cache.json and every ccrc.fleet-snapshot.v1 on disk the day this
+    // ships lacks all three fields, and a rejection here empties degraded mode
+    // at exactly the moment it is the only data there is.
+    //
+    // NOT derived the way `bucket` is: the ladder needs `alive` and a heartbeat
+    // no snapshot ever carried. A timestamp for an episode we cannot date is a
+    // claim; null is the reading.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const snap = await loadSnapshot(cachePath);
+    expect(snap, 'an older cache must still revive').not.toBeNull();
+    const s = snap?.sessions[0];
+    expect(s?.lifecycle).toBeNull();
+    expect(s?.stoppedBy).toBeNull();
+    expect(s?.swapBlocked).toBeNull();
+    // Present as KEYS, not merely undefined: `undefined !== null` is true, and
+    // that is the exact shape this whole revival module exists to prevent.
+    expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(['lifecycle', 'stoppedBy', 'swapBlocked']));
+  });
+
+  it('round-trips a populated lifecycle triple', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    const populated: FleetSession = {
+      ...session('claude-quiet-basin'),
+      lifecycle: 'stopped',
+      stoppedBy: { at: 1785300000000, surface: 'pwa' },
+      swapBlocked: { at: 1785299000000, reason: 'no transcript found under claude' },
+    };
+    await saveSnapshot([populated], cachePath);
+    expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+  });
+
+  it('degrades a stop surface this build does not know to `unknown` — the union HAS a designated ignorance member', async () => {
+    // Same stance as `pr.phase` -> 'unchecked', and for the same reason: the
+    // vocabulary carries a member that means "we cannot say", so version skew
+    // degrades rather than rejecting a whole fleet's worth of cache.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{
+      ...v1Session('claude-quiet-basin'),
+      lifecycle: 'stopped', stoppedBy: { at: 1785300000000, surface: 'slack' },
+    }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.stoppedBy)
+      .toEqual({ at: 1785300000000, surface: 'unknown' });
+  });
+
+  it('rejects a lifecycle token this build does not recognise — absence is ignorance, a stray token is not', async () => {
+    // The opposite stance from absence, and the same one `bucket` and
+    // `hookState` take: `null` here is an AFFIRMATIVE claim ("this build never
+    // measured a lifecycle"), so laundering a token we cannot parse into it
+    // would put a confident blank where a future build put a fact.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), lifecycle: 'zombie' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('rejects a malformed stoppedBy/swapBlocked rather than laundering it into null', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    for (const bad of [
+      { stoppedBy: 'yesterday' },
+      { stoppedBy: { surface: 'pwa' } },                    // no `at`
+      { stoppedBy: { at: 'soon', surface: 'pwa' } },
+      { swapBlocked: { at: 1785299000000 } },               // no `reason`
+      { swapBlocked: { at: 1785299000000, reason: 7 } },
+    ]) {
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
+      expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
+    }
   });
 });

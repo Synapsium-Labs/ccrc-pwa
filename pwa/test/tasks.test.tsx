@@ -81,6 +81,7 @@ describe('session reducer — tasks', () => {
   const snap = (): SessionSnapshot => ({
     events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
     dialog: null, ask: null, tasks: [], mail: [], missingFile: null,
+    strandedAccount: null, searchComplete: true, file: null,
   });
 
   it('replaces the list wholesale on a tasks frame', () => {

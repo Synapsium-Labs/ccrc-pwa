@@ -81,3 +81,195 @@ describe('README: workspace holds', () => {
     expect(ccd).toMatch(/\$\{reason\/\/\[\[:space:\]\]\/\}/);
   });
 });
+
+/**
+ * Fix round 2 (task 14 follow-up, Minor #2): the plan owner's own count —
+ * this branch has now caught prose overclaiming FOUR times, twice in text
+ * an implementer wrote. This section is what makes the fifth one a red
+ * suite instead of a reviewer's patience: the `--surface` bullet in "Agent
+ * security model" > Exec whitelist, pinned the same way the holds section
+ * above is — sliced by its own markers, checked against the code, not
+ * against a fixed sentence a future edit could silently falsify again.
+ */
+const execWhitelistBullet = (): string => {
+  const start = readme.indexOf('- **Exec whitelist**:');
+  expect(start).toBeGreaterThan(-1);
+  const end = readme.indexOf('- **Path whitelist**:', start);
+  expect(end).toBeGreaterThan(start);
+  return readme.slice(start, end);
+};
+
+/** Sentence-split, not the whole bullet — an absolute word ("every"/"all")
+ *  used correctly three paragraphs away from `pwa`/`cli` must not trip a
+ *  check aimed at one specific false pairing. Split on `.`/`:` followed by
+ *  whitespace, which is coarse but keeps each claim in its own window. */
+const sentencesOf = (text: string): string[] => text.split(/(?<=[.:])\s+/);
+
+describe('README: the --surface bullet', () => {
+  // Fix round 3 (task 14 follow-up, Minor #4): round 2's two negative pins
+  // matched the exact WRONG SENTENCE, not the underlying claim — a
+  // reworded re-overclaim ("all API stops record pwa", "cli is exclusive
+  // to a self-stop") would have sailed past both while still being false.
+  // Widened to catch a WIDER set of phrasings of the same two claims.
+  //
+  // STATED HONESTLY (fix round 4, task 14, Minor #5 — round 3's own comment
+  // here claimed these checks "do not depend on round 2's specific phrasing
+  // surviving verbatim", i.e. implied they were reword-proof; the reviewer
+  // then wrote a DIFFERENT overclaim — "always stamps … without exception",
+  // "belongs to … and to nothing else" — that used none of the words either
+  // regex looked for, and all 11 tests in this file stayed green against
+  // it). These are TEXT scans over a finite word list, exactly the class
+  // `single-definition.test.ts` names its own limit for: "these scan TEXT,
+  // deliberately… A determined author can evade [one]… The bar is 'a
+  // reasonable person adding a copy in the ordinary way is stopped before
+  // review', not 'unforgeable'." Same bar here, not a stronger one — the
+  // word lists below were widened once, with the specific words the
+  // reviewer's own bypass used, and will need widening again the next time
+  // someone finds a synonym neither list has yet.
+  it('does not claim every/all/always API-reached stops record/stamp pwa, in a wide set of phrasings', () => {
+    const bullet = execWhitelistBullet();
+    for (const s of sentencesOf(bullet)) {
+      if (/\b(every|all|any|always)\b/i.test(s) && /\bpwa\b/i.test(s)
+          && (/\brecord/i.test(s) || /\bstamp/i.test(s))) {
+        expect(s, `unqualified absolute claim: "${s.trim()}"`).toMatch(/ws-rm/);
+      }
+      // "without exception" carries the same claim with neither trigger
+      // word above present.
+      if (/\bwithout exception\b/i.test(s) && /\bpwa\b/i.test(s)) {
+        expect(s, `unqualified absolute claim: "${s.trim()}"`).toMatch(/ws-rm/);
+      }
+    }
+    // And the exception is still actually named somewhere — a corrected
+    // sentence that goes silent on it is still an overclaim by omission.
+    expect(bullet).toMatch(/ws-rm/);
+    expect(bullet.toLowerCase()).toMatch(/reap/);
+    expect(bullet).toMatch(/forget/);
+    expect(bullet).toMatch(/archiveMerged/);
+    // Grounded in the real default `_ws_unsupervise` falls back to.
+    expect(ccd).toMatch(/surface="\$\{2-ccd\}"/);
+  });
+
+  it('does not claim cli is reserved/exclusive/only/nothing-else for a session stopping itself', () => {
+    for (const s of sentencesOf(execWhitelistBullet())) {
+      if (/\bcli\b/i.test(s)) {
+        expect(s, `possible exclusivity claim: "${s.trim()}"`)
+          .not.toMatch(/\b(reserved|exclusive(ly)?|only|nothing else|belongs to)\b/i);
+      }
+    }
+  });
+
+  it('states the check is CONDITIONAL on the deployed ccd advertising the capability', () => {
+    // The hazard this whole round exists to close: an unconditional
+    // `--surface` sent to an old ccd parses as a two-argument stop of a
+    // session named `<id>---surface` and exits 0 having touched nothing.
+    // The bullet must say the send is gated, name the mechanism, and the
+    // mechanism must actually exist in the source it claims.
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/conditional/i);
+    expect(bullet).toMatch(/stop-surface/);
+    expect(bullet).toMatch(/stopSurfaceSupported/);
+    expect(ccd).toMatch(/echo stop-surface/);
+    const ccdargv = readFileSync(path.join(root, 'server', 'src', 'ccdargv.ts'), 'utf8');
+    expect(ccdargv).toMatch(/export function stopSurfaceSupported/);
+  });
+
+  // Fix round 3, Important #2/#3 — the two corrections that made "never a
+  // call that silently does nothing" (kept, deliberately, from round 2's
+  // text) actually true. Grounded in the real inverted default and the
+  // real local-mode probe, not merely asserted in prose.
+  it('states the no-evidence default is INVERTED for this capability, and says why', () => {
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/opposite/i);
+    expect(bullet).toMatch(/silent success/i);
+    const ccdargv = readFileSync(path.join(root, 'server', 'src', 'ccdargv.ts'), 'utf8');
+    const fn = ccdargv.slice(ccdargv.indexOf('export function stopSurfaceSupported'));
+    expect(fn, 'the no-evidence branch must refuse, not permit').toMatch(/if \(verbs === null\) return false;/);
+  });
+
+  it('states local mode measures its OWN ccd, not merely the remote one', () => {
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/local/i);
+    expect(bullet).toMatch(/boot/i);
+    const indexTs = readFileSync(path.join(root, 'server', 'src', 'index.ts'), 'utf8');
+    expect(indexTs).toMatch(/readLocalCcdCaps/);
+    const localcaps = readFileSync(path.join(root, 'server', 'src', 'localcaps.ts'), 'utf8');
+    expect(localcaps).toMatch(/export async function readLocalCcdCaps/);
+  });
+
+  // Fix round 5 (task 14 follow-up, Important #1 — rated Minor but named
+  // as the round's most important item): the round-4 pin above only
+  // asserted `index.ts` MENTIONS `readLocalCcdCaps` — true whether the
+  // call is awaited or not, so it caught nothing. Measured: re-adding
+  // `await` in front of the call left all three suites, including this
+  // one, green. This is the branch's recurring failure shape in
+  // miniature — the property everyone agrees is the point, guarded by
+  // nothing — so it gets both a fast, precise TEXT pin here (the literal
+  // regression the reviewer constructed) and a slow, real BEHAVIOURAL one
+  // in `server/test/boot.test.ts` (an actual subprocess boot of this
+  // exact file, timed, against a genuinely hung ccd — a text pin alone
+  // proves the SOURCE was not reverted, not that the PROPERTY holds).
+  it('does not await the local-caps read on the boot path — the literal round-4 regression', () => {
+    const indexTs = readFileSync(path.join(root, 'server', 'src', 'index.ts'), 'utf8');
+    expect(indexTs).not.toMatch(/await\s+readLocalCcdCaps/);
+    // And the call is still actually reachable, so this cannot pass by
+    // having deleted the call entirely.
+    const calls = indexTs.match(/readLocalCcdCaps\s*\(/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it('names the rollback window honestly — bounded, not zero', () => {
+    // The one edge the inversion narrows but cannot close: an old ccd
+    // exits 0 on the bad argv, so there is no failure to trigger an early
+    // re-probe. The bullet must say "60" (CAPS_REFRESH_MS) and must NOT
+    // claim the window is instant or the gate is total.
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/rollback/i);
+    expect(bullet).toMatch(/60/);
+    expect(bullet).not.toMatch(/\binstant(ly)?\b/i);
+    const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
+    expect(watchTs).toMatch(/CAPS_REFRESH_MS\s*=\s*60_000/);
+  });
+
+  // Fix round 5 (task 14 follow-up, Important #1): round 4's local-mode
+  // rollback correction (Important #2 that round) was the one README
+  // addition in this whole sequence that shipped with no pin at all —
+  // unlike every other correction in this describe block. The claim is
+  // sharp and easy to blur back into the bounded fleet-host figure above,
+  // which is exactly the failure this bullet exists to prevent a second
+  // time.
+  it('states local mode\'s rollback exposure has NO bound at all — not the fleet-host 60s figure', () => {
+    const bullet = execWhitelistBullet();
+    // The two phrases that must survive verbatim-in-substance: "no such
+    // timer" (there IS one on the fleet-host side, named two sentences
+    // earlier — this one must say the local side lacks it) and an
+    // explicit "no bound at all" / "unbounded" statement, plus "restart"
+    // as the ONLY stated trigger.
+    expect(bullet).toMatch(/no such timer/i);
+    expect(bullet).toMatch(/no bound at all/i);
+    expect(bullet).toMatch(/restart/i);
+    // And it must not accidentally inherit the 60s figure for the LOCAL
+    // sentence specifically — the fleet-host sentence above already
+    // contains "60"; this checks the LOCAL-mode sentence, split out on its
+    // own, does not also claim a numeric bound.
+    const localSentence = sentencesOf(bullet).find((s) => /no such timer/i.test(s) || /no bound at all/i.test(s));
+    expect(localSentence, 'the local-mode sentence must exist').toBeTruthy();
+    for (const s of sentencesOf(bullet)) {
+      if (/reopens the exact silent-success/i.test(s)) {
+        expect(s, 'the local-mode reopening sentence must not claim a numeric bound').not.toMatch(/\d+\s*seconds?/);
+      }
+    }
+    // Grounded in the real mechanism: one probe, at boot, no timer.
+    const localcaps = readFileSync(path.join(root, 'server', 'src', 'localcaps.ts'), 'utf8');
+    expect(localcaps).toMatch(/ONE exec, at startup|one probe/i);
+    expect(localcaps).not.toMatch(/setInterval/);
+  });
+
+  it('the grant it describes (a bare one-token `stop` prefix) is the grant that actually ships', () => {
+    const whitelist = readFileSync(path.join(root, 'agent', 'src', 'whitelist.ts'), 'utf8');
+    // Loose but load-bearing: `['stop']` appears as its own grant entry, not
+    // widened to require a flag the way ws-reap/ws-rename do.
+    expect(whitelist).toMatch(/\[\s*'stop'\s*\]/);
+    const bullet = execWhitelistBullet();
+    expect(bullet).toMatch(/bare one-token/);
+  });
+});

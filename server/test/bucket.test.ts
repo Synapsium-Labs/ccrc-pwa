@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer — see its docstring, and fleetstate.test.ts's derivation suite.
-import { sessionBucket, type BucketInput } from '../../shared/api.js';
+import { sessionBucket, SESSION_LIFECYCLES, type BucketInput } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -244,5 +244,36 @@ describe('sessionBucket', () => {
     expect(s.hookState).toBe('done');
     // The bucket — what the PWA sections/badges on — is not.
     expect(s.bucket).toBe('idle');
+  });
+});
+
+// §4.4 and non-goal §6: "No new SessionStatus/SessionBucket member, and no
+// bucket-ladder change." M10 is why — the live fleet frame is CAST, not
+// revived, so an unknown bucket reaches `RANK[bucket]` as a NaN comparator and
+// `DOT[status].cls` THROWS in an already-deployed PWA. A dead row's kind of
+// dead is a qualifier ON the row, never a new sorting class.
+describe('the lifecycle field moves no bucket (M10)', () => {
+  it('a dead row is `dead` whatever its lifecycle says — all seven of them', () => {
+    for (const lc of SESSION_LIFECYCLES) {
+      // Assigned to a const first: a fresh object literal at the call site
+      // would trip excess-property checking, which is the compiler telling us
+      // `BucketInput` does not name this field — exactly the property this
+      // test exists to keep true.
+      const s = { ...base, status: 'dead' as const, statusUpdatedAt: 42, lifecycle: lc };
+      expect(sessionBucket(s, null), lc).toEqual({ bucket: 'dead', bucketSince: 42 });
+    }
+  });
+
+  it('an archived, merged row still routes to cleanup with a lifecycle set — the archived rungs come first', () => {
+    // §4.3: "An archived row never reaches this table." `ws-archive` stamps
+    // `.stopped` through `_ws_unsupervise`, so an archived workspace DOES carry
+    // `lifecycle: 'stopped'` on the wire — and it must still bucket `cleanup`,
+    // because the archived rungs are tested before `dead` for the reason this
+    // file's first test already states.
+    const s = {
+      ...base, status: 'dead' as const, archivedAt: 1700,
+      pr: { phase: 'merged' } as never, lifecycle: 'stopped' as const,
+    };
+    expect(sessionBucket(s, null).bucket).toBe('cleanup');
   });
 });

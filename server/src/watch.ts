@@ -25,7 +25,7 @@ import { UNCHECKED_PR } from '../../shared/api.js';
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
-import { resolveTranscriptFile } from './transcript/resolve.js';
+import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import { MAIL_REPLAY_CEILING_ERROR, toRunSummary } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
@@ -331,6 +331,11 @@ export class FleetWatcher {
    *  restart doesn't notify for every already-pending dialog / idle session. */
   private primed = false;
   private readonly cachePath: string;
+  /** The sixth lane's transcript memo (§5.4) — ONE per watcher, shared across
+   *  rows, keyed per `(configDir, uuid, dir)`. This lane resolves per eligible
+   *  row on a 10 s clock; without the memo, every row with no transcript at its
+   *  exact address would run a full uuid search on every sweep, forever. */
+  private readonly transcripts: TranscriptResolver;
   /** The set of projects with at least one non-dead session, as of the last
    *  completed `tick()` — feeds `pushOne`'s "name the project only when more
    *  than one is active" rule. `detectDialogs` and `sweepPr`/`archiveMerged`
@@ -423,6 +428,7 @@ export class FleetWatcher {
 
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
+    this.transcripts = new TranscriptResolver(deps.io);
   }
 
   start(): void {
@@ -602,7 +608,7 @@ export class FleetWatcher {
       // `records` PASSED IN, never re-read here: `assembleFleet` would
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
-      // in remote mode, ~17 field reads per session, ~409 round trips on a
+      // in remote mode, ~21 field reads per session, ~505 round trips on a
       // 24-session fleet, doubled for no reason. Sharing the read also keeps
       // `sweepHookStates`/`detectDialogs` (which already consumed `records`
       // above) and this assembly looking at the identical snapshot, which is
@@ -1287,11 +1293,25 @@ export class FleetWatcher {
       // A PROBE argv: it is never sent. `verbSupported` reads argv[0] only, and
       // asking here — before `claimTitleRead` writes anything — is what makes
       // "an unsupported verb records no attempt" true of the stat gate as well
-      // as of the attempted set.
+      // as of the attempted set. Skips silently, same self-healing caveat as
+      // `archiveMerged`'s own `ws-archive` gate below (fix round 4, task 14,
+      // Minor #5): automatic in remote mode, on THIS WATCHER's own 60s
+      // timer (`CAPS_REFRESH_MS`) — not the agent's, which has none —
+      // requires a server restart in local mode (`localcaps.ts`, one probe
+      // at boot, no timer).
       if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
       const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
       if (!cfgDir) continue;
-      const file = await resolveTranscriptFile(this.deps.io, cfgDir, identity.workdir, identity.uuid);
+      // NO `foreign`: a derived branch name is written into the row with no
+      // banner attached to it, and a name taken from another account's frozen
+      // copy is exactly the quiet wrongness this spec removes (§5.2). Rungs 1-5
+      // are unconditional — a title should follow a transcript that moved
+      // inside its own account.
+      const file = (await this.transcripts.resolve({
+        configDir: cfgDir, dir: identity.workdir, registryWorkdir: identity.workdir, uuid: identity.uuid,
+      })).path;
+      // `claimTitleRead` already refuses a null stat, so a `fallback` path costs
+      // one stat and reads nothing — no extra branch needed here.
       if (!this.claimTitleRead(r.id, file, await this.deps.io.stat(file))) continue;
       const title = await readAiTitle(this.deps.io, file);
       if (title === null) continue;
@@ -1946,7 +1966,17 @@ export class FleetWatcher {
       // check, and being level-triggered it would re-fire for every merged
       // session on every sweep, forever. Skipping writes no state — the level
       // stays `merged`, so the archive happens on the first sweep after the
-      // host is upgraded.
+      // host is upgraded — IN REMOTE MODE, where THIS WATCHER's own 60s
+      // timer (`CAPS_REFRESH_MS`, just above) re-asks the agent regardless
+      // of any signal from ccd; the agent itself has no timer, it answers
+      // when asked and re-execs only when ccd's mtime/size has changed —
+      // so no restart is needed.
+      // In LOCAL MODE (fix round 4, task 14, Minor #5) `fleetState.ccdVerbs`
+      // is read once, at boot (`localcaps.ts`), so a `ccdVerbs` that is
+      // `null` (no evidence) or genuinely `[]` (measured, and this box's
+      // ccd advertises nothing) self-heals only on the NEXT SERVER RESTART
+      // — this sweep goes on skipping silently until then, not until the
+      // next upgrade.
       if (!verbSupported(this.deps.fleetState, argv)) continue;
       const res = await this.deps.runCcd(argv);
       if (!res.ok) continue;

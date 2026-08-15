@@ -16,8 +16,9 @@ export interface AgentHello { t: 'hello'; token: string }
  *  SHAPE breaks (not a verb gained or lost, but these fields changing) and
  *  gets a reader only then. `shared/api.ts`'s `FLEET_PROTO`/`FLEET_PROTO_MIN`
  *  is the sibling mechanism for the PWA↔server pair, wired because that pair
- *  has no per-capability negotiation to fall back on the way this one does. */
-/** `rosterFp` is `bodyDigest` (shared/mark.mjs) of the fleet host's INSTALLED
+ *  has no per-capability negotiation to fall back on the way this one does.
+ *
+ *  `rosterFp` is `bodyDigest` (shared/mark.mjs) of the fleet host's INSTALLED
  *  `~/.ccrc/accounts.sh` — the projection ccd actually sources, not the
  *  `accounts.json` it was generated from. The server compares it against the
  *  digest of the projection ITS roster produces; a mismatch means the two
@@ -33,6 +34,30 @@ export interface AgentHello { t: 'hello'; token: string }
  *  Optional for the same reason `ccdVerbs` is: an older agent omits it, and
  *  absent must read as "no evidence either way", never as "divergent". */
 export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string }
+
+/** `ccd caps` output -> the list both readers keep: one token per non-empty
+ *  line shaped like a bash identifier (`/^[a-z][a-z-]*$/`) — verbs AND
+ *  capability tokens alike (`stop-surface` is deliberately chosen to match
+ *  this exact shape, task 14 fix round 2, so it needs no second parser).
+ *  SINGLE DEFINITION (fix round 3, task 14, Important #3): the agent (which
+ *  reads the DEPLOYED fleet-host ccd, `agent/src/server.ts`'s
+ *  `readCcdVerbs`) and the server's own local-mode reader (which reads its
+ *  own box's ccd, `server/src/localcaps.ts`) must never drift on what
+ *  counts as a line worth keeping — two copies of this one regex is exactly
+ *  the shape that drifts silently.
+ *
+ *  ACTUALLY POLICED, not merely asked nicely (fix round 4, task 14, Minor
+ *  #4 — an earlier version of this comment claimed a scanner existed here,
+ *  citing `SessionLifecycle` as precedent; neither the scanner nor that
+ *  precedent existed in `single-definition.test.ts`, and a comment is a
+ *  request, not a mechanism). `single-definition.test.ts`'s `describe('one
+ *  parseCcdCaps — the ccd-caps-line filter')` scans `shared/`, `server/src`,
+ *  `pwa/src` and `agent/src` for this exact regex used inside a
+ *  `.filter(...)` call and fails if it appears anywhere but this file, or
+ *  if either real reader stops importing it. */
+export function parseCcdCaps(stdout: string): string[] {
+  return stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
+}
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
 export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number }

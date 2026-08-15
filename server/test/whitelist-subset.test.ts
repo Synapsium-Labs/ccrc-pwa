@@ -17,8 +17,8 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
   // separately, so layer 3 below fails outright if nothing builds `enable`.
   enable: ['claude', 'demo'],
   ensure: ['demo-quiet-basin'],
-  stopId: ['demo-quiet-basin'],
-  stopPair: ['claude', 'demo'],
+  stopId: ['demo-quiet-basin', 'pwa'],
+  stopPair: ['claude', 'demo', 'pwa'],
   forget: ['claude-corp-demo'],
   swap: ['demo-quiet-basin', 'claude2'],
   wsAdd: ['demo'],
@@ -182,6 +182,32 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsRename('demo-quiet-basin', 'ws/x')])).toBe(true);
   });
 
+  // Fix round 1 (task 14 follow-up): the drift pin above caught `stopId`/
+  // `stopPair` shipping with no `--surface` at all, sixteen tasks and eleven
+  // reviews after the spec named the flag. `stop`'s grant is the ONE-token
+  // prefix `['stop']` (never enrolled in `REQUIRED_VERB_FLAG` — the surface
+  // is a declaration, not a confirmation gate the way `--expect`/`--session`
+  // are), so `isExecAllowed`'s own rule ("tokens after the prefix are
+  // unconstrained") is what already covers `--surface` with zero widening.
+  // Executed here directly, past `CCD_ARGV`, so this is proof the PREFIX
+  // governs the shape rather than an assumption about which one does — and
+  // for both forms `stop` actually takes, since the id form and the
+  // `<wrapper> <project>` form put the flag at different offsets.
+  it('stop is a bare one-token grant, so --surface crosses with no widening, in both argv forms', () => {
+    const grant = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'stop');
+    expect(grant.length, 'exactly one stop grant').toBe(1);
+    expect(grant[0]).toEqual(['stop']);
+    expect(isExecAllowed('ccd', ['stop', 'demo-quiet-basin', '--surface', 'pwa'])).toBe(true);
+    expect(isExecAllowed('ccd', ['stop', 'claude', 'demo', '--surface', 'pwa'])).toBe(true);
+    // The exact argv the route actually builds, both forms.
+    expect(isExecAllowed('ccd', [...CCD_ARGV.stopId('demo-quiet-basin', 'pwa')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.stopPair('claude', 'demo', 'pwa')])).toBe(true);
+    // And the flag is not what grants the verb: a bare stop, with no surface
+    // at all, is unconstrained by this same prefix — confirming the grant was
+    // already this wide before this task, so nothing here is a widening.
+    expect(isExecAllowed('ccd', ['stop', 'demo-quiet-basin'])).toBe(true);
+  });
+
   it('no ungrantable ccd verb is granted, with any flags at all', () => {
     // ws-rm is the unguarded legacy delete; ws-gc carries --prune. Both were
     // previously kept out only by the reachability check above (no route builds
@@ -261,8 +287,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     start: ['start', 'claude', 'demo'],
     enable: ['enable', 'claude', 'demo'],
     ensure: ['ensure', 'demo-quiet-basin'],
-    stopId: ['stop', 'demo-quiet-basin'],
-    stopPair: ['stop', 'claude', 'demo'],
+    stopId: ['stop', 'demo-quiet-basin', '--surface', 'pwa'],
+    stopPair: ['stop', 'claude', 'demo', '--surface', 'pwa'],
     forget: ['forget', 'claude-corp-demo'],
     swap: ['swap', 'demo-quiet-basin', 'claude2'],
     wsAdd: ['ws-add', 'demo'],

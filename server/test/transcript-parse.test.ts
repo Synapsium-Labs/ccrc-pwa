@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO } from '../src/io.js';
-import { resolveTranscriptFile, transcriptPath } from '../src/transcript/resolve.js';
+import { resolveTranscript, transcriptPath, type TranscriptResolution } from '../src/transcript/resolve.js';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
 import type { ChatEvent } from '../../shared/api.js';
 
@@ -28,7 +28,7 @@ describe('transcriptPath', () => {
  * sessions were saved by the live cwd, which is already physical — which is
  * exactly why only dead sessions showed the banner.)
  */
-describe('resolveTranscriptFile', () => {
+describe('resolveTranscript — the symlink-munge mismatch it was born fixing', () => {
   /** A miniature of the production chain: `<root>/data -> <root>/volume`,
    *  registry workdir through the link, transcript under the physical munge. */
   const build = (): { root: string; cfg: string; linkDir: string; realDir: string } => {
@@ -42,13 +42,19 @@ describe('resolveTranscriptFile', () => {
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, '{}\n');
   };
+  /** The pre-ladder call shape: one directory doubling as the registry workdir,
+   *  no foreign accounts — so these five cases still say exactly what they said
+   *  before the ladder existed. */
+  const at = (cfg: string, dir: string, uuid: string): Promise<TranscriptResolution> =>
+    resolveTranscript(localIO, { configDir: cfg, dir, registryWorkdir: dir, uuid });
 
   it('finds the transcript behind a symlinked workdir — the munge Claude actually wrote', async () => {
     const { root, cfg, linkDir, realDir } = build();
     try {
       const real = transcriptPath(cfg, realDir, 'u-1');
       plant(real);
-      expect(await resolveTranscriptFile(localIO, cfg, linkDir, 'u-1')).toBe(real);
+      expect(await at(cfg, linkDir, 'u-1')).toEqual(
+        { kind: 'found', path: real, rung: 'live-resolved', account: null });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -57,7 +63,7 @@ describe('resolveTranscriptFile', () => {
     try {
       const raw = transcriptPath(cfg, linkDir, 'u-1');
       plant(raw);
-      expect(await resolveTranscriptFile(localIO, cfg, linkDir, 'u-1')).toBe(raw);
+      expect((await at(cfg, linkDir, 'u-1')).path).toBe(raw);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -68,19 +74,20 @@ describe('resolveTranscriptFile', () => {
     try {
       const real = transcriptPath(cfg, path.join(root, 'volume', 'projects', 'gone'), 'u-1');
       plant(real);
-      expect(await resolveTranscriptFile(localIO, cfg, path.join(root, 'data', 'projects', 'gone'), 'u-1')).toBe(real);
+      expect((await at(cfg, path.join(root, 'data', 'projects', 'gone'), 'u-1')).path).toBe(real);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('leaves a workdir with no symlink anywhere in it exactly alone', async () => {
     const raw = transcriptPath('/h/.claude', '/nonexistent-ccrc/projects/x', 'u-1');
-    expect(await resolveTranscriptFile(localIO, '/h/.claude', '/nonexistent-ccrc/projects/x', 'u-1')).toBe(raw);
+    expect(await at('/h/.claude', '/nonexistent-ccrc/projects/x', 'u-1')).toEqual(
+      { kind: 'fallback', path: raw, complete: false });
   });
 
   it('keeps the raw path when neither candidate exists — no behavior change for a truly missing transcript', async () => {
     const { root, cfg, linkDir } = build();
     try {
-      expect(await resolveTranscriptFile(localIO, cfg, linkDir, 'u-1')).toBe(transcriptPath(cfg, linkDir, 'u-1'));
+      expect((await at(cfg, linkDir, 'u-1')).path).toBe(transcriptPath(cfg, linkDir, 'u-1'));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

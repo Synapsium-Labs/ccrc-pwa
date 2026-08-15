@@ -1,4 +1,5 @@
 import type { FleetState } from './fleetstate.js';
+import type { StopSurface } from '../../shared/api.js';
 
 declare const CcdArgvBrand: unique symbol;
 
@@ -61,8 +62,37 @@ export const CCD_ARGV = {
    *  list, and because layer 3 fails if a grant nothing builds is left over. */
   enable:    (w: string, p: string, wd?: string) => argv(['enable', w, p, ...(wd ? [wd] : [])]),
   ensure:    (id: string) => argv(['ensure', id]),
-  stopId:    (id: string) => argv(['stop', id]),
-  stopPair:  (w: string, p: string) => argv(['stop', w, p]),
+  /** `surface` is REQUIRED, not defaulted — the caller always knows who is
+   *  asking, and a default here would be how a second caller quietly
+   *  inherits the wrong word — but it is nullable, and `null` is a real,
+   *  DELIBERATE choice, not "unset": it means the flag is OMITTED entirely,
+   *  which is what a caller must pass when the deployed ccd is not known to
+   *  understand `--surface` (`stopSurfaceSupported`, below). `--surface`
+   *  rides as an argv flag rather than an env var for the reason
+   *  `README.md`'s exec-whitelist section gives: the exec seam is `Runner =
+   *  (cmd, args) => …` with no env, and a `CCD_SURFACE` variable would
+   *  report the SERVER PROCESS's own environment identically for every
+   *  caller.
+   *
+   *  FIX ROUND 2 (task 14 follow-up, Important #1): before this, `surface`
+   *  was unconditionally required and always sent — measured against
+   *  `origin/main`'s pre-flag ccd (the shape deployed on this fleet until
+   *  the SECOND of two independent deploy commands runs, per
+   *  `deploy/deploy.sh`'s own ordering, which does not cross-check the
+   *  other target's version): `ccd stop <id> --surface pwa` parsed as a
+   *  TWO-ARGUMENT stop of a session literally named `<id>---surface`, which
+   *  that old ccd's positional arity rule then happily recomputed and
+   *  "stopped" — exit 0, nothing real touched, the actual session's unit
+   *  left enabled. `runCcdOr502` reads that exit 0 as `200 {ok:true}`: a
+   *  control that reports success while doing nothing, the exact defect
+   *  class this whole branch exists to remove — and this fix introduced it.
+   *  `null` is how the caller now says "this box might not understand the
+   *  flag yet" instead of finding out from a fleet-wide stop that silently
+   *  never happens. */
+  stopId:    (id: string, surface: StopSurface | null) =>
+               argv(surface === null ? ['stop', id] : ['stop', id, '--surface', surface]),
+  stopPair:  (w: string, p: string, surface: StopSurface | null) =>
+               argv(surface === null ? ['stop', w, p] : ['stop', w, p, '--surface', surface]),
   /** Registry-only removal of a DEAD non-workspace session — the end-of-life
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */
@@ -106,4 +136,52 @@ export function verbSupported(
   const verbs = state?.ccdVerbs ?? null;
   if (verbs === null) return true;
   return verbs.includes(argv[0] ?? '');
+}
+
+/**
+ * Whether the deployed ccd understands `--surface` on `stop` (fix round 2,
+ * task 14, Important #1). A CAPABILITY, not a verb — `stop` itself is
+ * `UNGATED_BY_DECISION` (`verb-gate.test.ts`) because every ccd generation
+ * has always understood the bare verb; only the FLAG is skew-exposed, and
+ * this function is named separately from `verbSupported` (rather than
+ * called inline at the call site) specifically so the verb-gate scanner's
+ * text search for `verbSupported(` inside a call site's enclosing function
+ * does not mark `stop`'s own call sites as gated — they still are not,
+ * correctly, since the verb always goes through.
+ *
+ * `ccd caps` prints `stop-surface` as one more line in the exact list
+ * `verbSupported` reads, chosen verb-shaped on purpose so nothing new has
+ * to parse, carry or cache it (see `ccd/ccd`'s own comment on the token,
+ * and `ccd-archive.test.ts`'s caps<->dispatcher parity check, which pins it
+ * as a known non-dispatchable capability rather than letting it silently
+ * pass as an undocumented verb) — the membership test below is the same
+ * shape `verbSupported` uses for that reason.
+ *
+ * THE NO-EVIDENCE DEFAULT IS DELIBERATELY THE OPPOSITE OF `verbSupported`'s
+ * (fix round 3, task 14, Important #2 — the plan owner's ruling, recorded
+ * here rather than merely applied): for every OTHER gated verb, guessing
+ * wrong when `ccdVerbs` is null costs a LOUD failure — ccd's own `die
+ * "usage: …"`, a 502, never a lie — so permitting on no evidence is the
+ * safe default there, and stays unchanged; `verbSupported` itself must NOT
+ * be touched. For `--surface`, guessing wrong costs a SILENT SUCCESS: an
+ * old ccd parses `stop <id> --surface pwa` as a two-argument stop of a
+ * session literally named `<id>---surface`, exits 0, and the real session
+ * is never touched — `runCcdOr502` then answers `200 {ok:true}` for a stop
+ * that did nothing. Same "no evidence" input, categorically different
+ * blast radius on the wrong guess: refusing costs a `cli` stamp instead of
+ * `pwa`; permitting wrongly costs a control that lies about success. The
+ * asymmetry is why this function does not delegate its null case to
+ * `verbSupported` — it re-implements the same membership check with the
+ * opposite default instead.
+ *
+ * This default is only sound because local mode ALSO now measures real
+ * evidence at boot (`localcaps.ts`, `index.ts`) rather than leaving
+ * `ccdVerbs` permanently null there — otherwise inverting this default
+ * would have killed the surface feature outright in local mode, the
+ * DEFAULT deployment mode (`deploy/ccrc.env.example`'s `CCRC_FLEET=local`).
+ */
+export function stopSurfaceSupported(state: Pick<FleetState, 'ccdVerbs'> | undefined): boolean {
+  const verbs = state?.ccdVerbs ?? null;
+  if (verbs === null) return false;
+  return verbs.includes('stop-surface');
 }

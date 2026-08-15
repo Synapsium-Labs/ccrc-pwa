@@ -127,7 +127,19 @@ describe('the dispatcher', () => {
 });
 
 describe('ccd caps', () => {
-  it('advertises exactly the verbs the dispatcher implements', () => {
+  // Fix round 2 (task 14 follow-up): `cmd_caps` now also advertises
+  // CAPABILITY tokens — verb-shaped strings that name a FLAG on an existing
+  // verb, not a second dispatchable command, so the server can ask "does
+  // this deployed ccd understand `--surface`" the exact same way it already
+  // asks "does this deployed ccd understand `ws-reap`" (`verbSupported`,
+  // reused rather than duplicated — see `ccd/ccd`'s own comment on the
+  // token). Named here, individually, so the exact-equality check below can
+  // still fail loudly on anything ELSE that drifts: a THIRD capability token
+  // added without updating this list is exactly as much a silent hole as an
+  // undispatched verb would be.
+  const KNOWN_CAPABILITY_TOKENS = ['stop-surface'];
+
+  it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
@@ -146,7 +158,13 @@ describe('ccd caps', () => {
     const dispatched = [...block.matchAll(/^ {2}([a-z][a-z|-]*)\)/gm)]
       .flatMap((m) => m[1]!.split('|'));
     const advertised = h.sh('cmd_caps').split('\n').filter(Boolean);
-    expect([...advertised].sort()).toEqual([...new Set(dispatched)].sort());
+    const verbs = advertised.filter((a) => !KNOWN_CAPABILITY_TOKENS.includes(a));
+    expect([...verbs].sort()).toEqual([...new Set(dispatched)].sort());
+    // The other half: the capability tokens actually advertised are EXACTLY
+    // the known set — neither a silently-dropped one nor an undocumented
+    // extra one hiding inside what the verb-parity check above now excludes.
+    const capabilities = advertised.filter((a) => KNOWN_CAPABILITY_TOKENS.includes(a));
+    expect(capabilities.sort()).toEqual([...KNOWN_CAPABILITY_TOKENS].sort());
   });
 });
 
@@ -308,6 +326,90 @@ describe('_transcript_path', () => {
     const r = shFail('_transcript_path half');
     expect(r.code).not.toBe(0);
     expect(r.stdout).toBe('');
+  });
+
+  /** Plant a transcript at an exact <cfg>/projects/<dir>/<uuid>.jsonl and return its path. */
+  const plant = (cfg: string, dir: string, uuid: string, body = '{}\n'): string => {
+    const p = path.join(h.home, cfg, 'projects', dir, `${uuid}.jsonl`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body);
+    return p;
+  };
+
+  it('prefers the resolved munge when a file is actually there', () => {
+    // Rung 1, and the only rung that ever fired before this task. Kills the
+    // mutant that drops the existence check and returns rung 1 unconditionally
+    // — that mutant passes every OTHER test in this block, because they are all
+    // cases where rung 1 is also the right answer.
+    const wd = path.join(h.home, 'projects', 'demo');
+    fs.mkdirSync(wd, { recursive: true });
+    h.sh(`_reg_set t1 wrapper claude; _reg_set t1 workdir '${wd}'; _reg_set t1 uuid u-1`);
+    const want = plant('.claude', mungePath(fs.realpathSync(wd)), 'u-1');
+    expect(h.sh('_transcript_path t1')).toBe(want);
+  });
+
+  it('falls to the RAW munge when only the unresolved path has the file', () => {
+    // A workdir reached through a symlink whose transcript sits under the
+    // symlinked spelling. Kills "resolve, then never look at the raw form".
+    const real = path.join(h.home, 'volume', 'demo');
+    const link = path.join(h.home, 'projects-link');
+    fs.mkdirSync(real, { recursive: true });
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'volume'), link);
+    const wd = path.join(link, 'demo');
+    h.sh(`_reg_set t2 wrapper claude; _reg_set t2 workdir '${wd}'; _reg_set t2 uuid u-2`);
+    const want = plant('.claude', mungePath(wd), 'u-2');   // the RAW spelling
+    expect(h.sh('_transcript_path t2')).toBe(want);
+  });
+
+  it('finds a transcript that moved, by uuid, under its own config dir', () => {
+    // The defect this task exists for: the session relocated into a worktree,
+    // so neither munge of the registry workdir has anything. Kills a ladder that
+    // stops after the two exact candidates.
+    const wd = path.join(h.home, 'projects', 'moved');
+    fs.mkdirSync(wd, { recursive: true });
+    h.sh(`_reg_set t3 wrapper claude; _reg_set t3 workdir '${wd}'; _reg_set t3 uuid u-3`);
+    const want = plant('.claude', '-somewhere-else-entirely', 'u-3');
+    expect(h.sh('_transcript_path t3')).toBe(want);
+  });
+
+  it('takes the NEWEST when the uuid matches in more than one project dir', () => {
+    // Kills "first glob hit wins", which is alphabetical and therefore
+    // arbitrary. The spec's rule is newest mtime, the same one §5.1 uses.
+    const wd = path.join(h.home, 'projects', 'multi');
+    fs.mkdirSync(wd, { recursive: true });
+    h.sh(`_reg_set t4 wrapper claude; _reg_set t4 workdir '${wd}'; _reg_set t4 uuid u-4`);
+    const older = plant('.claude', '-aaa-older', 'u-4');
+    const newer = plant('.claude', '-zzz-newer', 'u-4');
+    fs.utimesSync(older, new Date(1_600_000_000_000), new Date(1_600_000_000_000));
+    fs.utimesSync(newer, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+    expect(h.sh('_transcript_path t4')).toBe(newer);
+  });
+
+  it('never crosses into another account to answer', () => {
+    // The one thing the ladder must NOT do. A session on `claude` whose only
+    // copy sits under `.claude-corp` gets the canonical unchecked address, not
+    // another account's file — that is D4's bannered rung, and it belongs to a
+    // surface that can show the banner, not to a tombstone that cannot.
+    const wd = path.join(h.home, 'projects', 'lonely');
+    fs.mkdirSync(wd, { recursive: true });
+    h.sh(`_reg_set t5 wrapper claude; _reg_set t5 workdir '${wd}'; _reg_set t5 uuid u-5`);
+    plant('.claude-corp', mungePath(fs.realpathSync(wd)), 'u-5');
+    expect(h.sh('_transcript_path t5')).toBe(
+      path.join(h.home, '.claude', 'projects', mungePath(fs.realpathSync(wd)), 'u-5.jsonl'),
+    );
+  });
+
+  it('still prints the resolved munge when nothing exists anywhere', () => {
+    // Rung 4, and the reason the two pre-existing tests in this block keep
+    // passing: a session that has written nothing yet records the canonical
+    // address, never an empty string.
+    const wd = path.join(h.home, 'projects', 'fresh');
+    fs.mkdirSync(wd, { recursive: true });
+    h.sh(`_reg_set t6 wrapper claude; _reg_set t6 workdir '${wd}'; _reg_set t6 uuid u-6`);
+    expect(h.sh('_transcript_path t6')).toBe(
+      path.join(h.home, '.claude', 'projects', mungePath(fs.realpathSync(wd)), 'u-6.jsonl'),
+    );
   });
 });
 
@@ -1190,6 +1292,38 @@ describe('ws-restore', () => {
     fs.rmSync(wt, { recursive: true, force: true });
     expect(shFail(`${ARCH} cmd_ws_restore --session demo-quiet-basin`).stderr)
       .toMatch(/ccd ws-attic --session demo-quiet-basin/);
+  });
+});
+
+describe('ws-restore propagates a failed spawn', () => {
+  // The same plan-level gap ws-add has, mirrored on the restore path:
+  // `_spawn` failing (rc 3 or rc 4) must not print `restored <id> — <workdir>`
+  // over a session that never came back — M6's silent success.
+  const restoreWithSpawnRc = (rc: number): string =>
+    `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
+     _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; };
+     _spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return ${rc}; };
+     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
+     _alive() { return 1; };`;
+
+  it('refuses the success line and returns the rc on a vanished-session spawn (rc 3)', () => {
+    workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const r = shFail(`${restoreWithSpawnRc(3)} cmd_ws_restore --session demo-quiet-basin`);
+    expect(r.code).toBe(3);
+    expect(r.stdout).not.toMatch(/^restored /);
+    // The undo IS complete regardless — the archive stamps are gone whether or
+    // not the revived spawn came up, or the row is stuck archived with nothing
+    // left to un-archive it on a retry.
+    expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+  });
+
+  it('does the same on rc 4 (startup window expired)', () => {
+    workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const r = shFail(`${restoreWithSpawnRc(4)} cmd_ws_restore --session demo-quiet-basin`);
+    expect(r.code).toBe(4);
+    expect(r.stdout).not.toMatch(/^restored /);
   });
 });
 

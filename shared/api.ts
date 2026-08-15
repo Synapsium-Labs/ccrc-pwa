@@ -113,6 +113,32 @@ export interface FleetSession {
    *  states for an empty frame: absent evidence proves nothing, and a guess
    *  persisted as fact defeats the one thing a last-known-good cache is for. */
   unmeasured: readonly IdentityField[];
+  /**
+   * WHY this row is not alive — spec §4.3's classification, computed by
+   * `sessionLifecycle` in `fleet.ts` from the pane plus three registry stamps.
+   *
+   * A NEW FIELD, NOT A NEW `SessionStatus`/`SessionBucket` MEMBER (M10). The
+   * bucket ladder is untouched: a dead row stays in the `dead` bucket and gains
+   * a qualifier — "stopped by pwa, 2d ago", "orphan — nothing is watching it",
+   * "running unsupervised".
+   *
+   * `null` means NO LIFECYCLE WAS RECORDED, which today is exactly one thing: a
+   * snapshot written before this build. It is never a fourth classification —
+   * `unmeasurable` is what "we could not measure" looks like, and it is a
+   * member of the union, not this null.
+   */
+  readonly lifecycle: SessionLifecycle | null;
+  /** The deliberate stop, as recorded (§4.1). Epoch MS — the timebase
+   *  `statusUpdatedAt`/`bucketSince` already use, NOT `archivedAt`'s seconds.
+   *  Null when no stop was recorded. The surface is a DECLARATION: it says the
+   *  caller claimed to be the PWA, not that anything authenticated it. */
+  readonly stoppedBy: { readonly at: number; readonly surface: StopSurface } | null;
+  /** The last swap refusal (§2.4), epoch MS and the reason verbatim. Null when
+   *  no refusal stands — cleared by a successful swap and by any deliberate
+   *  revival (`ccd start`/`enable`/`ensure`), because a revive control that
+   *  leaves the refusal banner standing on the row it just revived teaches the
+   *  operator to ignore banners. */
+  readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
 }
 
 /**
@@ -779,6 +805,178 @@ export function sessionBucket(
   return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
 }
 
+/* ---------------------------------------------------------------------------
+ * Session lifecycle — WHY a row is not alive.
+ *
+ * Spec §4.3. `ccd ls` used to print `ALIVE=no` for a session that was
+ * deliberately stopped, one that died, and one that never started: three
+ * different facts, one word. This is the vocabulary for the difference, and the
+ * single pure ladder both producers run — `fleet.ts`'s live assembly here, and
+ * ccd's bash twin `_session_state` on the fleet host, pinned against this one
+ * by `server/test/ccd-session-lifecycle.test.ts` from a fixture neither side
+ * writes by hand.
+ *
+ * A NEW FIELD, NOT A NEW `SessionStatus` OR `SessionBucket` MEMBER (M10). The
+ * live fleet frame is cast, not revived (`asFleetMsg`), so an unknown bucket
+ * reaches `RANK[bucket]` as a NaN comparator, `WORD[bucket]` as `undefined`,
+ * and `DOT[status]`, where `dot.className = DOT[status].cls` THROWS in an
+ * already-deployed PWA. A dead row's KIND of dead is a qualifier on the row,
+ * never a new sorting class.
+ *
+ * PURE, and deliberately clock-free: `nowMs` is an input, so the whole table is
+ * testable with no timers and the bash twin can be driven against the identical
+ * fixed clock. State — the heartbeat's freshness window aside — lives at the
+ * caller.
+ * ------------------------------------------------------------------------- */
+
+export type SessionLifecycle =
+  | 'running' | 'unsupervised' | 'stopped' | 'restarting'
+  | 'orphan' | 'never-started' | 'unmeasurable';
+
+/** Derived from the type, not restated beside it — `Record<SessionLifecycle,
+ *  true>` makes a member added to the union fail LOUDLY here (TS2739) instead
+ *  of silently producing a list one short, and fails the other way too (TS2353)
+ *  on a key the union does not have. Same technique, same reasoning, as
+ *  `PR_REASONS` above. */
+const SESSION_LIFECYCLE_MAP: Record<SessionLifecycle, true> = {
+  running: true, unsupervised: true, stopped: true, restarting: true,
+  orphan: true, 'never-started': true, unmeasurable: true,
+};
+export const SESSION_LIFECYCLES: readonly SessionLifecycle[] =
+  Object.keys(SESSION_LIFECYCLE_MAP) as SessionLifecycle[];
+
+/** The only way to narrow an untrusted string to a `SessionLifecycle` — the
+ *  snapshot-revival path reads one out of a cache an OLDER OR NEWER build
+ *  wrote. `unknown` parameter so nothing can be smuggled in by claiming it is
+ *  already a lifecycle, and the CONSTANT is cast rather than the input, exactly
+ *  as `isPrPhase`'s own docstring insists. */
+export function isSessionLifecycle(v: unknown): v is SessionLifecycle {
+  return typeof v === 'string' && (SESSION_LIFECYCLES as readonly string[]).includes(v);
+}
+
+/** Who asked for the stop — a DECLARATION, not an authentication (spec §4.1).
+ *  `--surface pwa` means the caller said it was the PWA; a session that shells
+ *  `ccd stop` from its own Bash tool passes no flag and records `cli`, which is
+ *  honest — that is exactly what it looks like from the box. */
+export type StopSurface = 'cli' | 'pwa' | 'agent' | 'ccd' | 'unknown';
+
+const STOP_SURFACE_MAP: Record<StopSurface, true> = {
+  cli: true, pwa: true, agent: true, ccd: true, unknown: true,
+};
+/** MODULE-PRIVATE, for the reason `PR_PHASES`' own docstring gives at length:
+ *  with the list unexported, `STOP_SURFACES.includes(raw as StopSurface)`
+ *  cannot be written in `registry.ts` at all — it is TS2459 before the casts
+ *  are even considered — so `isStopSurface` is the only door. */
+const STOP_SURFACES: readonly StopSurface[] = Object.keys(STOP_SURFACE_MAP) as StopSurface[];
+
+export function isStopSurface(v: unknown): v is StopSurface {
+  return typeof v === 'string' && (STOP_SURFACES as readonly string[]).includes(v);
+}
+
+/** The REGISTRY fields the ladder below reads. `alive` is deliberately not one:
+ *  it comes from tmux, not from `$REG`, and arrives as a plain boolean. Naming
+ *  a field here that the ladder does not read would make an unrelated degraded
+ *  read (a stuck `.branch`) print `unmeasurable` over a perfectly measured row. */
+export type LifecycleField = 'started' | 'stopped' | 'supervised';
+const LIFECYCLE_FIELD_MAP: Record<LifecycleField, true> = {
+  started: true, stopped: true, supervised: true,
+};
+export const LIFECYCLE_FIELDS: readonly LifecycleField[] =
+  Object.keys(LIFECYCLE_FIELD_MAP) as LifecycleField[];
+
+/** A `$REG/<id>.supervised` stamp younger than this means A SUPERVISOR IS
+ *  WATCHING RIGHT NOW (spec §4.2) — strictly more useful than an enable
+ *  symlink, which only promises a start at next boot. ccd re-stamps every 30
+ *  seconds, so the window is four heartbeats wide: one missed tick is not an
+ *  alarm, four is. The bash twin carries the same number in seconds. */
+export const SUPERVISED_FRESH_MS = 120_000;
+
+export interface LifecycleInput {
+  /** A tmux pane exists for this id. */
+  readonly alive: boolean;
+  /** Epoch ms of the supervisor heartbeat; null = no stamp on disk. */
+  readonly supervisedAt: number | null;
+  /** Epoch ms of the stop stamp; null = no stamp on disk. */
+  readonly stoppedAt: number | null;
+  /** Who declared the stop. Carried so the input IS the stamp as read, rather
+   *  than a lossy projection of it — the ladder deliberately does not branch on
+   *  it (`session-lifecycle.test.ts` pins that no surface changes the answer),
+   *  because "somebody stopped it" is the fact, and who is the row's copy. */
+  readonly stopSurface: StopSurface | null;
+  /** `$REG/<id>.started` reads `1` — this row ever had a session. */
+  readonly started: boolean;
+  /** Registry field names this pass could not MEASURE — listed in the registry
+   *  directory but their bytes never came back. Three-valued input, collapsed
+   *  to a name list: the present/absent/unreadable discrimination happens in
+   *  the registry reader, which has the directory listing to do it with; this
+   *  function only reads the verdict. Any member of `LIFECYCLE_FIELDS` here
+   *  makes the answer `unmeasurable`; anything else is ignored. */
+  readonly unmeasured: readonly string[];
+  readonly nowMs: number;
+}
+
+/**
+ * §4.3's table, in order. The order is the specification:
+ *
+ *   alive + fresh heartbeat            -> running
+ *   alive + stale/absent heartbeat     -> unsupervised
+ *   dead  + stop stamp                 -> stopped
+ *   dead  + fresh heartbeat            -> restarting
+ *   dead  + started                    -> orphan
+ *   dead                               -> never-started
+ *   any lifecycle field unreadable     -> unmeasurable   (checked FIRST)
+ *
+ * `unmeasurable` is checked before everything because architecture rule (b)
+ * forbids a seam value that stands for more than one condition: remote
+ * `readFile` collapses "missing", "forbidden" and "agent disconnected" into one
+ * `null` (`remote/io.ts`), and an unreadable registry must NOT print `orphan` —
+ * the one answer that says "nothing is watching this session" about a session
+ * nobody managed to look at.
+ *
+ * The stop stamp is checked before the heartbeat in the not-alive branch so a
+ * stop taken INSIDE the 120-second freshness window reads `stopped`
+ * immediately, rather than spending two minutes claiming to be `restarting`.
+ *
+ * A stamp from the FUTURE is NOT fresh. This is a DEVIATION FROM THE BRIEF
+ * (recorded in full in task-8-report.md): an earlier draft of this function
+ * computed freshness as `nowMs - supervisedAt < SUPERVISED_FRESH_MS` alone,
+ * on the theory that the honest reading of a skewed clock is "a supervisor
+ * wrote this," never "nobody is watching." But ccd's shipped bash twin,
+ * `_session_state` (ccd/ccd), computes freshness as `now - sup >= 0 &&
+ * now - sup < 120`, and its own comment names exactly why the `>= 0` half is
+ * there: without it, `now - sup` runs deeply negative for a future-dated
+ * stamp and stays "< 120" for the life of the row, so a skewed or
+ * hand-edited stamp would read fresh forever. Two implementations of one
+ * rule must not diverge on a boundary neither the fixture nor ccd's own
+ * enumeration test happens to probe — DISPATCH-CONTEXT §5's rule ("where a
+ * brief and the shipped tree disagree, the tree wins") applies here exactly
+ * as it would to a table row, so this ladder carries the identical `>= 0`
+ * guard bash does.
+ *
+ * WHAT `orphan` CLAIMS, AND WHAT IT DOES NOT: it says nothing is watching this
+ * session and nobody recorded stopping it. It does NOT claim the unit file is
+ * absent — the server cannot see systemd at all (§4.2 chose a heartbeat over
+ * introspection precisely so the agent's read whitelist stayed unwidened) — so
+ * a unit that is enabled but `failed` and one that was never enabled both land
+ * here. That conflation is deliberate and safe: the two have the same answer,
+ * `ccd start <id>`.
+ */
+export function sessionLifecycle(input: LifecycleInput): SessionLifecycle {
+  if (input.unmeasured.some((f) => (LIFECYCLE_FIELDS as readonly string[]).includes(f))) {
+    return 'unmeasurable';
+  }
+  // A stamp from the FUTURE is NOT fresh — see this function's own docstring
+  // for why the `>= 0` guard exists and why it matches ccd's shipped bash
+  // rather than an earlier draft of this file.
+  const supervised = input.supervisedAt !== null
+    && input.nowMs - input.supervisedAt >= 0
+    && input.nowMs - input.supervisedAt < SUPERVISED_FRESH_MS;
+  if (input.alive) return supervised ? 'running' : 'unsupervised';
+  if (input.stoppedAt !== null) return 'stopped';
+  if (supervised) return 'restarting';
+  return input.started ? 'orphan' : 'never-started';
+}
+
 type RawObj = Record<string, unknown>;
 
 /** Thrown internally, caught at the boundary of `reviveFleetSession`, where it
@@ -875,6 +1073,39 @@ const BUCKETS: readonly string[] = ['attention', 'working', 'done', 'idle', 'cle
 // second of four copies; it is now `isPrReason`, over `PR_REASONS`, which is
 // derived from the union. The comment above about casting the constant rather
 // than the input is exactly why a predicate is the right shape for it.
+
+/** `stoppedBy.surface` splits from `lifecycle` right below it, and takes the
+ *  `pr.phase` ruling rather than the `bucket` one: `StopSurface` HAS a
+ *  designated "we cannot say" member (`unknown`), so a surface from a newer ccd
+ *  degrades onto it instead of rejecting a whole fleet's cache.
+ *
+ *  `SessionLifecycle` DOES have its own designated-ignorance member —
+ *  `unmeasurable`, the exact counterpart to `unknown` above — but it means "we
+ *  tried to classify this row and the evidence was degraded," not "this is a
+ *  token from a build we do not understand." Landing an UNRECOGNISED token
+ *  (an 8th union member some future build ships) on `unmeasurable` would claim
+ *  a measurement attempt that never happened, the same reason `bucket` does
+ *  not launder an unrecognised token onto `idle`. So an unrecognised
+ *  `lifecycle` still rejects the whole snapshot, the same stance
+ *  `bucket`/`hookState`/`checks` take three constants up — `null` (absent) is
+ *  the only degrade this field has, and it means "never recorded", an
+ *  affirmative claim about THIS build, not "we couldn't tell." */
+const reviveStoppedBy = (o: RawObj, k: string): { at: number; surface: StopSurface } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  const surfaceRaw = optStr(s, 'surface');
+  return { at: reqNum(s, 'at'), surface: isStopSurface(surfaceRaw) ? surfaceRaw : 'unknown' };
+};
+
+/** No vocabulary to degrade onto: the reason is free text ccd wrote, and it IS
+ *  the display. Absent → null; present-but-malformed rejects the session. */
+const reviveSwapBlocked = (o: RawObj, k: string): { at: number; reason: string } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
+};
 
 function revivePr(raw: unknown): PrState {
   const o = asObj(raw, 'pr');
@@ -1002,6 +1233,21 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
     const bucketRaw = optStr(o, 'bucket');
     if (bucketRaw !== null && !BUCKETS.includes(bucketRaw)) throw new MalformedSnapshot('bucket');
 
+    // Absent → null (an older cache predates the field entirely — THE
+    // compatibility contract, pinned in fleetstate.test.ts). NOT derived the
+    // way `bucket` is: the ladder needs `alive` and a supervisor heartbeat no
+    // snapshot ever carried, and a classification computed from fields we do
+    // not have would be a claim, not a reading. `unmeasurable` (the
+    // classifier's own designated-ignorance answer, `reviveStoppedBy`'s
+    // docstring above has the full reasoning) is not the right degrade either:
+    // it means the classifier RAN and its evidence was degraded, not that
+    // revival never ran the classifier at all — a different kind of "we do not
+    // know" than an absent field is.
+    const lifecycleRaw = optStr(o, 'lifecycle');
+    if (lifecycleRaw !== null && !isSessionLifecycle(lifecycleRaw)) {
+      throw new MalformedSnapshot('lifecycle');
+    }
+
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
     // reading of `o`, which is how the two could drift apart.
@@ -1037,6 +1283,11 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
+      // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the
+      // guard above — no cast.
+      lifecycle: lifecycleRaw,
+      stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
+      swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -1538,7 +1789,22 @@ export type HookAsk =
   | { approval: { tool: string; summary: string } };
 
 export type SessionStreamMsg =
-  | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean }  // missing=true → transcript file not found at `file`; UI shows a diagnostic banner
+  /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
+   *  banner. D4 (§5.2) adds the two facts that banner cannot be honest without,
+   *  both OPTIONAL so an older PWA build ignores them and an older server that
+   *  never sends them is not a protocol violation:
+   *    - `foreignAccount`: the account a rung-6 answer was found under — the
+   *      "stranded history, held by `claude`" banner. Null for every
+   *      own-account answer, which is all of them until a pre-fix swap's
+   *      residue is the only copy left.
+   *    - `searchComplete`: false when a `readdir` answered null, so rungs 5/6
+   *      never ran. `missing: true` with `searchComplete: false` is "can't read
+   *      the fleet host right now" — NEVER "no messages yet". Remote `readdir`
+   *      returns null for a missing directory, a forbidden path and a
+   *      disconnected agent alike, and this build refuses to render that
+   *      ambiguity as a confident empty chat. */
+  | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
+      foreignAccount?: string | null; searchComplete?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer

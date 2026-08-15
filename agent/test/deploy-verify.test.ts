@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -245,6 +245,108 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(window, `observation window ${window}s must exceed ${path.basename(unitFile)}'s RestartSec ${restartSec}s`)
         .toBeGreaterThan(restartSec);
     }
+  });
+
+  it('a session that dies instantly becomes a FAILED unit — and the keys sit in [Unit], where systemd reads them', () => {
+    // Spec §3.3. The section is not cosmetic, and the spec's own sentence ("the
+    // unit's [Service] gains…") is wrong for the systemd this fleet runs.
+    // Measured on systemd 255 with `systemd-analyze verify`:
+    //   StartLimitIntervalSec= in [Service] -> "Unknown key name
+    //     'StartLimitIntervalSec' in section 'Service', ignoring."
+    //   StartLimitBurst=       in [Service] -> silently accepted (legacy compat)
+    // Split across the two sections, the burst would be honored against
+    // systemd's DEFAULT 10s interval: a rate limit nobody chose, arrived at
+    // without a word. Both keys live in [Unit].
+    const unit = readFileSync(path.join(deployDir, '..', 'ccd', 'claude-session@.service'), 'utf8');
+    const unitSection = /\[Unit\]([\s\S]*?)(?=\n\[)/.exec(unit)?.[1] ?? '';
+    expect(unitSection).toMatch(/^StartLimitIntervalSec=\d+$/m);
+    expect(unitSection).toMatch(/^StartLimitBurst=\d+$/m);
+    // Anchored at the SECTION HEADER, not a bare substring search: the [Unit]
+    // section's own comment explains the split by naming "[Service]" in prose
+    // ("belong to [Unit], not [Service]"), and that mention precedes the real
+    // header — `indexOf('[Service]')` would find the comment instead and slice
+    // the StartLimit lines themselves into the region under test.
+    const serviceIdx = unit.search(/^\[Service\]/m);
+    // `.search()` returns -1 when the header is missing, and `.slice(-1)` would
+    // then take the FINAL CHARACTER of the file — the "no StartLimit in
+    // [Service]" assertion below would pass vacuously on a unit with no
+    // [Service] section at all, which is the same trap the indexOf bug above
+    // was. Guard it explicitly rather than let a negative index slice quietly.
+    expect(serviceIdx, 'no [Service] section header found in the unit file').toBeGreaterThan(-1);
+    const serviceSection = unit.slice(serviceIdx);
+    expect(/^StartLimit/m.test(serviceSection),
+      'a StartLimit key sits in [Service], where systemd 255 ignores it').toBe(false);
+    // And the limit must be reachable at THIS unit's restart cadence or it is
+    // decoration: RestartSec=3 means a crash loop spends ~3s per attempt, so
+    // the whole burst has to fit inside the interval.
+    const burst = Number(/^StartLimitBurst=(\d+)$/m.exec(unitSection)![1]);
+    const interval = Number(/^StartLimitIntervalSec=(\d+)$/m.exec(unitSection)![1]);
+    const restartSec = Number(/^RestartSec=(\d+)$/m.exec(unit)![1]);
+    expect(burst * restartSec, 'the burst cannot be spent inside the interval — the unit never fails')
+      .toBeLessThan(interval);
+  });
+
+  it('the supervisor sweep survives a FAILED session unit — the state the start limit made reachable', () => {
+    // FINAL REVIEW, finding 6. The start limit above is what made `failed`
+    // reachable at all (before it, every unit ran systemd's default 10s window
+    // against RestartSec=3, so the burst could never be spent and a
+    // crash-looping session looped invisibly for ever). `systemctl list-units`
+    // INCLUDES failed units, and `try-restart` is a no-op on one — so the
+    // unfiltered sweep handed verify-service.sh a unit that was never restarted
+    // and could not be active. Reproduced with exactly the stubs below:
+    // `DEPLOY FAILED — claude-session@boom.service did not come up clean after
+    // restart`, exit 1, and `set -e` aborting the agent target AFTER ccd, the
+    // units, the hooks and the agent are installed but BEFORE the `ccd version`
+    // sha check — every subsequent deploy failing identically until somebody
+    // cleared the unit by hand.
+    //
+    // The SWEEP_CMD is extracted from deploy.sh and RUN, not read: a structural
+    // assertion about `--state=` would pass on a filter applied to the wrong
+    // loop, which is precisely the mistake being fixed.
+    const sweep = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    expect(sweep, 'the supervisor sweep is no longer a single quoted block').toBeTruthy();
+
+    const home = mkTmp('ccrc-agent-deploysweep-');
+    const bin = path.join(home, 'stubbin');
+    mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    // A box with one healthy session and one failed one. The stub answers the
+    // `--state=` filters the way systemd does, AND answers an unfiltered
+    // `list-units` with both — so a sweep that drops the filter sees the failed
+    // unit again and this test goes red.
+    writeFileSync(path.join(bin, 'systemctl'),
+      '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\n'
+      + 'case "$*" in\n'
+      + '  *list-units*)\n'
+      + '    case "$*" in\n'
+      + '      *--state=failed*) echo "claude-session@boom.service loaded failed failed x" ;;\n'
+      + '      *--state=active*) echo "claude-session@good.service loaded active running x" ;;\n'
+      + '      *) echo "claude-session@good.service loaded active running x"\n'
+      + '         echo "claude-session@boom.service loaded failed failed x" ;;\n'
+      + '    esac ;;\n'
+      + 'esac\nexit 0\n', { mode: 0o755 });
+    // Stands in for verify-service.sh, failing for anything not active exactly
+    // as the real script's first `is-active` check does.
+    writeFileSync(path.join(home, 'ccrc', 'deploy', 'verify-service.sh'),
+      '#!/bin/sh\necho "verify $1" >> "$HOME/calls"\n'
+      + 'case "$1" in *boom*) echo "## DEPLOY FAILED — $1" >&2; exit 1 ;; esac\n'
+      + 'echo "verified: $1"\n', { mode: 0o755 });
+
+    const r = spawnSync('bash', ['-c', sweep![1]!], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    expect(r.status, 'a pre-existing failed session unit still aborts the deploy').toBe(0);
+    const calls = readFileSync(path.join(home, 'calls'), 'utf8');
+    expect(calls, 'verify-service.sh was handed a unit that was never restarted')
+      .not.toContain('verify claude-session@boom.service');
+    expect(calls, 'the healthy supervisor stopped being verified — the sweep is now decorative')
+      .toContain('verify claude-session@good.service');
+    // Named, with the remedy: a failed session is not this deploy's doing and
+    // must not fail it, but silence would leave a dead session on the box with
+    // nothing anywhere saying so.
+    expect(r.stderr).toContain('claude-session@boom.service is FAILED');
+    expect(r.stderr).toContain('reset-failed');
   });
 
   it('every hand-copied script lands via scp-to-temp + mv, never an in-place overwrite', () => {

@@ -1,7 +1,9 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { isPrPhase, type IdentityField, type PrPhase } from '../../shared/api.js';
+import {
+  isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
+} from '../../shared/api.js';
 
 // `IdentityField` moved to shared/api.ts (Task 2): `FleetSession.unmeasured`
 // carries the SAME evidence onto the wire, and a second, server-only
@@ -71,6 +73,53 @@ export interface SessionRecord {
    *  not a fact about identity, which is exactly why this array — not the
    *  empty string — is the thing a caller must check: see `measuredIdentity`. */
   unmeasured: readonly IdentityField[];
+  /** `$REG/<id>.stopped` — `<epoch> <surface>`, written by `_ws_unsupervise`
+   *  (the single choke point every deliberate unsupervise reaches systemd
+   *  through: `cmd_stop`, `ws-rm`, `ws-archive`, `ws-reap`, `forget`) and
+   *  cleared by `_ws_supervise` and any successful spawn. Epoch SECONDS, as
+   *  ccd writes it (`date +%s`, exactly like `archivedAt`); `fleet.ts` is the
+   *  one place it becomes ms. A surface outside the closed set — a newer ccd,
+   *  a hand-edited file — normalizes to `unknown` here, never leaks. */
+  stopped: { at: number; surface: StopSurface } | null;
+  /** `$REG/<id>.supervised` — epoch SECONDS, re-stamped by `cmd_supervise`
+   *  every 30s and by `cmd_swap` while it carries files. Younger than
+   *  `SUPERVISED_FRESH_MS` means a supervisor is watching RIGHT NOW, which is
+   *  strictly more than an enable symlink promises (§4.2). The server cannot
+   *  ask systemd anything — the agent's read whitelist covers `~/.cc-sessions`
+   *  and not `~/.config/systemd` — so the supervisor publishes instead. */
+  supervisedAt: number | null;
+  /** `$REG/<id>.swapblocked` — `<epoch> <reason>`, the durable half of §2.4's
+   *  refusal (M9: a notify banner with no socket open is gone). */
+  swapBlocked: { at: number; reason: string } | null;
+  /** `$REG/<id>.spawn` — `<epoch> <rc>`, written by `_spawn` ALWAYS, before
+   *  returning (§3.1). Read here so the verdict a supervisor raised in its own
+   *  process is a fact this side of the seam can see; no wire field carries it
+   *  yet, which is what makes the PWA task purely additive. */
+  spawn: { at: number; rc: number } | null;
+  /** Which of `started`/`stopped`/`supervised` were LISTED but unreadable this
+   *  pass — the same evidence rule `unmeasured` uses for the identity triple,
+   *  over the three fields §4.3's classifier reads. Kept SEPARATE from
+   *  `unmeasured` on purpose: that array is typed `IdentityField[]`, is carried
+   *  onto the wire verbatim, and is validated against the identity triple by
+   *  `reviveFleetSession` — widening it would reject every snapshot. The
+   *  visible consequence of this one is `lifecycle: 'unmeasurable'`, which is
+   *  the honest thing to show and the only thing a viewer can act on.
+   *
+   *  `.stopped` gets a WIDER net than `started`/`supervised`: it is pushed here
+   *  not only when unreadable-but-listed (the shared evidence rule) but also
+   *  when its bytes come back LISTED, READABLE and still fail to parse an
+   *  epoch (`packedStamp` returns null). That second case is real: ccd's own
+   *  `.stopped` write is `printf '%s %s' "$(date +%s)" "$surface" > file`
+   *  (ccd/ccd:336) — non-atomic, so an interrupted write leaves a zero-byte or
+   *  half-written file — and ccd's OWN reader (`_session_state`, ccd/ccd:377)
+   *  tests only `[[ -e "$REG/$id.stopped" ]]`, never content, so bash answers
+   *  `stopped` for exactly that on-disk state. `.supervised`'s bash reader
+   *  (ccd/ccd:367) already guards content with `^[0-9]+$`, matching what
+   *  `numOrNull` does below, so no such widening applies there. Collapsing a
+   *  present-but-unparseable `.stopped` to `stopped: null` would let
+   *  `sessionLifecycle`'s `dead + started -> orphan` rung fire about a row
+   *  bash confidently calls stopped — rule (b)'s exact prohibition. */
+  lifecycleUnmeasured: readonly LifecycleField[];
 }
 
 /**
@@ -116,7 +165,7 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
 /**
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
- * the agent WS is enough (`readRegistry` fires ~17 reads per session under one
+ * the agent WS is enough (`readRegistry` fires ~21 reads per session under one
  * request timeout). Held with an unreadable reason, never unheld: the
  * consumer is `archiveMerged`'s `held !== null` gate, and `ccd ws-archive` has
  * no held rung of its own, so a misread that read as released would kill a
@@ -141,6 +190,16 @@ export const HOLD_UNREADABLE = '<hold file unreadable — treated as held>';
  */
 export const HOLD_NO_REASON = '<hold file is empty — no program named>';
 
+/**
+ * The reason a swap refusal carries when `$REG/<id>.swapblocked` records an
+ * epoch and nothing after it. Same ruling as `HOLD_NO_REASON` and for the same
+ * reason: §2.4's refusal is durable precisely so somebody who was not watching
+ * finds out WHY, and `reason: ''` renders as a marker with an empty
+ * explanation on every surface — visible enough to alarm, empty enough to
+ * ignore.
+ */
+export const SWAP_BLOCKED_NO_REASON = '<swap refusal recorded no reason>';
+
 async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
   const content = await io.readFile(path.join(dir, `${id}.${name}`));
   return content !== null ? content.trim() : null;
@@ -153,6 +212,21 @@ function numOrNull(raw: string | null): number | null {
   if (raw === null || raw.trim() === '') return null;
   const n = Number(raw.trim());
   return Number.isFinite(n) ? n : null;
+}
+
+/** `<epoch> <rest>` — the packed two-token stamp shape every D3 field uses.
+ *  Epoch and payload share ONE registry file on purpose (§4.1): the registry is
+ *  read per-field per-session on a 2s tick, and packing is what keeps `stopped`
+ *  one read instead of two. A stamp whose epoch does not parse is NOT a stamp —
+ *  an interrupted `_reg_set` leaves a zero-byte file, and `Number('')` is 0,
+ *  which would date a live session's stop to 1970. */
+function packedStamp(raw: string | null): { at: number; rest: string } | null {
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  const sp = trimmed.indexOf(' ');
+  const at = numOrNull(sp === -1 ? trimmed : trimmed.slice(0, sp));
+  if (at === null) return null;
+  return { at, rest: sp === -1 ? '' : trimmed.slice(sp + 1).trim() };
 }
 
 function manifestBytes(raw: string | null): number | null {
@@ -169,8 +243,8 @@ function manifestBytes(raw: string | null): number | null {
 // ── Observability (spec's OBSERVABILITY section) ───────────────────────────
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
-// (registry.ts's own module docstring: "~17 reads per session" — a 24-session
-// fleet sees ~409 round trips PER `readRegistry` call) would otherwise log the
+// (registry.ts's own module docstring: "~21 reads per session" — a 24-session
+// fleet sees ~505 round trips PER `readRegistry` call) would otherwise log the
 // same stuck field dozens of times a minute. `warnOnce` is keyed `id#field`,
 // not just `field`, so one wrapper's degraded read never silences a
 // DIFFERENT session's — and it is pruned per id no longer listed, so a
@@ -276,7 +350,8 @@ async function buildRecord(
   io: FleetIO, cfg: CcrcConfig, names: string[], id: string, now: number,
 ): Promise<SessionRecord | null> {
   const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
-    base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw] = await Promise.all([
+    base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw,
+    stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw] = await Promise.all([
     field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
     field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -286,6 +361,8 @@ async function buildRecord(
     field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
     field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
     field(io, cfg.registryDir, id, 'hold'),
+    field(io, cfg.registryDir, id, 'stopped'), field(io, cfg.registryDir, id, 'supervised'),
+    field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -312,6 +389,35 @@ async function buildRecord(
   }
 
   const holdListed = names.includes(`${id}.hold`);
+
+  // §4.3's three-valued read, over the three fields the lifecycle classifier
+  // consumes. Same evidence as the identity ladder above: `names` is the
+  // listing this function opened with, so it proves PRESENCE independently of
+  // whether the bytes came back — the one thing `field()` alone cannot tell
+  // you. Without it a stop that WAS recorded but could not be read looks like
+  // no stop at all, and the classifier prints `orphan` about a session nobody
+  // managed to look at. That is rule (b)'s exact prohibition, and it is why the
+  // discrimination lives here rather than in the pure function.
+  const stopStamp = packedStamp(stoppedRaw);
+  const swapStamp = packedStamp(swapBlockedRaw);
+  const spawnStamp = packedStamp(spawnRaw);
+  const spawnRc = spawnStamp === null ? null : numOrNull(spawnStamp.rest);
+
+  const lifecycleUnmeasured: LifecycleField[] = [];
+  for (const [f, raw] of [
+    ['started', started], ['supervised', supervisedRaw],
+  ] as const) {
+    if (raw === null && names.includes(`${id}.${f}`)) lifecycleUnmeasured.push(f);
+  }
+  // `.stopped` gets the wider net `SessionRecord.lifecycleUnmeasured`'s own
+  // docstring explains: unreadable-but-listed (the shared rule above) OR
+  // listed-and-readable-but-unparseable (`stopStamp === null` while
+  // `stoppedRaw` itself is non-null) — the proven bash/TS divergence a
+  // zero-byte or torn `.stopped` produces.
+  if (stopStamp === null && (stoppedRaw !== null || names.includes(`${id}.stopped`))) {
+    lifecycleUnmeasured.push('stopped');
+  }
+
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
     started: started === '1',
@@ -342,6 +448,30 @@ async function buildRecord(
     held: holdRaw === null
       ? (holdListed ? HOLD_UNREADABLE : null)
       : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
+    // The surface is validated on READ as well as on write. The write-side
+    // check is `_ws_unsupervise`'s own `case "$surface" in cli|pwa|agent|ccd)
+    // ;; *) surface=unknown ;;` — NOT `cmd_stop`, which this comment used to
+    // name (final review, Minor #6): `cmd_stop` only parses the flag
+    // (`surface="$2"`) and hands the word on unchecked, so every other caller
+    // of `_ws_unsupervise` is covered by the same single check rather than by
+    // the verb. Both sides, not either: this box runs a ccd
+    // that is routinely a deploy ahead of or behind the server, so a word from
+    // a vocabulary this build does not have is the ordinary case, not the
+    // exotic one. `unknown` is a real member, so there is somewhere honest to
+    // put it — and the epoch, which is the part the ladder reads, survives.
+    stopped: stopStamp === null
+      ? null
+      : { at: stopStamp.at, surface: isStopSurface(stopStamp.rest) ? stopStamp.rest : 'unknown' },
+    supervisedAt: numOrNull(supervisedRaw),
+    swapBlocked: swapStamp === null
+      ? null
+      : { at: swapStamp.at, reason: swapStamp.rest === '' ? SWAP_BLOCKED_NO_REASON : swapStamp.rest },
+    // An rc that does not parse is not a verdict. `_spawn` writes the stamp
+    // ALWAYS, before returning, so a half-written one means a torn write, not
+    // an ambiguous outcome — and `rc: NaN` on the wire renders as `null` while
+    // typing as `number`, the silent lie `numOrNull` exists to refuse.
+    spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
+    lifecycleUnmeasured,
     unmeasured,
   };
 }
@@ -391,7 +521,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     out.push(rec);
   }
   // ONE SECOND LISTING, and only when something needs it. `names` was taken
-  // before ~17 field reads per session; a `ccd ws-release` that lands anywhere
+  // before ~21 field reads per session; a `ccd ws-release` that lands anywhere
   // inside that window leaves the name in the listing and no bytes behind it,
   // which the evidence above cannot tell apart from a read that failed — so a
   // perfectly ordinary release was reported as `HOLD_UNREADABLE`, the
@@ -440,8 +570,8 @@ export type SingleRead =
 
 /**
  * `readRegistry`, narrowed to ONE session (C0.3). One `readdir` plus that
- * id's 17 field reads — ~18 agent-WS round trips in remote mode, instead of
- * `readRegistry`'s 24-generation sweep of the whole fleet (~409 round trips
+ * id's 21 field reads — ~22 agent-WS round trips in remote mode, instead of
+ * `readRegistry`'s 24-generation sweep of the whole fleet (~505 round trips
  * on a 24-session fleet) — for every caller that only ever asked "what does
  * the registry say about THIS session" and never needed uniqueness or a
  * subtraction over the rest of the fleet. Built from the SAME `buildRecord`

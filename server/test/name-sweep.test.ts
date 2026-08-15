@@ -251,6 +251,34 @@ describe('the naming sweep', () => {
     expect(renames(h.calls)).toEqual(['ws/the-title-lands']);
   });
 
+  // §5.2's asymmetry (fix round 1, Important #2): the name sweep must NEVER
+  // look at another account's transcripts — a derived branch name silently
+  // taken from a foreign account's frozen copy is the quiet wrongness the
+  // spec removes, and this lane has no banner surface to warn about it (only
+  // the session stream does). Own account's search completes cleanly (its
+  // `projects` dir exists and lists) and simply has nothing for this uuid;
+  // a DIFFERENT account holds a real, valid ai-title transcript for the SAME
+  // uuid. Correct behaviour: no rename, ever — rung 6 must never even run
+  // here.
+  it('never reads a foreign account\'s transcript — no rename fires even when another account holds a ' +
+     'perfectly valid title for this uuid', async () => {
+    const h = harness();
+    seed(h.home);
+    // Own account (claude): the projects root exists but holds nothing for
+    // this uuid — a genuine, COMPLETE miss.
+    mkdirSync(path.join(h.home, '.claude', 'projects'), { recursive: true });
+    // A DIFFERENT account (claude2, `.claude-personal`) holds a transcript for
+    // the SAME uuid, with a real ai-title — findable only via rung 6.
+    const foreignDir = path.join(h.home, '.claude-personal', 'projects', '-stranded');
+    mkdirSync(foreignDir, { recursive: true });
+    writeFileSync(path.join(foreignDir, `${UUID}.jsonl`),
+      TITLE('Brainstorm Helix and slide notes integration') + '\n');
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toEqual([]);
+  });
+
   it('does not fire for a main checkout', async () => {
     const h = harness();
     seed(h.home, { workspace: null, branch: 'main' });

@@ -2,6 +2,21 @@
 Description=Durable Claude Code session %i (ccd-managed)
 After=network-online.target tailscaled.service
 Wants=network-online.target
+# A session whose pane dies instantly must become a FAILED unit rather than an
+# invisible restart loop (spec §3.3): with RestartSec=3 a crash loop spends its
+# 5 starts in ~15s, well inside this 120s window, and systemd stops trying. A
+# failed unit heartbeats nothing, so §4.3 classifies the row `orphan` — nothing
+# is bringing this back — and `ccd start <id>` is what would: its
+# `systemctl --user reset-failed` (§3.1) is what makes that sentence true
+# rather than aspirational.
+#
+# These two keys belong to [Unit], not [Service]. Measured on systemd 255 with
+# `systemd-analyze verify`: StartLimitIntervalSec= in [Service] is reported
+# "Unknown key name … ignoring", while StartLimitBurst= there is still accepted
+# for legacy compatibility — so splitting them would honor the burst against
+# systemd's DEFAULT 10s interval, a limit nobody chose.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple

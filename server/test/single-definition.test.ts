@@ -572,6 +572,31 @@ describe('the program ledger is parsed by nothing', () => {
   });
 });
 
+// Fix round 4 (task 14 follow-up, Minor #4): `parseCcdCaps`'s own docstring
+// claimed this exact mechanism existed before it did — a scanner that was
+// asserted in prose, not built. Corrected by building it: the fingerprint is
+// the caps-line regex itself, `/^[a-z][a-z-]*$/`, used the way both real
+// readers use it (inside a `.filter(...)` call) — narrow enough that this
+// file's OWN prose about the regex (this comment, `parseCcdCaps`'s
+// docstring) does not itself score a hit, since neither writes the pattern
+// inside a `.filter(`.
+describe('one parseCcdCaps — the ccd-caps-line filter', () => {
+  const FILTERS_WITH_IT = /\.filter\(\s*\(?\w*\)?\s*=>\s*\/\^\[a-z\]\[a-z-\]\*\$\/\.test\(/;
+
+  it('is defined in exactly one file, and that file is shared/agent-protocol.ts', () => {
+    const holders = ALL.filter((f) => FILTERS_WITH_IT.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
+  });
+
+  it('is what both real readers (the agent and the local-mode probe) call, not re-derive', () => {
+    for (const f of ['agent/src/server.ts', 'server/src/localcaps.ts']) {
+      const src = readFileSync(path.join(ccrcRoot, f), 'utf8');
+      expect(src, f).toContain('parseCcdCaps');
+      expect(src, f).toMatch(/import\s*\{[^}]*\bparseCcdCaps\b[^}]*\}\s*from\s*'[^']*shared\/agent-protocol(\.js)?'/);
+    }
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.

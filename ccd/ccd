@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2c164b4304797e49128b27e412c34467bd0d2c5c18ac4580a9b67edc618910ff
+# ccrc:generated 1 sha256=1c5ed4444fd93ebce9734aaae926c71a905f0e55c229fd4dbc1f1bb07d056ddb
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -45,6 +45,7 @@ LIMITS_DIR="$HOME/.cc-limits"   # per-account {"five":N,"seven":N,"ts":epoch} wr
 SWAP_THRESHOLD=90               # own 5h % that arms a pre-emptive swap
 SWAP_HEADROOM=30                # target must be at least this many points lower
 SWAP_COOLDOWN=900               # min seconds between swaps of one session
+SWAPBLOCK_COOLDOWN=1800         # min seconds before auto-swap retries a session whose last swap REFUSED
 SWAP_FRESH=1800                 # telemetry younger than this qualifies for pre-emptive swaps
 SWAP_QUIET=600                  # preempt only sessions quiet this long (any surface); rescue ignores
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
@@ -61,6 +62,23 @@ SWAP_JITTER=120                 # max seconds of random delay before a dispatche
                                 # concurrent, 17.4 GB) until the box stalled for 9.7 hours.
                                 # Spreading restarts stops a fleet-wide event becoming a herd.
                                 # Set to 0 to dispatch immediately (old behaviour).
+SWAP_BEAT_INTERVAL=30           # seconds between `supervised` re-stamps WHILE a swap carries files
+                                # (§4.2). Well inside `_session_state`'s 120s freshness window, and the
+                                # same cadence `cmd_supervise`'s own watch loop re-stamps on.
+SWAP_BEAT_MAX=240               # hard bound on those re-stamps: 2 hours at the interval above, after
+                                # which the stamper gives up even if `cmd_swap` never stopped it. A
+                                # carry that has run for two hours is not a swap in progress any more,
+                                # and a heartbeat is a claim that somebody is watching.
+SPAWN_GATE_TRIES=450            # capture-pane polls before the startup-gate window expires (~15 min
+                                # at the 2s tick). A plain shell variable with the production default,
+                                # deliberately NOT an env override — HOME is ccd's only isolation
+                                # boundary (see PROJECTS_ROOT above) and nothing on the wire can set
+                                # a shell variable. A test that sources ccd assigns it afterwards,
+                                # which is what keeps the rc-4 case a 3-poll assertion instead of a
+                                # 4,500-process one.
+SUPERVISED_START_WAIT=30        # seconds `ccd start`/`ccd ensure` wait for the unit's pane to appear.
+                                # A bound on FAILURE REPORTING, not a cost anybody normally pays: a
+                                # pane shows up about a second after the unit starts.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -223,11 +241,13 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
   # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
-  # `setup`, `started`, `uuid`, `workdir`, `workspace`, `wrapper`. That is a
-  # WIDER set than `_reg_set`/`_reg_get`: the inventory that stood here named
-  # only the shell-written fields and so silently dropped `prcheckedat`,
-  # `prphase` and `prhistory` (written by `_pr_py`'s own `put`/append) and
-  # `hookstate` (written by the hooks). The purge itself was always right — it
+  # `setup`, `spawn`, `started`, `stopped`, `supervised`, `swapblocked`,
+  # `uuid`, `workdir`, `workspace`, `wrapper`. That is a WIDER set than
+  # `_reg_set`/`_reg_get`: the inventory
+  # that stood here named only the shell-written fields and so silently dropped
+  # `prcheckedat`, `prphase` and `prhistory` (written by `_pr_py`'s own
+  # `put`/append) and `hookstate` (written by the hooks). The purge itself was
+  # always right — it
   # matches the SUFFIX shape, not a list — but an inventory that omits files is
   # an inventory a future reader trusts and a future writer copies.
   # AND THE ORDER IS PART OF THE CONTRACT — final-round verification P4. This
@@ -302,9 +322,81 @@ _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate c
 # The systemd calls live in their own functions (rather than inline in cmd_ws_add)
 # so the test harness can stub them — sourcing ccd and calling cmd_ws_add under
 # vitest would otherwise enable a REAL claude-session@<id> unit on the host.
-_ws_supervise()   { systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
+_ws_supervise()   { rm -f "$REG/$1.stopped"                                   # supervision supersedes an earlier stop
+                    systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
                       || echo "warn: could not enable unit claude-session@$1" >&2; }
-_ws_unsupervise() { systemctl --user disable --now "claude-session@$1" 2>/dev/null || true; }
+
+_ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBODY MEANT TO.
+  # THE SINGLE CHOKE POINT, which is why the stamp lives here and not in
+  # cmd_stop: ws-rm, ws-archive, ws-reap and forget all reach systemd through
+  # this function, and an archived workspace with no stamp would classify
+  # `orphan` for ever (§4.1). The surface defaults to `ccd` because those four
+  # call sites ARE ccd acting on its own account; `cmd_stop` passes its own.
+  #
+  # The word is text from the wire, so it is validated against the closed set
+  # on arrival and anything else becomes `unknown` — it is a DECLARATION, not
+  # an authentication, and `--surface pwa` means only that the caller said so.
+  #
+  # Epoch and surface share ONE field: the registry is read per-field per
+  # session on a 2s tick, and packing them keeps `stopped` one read instead of
+  # two. The stamp is written BEFORE the disable, because the intent is a fact
+  # whether or not systemd cooperates — the disable is already swallowed.
+  # `${2-ccd}`, NOT `${2:-ccd}`: the colon form defaults on EMPTY too, so a
+  # caller that explicitly declares `--surface ''` (an empty word off the
+  # wire) would default straight past the closed-set check to `ccd`,
+  # misattributing a PWA-sourced stop to ccd acting on its own account. The
+  # bare `-` form defaults only when $2 is truly absent (the four internal
+  # call sites, which pass no second argument at all) and leaves an explicit
+  # empty string to fall into the `case`'s `*` arm below, same as any other
+  # non-member word.
+  local id="$1" surface="${2-ccd}"
+  case "$surface" in cli|pwa|agent|ccd) ;; *) surface=unknown ;; esac
+  printf '%s %s' "$(date +%s)" "$surface" > "$REG/$id.stopped"
+  rm -f "$REG/$id.supervised"
+  # A silent failure here used to be observable at cmd_stop's own inlined call
+  # (the message this replaced); routing all five call sites through one
+  # choke point must not mean the warning stops firing for any of them. Mirrors
+  # _ws_supervise's own warning on the same failure, one function up.
+  systemctl --user disable --now "claude-session@$id" 2>/dev/null \
+    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
+}
+
+_session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|never-started
+  # The bash twin of shared/'s `sessionLifecycle` (spec §4.3). A pure function
+  # of four inputs — pane alive, heartbeat freshness, stop stamp, `started` —
+  # evaluated in this exact order; both implementations are driven from one
+  # fixture, so the order and the 120-second window are the contract, not an
+  # implementation detail.
+  #
+  # `unmeasurable` is the ONE row of the table this side cannot reach: ccd
+  # reads $REG off local disk, where a read either works or the file is
+  # genuinely absent. That state exists only on the server's side of the seam,
+  # where remote `readFile` collapses missing/forbidden/disconnected into one
+  # null and an unreadable registry must never print `orphan`.
+  local id="$1" sup fresh=0 now
+  sup=$(_reg_get "$id" supervised)
+  now=$(date +%s)
+  # A garbage stamp is NO stamp: this field is ccd's own, but it is a file on
+  # disk, and a truncated one must degrade to "nobody is watching" rather than
+  # to a silently-fresh `running`. `>= 0` matters as much as `< 120`: without
+  # it a FUTURE-dated stamp (clock skew, or a hand-edited registry) reads as
+  # fresh forever — `now - sup` goes negative, which satisfies `< 120`
+  # unconditionally and never ages out.
+  [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )) && fresh=1
+  if _alive "$id"; then
+    (( fresh )) && { echo running; return 0; }
+    # A pane with no supervisor: no auto-swap, no auto-compact, no uuid-sync,
+    # and nothing to record its death. What a pre-fix `ccd start` minted.
+    echo unsupervised; return 0
+  fi
+  # The stop stamp is checked BEFORE the heartbeat so that a stop taken inside
+  # the 120s freshness window reads `stopped` immediately, not `restarting`.
+  # `-e` not `-f`: present-but-unreadable still means somebody stopped this.
+  [[ -e "$REG/$id.stopped" ]] && { echo stopped; return 0; }
+  (( fresh )) && { echo restarting; return 0; }
+  [[ "$(_reg_get "$id" started)" == "1" ]] && { echo orphan; return 0; }
+  echo never-started
+}
 
 # ── PR / archive lifecycle helpers ─────────────────────────────────
 # `local x=$(cmd)` returns local's status, never cmd's — so anything whose exit
@@ -400,12 +492,42 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   # projects dir Claude never writes. cmd_swap's transcript copy already
   # resolves for exactly this reason (its `readlink -f`), and the server's
   # `resolveTranscriptFile` resolves the same way; this was the last raw one.
-  local id="$1" wrapper cfg workdir uuid munged
+  #
+  # EXISTENCE-FIRST (spec §2.5). Resolving is necessary and was never
+  # sufficient: a session that moves relocates its transcript, and this
+  # function's answer is written into archive manifests and reap TOMBSTONES,
+  # which outlive the registry row they describe. An unchecked guess there is
+  # a permanent wrong address. So: the resolved munge if that file exists, then
+  # the raw munge if that one does, then the uuid itself — newest match under
+  # THIS account's config dir — and only then today's unchecked answer, so a
+  # session that has written nothing yet still records the canonical address
+  # rather than an empty string.
+  #
+  # Deliberately no live-cwd rung and no cross-account rung. These callers run
+  # at archive, audit and reap time, when the session is stopped or idle and the
+  # registry workdir is the durable fact; and a foreign account's copy needs a
+  # banner naming it (D4 rung 6), which a tombstone has nowhere to put.
+  local id="$1" wrapper cfg workdir uuid munged raw newest
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   cfg=$(_cfg_dir "$wrapper")
   [[ -n "$cfg" && -n "$workdir" && -n "$uuid" ]] || return 1
+  raw=$(printf '%s' "$workdir" | tr './_' '---')
   workdir=$(_ws_realpath "$workdir")
   munged=$(printf '%s' "$workdir" | tr './_' '---')
+  if [[ -f "$cfg/projects/$munged/$uuid.jsonl" ]]; then
+    printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"; return 0
+  fi
+  if [[ -f "$cfg/projects/$raw/$uuid.jsonl" ]]; then
+    printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$raw" "$uuid"; return 0
+  fi
+  # Newest by mtime among every project dir holding this uuid. `stat -c %Y` per
+  # candidate rather than `ls -t`: the paths are ccd-controlled but a project
+  # dir name is a munged workdir, and parsing `ls` output is how a space in one
+  # becomes a silently wrong answer.
+  newest=$(_transcript_matches "$cfg" "$uuid" \
+    | while IFS= read -r f; do printf '%s\t%s\n' "$(stat -c %Y "$f" 2>/dev/null || printf 0)" "$f"; done \
+    | LC_ALL=C sort -rn -k1,1 | head -1 | cut -f2-)
+  if [[ -n "$newest" ]]; then printf '%s\n' "$newest"; return 0; fi
   printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"
 }
 
@@ -1265,8 +1387,18 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     fi
   fi
 
-  _spawn "$id" new; _reg_set "$id" started 1
+  # Captured, not discarded: a silent M6-shaped success on the workspace path
+  # was found by Task 4's reviewer (cmd_ws_add rc=0 with the success line
+  # printed over a spawn whose tmux session had vanished). Supervision wiring
+  # is untouched — `_ws_supervise` still runs on a failed spawn, since a
+  # unit that can retry is strictly better than one that never gets enabled.
+  local rc; _spawn "$id" new; rc=$?
+  _reg_set "$id" started 1
   _ws_supervise "$id"
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "workspace $id on $hw — $wt (branch $branch, from $base)"
 }
 
@@ -1795,6 +1927,20 @@ ws-rm
 version
 ls
 EOF
+  # `stop-surface` is a CAPABILITY token, not a dispatchable verb — `ccd
+  # stop-surface` is not a command. It rides this exact channel deliberately
+  # (fix round 2, task 14): the agent's caps reader, the wire's `ccdVerbs`
+  # list and the server's `verbSupported` lookup already exist, are already
+  # proven, and do a plain membership check with no assumption that every
+  # member is dispatchable — so a second capability channel would duplicate
+  # working plumbing for no reason. Shaped like a verb (lowercase + hyphens)
+  # on purpose, so it needs no new parsing anywhere: it passes the agent's
+  # existing `/^[a-z][a-z-]*$/` filter unchanged. Names the FLAG `cmd_stop`
+  # has carried since D3 (spec §4.1): `ccd stop [--surface <word>] <id>`.
+  # `server/test/ccd-archive.test.ts`'s caps<->dispatcher parity check knows
+  # this one token by name and requires it to stay exactly one token — a
+  # third one added here without updating that list fails loudly there.
+  echo stop-surface
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -2310,8 +2456,12 @@ sys.stdout.write(out)
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely
   # No confirmation: it only creates. The one thing it must not do is leave the
-  # session unsupervised — `ccd ensure` does NOT re-supervise (ccd:1427-1434), so
-  # boot persistence would be silently lost.
+  # session unsupervised, so it calls `_ws_supervise` itself below rather than
+  # leaving that to whoever next runs a start verb. (The line-numbered claim
+  # this comment used to carry — "`ccd ensure` does NOT re-supervise" — was
+  # stale twice over: the numbers had drifted, and `cmd_ensure` now adopts a
+  # live-but-unsupervised pane via `_resupervise_live`. It restores nothing on
+  # THIS path regardless, because `_spawn` below has not run yet.)
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-restore --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
@@ -2361,7 +2511,10 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
   rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
-  _spawn "$id" resume
+  # Captured, not discarded — same M6-shaped gap as ws-add, folded into this
+  # task because it owns the start paths and the spawn-rc plumbing. Supervision
+  # wiring stays untouched: `_ws_supervise` still runs on a failed spawn.
+  local rc; _spawn "$id" resume; rc=$?
   _reg_set "$id" started 1
   _ws_supervise "$id"
   # GIVEN BACK BEFORE THE VERB ANSWERS, for the reason `cmd_ws_reap` states at
@@ -2369,8 +2522,13 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # two strangers, and ccd is SOURCED — by `ccd` itself and by its tests — so a
   # descriptor left open here would refuse the next `ws-reap` in the same shell
   # with `in-progress` for ever. The `die`s above need no close of their own:
-  # `die` exits, and the kernel closes what exits.
+  # `die` exits, and the kernel closes what exits. Given back regardless of the
+  # spawn's fate — the undo (archive stamps gone) is real either way.
   exec {lfd}>&-
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "restored $id — $workdir"
 }
 
@@ -6983,10 +7141,18 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target hard_blocked=""
+  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
+  # A refused swap is not retried on the 5-second supervise tick. cmd_swap writes
+  # $REG/<id>.swapblocked as "<epoch> <reason>" when it cannot carry the conversation
+  # (spec §2.4); without this gate one refusal would produce 720 banners an hour, each
+  # one a notify.sh call and a swap.log line. The epoch is VALIDATED as digits rather
+  # than trusted: ccd runs under `set -u`, where `$(( now - garbage ))` on a hand-edited
+  # or half-written field emits an unbound-variable line on every single tick.
+  blocked=$(_reg_get "$id" swapblocked); bts="${blocked%% *}"
+  [[ "$bts" =~ ^[0-9]+$ && $((now - bts)) -lt "$SWAPBLOCK_COOLDOWN" ]] && return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
@@ -7108,8 +7274,25 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   # same words inside a restored transcript can't false-trigger keystrokes.
   # Window is ~15 min because 700k+-token resumes take minutes between gates; healthy sessions
   # return the moment the live marker shows, so the common path stays fast.
+  # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
+  # vanished mid-poll; 4 = the window expired with no marker. 3 and 4 both used to be "0 after ~15
+  # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
   local t="$1" fromswap="${2:-0}" i pane
-  for i in $(seq 1 450); do
+  for i in $(seq 1 "$SPAWN_GATE_TRIES"); do
+    # BEFORE the capture, and this order is the fix: `capture-pane` against a dead session fails into
+    # an EMPTY $pane, which matches no branch below, so the loop used to poll a corpse for the full
+    # window and then answer success. `has-session` is the one probe that distinguishes "not ready
+    # yet" from "not there", and it costs one call — except when it just failed, in which case a
+    # SECOND probe confirms it before this returns 3. A single failed `has-session` read on a box
+    # running a whole fleet of sessions can be transient load, not a vanished pane; tipping a healthy
+    # 15-minute resume into a false rc 3 on one flaky read would turn a spurious hiccup into a hard,
+    # loudly-reported failure (this task made rc 3/4 loud specifically so it WOULD be reported — a
+    # false positive is now as visible as a real one). A short debounce, not a retry loop: one
+    # re-check, not a second pass at the whole window.
+    if ! tmux has-session -t "$t" 2>/dev/null; then
+      sleep 1
+      tmux has-session -t "$t" 2>/dev/null || return 3
+    fi
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
@@ -7152,6 +7335,9 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
     fi
     sleep 2
   done
+  # The window expired. An explicit verdict, because falling out of a `for` loop under `set -uo
+  # pipefail` with no `-e` returns the status of the last command — `sleep 2`, i.e. 0. That is M6.
+  return 4
 }
 
 _spawn() {   # id mode(new|resume) — (re)create the tmux session under the right account
@@ -7182,16 +7368,42 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   tmux set-option -t "$tname" window-size latest 2>/dev/null
   local prompt_rc
   _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
-  # Code 2 means _accept_first_run_prompts stopped at a login screen: $id and $wrapper are
-  # only in scope HERE, not inside that function (which only knows the tmux name), so the
-  # operator-facing warning — naming both, spec §5 — is emitted from this side of the return.
-  [[ "$prompt_rc" == 2 ]] && echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2
+  # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — _spawn
+  # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
+  # inside the unit to a `ccd start` running in another process, which is what Task 5's
+  # _supervised_start polls. $REG is on the fleet wire within one 2s watcher tick (M9); an exit code
+  # is on nothing's wire at all.
+  _reg_set "$id" spawn "$(date +%s) $prompt_rc"
+  case "$prompt_rc" in
+    # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
+    # so this is correct whether or not the .stopped stamp itself has landed yet.
+    0) rm -f "$REG/$id.stopped" ;;
+    # $id and $wrapper are only in scope HERE, not inside _accept_first_run_prompts (which knows
+    # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
+    # side of the return.
+    2) echo "warn: $id is waiting for login on $wrapper — attach and run /login" >&2 ;;
+    # `started` stays 1 after a failed spawn (cmd_start/cmd_ensure, §4.3 orphan classification), so a
+    # retry resumes THIS uuid rather than minting a fresh one — correct when rc 4 means the pane lived
+    # 15 minutes and may hold real history (flipping to --session-id on retry would risk clobbering
+    # it), but a trap when rc 3/4 means nothing ever really started: the retry then resumes a uuid
+    # with no transcript behind it, forever, on every retry AND every Restart=always cycle, because
+    # nothing else ever clears $REG/$id.started. Named here so the operator has the escape hatch.
+    3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
+    4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
+  esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
   # (those are the opt-in external backends — gpt/Codex today — which don't take it, so the
-  # injection would just error into the prompt box). Code 2 means _accept_first_run_prompts
-  # stopped at a login screen — skip the same way: a synthesized keystroke into an auth flow
-  # is never correct.
-  _is_home_able "$wrapper" && [[ "$prompt_rc" != 2 ]] && _inject_spawn_effort "$tname"
+  # injection would just error into the prompt box). Keyed on home-ability rather than on the
+  # literal `gpt` since the roster became data — merged from main, whose reasoning stands
+  # unchanged here.
+  #
+  # The RC half of the guard is this branch's, and it is STRICTER than the `!= 2` it replaces:
+  # 2 used to be the only non-zero code, and with 3 and 4 now in the table (§3.1) `!= 2` would
+  # type a slash command at a session that does not exist. `== 0` means inject only into a TUI
+  # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
+  # (rc 2 fails `== 0` too) rather than dropping it.
+  _is_home_able "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
+  return "$prompt_rc"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
@@ -7210,39 +7422,344 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   return 0
 }
 
-cmd_start() {
-  local wrapper="${1:-}" project="${2:-}" workdir="${3:-}"
-  [[ -n "$wrapper" && -n "$project" ]] || die "usage: ccd start <wrapper> <project> [workdir]"
-  _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${CCRC_ACCOUNTS[*]})"
-  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
+# Its own function for the same reason _ws_supervise and _ws_unsupervise are (ccd:212-216): a test
+# harness can stub it, and `command -v` finds a shell function before it finds a binary, so nothing
+# else could.
+_have_systemctl() { command -v systemctl >/dev/null 2>&1; }
+
+_supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observable verdict.
+  # `ccd start`/`ccd ensure` outside a unit become `systemctl --user enable --now`, and the unit's
+  # ExecStart (`ccd supervise %i`) does the spawning it already does. That is what makes a restarted
+  # session a SUPERVISED one — with _sync_uuid, _auto_swap_check and _auto_compact_check running and
+  # something to record its death — instead of the bare pane stop-then-start used to leave.
+  #
+  # `local a=1 b="$a"` does NOT see `a`: local expands all its arguments before assigning any of
+  # them, and under `set -u` that is a fatal unbound-variable error. Hence the second line.
+  local id="$1" since i st at rc unit
+  unit="claude-session@$id"
+  since=$(date +%s)
+  if ! _have_systemctl; then
+    echo "ccd: warn: systemctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
+    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    _spawn "$id" "$mode"; rc=$?
+    _reg_set "$id" started 1
+    return "$rc"
+  fi
+  # §3.3 deliberately creates failed units — that is the point of the start limit — and a unit
+  # sitting in `failed` refuses to start again until its failure is cleared. Without this, the very
+  # verb §4.4 advertises as "what revives it" would not.
+  systemctl --user reset-failed "$unit" 2>/dev/null
+  if ! systemctl --user enable --now "$unit" 2>/dev/null; then
+    echo "ccd: warn: could not enable unit $unit — starting $id UNSUPERVISED (unit installed? lingering?)" >&2
+    local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
+    _spawn "$id" "$mode"; rc=$?
+    _reg_set "$id" started 1
+    return "$rc"
+  fi
+  # `enable --now` returns when systemd has STARTED THE UNIT, not when a pane exists — but
+  # `ccd attach` and `ccd menu` exec `tmux attach` on the next line, and §3.3 requires a failed
+  # spawn to be reported rather than assumed. So wait on two observables: the pane (success, exactly
+  # as today, since the TUI may still be working through a long resume) or a spawn stamp NEWER than
+  # this call carrying a non-zero rc. The freshness test is what stops the last failure this row
+  # ever had from being reported as this one's; a stale stamp written in the same second as `since`
+  # can only mean an operator is retrying a session that is failing right now, where reporting the
+  # failure is still the right answer.
+  for i in $(seq 1 "$SUPERVISED_START_WAIT"); do
+    _alive "$id" && return 0
+    st=$(_reg_get "$id" spawn)
+    if [[ -n "$st" ]]; then
+      at="${st%% *}"; rc="${st##* }"
+      # `return` truncates its argument mod 256, so an unvalidated rc from a malformed stamp
+      # could come back as 0 (success) on a genuine failure — measured: "1000" returns 232, and
+      # anything ≡0 mod 256 would lie outright. Unreachable today (only `_spawn` writes this
+      # field, always as two fields in one `printf`), but the field is a file, not a type: accept
+      # the parsed rc only if it is a plausible one-to-three-digit exit code; otherwise the stamp
+      # is unusable and the loop keeps polling rather than trusting it.
+      if [[ "$at" =~ ^[0-9]+$ && "$at" -ge "$since" && "$rc" =~ ^[0-9]{1,3}$ && "$rc" -le 255 && "$rc" != 0 ]]; then
+        echo "ccd: $id failed to start: spawn rc $rc (see $REG/$id.spawn)" >&2
+        return "$rc"
+      fi
+    fi
+    sleep 1
+  done
+  echo "ccd: $id: unit started but no pane appeared within ${SUPERVISED_START_WAIT}s — systemctl --user status $unit" >&2
+  return 1
+}
+
+_resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothing to adopt.
+  # THE REVIVE PATH FOR §4.3's `unsupervised` ROW, which until now had none.
+  # Every one of the three human-facing verbs returned before it could reach an
+  # `enable --now`: `cmd_ensure` early-returns on `_alive`, and `cmd_start`'s
+  # alive branch (which `cmd_enable` aliases through) issues `enable` WITHOUT
+  # `--now` — boot persistence, not a supervisor. So the PWA rendered "running
+  # unsupervised" beside a Restart button posting `/ensure`, which answered
+  # success and changed nothing, on what is the whole population of D2's defect:
+  # on deploy day every pane a pre-fix `ccd start` minted reads `unsupervised`.
+  #
+  # `enable --now` on a LIVE pane is not a second spawn. The unit runs
+  # `cmd_supervise`, which stamps `supervised` and then calls `cmd_ensure` with
+  # CCD_IN_UNIT set — that ensure finds the pane alive, returns, and the watch
+  # loop adopts it. Measured rather than assumed; `ccd-supervised-start.test.ts`
+  # pins the no-second-pane half.
+  #
+  # Scoped to the row that needs it, deliberately. `running` (a fresh heartbeat)
+  # must stay the cheap no-op `ensure` has always been — the PWA's revive button
+  # is reachable on any row, and a `systemctl --user enable --now` per click on
+  # a healthy fleet is a round-trip nobody asked for. And a DEAD pane is not this
+  # function's business at all: `_supervised_start` already owns that path.
+  local id="$1"
+  [[ "${CCD_IN_UNIT:-}" == 1 ]] && return 1   # the supervisor is the thing being asked for
+  _have_systemctl || return 1
+  [[ "$(_session_state "$id")" == unsupervised ]] || return 1
+  # §3.3 deliberately creates failed units and a failed one refuses to start
+  # until cleared — the same reset-failed `_supervised_start` carries, for the
+  # same reason, on the path that reaches systemd without going through it.
+  systemctl --user reset-failed "claude-session@$id" 2>/dev/null
+  if systemctl --user enable --now "claude-session@$id" 2>/dev/null; then
+    echo "re-supervised $id — a live pane with no supervisor; its unit has adopted it"
+  else
+    echo "ccd: warn: $id is alive but UNSUPERVISED and its unit would not start (unit installed? lingering?) — no auto-swap, no auto-compact, no uuid-sync" >&2
+  fi
+  return 0
+}
+
+cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
+  # THE ONE-ARGUMENT FORM IS THE CORRECT ONE FOR ANYTHING THAT ALREADY EXISTS.
+  # `<wrapper> <project>` recomputes `<wrapper>-<project>`, and a session keeps
+  # the id it was born with across every swap — `claude2-expoAI-assistant` is
+  # still that id while its `wrapper` field reads `claude-dev0`. So an operator
+  # reading the account off the board and typing it back MINTS A SECOND ID for
+  # a session that already exists. `cmd_stop` grew this form first, for the
+  # same reason, and its own comment records it.
+  #
+  # There is no id form for CREATION: a new session needs an account and a
+  # project, and there is NO WORKDIR TO INVENT from an id alone. A single
+  # argument with no registry row is therefore refused with the creating
+  # form's usage in the message, never resolved to `$PROJECTS_ROOT/<id>`.
+  local id wrapper="" project="" workdir=""
+  if [[ $# -ge 2 ]]; then
+    wrapper="$1"; project="$2"; workdir="${3:-}"
+    [[ -n "$wrapper" && -n "$project" ]] \
+      || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
+    _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${CCRC_ACCOUNTS[*]})"
+    [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
+    id=$(_id "$wrapper" "$project")
+  else
+    id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"
+    # The id becomes a path under $REG, so its shape is checked exactly as
+    # cmd_forget and cmd_ws_hold check theirs.
+    [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+    [[ -f "$REG/$id.uuid" ]] \
+      || die "no registry for '$id' — a new session needs its account and project: ccd start <wrapper> <project> [workdir]"
+  fi
+
+  # THE REGISTRY WINS OVER THE ARGUMENT, FOR THE ACCOUNT ONLY (spec §3.4).
+  # `_reg_set "$id" wrapper "$wrapper"` used to be unconditional, so
+  # `ccd start claude2 expoAI-assistant` on a session auto-swap had moved to
+  # claude-dev0 rewrote the row to an account whose config dir does not hold
+  # the transcript — the resumed session then finds no history under the very
+  # account it was just told it lives on. `ccd swap` is the ONLY verb that
+  # moves a session between accounts; a differing argument is a warning, and
+  # the warning names the verb that would actually do what was asked.
+  local regw; regw=$(_reg_get "$id" wrapper)
+  if [[ -n "$regw" ]]; then
+    [[ -z "$wrapper" || "$wrapper" == "$regw" ]] \
+      || echo "ccd: warn: $id lives on $regw, not $wrapper — starting it on $regw (to move it: ccd swap $id $wrapper)" >&2
+    wrapper="$regw"
+  fi
+  [[ -n "$wrapper" ]] || die "no wrapper recorded for '$id' and none given"
   [[ -x "$WRAPPER_DIR/$wrapper" ]] || die "wrapper missing: $WRAPPER_DIR/$wrapper"
-  [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
+
+  # The workdir stays the creating form's third argument to set. An id alone
+  # carries no directory, so the id form READS what the row already has and
+  # writes nothing back over it.
+  if [[ -n "$project" ]]; then
+    [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
+  else
+    project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+  fi
   [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
-  local id; id=$(_id "$wrapper" "$project")
-  if _alive "$id"; then echo "already running: $id (find on claude.ai by name: $id)"; return 0; fi
+
+  if _alive "$id"; then
+    # M5's shape, reachable from a keyboard: a live pane whose unit was never enabled, or was
+    # disabled without `--now` some other way. A bare `ccd start` staying a pure no-op here is
+    # correct — a fresh spawn is not what an alive session needs — but `cmd_enable` aliases
+    # straight through this branch, and its whole contract is "make this boot-persistent"; review
+    # found it printing `enabled boot-persistence for <id>` here while issuing zero systemctl
+    # calls. Reconcile unconditionally: idempotent, no `--now` (the same line cmd_supervise's own
+    # self-heal uses), and never reached from the fresh-start branch below, which already ran
+    # `enable --now` moments ago — so this never duplicates that call.
+    #
+    # …EXCEPT that a bare `enable` promises a start at NEXT BOOT and supervises
+    # nothing now, so on the row §4.3 calls `unsupervised` — a live pane with no
+    # heartbeat, which is every pane a pre-fix `ccd start` minted — this branch
+    # was reconciling the symlink and leaving the actual defect in place.
+    # `_resupervise_live` is the `--now` for exactly that row and nothing else;
+    # when it declines (a `running` row, or no systemctl) the cheap boot-
+    # persistence line below is still the right and only act.
+    if _have_systemctl && ! _resupervise_live "$id"; then
+      systemctl --user enable "claude-session@$id" 2>/dev/null \
+        || echo "ccd: warn: could not enable boot-persistence for $id" >&2
+    fi
+    echo "already running: $id (find on claude.ai by name: $id)"; return 0
+  fi
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
-  _reg_set "$id" wrapper "$wrapper"; _reg_set "$id" project "$project"
+  _reg_set "$id" wrapper "$wrapper"
+  [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  _spawn "$id" "$mode"; _reg_set "$id" started 1
+  # A deliberate revival supersedes a refused swap's banner: `ccd start <id>`
+  # is the human act §4.4 names as "what would bring this back" (whether typed
+  # directly or reached via the two-argument form once the registry has
+  # reasserted the real account above), so a stale refusal must not go on
+  # shadowing it.
+  rm -f "$REG/$id.swapblocked"
+  # And a stale deliberate-stop stamp, at the same altitude and for the same
+  # reason (§4.1: "cleared by ccd start, ccd enable and any successful
+  # spawn"). `_spawn`'s own clear only fires on prompt_rc==0, and on THIS path
+  # it runs in a DIFFERENT PROCESS entirely — `_supervised_start` below polls a
+  # unit whose ExecStart is a separate `ccd supervise` invocation. When that
+  # unit never comes up at all (a crash-looped FAILED unit, `enable --now`
+  # itself failing, `_supervised_start`'s own 30s timeout with no spawn stamp
+  # yet), `_spawn` never runs in THIS process and never gets the chance to
+  # clear it — the brief's original "clear inside _spawn" fix could not have
+  # reached this case. Cleared here on ATTEMPT, unconditionally, exactly like
+  # swapblocked above: `started` stays 1 regardless of the outcome (restated
+  # below), so a failed revival still reads `orphan` — the honest signal that
+  # someone tried and it didn't come up — instead of a stale `stopped` that
+  # hides the attempt and tells the operator to do the thing they just did.
+  rm -f "$REG/$id.stopped"
+  if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
+    local rc; _supervised_start "$id"; rc=$?
+    # `started` stays unconditional here too (Task 4's own invariant, restated below): a
+    # supervised start that never even reaches the in-unit cmd_ensure — the crash-looped FAILED
+    # unit this task's own StartLimitBurst is designed to produce, or `_supervised_start`'s own
+    # 30s timeout with no spawn stamp yet — must still classify `orphan` once a later task reads
+    # this field, not `never-started`. `($mode)` now appears here too (Task 6): the id form exists
+    # precisely so an operator can tell whether they resumed the row they named or minted a fresh
+    # one, and the supervised path is the one a human at a keyboard actually takes.
+    _reg_set "$id" started 1
+    [[ "$rc" -eq 0 ]] || return "$rc"
+    echo "started $id ($mode) — discover on claude.ai by name: $id"
+    return 0
+  fi
+  local rc; _spawn "$id" "$mode"; rc=$?
+  # `started` stays unconditional: it records that this row has HAD a session, which is what §4.3's
+  # never-started rung reads. A spawn that failed is still a row that was started — it classifies
+  # `orphan`, which is the honest answer, not `never-started`.
+  _reg_set "$id" started 1
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "started $id ($mode) — discover on claude.ai by name: $id"
 }
 
 cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
   local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
-  if _alive "$id"; then echo "alive: $id"; return 0; fi
+  if _alive "$id"; then
+    # A LIVE PANE IS NOT NECESSARILY A SUPERVISED ONE, and this early return used
+    # to treat the two as the same thing. `_resupervise_live` is the one place
+    # that discriminates; on a `running` row it does nothing at all, so `ensure`
+    # stays the cheap no-op it has always been for the ordinary case.
+    _resupervise_live "$id"
+    echo "alive: $id"; return 0
+  fi
+  # A deliberate revival supersedes a refused swap's banner (§2.4, mirroring
+  # cmd_start's matching line): `POST /api/sessions/:id/ensure` is the PWA's
+  # actual revive route, so a refusal banner left standing on the row `ensure`
+  # just revived would teach the operator to ignore banners. Placed AFTER the
+  # already-alive no-op return above, so it fires only on an actual (re)start
+  # attempt, exactly as cmd_start's own clear does.
+  #
+  # TWO GUARDS, one per process that reaches this line, because a refusal's
+  # marker was measured surviving neither.
+  #   - CCD_IN_UNIT: `cmd_supervise` calls this function on entry, and on the
+  #     restart `_swap_refuse` itself performs the pane is still dead when it
+  #     does — so the supervisor coming back erased the very field the refusal
+  #     had just written, in a DIFFERENT process, seconds later. A supervisor
+  #     re-entering its own unit is not a human act, and §2.4's "a deliberate
+  #     revival supersedes" is about a human act. (`.stopped` below is NOT
+  #     guarded and must not be: it says "this session is not running because
+  #     somebody stopped it", which the session being alive again falsifies
+  #     whoever caused it. `swapblocked` says "this conversation could not be
+  #     moved", which a restart onto the SAME account leaves exactly as true.)
+  #   - CCD_KEEP_SWAPBLOCK: `_swap_refuse`'s `|| cmd_ensure` fallback reaches
+  #     this in-process, where dynamic scoping makes the caller's `local`
+  #     visible — the same idiom, and the same argument, as CCD_IN_UNIT itself.
+  if [[ "${CCD_IN_UNIT:-}" != 1 && "${CCD_KEEP_SWAPBLOCK:-}" != 1 ]]; then
+    rm -f "$REG/$id.swapblocked"
+  fi
+  # And the mirror of cmd_start's stopped-clear (see its comment for the full
+  # argument): `_spawn`'s success-only clear cannot reach the supervised path
+  # when the unit itself never starts, since `_spawn` then runs in a different
+  # process altogether. The verb clears it here instead, on attempt,
+  # unconditionally — `ensure` is `POST /api/sessions/:id/ensure`'s actual
+  # revive route, so this is the case the spec sentence was written for.
+  rm -f "$REG/$id.stopped"
+  # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
+  # else it is a REQUEST for one, and the request goes through the unit so the session comes back
+  # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
+  # and correctly takes the supervised branch — which is why the guard is not INVOCATION_ID.
+  if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
+    local rc; _supervised_start "$id"; rc=$?
+    # `started` stays unconditional (Task 4's invariant, ccd:7118) on this path too — see cmd_start's
+    # matching comment for why the in-unit cmd_ensure setting it is not enough on its own.
+    _reg_set "$id" started 1
+    [[ "$rc" -eq 0 ]] || return "$rc"
+    echo "ensured $id"
+    return 0
+  fi
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  _spawn "$id" "$mode"; _reg_set "$id" started 1
+  local rc; _spawn "$id" "$mode"; rc=$?
+  _reg_set "$id" started 1
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+    echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
+    return "$rc"
+  fi
   echo "ensured $id ($mode)"
 }
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
+  # THE FIRST STAMP GOES BEFORE cmd_ensure, NOT AFTER IT. `cmd_ensure` can sit
+  # inside `_accept_first_run_prompts` for up to fifteen minutes while a 700k-
+  # token resume works through its gates, and a heartbeat that started with the
+  # watch loop would leave every large resume reading `unsupervised` for those
+  # fifteen minutes — the loudest possible false alarm, fired precisely when
+  # the fleet is doing the most work (§4.2).
+  #
+  # The stamp is how the SERVER learns this at all: the agent's read whitelist
+  # permits ~/.cc-sessions and ~/.claude*, and nothing under ~/.config/systemd,
+  # so rather than widen a security boundary to learn a fact, the supervisor
+  # publishes it. And it is strictly better than an enable symlink: the symlink
+  # promises a start at next boot, this proves auto-swap, uuid-sync and
+  # auto-compact are running for this row right now.
+  _reg_set "$id" supervised "$(date +%s)"
+  # §3.2's self-heal: creating the enable symlink is idempotent and safe from inside the unit
+  # (`enable` without `--now` asks systemd for nothing else), and this one line heals M5's three
+  # boot-persistence-less rows the next time each supervisor restarts — which the deploy's
+  # `try-restart "claude-session@*"` sweep makes fleet-wide and automatic.
+  systemctl --user enable "claude-session@$id" 2>/dev/null \
+    || echo "ccd: warn: could not enable boot-persistence for $id" >&2
+  # The recursion guard, in-process. `local` is dynamically scoped in bash, so cmd_ensure sees it
+  # and the caller does not; it is never exported and never an argv token, so — unlike an added
+  # argv word, which the agent's prefix-matching exec whitelist would permit — it is not
+  # addressable from the wire at all.
+  local CCD_IN_UNIT=1
   cmd_ensure "$id"
-  while _alive "$id"; do _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; sleep 5; done
+  # Re-stamped every 30s from the 5-second tick this loop already runs, so the
+  # 120-second freshness window never expires under a live supervisor.
+  local beat=0
+  while _alive "$id"; do
+    _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
+    beat=$((beat + 5))
+    (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
+    sleep 5
+  done
   echo "session $id ended; exiting for systemd restart" >&2
   exit 1
 }
@@ -7271,20 +7788,448 @@ if n:
 PY
 }
 
-cmd_swap() {   # id target-wrapper — move a session to another account, conversation intact.
-  # Transcripts are plain JSONL with no account binding (validated 2026-07-03): copy the
-  # current transcript into the target config dir, flip the registry wrapper, restart.
+_transcript_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>.jsonl, one per line.
+  # A session uuid is globally UNIQUE, so the transcript can be found instead of
+  # guessed. cmd_swap used to munge one directory and copy exactly that path;
+  # Claude Code writes under the munge of ITS cwd, which diverges the moment the
+  # session moves (a /cd relocates the transcript, a worktree tool does not), and
+  # on 2026-08-11 the guess missed and the swap completed with no history.
+  # Deliberately scoped to ONE config dir: the same uuid exists under five
+  # accounts at five different sizes, and a cross-account sweep would carry
+  # whichever stale copy sorted first.
+  # The glob runs in a subshell so `nullglob` — which is what makes "no matches"
+  # an empty list rather than a literal `*`-bearing path that `[[ -f ]]` quietly
+  # answers no to — cannot leak into the caller's shell.
+  # rc is ALWAYS 0, found or not: "no matches" is empty output, not a nonzero
+  # rc. A caller deciding whether to refuse (Task 3) must count output lines —
+  # `_transcript_matches … || die` never fires.
+  local cfg="$1" uuid="$2" f
+  [[ -n "$cfg" && -n "$uuid" ]] || return 0
+  ( shopt -s nullglob
+    for f in "$cfg"/projects/*/"$uuid".jsonl; do
+      [[ -f "$f" ]] || continue
+      printf '%s\n' "$f"
+    done )
+}
+
+_sidecar_matches() {   # cfgdir uuid -> every <cfgdir>/projects/*/<uuid>/ sidecar dir, no trailing slash.
+  # Globbed in its OWN right, not "beside each jsonl": two of the incident's
+  # sidecars sit in project dirs that hold no .jsonl for that uuid at all. The
+  # trailing slash in the glob is what restricts it to directories. The
+  # stripped slash on the way OUT gives every caller the same bare `<uuid>`
+  # path — it is NOT what stops `cp -a src/ dst` nesting: measured, `cp -al
+  # src/<uuid> dst/<uuid>` onto an ALREADY-EXISTING destination nests
+  # regardless of either side's trailing slash. The real guard is "the
+  # destination must not already exist before the copy runs", and that is the
+  # copying caller's job (Task 2), not this locator's.
+  local cfg="$1" uuid="$2" d
+  [[ -n "$cfg" && -n "$uuid" ]] || return 0
+  ( shopt -s nullglob
+    for d in "$cfg"/projects/*/"$uuid"/; do
+      [[ -d "$d" ]] || continue
+      printf '%s\n' "${d%/}"
+    done )
+}
+
+_swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
+  # rc 0 = carried, including the `mdir` slot; rc 1 = nothing found, or every
+  # copy failed; rc 2 = copies landed but NOT at `mdir`, the one slot the
+  # resumed session actually reads (see the verdict at the foot of this
+  # function). Every non-zero rc means the same thing to the caller — do not
+  # proceed with this swap — and they differ only in the sentence the refusal
+  # puts in front of a human.
+  # Destination slots = each match's MIRRORED relative dir (so the target account
+  # looks like where Claude Code actually had the file) plus `mdir`, the munge of
+  # the resolved registry workdir — the directory the resumed process starts in,
+  # and the first address it reads. Where two matches want one slot the newest
+  # source mtime wins, which is the rule that makes the mdir slot safe: a session
+  # that moved has a STALE transcript still sitting at its old startup munge,
+  # which for many rows IS mdir, and copying both while preserving directories
+  # would land the stale one at exactly the address that matters.
+  #
+  # One copy per distinct INODE (one inode wore three names in production, at
+  # 70MB); every other slot for that inode is a hardlink to the copy. Every
+  # destination write unlinks first (`cp -p --remove-destination`, `ln -f`): a
+  # previous swap onto this account left its names hardlinked to EACH OTHER, so a
+  # plain cp writes through the shared inode and rewrites siblings this swap
+  # never claimed, and a plain ln fails EEXIST — which, with no `set -e`, this
+  # script would sail straight past.
+  #
+  # A cp across config dirs, never a link from source to destination: the
+  # transcript is the one file that gets APPENDED to, so an aliased source would
+  # grow a conversation that account never had. `-p` because two of this design's
+  # rules read mtimes and a plain cp stamps every copy with the time of the swap.
+  local srccfg="$1" dstcfg="$2" uuid="$3" mdir="$4" sanitize="${5:-0}"
+  local -a matches=()
+  # C-collated: the glob itself carries no order guarantee, and ccd runs from
+  # an interactive shell, from `systemd-run --user`, and from the auto-swap
+  # dispatcher — three environments, three possible locales. Left unpinned,
+  # which match wins an equal-mtime tie (below) would depend on who triggered
+  # the swap. Pinning here is what makes that tie-break reproducible; the
+  # `LC_ALL=C sort` on the slot list further down is the same reasoning
+  # applied one step later.
+  mapfile -t matches < <(_transcript_matches "$srccfg" "$uuid" | LC_ALL=C sort)
+  (( ${#matches[@]} )) || return 1
+
+  local -A mtime_of=() ino_of=() winner=()
+  local f pdir mt s cur
+  for f in "${matches[@]}"; do
+    # Parameter expansion, not `basename "$(dirname …)"`: every munged project
+    # dir starts with `-`, and GNU basename would read `-data-projects-x` as
+    # options.
+    pdir="${f%/*}"; pdir="${pdir##*/}"
+    mt=$(stat -c %Y "$f" 2>/dev/null); [[ "$mt" =~ ^[0-9]+$ ]] || mt=0
+    mtime_of["$f"]="$mt"
+    # device:inode, not inode alone — an inode number is unique only WITHIN a
+    # filesystem, and two distinct transcripts on different devices could
+    # otherwise collide and get treated as the same content.
+    ino_of["$f"]=$(stat -c '%d:%i' "$f" 2>/dev/null)
+    [[ -n "${ino_of[$f]}" ]] || ino_of["$f"]="path:$f"
+    # Its own mirrored dir, and — for every match — the mdir slot, UNLESS mdir
+    # is empty: `_reg_get`'s `cat … 2>/dev/null` yields "" for a missing
+    # `.workdir` file, and `winner[""]=...` on an empty subscript is a FATAL
+    # bash error under `set -u` that kills the interpreter mid-loop, not a
+    # recoverable one — no rc, nothing after it runs. `${mdir:+"$mdir"}` drops
+    # the slot instead of ever writing to it. Strictly greater, so an
+    # equal-mtime tie keeps the first match in (C-sorted, see above) order,
+    # and the answer stays deterministic.
+    for s in "$pdir" ${mdir:+"$mdir"}; do
+      cur="${winner[$s]:-}"
+      if [[ -z "$cur" ]] || (( mt > ${mtime_of[$cur]} )); then winner["$s"]="$f"; fi
+    done
+  done
+
+  # Sorted, and C-collated, so which slot holds the physical copy is reproducible
+  # rather than a function of bash's hash order.
+  local -a slots=()
+  mapfile -t slots < <(printf '%s\n' "${!winner[@]}" | LC_ALL=C sort)
+
+  local -A copied=() placed=()
+  local carried=0 slot src ino dst
+  for slot in "${slots[@]}"; do
+    src="${winner[$slot]}"; ino="${ino_of[$src]}"
+    dst="$dstcfg/projects/$slot/$uuid.jsonl"
+    mkdir -p "$dstcfg/projects/$slot"
+    if [[ -n "${copied[$ino]:-}" ]]; then
+      ln -f "${copied[$ino]}" "$dst" 2>/dev/null \
+        || cp -p --remove-destination "${copied[$ino]}" "$dst" 2>/dev/null \
+        || { echo "ccd: warn: could not place transcript at $dst" >&2; continue; }
+    else
+      cp -p --remove-destination "$src" "$dst" 2>/dev/null \
+        || { echo "ccd: warn: could not carry transcript $src -> $dst" >&2; continue; }
+      # Order is load-bearing: _sanitize_anthropic rewrites through os.replace,
+      # which BREAKS hardlinks — the replaced name gets a new inode and every
+      # sibling keeps the unsanitized one. Copy -> sanitize -> link.
+      [[ "$sanitize" == 1 ]] && _sanitize_anthropic "$dst"
+      copied["$ino"]="$dst"; carried=$((carried + 1))
+    fi
+    # Recorded on BOTH arms, because a hardlink into a slot is a landing as
+    # surely as a copy is — `carried` counts distinct INODES copied and can
+    # therefore be 1 while N slots are correctly filled. This records SLOTS.
+    placed["$slot"]=1
+  done
+  (( carried > 0 )) || return 1
+  # Logged before the mdir verdict below, not after: a partial carry is exactly
+  # the case whose forensic trail matters, and these three numbers are what say
+  # which part landed. (This line has always recorded fewer copies than
+  # destinations for the failure the verdict now catches — the arithmetic that
+  # exposes it was written all along and simply never branched on.)
+  echo "$(date '+%F %T') carry $uuid: ${#matches[@]} match(es), $carried copy/copies, ${#slots[@]} destination(s)" \
+    >> "$REG/swap.log"
+  # THE mdir SLOT IS NOT ONE DESTINATION AMONG SEVERAL. It is the munge of the
+  # resolved registry workdir — the directory the resumed process starts in and
+  # the first address it reads — so "at least one copy landed" is the wrong bar
+  # for it: measured, two distinct source inodes with an unwritable mdir
+  # destination gave a warning on stderr, carried=1, rc 0, and `cmd_swap` went
+  # on to flip `wrapper` and print `swapped …`. The resumed session then munges
+  # its cwd to mdir, finds nothing, and reports no history — D1's exact symptom,
+  # behind a success report. rc 2 rather than 1 so the caller can name the real
+  # cause: "every copy failed" and "the copy that mattered failed" want different
+  # sentences in the banner an operator reads at 2am.
+  [[ -z "$mdir" || -n "${placed[$mdir]:-}" ]] || return 2
+  return 0
+}
+
+_swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a hardlink tree. Always rc 0.
+  # <projects dir>/<uuid>/ holds subagents, tool-results and workflows, and was
+  # copied by NOTHING before this build: 188MB of the incident session's state,
+  # left behind on the account it was swapped off. Globbed in its own right
+  # because sidecars exist in project dirs with no .jsonl for the same uuid, and
+  # each lands at the mirror of its OWN source dir.
+  #
+  # `cp -al` — a hardlink tree, the one place a source inode is shared across
+  # accounts, and the asymmetry with §2.2 is deliberate: the transcript is
+  # appended to, a sidecar's contents are write-once artifacts read after they
+  # are written. `cp -a` without `-l` is the fallback the moment linking fails
+  # (a cross-device destination), so the degradation is a slow correct copy
+  # rather than nothing — and it is the whole remedy if the write-once property
+  # is ever disproved: delete one flag, pay the bytes, change nothing else. The
+  # mode is logged so the evidence exists if a future defect implicates a shared
+  # checkpoint.
+  #
+  # An existing destination sidecar is LEFT ALONE rather than merged — the
+  # opposite of the transcript's unlink-first rule, because a tree can be
+  # half-merged where a single file is replaced in one step. `_sidecar_matches`
+  # strips the source's trailing slash; the anti-nesting guard is that `$dst`
+  # (the `<uuid>` directory itself, not just its parent) must not already
+  # exist before a copy attempt runs — measured: `cp -al src/<uuid> dst/<uuid>`
+  # (and `cp -a`, identically) onto an ALREADY-EXISTING destination nests the
+  # tree inside itself regardless of either path's trailing slash. `mkdir -p`
+  # below only creates the PARENT (`$dstcfg/projects/$pdir`), never `$dst`
+  # itself, so the FIRST attempt (`cp -al`) always starts clean.
+  #
+  # The SECOND attempt does not start clean on its own, and this is the
+  # subtle half of the guard: `cp -al` builds the destination directory
+  # skeleton before it fails on the first unlinkable file — measured on this
+  # box, a cross-device `$dst` gets every subdirectory created and every file
+  # missing, `cp` exits nonzero, and `$dst` now EXISTS where a moment ago it
+  # did not. Falling back to `cp -a "$src" "$dst"` against that survivor nests
+  # the whole tree one level down (`$dst/$uuid/…`) exactly as the top-of-loop
+  # case does, leaving the real path full of empty directories — and because
+  # `$dst` now exists, EVERY later swap onto this account hits the top-of-loop
+  # guard and logs `(kept)`, permanently, never repairing it. The fallback
+  # therefore clears any partial `$dst` immediately before it copies.
+  #
+  # Success is read from `cp`'s own exit status, not `[[ -d "$dst" ]]`: a
+  # same-device partial failure (one unreadable member, ENOSPC, EMLINK) can
+  # leave `$dst` populated as a directory before `cp -al` reports failure, so
+  # a directory-existence check would read a half-linked tree as a clean
+  # success — and log `(link)` for a tree that is only partly shared. Clearing
+  # `$dst` before the fallback and always doing a full `cp -a` on ANY first-
+  # attempt failure means the logged mode never overstates what is shared:
+  # `(link)` only when the whole tree is hardlinks to `$src`, `(copy)`
+  # whenever any part of it needed a real copy.
+  #
+  # C-collated sort: no destination is ever contested (each sidecar's `pdir`
+  # comes from a distinct source project directory), so ordering never changes
+  # WHAT is carried — only the order of the swap.log lines a human reads
+  # afterward. Sorted anyway so that order is reproducible rather than a
+  # function of glob/readdir order, which is locale- and filesystem-dependent.
+  local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc
+  local -a sidecars=()
+  mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
+  (( ${#sidecars[@]} )) || return 0
+  for src in "${sidecars[@]}"; do
+    # Parameter expansion, not `basename "$(dirname …)"`: every munged project
+    # dir starts with `-`, and GNU basename would read it as options.
+    pdir="${src%/*}"; pdir="${pdir##*/}"
+    dst="$dstcfg/projects/$pdir/$uuid"
+    if [[ -e "$dst" ]]; then
+      echo "ccd: sidecar already present at $dst — left alone (not merged)" >&2
+      echo "$(date '+%F %T') sidecar $uuid -> $dst (kept)" >> "$REG/swap.log"
+      continue
+    fi
+    mkdir -p "$dstcfg/projects/$pdir"
+    mode=link
+    cp -al "$src" "$dst" 2>/dev/null; rc=$?
+    if (( rc != 0 )); then
+      mode=copy
+      # $dst may already exist here — a partial skeleton the failed `cp -al`
+      # left behind — and `cp -a` onto an existing $dst nests instead of
+      # landing at the real path. Clear it first every time, unconditionally.
+      [[ -e "$dst" ]] && rm -rf "$dst"
+      cp -a "$src" "$dst" 2>/dev/null; rc=$?
+    fi
+    if (( rc == 0 )); then
+      echo "$(date '+%F %T') sidecar $uuid -> $dst ($mode)" >> "$REG/swap.log"
+    else
+      echo "ccd: warn: could not carry sidecar $src -> $dst" >&2
+      # Do not leave a half-built $dst behind on total failure either: the
+      # top-of-loop existence check would read it as "already carried" and
+      # this sidecar would never be retried by a later swap.
+      [[ -e "$dst" ]] && rm -rf "$dst" 2>/dev/null
+    fi
+  done
+  return 0
+}
+
+_swap_beat() {   # id parent-pid — re-stamp `supervised` every SWAP_BEAT_INTERVAL while the carry runs.
+  # §4.2 says "the swap re-stamps AS IT GOES, and the window classifies as
+  # `restarting`", and it says so for a measured reason: §2.3's `cp -a` fallback
+  # over a 188MB sidecar can exceed the 120s freshness window. What shipped was
+  # two stamps, one before the carry and one after it, and nothing between —
+  # bracketing, not covering. Measured against the shipped ladder with a 200s
+  # carry: `restarting` while the window held, then `orphan` at 125s and again
+  # at 180s. So on exactly the carry the spec names, the row flipped to
+  # "orphan — nothing is watching it" MID-SWAP, with the PWA's revive
+  # affordance beside it — and a revive there
+  # runs `ccd ensure` -> `systemctl start` while `cmd_swap` is still copying and
+  # the registry `wrapper` still names the SOURCE account.
+  #
+  # A background stamper rather than a stamp inside the carry helpers, because
+  # the long pole is ONE `cp -a` call, not a loop: a per-file stamp would leave
+  # the 188MB copy exactly as uncovered as it is today.
+  #
+  # A LEAKED STAMPER WOULD BE A WORSE LIE THAN THE ONE IT FIXES — a row that
+  # heartbeats forever with nobody watching — so it is bounded twice over: it
+  # dies with its parent (`kill -0`, checked every tick BEFORE the stamp, so an
+  # orphan never claims a supervisor even once; it covers a `cmd_swap` killed
+  # mid-carry where the explicit `_swap_beat_stop` never runs) and it gives up
+  # after SWAP_BEAT_MAX ticks regardless. Both bounds are the same argument as
+  # the `120` in `_session_state`: nothing may claim to be watching for longer
+  # than it plausibly is.
+  #
+  # Both bounds, and the `_swap_beat_stop` on cmd_swap's REFUSAL arm, are pinned
+  # by server/test/ccd-swap.test.ts — named here because they were not: each of
+  # the three lines was deleted in turn during the final review and the whole
+  # 2585-test suite stayed green, which made this paragraph a safety claim
+  # nothing defended, the finding this branch has now made four times.
+  local id="$1" parent="$2" i=0
+  while (( i < SWAP_BEAT_MAX )); do
+    sleep "$SWAP_BEAT_INTERVAL"
+    kill -0 "$parent" 2>/dev/null || return 0
+    _reg_set "$id" supervised "$(date +%s)"
+    i=$((i + 1))
+  done
+}
+
+_swap_beat_stop() {   # pid — end the carry heartbeat. Safe on an empty/dead pid.
+  # `wait` after the kill so the shell reaps it rather than announcing
+  # "Terminated" into the middle of a swap's own output; both are swallowed
+  # because a stamper that already exited on its own bound is the normal case,
+  # not an error.
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 0
+}
+
+_swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot carry the
+  # conversation is refused, not completed (spec §2.4). A swap exists to MOVE a
+  # conversation; completing one with nothing found trades a session's entire history
+  # for a rate-limit reprieve, which is exactly the trade that made the 2026-08-11
+  # incident. Refusing keeps the session on an account that may be throttled but still
+  # holds its file, and puts a human in the loop.
+  #
+  # THREE channels, because the loudest one is the one nobody hears. The common
+  # invocation is from inside the session being swapped, where cmd_swap detaches a
+  # transient unit and returns 0 to its caller (see the systemd-run arm below) — the
+  # caller is dead, killed by this very swap, long before this function runs. So:
+  #   - $REG/<id>.swapblocked = "<epoch> <reason>" — the DURABLE one. It lands on the fleet
+  #     wire within one 2s watcher tick and renders on the row (spec M9): `readSession`
+  #     reads this field and `SessionRecord.swapBlocked` carries it (server/src/registry.ts).
+  #     Read back on this side too, by `_auto_swap_check`'s own back-off gate below.
+  #     Survives nobody watching, which /api/notify does not. (An earlier draft of this
+  #     comment said nothing under `server/` or `shared/` read the field — true when the
+  #     ccd half shipped first, false from the moment the server half landed on this same
+  #     branch, and flagged by two reviewers.)
+  #   - $REG/notify.sh — the banner for whoever IS watching; the same hook the successful
+  #     swap already fires, so it rides a pipeline that is deployed and working.
+  #   - $REG/swap.log — the forensic trail beside every other swap decision.
+  #
+  # This refusal is deliberately NOT written in any of the four literal emission shapes
+  # server/test/wsaudit.test.ts harvests out of this file (its header lists them). Those
+  # belong to the workspace audit/reap protocol, which answers a MACHINE over a closed
+  # vocabulary that must have a matching sentence in wsaudit.ts, in both directions. A
+  # swap refusal answers a human. Pinned by server/test/ccd-swap-refuse.test.ts so the
+  # choice survives whoever edits this next.
+  local id="$1" cur="$2" target="$3" reason="$4" restart="${5:-0}"
+  _reg_set "$id" swapblocked "$(date +%s) $reason"
+  echo "$(date '+%F %T') swap-refused $id: $cur -> $target ($reason)" >> "$REG/swap.log"
+  [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap BLOCKED: $id stays on $cur — $reason" >/dev/null 2>&1
+  # `lastswap` is CLEARED here, not merely left unwritten. On the AUTO-swap path
+  # (_auto_swap_check, both the hard-blocked rescue arm and the return-home arm) it is
+  # already stamped BEFORE `_dispatch_swap` ever runs — seconds before this function is
+  # reached — so "never write it" would not be enough on that path; a refusal has to
+  # retract a stamp that already landed. A refusal means no landing happened, so a
+  # `lastswap` claiming one is false for every one of its readers, not only `_spawn`
+  # (which would answer the big-transcript resume gate with "resume from summary" — an
+  # auto-compaction of exactly the history this refusal exists to protect): the same
+  # false stamp makes `_auto_compact_check` skip a compaction on the grounds that "a
+  # swap landing already compacted from summary" (untrue after a refusal), and it would
+  # also re-arm `_auto_swap_check`'s own 900s SWAP_COOLDOWN gate — moot regardless,
+  # since the 1800s swapblocked gate this task added is strictly longer, but a stale
+  # `lastswap` is still a lie sitting in the registry. Plain removal, not back-dating:
+  # there is no old value worth preserving once a swap has been refused, and every
+  # window that reads `lastswap` is minutes wide, so deleting a genuinely old one costs
+  # nothing either.
+  rm -f "$REG/$id.lastswap"
+  if [[ "$restart" == 1 ]]; then
+    # Registry `wrapper` was never touched, so this puts the session back exactly where
+    # it was: same account, same unit, still holding its file. Same `|| cmd_ensure`
+    # fallback the successful swap's own tail uses for a box with no unit installed.
+    #
+    # AND IT MUST NOT ERASE THE MARKER IT JUST WROTE. The pane is already dead —
+    # `cmd_swap` killed it two lines before calling this — so `cmd_ensure` sails
+    # past its own `_alive` early return straight into the `swapblocked` clear.
+    # Measured before this line existed: the field above was gone by the time
+    # this function returned, `lastswap` was deliberately cleared, BOTH of
+    # `_auto_swap_check`'s gates were therefore open, and the next supervise tick
+    # re-dispatched. Run against the real dispatcher rather than a logging stub,
+    # ten ticks gave ten refusals, ten banners, ten swap.log lines and ten rounds
+    # of `systemctl stop` + `tmux kill-session` on a live session — the exact
+    # storm SWAPBLOCK_COOLDOWN exists to prevent, plus a kill loop. Dynamically
+    # scoped, so the in-process `cmd_ensure` below sees it and nothing else does;
+    # the unit's own `cmd_supervise` -> `cmd_ensure`, a different process
+    # entirely, is covered by cmd_ensure's CCD_IN_UNIT guard instead.
+    local CCD_KEEP_SWAPBLOCK=1
+    # TWO realistic reasons that `start` fails, and the second is this build's own
+    # doing: (a) no unit installed — what the `|| cmd_ensure` fallback is for; and
+    # (b) the unit is `failed` and rate-limited by §3.3's StartLimitIntervalSec/
+    # StartLimitBurst, which is precisely why `_supervised_start` carries a
+    # reset-failed. A refusal's restart is a revival too, and needs the same key.
+    systemctl --user reset-failed "claude-session@$id" 2>/dev/null
+    systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
+  fi
+  echo "ccd: refusing to swap $id: $reason — it stays on $cur. If there is genuinely nothing to carry: ccd swap --force $id $target" >&2
+  return 1
+}
+
+cmd_swap() {   # [--force] id target-wrapper — move a session to another account, conversation intact.
+  # Transcripts are plain JSONL with no account binding (validated 2026-07-03): carry the
+  # session's transcripts into the target config dir, flip the registry wrapper, restart.
   # Manual swaps may target ANY valid wrapper; the pool policy only constrains auto-swaps.
-  local id="${1:?usage: ccd swap <id> <target-wrapper>}" target="${2:?usage: ccd swap <id> <target-wrapper>}"
+  #
+  # Flags are stripped BEFORE the positional parse, so `ccd swap <id> <target> --force`
+  # and `ccd swap --force <id> <target>` mean the same thing and neither lets "--force"
+  # land in $1 or $2 — the same rule §4.1 needs for `ccd stop --surface`, applied here for
+  # the same reason. `--force` is an operator's word and stays one: _auto_swap_check never
+  # passes it and no CCD_ARGV entry builds it, so no server route can reach it; and
+  # _is_valid_wrapper rejects the literal, which is the second lock on the target slot.
+  local force="" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --)      shift; args+=("$@"); break ;;
+      *)       args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"    # bash >= 4.4 (the fleet host runs 5.2): an empty array here is
+                         # not an unbound-variable error under `set -u`.
+  local id="${1:?usage: ccd swap [--force] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
   [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
   # Invoked from inside the session being swapped (Claude's own Bash tool)? The swap kills
-  # its caller mid-flight — detach an orphan to finish the job after we return.
+  # its caller mid-flight — detach an orphan to finish the job after we return. The
+  # detached process re-enters this function and runs the pre-flight itself; its refusal
+  # reaches the operator through swapblocked + notify.sh, never through this return code,
+  # which nothing is waiting for by then. --force rides along or the detached retry would
+  # silently drop the operator's decision.
   if [[ -n "${TMUX:-}" && "$(tmux display-message -p '#S' 2>/dev/null)" == "$(_tmux "$id")" && -z "${CCD_SWAP_DETACHED:-}" ]]; then
-    systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap '$id' '$target' >>'$REG/swap.log' 2>&1"
+    # THE systemd-run's OWN EXIT STATUS IS THE ONLY EVIDENCE THIS ARM EVER GETS,
+    # and it used to be discarded: measured, `systemd-run` returning 1 printed
+    # the confident `detached: …` line below, returned 0, and recorded NOTHING —
+    # no swap.log line, no swapblocked, no banner, `wrapper` unchanged. This is
+    # the COMMON invocation (a session swapping itself from its own Bash tool),
+    # and `_dispatch_swap`, the auto-path twin, has carried the matching
+    # `|| echo "… dispatch FAILED …"` guard all along.
+    #
+    # Not routed through `_swap_refuse`, deliberately. Nothing was torn down —
+    # the pane is alive and the caller is READING THIS — so the strongest
+    # channel here is exactly the one the successful-detach case cannot use: a
+    # non-zero rc and a line on stderr. A `swapblocked` stamp would also be a
+    # lie about the cause (the conversation was never even looked for) and would
+    # gate a legitimate auto-rescue for the next SWAPBLOCK_COOLDOWN seconds over
+    # a failure that has nothing to do with carrying it.
+    if ! systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} '$id' '$target' >>'$REG/swap.log' 2>&1"; then
+      echo "$(date '+%F %T') detach FAILED for $id: $cur -> $target (systemd-run)" >> "$REG/swap.log"
+      echo "ccd: could not detach the swap of $id ($cur -> $target): systemd-run failed. Nothing was moved and this session is untouched — retry from OUTSIDE the session: ccd swap ${force:+--force }$id $target" >&2
+      return 1
+    fi
     echo "detached: $id will restart under $target in a few seconds (this session dies with the swap — that's expected)"
     return 0
   fi
@@ -7293,27 +8238,96 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
   srccfg=$(_cfg_dir "$cur"); dstcfg=$(_cfg_dir "$target")
   [[ -n "$srccfg" && -n "$dstcfg" ]] || die "no config-dir mapping for '$cur' -> '$target'"
   mdir=$(echo "$wd" | tr '/._' '---')
+  # PRE-FLIGHT — advisory, and it runs BEFORE the teardown. The glob is a read, so a
+  # refusal here costs nothing and leaves the session alive on the account that still
+  # holds its file; the pre-fix order looked only after stopping the unit and killing the
+  # pane, so a miss produced a session that was dead AND historyless. Advisory rather than
+  # authoritative because the file the swap actually carries is the one that exists after
+  # Claude Code has flushed below.
+  if [[ -z "$force" && -z "$(_transcript_matches "$srccfg" "$uuid")" ]]; then
+    _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur" 0
+    return 1
+  fi
   systemctl --user stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null
   sleep 1                                                  # let claude flush its final transcript entries
-  if [[ -f "$srccfg/projects/$mdir/$uuid.jsonl" ]]; then
-    mkdir -p "$dstcfg/projects/$mdir"
-    cp "$srccfg/projects/$mdir/$uuid.jsonl" "$dstcfg/projects/$mdir/"
-    # An external lane -> an Anthropic one: the Codex lane (via LiteLLM) writes
-    # assistant messages with EMPTY text blocks, which the Anthropic API rejects on
-    # the next turn ("text content blocks must be non-empty" -> every turn 400s).
-    # Fill them so the resumed session is valid. Anthropic -> Anthropic needs no
-    # fixup, and neither does a move ONTO an external lane. Keyed on home-ability
-    # rather than on the name `gpt` for the same reason as everything else here —
-    # a non-home-able account is the opt-in external backend by definition — and
-    # sanitizing is safe in the over-eager direction anyway: it only rewrites text
-    # blocks that are already empty.
-    if ! _is_home_able "$cur" && _is_home_able "$target"; then
-      _sanitize_anthropic "$dstcfg/projects/$mdir/$uuid.jsonl"
+  # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
+  # not alive and, after 120 seconds, would also stop looking watched — and
+  # §2.3's `cp -a` fallback over a 188MB sidecar can take that long. Stamped
+  # here, re-stamped every SWAP_BEAT_INTERVAL by `_swap_beat` for as long as the
+  # carry runs, and stamped once more below, so the window classifies
+  # `restarting` throughout — which is exactly what it is. Note the swap does
+  # NOT write `.stopped`: it is not a deliberate stop, which is why it goes
+  # round `_ws_unsupervise` rather than through it.
+  _reg_set "$id" supervised "$(date +%s)"
+  # Started BEFORE the first byte moves and stopped on every path out of the
+  # carry — the success tail below, and the refusal arm inside the `if`, which
+  # stops it before `_swap_refuse` runs so a refused swap leaves nothing behind
+  # claiming to watch the row it just gave up on.
+  local beat=""
+  _swap_beat "$id" "$$" & beat=$!
+  # AUTHORITATIVE. Two things changed across that sleep and both matter. The transcript
+  # gained the session's final entries — for a session being moved mid-turn, the most
+  # valuable lines in it, which is the whole reason the sleep exists. And the uuid may
+  # have ROTATED: a /clear does not delete the file, it mints a new uuid, and _sync_uuid
+  # writes that into the registry — so a swap that pre-flighted uuid-A can arrive here
+  # owning uuid-B. Re-read it; uuid-B is the one the resumed session will ask for.
+  #
+  # An external lane -> an Anthropic one: the Codex lane (via LiteLLM) writes
+  # assistant messages with EMPTY text blocks, which the Anthropic API rejects on
+  # the next turn ("text content blocks must be non-empty" -> every turn 400s).
+  # Fill them so the resumed session is valid. Anthropic -> Anthropic needs no
+  # fixup, and neither does a move ONTO an external lane. Keyed on home-ability
+  # rather than on the name `gpt` (merged from main, whose roster-becomes-data
+  # refactor made the literal wrong): a non-home-able account is the opt-in
+  # external backend by definition — and sanitizing is safe in the over-eager
+  # direction anyway, since it only rewrites text blocks that are already empty.
+  #
+  # The carry runs it on the COPY and BEFORE the hardlinks, because
+  # _sanitize_anthropic rewrites through os.replace and that breaks links. That
+  # ordering is this branch's (§2.2) and is why the decision is passed DOWN as a
+  # flag rather than applied here: main applied it to one guessed path, and there
+  # is no longer one path — there is every match the uuid has under the source
+  # account, which is the defect this task exists to close.
+  uuid=$(_reg_get "$id" uuid)
+  local sanitize=0
+  # `if` rather than the old `[[ … ]] && sanitize=1` one-liner: `!` binds to the
+  # PIPELINE it precedes, not to the `&&` list, so the inline form's precedence
+  # is a thing a reader has to know rather than see. Behaviour verified below.
+  if ! _is_home_able "$cur" && _is_home_able "$target"; then sanitize=1; fi
+  local carry_rc=0
+  _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize" || carry_rc=$?
+  if (( carry_rc != 0 )); then
+    local reason
+    # rc 1 covers two different causes it does not distinguish in its own return code:
+    # nothing matched this uuid at all, OR matches existed and every copy failed (a full
+    # disk, an EACCES). Ask _transcript_matches again — cheap, a read, and nothing on disk
+    # has changed since the carry attempt — so the operator reading swap.log/the banner is
+    # pointed at the right cause instead of always being told "not found" when the real
+    # problem was a copy that failed. rc 2 needs no such probe: the carry already knows
+    # exactly what happened and says so.
+    if (( carry_rc == 2 )); then
+      reason="transcript found for $uuid under $cur but the copy to $mdir failed — the directory the resumed session reads first"
+    elif [[ -n "$(_transcript_matches "$srccfg" "$uuid")" ]]; then
+      reason="transcript found for $uuid under $cur but every copy failed"
+    else
+      reason="no transcript found for $uuid under $cur after flush"
     fi
-  else
-    echo "ccd: warn: transcript $uuid.jsonl not found under $cur config; session may resume without history" >&2
+    if [[ -z "$force" ]]; then
+      # Registry `wrapper` is still $cur — nothing has been flipped — so _swap_refuse's
+      # restart puts the session back on the account that still holds its history.
+      _swap_beat_stop "$beat"
+      _swap_refuse "$id" "$cur" "$target" "$reason" 1
+      return 1
+    fi
+    # The forced warning carries the SAME sentence, for the same reason the refusal does:
+    # `--force` means the operator accepted a swap they were told about, and "no transcript
+    # for $uuid" was the wrong thing to tell them whenever a copy had in fact been found.
+    echo "ccd: warn: $reason; --force: $id resumes anyway" >&2
   fi
+  # Unconditional, and separate: sidecars are globbed in their own right and
+  # exist in project dirs that hold no .jsonl for this uuid at all.
+  _swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"
   # The task list lives at <configdir>/tasks/<uuid>/ and is keyed by config dir,
   # so a swap orphans it under the OLD account: the resumed session forgets its
   # plan entirely (seen 2026-07-26 — custom-tools kept 8 task files under
@@ -7325,9 +8339,17 @@ cmd_swap() {   # id target-wrapper — move a session to another account, conver
     cp -r "$srccfg/tasks/$uuid" "$dstcfg/tasks/" 2>/dev/null \
       || echo "ccd: warn: could not carry the task list across to $target" >&2
   fi
+  # THE CARRY IS OVER — every file that was going to move has moved — so the
+  # heartbeat stops here, before the registry is flipped. What follows is
+  # milliseconds of `_reg_set`, and the final stamp below covers the restart.
+  _swap_beat_stop "$beat"
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
+  rm -f "$REG/$id.swapblocked"   # a completed swap supersedes an earlier refusal: a
+                                 # banner left standing on a row that just worked teaches
+                                 # the operator to ignore banners.
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
+  _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
   systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   # Optional user notification (swap kills any attached remote session — give them a ping).
   # Drop an executable ~/.cc-sessions/notify.sh taking the message as $1 (curl to a Discord
@@ -7354,18 +8376,53 @@ cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps 
   echo "home for $id set to $w"
 }
 
-cmd_enable() {   # start (if needed) + make boot-persistent + supervise now
-  local wrapper="${1:?}" project="${2:?}" workdir="${3:-}"
-  cmd_start "$wrapper" "$project" "$workdir"
-  local id; id=$(_id "$wrapper" "$project")
-  if systemctl --user enable --now "claude-session@$id" 2>/dev/null; then
-    echo "enabled boot-persistence for $id"
-  else
-    echo "warn: could not enable systemd unit (lingering/unit installed?)" >&2
-  fi
+cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
+  # Behaviorally an ALIAS of cmd_start since §3.1 — the start path itself is
+  # `systemctl --user enable --now`, so there is no second act left for this verb to perform beyond
+  # the boot-persistence confirmation line below. It keeps its name because the agent whitelist and
+  # CCD_ARGV grant `enable` and `start` separately, and whitelist-subset.test.ts layer 3 fails on a
+  # grant no route builds. §3.4 gives it the same one-argument id form as `start` — it takes the
+  # SAME two shapes, so it needs its own usage line rather than borrowing start's, or a mistyped
+  # `ccd enable` would answer as a verb the operator did not type.
+  [[ $# -ge 1 ]] || die "usage: ccd enable <id> | ccd enable <wrapper> <project> [workdir]"
+  # The id is computed the same way cmd_start computes it — never trusted from
+  # a raw argument — so this line names the row cmd_start actually touched,
+  # even on the two-argument form once the registry's wrapper has won.
+  local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
+  cmd_start "$@" || return $?
+  echo "enabled boot-persistence for $id"
 }
 
-cmd_stop() {   # <id>  |  <wrapper> <project>
+cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <project>
+  # FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order is the whole
+  # correctness argument. `$# -ge 2` means wrapper-plus-project, so with the
+  # flag left in argv `ccd stop <id> --surface pwa` reads as a two-argument
+  # stop and `_id` mints `<id>---surface` — aiming the stop at a session that
+  # does not exist while the real one keeps running.
+  #
+  # The surface arrives as an argv flag because nothing else can carry it: the
+  # exec seam is `(cmd, args) => Promise<ExecResult>` with no env, and the
+  # agent's wire ExecReq carries {cmd, args, timeoutMs} and nothing else — a
+  # CCD_SURFACE variable would report the server process's own environment,
+  # identically for every caller in the fleet.
+  #
+  # cmd_stop's OWN default is `cli`, not _ws_unsupervise's `ccd`: a session
+  # shelling `ccd stop` from its own Bash tool passes no flag, and `cli` is
+  # exactly what that looks like from the box.
+  local surface=cli args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates.
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
+                   surface="$2"; shift 2 ;;
+      --surface=*) surface="${1#--surface=}"; shift ;;
+      *)           args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"
+
   # The two-argument form is the legacy one and recomputes `<wrapper>-<project>`.
   # That only works for ids that ENCODE a wrapper; a workspace id is
   # `<project>-<slug>`, so a caller forced to reverse one guesses a wrapper and
@@ -7376,10 +8433,14 @@ cmd_stop() {   # <id>  |  <wrapper> <project>
     local wrapper="${1:?}" project="${2:?}"
     id=$(_id "$wrapper" "$project")
   else
-    id="${1:?usage: ccd stop <id> | ccd stop <wrapper> <project>}"
+    id="${1:?usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>}"
   fi
-  systemctl --user disable --now "claude-session@$id" 2>/dev/null \
-    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
+  # Through the choke point, never around it: the inlined `systemctl --user
+  # disable --now` this replaces was the one stop path in the file that left
+  # no record, which is how a deliberate stop became indistinguishable from a
+  # crash (§4.1). The pane kill stays HERE rather than moving inward, because
+  # every other call site already runs these two as a pair.
+  _ws_unsupervise "$id" "$surface"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
   echo "stopped $id"
 }
@@ -7426,15 +8487,22 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
 }
 
 cmd_ls() {
-  printf '%-28s %-12s %-6s %s\n' "ID" "WRAPPER" "ALIVE" "WORKDIR"
+  # STATE, not ALIVE: `no` was one word for three different facts — a session
+  # somebody deliberately stopped, one that died with nothing watching it, and
+  # a row that never had a session at all (§4.4). The column is 13 wide because
+  # `never-started` is 13 characters. Nothing parses this output — no server,
+  # agent or pwa caller shells `ccd ls`, and `cmd_menu` formats its own list —
+  # so the rename costs no parser. The gpt trailer below is a different matter:
+  # its exact strings are pinned by ccd-limits.test.ts and are not touched here.
+  printf '%-28s %-12s %-13s %s\n' "ID" "WRAPPER" "STATE" "WORKDIR"
   local f id; shopt -s nullglob
   local files=("$REG"/*.uuid)
   [[ ${#files[@]} -eq 0 ]] && { echo "(no sessions)"; return 0; }
   local gpt_here=0
   for f in "${files[@]}"; do
-    id=$(basename "$f" .uuid); local alive=no; _alive "$id" && alive=yes
+    id=$(basename "$f" .uuid); local state; state=$(_session_state "$id")
     local w; w=$(_reg_get "$id" wrapper); [[ "$w" == gpt ]] && gpt_here=$((gpt_here+1))
-    printf '%-28s %-12s %-6s %s\n' "$id" "$w" "$alive" "$(_reg_get "$id" workdir)"
+    printf '%-28s %-12s %-13s %s\n' "$id" "$w" "$state" "$(_reg_get "$id" workdir)"
   done
   # The one place a lane is still named, and deliberately: `_gpt_status`'s prose
   # reads Codex's own telemetry shape (ccgpt-usage's JSON, "Codex weekly cap"),

@@ -232,6 +232,46 @@ export function SessionActionsSheet({
             {restarting ? 'Restarting…' : 'Restart session'}
           </button>
 
+          {/* §4.4: "what would revive it" is a sentence the row can print and
+              a button the operator already has. The button above posts
+              POST /api/sessions/:id/ensure (`restart()`, this file) — already
+              keyed by id, already whitelisted, already ungated by decision —
+              and §3.1 made `ensure` restore supervision, so it needs no new
+              argv, no new grant and no new caps line. The note names the
+              terminal spelling too, because §3.4's operator (the one who read
+              the account off the board and minted a DIFFERENT id) is exactly
+              who needs the one-argument form. */}
+          {session.lifecycle === 'orphan' && (
+            <p className="sess-sheet-note">
+              {`Nothing is watching this session — no supervisor, so no auto-swap, no auto-compact and no record when it dies. Restart session revives it: the same thing ccd start ${session.id} does at a terminal.`}
+            </p>
+          )}
+
+          {/* The OTHER state with the same remedy and a different sentence
+              (final review, Important 2). `unsupervised` is a LIVE pane with
+              no supervisor — on deploy day, every pane a pre-fix `ccd start`
+              minted, which is D2's entire population — and until the ccd lane
+              landed `_resupervise_live` it had no revive path at all: this
+              button posted `/ensure`, `cmd_ensure` early-returned on the live
+              pane, and the sheet closed having done nothing. It now emits
+              `reset-failed` + `enable --now` and the row afterwards reads
+              `running`; a row already `running` stays the cheap no-op, which
+              is why no note appears there.
+
+              A SEPARATE sentence, not a widened gate on the orphan's. That
+              one is written for a pane that is GONE ("nothing is watching
+              this session"), and shown over a live session it reads as "your
+              session is dead" with a button that reads as "this restarts my
+              work". Neither is true here: `enable --now` adopts the running
+              pane rather than spawning beside it (ccd's own comment, measured
+              by `ccd-supervised-start.test.ts`'s no-second-pane pin), so
+              nothing is interrupted and no history moves. */}
+          {session.lifecycle === 'unsupervised' && (
+            <p className="sess-sheet-note">
+              {`This pane is running, but nothing is supervising it — no auto-swap, no auto-compact and no record when it dies. Restart session adopts the running pane: nothing is restarted and nothing in the conversation is lost. The same thing ccd start ${session.id} does at a terminal.`}
+            </p>
+          )}
+
           <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}>
             Swap account
           </button>

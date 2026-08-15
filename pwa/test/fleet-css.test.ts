@@ -293,9 +293,97 @@ describe('selection is polarity, status is hue', () => {
     expect(declValue(ruleFor(last), 'color')).toBe('var(--edge-strong)');
     const group = selectorsOf(css, last);
     for (const cell of ['.sess-meta', '.sess-state', '.sess-tally', '.sess-warn',
-                        '.sess-acct', '.sess-acct-away']) {
+                        '.sess-acct', '.sess-acct-away',
+                        // Final review, Minor 3. These four take their OWN
+                        // `color: var(--ink-tertiary)` (one shared rule for
+                        // the first three, its own for .sess-unmeasured), and
+                        // a child's own colour beats the colour it would
+                        // inherit from .sess-meta — so being absent from this
+                        // group left them painting ink-tertiary on the
+                        // --ink-primary slab: 2.72:1 dark / 2.91:1 light,
+                        // against this repo's 4.5:1 body floor. Measured with
+                        // design/audit.mjs's own resolver, the same engine
+                        // the gate uses; --edge-strong gives 9.27 / 9.91.
+                        //
+                        // .sess-held was the original omission and shipped on
+                        // main; .sess-lifecycle and .sess-swapblocked joined
+                        // its rule on this branch and inherited the bug,
+                        // which widened it — .sess-lifecycle renders on every
+                        // non-running row, and the operator this branch
+                        // serves selects the dead row precisely to read
+                        // "stopped by agent, 2d ago".
+                        '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
+                        '.sess-unmeasured']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
+  });
+
+  // The list above names cells; this names the RULE that keeps producing them.
+  // Three separate cells have now been stranded on the selected slab by the
+  // same move — add a meta cell, give it a colour, forget the achromatic
+  // group — and a hand-written membership list only ever catches the ones
+  // somebody remembered to type into it. contrast-check.mjs does not catch it
+  // either: it prices the group's own pair (--edge-strong on --ink-primary)
+  // and has no way to know a cell is missing FROM the group.
+  //
+  // So the census reads the row's own source. Every `sess-…` class
+  // SessionLine.tsx actually renders, that fleet.css gives a colour of its
+  // own, must be answered by a `.sess-line--active` rule that sets a colour —
+  // the achromatic group for most of them, .sess-actions' own dedicated rule
+  // for the ··· button. `color: inherit` is already an answer (the flip is
+  // what it inherits). A modifier is covered by its base class, and that is
+  // specificity, not hand-waving: `.sess-line--active .sess-state` is (0,2,0)
+  // and `.sess-state--waiting` is (0,1,0), so the ancestor-qualified rule wins
+  // wherever it sits in the file.
+  //
+  // What it cannot see is an INLINE style, which beats every selector short of
+  // !important — .sess-acct's account hue is dropped in the component for
+  // exactly that reason (SessionLine.tsx's `acctStyle`). That one is a TSX
+  // decision and stays pinned there.
+  it('leaves no coloured cell on the row without an answer on the slab', () => {
+    const tsx = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'SessionLine.tsx'), 'utf8');
+
+    // `className="a b"` and `` className={`a b--${x}`} `` alike; the
+    // interpolation is stripped, leaving the `sess-state--` PREFIX, which is
+    // expanded below into every modifier the stylesheet declares for it.
+    const rendered = new Set<string>();
+    for (const m of tsx.matchAll(/className=[{]?[`"']([^`"']*)[`"']/g)) {
+      for (const c of (m[1] ?? '').replace(/\$\{[^}]*\}/g, '').split(/\s+/)) {
+        if (c.startsWith('sess-')) rendered.add(c);
+      }
+    }
+    // A prefix left by an interpolation stands for every class the stylesheet
+    // actually declares under it, so the three .sess-state--* modifiers are
+    // censused rather than skipped.
+    for (const prefix of [...rendered].filter((c) => c.endsWith('--'))) {
+      rendered.delete(prefix);
+      for (const m of css.matchAll(new RegExp(`\\.(${prefix}[a-z0-9-]+)`, 'g'))) {
+        rendered.add(m[1] ?? '');
+      }
+    }
+    // The row itself is the ground, not a cell on it.
+    rendered.delete('sess-line');
+    rendered.delete('sess-line--active');
+    expect(rendered.size).toBeGreaterThan(15); // the extraction still works
+
+    const colorOf = (sel: string): string | null => {
+      try {
+        return declValue(ruleIn(css, sel), 'color');
+      } catch {
+        return null; // no such rule: nothing to strand
+      }
+    };
+    const base = (c: string): string => c.slice(0, c.indexOf('--') + 2 || undefined);
+
+    const stranded = [...rendered].sort().filter((c) => {
+      const own = colorOf(`.${c}`);
+      if (own === null || own === 'inherit') return false;
+      const answered = colorOf(`.sess-line--active .${c}`)
+        ?? (c.includes('--') ? colorOf(`.sess-line--active .${base(c).slice(0, -2)}`) : null);
+      return answered === null;
+    });
+    expect(stranded).toEqual([]);
   });
 
   it('gives the lamp a --bg-well plate so its dot keeps the hue it was gated on', () => {
