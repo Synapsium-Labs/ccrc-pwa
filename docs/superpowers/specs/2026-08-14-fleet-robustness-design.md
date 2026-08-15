@@ -19,6 +19,31 @@ accounts by a 5-second poll that never looks at the hold (§3.3).
 One sentence for the whole build: **the fleet must never end up in a state that only a human at a
 terminal can recognise or repair.**
 
+**The operator's directive of 2026-08-15 sets the priority explicitly** — *"the main thing is to build
+the system that prevents reoccurrences of similar class of issues"*, with `swift-harbor` itself accepted
+as unrepaired and a one-time fix available if wanted. So this build is judged on the class, not the
+instance. The class, stated so it can be designed against:
+
+> **A fleet mutation is interrupted partway and leaves durable state that no read-only verb can name,
+> while every existing surface reports the fleet healthy.**
+
+F8 is one member. The grounding pass found **six more on the live box** — three sessions with no systemd
+unit at all, three units running but not boot-persistent, three registry rows whose pane is gone, eight
+worktrees with no registry row, two live workspaces whose registry `.branch` disagrees with git HEAD, and
+zero holds against a coordination database that believes it owns claims. Not one of those is visible to
+`ls`, `ws-audit`, `ws-gc` or `ensure`. Fixing F8 alone would leave the class untouched.
+
+The doctrine this build adds, which future mutations inherit:
+
+> **Every fleet mutation that creates durable state must write its claim before it blocks, and must
+> leave a residue that a read-only verb can NAME.** A mutation whose interruption produces a state no
+> verb can name is a defect, not an edge case.
+
+§1.1–§1.5 and §1.7 are the first half (write the claim before you block). **§1.6 is the second half and
+is the mechanism that makes the doctrine enforceable rather than aspirational** — a divergence census
+that new classes are added *to*, so the next bug of this shape becomes a row in a table instead of a
+bespoke chip nobody generalises from.
+
 ## Evidence base
 
 Every claim below comes from a five-agent measurement pass run on 2026-08-14 against the live fleet host
@@ -310,30 +335,86 @@ precondition, and the comment says so in the same words.
 `routes.ts:796` runs `dispatchRun` inside `coordMutex.run(...)`, which serialises open/dispatch/close/
 advance/settle server-wide, so at most one dispatch is ever in flight.)*
 
-### 1.6 `started` and `spawnState` reach the wire
+### 1.6 The divergence census — the class gets a name, a home, and a test
 
-`SessionRecord.started` is parsed (`registry.ts:18,282,317`) and consumed by **nothing** — it is absent
-from `FleetSession`, so the one bit that distinguishes an orphan is measured every snapshot and thrown
-away. `FleetSession` gains `started: boolean` and `spawnState: SpawnState | null`, revived through
-`reviveFleetSession` (which returns a literal, so a new field is a compile error until every path
-computes it — the wire rule doing its job).
+**This section was a chip. Per the operator's 2026-08-15 directive it becomes the mechanism the build is
+judged on.** A chip for F8 would have shipped detection for one member of a seven-member class and
+taught the codebase nothing about the other six.
 
-`SPAWN_STATES` is derived from the map, not hand-listed, and lands in `shared/api.ts`. **It does not
-get single-definition protection for free:** `server/test/single-definition.test.ts` has no generic
+**The census is a pure function, and almost all of its inputs are already measured.** That is the
+finding that makes this cheap: `FleetWatcher` already calls `tmux.hasSession(r.id)` for every row
+(`fleet.ts:186`), already reads git refs through `readBranchTip` (`coord/gitref.ts`), and already holds
+the full `SessionRecord[]`. Wave 2 adds open-run knowledge. The only fact nothing can currently see is
+systemd unit state — `EXEC_COMMANDS = ['tmux','ccd']` (`whitelist.ts:134`), so the server cannot run
+`systemctl` and must not learn to.
+
+    // L1, pure: no fs, no fastify, no reply. One home, one test per class.
+    divergences(records, alive, refs, units, openRuns): Divergence[]
+
+`DIVERGENCE_KINDS` is derived from the map in L0 `shared/api.ts`, enumerated once, with its own describe
+in `single-definition.test.ts` (§1.6's earlier claim that this comes free was wrong — see the audit
+trail). The seven classes, each measured live on 2026-08-15:
+
+| kind | condition | live count | repair |
+|---|---|---|---|
+| `unclaimed-session` | registered, pane alive, `started` absent | **1** | `ccd ensure` adopts (F8) |
+| `dead-row` | registered, `started=1`, **no pane** | **3** | respawn or archive — the **opposite** of adopt |
+| `unsupervised` | pane alive, no unit loaded at all | **3** | `_ws_supervise` |
+| `not-boot-persistent` | unit active, not enabled | **3** | `systemctl --user enable` |
+| `branch-drift` | registry `.branch` ≠ git HEAD in the worktree | **2 live** (6 more archived) | reconcile before a done-fingerprint trusts it |
+| `unregistered-worktree` | worktree with no registry row | **8** | ws-gc's `orphan`; human-only |
+| `claim-divergence` | hold without an open run, or open run whose session has no hold | 0 today | Wave 2 supplies the inputs |
+
+**`dead-row` earns its own line because it proves the point.** Three rows carry `started=1` with no pane,
+and adopt-and-enable — the repair this build's ruling names — is *wrong* for them: they do not need a
+claim written, they need a process. A single-class fix would have applied the wrong repair to a class it
+could not distinguish. The census exists so the distinction is structural.
+
+**What ccd owes it: three fields `ws-audit` structurally lacks.** `_alive` appears nowhere in
+`cmd_ws_audit` or `_ws_reap_eval` (measured), so the audit document — the one artifact whose *job* is
+answering "what is the state of this workspace" — carries no liveness, no `started`, and no unit state.
+`ws-audit` gains `alive`, `started`, and `unit: 'enabled'|'loaded'|'absent'`. **They must be computed
+before `_ws_reap_eval`'s early refusal**, which today returns `not-archived` and leaves every downstream
+field null — that refusal is exactly the shape that made the F8 orphan invisible to the audit. The verb
+stays read-only and its grant is unchanged: `['ws-audit','--session']` is already whitelisted
+(`whitelist.ts:337`), so this adds **no exec surface**.
+
+**What reaches the wire.** `FleetSession` gains `started: boolean` and `spawnState: SpawnState | null`
+(both revived through `reviveFleetSession`, whose literal return makes a missing field a compile error),
+plus the row's `divergence: DivergenceKind | null`. `SessionRecord.started` is parsed today
+(`registry.ts:18, 282, 317`) and consumed by **nothing** — the one bit distinguishing an orphan is
+measured every snapshot and thrown away.
+
+**The PWA surface stays modest deliberately:** the per-row chip is the census's projection, not a
+parallel implementation, with `null` meaning *no divergence* and the `spawnState: null` / `started ===
+false` handling of Part II's "PWA surface" section. A fleet-level census list is a natural follow-on and
+is **not** in this wave.
+
+**The enforcement clause, which is what makes this a mechanism rather than a report:** a new fleet
+mutation is not done until its interrupted state is either impossible or named in `DIVERGENCE_KINDS`.
+The `single-definition` describe makes a second copy of the enum a red suite; the per-class tests make a
+deleted class a red suite. That is the doctrine from the Goal, given teeth.
+
+### 1.6b The enum discipline both new vocabularies need
+
+`SPAWN_STATES` and `DIVERGENCE_KINDS` are each derived from their map, not hand-listed, and each lands
+in L0 `shared/api.ts`. **Neither gets single-definition protection for free:** `server/test/single-definition.test.ts` has no generic
 scanner — it is hand-written per concept, each with its own literal regex and its own `it` (`RunState`
 at `:263-267`, `MAIL_REJECT_CODES` at `:268-272`, `WORK_ITEM_*` at `:287-293`). Wave 1 must **add** a
-describe in that same Build-7-nouns idiom (`/^\s*export const SPAWN_STATES\b/m` scoped to
-`['shared/api.ts']`, plus a derivation assertion, plus a member-enumeration scan — the four state
-tokens also appear in ccd's bash). Otherwise the guard this section leans on does not exist.
+describe **per vocabulary** in that Build-7-nouns idiom (`/^\s*export const SPAWN_STATES\b/m` and
+`/^\s*export const DIVERGENCE_KINDS\b/m`, each scoped to `['shared/api.ts']`, each with a derivation
+assertion and a member-enumeration scan — the spawn tokens also appear in ccd's bash). Otherwise the
+guard §1.6's enforcement clause leans on does not exist, which was an error in an earlier draft.
 
-The PWA renders one chip — and **the naive rule lights all 18 healthy sessions.** `spawnstate` is a new
-registry field, so every pre-existing row revives `spawnState: null`, and "not `ready`" is true of `null`.
-`null` means *not recorded*, explicitly, pinned by a fixture row with no `spawnstate` file.
+The per-row chip is the census's projection, and **the naive rule lights all 18 healthy sessions.**
+`spawnstate` is a new registry field, so every pre-existing row revives `spawnState: null`, and "not
+`ready`" is true of `null`. `null` means *not recorded*, explicitly, pinned by a fixture row with no
+`spawnstate` file.
 
-**The rule must also read `started`, and that arm is not optional:** `swift-harbor` — the specimen this
-build exists for — has **no `spawnstate` at all**, so `spawnState` can never flag it and `started` is the
-only signal its shape emits. Putting `started` on `FleetSession` with no reader would repeat, one ring
-out, the exact defect this section opens by complaining about.
+**The rule must also read `started`, and that arm is not optional:** `swift-harbor` has **no
+`spawnstate` at all**, so `spawnState` can never flag it and `started` is the only signal its shape
+emits — which is precisely why the census keys on the *class*, `unclaimed-session`, rather than on any
+single field.
 
     spawnChip = dead                                         ? null
               : spawnState !== null && spawnState !== 'ready' ? SPAWN_WORD[spawnState]
@@ -839,14 +920,14 @@ stated so any of them can be overturned in one sentence:
    guards. The honest-label alternative fixes the lying control for free. One word pulls it back in.
 3. **Q6, implicitly settled by the ruling:** "roll back" is off the table; `ws-add` never deletes its own
    fresh work.
-4. **This build does NOT repair `swift-harbor`, and that contradicts the ruling it is built on.** Your
-   ruling was "adopt it — detect on the next verb, write `started`, enable the unit." But `cmd_start`
-   (`ccd:7202`) and `cmd_ensure` (`ccd:7215`) both return early on `_alive`, and an F8 orphan **has a live
-   pane** — that is C1's whole point. So no ccd verb in Wave 1 ever reaches `_spawn_start` for an
-   *existing* orphan. Wave 1 delivers prevention (§1.1), adoption of the workspace *this dispatch* created
-   (§1.5), and detection (§1.6). Grounding measured the residue class at **one member out of 24**, so
-   accepting this may well be right — but I will not leave your ruling standing as though the build
-   satisfied it. Accept, or add a repair path.
+4. ~~This build does not repair `swift-harbor`~~ — **ruled 2026-08-15: accepted.** *"swift-harbor
+   unrepaired is OK, main thing is to build the system that prevents reoccurrences of similar class of
+   issues. We can do a one-time fix for swift-harbor if we need to."* That directive is now the Goal's
+   framing and §1.6's mandate. The one-time fix, if wanted, is a human at a terminal running
+   `ccd ws-hold`-free `ccd ensure ccrc-pwa-swift-harbor` — which repairs nothing today (both verbs
+   early-return on `_alive`) — so in practice it is `tmux kill-session -t cc-ccrc-pwa-swift-harbor`
+   followed by `ccd ensure`, or `ws-reap` under the human-only contract. **Not scheduled**; the census
+   will name it as `unclaimed-session` and the operator decides.
 5. ~~The tmux substrate is defended only by a comment~~ — **ruled 2026-08-15: pin it, and fix it here.**
    §1.7 now carries all three layers — a red-on-delete test, a deploy pre-flight that refuses to sweep
    into a bad config, and the structural repair (`_tmux_server_ensure`) — with a **planned reboot** at
@@ -915,6 +996,12 @@ Pins the build must produce, at minimum:
 - `_accept_first_run_prompts` returns 3 on exhaust and 4 on a hard block, and `_inject_spawn_effort` does
   not run for either.
 - Two concurrent `ws-add`s for one project: one wins, one refuses `busy`.
+- **One test per divergence class**, each red when its class is deleted from `DIVERGENCE_KINDS` — the
+  enforcement clause of §1.6 is only real if the classes are individually pinned. Plus: a fixture with a
+  row in each class produces exactly that census and no more; a healthy fleet produces an empty census
+  (the false-positive direction, which is what would make the surface ignorable).
+- `ws-audit` reports `alive`/`started`/`unit` **even when `_ws_reap_eval` refuses `not-archived`** —
+  mutation: move the three fields back after the refusal, the test reds.
 - Deleting `KillMode=process` from `claude-session@.service` reds a named test; the deploy's pre-flight
   refuses to sweep when the unit about to be active lacks it (§1.7).
 - `_tmux_server_ensure` is a no-op when a server is already running, and places a newly created server
