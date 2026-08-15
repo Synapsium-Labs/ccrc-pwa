@@ -1,0 +1,386 @@
+#!/usr/bin/env bash
+# ccrc-doctor-checks — the check TABLE `ccrc doctor` iterates, and each check's
+# implementation. Stage 2b, Task 4 of the 2026-08-15-stage2b-ccrc-cli-and-doctor
+# plan: the PREREQUISITE checks only. Roster/wrapper coherence (Task 5) and the
+# cross-box fleet agreement check (Task 7) are later tasks and add entries to
+# the same table.
+#
+# SOURCED, never executed — `ccrc`'s `cmd_doctor` does `. "$CCRC_HERE/ccrc-doctor-checks"`.
+# Split out of `ccrc` itself (plan, "Files") so a check is testable without the
+# CLI's whole argument surface, and so the table stays visible as data rather
+# than buried in a dispatch.
+#
+# ── THE CONTRACT EVERY CHECK KEEPS ────────────────────────────────────────
+# `_check_<name>` prints exactly one verdict line to STDOUT
+#
+#     PASS|WARN|FAIL <name>: <detail>
+#
+# and, when the verdict is not PASS, exactly one further line
+#
+#     "  remedy: <what to do about it>"
+#
+# and returns 0 (pass), 2 (warn) or 1 (fail). The remedy is not optional and
+# not advisory: `_dr_fail`/`_dr_warn` print BOTH lines themselves, so a check
+# physically cannot emit a non-pass verdict without one. A check that only
+# complains sends an operator to a search engine; the remedy is the half that
+# makes doctor an instrument instead of an alarm.
+#
+# The verdict lines are the RESULT of the verb, so they go to stdout — NOT to
+# stderr through `_ccrc_say`, which `ccrc`'s own header (Task 1) had guessed
+# they would. The pairing "a FAIL line, then ITS remedy on the next line" is
+# the machine-readable part of this contract (`server/test/ccrc-doctor.test.ts`
+# asserts it per FAIL line), and splitting the pair across two streams would
+# break it for anyone who redirects one of them — which is every caller that
+# pipes doctor into a report. `_ccrc_say` keeps its job: stderr notes that are
+# not a verdict.
+#
+# The printed <name> IS the function suffix (`_check_gh_auth` prints `gh_auth`),
+# so a reader who sees a line can grep straight to the code that wrote it.
+# That is why the names are underscored rather than hyphenated.
+#
+# ── WHY THE DETAIL IS ALWAYS A MEASUREMENT ────────────────────────────────
+# Every PASS names what was actually found (the resolved path, the version, the
+# address), never the bare word "ok". A check that prints "PASS tmux: ok" is
+# indistinguishable from a check that was never wired up, and this project has
+# already been bitten by exactly that shape (`single-definition.test.ts`'s "a
+# scan over an empty list passes everything").
+#
+# ── set -e ────────────────────────────────────────────────────────────────
+# This file is sourced into `ccrc`, which runs `set -uo pipefail` and NOT `-e`,
+# deliberately — see that file's header. Checks SIGNAL by returning non-zero;
+# under `-e` the first failing check would abort the run, which is precisely
+# the run an operator needs to see whole. Nothing here may turn `-e` back on.
+
+# Where the shipped tree is, relative to THIS file rather than to $PWD —
+# `ccrc-adopt:103-104`'s idiom, in the same PATH-free spelling `ccrc` uses (see
+# that file for why `dirname` is not called here: doctor has to work on a box
+# whose PATH is the broken thing). `${BASH_SOURCE[0]}` and not `$0`, because
+# this file is only ever reached by `source`, where `$0` is the CALLER's
+# argv[0]. `:=` so the value `ccrc` already computed wins when there is one,
+# and so this file still resolves itself when a test sources it on its own.
+if [ -z "${CCRC_HERE:-}" ]; then
+  CCRC_HERE="${BASH_SOURCE[0]}"
+  [[ "$CCRC_HERE" == */* ]] || CCRC_HERE="./$CCRC_HERE"
+  CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
+fi
+
+# How long `gh auth status` (the one check that touches the network) may take.
+# Overridable for the same reason `deploy/verify-service.sh:56-62` makes its
+# settle/window knobs overridable: so a test need not wait out a production
+# timeout. The DEFAULT is what an operator gets.
+: "${CCRC_DOCTOR_GH_TIMEOUT:=15}"
+
+# ── the check table ───────────────────────────────────────────────────────
+# DATA. `cmd_doctor` iterates this array and calls `_check_<name>` for each
+# entry, so adding a check is one entry here, one function below, and one test
+# — and `ccrc-doctor.test.ts`'s first case fails the build if the table and the
+# functions ever disagree in either direction.
+CCRC_DOCTOR_CHECKS=(
+  node
+  tmux
+  git
+  gh
+  jq
+  python3
+  flock
+  gh_auth
+  git_email
+  linger
+)
+
+# ── verdict helpers ───────────────────────────────────────────────────────
+# Newlines are squashed out of both halves: the contract is "the line
+# immediately after a non-PASS verdict is its remedy", and a detail carrying an
+# embedded newline (a subprocess's multi-line stderr, say) would silently break
+# that pairing for every reader.
+_dr_line() { printf '%s %s: %s\n' "$1" "$2" "${3//$'\n'/ }"; }
+_dr_pass() { _dr_line PASS "$1" "$2"; return 0; }
+_dr_warn() { _dr_line WARN "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 2; }
+_dr_fail() { _dr_line FAIL "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 1; }
+
+# First non-empty line of a captured output, for details that quote a tool's
+# own diagnosis without pasting a screenful of it.
+_dr_first_line() {
+  local l
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    printf '%s' "$l"
+    return 0
+  done <<< "$1"
+  printf '%s' ""
+}
+
+# The one shape shared by the six "is this binary installed" checks.
+_dr_need_bin() {
+  local name="$1" why="$2" remedy="$3" p
+  p="$(command -v "$name" 2>/dev/null)"
+  if [ -z "$p" ]; then
+    _dr_fail "$name" "not on PATH — $why" "$remedy"
+    return 1
+  fi
+  _dr_pass "$name" "$p"
+}
+
+# ── node: the floor is READ, never re-typed ───────────────────────────────
+# WHICH package.json IS CANONICAL DEPENDS ON THE BOX, and that is why this
+# looks in two places rather than one:
+#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh:276), so
+#     the shipped declaration there is `~/ccrc/agent/package.json`;
+#   - a server host has `~/ccrc/{server,shared,deploy}` (deploy.sh:525), so it
+#     is `~/ccrc/server/package.json`;
+#   - `pwa/package.json` never ships at all and is deliberately not consulted.
+# Either answer is the SAME answer: `server/test/node-floor.test.ts:45-50`
+# asserts all three declarations are byte-identical and fails the build the
+# moment they are not. That test is the reason this may take the first one it
+# finds instead of cross-checking them.
+#
+# Resolved relative to THIS SCRIPT, not to $PWD, so doctor works on a bare
+# installed box with no checkout anywhere near it — which is the entire point
+# of doctor (plan, "Open questions": "`ccrc doctor` must not depend on a
+# checkout").
+_dr_pkg_candidates() {
+  local root
+  root="$(cd "$CCRC_HERE/.." 2>/dev/null && pwd)" || root="$CCRC_HERE/.."
+  printf '%s\n' "$root/server/package.json" "$root/agent/package.json"
+}
+
+_check_node() {
+  local p
+  p="$(command -v node 2>/dev/null)"
+  if [ -z "$p" ]; then
+    _dr_fail node "not on PATH — the server, the agent and every deploy step run on it" \
+      "install Node (nodesource or nvm), then re-run: ccrc doctor"
+    return 1
+  fi
+
+  local pkg="" cand
+  while IFS= read -r cand; do
+    [ -f "$cand" ] && { pkg="$cand"; break; }
+  done < <(_dr_pkg_candidates)
+  if [ -z "$pkg" ]; then
+    # Joined in bash rather than through `tr`: a check that needs a coreutils
+    # binary to print its own failure message is a check that goes silent on
+    # exactly the broken box it exists for.
+    local looked
+    looked="$(_dr_pkg_candidates)"
+    _dr_fail node "no shipped package.json to read engines.node from — looked at ${looked//$'\n'/ and }" \
+      "run ccrc from inside the shipped tree (~/ccrc/ccd/ccrc) or from a checkout; a lone copy of this script cannot know the floor"
+    return 1
+  fi
+
+  # Parsed by node itself, not by jq: the node check must not fail for a reason
+  # that belongs to another check (a box with no jq gets exactly one FAIL, from
+  # the jq check), and node is by definition available here — its absence is
+  # the branch above. The path travels in the environment rather than argv so
+  # there is no argv[1]-vs-argv[2] ambiguity to get wrong.
+  #   exit 3 = the file does not parse; exit 4 = it declares no engines.node.
+  local range rc
+  range="$(CCRC_DOCTOR_PKG="$pkg" node -e '
+    const fs = require("fs");
+    let j;
+    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_PKG, "utf8")); }
+    catch (e) { process.exit(3); }
+    const r = j && j.engines && j.engines.node;
+    if (typeof r !== "string" || r.length === 0) process.exit(4);
+    process.stdout.write(r);
+  ' 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 3 ]; then
+    _dr_fail node "$pkg does not parse as JSON, so the floor cannot be read" \
+      "restore or redeploy $pkg — something wrote garbage where a package manifest belongs"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ] || [ -z "$range" ]; then
+    _dr_fail node "$pkg declares no engines.node, so this box has no floor to check against" \
+      "declare it — engines.node is the single place the Node floor is written down (server/test/node-floor.test.ts)"
+    return 1
+  fi
+
+  # EXACTLY node-floor.test.ts:38-42's rule, and for its stated reason: the
+  # moment someone writes `^22 || >=24`, this must fail loudly rather than
+  # silently accept a floor it did not understand. No version number is spelled
+  # in this file — that is what reading the manifest is for.
+  local floor_re='^>=([0-9]+)\.([0-9]+)\.([0-9]+)$'
+  if [[ ! "$range" =~ $floor_re ]]; then
+    _dr_fail node "unrecognised engines range \"$range\" in $pkg — this check understands only a single '>=x.y.z'" \
+      "declare engines.node as one '>=x.y.z' range (node-floor.test.ts:38-42 pins the same rule), or teach ccrc-doctor-checks the new form deliberately"
+    return 1
+  fi
+  local maj="${BASH_REMATCH[1]}" min="${BASH_REMATCH[2]}" pat="${BASH_REMATCH[3]}"
+
+  local running ver_re='^v?([0-9]+)\.([0-9]+)\.([0-9]+)'
+  running="$(node --version 2>/dev/null)"
+  if [[ ! "$running" =~ $ver_re ]]; then
+    _dr_fail node "'node --version' printed \"$running\", which is not a version" \
+      "check what $p actually is — a wrapper script on PATH shadowing the real interpreter is the usual cause"
+    return 1
+  fi
+  local rmaj="${BASH_REMATCH[1]}" rmin="${BASH_REMATCH[2]}" rpat="${BASH_REMATCH[3]}"
+
+  if (( rmaj > maj || (rmaj == maj && (rmin > min || (rmin == min && rpat >= pat))) )); then
+    _dr_pass node "$running satisfies $range (declared in $pkg), at $p"
+  else
+    _dr_fail node "$running is below the floor $range declared in $pkg" \
+      "upgrade Node to at least ${maj}.${min}.${pat} — below it the server does not degrade, it fails to boot (node:sqlite is imported unconditionally)"
+    return 1
+  fi
+}
+
+# ── the binaries a fleet box cannot work without ──────────────────────────
+_check_tmux() {
+  _dr_need_bin tmux "every ccd session lives in a tmux window, and that is how one is attached, read and driven" \
+    "install it: sudo apt install tmux"
+}
+_check_git() {
+  _dr_need_bin git "ccd builds every workspace as a git worktree" \
+    "install it: sudo apt install git"
+}
+_check_gh() {
+  _dr_need_bin gh "PR state, review and merge all go through the GitHub CLI (ccd:700-720)" \
+    "install it: see https://cli.github.com (Debian/Ubuntu: sudo apt install gh)"
+}
+_check_jq() {
+  _dr_need_bin jq "ccrc and ccrc-adopt read this box's small JSON files with it (ccrc version, accounts.json)" \
+    "install it: sudo apt install jq"
+}
+_check_python3() {
+  _dr_need_bin python3 "ccd's session hook and its registry locking are python3 (ccd:1043-1110)" \
+    "install it: sudo apt install python3"
+}
+_check_flock() {
+  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:2501-2502)" \
+    "install it: sudo apt install util-linux"
+}
+
+# ── gh's authentication ───────────────────────────────────────────────────
+# DELIBERATE DIVERGENCE FROM ccd, do not "harmonise" the two: `ccd` never
+# probes `gh auth status` — it classifies gh's own stderr instead (ccd:707-715,
+# "`gh auth status` is NOT probed first: it is another network call on the
+# unhappy path"), because ccd runs that path in a poll loop over every open PR.
+# Doctor is the COLD path: it runs when a human asks "is this box fit to
+# work?", once, and the whole point of it is to answer questions the hot path
+# cannot afford to ask. Moving this call into ccd would put a network round
+# trip back into that loop.
+#
+# `--show-token` is NEVER passed, and only the FIRST line of gh's output is
+# ever quoted back: gh redacts the token itself (`Token: gho_****`), and this
+# file must not be the thing that un-redacts it.
+_check_gh_auth() {
+  if ! command -v gh >/dev/null 2>&1; then
+    _dr_fail gh_auth "gh is not on PATH, so this box's GitHub credentials cannot be checked" \
+      "install gh first — see the 'gh' check above; then: gh auth login --scopes repo"
+    return 1
+  fi
+
+  local out rc
+  if command -v timeout >/dev/null 2>&1; then
+    out="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status 2>&1)"; rc=$?
+  else
+    # A box without coreutils' `timeout` still gets an answer; it just gets it
+    # without a deadline. Silently skipping the check would be the worse trade.
+    out="$(gh auth status 2>&1)"; rc=$?
+  fi
+
+  if [ "$rc" -eq 124 ]; then
+    _dr_fail gh_auth "gh auth status did not answer within ${CCRC_DOCTOR_GH_TIMEOUT}s" \
+      "check this box's network/proxy — an authenticated gh answers in well under a second"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    _dr_fail gh_auth "gh auth status exited $rc: $(_dr_first_line "$out")" \
+      "run: gh auth login --scopes repo (and re-run ccrc doctor)"
+    return 1
+  fi
+
+  case "$out" in
+    *"Token scopes:"*)
+      # Matched WITH its quotes, exactly as gh prints a scope list, so
+      # 'repo:status' — a read-only scope — cannot be mistaken for 'repo'.
+      case "$out" in
+        *"'repo'"*)
+          _dr_pass gh_auth "authenticated, and the token carries the 'repo' scope" ;;
+        *)
+          _dr_fail gh_auth "authenticated, but the token has no 'repo' scope — this box could not open or merge a PR" \
+            "run: gh auth refresh -h github.com -s repo"
+          return 1 ;;
+      esac
+      ;;
+    *)
+      # A third state, and it must not collapse into either neighbour: PASS
+      # would claim a fact nobody measured, FAIL would block a box that may be
+      # entirely fine (a GH_TOKEN from the environment reports no scope list).
+      _dr_warn gh_auth "authenticated, but gh printed no 'Token scopes:' line, so the 'repo' scope could not be verified" \
+        "check by hand: gh auth status — a token from GH_TOKEN or a fine-grained token must still grant contents+pull-requests write"
+      return 2 ;;
+  esac
+}
+
+# ── git's identity ────────────────────────────────────────────────────────
+# Read from $HOME rather than from $PWD: doctor's subject is the BOX, and a
+# repository-local user.email in whatever directory the operator happened to be
+# standing in would answer a different question.
+#
+# MEASURED on this project's own fleet box, and it is why the distinction
+# matters rather than being pedantry: `~/.gitconfig` exists there and declares
+# no user.email at all — every repository sets its own in `.git/config`. That
+# box commits happily today and would refuse the FIRST commit in the next
+# project ccd clones. FAIL, not WARN, for exactly that reason: the gap is
+# invisible until it stops a worker mid-wave.
+_check_git_email() {
+  if ! command -v git >/dev/null 2>&1; then
+    _dr_fail git_email "git is not on PATH, so this box's commit identity cannot be read" \
+      "install git first — see the 'git' check above"
+    return 1
+  fi
+  local email
+  email="$(git -C "$HOME" config user.email 2>/dev/null)"
+  if [ -z "$email" ]; then
+    _dr_fail git_email "not set for this box (nothing in ~/.gitconfig or /etc/gitconfig) — a commit in any repository that does not set its own would be refused" \
+      "run: git config --global user.email \"you@example.com\" (and user.name alongside it)"
+    return 1
+  fi
+  _dr_pass git_email "$email"
+}
+
+# ── systemd linger ────────────────────────────────────────────────────────
+# Net-new: nothing in this repository has ever checked linger — it is prose in
+# the planning documents and nothing more. It belongs in doctor because every
+# ccd session is a `systemctl --user` unit (`ccd/claude-session@.service`), and
+# without linger /run/user/$UID is torn down when the last login session ends,
+# taking the whole fleet with it. `ccd:93-95` defaults XDG_RUNTIME_DIR and
+# DBUS_SESSION_BUS_ADDRESS so `systemctl --user` works from a non-interactive
+# SSH context; this check runs in that same world and asks the question those
+# defaults assume the answer to.
+#
+# Queried by $UID (a bash builtin variable — no `id` subprocess, and no NSS
+# name lookup to fail) and remedied by UID too, so the remedy is a command an
+# operator can paste verbatim.
+_check_linger() {
+  if ! command -v loginctl >/dev/null 2>&1; then
+    _dr_fail linger "loginctl is not on PATH — this box has no logind, but every ccd session is a systemd --user unit" \
+      "install/enable systemd-logind, or do not run a fleet on this box"
+    return 1
+  fi
+  local out rc
+  out="$(loginctl show-user "$UID" --property=Linger 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # The measured shape of a box that never had it: logind knows nothing about
+    # a user with neither a live session nor linger, so "not enabled" arrives
+    # as an error rather than as `Linger=no`. Same verdict, different detail —
+    # collapsing the two would hide which one an operator is looking at.
+    _dr_fail linger "logind does not know uid $UID (loginctl show-user exited $rc) — a user with neither a live session nor linger answers exactly this way" \
+      "run: sudo loginctl enable-linger $UID"
+    return 1
+  fi
+  case "${out#Linger=}" in
+    yes)
+      _dr_pass linger "enabled for uid $UID — /run/user/$UID survives logout, so the session units keep running" ;;
+    no)
+      _dr_fail linger "not enabled for uid $UID — the fleet's systemd --user units die with the last login session" \
+        "run: sudo loginctl enable-linger $UID"
+      return 1 ;;
+    *)
+      _dr_fail linger "could not read Linger from loginctl (it printed \"$out\")" \
+        "check by hand: loginctl show-user $UID --property=Linger"
+      return 1 ;;
+  esac
+}

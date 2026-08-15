@@ -1,22 +1,30 @@
 // ccd/ccrc — Task 1 of the stage-2b ccrc-cli-and-doctor plan: the dispatch
 // skeleton, the `version` verb, and usage/argument handling for the new
-// lifecycle CLI. `doctor`, `status` and `adopt` are reserved verb names this
-// task does not implement — dispatching to one of them is its own,
-// deliberately distinct, refusal (exit 1, "not implemented yet") from an
-// unrecognised verb (exit 2, a USAGE error).
+// lifecycle CLI. `doctor`, `status` and `adopt` are reserved verb names that
+// task did not implement — dispatching to one of them is its own, deliberately
+// distinct, refusal (exit 1, "not implemented yet") from an unrecognised verb
+// (exit 2, a USAGE error). `doctor` has since graduated out of that list in
+// Task 4 and is pinned by server/test/ccrc-doctor.test.ts; `status` and
+// `adopt` still refuse here.
 //
 // Harness: mkTmp + a hand-rolled runCcrcRaw/runCcrc pair, copied in shape
 // from ccrc-adopt's own (server/test/adopt.test.ts:33-44) — NOT
 // makeCcdHarness, for the same reason adopt's suite does not use it either:
-// these tests only ever exercise the dispatch/usage/version surface, which
-// needs nothing a populated fleet HOME (registry, roster, gh poison) would
-// provide, so a plain throwaway HOME from mkTmp is the whole fixture.
+// these tests only exercise the dispatch/usage/version surface, which needs
+// nothing a populated fleet HOME (registry, roster, wrappers) would provide,
+// so a throwaway HOME from mkTmp is the whole fixture.
+//
+// It takes ONE thing from that harness: `ghContainedEnv`'s poisoned `gh`. The
+// original sentence here claimed this file needed no part of a fleet HOME
+// "including the gh poison" — Task 4 measured that to be false, and the runner
+// below carries the correction and the reason.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -26,10 +34,34 @@ interface Result { code: number; stdout: string; stderr: string }
 /** Runs the CLI exactly as an operator does: `bash ccd/ccrc`, HOME pointed at
  *  a throwaway fixture. Never throws on a nonzero exit — several tests below
  *  exercise refusal paths (unknown verb, unreadable stamp) and need the exit
- *  code and stderr as data, not as a thrown Error. */
+ *  code and stderr as data, not as a thrown Error.
+ *
+ *  `ghContainedEnv` (Task 4) plants a POISONED `gh` at `<home>/.local/bin` and
+ *  PREPENDS that directory to PATH, so the real `gh` — which on the fleet box
+ *  carries a repo-WRITE token — cannot be reached from this file no matter
+ *  which verb a test dispatches. It is not decoration: this runner used to pass
+ *  the real PATH straight through, and the moment Task 4 implemented `doctor`
+ *  the (by then stale) "not implemented yet" case below started executing the
+ *  real `gh auth status` on every suite run. It was harmless only because the
+ *  fixture HOME left gh no credential to resolve — i.e. the OTHER boundary
+ *  saved it, which is exactly the accident CLAUDE.md means when it says gh
+ *  containment here is "per-test, not structural".
+ *
+ *  This is now applied at the RUNNER rather than per test, because `ccrc` grows
+ *  verbs that shell out: `status` (Task 7) and `adopt` (Task 8) both arrive
+ *  through this same function, and neither should have to remember. The rest of
+ *  PATH is left intact deliberately — `ccrc version` genuinely needs `jq`, and
+ *  a fixture-only PATH would test a box nobody runs. */
 function runCcrcRaw(home: string, args: string[] = []): Result {
-  const r = spawnSync('bash', [CCRC, ...args], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+  const r = spawnSync('bash', [CCRC, ...args], { env: ccrcEnv(home), encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** Named, and separated from the spawn above, for one reason: it is the thing
+ *  the containment test at the bottom of this file asserts on. A guard nothing
+ *  can go red for is a comment. */
+function ccrcEnv(home: string): NodeJS.ProcessEnv {
+  return ghContainedEnv(home, { ...process.env, HOME: home });
 }
 
 /** The brief's own shape: returns stdout, throwing (with stderr attached) on
@@ -90,12 +122,16 @@ describe('ccrc: dispatch and usage', () => {
 });
 
 describe('ccrc: reserved verbs not implemented yet', () => {
-  // doctor, status and adopt are dispatchable names as of this task, but
-  // deliberately non-functional — Task 3+ fills these in. This is NOT the
-  // same refusal as an unrecognised verb: exit 1 here (the verb is real,
-  // just not built yet), never 2 (that would claim the operator mistyped
-  // something).
-  it.each(['doctor', 'status', 'adopt'] as const)('%s prints "not implemented yet" on stderr and exits 1', (verb) => {
+  // status and adopt are dispatchable names, but deliberately non-functional —
+  // Task 7 and Task 8 fill these in. This is NOT the same refusal as an
+  // unrecognised verb: exit 1 here (the verb is real, just not built yet),
+  // never 2 (that would claim the operator mistyped something).
+  //
+  // `doctor` LEFT this list in Task 4, which implemented it — a verb graduates
+  // out of here exactly once, when it starts doing its job. Its behaviour is
+  // pinned by server/test/ccrc-doctor.test.ts from that point on; nothing in
+  // this file asserts anything about doctor any more.
+  it.each(['status', 'adopt'] as const)('%s prints "not implemented yet" on stderr and exits 1', (verb) => {
     const home = mkTmp(`ccrc-cli-notimpl-${verb}-`);
     const r = runCcrcRaw(home, [verb]);
     expect(r.code).toBe(1);
@@ -259,5 +295,25 @@ describe('ccrc: the BASH_SOURCE guard actually guards', () => {
     // Nothing dispatched: cmd_version's own stdout ("ccrc unstamped (...)"
     // for this fresh, stampless HOME) must never appear from a plain source.
     expect(r.stdout).not.toMatch(/unstamped/);
+  });
+});
+
+describe('ccrc: the runner cannot reach the real gh', () => {
+  it('resolves gh inside the fixture, not on the system PATH', () => {
+    // The guard this pins is `runCcrcRaw` running under `ghContainedEnv`, and
+    // the reason it is pinned HERE rather than left as a comment is measured
+    // history: for the whole of Task 1-3 this runner passed the real PATH, and
+    // the moment `doctor` existed the stale "not implemented yet: doctor" case
+    // began executing the real `gh auth status` on every suite run. Nothing
+    // went red, because no test in this file has ever asked what `gh` resolves
+    // to. This one does.
+    //
+    // Deliberately asserted on the ENV rather than through a verb: no ccrc verb
+    // shells out to gh today, so a behavioural assertion would be vacuous now
+    // and would silently stay vacuous while `status` (Task 7) and `adopt`
+    // (Task 8) land on top of this same runner.
+    const home = mkTmp('ccrc-cli-gh-contained-');
+    const r = spawnSync('bash', ['-c', 'command -v gh'], { env: ccrcEnv(home), encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe(join(home, '.local', 'bin', 'gh'));
   });
 });
