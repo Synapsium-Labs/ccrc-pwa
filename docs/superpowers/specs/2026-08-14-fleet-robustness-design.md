@@ -344,6 +344,90 @@ Placement, copy, tokens, and the two mechanical obligations it carries (the sele
 override and its membership test) are in Part II, "PWA surface". `swift-harbor` would have shown
 `unstarted` for two days.
 
+### 1.7 The tmux substrate stops being defended by a comment
+
+**Measured 2026-08-15.** The tmux server is pid 1569, `comm="tmux: server"`, up since 2026-08-05
+22:52:29, and its cgroup is
+`…/app-claude\x2dsession.slice/claude-session@claude-ccrc-pwa.service`. It owns the single socket
+`/tmp/tmux-1000/default`, so **all 21 fleet sessions live on it**. Nothing chose that unit: whichever
+`tmux new-session` ran first after boot created the server, and the server inherited the caller's cgroup.
+Reparenting to `systemd --user` (PPID 1197) did not move it — cgroup membership does not follow
+reparenting.
+
+To size it honestly: the **panes** are not in that cgroup. Ubuntu's tmux is built with systemd support
+and puts each pane in its own transient `tmux-spawn-<uuid>.scope` under the slice, which
+`deploy/systemd/claude-session@.service.d/limits.conf` documents. The exposure is exactly one process —
+but it is the substrate, and every pane dies with it, so the blast radius is the whole fleet.
+
+`KillMode=process` (`ccd/claude-session@.service:14`) is what makes this safe today, and it genuinely
+works: on stop/restart systemd signals only `MainPID`, the `ccd supervise` bash. The hazard is what
+happens if that line goes — **systemd's default is `control-group`**, so *deleting one line* turns
+`deploy.sh:389`'s `try-restart "claude-session@*"` into a fleet kill. And `grep -rn KillMode` over the
+repo returns the unit file plus **two comments** and nothing else. By this repo's own doctrine that is a
+request, not a mechanism.
+
+Two mechanisms, both cheap, and deliberately at different layers:
+
+- **Pin the line.** `agent/test/deploy-verify.test.ts` already reads `ccd/claude-session@.service`
+  (`:238`), and its sweep test's own comment (`:393`) states the dependency verbatim — *"The unit is
+  BUILT for this sweep: KillMode=process, with a comment that the tmux substrate must survive a
+  supervisor restart"* — while asserting everything except that. Add the assertion there, with the
+  failure message naming the consequence. Mutation: delete `KillMode=process` from the unit file, the
+  test reds.
+- **Make the deploy refuse to sweep into a bad configuration.** This matters more, because the sweep is
+  the trigger. Before `try-restart`, assert the unit file about to be active carries `KillMode=process`,
+  and print which unit currently hosts the tmux server (`cat /proc/$(pgrep -x -f 'tmux: server')/cgroup`).
+  Abort the deploy rather than restarting 18 units into it. The ordering precedent already exists in the
+  same block — the sweep is deliberately placed after the agent chain "so a broken agent fails the deploy
+  before any supervisor is touched"; this is the same principle one step earlier.
+
+**Third mechanism — the structural repair, which the operator's 2026-08-15 ruling ("reboot is fine once
+fixes are in") brings into this build rather than deferring it.** The bug is that the server's cgroup is
+decided by accident: whoever calls `tmux` first wins. So create it deliberately. `_spawn` gains an
+idempotent `_tmux_server_ensure` ahead of its `tmux new-session`:
+
+    _tmux_server_ensure() {   # place the SERVER in a known scope, not the caller's cgroup
+      tmux list-sessions >/dev/null 2>&1 && return 0    # already up; nothing to place
+      systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server \
+        tmux start-server 2>/dev/null || tmux start-server
+    }
+
+This needs **no new unit file** — nothing extra to deploy or keep in sync across boxes — and it
+self-heals: whenever the server is next created it lands in `ccrc-tmux-server.scope`. The `||` fallback
+keeps ccd working where `systemd-run` is absent, which the single-box OSS story requires. It is the same
+pattern tmux already uses for its per-pane `tmux-spawn-<uuid>.scope`.
+
+**It only takes effect when the server is next created, which means a reboot** — cgroup membership
+cannot be changed for a live process without a D-Bus `StartTransientUnit` adoption, and that is not
+something to attempt against a process holding 21 live sessions. The reboot is therefore a **planned,
+ordered step of Wave 1's deploy, and it must come after the ccd install**, or it recreates the same
+problem.
+
+**What a reboot actually costs, measured 2026-08-15 — this is the part to read before scheduling it.**
+The box currently runs **21 tmux sessions, 18 active units, and 15 enabled units.** A reboot kills the
+tmux server, so *every* pane dies; what returns is whatever systemd starts, which is the **15 enabled
+units only**. Each of those resumes cleanly (`started=1` → `cmd_ensure` picks `mode=resume` → the wrapper
+resumes from its transcript). **Six sessions do not come back on their own:**
+
+| Session | Why not |
+|---|---|
+| `ccrc-pwa-calm-mesa` | unit active, **not enabled** — no `default.target.wants` symlink |
+| `data-internal-plain-harbor` | same |
+| `data-internal-still-prairie` | same |
+| `ccrc-pwa-swift-harbor` | **no unit at all** — the F8 orphan; `_ws_supervise` never ran |
+| `custom-tools-brisk-ridge` | no unit at all |
+| `expoAI-assistant-warm-mesa` | no unit at all |
+
+Two of those are archived rows and one is the orphan the operator has said to leave, so the real
+decision is small — but it is a decision, not a surprise, and it must be made **before** the reboot, not
+discovered after it. Pre-flight: for each of the six, either `systemctl --user enable
+claude-session@<id>` (making it boot-persistent) or accept that its pane is gone and it needs a hand
+`ccd ensure` afterwards. Scrollback and any in-flight turn are lost either way; transcripts are not.
+
+Wave 1 therefore closes all three layers: the **regression** path (an edit that removes the guard), the
+**trigger** (a deploy that sweeps into a bad config), and — after the reboot — the **design** flaw
+itself.
+
 ## Wave 2 — a claim knows whose it is
 
 **Bounded context:** Coordination. **Not server-only** — §2.3 falsifies a shipped `cmd_ws_release`
@@ -763,15 +847,11 @@ stated so any of them can be overturned in one sentence:
    (§1.5), and detection (§1.6). Grounding measured the residue class at **one member out of 24**, so
    accepting this may well be right — but I will not leave your ruling standing as though the build
    satisfied it. Accept, or add a repair path.
-5. **A standing risk this build did not create and does not fix, which you should know about.** The tmux
-   server (pid 1569) is the parent of all 21 fleet sessions, and it lives inside **one** session unit's
-   cgroup. `KillMode=process` in `claude-session@.service` is the only thing between
-   `try-restart 'claude-session@*'` — which the deploy runs — and the death of the entire fleet's
-   substrate. **Nothing pins it:** `grep -rn KillMode` finds the unit file, a comment in `deploy.sh`, and
-   one test that merely *mentions* it in a comment. Meanwhile `deploy.sh` copies that unit file and
-   `daemon-reload`s in the same run that sweeps, so a bad edit goes live and is exercised against 18
-   units with no window to notice. By this repo's own doctrine — "a comment is a request; a red suite is
-   a mechanism" — that is not a guard. Want it pinned as part of this build, or tracked separately?
+5. ~~The tmux substrate is defended only by a comment~~ — **ruled 2026-08-15: pin it, and fix it here.**
+   §1.7 now carries all three layers — a red-on-delete test, a deploy pre-flight that refuses to sweep
+   into a bad config, and the structural repair (`_tmux_server_ensure`) — with a **planned reboot** at
+   the end of Wave 1's deploy as the migration, since the operator has approved one once the fixes are
+   in. The only thing still needing a human decision is §1.7's six-session pre-flight list.
 6. **When the widened guard (§4.2) finds a blank-marker wedge, may the system CLEAR it, or only
    refuse?** The spec as written only refuses. If refusal is the only outcome, a blank-marker wedge can
    be unstuck by nothing but a human at a terminal — and since the mail lane bounces off it
@@ -835,6 +915,10 @@ Pins the build must produce, at minimum:
 - `_accept_first_run_prompts` returns 3 on exhaust and 4 on a hard block, and `_inject_spawn_effort` does
   not run for either.
 - Two concurrent `ws-add`s for one project: one wins, one refuses `busy`.
+- Deleting `KillMode=process` from `claude-session@.service` reds a named test; the deploy's pre-flight
+  refuses to sweep when the unit about to be active lacks it (§1.7).
+- `_tmux_server_ensure` is a no-op when a server is already running, and places a newly created server
+  outside any `claude-session@*` cgroup — pinned under a fixture HOME, never against the live box.
 - A **killed** ws-add that created exactly one **unheld** workspace adopts it; a clean non-zero exit
   never adopts, whatever the candidate count; zero → still fails; two → still `ambiguous-dispatch`;
   one **held** candidate → refuses.
@@ -867,7 +951,13 @@ change the plan's shape:
    bytes left to read. Natural turnover is **3 supervisors per 12 hours**. So **the deploy's restart
    sweep is mandatory**: skip it and Wave 1's spawn invariant is false on most of the fleet for days,
    because `cmd_ensure` inside a live supervisor *is* an unattended spawn path.
-3. **The `fix/ccd-swap-jitter` merge gate is a hard blocker for Waves 1 and 3.** Deploying either from a
+3. **Wave 1 ends in a planned reboot** (operator ruling, 2026-08-15), ordered **after** the ccd install
+   and its sweep, so the tmux server is recreated by a ccd that places it in `ccrc-tmux-server.scope`
+   (§1.7). Rebooting first would recreate the flaw. Run §1.7's six-session pre-flight before it, and
+   verify afterwards that `/proc/$(pgrep -x -f 'tmux: server')/cgroup` no longer names a
+   `claude-session@*` unit — that check is the whole point of the exercise and is the one thing that
+   proves it worked.
+4. **The `fix/ccd-swap-jitter` merge gate is a hard blocker for Waves 1 and 3.** Deploying either from a
    main-based ref installs a ccd with no `SWAP_JITTER` — silently reverting the fix for the 2026-08-13
    nine-hour outage — and the sweep then **arms the reverted binary on all 18 supervisors at once**,
    converting a hazard currently dormant on 15 into one armed on 18. Merge at the branch **tip**
