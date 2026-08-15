@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# ccrc — the lifecycle CLI for a Claude Code fleet box: installs, updates and
+# diagnoses a box, as a sibling to `ccd`, which drives sessions once one is
+# already running. Stage 2b, Task 1 of the
+# 2026-08-15-stage2b-ccrc-cli-and-doctor plan: this ships only the dispatch
+# skeleton, the `version` verb, and usage/argument handling. `doctor`,
+# `status` and `adopt` are reserved verb NAMES so the usage line and every
+# later task's `case` arm are already stable — dispatching to one of them
+# today prints "not implemented yet: <verb>" and exits 1, distinct from an
+# unrecognised verb (exit 2, see below).
+#
+# ── WHY `set -uo pipefail`, NOT `-euo` ─────────────────────────────────────
+# `ccrc-adopt` (this file's own model for argument handling) uses `-e`
+# because it is a straight-line pipeline of "measure, or die" steps: any
+# failure really should stop everything right there. `ccrc doctor` (Task 3+)
+# is the opposite shape — a LIST of independent checks, each of which SIGNALS
+# by returning non-zero, and the whole point of running doctor is to see every
+# check's verdict in one pass, not to abort at the first failing one. `-e`
+# here would turn "the box is missing three things" into "the box is missing
+# one thing, and doctor crashed" the moment the first check's `return 1` hit a
+# `set -e` shell. So: no `-e`, ever, in this file. If a future change adds
+# `-e` back "because it caught a real bug", it has broken doctor; don't.
+# `-u` (unset variables are errors) and `pipefail` (a failing left-hand side
+# of a pipe fails the whole pipeline) carry no such conflict and stay on.
+#
+# ── EXIT CODES (house convention — see ccd/ccrc-adopt:68-91 and
+#    deploy/verify-service.sh:50-54, both already committed to this table) ──
+#   0 = success.
+#   1 = the tool ran and the answer was bad (a check failed, a stamp did not
+#       parse, a verb is not implemented yet).
+#   2 = USAGE error — an unknown verb or argument. Kept distinct from 1 so a
+#       caller can tell "you typed it wrong" apart from "doctor found a real
+#       problem": scripting `ccrc doctor; case $? in 1) …` must never trip on
+#       a typo instead of a genuine finding.
+#
+# ── DIAGNOSTIC REGISTERS (adopt's own convention, reused here) ─────────────
+# Every line this script prints to stderr is prefixed "$PROG: ", then one of:
+#   - a bare refusal — "$PROG: <what went wrong>" (`_ccrc_die`, exits 1).
+#   - "note: …" — informational, does not change the exit code (`_ccrc_say`).
+#   - "remedy: …" — what to do about a non-pass finding. Not exercised by
+#     this task (nothing here fails a CHECK yet), but doctor's checks
+#     (Task 3+) hang a `remedy:` line off every non-pass verdict, and it
+#     rides the same `_ccrc_say` helper this file defines.
+# The RESULT of a verb (what the operator actually asked for) goes to
+# stdout, same split as ccrc-adopt's JSON-on-stdout / diagnostics-on-stderr.
+#
+# Do NOT add a `# ccrc:generated …` marker line to this file by imitation of
+# `ccd`'s line 2: that marker is `shared/mark.mjs`'s format for files a
+# generator writes and would refuse to run over hand edits to; `ccd` carries
+# one spuriously (it predates the marker meaning something), and `ccrc` is,
+# and stays, hand-written.
+set -uo pipefail
+
+PROG=ccrc
+
+usage() {
+  cat <<EOF
+usage: $PROG {doctor|status|adopt|version}
+
+The lifecycle CLI for a Claude Code fleet box — installs, updates and
+diagnoses a box, as a sibling to ccd (which drives sessions once one is
+already running).
+
+  version   print the build this box is running, from ~/.ccrc/build.json
+  doctor    (not implemented yet) check this box's health
+  status    (not implemented yet) show this box's fleet role and state
+  adopt     (not implemented yet) rediscover accounts.json from disk
+
+  -h, --help   print this message and exit 0
+
+Exit codes: 0 success, 1 the tool ran and the answer was bad, 2 a usage
+error (unknown verb or argument).
+EOF
+}
+
+# ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
+# `_ccrc_say` — a note, does not stop the run or change the exit code. Also
+# how a future doctor check prints its "remedy: …" line (see header above).
+_ccrc_say() { echo "$PROG: $*" >&2; }
+# `_ccrc_die` — a bare refusal: this run cannot continue. Always exits 1 —
+# never 2, which is reserved for a USAGE error (see `_ccrc_usage_die` below).
+_ccrc_die() { echo "$PROG: $*" >&2; exit 1; }
+# The one place "unknown argument" is spelled, so the unknown-verb and
+# unknown-top-level-flag paths below cannot drift onto two different
+# messages for what is, to an operator, the same mistake.
+_ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
+# `doctor`/`status`/`adopt` share this exact refusal shape; naming the verb
+# again as a literal in three separate case arms is how that shape would
+# eventually drift between them.
+_ccrc_not_implemented() { _ccrc_die "not implemented yet: $1"; }
+
+# cmd_version — what THIS box is running, per its own build stamp, never a
+# guess. Same three-way discipline as `ccd version` (ccd/ccd:1946-1969):
+#   - no ~/.ccrc/build.json  -> a dev checkout, or a box `ccrc install` never
+#     touched. "unstamped" at exit 0 is the honest ANSWER here, not an error.
+#   - a stamp that parses    -> print the facts.
+#   - a stamp that exists but does not parse (or is missing a field) ->
+#     something wrote garbage where a deploy writes facts; refuse loudly
+#     rather than print a version nobody measured.
+# Parsed with jq, not `python3` (ccd's own choice) — this project already
+# depends on jq for exactly this kind of small-JSON reads (ccrc-adopt uses it
+# throughout) and there is no reason to add a second interpreter dependency
+# for one file read. The whole filter is wrapped in `try…catch empty` and
+# checks each field's TYPE rather than just its presence: `.dirty` is a real
+# boolean that is legitimately `false` on most boxes, so a naive `jq -e` (which
+# treats a `false`/`null` last output as failure) would misreport every clean
+# build as "unreadable" — this checks `.dirty|type=="boolean"` instead, which
+# accepts `false` as the valid, common value it is.
+cmd_version() {
+  [[ $# -eq 0 ]] || _ccrc_die "usage: $PROG version"
+  local stamp="$HOME/.ccrc/build.json"
+  if [[ ! -f "$stamp" ]]; then
+    echo "$PROG unstamped (no $stamp — this box has no build stamp yet)"
+    return 0
+  fi
+  local line
+  line="$(jq -r '
+    try (
+      if (type == "object")
+         and (.sha | type == "string") and (.sha | length > 0)
+         and (.ref | type == "string") and (.ref | length > 0)
+         and (.builtAt | type == "string") and (.builtAt | length > 0)
+         and (.dirty | type == "boolean")
+      then "\(.sha) (\(.ref), built \(.builtAt)\(if .dirty then ", dirty" else "" end))"
+      else empty
+      end
+    ) catch empty
+  ' -- "$stamp" 2>/dev/null)"
+  [[ -n "$line" ]] || _ccrc_die "build stamp unreadable: $stamp"
+  echo "$PROG $line"
+}
+
+cmd_doctor() { _ccrc_not_implemented doctor; }
+cmd_status() { _ccrc_not_implemented status; }
+cmd_adopt()  { _ccrc_not_implemented adopt; }
+
+# Guard so the script can be `source`d (by a future test that wants a
+# function directly, the way server/test/roster-generate.test.ts does for
+# ccd's own `_ccrc_*` helpers) without running a command — same guard ccd
+# carries at its own dispatch (ccd/ccd:8578).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+
+# ── top-level argument parsing ──────────────────────────────────────────
+# Only -h/--help is recognised ahead of the verb; anything else in that
+# position IS the verb (data, not a flag), so there is no --flag/--flag=value
+# loop to run at this level yet. That idiom (ccrc-adopt:82-90: --out PATH /
+# --out=PATH, --force, -h|--help, unknown -> usage+exit 2) is what each
+# cmd_<verb> follows once a verb grows flags of its own.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    -*) _ccrc_usage_die "$1" ;;
+    *) break ;;
+  esac
+done
+
+VERB="${1:-}"
+[ $# -eq 0 ] || shift
+
+if [ -z "$VERB" ]; then
+  echo "$PROG: missing verb" >&2
+  usage >&2
+  exit 2
+fi
+
+case "$VERB" in
+  version) cmd_version "$@" ;;
+  doctor)  cmd_doctor "$@" ;;
+  status)  cmd_status "$@" ;;
+  adopt)   cmd_adopt "$@" ;;
+  *) _ccrc_usage_die "$VERB" ;;
+esac
+
+fi
