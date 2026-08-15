@@ -106,13 +106,39 @@ _ccrc_not_implemented() { _ccrc_die "not implemented yet: $1"; }
 # treats a `false`/`null` last output as failure) would misreport every clean
 # build as "unreadable" — this checks `.dirty|type=="boolean"` instead, which
 # accepts `false` as the valid, common value it is.
+#
+# `version` takes NO arguments — not even `-h`/`--help`. An extra argument
+# here (including `--help`) is a USAGE error, exit 2, same as an unrecognised
+# top-level verb/flag: `_ccrc_usage_die` prints "unknown argument: <it>" plus
+# the full usage text and quits. This deliberately does not special-case
+# `--help` into its own per-verb help screen — asking for help is a top-level
+# concern (`ccrc -h` / `ccrc --help`, before the verb is even read); once a
+# verb has been selected, `version` has exactly one job and no flags of its
+# own to explain. (Round-1 review, Important 2: this used to `_ccrc_die` at
+# exit 1, which collided with this very file's own exit-code table — 1 means
+# "the tool ran and the answer was bad", not "you typed it wrong".)
+#
+# A missing `jq` is probed for and refused BY NAME before the parse is
+# attempted (round-1 review, Important 3) — without this, "jq not on PATH",
+# "jq parse error" and "permission denied reading the stamp" all fell through
+# to the same "build stamp unreadable" message, which sends an operator to
+# rebuild/redeploy when the actual fix is `apt install jq`. That collapse is
+# exactly the overloaded-seam mistake this codebase's conventions ban: two
+# conditions ("this box lacks a dependency" vs. "this box's stamp is
+# corrupt") that an operator would act on completely differently must not
+# share one signal.
 cmd_version() {
-  [[ $# -eq 0 ]] || _ccrc_die "usage: $PROG version"
+  [[ $# -eq 0 ]] || _ccrc_usage_die "$1"
   local stamp="$HOME/.ccrc/build.json"
-  if [[ ! -f "$stamp" ]]; then
+  if [[ ! -e "$stamp" ]]; then
     echo "$PROG unstamped (no $stamp — this box has no build stamp yet)"
     return 0
   fi
+  # Exists but is not a plain file (e.g. a directory) — a shape problem, not
+  # an absence; must not be read as "unstamped" (round-1 review, Minor 8).
+  [[ -f "$stamp" ]] || _ccrc_die "build stamp unreadable: $stamp (not a regular file)"
+  command -v jq >/dev/null 2>&1 \
+    || _ccrc_die "jq is required by 'ccrc version' but is not on PATH"
   local line
   line="$(jq -r '
     try (
@@ -134,10 +160,14 @@ cmd_doctor() { _ccrc_not_implemented doctor; }
 cmd_status() { _ccrc_not_implemented status; }
 cmd_adopt()  { _ccrc_not_implemented adopt; }
 
-# Guard so the script can be `source`d (by a future test that wants a
-# function directly, the way server/test/roster-generate.test.ts does for
-# ccd's own `_ccrc_*` helpers) without running a command — same guard ccd
-# carries at its own dispatch (ccd/ccd:8578).
+# Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
+# and server/test/ccd-workspaces.test.ts:394 source ccd itself, to call one
+# function directly without running the whole CLI) without running a command
+# — same guard ccd carries at its own dispatch (ccd/ccd:8578). (Round-1
+# review, Minor 4: this comment used to cite server/test/roster-generate.test.ts,
+# which sources the GENERATED ~/.ccrc/accounts.sh — a different file, whose
+# `_ccrc_*` helpers come from shared/generate.mjs, not from ccd. Fixed to name
+# the tests that actually source ccd.)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
 # ── top-level argument parsing ──────────────────────────────────────────
