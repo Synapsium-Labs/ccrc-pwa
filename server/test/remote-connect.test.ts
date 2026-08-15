@@ -108,8 +108,16 @@ describe('connectFleet — connection lifecycle', () => {
 /** A hand-rolled minimal agent that only speaks the hello/ready handshake, so
  *  a `ready` frame with a missing or malformed `ccdVerbs` — something the
  *  real ccrc-agent, which always sends a validated `string[]`, can never
- *  produce — can still be driven through `FleetClient.onReady`. */
-function fakeReadyAgent(readyExtra: Record<string, unknown>): Promise<{ port: number; close(): Promise<void> }> {
+ *  produce — can still be driven through `FleetClient.onReady`.
+ *
+ *  A FUNCTION may be passed instead of a literal, evaluated per handshake, so a
+ *  test can make the SECOND connection answer differently from the first. That
+ *  is the only way to reach a transition — a peer whose stamp becomes malformed
+ *  between two `ready` frames — and a fresh-connection fixture cannot: it starts
+ *  from a null state, so a reader that fails to reset has nothing stale to keep. */
+function fakeReadyAgent(
+  readyExtra: Record<string, unknown> | (() => Record<string, unknown>),
+): Promise<{ port: number; close(): Promise<void> }> {
   return new Promise((resolve) => {
     const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => {
       const address = wss.address();
@@ -127,7 +135,8 @@ function fakeReadyAgent(readyExtra: Record<string, unknown>): Promise<{ port: nu
       ws.on('message', (raw) => {
         const msg: unknown = JSON.parse(raw.toString());
         if (typeof msg === 'object' && msg !== null && (msg as { t?: unknown }).t === 'hello') {
-          ws.send(JSON.stringify({ t: 'ready', v: 1, ...readyExtra }));
+          const extra = typeof readyExtra === 'function' ? readyExtra() : readyExtra;
+          ws.send(JSON.stringify({ t: 'ready', v: 1, ...extra }));
         }
       });
     });
@@ -259,5 +268,39 @@ describe('FleetClient.onReady — build is re-validated at the wire, never trust
     // exactly where this field exists to end silence.
     fleet = await connect(extra);
     expect(fleet.state.build).toBeNull();
+  });
+
+  it('a peer that starts sending a MALFORMED stamp on RECONNECT drops the one it had', async () => {
+    // The reset-on-every-ready guard, on the transition the fresh-connection
+    // cases above structurally cannot reach. Each of them starts from a client
+    // whose `state.build` is already null, so a reader that kept its previous
+    // value on a failed parse — `parseBuildInfo(…) ?? this.state.build`, one
+    // character of defensiveness away from what is written — behaves
+    // identically to the correct one and every test stays green.
+    //
+    // Nor can the end-to-end suite reach it (`fleet-build-skew.test.ts`): a real
+    // agent OMITS the key when its own stamp will not parse, so the malformed
+    // value never crosses the wire from a real peer at all. Only a fake agent
+    // that answers the second handshake differently from the first gets there,
+    // and the condition is real — an agent redeployed onto a box whose
+    // `build.json` write was torn, or rolled forward to a build that writes the
+    // file differently. A client that kept the old stamp would keep answering
+    // with the sha of a build nobody is running, indistinguishable from a live
+    // measurement, which is exactly what this guard exists to prevent.
+    //
+    // `state.build` can only become null again through a fresh `onReady` —
+    // `onClose` does not touch it — so waiting on null is waiting on the
+    // handshake, never on the disconnect.
+    let extra: Record<string, unknown> = { build: { ...STAMP } };
+    server = await fakeReadyAgent(() => extra);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
+      reconnectMinMs: 30, reconnectMaxMs: 100,
+    });
+    await vi.waitFor(() => expect(fleet!.state.build).toEqual(STAMP), { timeout: 3000 });
+
+    extra = { build: { ...STAMP, sha: '' } };
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.build).toBeNull(), { timeout: 3000 });
   });
 });
