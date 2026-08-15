@@ -63,6 +63,22 @@ pack. Then the session that made those commits **reset `main` and moved the work
 here are now verified against the merge target. **A line number is a claim with a shelf life. Trust
 shipped source's own comments over any document, including this one.**
 
+**Third flip, and the last one this document will chase by hand.** PR #49 merged `fix/ccd-swap-jitter`
+on 2026-08-15 (`origin/main` = `5f1e666`), so `main`'s ccd is now the 7544-line body the fleet host was
+already running. **Every `ccd:N` in this document is stated against `21fef2a` (7523 lines) and must be
+shifted to read against `5f1e666`.** The diff is two insertions and nothing else, so the map is
+arithmetic rather than a re-derivation:
+
+| `21fef2a` line range | offset to `5f1e666` |
+|---|---|
+| 1 – 49 | **0** |
+| 50 – 6748 | **+11** |
+| 6749 – end | **+21** |
+
+(`git diff 21fef2a..origin/main -- ccd/ccd \| grep '^@@'` reproduces it: `@@ -50,6 +50,17 @@` and
+`@@ -6749,8 +6760,18 @@`.) The implementation plan re-derives every anchor by content against whatever
+HEAD it targets — arithmetic here, grep there, and never a number copied forward on trust.
+
 Two live facts that follow, and that the pack could not have seen:
 
 - **The fleet host is running unmerged ccd.** Installed = `5bdc6dd` (`fix/ccd-swap-jitter`, pushed but
