@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=db8438d6c5a5cc038903c38aef805cf4b2940331984402e1776f78315e3ae5ad
+# ccrc:generated 1 sha256=bd308a09a1e433c54b983b5841f339a2b804660d688d9a85d652f09277b1395b
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -8041,11 +8041,18 @@ _swap_beat() {   # id parent-pid — re-stamp `supervised` every SWAP_BEAT_INTER
   #
   # A LEAKED STAMPER WOULD BE A WORSE LIE THAN THE ONE IT FIXES — a row that
   # heartbeats forever with nobody watching — so it is bounded twice over: it
-  # dies with its parent (`kill -0`, checked every tick, which covers a
-  # `cmd_swap` killed mid-carry where the explicit `_swap_beat_stop` never runs)
-  # and it gives up after SWAP_BEAT_MAX ticks regardless. Both bounds are the
-  # same argument as the `120` in `_session_state`: nothing may claim to be
-  # watching for longer than it plausibly is.
+  # dies with its parent (`kill -0`, checked every tick BEFORE the stamp, so an
+  # orphan never claims a supervisor even once; it covers a `cmd_swap` killed
+  # mid-carry where the explicit `_swap_beat_stop` never runs) and it gives up
+  # after SWAP_BEAT_MAX ticks regardless. Both bounds are the same argument as
+  # the `120` in `_session_state`: nothing may claim to be watching for longer
+  # than it plausibly is.
+  #
+  # Both bounds, and the `_swap_beat_stop` on cmd_swap's REFUSAL arm, are pinned
+  # by server/test/ccd-swap.test.ts — named here because they were not: each of
+  # the three lines was deleted in turn during the final review and the whole
+  # 2585-test suite stayed green, which made this paragraph a safety claim
+  # nothing defended, the finding this branch has now made four times.
   local id="$1" parent="$2" i=0
   while (( i < SWAP_BEAT_MAX )); do
     sleep "$SWAP_BEAT_INTERVAL"

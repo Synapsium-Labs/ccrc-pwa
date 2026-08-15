@@ -538,11 +538,14 @@ describe('session store connect()', () => {
     store.getState().disconnect();
   });
 
-  // The compatibility window from the other side: a uuid with no file is the
-  // one case that may still resume on the uuid alone (the server treats a
-  // null echo as an older client, `sessionws.ts`'s `start()`). It is reached
-  // by a `rotated` with no backlog behind it yet — offset 0, new uuid, no
-  // file — and the URL must NOT carry the previous transcript's path.
+  // A uuid with no file is the one case that may still resume on the uuid
+  // alone — and since the final review's follow-up the server trusts that only
+  // AT OFFSET 0 (`sessionws.ts`'s `start()`; a non-zero offset with no file is
+  // read as a stale build and answered with a backlog). This is one of the two
+  // moments that state is legitimately reached: a `rotated` with no backlog
+  // behind it yet. So the `0` below is load-bearing, not incidental — it is
+  // what keeps this resume on the honoured side of that guard — and the URL
+  // must NOT carry the previous transcript's path.
   it('sends no sinceFile when a rotation left no file behind', () => {
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore('s1', { api: { prompt }, makeSocket });

@@ -642,5 +642,18 @@ describe('a chat that had to look elsewhere says so', () => {
     });
     expect(screen.getByText(/Stranded history — read from another account,/)).toBeInTheDocument();
     expect(screen.queryByText(/read from ,/)).not.toBeInTheDocument();
+    // And the OTHER half of the same expression. The fallback is
+    // `accountLabel(...).trim() || 'another account'`, and only the `||` was
+    // pinned above: an empty string is falsy with or without the `.trim()`, so
+    // deleting the trim left the test green while a WHITESPACE-ONLY account —
+    // just as reachable across a cast frame from an independently versioned
+    // server, and just as unnamed — rendered "read from    , not this
+    // session's own account." Same frame, same degradation.
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'b7001948', offset: 240, missing: false,
+      file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
+      foreignAccount: '   ', searchComplete: true, events: [someEvent],
+    });
+    expect(screen.getByText(/Stranded history — read from another account,/)).toBeInTheDocument();
   });
 });

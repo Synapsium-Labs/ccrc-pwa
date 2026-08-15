@@ -282,7 +282,12 @@ const streamWith = async (opts: {
   putHook(at(hookSeq, 0));
   const frames: any[] = [];
   const offset = existsSync(file) ? statSync(file).size : 0;
-  const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset });
+  // `file` alongside the offset because that is what a CURRENT client sends
+  // (§5.3's echo) and this harness's whole premise is a resume: since the
+  // final review's follow-up an echo-less `since` past offset 0 is read as a
+  // stale build and answered with a backlog — which here would mean a
+  // `readFileFrom` that is not an ask read, silently inflating `askReads`.
+  const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset, file });
   try {
     await stream.start();
     for (step = 1; step < Math.max(seq.length, panes.length, hookSeq.length); step += 1) {
@@ -632,17 +637,51 @@ describe('session WS', () => {
     ws.close();
   });
 
-  it('reconnect with ?since=<uuid>:<offset> skips the backlog and resumes from the offset', { timeout: 15_000 }, async () => {
+  it('an echo-less `since` PAST the start of a file is a STALE client — backlog, not a silent resume', { timeout: 15_000 }, async () => {
+    // The §5.3 compatibility window, closed (final review follow-up). A browser
+    // holding a build from before the PWA sent `sinceFile` reconnects with
+    // `since=<uuid>:<offset>` and no echo, and `parseSince` collapses "the
+    // param was absent" and "this client has no file" into the same
+    // `file: null` — so the old rule honoured the offset against whatever the
+    // ladder answers NOW, which after a swap is a different file (measured:
+    // byte 6620 of the carried copy stitched onto the head of the stranded
+    // one). Both moments a client legitimately has no file are at offset 0
+    // (the next test), so an offset PAST the start with no file named is a
+    // client that had one and cannot say so. It gets the backlog.
     const offset = statSync(fileA).size;
+    expect(offset).toBeGreaterThan(0);
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}?since=${UUID_A}:${offset}`);
     const next = collect(ws);
     await opened(ws);
 
-    appendFileSync(fileA, userLine('u9', 'after resume'));
     const first = await nextIgnoringAsk(next, 6000);
-    expect(first.type).toBe('events'); // no backlog on a matching `since` resume
+    expect(first.type).toBe('backlog');
+    expect(first.file).toBe(fileA);
+    expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1', 'u2']);
+
+    ws.close();
+  });
+
+  it('an echo-less `since` at offset 0 still resumes — the two moments a client HAS no file', { timeout: 15_000 }, async () => {
+    // The other direction, and the reason the guard is keyed on the offset
+    // rather than on the echo alone. A current client names no file at exactly
+    // two moments (`pwa/src/stores/session.ts`'s `connect()`): before its first
+    // backlog, and between a `rotated` and the backlog that follows it — and
+    // the store's `offset` is 0 at both (its initial state, and `rotated`'s own
+    // reset). Turning THOSE into a backlog would cost a current client a
+    // redundant replay on every rotation-window reconnect, so offset 0 keeps
+    // today's uuid-only resume exactly.
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}?since=${UUID_A}:0`);
+    const next = collect(ws);
+    await opened(ws);
+
+    // Resumed from 0, so the tailer — not a `backlog` frame — delivers what is
+    // already in the file. Asserting the type alone would pass on a build that
+    // sent nothing at all.
+    const first = await nextIgnoringAsk(next, 6000);
+    expect(first.type).toBe('events');
     expect(first.uuid).toBe(UUID_A);
-    expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u9']);
+    expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1', 'u2']);
 
     ws.close();
   });

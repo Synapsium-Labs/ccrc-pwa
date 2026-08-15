@@ -822,6 +822,16 @@ This is strictly a widening of an existing hazard, not a new one — `dir` is th
 a session that moves already changes its own path for a fixed uuid — and it is pinned here because
 this work makes it common.
 
+**And an ABSENT echo is not a free pass.** The parser cannot tell "this client sent no `sinceFile`"
+from "this client has no file" — both arrive as `file: null` — so trusting a null echo unconditionally
+leaves the whole hazard open to any browser still holding a pre-fix build, one reload wide. It does
+not have to stay open: both moments a client legitimately has no file are at **offset 0**. Before its
+first backlog it sends no `since` at all, and between a `rotated` and its backlog the offset was reset
+to 0 and the server sends that backlog on its very next statement. So the rule is keyed on the offset
+rather than on the echo — a null echo is honoured at offset 0 and nowhere else, and an echo-less
+resume past the start of a file is answered with the full backlog. A stale client pays one replayed
+backlog per reconnect; a current client pays nothing.
+
 ### 5.4 Cost: a cheap common path, and a memo for the expensive one
 
 `SessionStream` resolves on every 2-second poll for the life of every open socket (`POLL_MS`,

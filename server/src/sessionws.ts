@@ -152,13 +152,19 @@ export class SessionStream {
      *  conversation goes through in silence.
      *
      *  The PWA sends it (`pwa/src/stores/session.ts`'s `connect()`), so the
-     *  window is a browser holding a build from before that — one reload
-     *  wide, and this is why `start()` below refuses to trust a bare uuid
-     *  match when the echo is present and disagrees. An earlier version of
-     *  this comment said "Task 12 closes it": Task 12 is the PWA task on this
-     *  branch, its brief never mentioned `sinceFile`, and it shipped without
-     *  it. Nothing closed it until the final review found the client half
-     *  missing. */
+     *  exposure was a browser holding a build from before that — one reload
+     *  wide — and `start()` below refuses to trust a bare uuid match when the
+     *  echo is present and disagrees. An earlier version of this comment said
+     *  "Task 12 closes it": Task 12 is the PWA task on this branch, its brief
+     *  never mentioned `sinceFile`, and it shipped without it. Nothing closed
+     *  it until the final review found the client half missing.
+     *
+     *  THAT WINDOW IS NOW CLOSED TOO, by the offset rather than by the echo:
+     *  `start()` honours a null echo only at offset 0, the only offset either
+     *  legitimate no-file moment can carry. A stale build's non-zero offset
+     *  gets the backlog. This is why the parameter is still optional and why
+     *  its absence is still not a mismatch — a client with no file is a real
+     *  state, and it is a state with no offset to protect. */
     private readonly since?: { uuid: string; offset: number; file?: string | null },
   ) {
     this.transcripts = new TranscriptResolver(deps.io);
@@ -174,10 +180,21 @@ export class SessionStream {
       this.status = r.data.status;
       this.tailed = r.data.resolution;
       const echoed = this.since?.file ?? null;
-      if (this.since && this.since.uuid === r.data.uuid && (echoed === null || echoed === r.data.file)) {
-        // Resume — no backlog. A null echo is an older client (§5.3's honest
-        // compatibility window); a MATCHING echo proves the offset belongs to
-        // the file about to be tailed.
+      if (this.since && this.since.uuid === r.data.uuid
+        && (echoed === null ? this.since.offset === 0 : echoed === r.data.file)) {
+        // Resume — no backlog. A MATCHING echo proves the offset belongs to the
+        // file about to be tailed; a NULL echo is trusted only at offset 0,
+        // which is what closes §5.3's compatibility window rather than
+        // disclosing it (see the `since` parameter above). `parseSince` cannot
+        // tell "the parameter was absent" from "this client has no file" —
+        // both are `file: null` — but the two moments a client legitimately
+        // has none are both offset 0: before its first backlog there is no
+        // `since` at all, and between a `rotated` and its backlog the offset
+        // was reset to 0 and the server sends that backlog on its very next
+        // statement. So a non-zero offset with no file named is a client that
+        // HAD one and cannot say so — a stale build — and it gets the full
+        // backlog instead of an offset honoured against a file nobody agreed
+        // on. It costs a current client nothing.
         this.startTailer(r.data.file, r.data.uuid, this.since.offset);
       } else {
         await this.sendBacklogAndTail(r.data);

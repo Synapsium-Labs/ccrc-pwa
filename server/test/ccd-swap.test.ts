@@ -320,4 +320,89 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
     // this fixes, since it claims a supervisor that does not exist.
     expect(settled).toBe(done);
   });
+
+  // ——— the three lines that claim above rests on ———
+  //
+  // `_swap_beat`'s own comment says it is "bounded twice over" and that "a
+  // leaked stamper would be a worse lie than the one it fixes". The test above
+  // proves the covering and one stop; it does not touch either bound, and the
+  // whole 2585-test suite noticed nothing when all three of these lines were
+  // deleted in turn: the `kill -0 "$parent"` guard, the `i < SWAP_BEAT_MAX`
+  // loop condition, and the `_swap_beat_stop` on the REFUSAL arm (only the
+  // success tail was covered). A safety claim in a comment, defended by
+  // nothing — this branch's most-repeated finding, landing on the newest thing
+  // the branch itself wrote, which is why it is closed before the merge rather
+  // than after it.
+
+  it('a stamper whose parent is gone stamps NOTHING — the first bound', () => {
+    seed('claude');
+    // The leak this guard exists for is `cmd_swap` killed mid-carry, where the
+    // explicit `_swap_beat_stop` never runs at all. A pid that is dead AND
+    // REAPED, because `kill -0` succeeds on a zombie: a child that had merely
+    // exited would answer "alive" and test nothing. `sleep` is a no-op so the
+    // check happens now rather than 30s from now — and so a build with the
+    // guard deleted races its 240 ticks in milliseconds instead of hanging.
+    const out = h.sh(`sleep() { :; }
+      ( exit 0 ) & dead=$!; wait "$dead" 2>/dev/null
+      _swap_beat ${ID} "$dead"; rc=$?
+      echo "rc=$rc stamp=[$(_reg_get ${ID} supervised)]"`);
+    // Not "it exits" — it writes nothing. The order inside the loop is the
+    // whole property: the parent is checked BEFORE the stamp, so an orphaned
+    // beat never claims a supervisor even once.
+    expect(out).toBe('rc=0 stamp=[]');
+  });
+
+  it('gives up after SWAP_BEAT_MAX ticks with its parent still alive — the second bound', () => {
+    seed('claude');
+    // The parent is this very shell, so the first bound cannot be what ends
+    // this loop; only the counter can. `_reg_set` becomes a tick counter (the
+    // real one is exercised by the wall-clock test above) and `sleep` is a
+    // no-op, so production's 240 × 30s = 2h degenerates to 240 iterations in
+    // milliseconds — and `printf > "$REG/…"` creates no directory, so a beat
+    // that ran too long could not litter either.
+    //
+    // The killer subshell is what keeps `while :` from hanging the suite
+    // instead of failing it: a beat that had to be killed comes back 137.
+    const out = h.sh(`sleep() { :; }; _reg_set() { echo tick >> "$HOME/beats"; }
+      _swap_beat ${ID} $$ & beat=$!
+      ( command sleep 20; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
+      wait "$beat"; rc=$?
+      kill "$killer" 2>/dev/null; wait "$killer" 2>/dev/null
+      echo "rc=$rc ticks=$(wc -l < "$HOME/beats") max=$SWAP_BEAT_MAX window=$(( SWAP_BEAT_INTERVAL * SWAP_BEAT_MAX ))"`);
+    // The window is asserted, not just the counter: "bounded twice over" is a
+    // claim about TWO HOURS, and 240 ticks means two hours only while the
+    // interval is 30s. Turning either constant into something a leaked stamper
+    // could live inside fails here.
+    expect(out).toBe('rc=0 ticks=240 max=240 window=7200');
+  });
+
+  /** The refusal fixture's stubs, with ONE difference from `SWAP`: the beat's
+   *  own sleep is real. Under a blanket `sleep() { :; }` a leaked stamper
+   *  sprints to its 240-tick bound in milliseconds and is gone before any
+   *  assertion can see it — the test would then pass against a build that
+   *  leaks, which is the fixture-cannot-discriminate shape this branch found
+   *  twice. The interval is 3s (not the production 30) so a leak in a failing
+   *  run is observable for three seconds and orphans nothing for longer;
+   *  `cmd_swap`'s own `sleep 1` flush is still skipped. */
+  const BEAT_ALIVE = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };
+    SWAP_BEAT_INTERVAL=3
+    sleep() { [[ "\${1:-}" == "$SWAP_BEAT_INTERVAL" ]] && command sleep "$1"; return 0; };`;
+
+  it('stops the stamper on the REFUSAL arm too, not only on the success tail', () => {
+    const mdir = seed('claude');
+    plant('.claude', mdir, 'HISTORY\n');
+    // A carry that fails AFTER the pre-flight passed is the only way to reach
+    // the refusal arm inside the `if` — the pre-flight's own refusal happens
+    // before the beat is ever started. `_swap_beat_stop` runs there before
+    // `_swap_refuse` does, so a refused swap leaves nothing behind claiming to
+    // watch the row it just gave up on: the row is about to be handed back to
+    // an operator, and a heartbeat under it would say "something is watching
+    // this" for the next two hours.
+    const out = h.sh(`${BEAT_ALIVE} cp() { return 1; }
+      cmd_swap ${ID} claude-dev0 >/dev/null 2>&1; rc=$?
+      echo "rc=$rc stampers_left=$(jobs -pr | wc -l)"
+      jobs -pr | xargs -r kill -9 2>/dev/null; true`, { TMUX: '' });
+    expect(out).toBe('rc=1 stampers_left=0');
+  });
 });

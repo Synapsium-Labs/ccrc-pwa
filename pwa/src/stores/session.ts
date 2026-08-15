@@ -454,9 +454,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           //
           // Omitted, never sent empty, when there is no file yet (before the
           // first backlog, and between a `rotated` and its backlog): the
-          // server reads an absent echo as a client that predates this and
-          // falls back to the uuid-only resume, which at those two moments is
-          // the correct answer rather than a compatibility shrug.
+          // server falls back to the uuid-only resume, which at those two
+          // moments is the correct answer rather than a compatibility shrug.
+          // Both of them carry `offset: 0` — the store's initial state, and
+          // `rotated`'s own reset — and that is exactly what the server now
+          // requires of an echo-less resume, so a pre-fix build's non-zero
+          // offset gets a backlog instead of being honoured against a file
+          // nobody agreed on.
           url: () => {
             const { uuid, offset, file } = get();
             const base = wsUrl(`/ws/session/${encodeURIComponent(id)}`);
