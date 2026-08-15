@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
+  AgentReady,
   AgentReq,
   CapsReq,
   ExecReq,
@@ -127,13 +128,22 @@ export function resolveProjectsRoot(
   return root;
 }
 
-/** The agent's side of `AgentReady` (shared/agent-protocol.ts), which differs
- *  in exactly one way: `ccdVerbs` is REQUIRED here. The reader must tolerate an
- *  agent old enough to omit it; this agent always has a list — `[]` when `ccd`
- *  could not be read — so its own frame type says so. Named rather than left
- *  inline in `OutMsg` so the send site can declare a frame it fills in field by
- *  field without restating the shape a third time. */
-type ReadyFrame = { t: 'ready'; v: 1; ccdVerbs: string[]; rosterFp?: string; build?: BuildInfo };
+/** The agent's side of `AgentReady` (shared/agent-protocol.ts), DERIVED from it
+ *  rather than restated: every field the wire contract has, this frame has, and
+ *  a field added over there arrives here without anyone remembering to copy it.
+ *
+ *  The one difference is narrowed in the type, not asserted in prose:
+ *  `ccdVerbs` is REQUIRED here. The wire declares it optional because a READER
+ *  must tolerate an agent old enough to omit it; this agent always has a list
+ *  (`[]` when `ccd` could not be read), so its own frame type says so.
+ *
+ *  Written as a restatement first, and that was the defect: a hand-copied
+ *  member list is a claim about another file with nothing enforcing it. This
+ *  frame carries three synchronised fields now (`ccdVerbs`, `rosterFp`,
+ *  `build`) and the next task adds to `AgentReady` again — a required field
+ *  gained over there is now a compile error here until this send site answers
+ *  it, instead of a field the agent silently never sends. */
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs'> & { ccdVerbs: string[] };
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
 
@@ -455,8 +465,16 @@ function readRosterFp(home: string): string | undefined {
  * the same one the server makes about its own stamp — imported, not restated,
  * so a comparison between the two boxes can never straddle two definitions of
  * a well-formed stamp.
+ *
+ * NAMED `readBuildStamp`, not `readBuildInfo`, though it is the agent's twin of
+ * `server/src/buildinfo.ts`'s `readBuildInfo` and reads the same file on the
+ * other box. The two have OPPOSITE empty conventions — `undefined` here because
+ * that is what the wire omits, `null` there because that is what `/health`
+ * serialises — and a same-name/different-contract pair one import away from the
+ * same parser is how a later reader comes to assume the wrong one. Different
+ * contract, different name.
  */
-function readBuildInfo(home: string): BuildInfo | undefined {
+function readBuildStamp(home: string): BuildInfo | undefined {
   let raw: string;
   try {
     raw = readFileSync(path.join(home, '.ccrc', 'build.json'), 'utf8');
@@ -546,7 +564,7 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       const frame: ReadyFrame = { t: 'ready', v: 1, ccdVerbs: verbCache.verbs };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
-      const build = readBuildInfo(opts.home);
+      const build = readBuildStamp(opts.home);
       if (build !== undefined) frame.build = build;
       send(ws, frame);
       return;

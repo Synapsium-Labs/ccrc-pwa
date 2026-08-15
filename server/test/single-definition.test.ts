@@ -613,23 +613,35 @@ describe('one BuildInfo — the stamp shape and its field checks', () => {
   // nothing, not even `node:*`, because it bundles into the PWA — so what is
   // shared is exactly the shape and the checks.
   //
-  // The fingerprint is the first of the four checks as it is actually written.
-  // Narrow enough that the prose about it (this comment, the docstrings in
-  // both readers, which discuss a `sha: undefined` rather than a `typeof`) does
-  // not score a hit on itself.
-  const CHECKS_THE_SHA = /typeof\s+\w+\.sha\s*!==\s*'string'/;
+  // The fingerprint is the check on `sha` — the load-bearing field — in every
+  // spelling this repo has actually used for it: the bare `typeof` form the
+  // validation was born as (and the form a re-copy would be written in, since
+  // it is what `git log` shows), the `nonEmptyString` form it is in today, and
+  // the hand-rolled length test someone would reach for instead. Narrow enough
+  // that the prose about it (this comment, the docstrings in both readers,
+  // which discuss a `sha: undefined` rather than a check) does not score a hit
+  // on itself.
+  const CHECKS_THE_SHA = /typeof\s+\w+\.sha\s*!==\s*'string'|nonEmptyString\(\s*\w+\.sha\s*\)|\w+\.sha\.length\s*(?:===|!==|>|<)/;
 
   it('the field checks live in exactly one file, and that file is shared/buildinfo.ts', () => {
     const holders = ALL.filter((f) => CHECKS_THE_SHA.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/buildinfo.ts']);
   });
 
-  it('the interface is declared in exactly one file, and that file is shared/buildinfo.ts', () => {
+  it('the type is declared in exactly one file, and that file is shared/buildinfo.ts', () => {
     // `server/src/buildinfo.ts` RE-EXPORTS the type (`export type
     // { BuildInfo }`) so its own importers were untouched by the move — a
     // re-export is one declaration reachable by two names, which is the
-    // opposite of a copy, and this regex matches the declaration only.
-    const DECLARES = /^\s*export interface BuildInfo\b/m;
+    // opposite of a copy, and this regex matches a DECLARATION only.
+    //
+    // BOTH SPELLINGS. An `interface`-only fingerprint waves through
+    // `export type BuildInfo = { … }`, which is not an exotic way to write it
+    // here — the sibling block below fingerprints `MarkerState` as
+    // `/export type MarkerState\s*=/`, so a reader of this very file has just
+    // been shown the form that would slip past. The `=` is what keeps this off
+    // the re-export (`export type { BuildInfo };`), which has no `=` and is
+    // the one spelling that must stay legal.
+    const DECLARES = /^\s*export (interface BuildInfo\b|type BuildInfo\s*=)/m;
     const holders = ALL.filter((f) => DECLARES.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/buildinfo.ts']);
   });

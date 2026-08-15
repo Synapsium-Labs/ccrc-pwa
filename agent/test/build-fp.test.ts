@@ -39,11 +39,22 @@ const STAMP = { sha: 'deadbeef', ref: 'main', builtAt: '2026-08-15T00:00:00Z', d
 describe('the ready frame carries the box\'s own build stamp', () => {
   let agent: RunningAgent | undefined;
   let fixture: Fixture | undefined;
-  let client: TestClient | undefined;
+  /** EVERY client this file opens, closed by the hook below whether the test
+   *  passed, failed or threw. A local `const c = new TestClient(...)` followed
+   *  by a manual `c.ws.close()` leaks the socket on a failing assertion, which
+   *  is not the rare case here — this project's method is mutation sweeps that
+   *  run the suite with assertions deliberately failing, and this suite is
+   *  already known to be load-sensitive. Same reasoning as `tmpHelpers.ts`'s
+   *  registry, one resource down. */
+  const clients: TestClient[] = [];
+  const connect = (port: number): TestClient => {
+    const c = new TestClient(port);
+    clients.push(c);
+    return c;
+  };
 
   afterEach(async () => {
-    client?.ws.close();
-    client = undefined;
+    for (const c of clients.splice(0)) c.ws.close();
     if (agent) await agent.close();
     agent = undefined;
     if (fixture) {
@@ -58,12 +69,11 @@ describe('the ready frame carries the box\'s own build stamp', () => {
     fixture = makeFixture();
     writeStamp(fixture.home, `${JSON.stringify(STAMP)}\n`);
     agent = await boot(fixture);
-    client = new TestClient(agent.port);
 
     // Whole-object equality, not `.sha` alone: `dirty` is the field that stops
     // a working-tree deploy masquerading as the clean sha it names, and it is
     // the one a narrower assertion would let a reader quietly drop.
-    expect((await client.hello() as AgentReady).build).toEqual(STAMP);
+    expect((await connect(agent.port).hello() as AgentReady).build).toEqual(STAMP);
   });
 
   it('omits the field entirely when the box carries no stamp — absence is not a lie', async () => {
@@ -74,9 +84,8 @@ describe('the ready frame carries the box\'s own build stamp', () => {
     // "the fleet host is running a different build".
     fixture = makeFixture();
     agent = await boot(fixture);
-    client = new TestClient(agent.port);
 
-    const ready = await client.hello() as AgentReady;
+    const ready = await connect(agent.port).hello() as AgentReady;
     expect(ready.t).toBe('ready');
     expect('build' in ready).toBe(false);
   });
@@ -85,9 +94,8 @@ describe('the ready frame carries the box\'s own build stamp', () => {
     fixture = makeFixture();
     writeStamp(fixture.home, '{');
     agent = await boot(fixture);
-    client = new TestClient(agent.port);
 
-    expect('build' in (await client.hello() as AgentReady)).toBe(false);
+    expect('build' in (await connect(agent.port).hello() as AgentReady)).toBe(false);
   });
 
   it('omits the field when the stamp is well-formed JSON of the wrong shape', async () => {
@@ -101,15 +109,27 @@ describe('the ready frame carries the box\'s own build stamp', () => {
     fixture = makeFixture();
     writeStamp(fixture.home, JSON.stringify({ sha: 42, ref: 'main', builtAt: 'x', dirty: false }));
     agent = await boot(fixture);
-    client = new TestClient(agent.port);
-    expect('build' in (await client.hello() as AgentReady)).toBe(false);
+    expect('build' in (await connect(agent.port).hello() as AgentReady)).toBe(false);
 
     // ...and a stamp missing a field outright, which is what a truncated write
     // leaves behind.
-    client.ws.close();
     writeStamp(fixture.home, JSON.stringify({ ref: 'main', builtAt: 'x', dirty: false }));
-    client = new TestClient(agent.port);
-    expect('build' in (await client.hello() as AgentReady)).toBe(false);
+    expect('build' in (await connect(agent.port).hello() as AgentReady)).toBe(false);
+  });
+
+  it('omits the field when the stamp names an EMPTY sha — the value that fails safe-looking', async () => {
+    // Type-correct, JSON-valid, and the worst of the malformed stamps: every
+    // other bad value announces itself downstream as a MISMATCH, which is at
+    // worst a false alarm someone investigates. Two boxes both reporting
+    // `sha: ''` compare EQUAL, so the skew check would report "the builds
+    // agree" on the strength of two files neither box could read — silence
+    // where the whole point of this field is to end silence. Rejecting it
+    // returns the condition to the one the wire already models honestly:
+    // no evidence.
+    fixture = makeFixture();
+    writeStamp(fixture.home, JSON.stringify({ ...STAMP, sha: '' }));
+    agent = await boot(fixture);
+    expect('build' in (await connect(agent.port).hello() as AgentReady)).toBe(false);
   });
 
   it('re-reads on every connection, so a redeploy is picked up without an agent restart', async () => {
@@ -121,13 +141,10 @@ describe('the ready frame carries the box\'s own build stamp', () => {
     writeStamp(fixture.home, JSON.stringify(STAMP));
     agent = await boot(fixture);
 
-    const first = new TestClient(agent.port);
-    expect((await first.hello() as AgentReady).build).toEqual(STAMP);
-    first.ws.close();
+    expect((await connect(agent.port).hello() as AgentReady).build).toEqual(STAMP);
 
     const NEXT = { ...STAMP, sha: 'cafebabe', dirty: true };
     writeStamp(fixture.home, JSON.stringify(NEXT));
-    client = new TestClient(agent.port);
-    expect((await client.hello() as AgentReady).build).toEqual(NEXT);
+    expect((await connect(agent.port).hello() as AgentReady).build).toEqual(NEXT);
   });
 });

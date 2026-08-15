@@ -3,8 +3,13 @@
 // exec/file/tail/pty API on a REMOTE fleet host. Single source of truth for
 // both sides; copied verbatim per the plan's pinned interfaces.
 //
-// L0: this file imports nothing but its `shared/` siblings — it bundles into
-// the PWA, so not even `node:*`.
+// L0: this file imports nothing but its `shared/` siblings — not even `node:*`.
+// The RULE is `shared/`-wide, and it is stated as the rule rather than as a
+// fact about this file: `shared/` is the tree the PWA bundles from, so a
+// `node:*` import here is a defect the day a PWA module first imports this one.
+// Nothing under `pwa/src` imports this file TODAY (it reaches for `shared/api`
+// and `shared/roster`), and saying otherwise would be a false fact sitting next
+// to a true rule — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
 
 export interface AgentHello { t: 'hello'; token: string }
