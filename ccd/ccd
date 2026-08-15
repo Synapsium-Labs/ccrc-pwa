@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bd308a09a1e433c54b983b5841f339a2b804660d688d9a85d652f09277b1395b
+# ccrc:generated 1 sha256=1c5ed4444fd93ebce9734aaae926c71a905f0e55c229fd4dbc1f1bb07d056ddb
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -51,6 +51,17 @@ SWAP_QUIET=600                  # preempt only sessions quiet this long (any sur
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
 SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
+SWAP_JITTER=120                 # max seconds of random delay before a dispatched swap actually runs.
+                                # The supervise tick evaluates EVERY session in one pass, so a
+                                # fleet-wide condition (a limit window rolling over, a spend cap
+                                # tripping) dispatches every affected swap in the SAME second. On
+                                # 2026-08-13 that restarted 6 sessions at 21:00:0x; the SessionEnd +
+                                # SessionStart hooks behind them each launched a ~2 GB code-usage
+                                # scan, and once the box began thrashing no scan could finish, so
+                                # every later swap in the hour ratcheted more onto the pile (19
+                                # concurrent, 17.4 GB) until the box stalled for 9.7 hours.
+                                # Spreading restarts stops a fleet-wide event becoming a herd.
+                                # Set to 0 to dispatch immediately (old behaviour).
 SWAP_BEAT_INTERVAL=30           # seconds between `supervised` re-stamps WHILE a swap carries files
                                 # (§4.2). Well inside `_session_state`'s 120s freshness window, and the
                                 # same cadence `cmd_supervise`'s own watch loop re-stamps on.
@@ -6907,8 +6918,18 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
   # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
   # never respawned — bit us 2026-07-05). systemd-run escapes the cgroup entirely.
+  # Jitter (2026-08-14): see SWAP_JITTER. Computed per call, so each session in a
+  # fleet-wide burst gets its own delay and the restarts spread out instead of
+  # landing on one second. The sleep runs INSIDE the transient unit, so dispatch
+  # itself stays non-blocking and the supervise tick is not held up.
+  # Cooldown is unaffected: callers stamp `lastswap` at dispatch time, and
+  # SWAP_COOLDOWN (900s) dwarfs the jitter window, so nothing re-dispatches while
+  # a delayed swap is still pending.
+  local jitter=0
+  [[ "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
+  echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
   systemd-run --user --collect --quiet \
-    bash -c "exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
+    bash -c "sleep $jitter; exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
     || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
 }
 
