@@ -597,6 +597,56 @@ describe('one parseCcdCaps — the ccd-caps-line filter', () => {
   });
 });
 
+// — Stage 2b, Task 2: one build stamp, validated one way —
+describe('one BuildInfo — the stamp shape and its field checks', () => {
+  // Two boxes read a `~/.ccrc/build.json` now: the server its own at boot
+  // (`/health`), the fleet host's agent its own on every `ready` frame
+  // (`AgentReady.build`), so the server can compare the two SHAS. That
+  // comparison is only meaningful if both sides agree on what a well-formed
+  // stamp IS — a second copy of the field checks that drifted by one field
+  // would have one box omitting a stamp the other happily forwards, and the
+  // skew report would then be reporting on its own validators.
+  //
+  // The validation was written in `server/src/buildinfo.ts` and moved to
+  // `shared/` when the agent needed it (the agent cannot import from
+  // `server/src`). The FILESYSTEM read stays per package — `shared/` imports
+  // nothing, not even `node:*`, because it bundles into the PWA — so what is
+  // shared is exactly the shape and the checks.
+  //
+  // The fingerprint is the first of the four checks as it is actually written.
+  // Narrow enough that the prose about it (this comment, the docstrings in
+  // both readers, which discuss a `sha: undefined` rather than a `typeof`) does
+  // not score a hit on itself.
+  const CHECKS_THE_SHA = /typeof\s+\w+\.sha\s*!==\s*'string'/;
+
+  it('the field checks live in exactly one file, and that file is shared/buildinfo.ts', () => {
+    const holders = ALL.filter((f) => CHECKS_THE_SHA.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/buildinfo.ts']);
+  });
+
+  it('the interface is declared in exactly one file, and that file is shared/buildinfo.ts', () => {
+    // `server/src/buildinfo.ts` RE-EXPORTS the type (`export type
+    // { BuildInfo }`) so its own importers were untouched by the move — a
+    // re-export is one declaration reachable by two names, which is the
+    // opposite of a copy, and this regex matches the declaration only.
+    const DECLARES = /^\s*export interface BuildInfo\b/m;
+    const holders = ALL.filter((f) => DECLARES.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/buildinfo.ts']);
+  });
+
+  it('is what both real readers call, not re-derive', () => {
+    // Not merely "the copy is gone" — deleting either reader satisfies that.
+    // Each must still reach the shared parser, and each still owns its own
+    // `readFileSync`, which is the half that could not move.
+    for (const f of ['server/src/buildinfo.ts', 'agent/src/server.ts']) {
+      const src = readFileSync(path.join(ccrcRoot, f), 'utf8');
+      expect(src, f).toContain('parseBuildInfo');
+      expect(src, f).toMatch(/import\s*\{[^}]*\bparseBuildInfo\b[^}]*\}\s*from\s*'[^']*shared\/buildinfo(\.js)?'/);
+      expect(src, f).toContain('readFileSync');
+    }
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.

@@ -2,6 +2,10 @@
 // (T2) — a small authenticated WS surface exposing a whitelisted
 // exec/file/tail/pty API on a REMOTE fleet host. Single source of truth for
 // both sides; copied verbatim per the plan's pinned interfaces.
+//
+// L0: this file imports nothing but its `shared/` siblings — it bundles into
+// the PWA, so not even `node:*`.
+import type { BuildInfo } from './buildinfo.js';
 
 export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
@@ -32,8 +36,26 @@ export interface AgentHello { t: 'hello'; token: string }
  *  files agree and `ccd`'s behaviour still doesn't.
  *
  *  Optional for the same reason `ccdVerbs` is: an older agent omits it, and
- *  absent must read as "no evidence either way", never as "divergent". */
-export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string }
+ *  absent must read as "no evidence either way", never as "divergent".
+ *
+ *  `build` is the FLEET HOST's own build stamp — `~/.ccrc/build.json` as
+ *  `deploy/deploy.sh`'s `stamp_build` wrote it on the agent lane, parsed by
+ *  `shared/buildinfo.ts`'s `parseBuildInfo` (the same validator the server
+ *  applies to its own stamp, imported rather than restated). Until this field
+ *  existed the two boxes' builds could diverge indefinitely with nothing able
+ *  to say so: `/health` reports the SERVER's sha, and the fleet host's was
+ *  legible only by ssh'ing there. The skew is not hypothetical — the agent
+ *  lane and the server lane are separate deploys, and an AGENT-FIRST change
+ *  (`ccd/`, `session-hook.sh`) ships to one box on purpose.
+ *
+ *  Optional, and omitted rather than sent empty, for the third time on this
+ *  interface: an older agent, an unstamped dev box and an unreadable stamp are
+ *  one condition on the wire — "no evidence" — and none of them is "the boxes
+ *  disagree". A stamp that fails validation is omitted too, never forwarded as
+ *  a partial: a `build` whose `sha` is absent compares unequal to the server's
+ *  sha and would manufacture a skew alarm out of a file the fleet host could
+ *  not read. */
+export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo }
 
 /** `ccd caps` output -> the list both readers keep: one token per non-empty
  *  line shaped like a bash identifier (`/^[a-z][a-z-]*$/`) — verbs AND

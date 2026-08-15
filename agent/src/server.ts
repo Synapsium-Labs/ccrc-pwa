@@ -26,6 +26,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
+import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { readB64, readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
@@ -126,8 +127,15 @@ export function resolveProjectsRoot(
   return root;
 }
 
-type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong
-  | { t: 'ready'; v: 1; ccdVerbs: string[]; rosterFp?: string };
+/** The agent's side of `AgentReady` (shared/agent-protocol.ts), which differs
+ *  in exactly one way: `ccdVerbs` is REQUIRED here. The reader must tolerate an
+ *  agent old enough to omit it; this agent always has a list — `[]` when `ccd`
+ *  could not be read — so its own frame type says so. Named rather than left
+ *  inline in `OutMsg` so the send site can declare a frame it fills in field by
+ *  field without restating the shape a third time. */
+type ReadyFrame = { t: 'ready'; v: 1; ccdVerbs: string[]; rosterFp?: string; build?: BuildInfo };
+
+type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
 
 function send(ws: WebSocket, msg: OutMsg): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -418,6 +426,46 @@ function readRosterFp(home: string): string | undefined {
   }
 }
 
+/**
+ * This box's own build stamp — `~/.ccrc/build.json` as `deploy/deploy.sh`'s
+ * `stamp_build` installed it on the agent lane — or `undefined` when there
+ * isn't a usable one to read.
+ *
+ * The server has no other way to learn what the fleet host is running. Its
+ * `/health` reports the SERVER's sha; the fleet host's has been legible only
+ * by ssh'ing there and reading this same file by hand. The two lanes are
+ * separate deploys and an AGENT-FIRST change ships to one box on purpose, so
+ * skew is a normal transient state that nothing could name until now.
+ *
+ * Read fresh on every `ready`, synchronously, for the reasons spelled out on
+ * `readRosterFp` above — one small file read, at most once per WS connection,
+ * bought against having no staleness question at all. It matters slightly more
+ * here: the deploy RESTARTS this agent, but it is the server's link that
+ * reconnects afterwards, so a stamp cached at boot would be answering for a
+ * process that outlived the file.
+ *
+ * `undefined`, not `null` and not a partial object, for every failure — no
+ * stamp (dev checkout, never deployed to), unreadable, unparseable, or
+ * well-formed JSON of the wrong shape. `undefined` is what the send path below
+ * turns into an OMITTED key, which the server reads as "no evidence". The
+ * distinction is load-bearing in the wrong-shape case especially: forwarding a
+ * half-stamp would put a `sha: undefined` on the wire, which compares unequal
+ * to the server's sha and invents a skew alarm out of a file this box could not
+ * read. `parseBuildInfo` (`shared/buildinfo.ts`) makes that judgement, and it is
+ * the same one the server makes about its own stamp — imported, not restated,
+ * so a comparison between the two boxes can never straddle two definitions of
+ * a well-formed stamp.
+ */
+function readBuildInfo(home: string): BuildInfo | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(path.join(home, '.ccrc', 'build.json'), 'utf8');
+  } catch {
+    return undefined;
+  }
+  return parseBuildInfo(raw) ?? undefined;
+}
+
 /** The list `readCcdVerbs` last produced, plus the stat of the script that
  *  produced it. Per-`startAgent` state, never module-level: the test suite
  *  boots several agents in one process and they must not share a cache. */
@@ -486,13 +534,21 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       }
       authed = true;
       clearTimeout(helloTimer);
-      // `rosterFp` is omitted, not sent as null, when this box has no readable
-      // projection — `AgentReady` declares it optional and the server's reader
-      // treats absence as "no evidence", the same contract `ccdVerbs` has.
+      // `rosterFp` and `build` are OMITTED, not sent as null or as an explicit
+      // `undefined`, when this box has no readable projection / no usable
+      // stamp — `AgentReady` declares both optional and the server's readers
+      // treat absence as "no evidence", the same contract `ccdVerbs` has.
+      //
+      // Assembled field by field rather than by the ternary this used to be:
+      // with two optional fields that ternary becomes four spellings of one
+      // frame, and a third field eight. The contract is unchanged — a key is
+      // written only when there is something to write.
+      const frame: ReadyFrame = { t: 'ready', v: 1, ccdVerbs: verbCache.verbs };
       const rosterFp = readRosterFp(opts.home);
-      send(ws, rosterFp === undefined
-        ? { t: 'ready', v: 1, ccdVerbs: verbCache.verbs }
-        : { t: 'ready', v: 1, ccdVerbs: verbCache.verbs, rosterFp });
+      if (rosterFp !== undefined) frame.rosterFp = rosterFp;
+      const build = readBuildInfo(opts.home);
+      if (build !== undefined) frame.build = build;
+      send(ws, frame);
       return;
     }
 
