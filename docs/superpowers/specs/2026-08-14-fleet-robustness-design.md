@@ -63,32 +63,53 @@ pack. Then the session that made those commits **reset `main` and moved the work
 here are now verified against the merge target. **A line number is a claim with a shelf life. Trust
 shipped source's own comments over any document, including this one.**
 
-**Third flip, and the last one this document will chase by hand.** PR #49 merged `fix/ccd-swap-jitter`
-on 2026-08-15 (`origin/main` = `5f1e666`), so `main`'s ccd is now the 7544-line body the fleet host was
-already running. **Every `ccd:N` in this document is stated against `21fef2a` (7523 lines) and must be
-shifted to read against `5f1e666`.** The diff is two insertions and nothing else, so the map is
-arithmetic rather than a re-derivation:
+**The baseline is FROZEN at `d7137c2`, and every `ccd:N` below is stale.** `main` moved three times
+under this document: `21fef2a` (7523 lines) → PR #49 `5f1e666` (7544) → PR #50 `d7137c2` (**8612**).
+Two of those flips I chased by hand and one by an arithmetic offset map, and each time the map was
+dead within a day. So this document stops carrying line numbers as if they were facts.
 
-| `21fef2a` line range | offset to `5f1e666` |
+**The rule, from here to the end of this build:** every anchor is *derived by content* against the
+frozen ref — `git grep -n <identifier> d7137c2 -- <path>` — never copied forward from this document
+and never taken from `origin/main`, which is a moving target. A `ccd:N` printed anywhere below is a
+**historical note recording where a thing was when it was found**, not an address to open. The
+identifier is the address. Where a section's argument depends on the surrounding code rather than
+on the identifier alone, the section quotes the code verbatim so the quote can be grepped.
+
+**The waiver is not about `ccd` alone — it covers every SERVER-side anchor in this document too.**
+Those were measured before PR #50, and #50 rewrote three of the files they point into: `+40` lines in
+`server/src/watch.ts`, `+268` in `shared/api.ts`, `+199` in `README.md`. A `watch.ts:N`, an
+`api.ts:N` or a `README.md:N` below is the same kind of historical note as a `ccd:N`, and must be
+re-derived by content at `d7137c2` before anything is opened. The five that were re-derived by hand,
+recorded so nobody chases the old ones:
+
+| Anchor as measured | At `d7137c2` |
 |---|---|
-| 1 – 49 | **0** |
-| 50 – 6748 | **+11** |
-| 6749 – end | **+21** |
+| `archiveMerged` at `watch.ts:1900-1963` | `:1920-1999` |
+| the "consult the fresh answer, not the snapshot" comment this build cites as *already fixed once*, `watch.ts:1931-1935` | `:1951-1955` |
+| `composePrompt` at `shared/api.ts:2275-2277` | `:2556-2558` |
+| `README.md:202-205`, cited by §2.3 as blessing a by-hand archive of a held workspace | **BROKEN** — those lines are now the lifecycle-field table's header. The premise survives intact at **`README.md:277`**: *"manual archive/restore — a merged-but-held workspace can still be archived by hand from the PR sheet"*. §2.3's argument is unaffected; only its address was. |
+| C5's `README.md:191` | `:265` — *"A hold has exactly two consumers."* |
 
-(`git diff 21fef2a..origin/main -- ccd/ccd \| grep '^@@'` reproduces it: `@@ -50,6 +50,17 @@` and
-`@@ -6749,8 +6760,18 @@`.) The implementation plan re-derives every anchor by content against whatever
-HEAD it targets — arithmetic here, grep there, and never a number copied forward on trust.
+`sweepNames`' own narrowing rungs moved the same way (`:1267`/`:1269` → `:1273`/`:1275`), and
+`archiveMerged`'s (`:1911`/`:1912` → `:1931`/`:1932`); both are corrected in place below, because one
+of them was a directive an implementer would have followed.
+
+`d7137c2` is the merge of PR #50 (`ws/fix-swap-transcript-defect-family`), which landed **while this
+spec's implementation plan was being written** and shipped a substantial part of Wave 1 — see
+"What PR #50 already shipped" below. Wave 1's remaining scope is stated against that fact, not
+against the pre-#50 tree this document was originally measured on.
 
 Two live facts that follow, and that the pack could not have seen:
 
-- **The fleet host is running unmerged ccd.** Installed = `5bdc6dd` (`fix/ccd-swap-jitter`, pushed but
-  not merged); `main` = `871215b`. So the box is *ahead* of `main`, not behind, and every ccd line
-  number in this document is off by +21 below `_pane_hard_blocked` **relative to what is actually
-  executing**. `ccd version` also still reports `c8fd87f (built 2026-08-12T20:04:29Z)` — a stale
-  provenance marker, which by `baf8e5b`'s own account makes ccd "report `ccrc-edited` on every box
-  forever, the verdict that tells the stage-2b installer NOT to replace it." **Wave 1 must not ship ccd
-  until `fix/ccd-swap-jitter` merges and the marker is re-stamped**, or the agent-first deploy lands
-  under a marker that refuses it.
+- **The fleet host was running unmerged ccd — RESOLVED, and the resolution is why the baseline moved.**
+  When measured, installed = `5bdc6dd` (`fix/ccd-swap-jitter`, pushed but not merged) against `main` =
+  `871215b`: the box was *ahead* of `main`. `ccd version` also reported a stale provenance marker
+  (`c8fd87f`, built 2026-08-12), which by `baf8e5b`'s own account would make ccd "report `ccrc-edited`
+  on every box forever, the verdict that tells the stage-2b installer NOT to replace it." Both are now
+  closed: PR #49 merged that branch and PR #50 merged a much larger one on top. **The standing
+  obligation survives the specific incident** — Wave 1 must not ship ccd while the box is ahead of the
+  merge target, and every commit touching `ccd/ccd` re-stamps the marker in *that* commit, or the
+  agent-first deploy lands under a marker that refuses it.
 - **A fifth robustness surface exists and is already half-fixed by someone else.** `5bdc6dd` records
   that on 2026-08-13 a fleet-wide limit rollover dispatched six swaps in the same second; each
   SessionEnd/SessionStart hook pair launched a ~2 GB telemetry scan, and the box stalled for **9.7
@@ -129,6 +150,84 @@ Plus four stale source anchors:
 - `watch.ts:1398` cites `send.test.ts:642`; the const is at **`:19-20`**, the pinned assertion at **`:880`**.
 - `ccd-workspaces.test.ts` (**`:225`**) anchors `_spawn`'s guard at `ccd:497-503`; it is at **`:7142`**.
 
+## What PR #50 already shipped
+
+PR #50 (`ws/fix-swap-transcript-defect-family`) merged as `d7137c2` **while this spec's implementation
+plan was being written** — 18,125 insertions across 85 files, `ccd/ccd` 7544 → 8612 lines. It is a
+different build closing a different incident, and it lands on the same code Wave 1 designs against.
+Read this section before any wave; it is the difference between the tree this spec was measured on and
+the tree it will be implemented on.
+
+**Everything in this section was re-verified by hand at `d7137c2`**, including thirteen absence greps.
+
+**Shipped, so struck from this build:**
+
+- **The settle loop's silent-success lie is fixed — with a wider verdict table than §1.2 asked for.**
+  `_accept_first_run_prompts` now returns `0` ready, `2` login, **`3` the tmux session vanished
+  mid-poll** (with a one-shot `has-session` debounce so a flaky read on a loaded box does not
+  manufacture a false failure), **`4` the window expired**. Its docstring carries the whole table and
+  names M6. §1.2's "it will return 3 on exhaust" is **superseded**: exhaust is `4`, and `3` is a
+  genuinely different condition the spec never distinguished.
+- **The verdict is already a durable registry fact.** `_spawn` writes `_reg_set "$id" spawn
+  "$(date +%s) $prompt_rc"` — field `spawn`, encoding `<epoch-seconds> <rc>` — under a comment making
+  §1.2's own argument: "The verdict becomes a FACT before it becomes a return code … an exit code is on
+  nothing's wire at all." **§1.2's proposed `spawnstate` field must not be minted.** Build on `spawn`;
+  its timestamp is load-bearing, because `_supervised_start` compares `at >= since` to tell *this*
+  attempt's failure from the previous one's — a bare word field cannot.
+- **`_inject_spawn_effort` is gated on `prompt_rc == 0`**, exactly §1.2's requirement, and strictly
+  stronger than the `!= 2` it replaced.
+- **Every session-creating verb reports a failed spawn.** All four capture `rc=$?` and print to stderr
+  naming the fact file — `ccd: ws-add spawn failed for <id> (spawn rc <rc>) — see $REG/<id>.spawn`.
+- **`cmd_ws_add` already exits NON-ZERO on rc 3/4**, deliberately. **This contradicts §1.2's stated
+  polarity** ("`ws-add` still exits 0 on a non-`ready` settle") in the present tense — see §1.2, where
+  the contradiction is now resolved rather than restated.
+- **A per-row lifecycle chip already ships in the PWA** (`sess-lifecycle`, with a `data-lifecycle`
+  attribute and an actions-sheet repair gate), fed by a shipped vocabulary. §1.6's "the PWA surface
+  stays modest" is satisfied by construction: the chip exists.
+- **`cmd_enable` has no `systemctl` call to move.** It is an arity check, `_id`, `cmd_start "$@"`, and
+  an echo. §1.1's instruction to move its `enable --now` earlier is **struck** — followed literally it
+  would mint a *second* `enable --now` for the same unit, racing `_supervised_start`'s own, and without
+  the `reset-failed` that one is paired with.
+- **`CCD_VERB_TIMEOUT_MS` already carries `'ws-add': 300_000` and `ensure: 300_000`**, under a comment
+  naming F8 and stating the unclosed ccd-side half verbatim. Only `start` and `enable` still lack rows.
+- **A crash-looping session now becomes a FAILED unit rather than an invisible restart loop.**
+  `claude-session@.service` gained `StartLimitIntervalSec=120` / `StartLimitBurst=5` **in `[Unit]`** —
+  with a measured note that putting them in `[Service]` silently honours the burst against systemd's
+  default 10 s interval. This makes `orphan` mean something real. It does **not** touch `KillMode` or
+  the substrate-parenting question, so §1.7 stands.
+
+**The largest overlap: a `SessionLifecycle` vocabulary, which is most of §1.6's mechanism.**
+
+`shared/api.ts` now carries `SessionLifecycle = running | unsupervised | stopped | restarting | orphan
+| never-started | unmeasurable`, with the derived-enumeration discipline (`Record<SessionLifecycle,
+true>` → `SESSION_LIFECYCLES`, docstring naming TS2739/TS2353), an `isSessionLifecycle` narrower, a
+clock-free pure ladder `sessionLifecycle(input)`, a `LifecycleInput` carrying an explicit `unmeasured`
+field-name list, and `SUPERVISED_FRESH_MS`. `FleetSession.lifecycle` rides the wire through
+`reviveFleetSession`. ccd carries the **bash twin** `_session_state`, and
+`server/test/sessionLifecycleFixture.ts` drives both from one table.
+
+It is good work, it follows the same doctrine §1.6 argues from, and **§1.6 must extend it rather than
+mint a second vocabulary beside it.** §1.6 is rewritten accordingly.
+
+**But the bug that started this build is still invisible, and the proof is one line.**
+
+    if (input.alive) return supervised ? 'running' : 'unsupervised';
+
+`input.started` is read on **exactly one line** of the ladder, reachable only after that branch has not
+returned — i.e. only when `alive === false`. So the F8 shape — registered row, **live pane**, fresh
+heartbeat, **no `started` stamp** — returns `'running'`, bit-identical to a healthy session. The bash
+twin has the identical structure. Downstream it is equally invisible: `FleetSession` carries no
+`started` field, so the bit never reaches the wire; the chip is `null` for `running` by design. The bit
+has exactly one consumer in the tree — `fleet.ts`'s `started: r.started` into `LifecycleInput` — which
+discards it one branch later. The shipped suite corroborates by omission: **no fixture row combines
+`alive:true` with `started:false`**, so the 24-combination cross-language sweep still yields only six
+tokens.
+
+**This sharpens §1.6's finding rather than weakening it.** The spec said `started` was "consumed by
+nothing"; the truth is that it *is* consumed, and thrown away on the branch where it matters. And it
+makes the remaining fix small: **one rung on a ladder that already exists**, flowing to a chip, a
+`data-` attribute and a repair gate that already exist.
+
 ### The live specimen
 
 `ccrc-pwa-swift-harbor` has been sitting on the box since 2026-08-12 18:10:03 in exactly the F8 state:
@@ -140,7 +239,7 @@ nothing for (`ccd:6214-6219`, `:6679-6680`); `ensure` → `alive: <id>`, exit 0,
 
 It is also no longer invisible in one respect: `sweepPr` stamped `.prphase=no-commits` onto it at 06:59
 on 2026-08-14, so it does flow into `this.prStates`. `archiveMerged` skips anything whose phase is not
-`merged` (`watch.ts:1910-1912`) and — having never taken a turn — it will never have a merged PR, so
+`merged` (`archiveMerged`'s phase skip, `watch.ts:1930-1932` at the frozen ref) and — having never taken a turn — it will never have a merged PR, so
 **there is no level-triggered exit**. *(Framing corrected from an earlier draft: the stamp is not what
 pins it — `this.prStates.get(r.id)` returning `undefined` skips identically, so the sweep would ignore
 this workspace with or without the `prphase` row. The conclusion stands; the causal story does not.)* Per the operator's standing ruling
@@ -168,106 +267,171 @@ Given to the operator as the four questions the code cannot answer, 2026-08-14:
 
 ### 1.1 `started` and supervision move ahead of the blocking wait
 
-This is the single highest-yield change in the build. Today `cmd_ws_add:1257` is one line holding two
-statements — `_spawn "$id" new; _reg_set "$id" started 1` — with `_ws_supervise "$id"` on `:1258`.
-`_spawn` blocks for 900–1350 s inside `_accept_first_run_prompts`, and the agent kills it at 300 s. Every
-kill lands in that window.
+This is the single highest-yield change in the build, and **PR #50 closed part of it — but not the
+root cause.** Read this section against `d7137c2`, not against the pre-#50 tree the original draft
+measured.
+
+**What is still broken.** `cmd_ws_add` holds, in this order:
+
+    local rc; _spawn "$id" new; rc=$?
+    _reg_set "$id" started 1
+    _ws_supervise "$id"
+
+`_spawn` blocks for 900–1350 s inside `_accept_first_run_prompts`, and the agent kills it at 300 s.
+Every kill lands in that window, and both the claim and the supervision are on the far side of it.
+`cmd_ws_restore` has the identical shape. **That is F8's root cause, untouched.**
+
+**What #50 already fixed, so this section no longer claims it.** The out-of-unit `ccd start` path —
+the one the app actually uses — no longer calls `_spawn` at all. It calls `_supervised_start`, which
+runs `systemctl --user reset-failed` and `systemctl --user enable --now` **before** any spawn, polls
+for a bounded `SUPERVISED_START_WAIT` (30 s), and returns; `started` is written after that bounded
+call, not after a 900 s settle. `cmd_ensure` out-of-unit is identical. **The original claim that
+`cmd_start` "carries the identical F8 ordering" is false at this baseline — strike it.** Likewise
+strike the instruction to move `cmd_enable`'s `systemctl --user enable --now` earlier: `cmd_enable`
+contains no `systemctl` call at all (it is an arity check, `_id`, `cmd_start "$@"`, an echo), and
+following that instruction literally would mint a **second** `enable --now` for the same unit, racing
+`_supervised_start`'s own — and without the `reset-failed` that one is deliberately paired with.
 
 `_spawn` splits into two:
 
-- **`_spawn_start <id> <mode>`** — resolve the registry, build the wrapper argv, `tmux new-session -d`,
-  and then, **immediately, before returning**, `_reg_set "$id" started 1`. Returns in milliseconds.
-- **`_spawn_settle <id> <fromswap>`** — the blocking gate loop and `_inject_spawn_effort`. Writes
-  `spawnstate`. Never writes `started`.
+- **`_spawn_start <id> <mode>`** — resolve the registry, build the wrapper argv, `tmux new-session -d`.
+  Returns in milliseconds.
+- **`_spawn_settle <id> <fromswap> [bound]`** — the blocking gate loop and `_inject_spawn_effort`.
+  Writes the `spawn` verdict fact (§1.2). Never writes `started`.
 
-`_spawn` remains as the composition of the two, so `swap` is unchanged. **There are FOUR `_spawn` call
-sites, not three** — `grep -n '_spawn "\$id"' ccd/ccd` returns `:1257` (`cmd_ws_add`), `:2353`
-(`cmd_ws_restore`), `:7208` (**`cmd_start`**) and `:7217` (`cmd_ensure`). All four convert to the split
-form:
+`_spawn` remains as the composition of the two, so `swap` is unchanged.
 
-- `cmd_ws_add` and `cmd_ws_restore` keep `_ws_supervise "$id"` **between** the halves (they already call
-  it, at `:1258` and `:2355` — the only two `_ws_supervise` call sites in the file).
-- **`cmd_start` carries the identical F8 ordering and was missed by the measurement pass.** `ccd:7208`
-  is the same one-line `_spawn "$id" "$mode"; _reg_set "$id" started 1`, and `cmd_start` **never
-  supervises** — that is `ccd start`'s contract. It writes `started` between the halves; `cmd_enable`
-  (`ccd:7336-7340`) moves its `systemctl --user enable --now` from **after** `cmd_start` to before the
-  settle. This path is not obscure: `POST /api/sessions` picks `CCD_ARGV.start` only when
-  `body.enable === false`, and the PWA never sends that field, so **every session the app creates goes
-  through `cmd_enable` → `cmd_start`**.
-- `cmd_ensure` writes `started` between the halves and **does not** supervise. This is deliberate and
-  must stay: `cmd_supervise` (`ccd:7221-7227`) **is** the unit's `ExecStart` and calls `cmd_ensure` at
-  `:7223`, so supervising there would have the unit `systemctl --user enable --now` itself on every
-  restart. Not a deadlock (`Type=simple` + `Restart=always`), but `ccd:2301-2302` records ensure's
-  non-supervising behaviour as an explicit decision — *"`ccd ensure` does NOT re-supervise … boot
-  persistence would be silently lost"* — and this build does not overturn it. *(That comment's own
-  anchor, `ccd:1427-1434`, is itself stale; correct it in passing.)*
+**Pick ONE `started` writer, explicitly.** There are already four unconditional `started` writers among
+the verbs, plus writes inside `_supervised_start`. Moving the write into `_spawn_start` while leaving
+the existing ones gives `started` six writers across two processes — a fact with six authors is a fact
+nobody owns, and it is the same defect class as two vocabularies for one state. **Either `_spawn_start`
+becomes the sole writer and every caller's line is deleted, or the callers stay authoritative and
+`_spawn_start` writes nothing.** The plan states which, once, and the test pins the count.
 
-`CCD_VERB_TIMEOUT_MS` (`server/src/remote/runner.ts`) gains **`start: 300_000` and `enable: 300_000`**.
-Today neither has a row, so both inherit the flat `CCD_TIMEOUT_MS = 90_000` while ending in the same
-blocking `_spawn` — a budget **3.3× tighter** than the one whose expiry caused F8, on the app's default
-session-creation path. That omission is its own latent F8 and this build closes it.
+**Enumerate the `_spawn` call sites by grep at the frozen ref, not from this document.** The
+measurement pass found **six**, not the three or four earlier drafts claimed — the four verb paths plus
+fallback sites inside `_supervised_start`, which are reached when systemd is unavailable. Those
+fallbacks are new scope this spec did not originally cover and the plan must convert them too;
+a fallback that still spawns-first re-opens the hole on exactly the boxes least able to recover.
 
-The invariant, scoped to match: **every `_spawn` caller that creates a session writes `started` before
-it blocks, and every caller that supervises at all does so before it blocks.** A kill after
-`_spawn_start` therefore leaves an ordinary, restartable session — F8's residue class ceases to exist.
+Per call site:
 
-It also fixes the wrong-mode resurrection. `cmd_ensure:7216` picks `mode=new` when `started` is empty,
-which hands `--session-id '<uuid>'` to a wrapper for a uuid whose `session-env` directory already exists
+- `cmd_ws_add` and `cmd_ws_restore` keep `_ws_supervise "$id"` **between** the halves.
+- The **in-unit** branches of `cmd_start` and `cmd_ensure` still spawn-first and convert to the split
+  form, writing `started` between the halves. Neither supervises, and that must stay: `cmd_supervise`
+  **is** the unit's `ExecStart` and reaches `cmd_ensure` with `CCD_IN_UNIT=1`, so supervising there
+  would have the unit `enable --now` itself on every restart. ccd records that as an explicit decision
+  — *"`ccd ensure` does NOT re-supervise … boot persistence would be silently lost"* — and this build
+  does not overturn it.
+- The `_supervised_start` fallback sites convert to the split form with the same ordering rule.
+
+`CCD_VERB_TIMEOUT_MS` (`server/src/remote/runner.ts`) already carries **`'ws-add': 300_000` and
+`ensure: 300_000`**, added by #50 under a comment naming F8 and stating the unclosed ccd-side half
+verbatim. **`start` and `enable` still have no row**, so both inherit the flat `CCD_TIMEOUT_MS =
+90_000`. They no longer end in a 900 s `_spawn` — `_supervised_start` bounds itself at 30 s — so this
+is now a smaller correctness fix rather than a latent F8, but it is still wrong: a verb whose worst
+case exceeds its budget should say so in the table. Add both rows.
+
+The invariant, scoped to match: **every path that creates a session writes `started` before it blocks,
+and every path that supervises at all does so before it blocks.** A kill after `_spawn_start` therefore
+leaves an ordinary, restartable session — F8's residue class ceases to exist.
+
+It also fixes the wrong-mode resurrection. `cmd_ensure` picks `mode=new` when `started` is empty, which
+hands `--session-id '<uuid>'` to a wrapper for a uuid whose `session-env` directory already exists
 (measured on the live orphan). With `started` written at session-creation time, `ensure` picks `resume`.
 
 **One caveat, stated rather than glossed:** `started` becomes monotone at session-creation time and
 nothing ever clears it — there is no `_reg_del`/`_reg_unset` anywhere in ccd (grepped: zero hits). So a
 session killed *before any transcript was persisted* now gets `mode=resume` forever, i.e. `--resume
 '<uuid>'` against a zero-transcript uuid. That direction was **not** measured. Wave 1 therefore ships an
-explicit fallback: if `_spawn_start`'s `--resume` fails, retry once with `--session-id`. (The *other*
-direction — `--session-id` for a consumed uuid — is the one this change removes, and is listed as a
-non-goal precisely because it stops being reachable.)
+explicit fallback: if `_spawn_start`'s `--resume` fails, retry once with `--session-id`. #50's own
+stderr text names the same trap from the other side — it tells the operator to clear
+`$REG/<id>.started` by hand when a session never really started — which is corroboration that the
+monotone-`started` hazard is real, and an argument for the automatic fallback rather than a manual one.
+
+**Test-harness obligation this change creates.** #50's `_supervised_start` reaches
+`systemctl --user enable --now` from paths the ccd harness closes only per-file today. Wave 1 extends
+the shared harness (`server/test/ccdWsHelpers.ts`) so the protection is structural rather than
+per-test. Note that stubbing the systemd probe **alone is insufficient**: making it report "no systemd"
+sends `_supervised_start` down its fallback into a **real** `_spawn`. The stub set must cover
+`_spawn`, `_ws_supervise`, and `_supervised_start` together, and `_ws_supervise` must be a **recording**
+stub so the ordering this section specifies is asserted rather than assumed.
+
 
 ### 1.2 The settle loop stops lying, and stops running past the agent's ceiling
 
-`_accept_first_run_prompts` gains three things:
+**Half of this section shipped in PR #50. What remains is the ceiling and the hard-block recognizer.**
 
-- **A distinct exhaust verdict.** Today it returns 0 on a ready marker, 2 on a login screen, and **0 on
-  exhaust**. It will return `3` on exhaust. Its docstring stops claiming it confirms the TUI on a path
-  where it does not.
-- **A hard-block branch.** `_pane_hard_blocked` (`ccd:6952-6959`) already matches a limit/spend/auth
-  banner. The shipped regex at `ccd:6958` is wider than the abridged form an earlier draft quoted here
-  as if verbatim — it also carries `hit your .*spend`, `Too Many Requests`,
-  `rate limit(ed| exceeded| reached)?` and `Invalid API key`.
-  Its only caller today is `_auto_swap_check`. The settle loop calls it and returns `4`. This is the
-  recognizer `build4.md:172-173` asked for; it already exists one call away, which two measurement
+**Shipped, and struck from this build:**
+
+- **The silent-success lie is gone, in a wider form than this section asked for.**
+  `_accept_first_run_prompts` returns `0` ready, `2` login, **`3` the tmux session vanished mid-poll**,
+  **`4` the window expired**. This section originally asked for "return 3 on exhaust"; the shipped code
+  distinguishes *two* failure modes where this spec saw one, and numbers exhaust `4`.
+  **Do not renumber.** Four call sites plus `_supervised_start` already branch on `[[ "$rc" -eq 3 || "$rc"
+  -eq 4 ]]`, and renumbering would silently retarget every one of them.
+- **The docstring stops claiming it confirms the TUI on a path where it does not** — it now carries the
+  whole verdict table and names M6 explicitly.
+- **`_inject_spawn_effort` is gated on `prompt_rc == 0`**, which is exactly this section's requirement
+  and strictly stronger than the `!= 2` it replaced.
+- **The verdict is already a durable registry fact** in field `spawn` (§1.6b). **`spawnstate` must not
+  be minted.**
+
+**Still needed, and both are real:**
+
+- **A hard-block branch — returning `5`, not `4`.** `_pane_hard_blocked` already matches a
+  limit/spend/auth banner, and the shipped regex is wider than an earlier draft quoted: it also carries
+  `hit your .*spend`, `Too Many Requests`, `rate limit(ed| exceeded| reached)?` and `Invalid API key`.
+  **Its only caller is still `_auto_swap_check`** — verified at the frozen ref, three references
+  total: one comment, the definition, and that one call. The settle loop calls it and returns a new
+  code. `4` is taken by exhaust, so the recognizer gets **`5`**; the codes `_accept_first_run_prompts`
+  can produce today are 0, 2, 3 and 4, so `5` is free. The distinction is worth a code of its own: an
+  expired window means *we do not know*, a hard block means *we know exactly what is wrong and waiting
+  longer cannot fix it*. Collapsing them would be an adapter narrowing a distinction it received. This
+  is the recognizer `build4.md` asked for; it already exists one call away, which two measurement
   agents found separately and neither connected.
-- **A wall-clock bound, not an iteration count.** `CCD_SPAWN_SETTLE_S`, default **240 — but only on the
-  agent-reachable path**. Today the bound is 450 iterations: 900 s on the plain path, ~1350 s when gate
-  branches fire (`sleep 1` + `sleep 2` each) — 3× to 4.5× the agent's hard 300 s ceiling
-  (`agent/src/server.ts:56`), so a session slower than 300 s **cannot be spawned through the dispatch
-  path at all; it can only be killed**. 240 s leaves room for the rest of `ws-add` under the ceiling,
-  and is safe only *because* of §1.1: exceeding it is now a report, not an orphan.
+- **A wall-clock bound, not an iteration count.** The bound is still purely iterative:
+  `SPAWN_GATE_TRIES=450`, consumed as `for i in $(seq 1 "$SPAWN_GATE_TRIES")`, with **no epoch read
+  anywhere inside the function**. That is 900 s on the plain path and ~1350 s when gate branches fire
+  (`sleep 1` + `sleep 2` each) — 3× to 4.5× the agent's hard 300 s ceiling. #50 made the variable named
+  and overridable, which is an improvement, but a session slower than 300 s still **cannot be spawned
+  through the dispatch path at all; it can only be killed**. `CCD_SPAWN_SETTLE_S`, default **240**, on
+  the agent-reachable path: it leaves room for the rest of `ws-add` under the ceiling, and is safe only
+  *because* of §1.1 — exceeding it is now a report, not an orphan.
 
-  **The bound must be per-caller — and an earlier draft had the discriminator exactly backwards.**
-  `_accept_first_run_prompts` is also reached from `cmd_supervise` (systemd `ExecStart`, no ceiling) and
-  from `ccd swap`. That draft keyed the two bounds off `fromswap`, on the belief that swap takes the slow
-  branch. **Measured false:** `cmd_swap` writes `lastswap` at `ccd:7308`, *two lines before* the restart
-  at `:7310`, and `_spawn` sets `fromswap=1` within 300 s of `lastswap` (`ccd:7146-7148`). So **swap
-  takes the FAST branch and a fresh `ws-add` is `fromswap=0`** — implemented literally, `ws-add` would
-  have got ~900 s and §1.2's whole bound would have evaporated.
+  **The bound must be per-caller, and an earlier draft had the discriminator exactly backwards.** The
+  loop is also reached from `cmd_supervise` (systemd `ExecStart`, no ceiling) and from `ccd swap`. That
+  draft keyed the two bounds off `fromswap`, believing swap takes the slow branch. **Measured false:**
+  `cmd_swap` writes `lastswap` two lines before the restart, and `_spawn` sets `fromswap=1` within
+  300 s of `lastswap`. So **swap takes the FAST branch and a fresh `ws-add` is `fromswap=0`** —
+  implemented literally, `ws-add` would have got ~900 s and this whole bound would have evaporated.
 
-  So: **`_spawn_settle` takes its own bound parameter, defaulting to 240 s**, and `cmd_supervise` raises
-  it. Not `fromswap`. The distinction being drawn is "is there an agent ceiling above me", which no
-  existing flag encodes. A global 240 s is also wrong: it would make every systemd restart of a large
-  session settle `unconfirmed` — the "700k+-token resumes take minutes between gates" case the docstring
-  cites for its ~15 min window (`ccd:7088-7089`) — which **suppresses `_inject_spawn_effort`** and, under
-  §1.6, lights a warning chip on a healthy session.
+  So **`_spawn_settle` takes its own bound parameter, defaulting to 240 s**, and the no-ceiling callers
+  raise it. Not `fromswap`. The distinction being drawn is "is there an agent ceiling above me", which
+  no existing flag encodes — note `_accept_first_run_prompts` takes only `(tmuxname, fromswap)` today,
+  and that `cmd_supervise` reaches the loop *through* `cmd_ensure`, so the bound has to thread through
+  that call rather than being read from the environment at the bottom. A global 240 s is also wrong: it
+  would make every systemd restart of a large session settle unconfirmed — the "700k+-token resumes
+  take minutes between gates" case the docstring cites for its ~15 min window — which **suppresses
+  `_inject_spawn_effort`** and, under §1.6, would light a warning on a healthy session.
 
-`_spawn_settle` branches on the verdict and records it in a new registry field `spawnstate`:
-`ready | login | unconfirmed | blocked`. On anything but `ready` it **must not** run
-`_inject_spawn_effort` — today a `/effort ultracode` gets typed into an unknown screen after a silent
-exhaust.
+**The exit-code question is RESOLVED, not restated.** An earlier draft of this section ruled that
+`ws-add` "still exits 0 on a non-`ready` settle", arguing that a non-zero exit "would make `dispatchRun`
+return `fleetFailed` and re-create the very orphan we are closing". **The baseline now contradicts that
+in the present tense:** `cmd_ws_add` already exits non-zero on rc 3/4, deliberately and loudly, and #50
+states the reason — a failure that is not reported is the defect it was closing.
 
-`ws-add` still **exits 0** on a non-`ready` settle and still prints the workspace. This is deliberate
-and is the "never remove work" polarity ccd already states at `ccd:1246-1247`: a non-zero exit here would
-make `dispatchRun` return `fleetFailed` and re-create the very orphan we are closing. **The distinction
-lives in `spawnstate`, not in the exit code** — an adapter may not narrow a distinction it received.
+The resolution is that **§1.1 makes the loud polarity safe, and it was not safe before.** Once the
+claim and the supervision are written before the blocking wait, a non-zero `ws-add` no longer means "an
+orphan was created"; it means "the session exists, is claimed, is supervised, and did not confirm its
+TUI". That is a report about a *restartable* session, and §1.5's adoption path is what reads it.
+
+So: **keep #50's non-zero exit, and make dispatch read the fact rather than the code.** The distinction
+that matters lives in `spawn` and in the session's own existence, not in the exit status — an adapter
+may not narrow a distinction it received, and the exit code is the narrowest channel available. The
+plan must verify the `dispatchRun` path end-to-end against this polarity, because that path is live at
+the frozen ref and the earlier draft's premise about it is the one thing here that was never measured.
+
 
 ### 1.3 `ws-add` takes a per-project lock
 
@@ -351,97 +515,159 @@ precondition, and the comment says so in the same words.
 `routes.ts:796` runs `dispatchRun` inside `coordMutex.run(...)`, which serialises open/dispatch/close/
 advance/settle server-wide, so at most one dispatch is ever in flight.)*
 
-### 1.6 The divergence census — the class gets a name, a home, and a test
+### 1.6 The alive branch learns to read `started`, and the census keeps only what a row cannot say
 
-**This section was a chip. Per the operator's 2026-08-15 directive it becomes the mechanism the build is
-judged on.** A chip for F8 would have shipped detection for one member of a seven-member class and
-taught the codebase nothing about the other six.
+**This section was a chip. The operator's 2026-08-15 directive made it the mechanism the build is
+judged on. PR #50 then shipped most of that mechanism under a different name — so this section is now
+an EXTENSION of a shipped vocabulary plus a much smaller census.** Minting a second vocabulary beside
+`SessionLifecycle` would be the very defect this build exists to prevent: two names for one fact, and
+a reader who cannot tell which is authoritative.
 
-**The census is a pure function, and almost all of its inputs are already measured.** That is the
-finding that makes this cheap: `FleetWatcher` already calls `tmux.hasSession(r.id)` for every row
-(`fleet.ts:186`), already reads git refs through `readBranchTip` (`coord/gitref.ts`), and already holds
-the full `SessionRecord[]`. Wave 2 adds open-run knowledge. The only fact nothing can currently see is
-systemd unit state — `EXEC_COMMANDS = ['tmux','ccd']` (`whitelist.ts:134`), so the server cannot run
-`systemctl` and must not learn to.
+#### The one-line fix that closes F8
 
-    // L1, pure: no fs, no fastify, no reply. One home, one test per class.
-    divergences(records, alive, refs, units, openRuns): Divergence[]
+`sessionLifecycle`'s ladder reads `started` on exactly one line, reachable only when `alive === false`.
+So the F8 shape — live pane, fresh heartbeat, no `started` stamp — classifies as `running`. **The
+entire detection is one new rung on the alive branch, and one new member of the union.**
 
-`DIVERGENCE_KINDS` is derived from the map in L0 `shared/api.ts`, enumerated once, with its own describe
-in `single-definition.test.ts` (§1.6's earlier claim that this comes free was wrong — see the audit
-trail). The seven classes, each measured live on 2026-08-15:
+    if (input.alive) {
+      if (!input.started) return 'unclaimed';        // NEW: a pane nobody wrote a claim for
+      return supervised ? 'running' : 'unsupervised';
+    }
 
-| kind | condition | live count | repair |
-|---|---|---|---|
-| `unclaimed-session` | registered, pane alive, `started` absent | **1** | `ccd ensure` adopts (F8) |
-| `dead-row` | registered, `started=1`, **no pane** | **3** | respawn or archive — the **opposite** of adopt |
-| `unsupervised` | pane alive, no unit loaded at all | **3** | `_ws_supervise` |
-| `not-boot-persistent` | unit active, not enabled | **3** | `systemctl --user enable` |
-| `branch-drift` | registry `.branch` ≠ git HEAD in the worktree | **2 live** (6 more archived) | reconcile before a done-fingerprint trusts it |
-| `unregistered-worktree` | worktree with no registry row | **8** | ws-gc's `orphan`; human-only |
-| `claim-divergence` | hold without an open run, or open run whose session has no hold | 0 today | Wave 2 supplies the inputs |
+The rung goes **before** the supervised split, not after: `swift-harbor` was alive *and* supervised
+*and* unclaimed, so an `unclaimed` checked after `running` can never fire on the specimen that
+motivated it. `unmeasurable` still precedes everything — `started` is a `LIFECYCLE_FIELD`, so an
+unreadable stamp already returns `unmeasurable` and cannot be mistaken for an absent one. That
+ordering is the whole design; state it as the contract, because both implementations must agree on it.
 
-**`dead-row` earns its own line because it proves the point.** Three rows carry `started=1` with no pane,
-and adopt-and-enable — the repair this build's ruling names — is *wrong* for them: they do not need a
-claim written, they need a process. A single-class fix would have applied the wrong repair to a class it
-could not distinguish. The census exists so the distinction is structural.
+**Why a new member and not a new census kind:** the fact is a property of one row, derived from inputs
+the ladder already takes, and it flows for free to surfaces that already exist — the `sess-lifecycle`
+chip, its `data-lifecycle` attribute, and the actions-sheet repair gate. A census kind would need all
+three built again.
 
-**What ccd owes it: three fields `ws-audit` structurally lacks.** `_alive` appears nowhere in
-`cmd_ws_audit` or `_ws_reap_eval` (measured), so the audit document — the one artifact whose *job* is
-answering "what is the state of this workspace" — carries no liveness, no `started`, and no unit state.
-`ws-audit` gains `alive`, `started`, and `unit: 'enabled'|'loaded'|'absent'`. **They must be computed
-before `_ws_reap_eval`'s early refusal**, which today returns `not-archived` and leaves every downstream
-field null — that refusal is exactly the shape that made the F8 orphan invisible to the audit. The verb
-stays read-only and its grant is unchanged: `['ws-audit','--session']` is already whitelisted
-(`whitelist.ts:337`), so this adds **no exec surface**.
+**Price it honestly.** "One line" is the ladder. The change also touches: ccd's bash twin
+`_session_state` (the same rung, same position); `sessionLifecycleFixture.ts`, which today has **no row
+combining `alive:true` with `started:false`** — that omission is why the shipped 24-combination sweep
+yields only six tokens, and the new fixture row is what makes the sweep yield seven;
+`session-lifecycle.test.ts`; `ccd-session-lifecycle.test.ts`'s set-equality assertion; and
+`lifecycleWords.ts`'s `QUALIFIER`, which is `Record<Exclude<SessionLifecycle,'stopped'>, …>` and will
+therefore **fail to compile** until the new member gets a sentence. That compile error is the
+mechanism working, not an obstacle. This lands on the **agent-first** deploy lane, because ccd ships
+first.
 
-**What reaches the wire.** `FleetSession` gains `started: boolean` and `spawnState: SpawnState | null`
-(both revived through `reviveFleetSession`, whose literal return makes a missing field a compile error),
-plus the row's `divergence: DivergenceKind | null`. `SessionRecord.started` is parsed today
-(`registry.ts:18, 282, 317`) and consumed by **nothing** — the one bit distinguishing an orphan is
-measured every snapshot and thrown away.
+**The repair `unclaimed` names is `ccd ensure`, and it is the OPPOSITE of `orphan`'s.** `orphan` says
+nothing is bringing this back — the repair is a process. `unclaimed` says a process is running that no
+registry row claims — the repair is a claim. A single-class fix would have applied one to the other;
+that distinction is the reason this section exists.
 
-**The PWA surface stays modest deliberately:** the per-row chip is the census's projection, not a
-parallel implementation, with `null` meaning *no divergence* and the `spawnState: null` / `started ===
-false` handling of Part II's "PWA surface" section. A fleet-level census list is a natural follow-on and
-is **not** in this wave.
+#### The census: three kinds, not seven
 
-**The enforcement clause, which is what makes this a mechanism rather than a report:** a new fleet
-mutation is not done until its interrupted state is either impossible or named in `DIVERGENCE_KINDS`.
-The `single-definition` describe makes a second copy of the enum a red suite; the per-class tests make a
-deleted class a red suite. That is the doctrine from the Goal, given teeth.
+Four of the seven proposed kinds die on contact with the shipped vocabulary:
 
-### 1.6b The enum discipline both new vocabularies need
+| proposed kind | ruling |
+|---|---|
+| `dead-row` (registered, `started=1`, no pane) | **DELETE.** This is `lifecycle === 'orphan'`, and as written it is strictly *broader* — the shipped ladder splits that same population three ways (a stop stamp makes it `stopped`, a fresh heartbeat makes it `restarting`). Derive it; do not re-classify it. |
+| `unsupervised` (pane alive, no unit loaded) | **DELETE, and note why loudly.** One token, two evidence bases: the shipped `unsupervised` is a **heartbeat** verdict, chosen deliberately over unit introspection so the agent's read whitelist stayed unwidened. The systemd half is unreachable while `EXEC_COMMANDS = ['tmux','ccd']`, and re-using the word for it is the sharpest collision in this document. |
+| `not-boot-persistent` (unit active, not enabled) | **DELETE.** Same reason: the server cannot see systemd and must not learn to. |
+| `unclaimed-session` | **PROMOTE** to the `SessionLifecycle` member above. |
 
-`SPAWN_STATES` and `DIVERGENCE_KINDS` are each derived from their map, not hand-listed, and each lands
-in L0 `shared/api.ts`. **Neither gets single-definition protection for free:** `server/test/single-definition.test.ts` has no generic
-scanner — it is hand-written per concept, each with its own literal regex and its own `it` (`RunState`
-at `:263-267`, `MAIL_REJECT_CODES` at `:268-272`, `WORK_ITEM_*` at `:287-293`). Wave 1 must **add** a
-describe **per vocabulary** in that Build-7-nouns idiom (`/^\s*export const SPAWN_STATES\b/m` and
-`/^\s*export const DIVERGENCE_KINDS\b/m`, each scoped to `['shared/api.ts']`, each with a derivation
-assertion and a member-enumeration scan — the spawn tokens also appear in ccd's bash). Otherwise the
-guard §1.6's enforcement clause leans on does not exist, which was an error in an earlier draft.
+Three survive, because each is a disagreement *between sources* rather than a state *of a row* — which
+is precisely what a per-row ladder structurally cannot express:
 
-The per-row chip is the census's projection, and **the naive rule lights all 18 healthy sessions.**
-`spawnstate` is a new registry field, so every pre-existing row revives `spawnState: null`, and "not
-`ready`" is true of `null`. `null` means *not recorded*, explicitly, pinned by a fixture row with no
-`spawnstate` file.
+| kind | condition | repair |
+|---|---|---|
+| `unregistered-worktree` | worktree with no registry row | ws-gc's own verb; human-only |
+| `branch-drift` | registry `.branch` ≠ git HEAD in the worktree | reconcile before a done-fingerprint trusts it |
+| `claim-divergence` | hold without an open run, or open run whose session has no hold | Wave 2 supplies the inputs |
 
-**The rule must also read `started`, and that arm is not optional:** `swift-harbor` has **no
-`spawnstate` at all**, so `spawnState` can never flag it and `started` is the only signal its shape
-emits — which is precisely why the census keys on the *class*, `unclaimed-session`, rather than on any
-single field.
+**Keep the name `unregistered-worktree` even though ccd's `_ws_gc_row` calls the same thing `orphan`.**
+That is not a collision this spec creates; it is one that already exists, and in the worst form:
+`orphan` currently means a *registry row with no pane* in one half of the repo and a *worktree with no
+registry row* — the exact opposite — in the other. Naming this kind explicitly defuses the overload.
+The mapping from ccd's word to the census's must be written down where the translation happens.
 
-    spawnChip = dead                                         ? null
-              : spawnState !== null && spawnState !== 'ready' ? SPAWN_WORD[spawnState]
-              : started === false                             ? 'unstarted'
-              : null
+**And price these three honestly, because §1.6's earlier draft priced them at zero.** That draft
+claimed the watcher "already reads git refs through `readBranchTip`". **That is false** — `fleet.ts`
+imports no gitref module. So `branch-drift` means wiring `readBranchTip` into the watcher *and* undoing
+the place where the statusline's branch already silently overrides the registry's, which is a real
+decision, not plumbing. `claim-divergence` means giving fleet assembly open-run knowledge it does not
+have, which crosses the coord.db containment that `single-definition.test.ts` pins. **If either price
+is judged too high for this wave, cut the kind — do not cut the honesty about its cost.**
 
-Placement, copy, tokens, and the two mechanical obligations it carries (the selected-row achromatic
-override and its membership test) are in Part II, "PWA surface". `swift-harbor` would have shown
-`unstarted` for two days.
+#### Where the census lives, and its single producer
+
+`sessionLifecycle` co-locates its map and its classifier in L0, for a stated reason: two producers must
+not be able to disagree. Splitting `DIVERGENCE_KINDS` (L0) from `divergences()` (L1) is defensible
+**only if the census has exactly one producer**, and the plan must name it. In particular
+`reviveFleetSession` must not become a second producer — the existing precedent in `fleet.ts` exists
+specifically to prevent that shape.
+
+#### What ccd owes the census
+
+`ws-audit` gains `alive`, `started`, and `unit: 'enabled'|'loaded'|'absent'` — three fields it
+structurally lacks today, which is why the artifact whose *job* is answering "what is the state of this
+workspace" could not see F8. **They must be computed before `_ws_reap_eval`'s early refusal**, which
+returns `not-archived` and leaves every downstream field null — that refusal is exactly the shape that
+made the orphan invisible. The verb stays read-only and `['ws-audit','--session']` is already
+whitelisted, so this adds **no exec surface**.
+
+#### One deferral that expires
+
+`fleet.ts` carries a deliberate deferral of the asymmetric-skew fix, justified on the grounds that
+`lifecycle` is "a display-only qualifier that nothing server-side reads yet", and it names its own
+expiry. **If the census makes lifecycle or any heartbeat-derived divergence drive an adopt/respawn
+DECISION rather than a chip, that bound expires** and the deferred fix comes in scope. Wave 1 keeps it
+a chip; the plan must say so explicitly so the deferral stays valid.
+
+#### The enforcement clause
+
+A new fleet mutation is not done until its interrupted state is either impossible or named — by a
+`SessionLifecycle` member or a `DivergenceKind`. The single-definition describes make a second copy of
+either enum a red suite; the per-class tests make a deleted class a red suite. That is the doctrine
+from the Goal, given teeth.
+
+### 1.6b The enum discipline, and the spawn verdict that already has a field
+
+**`spawnstate` must not be minted. Extend the shipped `spawn` field.** `_spawn` already writes
+`<epoch-seconds> <rc>` to `$REG/<id>.spawn`, and the server already parses it into
+`SessionRecord.spawn: { at, rc } | null`. Nothing puts it on the wire, and that is the gap — not the
+absence of a field. **The timestamp is load-bearing and a word-only field would destroy it:**
+`_supervised_start` compares `at >= since` to tell *this* attempt's failure from the previous one's.
+
+So the wire gains a **typed projection of the shipped rc table**, derived once in L0 from ccd's own
+verdicts — `0` ready, `2` login, `3` vanished, `4` expired — rather than a parallel vocabulary of
+words. A rc this build has never heard of must revive as "unrecognised", not as a throw and not as
+`ready`.
+
+**Neither new vocabulary gets single-definition protection for free.** `single-definition.test.ts` has
+no generic scanner — it is hand-written per concept, each with its own literal regex and its own `it`.
+Wave 1 adds a describe **per vocabulary**, in the established idiom, each scoped to `shared/api.ts`
+with a derivation assertion and a member-enumeration scan. **And it adds one for the EXISTING
+`SESSION_LIFECYCLES`, which shipped without one** — a gap worth closing in the same pass, by the same
+rule this build is trying to establish.
+
+**The chip needs no new component.** `lifecycleWords.ts`'s `QUALIFIER` is total over the union and the
+`sess-lifecycle` span already renders it; `unclaimed` gets a sentence there and appears. The spawn
+verdict is a second, orthogonal qualifier — it says how the *last spawn attempt* ended, not what the
+row *is* — and must not be collapsed into the lifecycle word. A row can be `running` today after a
+failed spawn yesterday; showing one as the other would be an adapter narrowing a distinction it
+received.
+
+**The `null` trap the earlier draft caught, restated against the shipped field:** `spawn` is written by
+every spawn from #50 onward, so a row that has not spawned since carries none. `null` means *not
+recorded*, explicitly — never *ready*, and never a warning. Pin it with a fixture row that has no
+`spawn` file. `swift-harbor` has no `spawn` stamp at all, which is exactly why F8's detection keys on
+`unclaimed` and not on the spawn verdict: **the class is the absent claim, not the failed attempt.**
+
 
 ### 1.7 The tmux substrate stops being defended by a comment
+
+**#50 moved every anchor in this section, and added a sibling mechanism.** The unit file gained
+`StartLimitIntervalSec=120` / `StartLimitBurst=5` in `[Unit]` (so a crash-looping session becomes a
+FAILED unit rather than an invisible restart loop), and `SWEEP_CMD` gained a warning that names any
+unit `try-restart` skipped because it was FAILED. Neither touches `KillMode`, so this section stands
+unchanged in substance — but re-derive its anchors by content, and consider asserting the two new
+`[Unit]` keys in the same test that pins `KillMode`, since they now share a failure story.
 
 **Measured 2026-08-15.** The tmux server is pid 1569, `comm="tmux: server"`, up since 2026-08-05
 22:52:29, and its cgroup is
@@ -456,17 +682,18 @@ and puts each pane in its own transient `tmux-spawn-<uuid>.scope` under the slic
 `deploy/systemd/claude-session@.service.d/limits.conf` documents. The exposure is exactly one process —
 but it is the substrate, and every pane dies with it, so the blast radius is the whole fleet.
 
-`KillMode=process` (`ccd/claude-session@.service:14`) is what makes this safe today, and it genuinely
+`KillMode=process` (`ccd/claude-session@.service`, at `:29` since PR #50 added the
+`StartLimitIntervalSec`/`StartLimitBurst` keys above it) is what makes this safe today, and it genuinely
 works: on stop/restart systemd signals only `MainPID`, the `ccd supervise` bash. The hazard is what
 happens if that line goes — **systemd's default is `control-group`**, so *deleting one line* turns
-`deploy.sh:389`'s `try-restart "claude-session@*"` into a fleet kill. And `grep -rn KillMode` over the
+the deploy's `try-restart "claude-session@*"` (in `SWEEP_CMD`) into a fleet kill. And `grep -rn KillMode` over the
 repo returns the unit file plus **two comments** and nothing else. By this repo's own doctrine that is a
 request, not a mechanism.
 
 Two mechanisms, both cheap, and deliberately at different layers:
 
 - **Pin the line.** `agent/test/deploy-verify.test.ts` already reads `ccd/claude-session@.service`
-  (`:238`), and its sweep test's own comment (`:393`) states the dependency verbatim — *"The unit is
+  (twice), and its sweep test's own comment states the dependency verbatim — *"The unit is
   BUILT for this sweep: KillMode=process, with a comment that the tmux substrate must survive a
   supervisor restart"* — while asserting everything except that. Add the assertion there, with the
   failure message naming the consequence. Mutation: delete `KillMode=process` from the unit file, the
@@ -536,7 +763,7 @@ and most of the sweep-blindness window.
 The root cause is stated exactly by the code: the hold is one file keyed on the **session id** with a
 reason string that is **display-only, never parsed back anywhere in this tree**
 (`rundefs.ts:54-61`). It cannot answer "whose claim is this?", and the coordinator protocol
-*deliberately* creates two open runs naming one session — `SKILL.md:204-215` mandates opening wave N+1
+*deliberately* creates two open runs naming one session — `SKILL.md:207-215` mandates opening wave N+1
 **before** closing wave N. That is correct protocol, not a mistake. So one run's abandon calling
 `wsRelease` unconditionally (`close.ts:125-130`) removes a claim that is still live, and within ≤120 s
 `archiveMerged` sees merged + unheld and archives the workspace out from under an open run. That is
@@ -564,12 +791,19 @@ places that hold both halves in one process are exactly `closeRun`, `dispatchRun
   those two comments must be corrected in the same task.
 
 **No cache.** Measured N is not the record count: `sweepNames` narrows to **3** rows before the query
-(`watch.ts:1267` then `:1269`) and `archiveMerged` to **0**; the live `runs` table is **5 rows**. A
+(the workspace/archived rung `if (r.workspace === null || r.archivedAt !== null) continue;`, then the
+born-name rung — `watch.ts:1273` and `:1275` at the frozen ref) and `archiveMerged` to **0**; the live
+`runs` table is **5 rows**. A
 per-tick cache is also *slower* than the index (both defeat the same predicate; benchmarked at 10k rows,
 indexed 0.27 ms vs cached 1.16 ms) and — decisively — a cached snapshot consulted at a destructive
 decision point is the shape `watch.ts:1931-1935` already fixed once. Put the twelfth condition
-immediately after `:1269` as `if (r.held !== null || coord.openRunsForSession(r.id).length > 0) continue;`
-so the free in-memory `held` short-circuits the query away for every claimed row.
+**immediately after the born-name rung — `if (r.branch !== born) continue;`** — as
+`if (r.held !== null || coord.openRunsForSession(r.id).length > 0) continue;` so the free in-memory
+`held` short-circuits the query away for every claimed row. **Cite that rung by its code, never by its
+number:** an earlier draft of this section said "immediately after `:1269`", and at `d7137c2` `:1269`
+is `if (identity === null) continue;` — the degraded-row skip, three rungs and six lines too early,
+ahead of both the workspace/archived test and the born-name test the narrowing argument below depends
+on. The born-name rung is `watch.ts:1275` at the frozen ref; grep the line, do not open the number.
 - `releaseIsSafe(openSiblings)` in L1 — pure, no `fs`, no reply. Trivial today; it exists so the decision
   has one home and one test.
 
@@ -583,7 +817,7 @@ later reviewer does not "fix" it.
 Note also that nothing at the store layer prevents two open runs naming one session — `setSession`
 (`store.ts:457-458`) and `markDispatched` (`:484-488`) are bare `UPDATE`s with no uniqueness constraint,
 and that is **correct**, because the coordinator protocol deliberately creates exactly that state
-(`SKILL.md:204-215`). Nothing in §1.5 or §2.2 may read as though a constraint existed.
+(`SKILL.md:207-215`). Nothing in §1.5 or §2.2 may read as though a constraint existed.
 
 ### 2.2 `closeRun` stops releasing a live claim
 
@@ -603,10 +837,12 @@ boolean` so the outcome is never silent.
 
 ### 2.3 The sweep stops archiving under an open run
 
-`archiveMerged` (`watch.ts:1900-1963`) gains a third rung after `archiveSafety`: skip when
+`archiveMerged` (`server/src/watch.ts`; `:1920-1999` at the frozen ref — find it by its signature,
+not by the number) gains a third rung after `archiveSafety`: skip when
 `openRunsForSession(r.id)` is non-empty, and push the same shape of notification `notifyHeldMerged`
-already sends. Today `deps.coord` is in scope in that class and used four times elsewhere in the file,
-and the archive path never touches it.
+already sends. Today `deps.coord` is in scope in that class and used **eight times** elsewhere in the
+file, on eight distinct lines — one `else if` guard, two max-id reads, four `const` bindings and one
+optional-chained `recordFeedEvent` — and the archive path never touches it.
 
 This rung is what makes the whole surface safe rather than merely safer: it means an *absent* hold is no
 longer sufficient to archive. Release-then-crash (the hold gone, the run still open, D-48 protecting the
@@ -738,8 +974,14 @@ Recorded here because it is measured and real, and **recommended for deferral** 
 `ccd swap` writes `.wrapper` and never `.home` (`ccd:7307-7308`), and `_auto_swap_check` returns the
 session home the moment home is usable (`ccd:6914`). So **the swap control the PWA ships today is
 cosmetic** — a deliberate lane change is silently reverted within ~15 minutes (measured live in
-`swap.log`, in both directions). `ccd prefer` is the only `.home` writer and is unreachable from the
-server: no `CCD_ARGV` entry, no exec-whitelist grant.
+`swap.log`, in both directions). `ccd prefer` is the only writer that expresses a *deliberate* choice —
+it is not the only writer of `.home` at all. `_ws_seed_home` writes it too, seed-once and never
+clobbering (`[[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"`), from two call sites; it is what puts a
+lane on a brand-new row, and it steps aside for anything already there. `cmd_prefer`'s `_reg_set "$id"
+home "$w"` is the only unconditional one, and it is unreachable from the server: no `CCD_ARGV` entry, no
+exec-whitelist grant. **The seed writer does not change this section's conclusion** — a seed-once write
+cannot make a lane choice durable against `_auto_swap_check`, because it never fires on a row that
+already has a `.home`. The deferral stands exactly as stated below.
 
 Fixing it properly costs **one new exec-whitelist entry**, on the surface CLAUDE.md guards. With Q1
 answered, the strongest motivation for it — moving a worker off a billing lane — no longer exists, and
@@ -760,7 +1002,8 @@ Recommendation: **ship the honest label, defer the grant.** One word from the op
 `verify-failed` on the ordinary text path returns with no `clearBox`, no C-u and **no `draft` field**
 (`send.ts:523-532`), while the attachment path clears and returns one (`:487-521`) — and `send.ts:489-497`
 states the clearing rule as universal. The PWA offers its `Send it` rescue only for `enter-ignored`
-**with** a non-blank draft (`ChatList.tsx:331-332`), so the wedge-creating refusal gets no button at all,
+**with** a non-blank draft (`pwa/src/session/ChatList.tsx:331-332` — `session/`, not `fleet/`), so the
+wedge-creating refusal gets no button at all,
 only "The session never showed the text — open the terminal to check."
 
 Per the ruling: the text stays in the box, and `verify-failed` returns the `draft` so the rescue renders.
@@ -784,9 +1027,13 @@ server never sends the flag, so no button — today's behaviour, the safe direct
 cases "are kept because they are what fails if the `code` branch is ever widened", and `verify-failed` is
 in its list. It firing is the design working.
 
-`SEND_ERROR_TEXT['verify-failed']` — *"The session never showed the text — open the terminal to check."* —
-becomes false twice over (the text IS in the box, and §4.4 makes this fire more often) and is replaced
-with the register `enter-ignored` uses: *"Typed it, but the session never echoed it back."*
+`SEND_ERROR_TEXT['verify-failed']` — *"The session never showed the text — open the terminal to check."*
+(`pwa/src/lib/api.ts:35`) — becomes false twice over (the text IS in the box, and §4.4 makes this fire
+more often), so Wave 4 **mints a new sentence** for it: *"Typed it, but the session never echoed it
+back."* That string does not exist in the tree — do not grep for it, and do not go looking for a
+register to copy it from. Its neighbour `enter-ignored` reads *"Typed it, but the session didn't take
+it."* (`:34`) and is left exactly as it is; the two refusals become adjacent sentences in one register,
+which is the point, not the same string reused.
 
 The draft-conflict sheet also stops destroying work: it shows `draftOf`'s **single marker row** as though
 it were the whole draft, and "Append anyway" C-u's the box and retypes only that row plus the new text,
@@ -852,11 +1099,22 @@ safe only because §4.1 makes that refusal recoverable.
 `draft-present` lands in `mail_deliveries.lastError`, a SQLite column with **no wire type, no route and
 no PWA reader**. `MailSummary` carries only `state`, so a delivery blocked for 15 minutes is
 byte-identical to one merely waiting. The only operator-visible signal arrives **after** the park, on the
-recipient's screen. The coordinator skill has zero hits for `undeliverable|rejected|blocked`.
+recipient's screen. **`SKILL.md` itself has zero hits for `undeliverable|rejected|blocked`** — but the
+skill's `references/` pages carry six matching lines — three in `mail-envelope.md`, three in
+`wave-lifecycle.md`; `undeliverable` **3**, `rejected` **4**, `blocked` **0** — including *"the lane
+gives up and marks the delivery undeliverable"* and three `state:"rejected"` mentions. An earlier
+draft said "the coordinator skill has zero hits", full stop, which is false of the
+reference corpus and would send an implementer to write text that already exists. **The argument
+survives the correction, narrowed:** every one of those six passages is **recipient**-side — what
+becomes of mail addressed to *you* — and there is no sender-side procedure anywhere in the skill. The
+sender is who this section makes whole, and the sender is who is told nothing.
 
 - `MailSummary` gains `attempts` and `lastError` (additive wire, no proto bump).
-- `MailStrip` renders a distinct row for a queued delivery with `lastError === 'draft-present'`:
-  *blocked — the recipient's input box has unsent text*.
+- `MailStrip` grows a distinct row for a queued delivery with `lastError === 'draft-present'`:
+  *blocked — the recipient's input box has unsent text*. **The pattern exists; this row does not.**
+  Today the component renders exactly one distinct status row, `.mail-strip-abandoned`, keyed on
+  `item.state === 'rejected'`, and **nothing in `pwa/src` reads `lastError` at all** — grepped at the
+  frozen ref, zero hits. So this is an extension of a shipped shape, not a variant of a shipped row.
 - The **first** `draft-present` back-off emits one notification to the sender, not only the park.
 - The park writes a `run_events` row and a push. A wave brief that becomes permanently undeliverable is
   the coordinator's business, and coordinator↔worker mail is the only channel Build 7 has: **one dirty
@@ -1357,7 +1615,7 @@ The attachment path's `verify-failed` (`server/src/inject/send.ts:512-521`) retu
 
 Note that `pwa/test/send-it.test.tsx:34-40` is an intentional tripwire for exactly this: its comment says the cases "are kept because they are what fails if the `code` branch is ever widened", and `verify-failed` is in its list.
 
-**Copy.** `SEND_ERROR_TEXT['verify-failed']` is *"The session never showed the text — open the terminal to check."* That is false twice after this build: the text is in the box, and §4.4 makes the refusal fire more often. Replace with the register `enter-ignored` moved to — *"Typed it, but the session never echoed it back."* — and let the button's presence or absence carry the rest. Also worth stating rather than discovering: §4.4 raises the rate of red bubbles and `ChatList` has no grouping or cap, so each failed send is a permanent bubble until dismissed.
+**Copy.** `SEND_ERROR_TEXT['verify-failed']` is *"The session never showed the text — open the terminal to check."* That is false twice after this build: the text is in the box, and §4.4 makes the refusal fire more often. Replace with a **new** sentence — *"Typed it, but the session never echoed it back."* — and let the button's presence or absence carry the rest. That string is not in the tree and never has been (grepped across every revision touching `api.ts`); `enter-ignored`'s own shipped copy is the neighbouring *"Typed it, but the session didn't take it."*, and it is not moving. Also worth stating rather than discovering: §4.4 raises the rate of red bubbles and `ChatList` has no grouping or cap, so each failed send is a permanent bubble until dismissed.
 
 **§4.2's blank-marker case does not reach `ChatList.tsx:331`.** The widened guard refuses as `draft-present`, and `PendingBubble` suppresses the error line and renders no rescue for `draft-present`. The consumers are the conflict sheet: `Composer.tsx:101` (`c.draft ?? ''`), `:300` (the well) and `:312` ("Append anyway", which builds `${conflict.draft}\n${conflict.text}`). The rule "never send `''`" stands; the cited surface does not. The fix needs three things together: the server sends every row it will replace, the well renders them, and `.draft-copy` says how many.
 
@@ -1478,7 +1736,7 @@ Everything else that mentions `program:… wave:…` is a hand-written fixture �
 
 `openRunsForSession` does not exist yet anywhere in the tree — confirmed by grep across `server/`, `shared/` and `pwa/`.
 
-**The real number, and it is not 11.** Measured on the live registry: 24 records, 14 with a workspace, 8 archived, **0 holds**. `sweepNames` narrows before anything expensive — `watch.ts:1267` drops no-workspace/archived, `:1269` drops any row whose branch has moved off its born name. Six survive `:1267`; **three survive `:1269`**. So **N = 3** for `sweepNames`, every 10 s (`NAME_SWEEP_MS`). `archiveMerged` narrows harder: seven records carry `prphase=merged` and **all seven are already archived**, so all seven exit at `:1911` before `:1912`'s merged test. **N = 0**, every 30–120 s — and the spec puts the new rung *after* `archiveSafety`, by which point the code is already committed to a cross-box `ccd ws-archive` round trip, so the sqlite query is free by orders of magnitude.
+**The real number, and it is not 11.** Measured on the live registry: 24 records, 14 with a workspace, 8 archived, **0 holds**. `sweepNames` narrows before anything expensive — the workspace/archived rung drops no-workspace/archived, the born-name rung `if (r.branch !== born) continue;` drops any row whose branch has moved off its born name (`watch.ts:1273` and `:1275` at the frozen ref; an earlier draft said `:1267`/`:1269`, which are the pre-#50 numbers). Six survive the first; **three survive the born-name rung**. So **N = 3** for `sweepNames`, every 10 s (`NAME_SWEEP_MS`). `archiveMerged` narrows harder: seven records carry `prphase=merged` and **all seven are already archived**, so all seven exit at the workspace/archived rung (`:1931`) before the merged test (`:1932`). **N = 0**, every 30–120 s — and the spec puts the new rung *after* `archiveSafety`, by which point the code is already committed to a cross-box `ccd ws-archive` round trip, so the sqlite query is free by orders of magnitude.
 
 **The live table is five rows.** Read read-only over the tailnet with `curl -s 'http://203.0.113.7:7788/api/runs?closed=1'` (an ungated GET): ids 1–5, all `program:'build4'`, all closed, zero open. That is the project's complete program history. So the table-growth premise is real — `runs` has **no retention and no pruning**, and `store.ts:1306`'s `feed_events` prune is the only `DELETE` in the whole server — but the base is 5, and the extrapolated rate from one program over three days is order 10²/year, not 10⁴.
 
@@ -1492,7 +1750,7 @@ Everything else that mentions `program:… wave:…` is a hand-written fixture �
 
 **One migration hazard the research did not name, and it is now load-bearing.** `schema.ts:149-153` and `:199-201` both justify amending v1 in place on the grounds that "coord.db has shipped to no box yet". That premise **expired** — build4 drove five runs through the coordination routes and the server's copy is live. `db.ts` migrates with `for (let v = current; v < COORD_SCHEMA_VERSION; v++)`, so an edit to `MIGRATIONS[0]` would never run against a database already at `user_version 1`. **The index must land as `MIGRATIONS[1]`**, and those two comments must be corrected in the same task.
 
-**Also worth stating rather than implying:** where the twelfth condition goes in `sweepNames` changes the query count. Put it immediately after the born-name check at `watch.ts:1269`, written as `if (r.held !== null || coord.openRunsForSession(r.id).length > 0) continue;` — `held` is a free in-memory field that short-circuits the query away for every claimed workspace, and `:1269` is the cheapest large narrowing in the chain. Do not place it earlier.
+**Also worth stating rather than implying:** where the twelfth condition goes in `sweepNames` changes the query count. Put it immediately after the born-name check — `if (r.branch !== born) continue;`, `watch.ts:1275` at the frozen ref — written as `if (r.held !== null || coord.openRunsForSession(r.id).length > 0) continue;`. `held` is a free in-memory field that short-circuits the query away for every claimed workspace, and the born-name rung is the cheapest large narrowing in the chain. Do not place it earlier: `:1269` (which an earlier draft named here and in §2.1) is `if (identity === null) continue;`, the degraded-row skip, three rungs above the one meant.
 
 ---
 
