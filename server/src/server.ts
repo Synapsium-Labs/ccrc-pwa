@@ -11,7 +11,16 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome } from './limits.js';
-import { defaultCachePath, loadSnapshot, type FleetState } from './fleetstate.js';
+import { defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
+// The first `.mjs` imports in `server/src/`. Those two files are deliberately
+// not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
+// build step (see `shared/mark.mjs`'s header) — so reaching them from here
+// needed `allowJs` plus `../shared/**/*.mjs` in `server/tsconfig.json`, or tsc
+// emits only the `.ts` files and the BUILT server dies at startup on a module
+// it cannot resolve. `server/test/module-format.test.ts` is what keeps that
+// include list and the ESM-emit invariant honest.
+import { generateAccountsSh } from '../../shared/generate.mjs';
+import { bodyDigest } from '../../shared/mark.mjs';
 import { CCD_ARGV, verbSupported, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -169,11 +178,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()) };
   });
 
+  // The digest of the projection THIS box's roster produces, computed once:
+  // `deps.cfg.roster` is loaded at boot and never reloaded (`loadConfig` is
+  // called at module top level in index.ts), so re-deriving it per poll would
+  // be a sha256 every 15 seconds for an answer that cannot have changed.
+  const ownRosterFp = bodyDigest(generateAccountsSh(deps.cfg.roster));
+
   app.get('/api/fleet/health', async () => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
-      return { mode: 'remote', connected: deps.fleetState.connected, downSince: deps.fleetState.downSince };
+      return {
+        mode: 'remote',
+        connected: deps.fleetState.connected,
+        downSince: deps.fleetState.downSince,
+        roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp),
+      };
     }
-    return { mode: deps.cfg.fleetMode, connected: true, downSince: null };
+    // Local mode drives ccd on this same box, off this same roster: there is
+    // no second copy to disagree with, so the question does not arise. Said as
+    // `'unknown'` rather than `'agreed'` on purpose — nothing was compared,
+    // and a reader that later learns to show `'agreed'` as a green tick would
+    // otherwise be showing one for a check that never ran.
+    return { mode: deps.cfg.fleetMode, connected: true, downSince: null, roster: 'unknown' };
   });
 
   // Fleet-host reboot: guarded to remote mode with Hetzner creds configured.

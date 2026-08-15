@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,7 @@ import type {
   TailReset,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
+import { bodyDigest } from '../../shared/mark.mjs';
 import { readB64, readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
@@ -123,7 +125,8 @@ export function resolveProjectsRoot(
   return root;
 }
 
-type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | { t: 'ready'; v: 1; ccdVerbs: string[] };
+type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong
+  | { t: 'ready'; v: 1; ccdVerbs: string[]; rosterFp?: string };
 
 function send(ws: WebSocket, msg: OutMsg): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -381,6 +384,39 @@ async function readCcdVerbs(home: string): Promise<string[] | null> {
   return res.stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
 }
 
+/**
+ * `bodyDigest` of this box's installed `~/.ccrc/accounts.sh` — the roster
+ * projection every `ccd` invocation here actually sources — or `undefined`
+ * when there isn't one to read.
+ *
+ * The server compares this against the digest of the projection ITS roster
+ * produces, and a mismatch means the two boxes disagree about which accounts
+ * exist. That disagreement is silent today: it surfaces as a session
+ * attributed to the wrong account, or a swap target ccd rejects, with nothing
+ * anywhere naming the cause.
+ *
+ * Read fresh on every `ready`, synchronously, rather than cached the way
+ * `VerbCache` caches `ccd caps`. The two are not the same problem. `ccd caps`
+ * is an EXEC — a bash fork per server tick, tens of thousands a day — so it
+ * earns a stat-gated cache. This is one ~2 KB file read, and only on the
+ * authenticated `ready` path, so at most once per WS connection to a link
+ * that stays up for days. Paying it inline buys the absence of a staleness
+ * question entirely, and keeps `ready` synchronous — an async read here would
+ * let request frames overtake the handshake.
+ *
+ * Every failure — missing file, unreadable, a box with no ccrc roster — is
+ * `undefined`, which the wire omits and the server reads as "no evidence",
+ * never as "divergent". An agent must not turn its own inability to read a
+ * file into an alarm on the server's dashboard.
+ */
+function readRosterFp(home: string): string | undefined {
+  try {
+    return bodyDigest(readFileSync(path.join(home, '.ccrc', 'accounts.sh'), 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
 /** The list `readCcdVerbs` last produced, plus the stat of the script that
  *  produced it. Per-`startAgent` state, never module-level: the test suite
  *  boots several agents in one process and they must not share a cache. */
@@ -449,7 +485,13 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       }
       authed = true;
       clearTimeout(helloTimer);
-      send(ws, { t: 'ready', v: 1, ccdVerbs: verbCache.verbs });
+      // `rosterFp` is omitted, not sent as null, when this box has no readable
+      // projection — `AgentReady` declares it optional and the server's reader
+      // treats absence as "no evidence", the same contract `ccdVerbs` has.
+      const rosterFp = readRosterFp(opts.home);
+      send(ws, rosterFp === undefined
+        ? { t: 'ready', v: 1, ccdVerbs: verbCache.verbs }
+        : { t: 'ready', v: 1, ccdVerbs: verbCache.verbs, rosterFp });
       return;
     }
 

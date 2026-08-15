@@ -17,7 +17,22 @@ export interface AgentHello { t: 'hello'; token: string }
  *  gets a reader only then. `shared/api.ts`'s `FLEET_PROTO`/`FLEET_PROTO_MIN`
  *  is the sibling mechanism for the PWA↔server pair, wired because that pair
  *  has no per-capability negotiation to fall back on the way this one does. */
-export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[] }
+/** `rosterFp` is `bodyDigest` (shared/mark.mjs) of the fleet host's INSTALLED
+ *  `~/.ccrc/accounts.sh` — the projection ccd actually sources, not the
+ *  `accounts.json` it was generated from. The server compares it against the
+ *  digest of the projection ITS roster produces; a mismatch means the two
+ *  boxes disagree about which accounts exist, which is silent today and shows
+ *  up as sessions attributed to the wrong account or a swap target ccd
+ *  rejects.
+ *
+ *  Comparing the installed projection rather than the two JSON files is the
+ *  stricter of the two and catches a case the JSON comparison cannot: a fleet
+ *  host whose `accounts.json` was hand-edited but never redeployed, where both
+ *  files agree and `ccd`'s behaviour still doesn't.
+ *
+ *  Optional for the same reason `ccdVerbs` is: an older agent omits it, and
+ *  absent must read as "no evidence either way", never as "divergent". */
+export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string }
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
 export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number }

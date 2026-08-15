@@ -76,6 +76,11 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  the parser keeps its copy. */
 const SUFFIX_SAFE_RE = /^\.[A-Za-z0-9._-]+$/;
 
+/** Mirrors `shared/roster.ts`'s `LABEL_UNSAFE_RE` — C0 controls plus DEL.
+ *  A label reaches a one-line terminal status bar and the tmux-capture
+ *  parser that reads it back; a control byte breaks both. */
+const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
+
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);
 const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
 
@@ -118,6 +123,16 @@ function checkAccount(raw, index) {
   const label = raw['label'];
   if (typeof label !== 'string' || label.length === 0) {
     bad(`account "${id}" has no label.`, `Add a non-empty "label" for account "${id}".`);
+  }
+  // Mirrors `parseRoster`'s `LABEL_UNSAFE_RE`. The label is now emitted into
+  // `_ccrc_label`, which `ccd/statusline-command.sh` prints into a one-line
+  // status bar that `server/src/pane/statusline.ts` parses back out of a tmux
+  // capture — an embedded newline splits that line and the parser reads the
+  // wrong branch off the remainder.
+  if (LABEL_UNSAFE_RE.test(label)) {
+    bad(`account "${id}" has a label containing a control character.`,
+      `Remove the tab, newline or escape character from "label" for account "${id}" — `
+      + 'a label is one line of display text.');
   }
 
   // `"."` passes "starts with a dot, holds no slash and no ..", and then
@@ -166,7 +181,37 @@ function checkAccount(raw, index) {
       `Set "hue" for account "${id}" to one of ${[...HUES].join(', ')}, or remove the field.`);
   }
 
-  return { id, configDirSuffix: suffix, homeAble, execKind: exec['kind'] };
+  // `hue` comes back UNDEFINED when the roster omits it — `assignHues` below
+  // fills it in, exactly as `parseRoster` does, and for the same reason: the
+  // emitter now writes `_ccrc_hue`, so an auto-assigned hue is generated
+  // output and has to match the server's byte for byte.
+  return { id, label, configDirSuffix: suffix, homeAble, telemetry, hue, execKind: exec['kind'] };
+}
+
+/**
+ * Mirrors `shared/roster.ts`'s `assignHues`: accounts that named a hue keep
+ * it, and the rest are dealt the hues nobody claimed, in `HUES` order,
+ * cycling. Falls back to the full list when every hue is already spoken for,
+ * so a roster of seven accounts still terminates with a hue each.
+ *
+ * `HUES` is a Set above (membership is all the validator needed); the walk
+ * needs a SEQUENCE, and it must be the same sequence `parseRoster` walks —
+ * Set iteration preserves insertion order, so `[...HUES]` is that literal
+ * order and not a re-typed copy of it.
+ *
+ * @param {{hue: string|undefined}[]} accounts
+ */
+function assignHues(accounts) {
+  const order = [...HUES];
+  const explicit = new Set(accounts.map((a) => a.hue).filter((h) => h !== undefined));
+  const pool = order.filter((h) => !explicit.has(h));
+  const available = pool.length > 0 ? pool : order;
+  let i = 0;
+  for (const a of accounts) {
+    if (a.hue !== undefined) continue;
+    a.hue = available[i % available.length];
+    i++;
+  }
 }
 
 /**
@@ -203,12 +248,30 @@ function rosterFromJson(json) {
     seen.add(a.id);
   }
 
+  // Mirrors `parseRoster`'s duplicate-configDirSuffix check. `_ccrc_dir_id`
+  // maps a config dir back to ONE account; two accounts on one dir makes that
+  // answer an artifact of emitter order (see `shared/generate.mjs`).
+  const seenDirs = new Map();
+  for (const a of accounts) {
+    const owner = seenDirs.get(a.configDirSuffix);
+    if (owner !== undefined) {
+      bad(`accounts "${owner}" and "${a.id}" share the configDirSuffix ${JSON.stringify(a.configDirSuffix)}.`,
+        `Give each account its own "configDirSuffix" (e.g. ".${a.id}"), or delete the duplicate account.`);
+    }
+    seenDirs.set(a.configDirSuffix, a.id);
+  }
+
   const upstreams = accounts.filter((a) => a.execKind === 'upstream');
   if (upstreams.length !== 1) {
     bad(`the roster has ${upstreams.length} upstream accounts: exactly one account must have exec.kind "upstream".`,
       'Set exec.kind to "upstream" on the one account that runs the Claude Code binary directly '
       + '(usually "claude"), and "generated" or "external" on the rest.');
   }
+
+  // Last, exactly where `parseRoster` runs it — after every check that can
+  // throw. Nothing here depends on the ordering, but keeping the two
+  // sequences aligned is what makes the mirror readable as a mirror.
+  assignHues(accounts);
 
   return {
     version: 1,

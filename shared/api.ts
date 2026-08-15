@@ -1232,6 +1232,21 @@ export interface FleetHealth {
   mode: 'local' | 'remote';
   connected: boolean;
   downSince: number | null;   // epoch ms since the agent connection dropped
+  /**
+   * Whether the fleet host's installed roster projection matches the one this
+   * server's roster produces (`rosterAgreement`, server/src/fleetstate.ts).
+   *
+   * `'unknown'` is a real answer and not a null in disguise: local mode has no
+   * second box, and an older agent does not report a digest. A reader must
+   * render `'divergent'` and stay silent on `'unknown'` — treating the two
+   * alike would warn on every deploy of an older agent, and a warning that
+   * fires when nothing is wrong stops being read.
+   *
+   * Optional so an older SERVER's response still parses here — same
+   * absence-permits rule the rest of the wire follows. Absent reads as
+   * `'unknown'`.
+   */
+  roster?: 'agreed' | 'divergent' | 'unknown';
 }
 
 /**

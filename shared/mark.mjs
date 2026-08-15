@@ -115,6 +115,35 @@ export function markGenerated(body) {
 }
 
 /**
+ * The sha256 of `text`'s BODY — the same bytes `markGenerated` hashes and
+ * `verifyMarker` re-hashes, with any marker line stripped first. Given a
+ * generated file and the body it was generated from, both answer the same
+ * digest; that is the whole point.
+ *
+ * It exists to compare a generated file on one box against the projection a
+ * DIFFERENT box would generate, which is a question `verifyMarker` cannot
+ * answer: `verifyMarker` asks "was this file edited after ccrc wrote it",
+ * always against the file's own embedded claim. Roster divergence is the
+ * other question — "did ccrc write the same thing here as there" — and the
+ * embedded marker is useless for it, because a hand-edited `accounts.sh`
+ * still carries the digest of the body it USED to have.
+ *
+ * Its consumers are `agent/src/server.ts` (which digests the fleet host's
+ * installed `~/.ccrc/accounts.sh`) and `server/src/fleetstate.ts`'s
+ * comparison against `generateAccountsSh(cfg.roster)`. Comparing the
+ * PROJECTIONS rather than the two `accounts.json` files is deliberate and
+ * catches strictly more: it sees a fleet host whose roster was hand-edited
+ * but never regenerated, where the two JSON files agree and ccd's actual
+ * behaviour does not.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function bodyDigest(text) {
+  return sha256Hex(stripMarkerLine(text));
+}
+
+/**
  * Classifies `text` by comparing it against its own embedded marker:
  *
  * - `'foreign'` — no marker line is present where one would have to be
