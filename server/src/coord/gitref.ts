@@ -98,3 +98,58 @@ export async function readBranchTip(
   }
   return null;
 }
+
+/** One linked worktree, as GIT records it. */
+export interface WorktreeRecord {
+  readonly name: string;
+  readonly path: string;
+  readonly headBranch: string | null;
+}
+
+/**
+ * Every linked worktree of `<projectsRoot>/<project>`, read out of git's own
+ * admin directory `<project>/.git/worktrees/<name>/` — `gitdir` names the
+ * worktree's path, `HEAD` names its branch.
+ *
+ * READ FROM THE MAIN REPO, NOT FROM `~/worktrees`, and that is structural rather
+ * than stylistic. `agent/src/whitelist.ts`'s read set is `.cc-sessions`,
+ * `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and `projectsRoot`; `~/worktrees`
+ * is NOT in it, and ccd's own `pr-open` comment says so in as many words. Reading
+ * git's record instead needs no widening, catches the FLAT
+ * `~/worktrees/<project>-<slug>` layout a directory glob would miss, and is
+ * immune to the `~/worktrees -> /data/worktrees` symlink (ccd writes the
+ * registry's `workdir` unresolved, git resolves it, and `FleetIO.realpath`
+ * answers null unconditionally in remote mode — so absolute-path comparison
+ * would report the whole fleet as unregistered).
+ *
+ * `null` = there is no readable admin directory here: no linked worktrees, or a
+ * listing that failed. It has exactly ONE consumer behaviour — contribute no
+ * worktrees for this project — so it can only ever suppress a finding, never
+ * manufacture one, which is why it is not an overloaded null at a decision seam.
+ *
+ * A DETACHED HEAD gives `headBranch: null`, never a fabricated name.
+ */
+export async function readWorktreeRecords(
+  io: FleetIO, projectsRoot: string, project: string,
+): Promise<WorktreeRecord[] | null> {
+  // Same single-segment guard `readBranchTip` applies to `project`: the only two
+  // values that mean anything but a literal directory name are `.` and `..`.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(project) || project.includes('..')) return null;
+  const adminRoot = path.join(projectsRoot, project, '.git', 'worktrees');
+  const names = await io.readdir(adminRoot);
+  if (names === null) return null;
+  const out: WorktreeRecord[] = [];
+  for (const name of names) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) continue;
+    const gitdir = await io.readFile(path.join(adminRoot, name, 'gitdir'));
+    if (gitdir === null) continue;
+    // `gitdir` names the worktree's `.git` FILE; the worktree is its parent.
+    const wt = path.dirname(gitdir.trim());
+    if (wt === '' || wt === '.') continue;
+    const head = await io.readFile(path.join(adminRoot, name, 'HEAD'));
+    const m = head === null ? null : /^ref:\s*refs\/heads\/(\S+)\s*$/.exec(head.trim());
+    const branch = m?.[1] ?? null;
+    out.push({ name, path: wt, headBranch: branch !== null && BRANCH_OK.test(branch) ? branch : null });
+  }
+  return out;
+}

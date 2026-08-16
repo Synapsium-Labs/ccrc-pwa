@@ -45,7 +45,8 @@ import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountsResponse, type AccountUsage, type CoordStatus, type FleetMsg, type FleetSession,
+  type AccountsResponse, type AccountUsage, type CoordStatus, type Divergence, type FleetMsg,
+  type FleetSession,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
@@ -333,6 +334,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
     const onCoord = (coord: CoordStatus) =>
       socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
+    // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
+    // guard re-broadcasts to every connected client the next time the census
+    // changes, and there is no `currentDivergences()` to serve — a fabricated
+    // empty census on connect would claim a measurement this process may not
+    // have taken yet, which is exactly the rule `onCoord`'s own `null` follows
+    // two lines below.
+    const onDivergence = (divergences: Divergence[]) =>
+      socket.send(JSON.stringify({ type: 'divergence', divergences } satisfies FleetMsg));
     // The `runs` cold start is chained AFTER `fleet`'s own, not fired
     // alongside it: `fleet` is itself async (`assembleFleet` awaits tmux/IO),
     // while a `coord.runs()` read is synchronous, so firing both
@@ -379,11 +388,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('notice', onNotice);
     bus.on('runs', onRuns);
     bus.on('coord', onCoord);
+    bus.on('divergence', onDivergence);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
       bus.off('coord', onCoord);
+      bus.off('divergence', onDivergence);
     });
   });
 

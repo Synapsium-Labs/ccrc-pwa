@@ -23,6 +23,8 @@ import { UNCHECKED_PR } from '../../shared/api.js';
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
+import { readWorktreeRecords } from './coord/gitref.js';
+import { divergences, type DivergenceInput } from './divergence.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -47,6 +49,13 @@ const TASK_SWEEP_MS = 10_000;
  *  2 s tick is five times faster, so riding it would cost five times that on
  *  those same nine transcripts to learn nothing — roughly 38.5 MB/min. */
 const NAME_SWEEP_MS = 10_000;
+
+/** The census lane. A disagreement between sources is a HUMAN-timescale event —
+ *  a rename, a hand-made worktree, a run left open — and each sweep reads
+ *  `<projectsRoot>/<project>/.git/worktrees/` per project. Six times slower than
+ *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
+ *  not per pane. */
+const DIVERGENCE_SWEEP_MS = 60_000;
 
 /** Refusal tokens (of ccd's fourteen, `spec:252-266` — the spec's own table
  *  predates the ninth and the fourteenth, `spec:49` is the unrelated `ws/`-
@@ -262,6 +271,13 @@ export class FleetWatcher {
   private lastCapsAt = 0;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
+  /** The census lane's clock, and its byte-equality guard. A git-ref read per
+   *  project is far too expensive for the 2 s poll, and a census changes on
+   *  human timescales; `null` (not `'[]'`) so the first sweep always emits, even
+   *  an empty one — mirroring `lastRunsJson`'s own initial value, and the reason
+   *  a HEALTHY fleet is a frame rather than a silence. */
+  private lastDivergenceSweep = 0;
+  private lastDivergenceJson: string | null = null;
   /** `<id>#<uuid>:<derived-branch>` for every pair already tried. THE DERIVED
    *  NAME, not the born slug: a title that changes while the branch is still
    *  at its born name earns exactly one fresh attempt, and a server restart
@@ -599,6 +615,9 @@ export class FleetWatcher {
       // attempted-set is written BEFORE the call, so a second sweep's condition 4
       // refuses the pair the first is still running.
       void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as `sweepNames` above. Own clock: this reads
+      // git's admin directory per project, which is not a per-tick cost.
+      void this.sweepDivergences(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -1367,6 +1386,91 @@ export class FleetWatcher {
       }
     }
   }
+
+  /**
+   * §1.6's census, and THE ONLY PRODUCER OF IT. Named once, deliberately, so
+   * nobody adds a second — `reviveFleetSession` in particular must never become
+   * one (the `fleet.ts` precedent exists to prevent exactly that shape, and it is
+   * what makes splitting `DIVERGENCE_KINDS` in L0 from `divergences()` in L1
+   * defensible).
+   *
+   * L4: it GATHERS (git's worktree records through `FleetIO`, open-run session
+   * ids through `coord`) and it PUBLISHES. It DECIDES nothing — no ccd verb runs
+   * here and nothing mutates. That is also what keeps `fleet.ts`'s
+   * asymmetric-skew deferral valid: lifecycle stays a display-only qualifier, and
+   * the deferral's own stated expiry ("if the census makes lifecycle drive an
+   * adopt/respawn DECISION") has not been reached.
+   *
+   * PUBLIC for the reason `sweepNames` is public: `tick()` dispatches it with
+   * `void`, so a test that awaits `tick()` has not awaited this.
+   *
+   * THE PROJECTS IT ASKS GIT ABOUT ARE THE PROJECTS THE REGISTRY NAMES, never a
+   * listing of `projectsRoot`. That bounds the per-sweep cost to the fleet's
+   * ACTIVE projects rather than to every checkout on the box, and it is a real
+   * limit worth stating rather than discovering: a project whose every session
+   * has been reaped contributes no rows, so its leftover worktrees go unnamed
+   * until something is running there again. Widening it is a `readdir` of
+   * `projectsRoot` per sweep plus a `.git/worktrees` read per project found —
+   * a deliberate cost, not an oversight to be quietly fixed.
+   *
+   * `this.deps.coord` is `?.`-chained because `testDeps` supplies none — a
+   * non-optional call TypeErrors fourteen `hold-gate` tests plus `pr-sweep`'s.
+   */
+  async sweepDivergences(records: SessionRecord[]): Promise<void> {
+    // `Date.now()`, not an injected clock: this class has none, and `sweepNames`
+    // just above reads the same way. `!== 0` is not a style tic — it is what
+    // makes the FIRST sweep run immediately after a restart instead of waiting a
+    // minute, and it is the shape `sweepNames` already ships.
+    const now = Date.now();
+    if (this.lastDivergenceSweep !== 0 && now - this.lastDivergenceSweep < DIVERGENCE_SWEEP_MS) return;
+    this.lastDivergenceSweep = now;
+    const projects = [...new Set(records.map((r) => r.project))];
+    const worktrees: DivergenceInput['worktrees'][number][] = [];
+    const headBranch = new Map<string, string | null>();
+    for (const project of projects) {
+      const found = await readWorktreeRecords(this.deps.io, this.deps.cfg.projectsRoot, project);
+      // `null` contributes nothing for this project — it can only suppress a
+      // finding, never manufacture one.
+      if (found === null) continue;
+      for (const w of found) {
+        worktrees.push({ project, name: w.name, path: w.path });
+        headBranch.set(`${project}/${w.name}`, w.headBranch);
+      }
+    }
+    let openRunSessionIds = new Set<string>();
+    try {
+      openRunSessionIds = new Set(
+        (this.deps.coord?.runs() ?? [])
+          .map((r) => r.sessionId)
+          .filter((id): id is string => id !== null),
+      );
+    } catch (err) {
+      // `coord.runs()` walks straight into synchronous `node:sqlite` — the same
+      // fault every neighbouring lane already guards. A failed read skips the
+      // census this pass rather than killing the poll.
+      console.warn(`ccrc-server: sweepDivergences runs() failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+      return;
+    }
+    // THE REGISTRY'S `.branch`, never the assembled `FleetSession.branch`:
+    // `assembleFleet` computes `sl?.branch ?? r.branch` (fleet.ts) and the
+    // STATUSLINE wins there, so a census fed from `sessions` would compare git's
+    // HEAD against whatever Claude Code last rendered. The field a
+    // done-fingerprint trusts, and the field a rename moves, is this one — which
+    // is exactly why this method takes `records`, the same reason `sweepNames`
+    // reads the registry itself.
+    const found = divergences({
+      records: records.map((r) => ({
+        id: r.id, project: r.project, workspace: r.workspace, workdir: r.workdir,
+        branch: r.branch, held: r.held, archivedAt: r.archivedAt,
+      })),
+      worktrees, headBranch, openRunSessionIds,
+    });
+    const json = JSON.stringify(found);
+    if (json === this.lastDivergenceJson) return;
+    this.lastDivergenceJson = json;
+    this.bus.emit('divergence', found);
+  }
+
 
   /**
    * Deliver queued mail, one message per eligible session per sweep.

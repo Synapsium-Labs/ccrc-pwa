@@ -1860,7 +1860,14 @@ export type FleetMsg =
    *  the one-way new-writer/old-reader rule this file states at :560-566. */
   | { type: 'runs'; runs: RunSummary[] }
   /** Build 4, spec §4.2. Additive on the same terms as `runs` above. */
-  | { type: 'coord'; coord: CoordStatus };
+  | { type: 'coord'; coord: CoordStatus }
+  /** §1.6's census. Additive on the same terms as `runs`/`coord` above — an
+   *  already-deployed PWA drops an unknown frame type silently, so NO
+   *  `FLEET_PROTO` bump. FLEET-LEVEL, not row-level: a divergence names a
+   *  disagreement BETWEEN sources, so it cannot ride on a `FleetSession` — and
+   *  keeping it off `FleetSession` is what keeps `reviveFleetSession` from
+   *  becoming a second producer. */
+  | { type: 'divergence'; divergences: Divergence[] };
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers
