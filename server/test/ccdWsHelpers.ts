@@ -53,7 +53,40 @@ export function seedAccountsSh(home: string, roster: unknown = DEFAULT_TEST_ROST
  *  insufficient: reporting "no systemd" sends `_supervised_start` down its
  *  fallback into a REAL `_spawn`. */
 export const WS_ADD =
-  `_spawn() { :; }; _ws_supervise() { :; }; _supervised_start() { :; }; tmux() { :; };`;
+  `_spawn() { :; }; _spawn_start() { echo 0; }; _spawn_settle() { :; };`
+  + ` _ws_supervise() { :; }; _supervised_start() { :; }; tmux() { :; };`;
+
+/** THE VARIANT THE ORDERING PINS NEED: `_spawn_start` and `_spawn_settle` stay
+ *  REAL, so §1.1's "the claim and the supervision precede anything that can
+ *  block" is an assertion rather than an assumption. Three things are stubbed:
+ *
+ *   - `tmux`            — no tmux under test.
+ *   - `_accept_first_run_prompts` — the settle's 450-poll gate loop; RC is the
+ *     fixture's input via $ACCEPT_RC.
+ *   - `_ws_supervise`   — a RECORDING stub, readable through `h.calls()`, and
+ *     this one is a SAFETY RULE, not convenience: left real it would
+ *     `systemctl --user enable --now claude-session@<id>` against the live user
+ *     manager, write a PERSISTENT default.target.wants symlink, and start a
+ *     Restart=always supervise loop against a vitest tmpdir — while swallowing
+ *     its own error, so the test would pass green. (The harness's contained
+ *     systemctl is the structural backstop; this is what makes ORDERING
+ *     assertable, because a real systemctl writes nothing into the fixture.)
+ *   - `_supervised_start` — the third member of the set: reporting "no systemd"
+ *     sends it down its fallback into a REAL spawn. */
+export const WS_ADD_REAL_SPAWN = `
+  _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; };
+  _supervised_start() { echo "supervised_start $1" >> "$HOME/ccd-calls"; return 0; };
+  _accept_first_run_prompts() { echo "accept $*" >> "$HOME/ccd-calls"; return \${ACCEPT_RC:-0}; };
+  sleep() { :; };
+  tmux() {
+    echo "tmux $*" >> "$HOME/ccd-calls"
+    case "\$1" in
+      new-session)  : > "\$HOME/pane-up" ;;
+      kill-session) rm -f "\$HOME/pane-up" ;;
+      has-session)  [[ -e "\$HOME/pane-up" ]] ;;
+      capture-pane) printf '%s' "\${PANE_TEXT:-? for shortcuts}" ;;
+    esac
+  };`;
 
 /** THE ONE PATH-STUB DIRECTORY. `ghContainedEnv` PREPENDS this dir, so a test
  *  that plants its own binary anywhere else loses to the poison on ordering

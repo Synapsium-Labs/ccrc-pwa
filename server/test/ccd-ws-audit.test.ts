@@ -10,6 +10,7 @@ beforeEach(() => { h = makePrHarness('ccrc-ccd-audit-'); });
 afterEach(() => { h.cleanup(); });
 
 const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; };
+  _spawn_start() { echo 0; }; _spawn_settle() { :; };
   tmux() { return 1; }; _alive() { return 1; };`;
 
 interface Built { main: string; wt: string; tip: string; merge: string }

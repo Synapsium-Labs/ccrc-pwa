@@ -58,6 +58,7 @@ const runPrStateWithGhAnswering = (
  *  demands, and no status file is needed for it: ccd-archive.test.ts archives
  *  a fresh workspace with nothing but this block, repeatedly. */
 const ARCH_STUBS = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; };
+  _spawn_start() { echo 0; }; _spawn_settle() { :; };
   tmux() { return 1; }; _alive() { return 1; };`;
 
 describe('prhistory — the one chokepoint', () => {

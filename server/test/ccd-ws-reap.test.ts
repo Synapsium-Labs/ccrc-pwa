@@ -10,7 +10,7 @@ beforeEach(() => { h = makePrHarness('ccrc-ccd-reap-'); });
 afterEach(() => { h.cleanup(); });
 
 const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
-  _ws_supervise() { :; }; _spawn() { :; };
+  _ws_supervise() { :; }; _spawn() { :; }; _spawn_start() { echo 0; }; _spawn_settle() { :; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _alive() { return 1; };`;
 
 /** The same genuine squash-with-a-moved-base fixture the audit tests use, so

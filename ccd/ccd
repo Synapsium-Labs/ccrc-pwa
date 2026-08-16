@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3c107524660c6fff7f7050292561f14e833ff9133c12b3f48cc65b0168177198
+# ccrc:generated 1 sha256=b8c832410c76e0babbffab693fe71e7b6d1dac559017df7463f21cd0179b0647
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7355,10 +7355,17 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   return 4
 }
 
-_spawn() {   # id mode(new|resume) — (re)create the tmux session under the right account
-  # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
-  # URL to capture. The session is discovered on claude.ai by its name, which == the id
-  # (we pass `--remote-control '$id'`). _spawn just (re)creates the session and accepts trust.
+_spawn_start() {   # id mode(new|resume) -> creates the tmux session, echoes fromswap. NEVER BLOCKS.
+  # THE NON-BLOCKING HALF. Split out so that every caller can write the claim
+  # (`_reg_claim`) and, where it has one, wire the supervision BEFORE anything
+  # that can block — which is F8's whole shape: a `ws-add` killed at the
+  # agent's 300 s ceiling after the pane existed and before either write,
+  # leaving a live pane no registry row claimed and no unit was watching.
+  #
+  # Echoes `$fromswap` so `_spawn_settle` need not recompute it: the window is
+  # 300 seconds wide and recomputing it after a settle would race it.
+  # WRITES NOTHING TO `started` — that is `_reg_claim`'s single job, and the
+  # callers decide when.
   local id="$1" mode="$2" wrapper workdir uuid tname sidflag
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   [[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die "incomplete registry for '$id'"
@@ -7381,13 +7388,20 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # Follow the most-recent client's size (defensive; with attach -d there's only ever one client,
   # so the window always fits the device you're on — no smaller-client "dotted filler" clash).
   tmux set-option -t "$tname" window-size latest 2>/dev/null
-  local prompt_rc
+  echo "$fromswap"
+}
+
+_spawn_settle() {   # id fromswap [bound_s] — the BLOCKING half: gate loop, fact, warnings, /effort
+  local id="$1" fromswap="$2" wrapper tname prompt_rc
+  wrapper=$(_reg_get "$id" wrapper)
+  tname=$(_tmux "$id")
   _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
-  # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — _spawn
+  # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — this
   # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
-  # inside the unit to a `ccd start` running in another process, which is what Task 5's
-  # _supervised_start polls. $REG is on the fleet wire within one 2s watcher tick (M9); an exit code
-  # is on nothing's wire at all.
+  # inside the unit to a `ccd start` running in another process, which is what _supervised_start
+  # polls. KEEP THE FIELD AND ITS `<epoch-seconds> <rc>` ENCODING: the timestamp is load-bearing,
+  # because _supervised_start compares `at >= since` to tell THIS attempt's failure from the
+  # previous one's, and a bare word field would destroy that.
   _reg_set "$id" spawn "$(date +%s) $prompt_rc"
   case "$prompt_rc" in
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
@@ -7419,6 +7433,23 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # (rc 2 fails `== 0` too) rather than dropping it.
   _is_home_able "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
   return "$prompt_rc"
+}
+
+_spawn() {   # id mode(new|resume) [bound_s] — the composition, so cmd_swap and friends are unchanged
+  # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
+  # URL to capture. The session is discovered on claude.ai by its name, which == the id
+  # (we pass `--remote-control '$id'`).
+  #
+  # A CALLER THAT WANTS THE F8-SAFE ORDERING DOES NOT USE THIS: it calls the two halves and puts
+  # `_reg_claim` (and its `_ws_supervise`, where it has one) between them.
+  local fs
+  fs=$(_spawn_start "$1" "$2") || return $?
+  # LAST LINE ONLY, then validated to the two legal words. `_spawn_start`'s own tmux calls are
+  # silent on success, but a stub or a hostile `tmux` on PATH is not, and the FAILURE DIRECTION
+  # matters: fromswap=1 picks the cheap auto-compact landing, fromswap=0 keeps full fidelity, so
+  # anything unrecognised degrades to 0.
+  fs="${fs##*$'\n'}"; [[ "$fs" == 1 ]] || fs=0
+  _spawn_settle "$1" "$fs"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.

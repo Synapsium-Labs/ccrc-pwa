@@ -1084,7 +1084,8 @@ describe('ws-gc --prune', () => {
 });
 
 describe('archived and reaping workspaces', () => {
-  const ARCH = `_ws_unsupervise() { :; }; _spawn() { :; }; tmux() { return 1; }; _alive() { return 1; };`;
+  const ARCH = `_ws_unsupervise() { :; }; _spawn() { :; }; _spawn_start() { echo 0; }; _spawn_settle() { :; };`
+    + ` tmux() { return 1; }; _alive() { return 1; };`;
 
   it('classifies an archived workspace as archived, not tracked', () => {
     h.makeRepo('demo');
@@ -1271,7 +1272,8 @@ describe('_ws_gc_bytes', () => {
  *  partially-unreadable worktree must both record `null`, never the
  *  understated number `_ws_gc_bytes` used to hand them. */
 describe('worktreeBytes: null on a partial read, at both call sites (finding F)', () => {
-  const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; }; tmux() { return 1; }; _alive() { return 1; };`;
+  const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; };`
+    + ` _spawn_start() { echo 0; }; _spawn_settle() { :; }; tmux() { return 1; }; _alive() { return 1; };`;
   // FIXTURE NARROWED (final-round integration item 5, same round): the two
   // subdirectories are GITIGNORED. A chmod-000 directory git WALKS makes
   // `git status --porcelain` print `warning: could not open directory` on
