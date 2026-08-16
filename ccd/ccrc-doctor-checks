@@ -582,6 +582,17 @@ _dr_wr_present() {
     wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
     return 1
   fi
+  # `-f` BEFORE `-x`, and it is not redundant: a DIRECTORY is both `-e` and
+  # `-x` (that is what the execute bit means on a directory), so without this a
+  # `mkdir $HOME/.local/bin/<id>` passed the whole triad and doctor reported
+  # `PASS wrappers: N accounts … match`. Found by the round-2 review, and it is
+  # a narrowing THIS ROUND INTRODUCED: before external/upstream were routed
+  # through here, a directory fell into the a-only arm and was caught by
+  # `_wrap_is_script`'s own `-f`.
+  if [ ! -f "$p" ]; then
+    wr_hard+=("$id's \$HOME/.local/bin/$id is not a regular file")
+    return 1
+  fi
   if [ ! -x "$p" ]; then
     wr_hard+=("$id's \$HOME/.local/bin/$id is not executable")
     return 1
@@ -596,12 +607,21 @@ _dr_wr_present() {
 #
 # The a-only branch MEASURES before it words its finding: "the roster expects a
 # wrapper here and there is no CLAUDE_CONFIG_DIR-setting script of that name"
-# is four distinguishable states on disk (nothing, a dangling symlink, a file
-# that is not executable, a file that is not a wrapper), and an operator does
-# something different about each. Collapsing them into one message is the
-# overloaded-seam mistake this codebase bans by name — and the two states that
-# are easiest to collapse, a DANGLING SYMLINK and a present-but-NOT-EXECUTABLE
-# file, have a test each that reddens when they are merged.
+# is five distinguishable states on disk (nothing, a dangling symlink, a
+# directory or other non-file, a file that is not executable, a file that is
+# not a wrapper — and that last one splits again into "not a script at all" and
+# "a script that sets no CLAUDE_CONFIG_DIR"), and an operator does something
+# different about each. Collapsing any two into one message is the
+# overloaded-seam mistake this codebase bans by name.
+#
+# EVERY ONE OF THEM HAS ITS OWN TEST, and that sentence was not true until the
+# round-2 review measured it: the presence triad was pinned but the two SHAPE
+# sentences below were not, so replacing this whole inner `if/else` with `:`
+# left the suite 95/95 green while a real defect went unreported. They now have
+# a test each, plus a third that puts both defects in ONE run and asserts the
+# two sentences stay distinct — the merge into a single "is not a wrapper" is
+# precisely the collapse this comment claims to forbid, and a comment is a
+# request where a red suite is a mechanism.
 _dr_wr_note() {
   local dir="$1" id="$2"
   # TWO `local` statements, and it must stay that way: bash expands every
@@ -687,16 +707,29 @@ _check_wrappers() {
     try { j = JSON.parse(text); } catch (e) { process.exit(3); }
     if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
     if (j.accounts.length === 0) process.exit(6);
-    // A tab or a newline inside a value would break the TSV this prints, so
-    // they are ESCAPED rather than replaced by a space (Task 5 review, Minor
-    // 5). A space is a legal character in plenty of strings, so squashing
-    // "acct<TAB>b" down to "acct b" INVENTED an id that looks real, and the
-    // bash side then reported a finding about an account of that name. A
-    // backslash escape is not in the safe set WRAPPER_ID_RE allows, so the
-    // reader below rejects such an id outright instead, and prints it back
-    // the way it was actually spelled.
+    // EVERY CONTROL BYTE IS ESCAPED — all of C0 (0x00-0x1f) and DEL (0x7f) —
+    // not just the three that would break this TSV (Task 5 review, Minor 5;
+    // widened by the round-2 review, which pointed out that the narrow version
+    // left the very failure it was closing reachable through a different
+    // byte). Two separate jobs, and both are load-bearing:
+    //   - TSV integrity: a tab or a newline inside a value would silently
+    //     become a field or a record boundary.
+    //   - THE VERDICT LINE IS READ BY A HUMAN, on a terminal that ACTS on
+    //     control bytes. `"claude\bcorp"` renders as `claude-corp` if the
+    //     terminal is allowed to see the backspace, so an id that is not an
+    //     account can be made to look exactly like one that is. The reader
+    //     used to squash the three it knew about down to a space, which
+    //     INVENTED a plausible id (`acct b`) all by itself.
+    // The backslash escape is the half that makes this INJECTIVE: without it,
+    // an id spelled with a literal backslash-t and an id carrying a real tab
+    // arrive as the same string, and an escaped rendering that can be forged
+    // is no better than the raw byte. Nothing escaped this way can match
+    // WRAPPER_ID_RE, so the reader below refuses such an id by name rather
+    // than looking on disk for it.
+    const esc = (c) => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0");
     const s = (v) => (typeof v === "string"
-      ? v.replace(/\\/g, "\\\\").replace(/\t/g, "\\t").replace(/\r/g, "\\r").replace(/\n/g, "\\n")
+      ? v.replace(/\\/g, "\\\\").replace(/\t/g, "\\t").replace(/\r/g, "\\r")
+         .replace(/\n/g, "\\n").replace(/[\x00-\x1f\x7f]/g, esc)
       : "");
     process.stdout.write(j.accounts.map((a) => {
       const o = (a && typeof a === "object") ? a : {};

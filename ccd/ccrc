@@ -332,8 +332,14 @@ cmd_doctor() {
     pass=$((pass + vp)); warn=$((warn + vw)); fail=$((fail + vf))
   done
 
-  printf 'summary: %s checks — %s passed, %s warned, %s failed\n' \
-    "$ran" "$pass" "$warn" "$fail"
+  # BOTH NOUNS ARE PRINTED, because the three tail numbers count verdicts and
+  # the leading one counts checks, and a line where 9+1+2 does not equal 11
+  # reads as an arithmetic bug to anyone who has not read this function. The
+  # repair a later reader would reach for — count each check once, by its worst
+  # class — is exactly the `0 warned`-with-warnings-on-screen lie this round
+  # removed, so the line says what each number is instead of inviting the fix.
+  printf 'summary: %s checks, %s verdicts — %s passed, %s warned, %s failed\n' \
+    "$ran" "$((pass + warn + fail))" "$pass" "$warn" "$fail"
   [[ "$fail" -eq 0 ]] || return 1
 }
 cmd_status() { _ccrc_not_implemented status; }
