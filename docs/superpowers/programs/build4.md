@@ -421,11 +421,12 @@ false against the code") assigned to these same sentences; they are reused here 
 name one thing once.
 
 **1 (C1). "worktree + full registry entries present, no session, no run binding" (line 150).** The
-worktree and the registry entries were there. **The session was too.** `tmux new-session -d`
-(`ccd:7153`) completes before the blocking wait, and the tmux server is not ccd's child — so killing
-`ccd ws-add` at 90 s killed the client that was waiting, never the pane. `ccd ls` printed
-`ccrc-pwa-swift-harbor` as `ALIVE yes` throughout, and it was still alive on the box two days later.
-"No session" is the sentence that sent three later readings down the wrong path.
+worktree and the registry entries were there. **The session was too.** `_spawn`'s
+`tmux new-session -d -s "$tname" -x 220 -y 50` completes before the blocking wait, and the tmux
+server is not ccd's child — so killing `ccd ws-add` at 90 s killed the client that was waiting, never
+the pane. `ccd ls` printed `ccrc-pwa-swift-harbor` as `ALIVE yes` throughout, and it was still alive
+on the box two days later. "No session" is the sentence that sent three later readings down the
+wrong path.
 
 **2 (C12). "Signature to recognize it: `<id>.started` marker absent, `claude-session@<id>.service`
 inactive(dead) with ZERO journal entries" (lines 161–162).** Every clause is true and the signature
@@ -440,13 +441,15 @@ downstream field, and `_alive` appeared nowhere in that verb.
 
 **3 (C11). "`_ws_least_loaded` picked wrapper `claude-dev0` by session-count + disk only" (lines
 153–154).** It considers neither. `_ws_least_loaded` ranks home-able accounts by `_account_ok` plus
-`_limit_score` (`ccd:1134-1142`) — the max of the 5h/7d percentages. This ledger self-corrects 150
-lines later, in F10's own entry ("ranks home-able accounts by `_limit_score` alone"), and the two
-sentences have coexisted since the day it merged. The conclusion drawn from the wrong one still
-holds: placement does not consider wrapper HEALTH, which is the defect.
+`_limit_score` — the whole of its ranking is `sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue`
+followed by `(( sc < bs )) && { bs=$sc; best="$w"; }` — and `_limit_score` is the max of the 5h/7d
+percentages. This ledger self-corrects further down, in F10's own entry ("ranks home-able accounts
+by `_limit_score` alone"), and the two sentences have coexisted since the day it merged. The
+conclusion drawn from the wrong one still holds: placement does not consider wrapper HEALTH, which
+is the defect.
 
 **4. "a failed ws-add must not leave an orphan — roll back or surface it as reclaimable" (line
-173).** Correct as a requirement, wrong about the evidence available to satisfy it. The spawn's exit
+174).** Correct as a requirement, wrong about the evidence available to satisfy it. The spawn's exit
 code was on disk the whole time: `$REG/<id>.spawn` is written as `<epoch-seconds> <rc>`. Nothing on
 the wire carried it, so no surface could show it — a plumbing gap, not an absence of evidence. And
 nothing classified the shape either, because no lifecycle fixture anywhere combined `alive: true`
@@ -460,3 +463,24 @@ moment leaves an ordinary, restartable session. `_session_state` and `sessionLif
 `alive`/`started`/`unit` on every verdict, probing with `list-units` rather than `show`.
 `_resupervise_live` adopts an `unclaimed` pane and writes the claim, so `ccd ensure` repairs the
 shape rather than reporting success and changing nothing.
+
+**On the anchors in this correction (revised 2026-08-16, same wave).** Three of the seven were wrong
+as first written — which is the failure the robustness spec's anchor rule exists to stop ("every
+anchor is *derived by content* … the identifier is the address"), committed inside a section whose
+whole subject is a citation nobody re-measured. All seven were re-derived by content, and each now
+leads with an identifier or a quoted line, with any number kept only as a historical note:
+
+- `tmux new-session -d` was cited `ccd:7153`, which is no ref anyone can open. At the frozen baseline
+  `d7137c2` the construct is `ccd/ccd:7360`, inside `_spawn`; on this build's branch it is `:7631`,
+  inside `_spawn_start` — the function this wave split out of `_spawn`. The identifier survived the
+  split; the number did not survive a single wave.
+- `_ws_least_loaded`'s ranking was cited `ccd:1134-1142`, which matched nothing at any ref (at
+  `d7137c2` that range is inside a `gh`-JSON python helper). The ranking block is `ccd/ccd:1267-1274`
+  at `d7137c2` and `:1324-1331` on this branch; `_limit_score` itself is defined at `ccd/ccd:7007`
+  (`:7163` on this branch). The quoted two lines are what to grep for.
+- Claim 4's sentence was cited `build4.md:173`; `grep -n` puts it at **174**.
+- The three remaining in-document anchors — 150, 161–162, 153–154 — were re-checked line by line and
+  are correct. They point into this same file, and this correction is appended BELOW everything it
+  cites, so nothing here moves them. Each is quoted verbatim beside its number anyway, which is what
+  makes it re-derivable at all. The one distance measurement ("150 lines later", and it was 152) is
+  gone: F10's own entry is named, not counted.
