@@ -13483,6 +13483,26 @@ git add ccd/ccd server/test/ccd-arith-containment.test.ts
 git -c user.name="Mykyta Fastovets" -c user.email="m.fastovets@example.com" commit
 ```
 
+- [ ] **Step 8: pin `_spawn_start`'s failure mode, because the split installed a door (D-B8-4)**
+
+Tasks 7/8 made every caller `_spawn_start "$id" <mode> || return $?`. That early return **skips
+`_reg_claim`** — and, at `cmd_ws_add`/`cmd_ws_restore`, `_ws_supervise` too — which the pre-split
+straight line always reached.
+
+**This is unobservable today**, and the reason is precise: `_spawn_start` has no `return` of its own.
+Every failure inside it is a `die` (process-fatal), and it ends on an assignment, so `|| return $?` is
+currently unreachable in production. **The day someone adds a non-zero `return` to `_spawn_start`,
+`cmd_ws_add` leaves a live pane that no row claims and no unit watches — F8's exact shape, re-entering
+through the door the split installed.**
+
+A comment asking the next editor to remember is not a mechanism. Add a structural test asserting
+`_spawn_start`'s only failure mode is `die` — e.g. scan its deparsed body (`type _spawn_start`) for a
+bare `return` with a non-zero operand and require none. Its failure message must say what to do:
+*"`_spawn_start` grew a `return`; every `|| return $?` caller now skips `_reg_claim` — give those
+callers a claim on the failure path before landing this."*
+
+Mutation-prove it: add `return 9` to `_spawn_start`, confirm RED, restore.
+
 - [ ] **Step 7: Record the one site this task does NOT change, and why**
 
 `_auto_compact_check` compares `pct` — derived from **pane text** — with `-ge`. Pane text is genuinely
@@ -13521,3 +13541,22 @@ own regex for "the bound is not keyed off `fromswap`" was **unsatisfiable** agai
 bash's `type` deparse renders the whole `local` list on one line. A test that cannot pass for the right
 reason is as bad as one that cannot fail for the wrong one.
 
+**D-B8-4 — the split installed a door that re-opens F8, and it is currently unreachable.** Tasks 7/8
+made every caller `_spawn_start "$id" <mode> || return $?`. That early return skips `_reg_claim` (and
+`_ws_supervise` where the verb has one) — the very writes Wave 1 exists to move earlier. It is
+unobservable only because `_spawn_start` has no `return` of its own: every failure is a `die`, and the
+function ends on an assignment. Add one non-zero `return` and `cmd_ws_add` leaves a live pane no row
+claims and no unit watches.
+
+Found by the early-return cleanup audit that followed the `cmd_ws_restore` fd leak, and correctly
+judged "needs no change now" — but "no change now" plus a comment is how the next incident gets
+written. Task 17 Step 8 pins it, so the day the door opens is a red suite naming the callers that need
+a claim on their failure path.
+
+*Also fixed in the same pass:* `cmd_ws_restore`'s new early `return` skipped `exec {lfd}>&-`, leaking
+the ws-reap flock fd. The block's own comment asserted the opposite invariant — *"`die` exits, and the
+kernel closes what exits"* — true of `die`, false of `return`. Because ccd is SOURCED and `flock`
+treats two `open()`s of one file in a process as strangers, that is a lock nothing releases. The fix
+routes both outcomes through a single close and the comment now states the real rule. The leak is
+observable only from the sourcing shell, which is also the production shape — a fresh-bash probe would
+have shown it free, so the test asks the same shell.
