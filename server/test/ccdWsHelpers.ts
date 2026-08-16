@@ -53,7 +53,7 @@ export function seedAccountsSh(home: string, roster: unknown = DEFAULT_TEST_ROST
  *  insufficient: reporting "no systemd" sends `_supervised_start` down its
  *  fallback into a REAL `_spawn`. */
 export const WS_ADD =
-  `_spawn() { :; }; _spawn_start() { echo 0; }; _spawn_settle() { :; };`
+  `_spawn() { :; }; _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };`
   + ` _ws_supervise() { :; }; _supervised_start() { :; }; tmux() { :; };`;
 
 /** THE VARIANT THE ORDERING PINS NEED: `_spawn_start` and `_spawn_settle` stay
@@ -150,14 +150,13 @@ export function ghContainedEnv(home: string, env: NodeJS.ProcessEnv = {}): NodeJ
   return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
-/** Every argv the poisoned `gh` at `<home>` saw. */
-export const ghPoisonAt = (home: string): string[] => {
-  const p = path.join(home, 'gh-poison');
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
-};
-
+/** The one reader every append-only call log in this file goes through: absent
+ *  file == no calls, and blank lines are not calls. */
 const readLines = (p: string): string[] =>
   fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+
+/** Every argv the poisoned `gh` at `<home>` saw. */
+export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 'gh-poison'));
 
 export interface CcdHarness {
   home: string;
@@ -249,10 +248,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
     },
-    calls: () => {
-      const p = path.join(home, 'ccd-calls');
-      return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
-    },
+    calls: () => readLines(path.join(home, 'ccd-calls')),
     ghPoison: () => ghPoisonAt(home),
     systemctlCalls: () => readLines(path.join(home, 'systemctl-calls')),
     systemdRunCalls: () => readLines(path.join(home, 'systemd-run-calls')),

@@ -23,7 +23,7 @@ afterEach(() => { h.cleanup(); });
 const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
   _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; };
   _spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; };
-  _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; echo 0; };
+  _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
   _spawn_settle() { echo "spawn_settle $1" >> "$HOME/ccd-calls"; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
   _alive() { return 1; };`;
@@ -1309,7 +1309,7 @@ describe('ws-restore propagates a failed spawn', () => {
     `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
      _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; };
      _spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return ${rc}; };
-     _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; echo 0; };
+     _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
      _spawn_settle() { echo "spawn_settle $1" >> "$HOME/ccd-calls"; return ${rc}; };
      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
      _alive() { return 1; };`;

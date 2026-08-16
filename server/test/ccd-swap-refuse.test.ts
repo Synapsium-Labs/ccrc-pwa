@@ -42,7 +42,7 @@ const REAL_ENSURE_STUBS = `
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in has-session) return 1;; esac; return 0; };
   sleep() { :; };
   _spawn() { echo "_spawn $*" >> "$HOME/ccd-calls"; return 0; };
-  _spawn_start() { echo "_spawn_start $*" >> "$HOME/ccd-calls"; echo 0; };
+  _spawn_start() { echo "_spawn_start $*" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
   _spawn_settle() { echo "_spawn_settle $1" >> "$HOME/ccd-calls"; return 0; };
 `;
 

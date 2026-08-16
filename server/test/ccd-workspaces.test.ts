@@ -422,7 +422,7 @@ describe('ws-add propagates a failed spawn', () => {
   };
   const WS_ADD_SPAWN_FAIL = (rc: number): string =>
     `_spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return ${rc}; };`
-    + ` _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; echo 0; };`
+    + ` _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };`
     + ` _spawn_settle() { echo "spawn_settle $1" >> "$HOME/ccd-calls"; return ${rc}; };`
     + ` _ws_supervise() { :; }; tmux() { :; };`;
 
