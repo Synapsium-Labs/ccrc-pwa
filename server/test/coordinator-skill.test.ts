@@ -344,3 +344,20 @@ describe('the coordinator skill: linkage', () => {
       readFileSync(path.join(root, 'docs/superpowers/programs/TEMPLATE.md'), 'utf8'));
   });
 });
+
+describe('the dispatch response documents that ok is not proof of a ready pane', () => {
+  it('names adopted and spawnState, and says what adopted:true costs the coordinator', () => {
+    const ref = refs('wave-lifecycle.md');
+    expect(ref).toContain('adopted');
+    expect(ref).toContain('spawnState');
+    // The sentence that makes the fields actionable rather than decorative.
+    expect(ref).toMatch(/ok.*(is not|no longer).*proof/i);
+  });
+
+  // The new passage introduces no mention of the destructive verbs, and that is
+  // NOT re-asserted here. `names the three destructive verbs ONLY inside the
+  // clause that forbids them` (above) pins hits === CONTRACT[2]'s own count
+  // across SKILL.md and both references — strictly stronger than any check
+  // written here, since a weaker duplicate would stay green on an extra
+  // mention. It is the mechanism; it must stay green.
+});

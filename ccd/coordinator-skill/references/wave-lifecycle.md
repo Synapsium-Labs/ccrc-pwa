@@ -50,6 +50,29 @@ with the run now `dispatched`, or a refusal:
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
 
+#### An `ok:true` dispatch is no longer proof that the pane is ready
+
+`POST /api/runs/:id/dispatch` answers with two fields beyond the ones above:
+
+| field | meaning |
+|---|---|
+| `adopted` | `true` when the workspace was **adopted from a killed `ws-add`**, not created by a clean one. The HTTP call that made it timed out and the server killed `ccd`; the workspace, the claim and the supervisor all exist, but nothing confirmed the session's TUI came up. |
+| `spawnState` | how the last spawn attempt ended: `ready`, `login`, `vanished`, `expired`, `blocked`, `unrecognised`, or `null` for *not recorded*. `null` is not `ready` and is not a warning — it means no spawn fact was written. |
+
+**What to do with them.** On `adopted: true`, or on any `spawnState` other than `ready` or `null`,
+**do not treat the brief as delivered**. Wait for the worker's first mail as usual, but if none
+arrives within the wave's ordinary window, read the session's own screen before re-dispatching:
+
+- `spawnState: 'expired'` — the settle ran out. Large resumes legitimately settle unconfirmed; the
+  session is very often fine. Give it the ordinary window before acting.
+- `spawnState: 'login'` or `'blocked'` — the account behind that lane needs a human. Waiting longer
+  cannot fix it. Say so to the operator; do not re-dispatch onto the same lane.
+- `spawnState: 'vanished'` — the tmux session went away mid-poll. The row will classify itself on
+  the next sweep.
+
+`adopted: true` is also written to the run's event trail as `spawn-adopted:<spawnState>`, so the
+provenance of the workspace survives the conversation.
+
 **`items` — the wave's declared ledger.** `"items"` is the machine-readable
 half of the wave plan whose other half is the brief: one title per unit of
 work, at most **32** of them, each at most **200 UTF-8 bytes** (bytes, not
