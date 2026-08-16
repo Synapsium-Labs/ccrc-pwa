@@ -23,7 +23,7 @@
       "id": "claude-corp",
       "label": "team·shared",
       "configDirSuffix": ".claude-corp",
-      "exec": { "kind": "generated" },
+      "exec": { "kind": "generated", "secretsFile": ".cc-secrets/claude-corp-oauth.env" },
       "homeAble": true,
       "hue": "blue",
       "telemetry": "anthropic"
