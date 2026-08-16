@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cf4a8ff9e9c1cde17a4bf5827e7c3d537e1d3fb7dcbbb4b473b9532a04b6a3db
+# ccrc:generated 1 sha256=2b486ba759aaa905de235f225d839cc6cc40f3a88aaa1663b1d4a43c76005db3
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7293,7 +7293,7 @@ _pane_login_screen() {
   grep -Eq 'Select login method|Invalid API key|Please run /login' <<<"$1"
 }
 
-_accept_first_run_prompts() {   # tmuxname [fromswap] [bound_s] — clear startup gates, then CONFIRM the main TUI is up.
+_accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
   #   • trust-folder prompt  — default is "1. Yes, I trust this folder"  → just Enter
@@ -7312,7 +7312,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] [bound_s] — clear startu
   # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
   # or lost auth): waiting longer cannot fix it. 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
-  local t="$1" fromswap="${2:-0}" bound="${3:-$SPAWN_SETTLE_S}" i pane t0
+  local t="$1" fromswap="${2:-0}" bound i pane t0
   # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
   # bound anyone can reason about: gate branches sleep 2 EXTRA seconds each, so
   # the same 450 iterations are ~900s plain and ~1350s when gates fire. The
@@ -7320,6 +7320,26 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] [bound_s] — clear startu
   # backwards from the obvious reading: `cmd_swap` writes `lastswap` two lines
   # before the restart, so a SWAP is fromswap=1 (the fast branch) and a fresh
   # `ws-add` is fromswap=0. Keyed off it, ws-add would get the LONG window.
+  #
+  # THE BOUND ARRIVES IN A VARIABLE, NEVER IN ARGV, and that is a SECURITY
+  # property, not a style choice. It reached this function as a positional for
+  # one commit (Task 5), threaded down from a second positional on `cmd_ensure`
+  # — and `ccd ensure` is granted by the agent's exec whitelist, whose own
+  # docstring says "tokens after the prefix are unconstrained". `(( ))` below
+  # evaluates its operand's CONTENTS as an arithmetic expression, and a command
+  # substitution inside an ARRAY SUBSCRIPT runs before the arithmetic even
+  # errors: `bound='REG[$(rm -rf ~)]'` executes. That made a wire-reachable
+  # argv word into arbitrary code as the fleet user. `CCD_SETTLE_BOUND` is the
+  # CCD_IN_UNIT idiom instead — a caller's dynamically-scoped `local`, never
+  # exported, never an argv token, so nothing on the wire can reach it.
+  #
+  # VALIDATED ANYWAY, because a comment is a request and a red suite is a
+  # mechanism: `(( ))` on any non-literal is a footgun, and the next editor
+  # deserves a guard rather than a paragraph. Anything that is not 1-5 digits
+  # degrades to the production default — never to zero (an instant rc 4 on
+  # every spawn) and never to "no bound".
+  bound="${CCD_SETTLE_BOUND:-$SPAWN_SETTLE_S}"
+  [[ "$bound" =~ ^[0-9]{1,5}$ ]] || bound=$SPAWN_SETTLE_S
   t0=$(date +%s)
   for i in $(seq 1 "$SPAWN_GATE_TRIES"); do
     (( $(date +%s) - t0 >= bound )) && return 4
@@ -7502,11 +7522,15 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   SPAWN_FROMSWAP="$fromswap"
 }
 
-_spawn_settle() {   # id fromswap [bound_s] — the BLOCKING half: gate loop, fact, warnings, /effort
-  local id="$1" fromswap="$2" bound="${3:-$SPAWN_SETTLE_S}" wrapper tname prompt_rc
+_spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnings, /effort
+  # NO BOUND POSITIONAL, and none is threaded onward: the settle window is
+  # `CCD_SETTLE_BOUND`, read once by `_accept_first_run_prompts` out of the
+  # calling frame (see the block at its `bound=` line for the arbitrary-code
+  # execution an argv-threaded bound bought). One reader, one place to validate.
+  local id="$1" fromswap="$2" wrapper tname prompt_rc
   wrapper=$(_reg_get "$id" wrapper)
   tname=$(_tmux "$id")
-  _accept_first_run_prompts "$tname" "$fromswap" "$bound"; prompt_rc=$?
+  _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
   # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — this
   # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
   # inside the unit to a `ccd start` running in another process, which is what _supervised_start
@@ -7547,7 +7571,7 @@ _spawn_settle() {   # id fromswap [bound_s] — the BLOCKING half: gate loop, fa
   return "$prompt_rc"
 }
 
-_spawn() {   # id mode(new|resume) [bound_s] — the composition, so cmd_swap and friends are unchanged
+_spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends are unchanged
   # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
   # URL to capture. The session is discovered on claude.ai by its name, which == the id
   # (we pass `--remote-control '$id'`).
@@ -7561,7 +7585,7 @@ _spawn() {   # id mode(new|resume) [bound_s] — the composition, so cmd_swap an
   # here turned its `die` into rc 1 and every caller reported success over a
   # spawn that never happened.
   _spawn_start "$1" "$2" || return $?
-  _spawn_settle "$1" "$SPAWN_FROMSWAP" "${3:-$SPAWN_SETTLE_S}"
+  _spawn_settle "$1" "$SPAWN_FROMSWAP"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
@@ -7815,8 +7839,18 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   echo "started $id ($mode) — discover on claude.ai by name: $id"
 }
 
-cmd_ensure() {   # id [bound_s] — idempotent; used by systemd. arg is the id directly.
-  local id="${1:?usage: ccd ensure <id>}" bound="${2:-$SPAWN_SETTLE_S}"
+cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
+  # ONE POSITIONAL, AND THAT IS A SECURITY BOUNDARY. `ccd ensure` is granted by
+  # the agent's exec whitelist (agent/src/whitelist.ts), which matches a PREFIX:
+  # "tokens after the prefix are unconstrained". A second positional here was
+  # threaded down to `(( … >= bound ))` in `_accept_first_run_prompts`, where
+  # bash evaluates a variable's CONTENTS as arithmetic and a command
+  # substitution inside an array subscript EXECUTES — i.e. any extra argv word
+  # this verb accepts is a candidate for arbitrary code as the fleet user. The
+  # settle bound travels in `CCD_SETTLE_BOUND` instead (cmd_supervise sets it as
+  # a `local`, exactly like CCD_IN_UNIT below). Do not give this verb another
+  # argument without asking what a hostile string does once it lands.
+  local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
   if _alive "$id"; then
     # A LIVE PANE IS NOT NECESSARILY A SUPERVISED ONE, and this early return used
@@ -7872,7 +7906,7 @@ cmd_ensure() {   # id [bound_s] — idempotent; used by systemd. arg is the id d
     return 0
   fi
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  local rc; _spawn "$id" "$mode" "$bound"; rc=$?
+  local rc; _spawn "$id" "$mode"; rc=$?
   _reg_claim "$id"
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
@@ -7914,7 +7948,17 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # here would make every systemd restart of a large session settle
   # unconfirmed — suppressing _inject_spawn_effort and lighting a warning on a
   # healthy row.
-  cmd_ensure "$id" "$SPAWN_SETTLE_SUPERVISE_S"
+  #
+  # SIGNALLED THE SAME WAY CCD_IN_UNIT IS, one line up, and for the same reason
+  # that comment gives: dynamically scoped, so `_accept_first_run_prompts` sees
+  # it several frames down without any function in between naming it; never
+  # exported and never an argv token, so — unlike an added argv word, which the
+  # agent's prefix-matching exec whitelist would permit — it is not addressable
+  # from the wire. It reached `cmd_ensure` as a POSITIONAL for one commit, and
+  # the value lands in `(( ))`, which executes a command substitution written
+  # into an array subscript. That is why this is a variable.
+  local CCD_SETTLE_BOUND=$SPAWN_SETTLE_SUPERVISE_S
+  cmd_ensure "$id"
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.
   local beat=0

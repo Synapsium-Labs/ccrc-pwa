@@ -47,6 +47,20 @@ describe('_tmux_server_ensure', () => {
     expect(h.calls()).toContain('tmux start-server');
   });
 
+  it('does NOT fall back when systemd-run SUCCEEDS — the `||` is a fallback, not a second attempt', () => {
+    // THE NEGATIVE CONTROL the test above had none of. With a poison that can
+    // only ever exit 97, `systemd-run … || tmux start-server` is
+    // indistinguishable from `systemd-run …; tmux start-server` — and from
+    // dropping systemd-run altogether — so nothing proved the `||` was
+    // load-bearing. $SYSTEMD_RUN_RC (defaulting to 97, so every other case is
+    // untouched) makes the success branch expressible: the scope was created,
+    // and creating a SECOND server outside it would defeat the whole point.
+    h.sh('tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in list-sessions) return 1 ;; esac; };'
+       + ' _tmux_server_ensure; :', { SYSTEMD_RUN_RC: '0' });
+    expect(h.systemdRunCalls().length).toBeGreaterThan(0);
+    expect(h.calls()).not.toContain('tmux start-server');
+  });
+
   it('_spawn_start calls it BEFORE new-session — a server created by the spawn is already scoped', () => {
     h.sh(`_reg_set myid wrapper claude
           _reg_set myid workdir '${h.home}'

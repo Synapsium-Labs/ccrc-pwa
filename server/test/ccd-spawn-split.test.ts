@@ -10,6 +10,8 @@
 // are human-only by contract and appear in no step here.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -115,14 +117,20 @@ describe('_spawn_start / _spawn_settle', () => {
     expect(h.reg('myid', 'spawn')).toMatch(/^\d+ 0$/);
   });
 
-  it('_spawn threads the settle bound through as its third positional', () => {
+  it('_spawn calls both halves and threads NO bound positional', () => {
     const body = h.sh('type _spawn');
     expect(body).toContain('_spawn_settle');
     expect(body).toContain('_spawn_start');
-    // The name USED to be a lie: the body only ever greped for the two function
-    // names, while `_spawn` passed no `$3` at all. Task 5 threads it for real,
-    // so the assertion now measures what the name claims.
-    expect(body).toContain('${3:-$SPAWN_SETTLE_S}');
+    // The name has now been wrong twice, in opposite directions, so it says
+    // only what this body measures. It was "threads the settle bound through as
+    // its third positional" while the body greped for two function names and
+    // `_spawn` passed no `$3` at all; Task 5 threaded a `$3` for real; and that
+    // `$3` came from a second positional on `cmd_ensure`, a whitelisted verb —
+    // an argv word that lands in `(( ))` is arbitrary code (see the
+    // "not addressable from argv" block below). The bound is `CCD_SETTLE_BOUND`
+    // now, so there is no positional left to thread and none may come back.
+    expect(body).not.toContain('${3:-$SPAWN_SETTLE_S}');
+    expect(body).toContain('_spawn_settle "$1" "$SPAWN_FROMSWAP"');
   });
 
   it('_spawn_start still dies on an incomplete registry — the guard did not move, and it is still FATAL', () => {
@@ -187,7 +195,7 @@ describe('the settle bound is wall-clock, and it is per caller', () => {
     const out = h.sh(
       `${FAKE_CLOCK}
        tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
-       _accept_first_run_prompts cc-test 0 10; echo "rc=$? t=$_faketime"`);
+       CCD_SETTLE_BOUND=10 _accept_first_run_prompts cc-test 0; echo "rc=$? t=$_faketime"`);
     expect(out).toMatch(/rc=4/);
     // ~5 iterations of `sleep 2`, not 450: the bound fired, not the counter.
     expect(Number(/t=(\d+)/.exec(out)![1])).toBeLessThan(20);
@@ -221,12 +229,104 @@ describe('the settle bound is wall-clock, and it is per caller', () => {
     expect(expiredAt('0')).toBe(expiredAt('1'));
   });
 
-  it('_spawn_settle takes the bound as its third positional and defaults to SPAWN_SETTLE_S', () => {
-    expect(h.sh('type _spawn_settle')).toContain('${3:-$SPAWN_SETTLE_S}');
+  it('_spawn_settle takes NO bound positional — it threads none, and reads none', () => {
+    // The single reader is `_accept_first_run_prompts`; the settle half neither
+    // takes a `$3` nor passes one. Two readers of one dynamically-scoped
+    // variable would be two places to remember the validation.
+    const body = h.sh('type _spawn_settle');
+    expect(body).not.toContain('${3:-$SPAWN_SETTLE_S}');
+    expect(body).toContain('_accept_first_run_prompts "$tname" "$fromswap"');
   });
 
-  it('cmd_ensure takes it as a second positional, and cmd_supervise RAISES it', () => {
-    expect(h.sh('type cmd_ensure')).toContain('${2:-$SPAWN_SETTLE_S}');
-    expect(h.sh('type cmd_supervise')).toContain('cmd_ensure "$id" "$SPAWN_SETTLE_SUPERVISE_S"');
+  it('_accept_first_run_prompts is the ONE reader of CCD_SETTLE_BOUND, and it defaults to SPAWN_SETTLE_S', () => {
+    expect(h.sh('type _accept_first_run_prompts')).toContain('${CCD_SETTLE_BOUND:-$SPAWN_SETTLE_S}');
+    // Nobody else reads it: one reader is what makes one validation enough.
+    const readers = h.sh(
+      'for f in _spawn _spawn_start _spawn_settle _accept_first_run_prompts cmd_ensure cmd_start;'
+      + ' do type "$f" | grep -q "CCD_SETTLE_BOUND:-" && echo "$f"; done; :');
+    expect(readers).toBe('_accept_first_run_prompts');
+  });
+});
+
+/** THE BOUND IS NOT AN ARGV SURFACE.
+ *
+ *  `(( ))` evaluates its operand's CONTENTS as an arithmetic expression, and a
+ *  command substitution inside an ARRAY SUBSCRIPT executes before the
+ *  arithmetic even errors:
+ *
+ *      $ REG=/tmp; bound='REG[$(touch /tmp/PWNED)]'; (( 0 >= bound ))
+ *      bash: ((: /tmp: syntax error: operand expected     # …and PWNED exists.
+ *
+ *  So a `bound` that reaches `_accept_first_run_prompts`'s
+ *  `(( $(date +%s) - t0 >= bound ))` from ARGV is arbitrary code execution as
+ *  the fleet user. The agent grants `['ensure']` and its own docstring says
+ *  "tokens after the prefix are unconstrained" — a second positional on
+ *  `cmd_ensure` is therefore reachable across the exec boundary the moment any
+ *  call site emits one. It is closed structurally: the bound travels as
+ *  `CCD_SETTLE_BOUND`, a dynamically-scoped `local` (the CCD_IN_UNIT idiom),
+ *  never an argv token.
+ *
+ *  FIXTURE HOME ONLY — the payload writes `$HOME/PWNED` inside the harness's
+ *  own tmpdir and nowhere else. */
+describe('the settle bound is not addressable from argv', () => {
+  /** The payload: substituted, it runs `touch`; evaluated, it is a path and a
+   *  syntax error. Single-quoted so the SNIPPET's shell leaves it alone and only
+   *  an arithmetic context can expand it. */
+  const PAYLOAD = `'REG[$(touch "$HOME/PWNED")]'`;
+  const pwned = (): boolean => fs.existsSync(path.join(h.home, 'PWNED'));
+
+  it('cmd_ensure does not evaluate a second positional — no command substitution runs', () => {
+    seed('myid');
+    // CCD_IN_UNIT=1 selects the DIRECT spawn path (the supervised branch would
+    // hand off to a unit and never reach the gate loop in this process), and
+    // SPAWN_GATE_TRIES=2 keeps the loop short. PANE_TEXT matches no branch, so
+    // every iteration reaches the `(( ))` — which is the point.
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; SPAWN_GATE_TRIES=2; CCD_IN_UNIT=1;`
+       + ` cmd_ensure myid ${PAYLOAD}; :`,
+      { PANE_TEXT: 'a pane with nothing this function recognises' });
+    expect(pwned()).toBe(false);
+  });
+
+  it('cmd_ensure consumes NO second positional at all', () => {
+    // The structural half: a validated `$2` would still be an argv surface, and
+    // the next editor would have only a comment stopping them widening it.
+    const body = h.sh('type cmd_ensure');
+    expect(body).not.toContain('${2:-$SPAWN_SETTLE_S}');
+    expect(body).not.toMatch(/\$\{?2[:}]/);
+  });
+
+  it('a hostile CCD_SETTLE_BOUND is rejected before the arithmetic, not executed by it', () => {
+    // Defense in depth. Nothing on the wire sets a shell variable — the agent
+    // whitelists ARGV — so this is not a reachable path today; it is the guard
+    // that keeps `(( ))` safe for whoever edits this function next.
+    const out = h.sh(
+      `${FAKE_CLOCK}
+       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       CCD_SETTLE_BOUND=${PAYLOAD}
+       _accept_first_run_prompts cc-test 0; echo "rc=$? t=$_faketime"`);
+    expect(pwned()).toBe(false);
+    // …and it degrades to the PRODUCTION DEFAULT, not to "no bound" and not to
+    // zero: t=240 is SPAWN_SETTLE_S, measured on the fake clock.
+    expect(out).toBe('rc=4 t=240');
+  });
+
+  it('cmd_supervise still RAISES the bound — through the variable, not an argv word', () => {
+    expect(h.sh('type cmd_supervise')).toContain('local CCD_SETTLE_BOUND=$SPAWN_SETTLE_SUPERVISE_S');
+    expect(h.sh('type cmd_supervise')).toContain('cmd_ensure "$id"');
+    expect(h.sh('type cmd_supervise')).not.toContain('cmd_ensure "$id" "$SPAWN_SETTLE_SUPERVISE_S"');
+  });
+
+  it('the raised bound actually reaches the gate loop — dynamic scoping, measured', () => {
+    // `local` is dynamically scoped, so the variable cmd_supervise sets is
+    // visible to `_accept_first_run_prompts` several frames down without any
+    // function in between naming it. Measured through a stand-in for
+    // cmd_supervise's frame, because the real one blocks on a watch loop.
+    const out = h.sh(
+      `${FAKE_CLOCK}
+       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       outer() { local CCD_SETTLE_BOUND=30; _accept_first_run_prompts cc-test 0; }
+       outer; echo "rc=$? t=$_faketime"`);
+    // 30, not SPAWN_SETTLE_S's 240: the caller's frame won.
+    expect(out).toBe('rc=4 t=30');
   });
 });

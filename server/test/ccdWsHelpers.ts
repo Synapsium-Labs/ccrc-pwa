@@ -137,12 +137,28 @@ export function ghContainedEnv(home: string, env: NodeJS.ProcessEnv = {}): NodeJ
   // `systemctl --user enable --now` that touches `$HOME/pane-up`, and their
   // `runCcd` writes that stub BEFORE this function is evaluated in its `opts`
   // literal. Re-planting would break both suites and read as a mystery.
-  for (const [name, log] of [['systemctl', 'systemctl-calls'], ['systemd-run', 'systemd-run-calls']] as const) {
+  //
+  // `systemd-run`'s exit code is the ONE thing a test may steer, through
+  // $SYSTEMD_RUN_RC, and it DEFAULTS TO 97 so every existing case is unchanged.
+  // `_tmux_server_ensure` is `systemd-run … || tmux start-server`, and with a
+  // poison that can only ever fail, nothing proved the `||` was load-bearing —
+  // deleting the fallback and deleting the systemd-run call are both green
+  // against a refusal-only stub. A test that makes it SUCCEED is the negative
+  // control. Steering the rc keeps the containment structural: the stub still
+  // records, and a real `systemd-run` is unreachable at every value.
+  for (const [name, log, rc] of [
+    ['systemctl', 'systemctl-calls', 'rc=97'],
+    ['systemd-run', 'systemd-run-calls', 'rc=${SYSTEMD_RUN_RC:-97}'],
+  ] as const) {
     const p = path.join(bin, name);
     if (fs.existsSync(p)) continue;
     fs.writeFileSync(p,
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${log}"\n`
-      + 'echo "ccd tests must never reach the real user manager" >&2\nexit 97\n', { mode: 0o755 });
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${log}"\n${rc}\n`
+      // The refusal message is conditional on actually refusing: at rc 0 the
+      // stub is standing in for a systemd that WORKED, and a line saying
+      // otherwise would send the next reader looking for a failure.
+      + '[ "$rc" = 0 ] || echo "ccd tests must never reach the real user manager" >&2\nexit "$rc"\n',
+      { mode: 0o755 });
   }
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
