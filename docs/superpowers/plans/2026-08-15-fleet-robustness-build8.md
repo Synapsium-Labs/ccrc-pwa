@@ -1310,6 +1310,58 @@ check is last precisely because those banners live in restored scrollback."
 
 ---
 
+### Calling `_spawn_start` — READ THIS BEFORE TASKS 7 AND 8 (D-B8-1)
+
+**`_spawn_start` returns `fromswap` in the global `SPAWN_FROMSWAP`, never on stdout. Every call site
+has exactly this shape:**
+
+```bash
+_spawn_start "$id" "$mode" || return $?     # or `|| exit $?` at a cmd_* top level
+# … _reg_claim, _ws_supervise, whatever must precede the blocking half …
+_spawn_settle "$id" "$SPAWN_FROMSWAP"
+```
+
+**Never `fs=$(_spawn_start …)`, and never any other `$( )` or `( )` around it.** `_spawn_start`'s
+registry validation ends in `die` (`echo …; exit 1`), and `exit` inside a command substitution kills
+only the subshell — so the fatal error degrades to rc 1. **rc 1 is in no caller's failure set**:
+`cmd_ws_add`, `cmd_start` and `cmd_ensure` all test `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. The result is
+a SUCCESS line and rc 0 over a spawn that never happened.
+
+This is not hypothetical. It shipped at `ad6396d` and was fixed in `9ca06ae`. Measured through the
+real harness: at `d7137c2` the shell exits 1 with `ccd: incomplete registry for 'nosuchid'` and dies;
+at `ad6396d` it exits **0**, printing `SPAWN_RC=1` and then continuing. That is a fatal condition
+narrowed at a seam into a value nobody checks — the exact defect class this build exists to close,
+reproduced by the build at the seam it had just created.
+
+`SPAWN_FROMSWAP` is `0` or `1`, validated **inside** `_spawn_start` — do not re-validate at the call
+site, and do not add a `${fs##*$'\n'}`-style last-line filter; there is no stdout channel left to
+filter. `_spawn_start` sets it to `0` on entry, so a caller never reads a previous spawn's value, and
+it is initialised at file scope so `set -u` cannot kill a reader whose `_spawn_start` never ran.
+
+**Test stubs must model this:** `_spawn_start() { SPAWN_FROMSWAP=0; }`, **not**
+`_spawn_start() { echo 0; }` — an echoing stub leaks `0` onto the caller's stdout under the real call
+shape.
+
+Pinned by `server/test/ccd-spawn-split.test.ts`: `_spawn is fatal on an incomplete registry too`
+(status of the whole shell, unwrapped — a `( )` wrapper cannot observe this) and `_spawn reads
+fromswap out of the GLOBAL` (`type _spawn` must not match `/\$\(\s*_spawn_start/`).
+
+**Tasks 7 and 8 MUST extend that second assertion to `type` each new caller they add.** As written it
+inspects `_spawn` alone, so a new call site could reintroduce `$( )` and stay green. That gap is the
+single most likely way this regression returns.
+
+**If you need to measure a fatal `die` in another test file, move `shStatus` from
+`ccd-spawn-split.test.ts` into `server/test/ccdWsHelpers.ts` rather than copying it** —
+`single-definition.test.ts` will eventually notice a second copy, and a helper that measures process
+death is exactly the kind of thing that must have one definition.
+
+**Task 5, note:** `_spawn`'s header documents a third positional `[bound_s]` and
+`ccd-spawn-split.test.ts` has a test *named* "threads the settle bound through as its third
+positional" — but the body has never passed `$3` to `_spawn_settle`, before or after Task 3, and that
+test only greps for the two function names. **The test's name is currently a lie.** Task 5 either
+threads the bound for real and makes the assertion measure it, or renames the test. Do not leave a
+test whose name claims more than its body checks.
+
 ### Task 7: §1.1 ordering — `cmd_ws_add` and `cmd_ws_restore`
 
 This is the fix F8 names. Once the claim and the supervision precede the blocking wait, **a
@@ -13180,3 +13232,151 @@ Wave 4: nothing here touches `agent/`.
 - **No new `NotifyEvent['kind']`.** `KIND_WORD`/`KIND_GLYPH` are total maps and an older client would
   render `undefined`.
 - **`FLEET_PROTO` stays 1.** Every wire change here is additive and absence-permitting.
+
+### Task 16: the `die`-inside-`$( )` class gets a sweep and a mechanical guard (D-B8-2)
+
+**This task exists because of D-B8-1, and it is the difference between fixing an instance and closing a
+class.** `die` is `echo …; exit 1`. Inside a command substitution, `exit` kills only the subshell — so
+**every** `x=$(_helper …)` where `_helper` can reach `die` silently demotes a fatal error to a value the
+caller probably does not check. D-B8-1 was one instance, found by review. Nothing prevents the next one.
+
+The shape is mechanically greppable, which is what makes a guard possible rather than a request.
+
+**Files:**
+- Create: `server/test/ccd-die-containment.test.ts`
+- Modify: `ccd/ccd` — only where the sweep finds a real demotion
+- Modify: `server/test/ccdWsHelpers.ts` — move `shStatus` here from `ccd-spawn-split.test.ts` if a
+  second file needs it (do NOT copy it; `single-definition.test.ts` will notice the second copy)
+
+**Interfaces:**
+- Consumes: `shStatus` (measures the exit status of a whole `bash -c`, unwrapped), `makeCcdHarness`.
+- Produces: nothing other tasks consume.
+
+- [ ] **Step 1: Enumerate the population, and write it down**
+
+Run, at the branch tip:
+
+```bash
+cd <worktree>
+# every command substitution that calls an underscore-prefixed ccd helper
+grep -nE '\$\(\s*_[a-z_]+' ccd/ccd | tee /tmp/cs-sites.txt | wc -l
+# every function that can reach `die` directly
+grep -nE '^\s*(die|_die)\b' ccd/ccd | wc -l
+```
+
+For each site, determine whether the called helper can reach `die` on any path. **Record the full
+list in the task's commit message** — including the sites you cleared and why, because a sweep whose
+negative results are unrecorded gets re-run from scratch next time.
+
+- [ ] **Step 2: Write the failing guard**
+
+The guard is a text scan, in the idiom `single-definition.test.ts` already uses. It asserts that the
+set of `$(_helper …)` sites where `_helper` can `die` is **exactly the allow-list** — empty if the
+sweep fixed them all. A new demotion added later is a new set member, and the suite goes red naming it.
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { CCD } from './ccdWsHelpers.js';
+
+/** Helpers that can reach `die` on some path — derived in Step 1, listed once here.
+ *  A command substitution around ANY of these demotes a process-fatal error to a
+ *  return code the caller almost certainly does not check (D-B8-1). */
+const CAN_DIE = [
+  // filled from Step 1's sweep, e.g. '_spawn_start', '_id', …
+];
+
+describe('die is never demoted by a command substitution', () => {
+  it('no $( ) wraps a helper that can die', () => {
+    const src = readFileSync(CCD, 'utf8').split('\n');
+    const offenders: string[] = [];
+    src.forEach((line, i) => {
+      for (const fn of CAN_DIE) {
+        // `$(fn` with optional whitespace — the shape that swallows `exit`
+        if (new RegExp(`\\$\\(\\s*${fn}\\b`).test(line)) offenders.push(`${i + 1}: ${line.trim()}`);
+      }
+    });
+    expect(offenders,
+      'a `die` inside $( ) kills only the subshell, so a fatal error becomes a return code — ' +
+      'and rc 1 is in no ccd caller\'s failure set. See D-B8-1.')
+      .toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 3: Run it and confirm it fails**
+
+```bash
+cd <worktree>/server && ./node_modules/.bin/vitest run test/ccd-die-containment.test.ts
+```
+
+Expected: FAIL, listing each demoting site the sweep found. **If it passes on the first run, the
+`CAN_DIE` list is wrong — go back to Step 1**, because D-B8-1 proves at least one such shape existed.
+(If Task 3's fix genuinely removed the only one, prove that by reverting `9ca06ae` in the working
+tree, watching this test go red, and restoring — then say so in the commit message.)
+
+- [ ] **Step 4: Fix each site the same way D-B8-1 was fixed**
+
+Prefer the structural fix: **return the value through a documented global and drop the substitution**,
+so the hazard is unrepresentable. Patching each call site with `|| exit $?` is a rule every future
+caller must remember, which is what this task exists to eliminate. Where a substitution genuinely must
+stay, hoist the `die`-able validation out of the helper and above the substitution.
+
+- [ ] **Step 5: Run the guard and the full ccd surface**
+
+```bash
+cd <worktree>/server && ./node_modules/.bin/vitest run test/ccd-die-containment.test.ts
+cd <worktree>/server && ./node_modules/.bin/vitest run test/ccd-spawn-split.test.ts test/ccd-workspaces.test.ts test/ccd-archive.test.ts test/ccd-supervised-start.test.ts test/ccd-start-id.test.ts test/ccd-swap.test.ts test/ownership.test.ts
+```
+
+Expected: all green.
+
+- [ ] **Step 6: Mutation-prove the guard**
+
+Reintroduce one demotion (e.g. wrap a cleared call in `$( )`), run the guard, confirm RED naming that
+line, then restore. Verify `git status` is clean. Record before/after counts.
+
+- [ ] **Step 7: Re-stamp and commit**
+
+```bash
+cd <worktree> && node <scratchpad>/restamp.mjs   # must print -> ccrc-unmodified
+git add ccd/ccd server/test/ccd-die-containment.test.ts server/test/ccdWsHelpers.ts
+git -c user.name="Mykyta Fastovets" -c user.email="m.fastovets@example.com" commit
+```
+
+---
+
+## Deviations found
+
+Numbered `D-B8-N`, global and monotonic across project history (Build 4 ended at `D-B4-23`). Source
+files carry `D-B8-N` refs in comments; **read them as authoritative history and do not delete them.**
+
+**D-B8-1 — the `_spawn` split demoted a process-fatal error to a success line.** Task 3 gave
+`_spawn_start` an stdout channel for `fromswap`, so the composition called it as
+`fs=$(_spawn_start "$1" "$2")`. `_spawn_start` retains `die "incomplete registry for '$id'"`, and
+`exit 1` inside `$( )` kills only the subshell — so the fatal became `return 1`, which is in no
+caller's failure set (`cmd_ws_add`, `cmd_start`, `cmd_ensure` all test
+`[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`). Measured through the real harness: at `d7137c2` the shell exits
+1 and dies; at `ad6396d` it exits **0**, prints `SPAWN_RC=1`, and continues to the success line.
+Reachable with a `.uuid` present but `.wrapper`/`.workdir` missing — the torn-registry family Wave 1
+exists to close.
+
+*Fixed in `9ca06ae`* by removing the stdout channel entirely: `_spawn_start` sets the global
+`SPAWN_FROMSWAP` (file-scope initialised, so `set -u` cannot kill a reader whose `_spawn_start` never
+ran; reset to `0` on entry, so no caller reads a previous spawn's answer). The call-site patch
+(`|| exit $?`) was **rejected** — Tasks 7 and 8 add ~6 more call sites, and a rule every caller must
+remember is the shape this build removes. With no substitution, `die` is fatal by construction.
+
+Two lessons recorded rather than summarised. First: the one test that claimed to pin this guard ran
+`(_spawn_start nosuchid new)` inside an explicit subshell and grepped stdout — it passed whether the
+guard was fatal or not, and was structurally incapable of catching the defect. A test that cannot
+fail for the reason it names is worse than no test, because it is counted as coverage. Second: the
+demotion happens at the **call site**, not in the function — so a test that calls `_spawn_start`
+plainly can never see it. The pin has to measure the composition.
+
+**D-B8-2 — the class behind D-B8-1 is unswept.** `die` inside `$( )` is silently non-fatal
+*everywhere* in `ccd/ccd`, not only at the one site review happened to catch. Task 16 sweeps the
+population and lands a text-scan guard so a new demotion is a red suite rather than a future
+incident. Recorded as a deviation because the plan as written closed an instance and left the class
+open — which is the exact failure this build's own goal statement names.
+
