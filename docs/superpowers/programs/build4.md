@@ -410,3 +410,53 @@ protocol — re-measure, advance, review the handoff commit, and open wave N+1 B
 wave N (`final:false`), close-first being what retires a program early and breaks every
 `toId:'coordinator'` mail. Wave 4 was the last wave and closed `final:true`. There is no next
 wave; follow-on work is tracked as the robustness build and Builds 5–6.
+
+## Correction, appended 2026-08-16 (robustness build, Wave 1)
+
+Four claims above are wrong. They are left standing, because a ledger that quietly repairs itself
+stops being evidence. What follows is what was actually true and how the error was made. The labels
+`C1`, `C11` and `C12` are the ones the robustness spec
+(`docs/superpowers/specs/2026-08-14-fleet-robustness-design.md`, "twelve shipped claims that are
+false against the code") assigned to these same sentences; they are reused here so the two documents
+name one thing once.
+
+**1 (C1). "worktree + full registry entries present, no session, no run binding" (line 150).** The
+worktree and the registry entries were there. **The session was too.** `tmux new-session -d`
+(`ccd:7153`) completes before the blocking wait, and the tmux server is not ccd's child — so killing
+`ccd ws-add` at 90 s killed the client that was waiting, never the pane. `ccd ls` printed
+`ccrc-pwa-swift-harbor` as `ALIVE yes` throughout, and it was still alive on the box two days later.
+"No session" is the sentence that sent three later readings down the wrong path.
+
+**2 (C12). "Signature to recognize it: `<id>.started` marker absent, `claude-session@<id>.service`
+inactive(dead) with ZERO journal entries" (lines 161–162).** Every clause is true and the signature
+is still uninformative, because it reads only the half of the box that was dead. `_ws_supervise`
+never ran, so no unit was ever enabled — an inactive unit with no journal is what a unit that was
+never instantiated looks like, not evidence about the pane. **Two liveness signals disagreed and
+this ledger believed the one that cannot see a pane.** `systemctl show` on an UNINSTANTIATED
+TEMPLATE reports `LoadState=loaded`, so it answers for an id that has no unit at all; the probe that
+would have disagreed is `list-units`, which does not name it. `ccd ws-audit` could not have
+corrected the reading either: `_ws_reap_eval` refuses `not-archived` first and nulls every
+downstream field, and `_alive` appeared nowhere in that verb.
+
+**3 (C11). "`_ws_least_loaded` picked wrapper `claude-dev0` by session-count + disk only" (lines
+153–154).** It considers neither. `_ws_least_loaded` ranks home-able accounts by `_account_ok` plus
+`_limit_score` (`ccd:1134-1142`) — the max of the 5h/7d percentages. This ledger self-corrects 150
+lines later, in F10's own entry ("ranks home-able accounts by `_limit_score` alone"), and the two
+sentences have coexisted since the day it merged. The conclusion drawn from the wrong one still
+holds: placement does not consider wrapper HEALTH, which is the defect.
+
+**4. "a failed ws-add must not leave an orphan — roll back or surface it as reclaimable" (line
+173).** Correct as a requirement, wrong about the evidence available to satisfy it. The spawn's exit
+code was on disk the whole time: `$REG/<id>.spawn` is written as `<epoch-seconds> <rc>`. Nothing on
+the wire carried it, so no surface could show it — a plumbing gap, not an absence of evidence. And
+nothing classified the shape either, because no lifecycle fixture anywhere combined `alive: true`
+with `started: false`: the 24-combination cross-language sweep yielded only six tokens, and the row
+read `running` for two days.
+
+**What the robustness build changes.** `started` is written between `_spawn_start` and
+`_spawn_settle`, before anything blocks, and `_ws_supervise` runs there too — so a kill at any
+moment leaves an ordinary, restartable session. `_session_state` and `sessionLifecycle` gain
+`unclaimed`, first inside the alive branch, so the shape names itself. `ws-audit` answers
+`alive`/`started`/`unit` on every verdict, probing with `list-units` rather than `show`.
+`_resupervise_live` adopts an `unclaimed` pane and writes the claim, so `ccd ensure` repairs the
+shape rather than reporting success and changing nothing.
