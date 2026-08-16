@@ -6,8 +6,13 @@
 # entry in the table and the last function in this file).
 #
 # SOURCED, never executed — `ccrc`'s `cmd_doctor` does `. "$CCRC_HERE/ccrc-doctor-checks"`.
-# It in turn sources `ccrc-wrapper-shape` (see below), so a complete install is
-# THREE files in one directory, not two.
+# It in turn sources `ccrc-wrapper-shape` (see below), so **DOCTOR's set is
+# THREE files in one directory** — `ccrc`, this file, `ccrc-wrapper-shape` —
+# not two. THE CLI'S SET IS FOUR: `ccrc-adopt` joins them, because `cmd_adopt`
+# execs it (Task 8). Both counts are correct and they are counting different
+# things; `ccrc`'s own header counts the CLI's four, and whatever installs the
+# CLI must ship all four. The two paragraphs used to share one wording, which
+# read as a contradiction.
 # Split out of `ccrc` itself (plan, "Files") so a check is testable without the
 # CLI's whole argument surface, and so the table stays visible as data rather
 # than buried in a dispatch.
@@ -90,7 +95,7 @@
 # the run an operator needs to see whole. Nothing here may turn `-e` back on.
 
 # Where the shipped tree is, relative to THIS file rather than to $PWD —
-# `ccrc-adopt:103-104`'s idiom, in the same PATH-free spelling `ccrc` uses (see
+# `ccrc-adopt:124-125`'s idiom, in the same PATH-free spelling `ccrc` uses (see
 # that file for why `dirname` is not called here: doctor has to work on a box
 # whose PATH is the broken thing). `${BASH_SOURCE[0]}` and not `$0`, because
 # this file is only ever reached by `source`, where `$0` is the CALLER's
@@ -215,10 +220,17 @@ _dr_need_bin() {
 # ── node: the floor is READ, never re-typed ───────────────────────────────
 # WHICH package.json IS CANONICAL DEPENDS ON THE BOX, and that is why this
 # looks in two places rather than one:
-#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh:276), so
+#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh:343), so
 #     the shipped declaration there is `~/ccrc/agent/package.json`;
-#   - a server host has `~/ccrc/{server,shared,deploy}` (deploy.sh:525), so it
-#     is `~/ccrc/server/package.json`;
+#   - a server host has `~/ccrc/{server,shared,deploy,ccd}` (deploy.sh:613), so
+#     it is `~/ccrc/server/package.json`. `ccd` is in BOTH lanes as of Task 8 —
+#     the server box gets the directory so `ccrc` and its three siblings have a
+#     home there, and it installs nothing else out of it (no ccd binary, no
+#     session hooks; those are the agent lane's). This paragraph said
+#     `{server,shared,deploy}` until the whole-branch review caught it: the
+#     LOGIC never depended on the difference (both candidates are tried, and
+#     the right one exists on each box), but a comment that is wrong about
+#     what ships is exactly how the next reader mis-predicts a deploy.
 #   - `pwa/package.json` never ships at all and is deliberately not consulted.
 # Either answer is the SAME answer: `server/test/node-floor.test.ts:45-50`
 # asserts all three declarations are byte-identical and fails the build the
@@ -930,6 +942,22 @@ _check_wrappers() {
         # Absent from disk, or not a wrapper at all: already reported, in the
         # words the measurement earned, by the set difference above.
         _dr_wr_has "$id" ${wr_seen[@]+"${wr_seen[@]}"} || continue
+        # D-71 SAYS THIS IDIOM IS BANNED FOR RECORDS WITH POSSIBLY-EMPTY
+        # FIELDS, and this one is the exception — for a reason that lives in
+        # ANOTHER FILE, which is why it is written down here:
+        # `_wrap_parse_shape` (ccd/ccrc-wrapper-shape) only prints `ok` after
+        # matching `target` against WRAPPER_ID_RE and `suffix` against
+        # WRAPPER_SUFFIX_SAFE_RE, both of which reject the empty string, and
+        # `ok` is a literal. So the ONLY field that can be empty is `secrets`,
+        # the LAST one — and a trailing empty field is the one case
+        # `IFS=$'\t' read` handles correctly. Its `no` answer is four empty
+        # fields, but the `[ "$ok" != ok ]` line below is the only thing read
+        # in that case.
+        # RE-CHECK THIS IF EITHER REGEX IS RELAXED TO ACCEPT EMPTY, OR IF A
+        # FIFTH FIELD IS ADDED AHEAD OF `secrets`: the failure would be a
+        # silently WRONG D-69 verdict (a secrets path read out of the suffix
+        # column), not a parse error. Split by hand then, as the roster reader
+        # above does.
         IFS=$'\t' read -r ok target wsuffix wsecrets < <(_wrap_parse_shape "$bin/$id")
         if [ "$ok" != ok ]; then
           wr_hard+=("$id is declared generated but \$HOME/.local/bin/$id is not the generated shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")

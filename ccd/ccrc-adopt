@@ -237,6 +237,20 @@ extract_suffix_loose() {
 mapfile -t REST < <(printf '%s\n' "${CFG_SCRIPTS[@]}" | sort)
 declare -A SHAPE_OK=() SHAPE_TARGET=() SHAPE_SUFFIX=() SHAPE_SECRETS=()
 for name in "${REST[@]}"; do
+  # D-71 (plan) bans `IFS=$'\t' read` for any tab-delimited record that can
+  # carry an empty field — a tab is IFS whitespace, so bash collapses runs of
+  # them and every later field shifts left. This call is SAFE, and the reason
+  # is in ccd/ccrc-wrapper-shape rather than here: `_wrap_parse_shape` answers
+  # `ok` only once `target` matched WRAPPER_ID_RE and `suffix` matched
+  # WRAPPER_SUFFIX_SAFE_RE, neither of which accepts empty, so `secrets` — the
+  # LAST field — is the only one that can be, and a trailing empty field is
+  # exactly the case `read` gets right. (A `no` answer is `no` plus three empty
+  # fields; the cache below stores them all, and every later read of
+  # SHAPE_TARGET/SUFFIX/SECRETS is gated on `SHAPE_OK = ok` first — :269, :317,
+  # :321.) RELAXING EITHER REGEX, OR ADDING A FIFTH FIELD BEFORE
+  # `secrets`, breaks this silently: adopt would cache a secrets path taken
+  # from the wrong column and write it into the roster. Split by hand if that
+  # day comes, the way `_check_wrappers`'s roster reader does.
   IFS=$'\t' read -r ok target suffix secrets < <(_wrap_parse_shape "$BIN_DIR/$name")
   SHAPE_OK["$name"]="$ok"
   SHAPE_TARGET["$name"]="$target"

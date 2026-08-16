@@ -25,10 +25,14 @@
 # ── THE THIRD SHIPPED FILE (read this before installing anything) ─────────
 # `ccrc` finds `ccrc-doctor-checks` through `${BASH_SOURCE[0]}`, and this file
 # the same way. Bash does NOT resolve `BASH_SOURCE` through a symlink, so a
-# symlink to `ccrc` on PATH does not rescue a missing sibling: all THREE files
-# have to be installed into one directory together. `_check_wrappers` says so
-# by name when this file is not beside it, and `ccrc-doctor.test.ts` pins that
-# message — a red suite rather than a comment.
+# symlink to `ccrc` on PATH does not rescue a missing sibling: DOCTOR's three
+# files — `ccrc`, `ccrc-doctor-checks` and this one — have to be installed into
+# one directory together. (The CLI's own set is FOUR: `ccrc-adopt` as well,
+# which `cmd_adopt` execs. Doctor does not need it, which is why this paragraph
+# counts three and `ccrc`'s header counts four; they are counting different
+# sets, not disagreeing.) `_check_wrappers` says so by name when this file is
+# not beside it, and `ccrc-doctor.test.ts` pins that message — a red suite
+# rather than a comment.
 #
 # ── NAMESPACE ─────────────────────────────────────────────────────────────
 # Everything here is `_wrap_*` / `WRAPPER_*`, which is neither of the two

@@ -844,6 +844,34 @@ describe('ccrc doctor: wrappers', () => {
     expect(r.code).toBe(1);
   });
 
+  it('fails the THIRD way too — both name a secrets file and they are different files', () => {
+    // The arm the whole-branch review found unpinned, and the one a real box
+    // reaches by the most ordinary route there is: somebody renamed the
+    // credentials file and updated one side. Measured before the fix — with
+    // this arm deleted the suite was 169/169 GREEN and doctor answered
+    // `PASS wrappers: 2 accounts … match`, which is a wrapper loading
+    // credentials nobody wrote down reported as a healthy box.
+    //
+    // The two paths are a NEAR MISS on purpose (the live shape is
+    // `claude-corp-oauth.env`): unrelated names would also pass a comparison
+    // that had been loosened to a prefix or substring test.
+    const home = healthy('ccrc-doctor-wrappers-secrets-differ-');
+    writeWrapper(home, 'acct-a', { cfgDir: '.acct-a', secrets: '.cc-secrets/acct-a.env' });
+    writeRoster(home, [{
+      id: 'acct-a', configDirSuffix: '.acct-a',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/acct-a-oauth.env' },
+    }]);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(
+      /acct-a sources \.cc-secrets\/acct-a\.env but the roster declares \.cc-secrets\/acct-a-oauth\.env/);
+    // BOTH paths, and the roster's one named rather than called "none": an
+    // operator has to know which of the two files to go and look at, and this
+    // arm collapsing into the first one's wording would say something false
+    // about a roster that does declare a file.
+    expect(r.stdout).not.toMatch(/acct-a sources .* but the roster declares none/);
+    expect(r.code).toBe(1);
+  });
+
   it('fails when a roster account has no wrapper at all', () => {
     const home = healthy('ccrc-doctor-wrappers-ghost-');
     writeRoster(home, [{ id: 'ghost', exec: { kind: 'generated' } }]);
@@ -1599,8 +1627,19 @@ describe('ccrc doctor: fleet', () => {
     // itself — this file is only ever sourced BY ccrc. Sourced by anything
     // else, the check must say that in a verdict line rather than assume, the
     // same way `_check_wrappers` reports a missing ccrc-wrapper-shape.
+    // CONTAINED LIKE `roleFor` BELOW, and not because it needs to be today:
+    // the guard under test returns before the check reads anything, so this
+    // passed the real HOME and the real PATH straight into a `_check_fleet`
+    // that never used them. The moment the check grows one step AHEAD of that
+    // guard, this test reads the live `~/.ccrc/ccrc.env` and curls the
+    // production server from a unit test. A HOME that cannot exist removes the
+    // only file that could name a server, and a PATH of the same non-existent
+    // directory removes `curl` — this file resolves no binary at source time
+    // (its own header's "no PATH lookups" rule), so nothing legitimate needs
+    // either.
+    const nowhere = join(REPO, 'no-such-home-for-check-fleet');
     const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_fleet`],
-      { encoding: 'utf8', env: { ...process.env } });
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
     expect(r.stdout).toMatch(/^FAIL fleet: ccrc's own fleet readers are not loaded/m);
     expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
     expect(r.status).toBe(1);

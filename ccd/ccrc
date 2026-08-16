@@ -70,7 +70,7 @@ set -uo pipefail
 PROG=ccrc
 
 # Where the rest of the shipped tree is, relative to THIS FILE rather than to
-# $PWD — `ccrc-adopt:103-104`'s idiom, so `ccrc` works run as `bash ccd/ccrc`
+# $PWD — `ccrc-adopt:124-125`'s idiom, so `ccrc` works run as `bash ccd/ccrc`
 # from anywhere, and on a bare installed box (~/ccrc/ccd/ccrc) with no checkout
 # in sight. Two deliberate differences from adopt's line, both measured:
 #   - `${BASH_SOURCE[0]}`, not `$0`: THIS script is meant to be source-able
@@ -753,10 +753,14 @@ cmd_status() {
 # reported as a bug in ccrc. "I did not run" and "here is my answer" cannot both
 # be true, and a silent skip is a check that vanished from the run.
 #
-# A COMPLETE INSTALL IS FOUR FILES IN ONE DIRECTORY, not two: this script,
-# `ccrc-doctor-checks`, `ccrc-wrapper-shape` (which the checks file sources for
-# the account-wrapper contract it shares with `ccrc-adopt`) and `ccrc-adopt`
-# itself, which `cmd_adopt` execs. All four resolve each other through
+# A COMPLETE INSTALL OF THE CLI IS FOUR FILES IN ONE DIRECTORY, not two: this
+# script, `ccrc-doctor-checks`, `ccrc-wrapper-shape` (which the checks file
+# sources for the account-wrapper contract it shares with `ccrc-adopt`) and
+# `ccrc-adopt` itself, which `cmd_adopt` execs. DOCTOR alone needs only the
+# first three, which is what `ccrc-doctor-checks` and `ccrc-wrapper-shape` say
+# in their own headers — the same sentence about different sets, not a
+# contradiction: an install that ships three has a working `doctor` and a
+# broken `adopt`. All four resolve each other through
 # `${BASH_SOURCE[0]}`, which bash does NOT follow through a symlink, so linking
 # `ccrc` onto PATH does not drag its siblings along — whatever installs one has
 # to install all four. A missing library is not fatal here: `_check_wrappers`
