@@ -47,6 +47,8 @@
 
 - **D-69 — the roster does not describe the box it came from.** `~/.ccrc/accounts.json` on the fleet host declares `claude-corp` as `{"kind":"generated"}` with no `secretsFile`, while the live `~/.local/bin/claude-corp` sources `.cc-secrets/claude-corp-oauth.env` (present, 461 bytes, mtime 2026-08-15 15:33 — actively rotating). `deploy/accounts.migration.json` carries the same omission. `exec.secretsFile` has no runtime consumer today, so nothing has ever noticed. The first generator to write wrappers from this roster silently drops that account's auth line. Doctor's roster/wrapper coherence check (Task 5) is what finds it; the data fix is Task 6. **The live box's `accounts.json` is user-owned — a human edits it, not a deploy.**
 
+- **D-70 — the generated projection cannot answer the question the roster is asked.** This plan's Task 5 brief named `~/.ccrc/accounts.sh` as the coherence check's input. That is unimplementable: `shared/generate.mjs` emits `CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`, `CCRC_UPSTREAM` and the five `_ccrc_*` lookups, and **no `exec.kind` and no `secretsFile`** — so the projection cannot express the very distinction D-69 is made of. The check reads `~/.ccrc/accounts.json` directly instead, via `node` rather than `jq`: the test suite stubs `jq` as `exit 0`, so a `jq`-based reader would have seen an empty roster in every fixture and passed everything. Consequence for later work: anything needing `exec` semantics must read the JSON, and the projection is only good for the four questions ccd asks of it.
+
 ---
 
 ## Task 1: `ccd/ccrc` — dispatch skeleton, `version`, and usage
