@@ -239,3 +239,76 @@ describe('cmd_start / cmd_ensure: the in-unit branch takes the split form', () =
     }
   });
 });
+
+describe('an UNCLAIMED live pane is adopted, not ignored', () => {
+  /** F8's residue exactly: a live pane, a fresh `supervised` stamp, and NO
+   *  `started` file. The row a killed `ws-add` left behind. */
+  const seedUnclaimed = (id: string, project: string): void => {
+    fs.mkdirSync(path.join(h.home, 'projects', project), { recursive: true });
+    h.sh(`_reg_set ${id} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
+      _reg_set ${id} project ${project}
+      _reg_set ${id} workdir "$HOME/projects/${project}"
+      _reg_set ${id} wrapper claude2
+      printf '%s' "$(( $(date +%s) - 5 ))" > "$REG/${id}.supervised"`);
+  };
+
+  const ALIVE = `_alive() { return 0; }; `
+    + `_have_systemctl() { return 0; }; `
+    + `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };`;
+
+  it('writes the claim — the repair `unclaimed` names is a CLAIM, not a process', () => {
+    seedUnclaimed('demo-quiet-basin', 'demo');
+    expect(h.reg('demo-quiet-basin', 'started')).toBeNull();
+    h.sh(`${ALIVE} _resupervise_live demo-quiet-basin >/dev/null; :`);
+    expect(h.reg('demo-quiet-basin', 'started')).toBe('1');
+  });
+
+  it('and enables the unit, so `ccd ensure` on the row is a real repair', () => {
+    seedUnclaimed('demo-quiet-basin', 'demo');
+    const r = run(`${ALIVE} cmd_ensure demo-quiet-basin`);
+    expect(r.code).toBe(0);
+    expect(h.calls()).toContain('systemctl --user enable --now claude-session@demo-quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'started')).toBe('1');
+    // NO SPAWN. The pane is alive; adopting it must not mint a second one.
+    expect(h.calls().filter((c) => c.startsWith('spawn'))).toEqual([]);
+  });
+
+  it('a `running` row stays the cheap no-op PR #50 deliberately made it', () => {
+    // The gate widens by exactly one word. A claimed, freshly-supervised row is
+    // `running`, and an `enable --now` per PWA Restart tap on a healthy fleet
+    // is the round trip nobody asked for.
+    seedUnclaimed('demo-quiet-lake', 'demo');
+    h.sh(`printf 1 > "$REG/demo-quiet-lake.started"`);
+    h.sh(`${ALIVE} _resupervise_live demo-quiet-lake >/dev/null; :`);
+    expect(h.calls()).toEqual([]);
+  });
+
+  it('an `unsupervised` row still adopts — PR #50’s own population is untouched', () => {
+    seedUnclaimed('demo-warm-mesa', 'demo');
+    h.sh(`printf 1 > "$REG/demo-warm-mesa.started"; rm -f "$REG/demo-warm-mesa.supervised"`);
+    h.sh(`${ALIVE} _resupervise_live demo-warm-mesa >/dev/null; :`);
+    expect(h.calls()).toContain('systemctl --user enable --now claude-session@demo-warm-mesa');
+  });
+
+  it('the gate names both words, and the claim is on the unclaimed branch only', () => {
+    // MUTATION TABLE, measured, not asserted: narrow the gate back to
+    // `unsupervised)` alone -> the first two cases and this one red (3 failed);
+    // delete the `_reg_claim` line -> the same three red (the second case
+    // asserts the claim too, and this one greps for the call).
+    //
+    // What is NOT pinned, and cannot be: moving `_reg_claim` ABOVE the gate
+    // reds nothing (measured: 46 passed). `unclaimed` exists only inside
+    // `_session_state`'s alive branch, so the `[[ "$state" == unclaimed ]]`
+    // guard already excludes every row the gate would have rejected, and the
+    // one other state that reaches the claim — `unsupervised` — carries
+    // `started` by definition, so writing it again is invisible. The guard is
+    // defence in depth against a future rung, not a load-bearing ordering.
+    // `type` deparses from the parse tree and re-prints a case pattern list
+    // with spaces around the bar (`unsupervised | unclaimed`), so the pattern
+    // has to tolerate them — matching the source spelling literally would pin
+    // bash's pretty-printer, not the gate.
+    const t = h.sh('type _resupervise_live');
+    expect(t).toMatch(/unsupervised\s*\|\s*unclaimed/);
+    expect(t).toContain('_reg_claim');
+  });
+});

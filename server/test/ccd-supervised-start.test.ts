@@ -133,8 +133,18 @@ describe('stop then start leaves the unit ENABLED', () => {
 
 describe('cmd_enable reconciles a session that is already alive', () => {
   /** A live pane the supervisor IS watching: `_session_state` reads `running`,
-   *  which is the row the alive branch must stay cheap for. */
-  const beat = (id: string): void => { h.sh(`_reg_set ${id} supervised "$(date +%s)"`); };
+   *  which is the row the alive branch must stay cheap for.
+   *
+   *  THE CLAIM IS PART OF THE FIXTURE, not decoration. A fresh heartbeat alone
+   *  no longer makes a row `running`: Wave 1 put `unclaimed` first inside the
+   *  alive branch, so a live pane with a heartbeat and NO `started` is F8's
+   *  residue — a row `_resupervise_live` is now supposed to adopt AND claim.
+   *  Seeding only `supervised` here described `running` in the docstring while
+   *  planting `unclaimed` on disk, and the case would have passed for the wrong
+   *  reason (gate miss, not cheapness). */
+  const beat = (id: string): void => {
+    h.sh(`_reg_claim ${id}; _reg_set ${id} supervised "$(date +%s)"`);
+  };
 
   it('adopts a live pane no supervisor is watching — M5\'s shape, from the keyboard', () => {
     // Review finding, CRITICAL, in two rounds. Round one: cmd_start's

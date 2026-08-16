@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e4f121f7395f7e877fd12a01bd6bea47ae61c1cbbedaa06704f24d01d515c7c5
+# ccrc:generated 1 sha256=b9c69f0db81df13b293e643198af59a8ea48d47f81cd28abb6e27bcae2803f97
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7903,10 +7903,29 @@ _resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothi
   # is reachable on any row, and a `systemctl --user enable --now` per click on
   # a healthy fleet is a round-trip nobody asked for. And a DEAD pane is not this
   # function's business at all: `_supervised_start` already owns that path.
+  #
+  # TWO ROW SHAPES REACH THE SAME ADOPTION, and on the `unclaimed` one the
+  # repair is a CLAIM as well as a process — see the two blocks below.
   local id="$1"
   [[ "${CCD_IN_UNIT:-}" == 1 ]] && return 1   # the supervisor is the thing being asked for
   _have_systemctl || return 1
-  [[ "$(_session_state "$id")" == unsupervised ]] || return 1
+  # TWO SHAPES, ONE ADOPTION — and `unclaimed` is why this line is not a
+  # single-word comparison any more. Wave 1 made `unclaimed` the FIRST rung
+  # inside `_session_state`'s alive branch, so F8's residue (a live pane with a
+  # fresh heartbeat and no claim) stopped answering `unsupervised` — which is
+  # the population this function was written for in the first place. Narrowing
+  # it back would silently delete PR #50's repair path for the exact rows this
+  # build exists to name.
+  local state; state=$(_session_state "$id")
+  case "$state" in unsupervised|unclaimed) : ;; *) return 1 ;; esac
+  # THE CLAIM IS HALF THE REPAIR, and only on this branch. `unclaimed`'s repair
+  # is a CLAIM (a process is running that no row claims); `orphan`'s is a
+  # PROCESS. Both `cmd_ensure` and `cmd_start` early-return on `_alive` and so
+  # never reach `_spawn_start`'s `_reg_claim` — without this write, `ccd ensure`
+  # on a live unclaimed pane would enable a unit and leave the row unclaimed for
+  # ever, and the PWA's "Restart session" would keep promising a repair it does
+  # not perform. A `running` row must NOT be claimed here: it already is.
+  [[ "$state" == unclaimed ]] && _reg_claim "$id"
   # §3.3 deliberately creates failed units and a failed one refuses to start
   # until cleared — the same reset-failed `_supervised_start` carries, for the
   # same reason, on the path that reaches systemd without going through it.
