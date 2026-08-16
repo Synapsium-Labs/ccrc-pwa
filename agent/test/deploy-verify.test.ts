@@ -318,29 +318,35 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // systemd's DEFAULT 10s interval: a rate limit nobody chose, arrived at
     // without a word. Both keys live in [Unit].
     const unit = readFileSync(path.join(deployDir, '..', 'ccd', 'claude-session@.service'), 'utf8');
-    const unitSection = /\[Unit\]([\s\S]*?)(?=\n\[)/.exec(unit)?.[1] ?? '';
-    expect(unitSection).toMatch(/^StartLimitIntervalSec=\d+$/m);
-    expect(unitSection).toMatch(/^StartLimitBurst=\d+$/m);
-    // Anchored at the SECTION HEADER, not a bare substring search: the [Unit]
-    // section's own comment explains the split by naming "[Service]" in prose
-    // ("belong to [Unit], not [Service]"), and that mention precedes the real
-    // header — `indexOf('[Service]')` would find the comment instead and slice
-    // the StartLimit lines themselves into the region under test.
-    const serviceIdx = unit.search(/^\[Service\]/m);
-    // `.search()` returns -1 when the header is missing, and `.slice(-1)` would
-    // then take the FINAL CHARACTER of the file — the "no StartLimit in
-    // [Service]" assertion below would pass vacuously on a unit with no
-    // [Service] section at all, which is the same trap the indexOf bug above
-    // was. Guard it explicitly rather than let a negative index slice quietly.
-    expect(serviceIdx, 'no [Service] section header found in the unit file').toBeGreaterThan(-1);
-    const serviceSection = unit.slice(serviceIdx);
-    expect(/^StartLimit/m.test(serviceSection),
+    // BOTH sections come from `unitSection` (above), which anchors on a section
+    // header at the START OF A LINE. This test used to carry its own pair — a
+    // `/\[Unit\]([\s\S]*?)(?=\n\[)/` for one section and a
+    // `.search(/^\[Service\]/m)` + `slice` for the other — two spellings of one
+    // idea in one file, each with its own way of being subtly wrong. The helper
+    // also STOPS at the next header, so the [Service] region no longer runs to
+    // EOF and drags [Install] in with it.
+    const unitBlock = unitSection(unit, 'Unit');
+    expect(unitBlock).toMatch(/^StartLimitIntervalSec=\d+$/m);
+    expect(unitBlock).toMatch(/^StartLimitBurst=\d+$/m);
+    // Anchoring matters here specifically: the [Unit] section's own comment
+    // explains the split by naming "[Service]" in prose ("belong to [Unit], not
+    // [Service]"), and that mention precedes the real header — an
+    // `indexOf('[Service]')` would find the comment instead and slice the
+    // StartLimit lines themselves into the region under test.
+    const serviceBlock = unitSection(unit, 'Service');
+    // `unitSection` returns '' for a section that is not there, and
+    // `/^StartLimit/m.test('')` is false — so the assertion below would pass
+    // VACUOUSLY on a unit with no [Service] section at all, the same trap the
+    // old `.search()`-returns-`-1` + `.slice(-1)` shape had. Guard it
+    // explicitly; emptiness is not evidence.
+    expect(serviceBlock, 'no [Service] section found in the unit file').not.toBe('');
+    expect(/^StartLimit/m.test(serviceBlock),
       'a StartLimit key sits in [Service], where systemd 255 ignores it').toBe(false);
     // And the limit must be reachable at THIS unit's restart cadence or it is
     // decoration: RestartSec=3 means a crash loop spends ~3s per attempt, so
     // the whole burst has to fit inside the interval.
-    const burst = Number(/^StartLimitBurst=(\d+)$/m.exec(unitSection)![1]);
-    const interval = Number(/^StartLimitIntervalSec=(\d+)$/m.exec(unitSection)![1]);
+    const burst = Number(/^StartLimitBurst=(\d+)$/m.exec(unitBlock)![1]);
+    const interval = Number(/^StartLimitIntervalSec=(\d+)$/m.exec(unitBlock)![1]);
     const restartSec = Number(/^RestartSec=(\d+)$/m.exec(unit)![1]);
     expect(burst * restartSec, 'the burst cannot be spent inside the interval — the unit never fails')
       .toBeLessThan(interval);
