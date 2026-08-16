@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-supstart-'); });
@@ -70,8 +70,12 @@ const seed = (id: string): void => {
  *  ccd-archive.test.ts's runCcd, and through ghContainedEnv so this PATH cannot
  *  displace the poisoned `gh`. */
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
-  const stub = path.join(h.home, 'stubbin');
-  fs.mkdirSync(stub, { recursive: true });
+  // harnessBin(), not a private dir: ghContainedEnv PREPENDS the harness bin,
+  // so a stub anywhere else can never win. Writing here REPLACES the contained
+  // systemctl/tmux for this test, which is what these two files need — and the
+  // replacement STICKS, because the systemd poison is create-if-absent while
+  // this write is unconditional.
+  const stub = harnessBin(h.home);
   fs.writeFileSync(path.join(stub, 'tmux'),
     '#!/bin/sh\necho "tmux $*" >> "$HOME/ccd-calls"\n'
     + 'case "$1" in\n'

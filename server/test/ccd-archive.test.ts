@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
@@ -48,8 +48,12 @@ const workspace = (project: string, slug: string): string => {
  *  subprocess: `_alive`'s `tmux has-session` then fails, so _ws_status answers
  *  idle with no status file to write. */
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
-  const stub = path.join(h.home, 'stubbin');
-  fs.mkdirSync(stub, { recursive: true });
+  // harnessBin(), not a private dir: ghContainedEnv PREPENDS the harness bin,
+  // so a stub anywhere else can never win. Writing here REPLACES the contained
+  // systemctl/tmux for this test, which is what these two files need — and the
+  // replacement STICKS, because the systemd poison is create-if-absent while
+  // this write is unconditional.
+  const stub = harnessBin(h.home);
   fs.writeFileSync(path.join(stub, 'tmux'),
     '#!/bin/sh\necho "tmux $*" >> "$HOME/ccd-calls"\nexit 1\n', { mode: 0o755 });
   fs.writeFileSync(path.join(stub, 'systemctl'),

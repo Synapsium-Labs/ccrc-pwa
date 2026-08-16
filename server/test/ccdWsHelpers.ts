@@ -43,11 +43,28 @@ export function seedAccountsSh(home: string, roster: unknown = DEFAULT_TEST_ROST
   fs.writeFileSync(path.join(home, '.ccrc', 'accounts.sh'), generateAccountsSh(parseRoster(roster)));
 }
 
-/** ws-add spawns a session; tmux is not available under test, so stub _spawn and
- *  the systemd call. Everything else runs for real. `tmux` is shadowed too,
- *  unconditionally: nothing in ws-add reaches it today, and this is what keeps
- *  that true if something ever does. */
-export const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };`;
+/** ws-add spawns a session; tmux is not available under test, so stub the spawn
+ *  and the systemd calls. Everything else runs for real. `tmux` is shadowed
+ *  too, unconditionally: nothing in ws-add reaches it today, and this is what
+ *  keeps that true if something ever does.
+ *
+ *  THE SET IS THE THREE TOGETHER. `_supervised_start` is here even though
+ *  `cmd_ws_add` does not call it, because stubbing the systemd PROBE alone is
+ *  insufficient: reporting "no systemd" sends `_supervised_start` down its
+ *  fallback into a REAL `_spawn`. */
+export const WS_ADD =
+  `_spawn() { :; }; _ws_supervise() { :; }; _supervised_start() { :; }; tmux() { :; };`;
+
+/** THE ONE PATH-STUB DIRECTORY. `ghContainedEnv` PREPENDS this dir, so a test
+ *  that plants its own binary anywhere else loses to the poison on ordering
+ *  alone. A test that needs a FUNCTIONAL `tmux`/`systemctl` on PATH (the two
+ *  `runCcd` idioms, which must survive `exec`) writes it HERE, where it
+ *  REPLACES the poison file instead of racing it. */
+export function harnessBin(home: string): string {
+  const bin = path.join(home, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  return bin;
+}
 
 /**
  * THE SECOND ISOLATION BOUNDARY, beside HOME: a `gh` that logs its argv and
@@ -69,11 +86,31 @@ export const WS_ADD = `_spawn() { :; }; _ws_supervise() { :; }; tmux() { :; };`;
  * this is what answers when a snippet has no stub.
  */
 export function ghContainedEnv(home: string, env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const bin = path.join(home, '.local', 'bin');
-  fs.mkdirSync(bin, { recursive: true });
+  const bin = harnessBin(home);
   fs.writeFileSync(path.join(bin, 'gh'),
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
     + 'echo "ccd tests must never reach the real gh" >&2\nexit 97\n', { mode: 0o755 });
+  // THE SECOND STRUCTURAL BOUNDARY, and the reason it is a poison rather than an
+  // absence: `_have_systemctl` is `command -v systemctl`, so REMOVING systemctl
+  // would send every ccd test down `_supervised_start`'s no-systemd fallback —
+  // a different code path, silently. This one exists, records, and refuses.
+  //
+  // CREATE-IF-ABSENT, unlike the `gh` poison above, AND THE ASYMMETRY IS THE
+  // POINT. This function runs on EVERY `sh()` (see `makeCcdHarness`'s `sh:`),
+  // so an unconditional write re-plants itself between two calls. `gh` WANTS
+  // that — the host token has repo WRITE scope and nothing may displace it.
+  // systemd must be displaceable: `ccd-supervised-start.test.ts` and
+  // `ccd-archive.test.ts` MODEL the unit through a functional
+  // `systemctl --user enable --now` that touches `$HOME/pane-up`, and their
+  // `runCcd` writes that stub BEFORE this function is evaluated in its `opts`
+  // literal. Re-planting would break both suites and read as a mystery.
+  for (const [name, log] of [['systemctl', 'systemctl-calls'], ['systemd-run', 'systemd-run-calls']] as const) {
+    const p = path.join(bin, name);
+    if (fs.existsSync(p)) continue;
+    fs.writeFileSync(p,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${log}"\n`
+      + 'echo "ccd tests must never reach the real user manager" >&2\nexit 97\n', { mode: 0o755 });
+  }
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
@@ -86,6 +123,9 @@ export const ghPoisonAt = (home: string): string[] => {
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
 };
 
+const readLines = (p: string): string[] =>
+  fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+
 export interface CcdHarness {
   home: string;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;
@@ -96,6 +136,11 @@ export interface CcdHarness {
    *  this is the assertion that it reached OURS; in every other test it must be
    *  empty. */
   ghPoison(): string[];
+  /** Every argv the contained `systemctl` saw — i.e. every systemd call that
+   *  was not shadowed by a stub shell function. */
+  systemctlCalls(): string[];
+  /** Every argv the contained `systemd-run` saw (`_tmux_server_ensure`). */
+  systemdRunCalls(): string[];
   makeRepo(name: string): string;
   /** Like `makeRepo`, but with an origin `ccd`'s `_gh_repo_slug` resolves to
    *  `<slug>` — required by every pr-state/pr-open/ws-audit/ws-reap test. */
@@ -176,6 +221,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
     },
     ghPoison: () => ghPoisonAt(home),
+    systemctlCalls: () => readLines(path.join(home, 'systemctl-calls')),
+    systemdRunCalls: () => readLines(path.join(home, 'systemd-run-calls')),
     makeRepo: makeRepoAt,
     /** A repo that reads as GitHub and behaves as a local bare repo.
      *
