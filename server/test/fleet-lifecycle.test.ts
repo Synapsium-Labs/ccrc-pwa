@@ -128,3 +128,34 @@ describe('assembleFleet ships the lifecycle', () => {
     expect(s.stoppedBy).toBeNull();
   });
 });
+
+describe('§1.6b — the spawn verdict reaches the wire off the SHIPPED `spawn` field', () => {
+  it('projects the rc, keeping the `<epoch-seconds> <rc>` encoding untouched', async () => {
+    const s = await one(
+      { supervised: String(NOW_SEC - 5), started: '1', spawn: `${NOW_SEC - 30} 5` }, true);
+    expect(s.spawnState).toBe('blocked');
+    expect(s.started).toBe(true);
+  });
+
+  it('a row with NO $REG/<id>.spawn file is null — not `ready`, not a warning', async () => {
+    // THIS IS swift-harbor's EXACT SHAPE, and the reason F8's detection keys on
+    // `unclaimed` rather than on the spawn verdict: the class is the ABSENT CLAIM,
+    // not the failed attempt. A `null` laundered into `ready` would assert a
+    // measurement nobody made; laundered into a warning it would light every one of
+    // the 18 live sessions that has not spawned since PR #50.
+    const s = await one({ supervised: String(NOW_SEC - 5), started: '1' }, true);
+    expect(s.spawnState).toBeNull();
+  });
+
+  it('an unparseable rc is `spawn: null` at the record and null on the wire', async () => {
+    const s = await one({ started: '1', spawn: `${NOW_SEC - 30} banana` }, true);
+    expect(s.spawnState).toBeNull();
+  });
+
+  it('carries `started: false` onto the wire — the only signal swift-harbor emits', async () => {
+    const s = await one({ supervised: String(NOW_SEC - 5) }, true);
+    expect(s.started).toBe(false);
+    expect(s.spawnState).toBeNull();
+    expect(s.lifecycle).toBe('unclaimed');
+  });
+});

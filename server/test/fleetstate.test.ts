@@ -17,6 +17,7 @@ const session = (id: string): FleetSession => ({
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], lifecycle: null, stoppedBy: null, swapBlocked: null,
+  started: true, spawnState: null,
 });
 
 describe('fleetstate', () => {
@@ -244,6 +245,43 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: true }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: { reason: 'x' } }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `started` — ABSENT DEGRADES TO TRUE, which is the documented direction', async () => {
+    // Every session a pre-Wave-1 build persisted HAD a claim; `false` would light
+    // `unstarted` on every restored row, and a surface that cries wolf on restore
+    // is a surface the operator learns to ignore.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.started).toBe(true);
+    expect(Object.keys(absent ?? {})).toContain('started');
+
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), started: false }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.started).toBe(false);
+
+    // Not laundered into either boolean: the WHOLE snapshot goes.
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), started: 'yes' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `spawnState` — absent is null, and an unknown token rejects rather than launders', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.spawnState).toBeNull();
+    expect(Object.keys(absent ?? {})).toContain('spawnState');
+
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'blocked' }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.spawnState).toBe('blocked');
+
+    // Unlike an unrecognised RC (which becomes `unrecognised` in L0), an
+    // unrecognised STRING off a cache an older-or-newer build wrote rejects the
+    // whole session — the same rule `lifecycle`/`bucket`/`hookState` already follow.
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'spawnstate' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 3 }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
 

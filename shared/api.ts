@@ -139,6 +139,17 @@ export interface FleetSession {
    *  leaves the refusal banner standing on the row it just revived teaches the
    *  operator to ignore banners. */
   readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
+  /** `$REG/<id>.started` reads `1`. MEASURED every snapshot as
+   *  `SessionRecord.started` and, before Wave 1, discarded one branch later
+   *  inside `sessionLifecycle`. It reaches the wire because the spawn chip needs
+   *  it: `swift-harbor` has NO `spawn` stamp, so `started === false` is the only
+   *  signal that shape ever emits. */
+  readonly started: boolean;
+  /** How the LAST spawn attempt ended (§1.6b). `null` = NOT RECORDED — never
+   *  `ready`, never a warning. ORTHOGONAL to `lifecycle`: a row can be `running`
+   *  today after a failed spawn yesterday, and showing one as the other would be
+   *  an adapter narrowing a distinction it received. */
+  readonly spawnState: SpawnVerdict | null;
 }
 
 /**
@@ -1355,6 +1366,16 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       throw new MalformedSnapshot('lifecycle');
     }
 
+    // Absent → null ("not recorded"). An unrecognised STRING rejects the whole
+    // session rather than being laundered — the same rule `lifecycle` above
+    // follows. Note the asymmetry with L0: an unrecognised RC becomes
+    // `'unrecognised'` inside `spawnVerdict`, because an rc is ccd's own output
+    // and a word off a cache is not.
+    const spawnRaw = optStr(o, 'spawnState');
+    if (spawnRaw !== null && !isSpawnVerdict(spawnRaw)) {
+      throw new MalformedSnapshot('spawnState');
+    }
+
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
     // reading of `o`, which is how the two could drift apart.
@@ -1395,6 +1416,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       lifecycle: lifecycleRaw,
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
+      // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
+      // pre-Wave-1 build persisted had a claim, and `false` would light
+      // `unstarted` on every restored row — the false-positive direction that
+      // makes a surface ignorable.
+      started: optBool(o, 'started', true),
+      spawnState: spawnRaw,
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
