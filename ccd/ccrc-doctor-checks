@@ -769,8 +769,8 @@ _check_wrappers() {
   fi
 
   # ── the roster side ────────────────────────────────────────────────────
-  # THE FOUR FIELDS ARE SPLIT BY HAND, and `IFS=$'\t' read -r id suffix kind
-  # secrets` — which is what this was — must not come back. A tab is IFS
+  # THE FOUR FIELDS ARE SPLIT BY HAND (D-71), and `IFS=$'\t' read -r id suffix
+  # kind secrets` — which is what this was — must not come back. A tab is IFS
   # *whitespace*, so bash collapses a run of them into one delimiter and strips
   # leading ones: an entry with no `id` arrived as `<TAB>.acct-a<TAB>generated`
   # and was read as id=".acct-a", suffix="generated", which is how a roster
