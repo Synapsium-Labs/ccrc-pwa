@@ -419,7 +419,34 @@ if [ "$TARGET" = "agent" ]; then
   # until somebody cleared the unit by hand. A pre-existing failed session is
   # not this deploy's doing and must not fail it — but it must not be silent
   # either, so it is named first, with the remedy, on stderr.
+  #
+  # PRE-FLIGHT, AND IT IS THE POINT OF THE WHOLE BLOCK. This script copied the
+  # unit file and daemon-reloaded a few lines up, in THIS run — so a bad edit is
+  # already live and the next line would exercise it against every supervisor on
+  # the box. systemd's DEFAULT KillMode is control-group, all 21 sessions are
+  # children of ONE tmux server, and that server sits inside whichever
+  # claude-session@ unit happened to create it: without KillMode=process the
+  # sweep below is a fleet kill, not a restart.
+  #
+  # Same ordering principle the sweep's own placement already encodes ("after
+  # the agent chain, so a broken agent fails the deploy before any supervisor is
+  # touched") — one step earlier. `set -e` at the top of this file turns the
+  # non-zero exit into an aborted deploy.
+  #
+  # The cgroup print is INFORMATIONAL and non-fatal (`2>/dev/null`, and the echo
+  # succeeds even when `pgrep` finds nothing): a box with no tmux server yet is
+  # an ordinary fresh box, and refusing there would break the first deploy to a
+  # new fleet host. What it buys is that the operator reading an abort — or a
+  # successful sweep — sees the blast radius instead of inferring it.
+  #
+  # DOUBLE quotes around the pgrep pattern and no apostrophes in the refusal
+  # message: this is a single-quoted assignment and bash has no escape for a
+  # single quote inside one, so either would end SWEEP_CMD early and ship the
+  # remainder as shell code in the deploy script itself.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
+    && { grep -qE "^KillMode=process$" ~/.config/systemd/user/claude-session@.service \
+         || { echo "deploy: FAILED — the claude-session@ unit about to be swept lacks KillMode=process. systemds default is control-group, so try-restart would kill the tmux server and every session under it. REFUSING to sweep." >&2; exit 1; }; } \
+    && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x -f "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
     && systemctl --user try-restart "claude-session@*" \
     && for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk "{print \$1}"); do \
          echo "deploy: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2; done \

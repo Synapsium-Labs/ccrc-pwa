@@ -160,6 +160,34 @@ describe('deploy.sh agent verifies the restart it just performed', () => {
   });
 });
 
+/** A unit file's named section, anchored on a section header at the START OF A
+ *  LINE — never `indexOf('[Service]')`. `claude-session@.service`'s [Unit]
+ *  block carries a comment that spells `[Service]` and `[Unit]` in prose
+ *  (explaining why the two StartLimit keys live where they do), so an
+ *  unanchored search cuts the section inside that comment: measured, the
+ *  [Unit] slice ended before `StartLimitIntervalSec=` and the [Service] slice
+ *  began in the middle of a sentence — one assertion red for the wrong reason,
+ *  its neighbour green for the wrong reason. */
+const unitSection = (unit: string, name: string): string => {
+  const at = new RegExp(`^\\[${name}\\]$`, 'm').exec(unit);
+  if (!at) return '';
+  const rest = unit.slice(at.index + at[0].length);
+  const next = /^\[[A-Za-z]+\]$/m.exec(rest);
+  return next ? rest.slice(0, next.index) : rest;
+};
+
+/** Plants `~/.config/systemd/user/claude-session@.service` in a fixture HOME,
+ *  with or without the one line the sweep's pre-flight refuses without. */
+const plantUnit = (home: string, killModeProcess: boolean): void => {
+  const dir = path.join(home, '.config', 'systemd', 'user');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'claude-session@.service'),
+    '[Unit]\nStartLimitIntervalSec=120\nStartLimitBurst=5\n\n[Service]\n'
+    + 'ExecStart=%h/.local/bin/ccd supervise %i\n'
+    + (killModeProcess ? 'KillMode=process\n' : '')
+    + '\n[Install]\nWantedBy=default.target\n');
+};
+
 describe('the verification is actually wired into the deploy, and can observe a restart', () => {
   const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
 
@@ -310,6 +338,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const bin = path.join(home, 'stubbin');
     mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
     mkdirSync(bin, { recursive: true });
+    // The unit file this run just copied — the sweep now pre-flights it for
+    // KillMode=process and refuses without it, so a box modelled here without
+    // one is not "a box", it is the abort case (pinned as its own test below).
+    plantUnit(home, true);
     // A box with one healthy session and one failed one. The stub answers the
     // `--state=` filters the way systemd does, AND answers an unfiltered
     // `list-units` with both — so a sweep that drops the filter sees the failed
@@ -528,6 +560,93 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const sweepExecAt = agentBranch.indexOf('"${SSH[@]}" "$BOX" "$SWEEP_CMD"');
     expect(sweepExecAt, 'SWEEP_CMD is defined but never executed').toBeGreaterThan(-1);
     expect(sweepExecAt).toBeGreaterThan(agentBranch.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"'));
+  });
+
+  it('the unit carries KillMode=process, in [Service] — without it the sweep is a fleet kill', () => {
+    // THE CONSEQUENCE, named in the message because that is the whole value of
+    // this assertion: the deploy sweeps `try-restart "claude-session@*"` across
+    // every live supervisor, and systemd's DEFAULT KillMode is control-group.
+    // All 21 live sessions are children of ONE tmux server that sits inside a
+    // claude-session@ cgroup, so deleting this one line turns a routine deploy
+    // into a fleet kill. Until now `grep -rn KillMode` over this repo returned
+    // the unit file and two COMMENTS — a request, not a mechanism.
+    const unit = readFileSync(path.join(deployDir, '..', 'ccd', 'claude-session@.service'), 'utf8');
+    const service = unitSection(unit, 'Service');
+    expect(service,
+      'claude-session@.service lost KillMode=process — the deploy sweep would kill the tmux '
+      + 'server and every session under it')
+      .toMatch(/^KillMode=process$/m);
+  });
+
+  // The two [Unit] start-limit keys are NOT pinned a second time here. `a
+  // session that dies instantly becomes a FAILED unit — and the keys sit in
+  // [Unit], where systemd reads them` (above, in this file) already asserts
+  // both sections, in both directions, plus burst*RestartSec < interval — and
+  // its own comment already records the `indexOf('[Service]')` trap. A copy
+  // here would be a second definition of the same rule, which is the thing this
+  // repo fails builds over.
+
+  it('the sweep REFUSES before try-restart when the unit about to be active lacks KillMode=process', () => {
+    // The layer that matters more, because the sweep is the trigger: deploy.sh
+    // copies the unit file and daemon-reloads in the SAME run that sweeps, so a
+    // bad edit goes live and is exercised against 18 units with no window to
+    // notice. Same ordering principle the sweep's own placement already
+    // encodes ("after the agent chain, so a broken agent fails the deploy
+    // before any supervisor is touched") — one step earlier.
+    const sweep = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    expect(sweep, 'SWEEP_CMD is no longer a single-quoted assignment').not.toBeNull();
+    const body = sweep![1]!;
+    const guardAt = body.indexOf('KillMode=process');
+    const restartAt = body.indexOf('try-restart "claude-session@*"');
+    expect(guardAt, 'the sweep does not check KillMode at all').toBeGreaterThan(-1);
+    expect(guardAt, 'the KillMode guard must precede try-restart, not follow it')
+      .toBeLessThan(restartAt);
+    // And it must ABORT, not warn: deploy.sh runs under `set -e`, so a
+    // non-zero here stops the run before any supervisor is touched.
+    expect(body.slice(Math.max(0, guardAt - 200), restartAt)).toMatch(/exit 1/);
+    // It also names WHICH unit currently hosts the tmux server, so the operator
+    // reading the abort can see the blast radius rather than infer it. DOUBLE
+    // quotes around the pgrep pattern, necessarily: SWEEP_CMD is a
+    // single-quoted assignment and bash has no escape for a single quote inside
+    // one, so a `'tmux: server'` here would terminate the assignment early —
+    // and this very regex would then capture a truncated body.
+    expect(body).toContain('/proc/$(pgrep -x -f "tmux: server")/cgroup');
+  });
+
+  it('and RUNNING the sweep against a KillMode-less unit aborts it before one systemctl call', () => {
+    // The structural case above would pass on a guard that checks the right
+    // text in the wrong place or never runs; this one EXECUTES SWEEP_CMD with
+    // the same stubs the FAILED-unit case uses, against a box whose unit file
+    // lost the line. Zero try-restarts is the assertion that matters — the
+    // whole point is that no supervisor is touched.
+    const home = mkTmp('ccrc-agent-sweepguard-');
+    const bin = path.join(home, 'stubbin');
+    mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    plantUnit(home, false);
+    writeFileSync(path.join(bin, 'systemctl'),
+      '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\nexit 0\n', { mode: 0o755 });
+
+    const body = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh)![1]!;
+    const r = spawnSync('bash', ['-c', body], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    expect(r.status, 'the sweep ran against a unit without KillMode=process').toBe(1);
+    expect(r.stderr).toContain('REFUSING to sweep');
+    expect(existsSync(path.join(home, 'calls')),
+      'the sweep reached systemctl despite the refusal').toBe(false);
+
+    // …and the same box with the line restored sweeps normally, so the guard is
+    // a gate and not a wall.
+    plantUnit(home, true);
+    const ok = spawnSync('bash', ['-c', body], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    expect(ok.status).toBe(0);
+    // The stub echoes `$*` unquoted, so the recorded line has no quotes.
+    expect(readFileSync(path.join(home, 'calls'), 'utf8')).toContain('try-restart claude-session@*');
   });
 
   it('coord.db is snapshotted (WAL folded in) into the backup set before the server rsync', () => {
