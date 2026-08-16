@@ -3012,7 +3012,8 @@ AGENT-FIRST and hits the provenance gate. Everything else is server/PWA lane.
   `shared/api.ts`; w1-ccd Task 12 consumes it. Whichever lands first defines it; the second deletes
   its own copy. `server/test/single-definition.test.ts` is the arbiter.
 
-**The census has no PWA reader in Wave 1, and that is deliberate.** Task 111 publishes the
+**The census has no PWA reader in Wave 1, and that is deliberate — RULED OK by the operator on
+2026-08-16.** Task 111 publishes the
 `divergence` frame and Task 112 pins its single producer; nothing in `pwa/src` subscribes. The
 measured population is ONE, the frame is additive and absence-permitting, and a surface designed in
 the same wave as its first producer is a surface designed without data. **Its reader lands with the
@@ -11667,13 +11668,32 @@ compares a single-row reading."
 
 ### Task 407: `isMailResidue` recognises a stranded `/clear`, through the shared fence
 
-**GATED ON AN OPERATOR RULING — do not execute this task until it is given.** The spec asks for none
-of this: §4.x never mentions `isMailResidue`, and no ruling, assumption or open decision covers it.
-It is this plan's own proposal, and it moves in the OPPOSITE direction from Open decision 6, which
-the operator closed refuse-only: `isMailResidue` gates `replaceDraft`, so this task makes the mail
-lane auto-clear a box in a case where it does not today. The scope below is the narrowest form of
-the idea (exact match, machine-authored text only, one shape), and the case for it is real — but it
-is a case to be PUT, not a ruling to be implemented. Everything else in Wave 4 stands without it.
+**RULED IN by the operator on 2026-08-16 — but PROVENANCE-GATED, and that changes the task's shape.**
+This task was flagged because it moves opposite to the refuse-only ruling: `isMailResidue` gates
+`replaceDraft`, so extending it makes the mail lane auto-clear a box where it does not today. The
+objection was right, and the resolution is not "match more narrowly" — it is **match on provenance,
+not on text.**
+
+**Exact-match on `/clear` does NOT establish provenance.** `/clear` is a plausible thing for an
+operator to type and leave sitting; a text predicate cannot tell that box from one this system
+stranded, and refuse-only exists to protect exactly the operator's copy.
+
+**So the requirement is: clear it only when this delivery can PROVE it typed that `/clear` itself** —
+i.e. when this delivery's own previous attempt is recorded as having sent `/clear` and ended
+`enter-ignored`. The lane has that fact: `dispatch.ts` is what strands the text, and the delivery row
+carries `attempts`/`lastError` (surfaced by Task 411). If provenance cannot be established for a given
+box, **refuse** — that is the unchanged default, not a fallback.
+
+**This likely means `isMailResidue` is the wrong home.** It is a pure text predicate, and giving it a
+provenance argument would have it decide something its inputs cannot see. Prefer moving the decision to
+the caller that holds the provenance and passing `replaceDraft` explicitly — an adapter may not narrow
+a distinction it received, and "machine debris" vs "operator text" is exactly such a distinction.
+**Settle the shape in step 1** by reading `dispatch.ts`'s delivery path and `isMailResidue`'s call
+sites; implement whichever placement keeps the text predicate honest. The test below pins the
+BEHAVIOUR (a stranded `/clear` gets replaced, an operator's identical `/clear` does not) and must
+survive either placement — if it cannot distinguish those two cases, the implementation is wrong.
+
+Everything else in Wave 4 stands without this task.
 
 `dispatch.ts` documents the wedge it creates, verbatim: *"on `enter-ignored` the literal text `/clear`
 is left sitting in the worker's own input box … the delivery lane's very next sweep calls `sendPrompt`
@@ -12030,7 +12050,8 @@ mail is the only channel Build 7 has.
   `draft-present` back-off for a delivery, and (b) the park. No new `NotifyEvent['kind']`:
   `KIND_WORD`/`KIND_GLYPH` are total maps, so a new kind means touching both plus `NOTIFY_KINDS`.
 
-**DEVIATION FROM THE SPEC, and it is the tree winning.** §4.5 says the park writes a `run_events` row.
+**DEVIATION FROM THE SPEC, and it is the tree winning. ACCEPTED by the operator on 2026-08-16.**
+§4.5 says the park writes a `run_events` row.
 It cannot, and must not be made to. `run_events` is written in exactly one place — `advanceInner`, whose
 own docstring calls itself *"the ONLY way a run's state changes, and the only place `run_events` is
 written"* — and every insert there is paired with a state transition validated against
