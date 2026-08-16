@@ -2023,6 +2023,50 @@ describe('serialisation with ws-restore', () => {
     expect(JSON.parse(r.stdout).reaped, r.stdout).toBe('demo-quiet-basin');
     expect(fs.existsSync(wt)).toBe(false);
   }, 30000);
+
+  it('gives the reap lock back when the SPAWN FAILS too — a `return` is not a `die`', () => {
+    // THE OTHER WAY OUT OF THE LOCKED REGION, and the one the success-path test
+    // above cannot see. `cmd_ws_restore`'s close sits after `_ws_supervise`;
+    // everything that leaves the function EARLIER has to give the descriptor
+    // back on its own. Until the split (Task 7) every early exit was a `die`,
+    // and the block's own comment reasoned from exactly that — "the `die`s
+    // above need no close of their own: `die` exits, and the kernel closes what
+    // exits". True of `die`. FALSE of `_spawn_start … || return $?`, which
+    // Task 7 put in front of the close: `return` leaves the shell alive with
+    // the descriptor still open.
+    //
+    // MEASURED IN ONE PROCESS, for the reason spelled out on the test above:
+    // `lockFree()` asks a NEW bash, and the kernel closes what exits, so a
+    // cross-process probe answers `free` whether or not the leak is there. A
+    // second `open()` + `flock -n` from the SAME shell is the only form of the
+    // question with teeth — and it is the shape that matters in production,
+    // because ccd is SOURCED (by `ccd` itself and by its tests), so the leaking
+    // shell goes on to serve the next verb.
+    //
+    // `_spawn_start` is stubbed to a non-zero RETURN rather than driven to a
+    // real failure deliberately: its own failures are `die`s (process-fatal, fd
+    // closed by the kernel), so the rc path this exercises is reachable only
+    // through the return contract `|| return $?` promises to honour. The stub
+    // IS that contract.
+    const { wt } = ready();
+    const lock = path.join(h.home, '.cc-sessions', '.reap-demo-quiet-basin.lock');
+    const out = h.sh(`${ARCH}
+      _spawn_start() { SPAWN_FROMSWAP=0; return 5; }
+      cmd_ws_restore --session demo-quiet-basin; echo "rc=$?"
+      exec {probe}>>"${lock}"
+      if flock -n "$probe"; then echo SAMESHELL=free; else echo SAMESHELL=held; fi
+      exec {probe}>&-`);
+    // The rc still travels — a close that swallowed the spawn's verdict would
+    // trade this leak for M6's silent success, which is the worse of the two.
+    expect(out, `the spawn rc must reach the caller: ${out}`).toContain('rc=5');
+    expect(out, 'cmd_ws_restore left its lock descriptor open after a failed spawn')
+      .toContain('SAMESHELL=free');
+    expect(lockFree(), 'a failed restore must not leave the reap lock held').toBe(true);
+    // Nothing was destroyed on the way out: a failed spawn is a session that
+    // did not come up, not a workspace that went away.
+    expect(fs.existsSync(wt), 'the worktree survives a failed restore').toBe(true);
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry survives it too').not.toBeNull();
+  }, 30000);
 });
 
 describe('ws-rm refuses nested checkouts (D1)', () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4da7063507fd99981c3b7e8cf6a2849f83b82593f610b93741b62483722ba47d
+# ccrc:generated 1 sha256=593231900b5cb05ae1f770931f40ab1c8ea703341cfc06e540b4e2cd6eb8ab35
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -98,6 +98,22 @@ SPAWN_SETTLE_SUPERVISE_S=1350   # what `cmd_supervise` (systemd ExecStart, no ce
                                 # warning on a healthy row. Above SPAWN_GATE_TRIES x 2s, so on this
                                 # path the ITERATION cap still fires first and the window is exactly
                                 # today's.
+SPAWN_RESUME_SETTLE_S=2         # seconds `_spawn_start` waits, on the `resume` path ONLY, between
+                                # `tmux new-session … --resume` and the `has-session` probe that
+                                # decides whether to retry once with `--session-id`. It is waiting
+                                # for the WRAPPER'S EXIT to become observable: `tmux new-session -d`
+                                # returns 0 whether or not the command it launched survived, so
+                                # without this pause `has-session` answers about a pane that has not
+                                # had time to die yet and the fallback never fires.
+                                # THE COST IS PAID IN THE UNCLAIMED WINDOW: this sits between the
+                                # pane's creation and the caller's `_reg_claim`, i.e. inside exactly
+                                # the F8 gap the split exists to shrink, so it widens that gap by
+                                # this many seconds on every resume. Keep it the smallest number
+                                # that makes the probe mean anything.
+                                # A plain shell variable with the production default, deliberately
+                                # NOT an env override — same discipline, and the same reason, as
+                                # SPAWN_GATE_TRIES above: HOME is ccd's only isolation boundary and
+                                # nothing on the wire can set a shell variable.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -2575,10 +2591,23 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # Captured, not discarded — same M6-shaped gap as ws-add, folded into this
   # task because it owns the start paths and the spawn-rc plumbing. Supervision
   # wiring stays untouched: `_ws_supervise` still runs on a failed spawn.
-  local rc
-  _spawn_start "$id" resume || return $?
-  _reg_claim "$id"
-  _ws_supervise "$id"
+  #
+  # A BRANCH RATHER THAN `_spawn_start … || return $?`, WHICH IS THE SHAPE
+  # EVERY OTHER CALL SITE USES — and the difference is the descriptor, not
+  # taste. This is the only caller holding one, and the close is eleven lines
+  # below; an early `return` between the two leaves it open. (Shipped that way
+  # for one commit: the split's `|| return $?` landed here unchanged from the
+  # lockless call sites, and a failed resume left the reap lock held in the
+  # sourcing shell for ever.) The spawn's verdict travels in `$rc` instead, so
+  # SUCCESS AND FAILURE LEAVE THE LOCKED REGION THROUGH THE SAME CLOSE and the
+  # next editor has nothing to remember.
+  local rc=0
+  if _spawn_start "$id" resume; then
+    _reg_claim "$id"
+    _ws_supervise "$id"
+  else
+    rc=$?
+  fi
   # GIVEN BACK BEFORE THE SETTLE, not merely before the verb answers. The reason
   # `cmd_ws_reap` gives at its own close applies unchanged (`flock` treats two
   # `open()`s of one path in one process as two strangers, and ccd is SOURCED —
@@ -2586,11 +2615,19 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # refuse the next `ws-reap` in the same shell with `in-progress` for ever),
   # and the settle can now block for SPAWN_SETTLE_S: holding the reap lock
   # across it would answer `in-progress` to every ws-reap on this id for four
-  # minutes. The `die`s above need no close of their own: `die` exits, and the
-  # kernel closes what exits. Given back regardless of the spawn's fate — the
-  # undo (archive stamps gone) is real either way, which is what made the old
-  # placement unconditional too.
+  # minutes.
+  #
+  # THE `die`s ABOVE NEED NO CLOSE OF THEIR OWN — and that is a statement about
+  # `die`, not about early exits in general. `die` is `echo …; exit`, and the
+  # kernel closes what exits; a `return` does not exit, so any path that leaves
+  # this function by returning must close the descriptor EXPLICITLY. That is
+  # why the spawn's failure is a captured rc above and a `return` below THIS
+  # LINE rather than one above it.
+  #
+  # Given back regardless of the spawn's fate — the undo (archive stamps gone)
+  # is real either way, which is what made the old placement unconditional too.
   exec {lfd}>&-
+  [[ "$rc" -eq 0 ]] || return "$rc"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
@@ -7504,8 +7541,8 @@ _tmux_server_ensure() {   # place the SERVER in a known scope, not the caller's 
 SPAWN_FROMSWAP=0
 
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
-                   # (One bounded exception, `resume` only: a 2s settle before the
-                   #  --session-id retry below. The 15-minute wait stays in _spawn_settle.)
+                   # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
+                   #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
   # THE NON-BLOCKING HALF. Split out so that every caller can write the claim
   # (`_reg_claim`) and, where it has one, wire the supervision BEFORE anything
   # that can block — which is F8's whole shape: a `ws-add` killed at the
@@ -7561,12 +7598,18 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   #
   # AND THIS IS THE ONE PLACE THIS FUNCTION WAITS. The header's "NEVER BLOCKS"
   # is about the TUI — the gate loop, up to fifteen minutes, which is F8's whole
-  # window and stays in `_spawn_settle`. Two seconds on the resume path widens
-  # the unclaimed window by two seconds and buys back a row that would otherwise
-  # never start again; it cannot be moved into the settle, which knows only the
-  # tmux name and neither the mode nor the uuid.
+  # window and stays in `_spawn_settle`. SPAWN_RESUME_SETTLE_S on the resume path
+  # widens the unclaimed window by exactly that much and buys back a row that
+  # would otherwise never start again; it cannot be moved into the settle, which
+  # knows only the tmux name and neither the mode nor the uuid.
+  #
+  # NAMED, not a literal, and it is the only timing bound in this area that was
+  # ever spelled as one — its neighbours (SPAWN_GATE_TRIES, SPAWN_SETTLE_S,
+  # SPAWN_SETTLE_SUPERVISE_S, SUPERVISED_START_WAIT, CCD_SETTLE_BOUND) are all
+  # greppable constants, and this one sits INSIDE the window Tasks 7/8 exist to
+  # shrink, so it is precisely the number a later measurement will want to find.
   if [[ "$mode" == "resume" ]]; then
-    sleep 2
+    sleep "$SPAWN_RESUME_SETTLE_S"
     if ! tmux has-session -t "$tname" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
       tmux new-session -d -s "$tname" -x 220 -y 50 \

@@ -489,4 +489,26 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
     expect(out).toBe('[0]');
     expect(h.reg('myid', 'started')).toBeNull();
   });
+
+  it('the wait before the probe is SPAWN_RESUME_SETTLE_S=2, not a magic number', () => {
+    // THE ONE TIMING BOUND IN THIS AREA THAT WAS A LITERAL. Every neighbour is
+    // a named, greppable constant (SPAWN_GATE_TRIES, SPAWN_SETTLE_S,
+    // SPAWN_SETTLE_SUPERVISE_S, SUPERVISED_START_WAIT, CCD_SETTLE_BOUND), and
+    // this one sits BETWEEN the pane's creation and the caller's `_reg_claim`
+    // — inside exactly the unclaimed window Tasks 7/8 exist to shrink — so it
+    // is the number the next measurement of that window has to be able to find.
+    expect(h.sh('echo "$SPAWN_RESUME_SETTLE_S"')).toBe('2');
+    // Asked of the DEPARSED function, not the file: a constant nothing reads is
+    // documentation, and reverting the call site to `sleep 2` would leave the
+    // assertion above green on its own.
+    expect(h.sh('type _spawn_start')).toContain('sleep "$SPAWN_RESUME_SETTLE_S"');
+  });
+
+  it('is not an env override — HOME is ccd\'s only isolation boundary', () => {
+    // The same discipline SPAWN_GATE_TRIES' own docstring states and the settle
+    // bounds are already pinned on: nothing on the wire can set a shell
+    // variable, and a spawn bound that an environment could widen would be a
+    // way to hold the unclaimed window open from outside.
+    expect(h.sh('echo "$SPAWN_RESUME_SETTLE_S"', { SPAWN_RESUME_SETTLE_S: '7' })).toBe('2');
+  });
 });
