@@ -439,12 +439,37 @@ export interface WsAuditChild {
   stray: boolean;
 }
 
+/** `enabled` = a `default.target.wants` symlink exists; `loaded` = the manager
+ *  knows the unit but it is not boot-persistent; `absent` = `list-units` does
+ *  not name it. NB `systemctl show` on an uninstantiated template reports
+ *  `LoadState=loaded`, which is why ccd's probe must be `list-units`. */
+export type WsAuditUnit = 'enabled' | 'loaded' | 'absent';
+const WS_AUDIT_UNIT_MAP: Record<WsAuditUnit, true> = { enabled: true, loaded: true, absent: true };
+export const WS_AUDIT_UNITS: readonly WsAuditUnit[] =
+  Object.keys(WS_AUDIT_UNIT_MAP) as WsAuditUnit[];
+export function isWsAuditUnit(v: unknown): v is WsAuditUnit {
+  return typeof v === 'string' && (WS_AUDIT_UNITS as readonly string[]).includes(v);
+}
+
 /** `ccd ws-audit --session <id>`, with a server-added `sentence`. `token` is
  *  present ONLY when `verdict === 'reapable'`; the client sends it back as
  *  `expect`, and ccd re-proves the world state matches it. */
 export interface WsAudit {
   id: string; branch: string; base: string; workdir: string; project: string; repo: string;
   exists: boolean; headMatchesRegistry: boolean; reaping: string | null;
+  /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
+   * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
+   * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
+   * nulls those and that is exactly the shape that made F8's orphan invisible
+   * to the one artifact whose job is answering "what is the state of this
+   * workspace". These three are answerable on every verdict, so they are
+   * answered on every verdict. */
+  alive: boolean;
+  started: boolean;
+  /** `null` when the fleet host has no `systemctl` at all — and, by the same
+   *  degrade, when the ccd that answered predates these fields. Never a fourth
+   *  state; "we could not see a unit" is one fact, not two. */
+  unit: WsAuditUnit | null;
   /* ── `null` MEANS NOBODY LOOKED ────────────────────────────────────────────
    *
    * The six fields below, plus `stashes` and `merge.fetchedAt`, are `null`
@@ -1003,6 +1028,17 @@ const optNum = (o: RawObj, k: string): number | null => {
   if (typeof v !== 'number' || !Number.isFinite(v)) throw new MalformedSnapshot(k);
   return v;
 };
+/** Absent or explicitly null → the caller's `dflt`. Present → must be a
+ *  boolean. The default is a PARAMETER rather than `null`, because the fields
+ *  that need this ("we could not see a session") have a meaningful degraded
+ *  answer and inventing a third state for "an older peer did not say" would
+ *  make every reader carry it. */
+const optBool = (o: RawObj, k: string, dflt: boolean): boolean => {
+  const v = o[k];
+  if (v === undefined || v === null) return dflt;
+  if (typeof v !== 'boolean') throw new MalformedSnapshot(k);
+  return v;
+};
 const reqStr = (o: RawObj, k: string): string => {
   const v = o[k];
   if (typeof v !== 'string') throw new MalformedSnapshot(k);
@@ -1444,6 +1480,8 @@ const reviveMerge = (raw: unknown): AuditMerge => {
 export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
   const o = asObj(v, 'audit');
   const token = optStr(o, 'token');
+  const unitRaw = optStr(o, 'unit');
+  if (unitRaw !== null && !isWsAuditUnit(unitRaw)) throw new MalformedSnapshot('unit');
 
   return {
     id: reqStr(o, 'id'),
@@ -1455,6 +1493,14 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
     exists: reqBool(o, 'exists'),
     headMatchesRegistry: reqBool(o, 'headMatchesRegistry'),
     reaping: optStr(o, 'reaping'),
+    // optBool/optStr, NOT reqBool — DELIBERATE, and decided beside the writer.
+    // An older ccd on the fleet host omits all three; reqBool would throw and
+    // the whole sheet would render nothing, against a rolled-back ccd or a
+    // second fleet host. `false`/`null` say "we could not see a session",
+    // which is what a build that cannot answer means.
+    alive: optBool(o, 'alive', false),
+    started: optBool(o, 'started', false),
+    unit: unitRaw,
     dirty: optStrArray(o, 'dirty'),
     ignored: optIgnoredArray(o, 'ignored'),
     ignoredCount: optNum(o, 'ignoredCount'),

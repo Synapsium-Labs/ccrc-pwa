@@ -8,6 +8,7 @@ import { ReapSheet } from '../src/session/ReapSheet';
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
   project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [
     { path: 'node_modules/', bytes: 412_000_000, sensitive: false },
     { path: 'dist/', bytes: 8_000_000, sensitive: false },

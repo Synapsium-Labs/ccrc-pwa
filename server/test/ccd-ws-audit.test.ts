@@ -2556,3 +2556,91 @@ describe('children on the audit wire (D4)', () => {
     expect(fs.existsSync(wt)).toBe(true);
   }, 30000);
 });
+
+// ---------------------------------------------------------------------------
+// §1.6 — THE SESSION BEHIND THE WORKSPACE.
+// ---------------------------------------------------------------------------
+
+describe('ws-audit reports the session\'s own state, on EVERY verdict', () => {
+  it('reports alive/started/unit even when _ws_reap_eval refuses not-archived', () => {
+    // A `not-archived` refusal nulls every downstream field, and that is
+    // exactly the shape that made F8's orphan invisible to the one artifact
+    // whose job is answering "what is the state of this workspace". THE
+    // PLACEMENT ITSELF is pinned by the last case in this block, not by this
+    // one — see there for the measurement.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const doc = JSON.parse(h.sh(`${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(doc.verdict).toBe('not-archived');
+    expect(doc.alive).toBe(false);          // ARCH stubs `_alive() { return 1; }`
+    expect(doc.started).toBe(true);         // cmd_ws_add claimed it
+    expect(doc.unit).toBe('absent');        // the contained systemctl lists nothing
+  });
+
+  it('says started:false for a row nobody claimed — the F8 shape, nameable at last', () => {
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    h.sh(`rm -f "$REG/demo-quiet-basin.started"`);
+    const doc = JSON.parse(h.sh(`${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(doc.started).toBe(false);
+  });
+
+  it('unit is null — never a fourth state — where the box has no systemctl at all', () => {
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const doc = JSON.parse(h.sh(
+      `${ARCH} _have_systemctl() { return 1; }; cmd_ws_audit --session demo-quiet-basin`));
+    expect(doc.unit).toBeNull();
+  });
+
+  it('computes them BEFORE _ws_reap_eval — asserted on the CODE, because the JSON cannot tell', () => {
+    // MEASURED, and the plan was wrong about this: moving the three lines below
+    // `_ws_reap_eval` leaves the `not-archived` case above GREEN. The reason is
+    // in the tree — `_ws_reap_eval "$id" || true` does not return from
+    // `cmd_ws_audit`, so a Phase-A refusal nulls only the fields the EVAL
+    // fills, and these three stay reachable from either position. A document
+    // assertion therefore cannot be the guard.
+    //
+    // The placement still is one: it is what keeps the three answerable if any
+    // future rung of that ladder ever leaves early, and what keeps them off the
+    // far side of `_ws_reap_eval`'s mandatory `git fetch`. So it is pinned
+    // where it IS observable — the deparsed function, the `cmd_ws_restore`
+    // idiom from ccd-spawn-split.test.ts. `type` drops comments, so this
+    // anchors on code: `_alive` appears nowhere else in this verb.
+    const t = h.sh('type cmd_ws_audit');
+    expect(t.indexOf('_alive')).toBeGreaterThan(-1);
+    expect(t.indexOf('_alive')).toBeLessThan(t.indexOf('_ws_reap_eval'));
+    expect(t.indexOf('_ws_unit_state')).toBeLessThan(t.indexOf('_ws_reap_eval'));
+  });
+});
+
+describe('_ws_unit_state', () => {
+  it('is `enabled` when a default.target.wants symlink exists', () => {
+    h.sh(`mkdir -p "$HOME/.config/systemd/user/default.target.wants"
+          ln -sf /dev/null "$HOME/.config/systemd/user/default.target.wants/claude-session@x.service"`);
+    expect(h.sh('_ws_unit_state x')).toBe('enabled');
+  });
+
+  it('is `loaded` when the manager knows the unit but it is not boot-persistent', () => {
+    expect(h.sh(
+      `systemctl() { echo "claude-session@x.service loaded active running x"; return 0; }
+       _ws_unit_state x`)).toBe('loaded');
+  });
+
+  it('is `absent` when list-units does not name it', () => {
+    expect(h.sh('systemctl() { return 0; }; _ws_unit_state x')).toBe('absent');
+  });
+
+  it('probes with list-units, NOT `systemctl show`', () => {
+    // `show` on an uninstantiated template reports LoadState=loaded, which is
+    // why a naive check misreads this. Measured live: list-units returned 18
+    // rows and the six ids absent from it had no unit loaded at all.
+    const t = h.sh('type _ws_unit_state');
+    expect(t).toContain('list-units');
+    expect(t).not.toContain('systemctl show');
+  });
+
+  it('prints NOTHING where there is no systemctl — the JSON writer renders null', () => {
+    expect(h.sh('_have_systemctl() { return 1; }; _ws_unit_state x')).toBe('');
+  });
+});

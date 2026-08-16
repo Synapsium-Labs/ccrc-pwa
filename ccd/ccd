@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d07591ea2bf2668daf1350b57d59b358c9052770b90155eb8722395a4d50e20c
+# ccrc:generated 1 sha256=fb2da1354e237188935aef3faf9358fc1dd84e87a7de27778a9a68e86ebc0317
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -4497,6 +4497,17 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the audit record safely"
 
+  # BEFORE `_ws_reap_eval`, AND THAT IS THE WHOLE POINT. Its Phase-A refusals —
+  # `not-archived` first among them — return with every downstream field null,
+  # which is exactly the shape that made F8's orphan invisible to the one
+  # artifact whose job is answering "what is the state of this workspace".
+  # These three are answerable on EVERY verdict, so they are answered on every
+  # verdict. (`_alive` appeared nowhere in this verb before.)
+  local aliveflag=false startedflag=false unitstate
+  _alive "$id" && aliveflag=true
+  [[ "$(_reg_get "$id" started)" == "1" ]] && startedflag=true
+  unitstate=$(_ws_unit_state "$id")
+
   _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
   local project workdir branch base repo transcript reaping
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
@@ -4705,6 +4716,10 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
   printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
+  # The session behind the workspace, not just the tree. `unit` is null — never
+  # a fourth word — when this box has no systemctl at all.
+  printf '"alive":%s,"started":%s,"unit":%s,' \
+    "$aliveflag" "$startedflag" "$( [[ -n "$unitstate" ]] && _json_str "$unitstate" || echo null)"
   # Six fields, one source of truth for whether each is a measurement: `null`
   # from the builders above whenever the read did not happen. See the two
   # blocks for the reason; the printf is deliberately dumb so no third rule can
@@ -7748,6 +7763,38 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
 # harness can stub it, and `command -v` finds a shell function before it finds a binary, so nothing
 # else could.
 _have_systemctl() { command -v systemctl >/dev/null 2>&1; }
+
+_ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no systemctl
+  # Three states, and the empty fourth answer is deliberately not one of them:
+  # "this box has no systemd" is not "this unit is absent", and the JSON writer
+  # renders the empty string as `null` rather than inventing a word.
+  #
+  #   enabled — a default.target.wants symlink exists: it will come back at boot.
+  #   loaded  — the manager knows the unit, but nothing promises a next boot.
+  #   absent  — list-units does not name it at all.
+  #
+  # THE PROBE IS `list-units`, NEVER `systemctl show`: `show` on an
+  # UNINSTANTIATED TEMPLATE reports LoadState=loaded, so a naive check calls
+  # every id in the roster "loaded". Measured live — list-units returned
+  # exactly 18 rows, and the six ids absent from it had no unit loaded at all.
+  _have_systemctl || return 0
+  # THREE STATEMENTS, not one `local id=… unit="…$id…" link`: bash expands
+  # every assignment word of a `local` BEFORE it performs any of them, so the
+  # second word reads `$id` while it is still the freshly-declared, unset local
+  # — and under `set -uo pipefail` that is `id: unbound variable`, which exits
+  # the shell rather than answering. (Measured; it only LOOKED green from
+  # `cmd_ws_audit`, whose own `local id` had already dynamically scoped one.)
+  local id="$1" unit link
+  unit="claude-session@$id.service"
+  link="$HOME/.config/systemd/user/default.target.wants/$unit"
+  # -L as well as -e: a wants symlink whose target is gone is still an enable.
+  [[ -L "$link" || -e "$link" ]] && { echo enabled; return 0; }
+  if systemctl --user list-units 'claude-session@*' --all --plain --no-legend 2>/dev/null \
+       | grep -qF "$unit"; then
+    echo loaded; return 0
+  fi
+  echo absent
+}
 
 _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observable verdict.
   # `ccd start`/`ccd ensure` outside a unit become `systemctl --user enable --now`, and the unit's
