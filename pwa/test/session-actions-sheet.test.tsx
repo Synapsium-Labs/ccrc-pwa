@@ -406,3 +406,57 @@ describe('forget — the end-of-life a non-workspace session never had', () => {
     expect(await screen.findByText(/Couldn't forget — held: program:evals/)).toBeInTheDocument();
   });
 });
+
+describe('the spawn-state note (§1.6b)', () => {
+  // THIS FILE HAS NO RENDER HELPER — every one of its mount sites spells the
+  // render inline, and `open`, `onClose` and `onReap` are all required props.
+  // So the helper is DEFINED HERE, modelled on the `line()` helper in
+  // pwa/test/session-lifecycle.test.tsx.
+  const renderSheet = (session: FleetSession): void => {
+    render(<SessionActionsSheet session={session} open onClose={() => {}} onReap={() => {}} />);
+  };
+  const notes = () => [...document.querySelectorAll('.sess-sheet-note')].map((n) => n.textContent ?? '');
+
+  it('points a blocked spawn at Swap account and the terminal, not at Restart', () => {
+    // A hard block is the one verdict where waiting cannot help and restarting
+    // reproduces it: the account is rate-limited or logged out.
+    renderSheet(s({ spawnState: 'blocked' }));
+    expect(notes().join(' ')).toContain('Swap account');
+    expect(notes().join(' ')).not.toContain('Restart session revives it');
+  });
+
+  it('points a login spawn at Swap account too', () => {
+    renderSheet(s({ spawnState: 'login' }));
+    expect(notes().join(' ')).toContain('Swap account');
+  });
+
+  it('says an unconfirmed settle is not a fault', () => {
+    // A systemd restart of a large session legitimately settles unconfirmed
+    // ("700k+-token resumes take minutes between gates"). A sheet that calls that
+    // broken teaches the operator to ignore the sheet.
+    renderSheet(s({ spawnState: 'expired' }));
+    expect(notes().join(' ')).toContain('not a fault');
+  });
+
+  it('says NOTHING for a CLEAN spawn', () => {
+    renderSheet(s({ spawnState: 'ready' }));
+    expect(notes().join(' ')).not.toContain('last spawn');
+  });
+
+  it('and says NOTHING for an UNRECORDED one — the case every pre-#50 row carries', () => {
+    // A SEPARATE `it`, deliberately. `notes()` reads the whole document and the
+    // file's cleanup runs BETWEEN TESTS, not between renders — two renders in
+    // one case leave the second assertion unable to fail, which would pin
+    // nothing at all about `spawnState: null`. This is the false-positive
+    // direction that would otherwise light a note on all 18 live sessions.
+    renderSheet(s({ spawnState: null }));
+    expect(notes().join(' ')).not.toContain('last spawn');
+  });
+
+  it('names a CLAIM as the repair for unclaimed, never a process', () => {
+    renderSheet(s({ lifecycle: 'unclaimed' }));
+    const t = notes().join(' ');
+    expect(t).toContain('Restart session');
+    expect(t).not.toContain('Nothing is watching');
+  });
+});
