@@ -11,8 +11,8 @@ import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReason, queueSystemMail } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX,
-  type RunRefuseCode, type RunState,
+  MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
+  type RunRefuseCode, type RunState, type SpawnVerdict,
 } from '../../../shared/api.js';
 
 /**
@@ -43,7 +43,12 @@ export interface DispatchRunDeps {
 
 export type DispatchOutcome =
   | { ok: true; id: number; sessionId: string; resumed: boolean; clearedAt: number | null;
-      briefQueued: boolean; clearError: string | null }
+      briefQueued: boolean; clearError: string | null;
+      /** Adopted from a KILLED `ws-add`, not created by a clean one — so `ok` is
+       *  NO LONGER PROOF THE PANE IS READY. */
+      adopted: boolean;
+      /** How that spawn ended, when it recorded anything. `null` = not recorded. */
+      spawnState: SpawnVerdict | null }
   | { ok: false; kind: 'unknown-run' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; kind: 'bad-request' }
@@ -161,6 +166,10 @@ export async function dispatchRun(
 
   let sessionId: string; let workspace: string | null; let branch: string | null;
   let resumed: boolean; let clearedAt: number | null = null; let clearError: string | null = null;
+  // §1.5. Both stay at these values on every path that is not the fresh-spawn
+  // adoption gate — a resumed wave-N run adopts nothing, and neither does a
+  // clean `ws-add`.
+  let adopted = false; let adoptedSpawn: SpawnVerdict | null = null;
 
   if (run.sessionId === null) {
     // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
@@ -180,7 +189,8 @@ export async function dispatchRun(
     const beforeIds = new Set(before.map((r) => r.id));
     const argv = CCD_ARGV.wsAdd(run.project);
     const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+    // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
+    // this line, before the diff below — see the gate after `winner`.
     // AFTER never tolerates degradation — the question here is "is this
     // NEW", the identity-by-subtraction this whole block performs, and
     // THAT one must not guess. Two drops (or, under the ladder, two
@@ -192,6 +202,18 @@ export async function dispatchRun(
     // block back to a plain `readRegistry` call: BEFORE answers "does this
     // still exist" (tolerant); AFTER answers "is this new" (never
     // tolerant).
+    //
+    // AND §1.5 CHANGED WHAT MAKES BEFORE'S TOLERANCE SAFE. It was safe because the
+    // SUCCESS path always contributes exactly one genuinely-new row, so a
+    // false-new made the count 2 and `candidates.length !== 1` refused. ON THE
+    // ADOPTION PATH THAT GUARANTEE IS GONE: a false-new makes the count 1, AND
+    // WOULD BE ADOPTED. Two triggers were measured — a whole-fleet listing failure
+    // (`readRegistry` collapses an unlistable directory to `[]`, emptying
+    // `beforeIds`) and an operator `ws-add` from the PWA racing a refused dispatch
+    // (`server.ts`'s own route, outside `coordMutex`, with no diff of its own).
+    // `killed` + `held` are what REPLACE the lost precondition: the first says a
+    // spawn really was interrupted here and now, the second is fail-shut and says
+    // nothing else has claimed the row.
     const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!afterRead.listed ||
         afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
@@ -203,9 +225,50 @@ export async function dispatchRun(
     if (candidates.length !== 1) {
       // Nothing claimed on a guess: the run stays `planned`, no hold placed
       // — the operator resolves it.
+      if (!res.ok) {
+        coord.recordRunEvent(id, 'coordinator',
+          `dispatch-refused:${candidates.length === 0 ? 'fleetFailed' : 'ambiguous-dispatch'}`
+          + ` candidates=${candidates.map((c) => c.id).join(',')}`);
+        // ccd failed AND left nothing new: there is no ambiguity to report, only
+        // a failure. Zero candidates after a failed `ws-add` is the ordinary
+        // shape of "it refused before it created anything", and `fleetFailed`
+        // is the honest answer — `ambiguous-dispatch` means "the ws-add worked
+        // and we cannot read the diff", which is a different sentence.
+        if (candidates.length === 0) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+      }
       return { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length };
     }
     const winner = candidates[0]!;
+    // §1.5. `!res.ok` NO LONGER SHORT-CIRCUITS BEFORE THE DIFF — that early return
+    // is what turned a slow spawn into an unclaimed workspace: `cmd_ws_add` writes
+    // the worktree and every registry row FIRST and blocked LAST, so a kill at the
+    // budget landed after the workspace existed and before anything claimed it.
+    //
+    // ADOPTION NEEDS POSITIVE EVIDENCE THAT THIS CANDIDATE IS THE ONE THIS CALL
+    // CREATED, and two gates supply it. `killed` (§1.4) separates "we SIGTERM'd a
+    // spawn in flight" from "ccd refused" — a ccd `die` is exit 1, byte-identical
+    // without it, and the transport catch path carries no `killed` at all, so a
+    // dropped socket lands here too and does not adopt. `held` is fail-shut by
+    // construction (`registry.ts`: a listed-but-unreadable `.hold` reads as HELD):
+    // a workspace a killed `ws-add` just created never carries one, while a live
+    // coordinated worker always does.
+    if (!res.ok) {
+      if (!(res.killed === true && winner.held === null)) {
+        // §1.2's OTHER polarity, and the reason the refusal is no longer silent.
+        // A settle that expires INSIDE the agent's 300 s ceiling is a clean
+        // non-zero exit — so ccd created, claimed and supervised a workspace,
+        // and we correctly decline to bind it (nothing ties it to THIS call;
+        // the `.spawn` fact says how A spawn ended, never whose). But a run
+        // stuck in `planned` beside an unexplained new workspace is a state no
+        // verb names, which is the class this build is judged on. Say what
+        // happened and which ids appeared, WITHOUT claiming any of them.
+        coord.recordRunEvent(id, 'coordinator',
+          `dispatch-refused:fleetFailed candidates=${candidates.map((c) => c.id).join(',')}`);
+        return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+      }
+      adopted = true;
+      adoptedSpawn = spawnVerdict(winner.spawn === null ? null : winner.spawn.rc);
+    }
     sessionId = winner.id; workspace = winner.workspace; branch = winner.branch;
     resumed = false;
     // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY —
@@ -320,7 +383,12 @@ export async function dispatchRun(
   // can otherwise only guess at.
   const adv = coord.dispatchRun({ runId: id, sessionId, workspace, branch, resumed, clearedAt,
     items: itemTitles,
-    detail: clearError !== null ? `clear-refused:${clearError}` : undefined });
+    // The SUFFIX is a `SpawnVerdict`, never a raw rc — and never the word
+    // `spawnstate`, which is not a field and must never become one. Recorded only
+    // on the adoption path, so its PRESENCE is the record that this workspace came
+    // from a killed `ws-add` rather than a clean one.
+    detail: adopted ? `spawn-adopted:${adoptedSpawn ?? 'unrecognised'}`
+      : clearError !== null ? `clear-refused:${clearError}` : undefined });
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
@@ -344,5 +412,6 @@ export async function dispatchRun(
     queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body: brief });
   }
 
-  return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError };
+  return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
+    adopted, spawnState: adoptedSpawn };
 }
