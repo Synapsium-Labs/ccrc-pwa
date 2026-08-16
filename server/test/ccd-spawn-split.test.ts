@@ -419,3 +419,74 @@ describe('the settle bound is not addressable from argv', () => {
     expect(out).toBe('rc=4 t=30');
   });
 });
+
+/** THE PRICE OF A MONOTONE `started`. Nothing in ccd ever clears the field —
+ *  no `_reg_del`, no `_reg_unset`, and `_reg_purge` destroys the identity
+ *  rather than un-claiming it — so once a row is claimed every later revival
+ *  picks `mode=resume`. If the session never really came up, `--resume '<uuid>'`
+ *  names a uuid with no transcript behind it and the wrapper exits immediately,
+ *  forever, on every retry AND every `Restart=always` cycle. `_spawn_settle`'s
+ *  own rc 3/4 warnings already name the trap and tell a human to clear the
+ *  field; this is that escape hatch, taken once, automatically. */
+describe('_spawn_start: the --resume fallback a monotone `started` owes', () => {
+  /** A tmux whose `--resume` new-session leaves no pane (the wrapper exits on a
+   *  uuid with no transcript) but whose `--session-id` one does. */
+  const RESUME_DIES = `sleep() { :; };
+    tmux() {
+      echo "tmux $*" >> "$HOME/ccd-calls"
+      case "$1" in
+        new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
+        has-session)  [[ -e "$HOME/pane-up" ]] ;;
+        list-sessions) return 0 ;;
+      esac
+    };`;
+
+  const newSessions = (): string[] => h.calls().filter((c) => c.startsWith('tmux new-session'));
+
+  it('retries ONCE with --session-id when the resume produced no session', () => {
+    seed('myid');
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const news = newSessions();
+    expect(news).toHaveLength(2);
+    expect(news[0]).toContain('--resume');
+    expect(news[1]).toContain('--session-id');
+  });
+
+  it('says so on stderr — a silent second spawn is a fact nobody can audit', () => {
+    seed('myid');
+    const r = shStatus(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume`);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("--resume 'deadbeef-0000-4000-8000-000000000000' left no session");
+  });
+
+  it('does NOT retry when the resume worked', () => {
+    seed('myid');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid resume`);
+    expect(newSessions()).toHaveLength(1);
+  });
+
+  it('does NOT retry a `new` spawn — there is nothing to fall back to', () => {
+    seed('myid');
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+          _spawn_start myid new`);
+    expect(newSessions()).toHaveLength(1);
+  });
+
+  it('retries at most once — never a loop', () => {
+    // A tmux where NOTHING ever produces a pane. One retry, then the settle's
+    // rc 3 is the honest verdict; a loop here would spend the whole window
+    // minting panes nobody watches.
+    seed('myid');
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+          _spawn_start myid resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(2);
+  });
+
+  it('still writes nothing to `started`, and still answers in the GLOBAL', () => {
+    // The retry does not make the start half into the claiming half.
+    seed('myid');
+    const out = h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null; echo "[$SPAWN_FROMSWAP]"`);
+    expect(out).toBe('[0]');
+    expect(h.reg('myid', 'started')).toBeNull();
+  });
+});

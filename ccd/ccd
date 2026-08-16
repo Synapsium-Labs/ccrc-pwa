@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2bdc9b3383124f9f96f35382456e8f0f1f55ba679cff99137711d0c4690b5dbe
+# ccrc:generated 1 sha256=4da7063507fd99981c3b7e8cf6a2849f83b82593f610b93741b62483722ba47d
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7503,7 +7503,9 @@ _tmux_server_ensure() {   # place the SERVER in a known scope, not the caller's 
 # safe value — full fidelity, per the failure direction below.
 SPAWN_FROMSWAP=0
 
-_spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER BLOCKS.
+_spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
+                   # (One bounded exception, `resume` only: a 2s settle before the
+                   #  --session-id retry below. The 15-minute wait stays in _spawn_settle.)
   # THE NON-BLOCKING HALF. Split out so that every caller can write the claim
   # (`_reg_claim`) and, where it has one, wire the supervision BEFORE anything
   # that can block — which is F8's whole shape: a `ws-add` killed at the
@@ -7539,6 +7541,38 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
   tmux new-session -d -s "$tname" -x 220 -y 50 \
     "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
+  # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
+  # Nothing in ccd ever clears the field: there is no registry delete/unset
+  # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
+  # zero hits, so naming the two candidate spellings HERE would red that suite —
+  # and `_reg_purge` unlinks every field for an id, which destroys the identity
+  # rather than un-claiming it. So once a row is claimed every later
+  # revival picks mode=resume. If the session never really came up, `--resume
+  # '<uuid>'` names a uuid with no transcript behind it and the wrapper exits
+  # immediately — forever, on every retry AND every Restart=always cycle.
+  # `_spawn_settle`'s own rc 3/4 warnings name this trap from the other side
+  # ("if the session never came up, clear $REG/$id.started first"); this is that
+  # escape hatch, taken once, automatically.
+  #
+  # ONCE, never a loop, and only on `resume`: a `new` spawn has nothing to fall
+  # back to. The short settle is what makes `has-session` mean anything — the
+  # wrapper's exit is not instantaneous, and `tmux new-session -d` returns 0
+  # whether or not the command it launched survives.
+  #
+  # AND THIS IS THE ONE PLACE THIS FUNCTION WAITS. The header's "NEVER BLOCKS"
+  # is about the TUI — the gate loop, up to fifteen minutes, which is F8's whole
+  # window and stays in `_spawn_settle`. Two seconds on the resume path widens
+  # the unclaimed window by two seconds and buys back a row that would otherwise
+  # never start again; it cannot be moved into the settle, which knows only the
+  # tmux name and neither the mode nor the uuid.
+  if [[ "$mode" == "resume" ]]; then
+    sleep 2
+    if ! tmux has-session -t "$tname" 2>/dev/null; then
+      echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
+      tmux new-session -d -s "$tname" -x 220 -y 50 \
+        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' --session-id '$uuid' --dangerously-skip-permissions"
+    fi
+  fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
   tmux set-option -t "$tname" set-titles on 2>/dev/null
