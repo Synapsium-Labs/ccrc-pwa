@@ -70,18 +70,35 @@ function runCcrcRaw(home: string, args: string[] = []): Result {
  *  already missing for `gh` when `doctor` landed. */
 function ccrcEnv(home: string): NodeJS.ProcessEnv {
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
-  writeFileSync(join(home, '.local', 'bin', 'curl'),
-    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/curl-poison"\n'
-    + 'echo "ccrc tests must never reach a real server" >&2\nexit 97\n', { mode: 0o755 });
+  const poison = (name: string, says: string): void =>
+    writeFileSync(join(home, '.local', 'bin', name),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
+      + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
+  poison('curl', 'ccrc tests must never reach a real server');
+  // `systemctl` for the same reason and a sharper one: this runner keeps the
+  // REAL PATH, so `status` was executing `systemctl --user is-active` against
+  // THIS PRODUCTION BOX on every suite run (round-2 review, Minor 4). It is a
+  // read-only query and nothing was asserted on its answer, which is exactly
+  // why nobody noticed — and "harmless today" is not containment. The doctor
+  // suite reaches no system directory at all; this one now cannot reach these
+  // three binaries either.
+  poison('systemctl', 'ccrc tests must never query this box\'s real systemd');
+  // The verbs read their own environment, and this runner inherits the ambient
+  // one wholesale. An operator (or a parent agent) with CCRC_ADDR exported
+  // would hand `status` a real address and turn the "leaves the box alone" test
+  // below red — a flake that depends on who ran the suite. Every CCRC_* input
+  // this CLI reads is removed by name, so the fixture decides, never the shell.
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   return env;
 }
 
-/** Every argv the poisoned `curl` saw. Empty means nothing tried to leave the
- *  box — which is what every test in this file except the one below expects. */
-const curlPoison = (home: string): string[] => {
-  const p = join(home, 'curl-poison');
+/** Every argv a poisoned binary saw. Empty means nothing tried to leave the
+ *  fixture — which is what every test in this file except two expects. */
+const poisonLog = (home: string, name: string): string[] => {
+  const p = join(home, `${name}-poison`);
   return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
 };
+const curlPoison = (home: string): string[] => poisonLog(home, 'curl');
 
 /** The brief's own shape: returns stdout, throwing (with stderr attached) on
  *  a nonzero exit — for the tests that only care about the happy path. */
@@ -378,6 +395,38 @@ describe('ccrc: the runner cannot reach the real server', () => {
     // ~/.ccrc/ccrc.env, there is no server to ask, and a status that invented
     // one would show up right here.
     expect(curlPoison(home)).toEqual([]);
+  });
+
+  it('an ambient CCRC_ADDR in the SUITE\'s own shell does not reach the verb', () => {
+    // The runner spreads process.env, so whoever ran the suite could otherwise
+    // hand `status` a live address and turn the test above red — a flake that
+    // depends on the operator's shell rather than on the code.
+    const before = process.env['CCRC_ADDR'];
+    process.env['CCRC_ADDR'] = '203.0.113.7:7788';   // a REAL address, deliberately
+    try {
+      const home = mkTmp('ccrc-cli-ambient-addr-');
+      expect(ccrcEnv(home)['CCRC_ADDR']).toBeUndefined();
+      const r = runCcrcRaw(home, ['status']);
+      expect(r.stdout).toMatch(/server: +none configured/);
+      expect(curlPoison(home)).toEqual([]);
+    } finally {
+      if (before === undefined) delete process.env['CCRC_ADDR']; else process.env['CCRC_ADDR'] = before;
+    }
+  });
+
+  it('status queries the POISONED systemctl, never this box\'s real one', () => {
+    // This runner keeps the real PATH, and `status` asks systemd about two
+    // units. On this machine that is a LIVE fleet host; the query is read-only,
+    // but a suite that touches the box it is running on is one refactor away
+    // from touching it differently.
+    const home = mkTmp('ccrc-cli-systemctl-');
+    const r = runCcrcRaw(home, ['status']);
+    expect(poisonLog(home, 'systemctl').join('\n')).toContain('--user is-active ccrc.service');
+    expect(poisonLog(home, 'systemctl').join('\n')).toContain('--user is-active ccrc-agent.service');
+    // The poison exits 97 saying nothing on stdout, so both units read as
+    // "unknown" — and status says unknown rather than inventing a role.
+    expect(r.stdout).toMatch(/role: +unknown/);
+    expect(r.code).toBe(0);
   });
 });
 

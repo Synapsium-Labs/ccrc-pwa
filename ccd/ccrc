@@ -355,15 +355,22 @@ _box_server_addr() {
 #     into this process and into every child it spawns (curl, node, jq).
 #   - only the requested key's value is ever returned; every other line is read
 #     and dropped. Nothing here prints, logs or exports another line of it.
-#   - the shape read is `KEY=value` at the start of a line, which is what
-#     systemd's own `EnvironmentFile=` parser accepts — this file's actual
-#     consumer — with one layer of surrounding quotes stripped. No `export`
-#     prefix, no continuations: a form systemd would not read is a form this
-#     box is not configured by either.
+#   - the shape read is a SUBSET of what systemd's own `EnvironmentFile=` parser
+#     accepts — this file's actual consumer: optional leading whitespace, then
+#     `KEY=value`, with one layer of surrounding quotes stripped. Deliberately
+#     NOT supported, and named rather than implied (round-2 review, Minor 2):
+#     backslash line-continuations, and escape sequences inside a quoted value.
+#     A subset is safe HERE because the failure is one-directional — a form this
+#     misses yields no address, which SKIPS the check with a detail, never a
+#     wrong address confidently probed — but it is a subset, and a comment that
+#     claimed the whole parser was a claim that could quietly stop being true.
 # The LAST assignment wins, as it does in systemd and in a shell.
 _box_env_value() {
   local file="$1" key="$2" line v=""
   while IFS= read -r line || [ -n "$line" ]; do
+    # Leading whitespace, exactly as systemd skips it. `${line#"${line%%[![:space:]]*}"}`
+    # is `_dr_trim`'s left half, in the one namespace this file can reach.
+    line="${line#"${line%%[![:space:]]*}"}"
     case "$line" in
       "$key="*) v="${line#"$key="}" ;;
       *) continue ;;
@@ -387,7 +394,7 @@ _box_env_value() {
 #   0 -> BOX_HEALTH=(mode connected build roster)
 #   4 -> curl is not on PATH (nothing was asked)
 #   5 -> the server did not answer;      BOX_HEALTH_WHY = curl's exit code
-#   6 -> it answered an HTTP error;      BOX_HEALTH_WHY = the status code
+#   6 -> it answered an HTTP error;      BOX_HEALTH_WHY = "HTTP <code>"
 #   7 -> what came back is not the health JSON
 #   8 -> node is not on PATH, so nothing could parse the answer
 #
@@ -415,7 +422,16 @@ _box_health() {
   # the output) rather than `$'\n'`: a real newline inside an argument shows up
   # in `ps`, in a log line and in this suite's own stub log as a second record,
   # and an argv that cannot be printed on one line is an argv nobody can read.
-  out="$(curl -sS --max-time "$CCRC_HEALTH_TIMEOUT" -H 'accept: application/json' \
+  #
+  # `-s` and NOT `-sS` (round-2 review, Minor 1): `-S` asks curl to print its
+  # error message despite `-s`, and this redirects stderr away, so the two
+  # cancelled out. Discarding it is the deliberate half of that pair — curl's
+  # exit code IS the diagnosis this reports, and a check's subprocess writing
+  # to stderr mid-run interleaves with the verdict lines an operator is reading
+  # on stdout. (Deliberately unlike `_check_gh_auth`, which captures gh's stderr
+  # and quotes its first line: gh's exit codes are not distinguishing, curl's
+  # are, and gh answers once where this can answer on every doctor run.)
+  out="$(curl -s --max-time "$CCRC_HEALTH_TIMEOUT" -H 'accept: application/json' \
     -w '\n%{http_code}' "http://$addr/api/fleet/health" 2>/dev/null)" || rc=$?
   if [ "$rc" -ne 0 ]; then BOX_HEALTH_WHY="$rc"; return 5; fi
   case "$out" in
@@ -424,9 +440,14 @@ _box_health() {
   esac
   local code="${out##*$'\n'}" body="${out%$'\n'*}"
   if [ "$code" != 200 ]; then
+    # WHY carries the whole PHRASE, not a bare code, so both arms read as
+    # English in the one sentence the callers wrap it in ("… answered <why>
+    # when asked for /api/fleet/health"). It used to carry either a number or
+    # the words "an unreadable status", which produced "answered HTTP an
+    # unreadable status" — dead text nobody had read aloud (round-2 review).
     case "$code" in
-      [0-9][0-9][0-9]) BOX_HEALTH_WHY="$code" ;;
-      *) BOX_HEALTH_WHY="an unreadable status" ;;
+      [0-9][0-9][0-9]) BOX_HEALTH_WHY="HTTP $code" ;;
+      *) BOX_HEALTH_WHY="a status this check could not read" ;;
     esac
     return 6
   fi
@@ -459,32 +480,64 @@ _box_health() {
   return 0
 }
 
-# The two units ccrc itself installs (deploy/ccrc.service, ccrc-agent.service).
-# Which of them is active IS this box's role, measured rather than declared: a
-# server host runs the first, a fleet host the second, and a single-box install
-# runs both. `is-active` only — status never touches a unit, and `ccd supervise`
-# units are long-lived by design (CLAUDE.md).
+# The two units ccrc itself installs (deploy/ccrc.service, ccrc-agent.service),
+# measured with `is-active` and nothing else — status never touches a unit, and
+# every `ccd supervise` unit beside them is long-lived by design (CLAUDE.md).
+# Sets `BOX_UNITS=(<ccrc.service state> <ccrc-agent.service state>)`, in the
+# order of `BOX_UNIT_NAMES`, because TWO lines are written from this one
+# measurement — `services:` (what was measured) and `role:` (what it implies) —
+# and measuring twice is how the two would come to disagree on a box whose units
+# changed state between them.
 #
 # XDG_RUNTIME_DIR is defaulted exactly as `ccd:93-95` defaults it, and for the
 # same reason: without it `systemctl --user` cannot find the bus from a
 # non-interactive SSH context, and status would report "unknown" on a perfectly
 # healthy box. `$UID` is a bash builtin — no `id` subprocess to fail on the
 # broken box this tool exists for.
-_box_services() {
+BOX_UNIT_NAMES=(ccrc.service ccrc-agent.service)
+BOX_UNITS=()
+_box_units() {
+  BOX_UNITS=()
+  local u state
   if ! command -v systemctl >/dev/null 2>&1; then
-    printf '%s' "unknown (systemctl is not on PATH — this box has no systemd --user to ask)"
-    return 0
+    for u in "${BOX_UNIT_NAMES[@]}"; do BOX_UNITS+=("unknown"); done
+    return 1
   fi
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local out="" u state
-  for u in ccrc.service ccrc-agent.service; do
+  for u in "${BOX_UNIT_NAMES[@]}"; do
     state="$(systemctl --user is-active "$u" 2>/dev/null)"
     [ -n "$state" ] || state="unknown"
-    [ -z "$out" ] || out+=", "
-    out+="$u $state"
+    BOX_UNITS+=("$state")
   done
-  printf '%s' "$out"
+  return 0
+}
+
+# WHAT THIS BOX IS FOR, INFERRED — and labelled as inferred, every time.
+# Nothing on a box records its own role today (D-73): the topology lives in
+# CLAUDE.md and in an operator's head, and the only evidence on disk is which
+# unit is running. So this reports the inference AND names it as one, rather
+# than asserting a role the box never declared. The moment a box does declare
+# one, this becomes a read of that declaration and the word "inferred" goes.
+_box_role() {
+  local ccrc_state="${BOX_UNITS[0]}" agent_state="${BOX_UNITS[1]}"
+  local role
+  if [ "$ccrc_state" = active ] && [ "$agent_state" = active ]; then
+    role="server AND fleet host (both units active — a single-box install)"
+  elif [ "$ccrc_state" = active ]; then
+    role="server"
+  elif [ "$agent_state" = active ]; then
+    role="fleet host"
+  elif [ "$ccrc_state" = unknown ] && [ "$agent_state" = unknown ]; then
+    # The units could not be asked at all. "I could not tell" is not "no unit is
+    # running", and inferring the second from no evidence is the one thing this
+    # line exists not to do.
+    printf '%s' "unknown (the two units could not be asked, so nothing was inferred)"
+    return 0
+  else
+    role="neither (no ccrc unit is active here — a dev checkout, or a box mid-install)"
+  fi
+  printf '%s' "$role (inferred from the units below, not declared — no box records its own role yet)"
 }
 
 # How many ccd sessions this box holds, counted the way ccd itself counts them:
@@ -537,7 +590,12 @@ cmd_status() {
     *) printf 'build:     unreadable (%s does not parse as a build stamp)\n' "$BOX_STAMP_FILE" ;;
   esac
 
-  printf 'services:  %s\n' "$(_box_services)"
+  # ONE measurement, TWO lines: what is running, and what that implies this box
+  # is for. `_box_units` is called here, in cmd_status's own shell rather than
+  # in a `$( )`, so both lines are written from the same reading.
+  _box_units || true
+  printf 'role:      %s\n' "$(_box_role)"
+  printf 'services:  %s\n' "${BOX_UNIT_NAMES[0]} ${BOX_UNITS[0]}, ${BOX_UNIT_NAMES[1]} ${BOX_UNITS[1]}"
   printf 'sessions:  %s\n' "$(_box_sessions)"
 
   local addr_out addr_rc=0
@@ -562,7 +620,7 @@ cmd_status() {
   case "$h_rc" in
     4) printf 'fleet:     not measured (curl is not on PATH, so the server could not be asked)\n'; return 0 ;;
     5) printf 'fleet:     not measured (the server did not answer — curl exited %s)\n' "$BOX_HEALTH_WHY"; return 0 ;;
-    6) printf 'fleet:     not measured (the server answered HTTP %s for /api/fleet/health)\n' "$BOX_HEALTH_WHY"; return 0 ;;
+    6) printf 'fleet:     not measured (the server answered %s when asked for /api/fleet/health)\n' "$BOX_HEALTH_WHY"; return 0 ;;
     7) printf 'fleet:     not measured (the server answered something that is not the health JSON)\n'; return 0 ;;
     8) printf 'fleet:     not measured (node is not on PATH, so the answer could not be parsed)\n'; return 0 ;;
   esac
@@ -580,14 +638,35 @@ cmd_status() {
     return 0
   fi
   printf 'mode:      remote (fleet host connected: %s)\n' "$connected"
-  # ONE WORD FOR THE PAIR, then both answers behind it. `agreed` only when both
-  # are, `disagreed` when either is a real disagreement, and `unknown` for
-  # everything else — never `agreed` for something nobody measured.
-  local overall=unknown
-  if [ "$build" = agreed ] && [ "$roster" = agreed ]; then overall=agreed
-  elif [ "$build" = skewed ] || [ "$roster" = divergent ]; then overall=disagreed
+  # ONE WORD FOR THE PAIR, then both answers behind it. `agreed` is the strongest
+  # claim this verb can make and it requires everything: both answers agreed AND
+  # the server currently in contact with the fleet host. Anything else gets a
+  # weaker word — never `agreed` for something nobody measured, and never
+  # `agreed` for something measured at a contact that has since dropped.
+  #
+  # THE `connected` ARM IS THREE-WAY, and the middle case is the one that used to
+  # be wrong (round-2 review, Important): `[ "$connected" = false ]` alone made
+  # `?` — the classifier's token for absent-or-unrecognised — take the `true`
+  # branch, so a body with no `connected`, or with `"yes"`, or with the STRING
+  # `"false"`, printed `agreed` beside `connected: ?`. `shared/api.ts:1484`
+  # declares `connected` REQUIRED, so its absence is a malformed answer and not
+  # the absence-permits rule that `roster?`/`build?` carry; and either way an
+  # answer this tool did not understand must not become a claim that the
+  # opposite is true. The classifier carried the distinction — this line was
+  # narrowing it, which is the one rule the architecture doc calls
+  # highest-yield.
+  local overall link=""
+  case "$connected" in
+    true) ;;
+    false) link="; the server is NOT currently in contact with the fleet host, so both answers describe the last contact" ;;
+    *)     link="; the server did not say whether it is in contact with the fleet host, so neither answer can be trusted to describe now" ;;
+  esac
+  if [ "$build" = skewed ] || [ "$roster" = divergent ]; then overall=disagreed
+  elif [ "$build" != agreed ] || [ "$roster" != agreed ]; then overall=unknown
+  elif [ -n "$link" ]; then overall=stale
+  else overall=agreed
   fi
-  printf 'fleet:     %s — build %s, roster %s\n' "$overall" "$build" "$roster"
+  printf 'fleet:     %s — build %s, roster %s%s\n' "$overall" "$build" "$roster" "$link"
 }
 
 # cmd_doctor — run every check in `ccd/ccrc-doctor-checks`'s table and report

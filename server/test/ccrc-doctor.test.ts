@@ -1675,8 +1675,35 @@ describe('ccrc doctor: fleet', () => {
     const home = healthy('ccrc-doctor-fleet-down-');
     stubHealth(home, { mode: 'remote', connected: false, downSince: 1_755_000_000_000, build: 'agreed', roster: 'agreed' });
     const r = runDoctor(home);
-    expect(lineFor(r.stdout, 'fleet')).toMatch(/^WARN fleet: /);
+    const line = lineFor(r.stdout, 'fleet') ?? '';
+    expect(line).toMatch(/^WARN fleet: /);
+    expect(line).toMatch(/is not currently connected/);
     expect(r.stdout).not.toMatch(/PASS fleet: /);
+    expect(r.code).toBe(0);
+  });
+
+  // AN ANSWER THIS CHECK DID NOT UNDERSTAND MUST NOT BECOME A CLAIM THAT THE
+  // OPPOSITE IS TRUE. `connected` is required on the wire (shared/api.ts:1484),
+  // so each of these is a malformed answer — and each used to PASS with the
+  // words "in remote mode, connected", which is the strongest claim this check
+  // can make, made about the one field the answer did not state. The
+  // classifier has always emitted `?` here; the verdict was narrowing it.
+  it.each([
+    ['absent', { mode: 'remote', build: 'agreed', roster: 'agreed' }],
+    ['a non-boolean word', { mode: 'remote', connected: 'yes', build: 'agreed', roster: 'agreed' }],
+    ['null', { mode: 'remote', connected: null, build: 'agreed', roster: 'agreed' }],
+    ['the STRING "false"', { mode: 'remote', connected: 'false', build: 'agreed', roster: 'agreed' }],
+  ] as const)('warns when `connected` is %s — it must never pass as "connected"', (_what, body) => {
+    const home = healthy(`ccrc-doctor-fleet-conn-${_what.replace(/\W+/g, '-')}-`);
+    stubHealth(home, body as Health);
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'fleet') ?? '';
+    expect(line).toMatch(/^WARN fleet: /);
+    expect(line).toMatch(/did not say whether it is in contact/);
+    expect(r.stdout).not.toMatch(/PASS fleet: /);
+    // …and specifically not the OTHER link sentence: "the fleet host is down"
+    // and "this answer did not say" are two different things to go and look at.
+    expect(line).not.toMatch(/is not currently connected/);
     expect(r.code).toBe(0);
   });
 
@@ -1790,6 +1817,18 @@ describe('ccrc doctor: fleet', () => {
     expect(curlCalls(home).join('\n')).not.toContain('ccrc-canary');
   });
 
+  it('reads an INDENTED key, which is what its own config file\'s parser accepts', () => {
+    // systemd's `EnvironmentFile=` skips leading whitespace, and ccrc.env's
+    // only real consumer is systemd. A reader stricter than the parser it
+    // claims to copy answers "no address" for a file that configures the box
+    // perfectly well — a safe failure, but the wrong answer.
+    const home = healthy('ccrc-doctor-fleet-indented-');
+    writeCcrcEnv(home, '  CCRC_HOST=ccrc-fixture.invalid\n\tCCRC_PORT=7788\n');
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'fleet')).toMatch(/^PASS fleet: /);
+    expect(curlCalls(home).join('\n')).toContain(`http://${FIXTURE_ADDR}/api/fleet/health`);
+  });
+
   it('bounds the request, and the bound is overridable the way verify-service.sh\'s are', () => {
     // A route that hangs must not hang doctor. The knob exists so a test need
     // not wait out a production timeout — `deploy/verify-service.sh`'s
@@ -1869,6 +1908,40 @@ describe('ccrc status', () => {
     expect(out).toMatch(/sessions: +3\b/);
   });
 
+  // ── the role, and the word "inferred" that has to travel with it ────────
+  // Nothing on a box records its own role (D-73). The two unit states are the
+  // only evidence there is, so status reports the inference and SAYS it is one
+  // — a flat `role: fleet host` would be this tool asserting a fact no box ever
+  // declared, on evidence that is one `systemctl stop` away from changing.
+  it.each([
+    ['fleet host', { ccrc: 'inactive', agent: 'active' }],
+    ['server', { ccrc: 'active', agent: 'inactive' }],
+    ['server AND fleet host', { ccrc: 'active', agent: 'active' }],
+    ['neither', { ccrc: 'inactive', agent: 'inactive' }],
+  ] as const)('infers "%s" from the units, and says that it inferred it', (role, units) => {
+    const home = statusBox(`ccrc-status-role-${role.replace(/\W+/g, '-')}-`);
+    for (const [u, state] of [['ccrc.service', units.ccrc], ['ccrc-agent.service', units.agent]] as const) {
+      writeFileSync(join(home, `fixture-unit-${u}`), `${state}\n`);
+    }
+    const out = runDoctor(home, ['status']).stdout;
+    const line = out.split('\n').find((l) => l.startsWith('role:')) ?? '';
+    expect(line).toContain(role);
+    expect(line).toMatch(/inferred|not declared/);
+  });
+
+  it('says the role is unknown, not "neither", when the units could not be asked at all', () => {
+    // "I could not tell" and "no unit is running" are two different answers,
+    // and inferring the second from no evidence is the thing this line exists
+    // not to do.
+    const home = statusBox('ccrc-status-role-nosystemctl-');
+    unstub(home, 'systemctl');
+    const out = runDoctor(home, ['status']).stdout;
+    const line = out.split('\n').find((l) => l.startsWith('role:')) ?? '';
+    expect(line).toMatch(/unknown/);
+    expect(line).not.toMatch(/neither/);
+    expect(out).toMatch(/services: +.*ccrc\.service unknown/);
+  });
+
   it('counts the sessions the registry really holds, not a constant', () => {
     const home = statusBox('ccrc-status-sessions-');
     writeSessions(home, 7);
@@ -1913,6 +1986,31 @@ describe('ccrc status', () => {
     expect(r.code).toBe(0);
     // …and doctor, on the same box, does not shrug at it.
     expect(runDoctor(home, ['doctor']).code).toBe(1);
+  });
+
+  it('will not say "agreed" over a link the server says is DOWN', () => {
+    // Both halves agree, and the server is not in contact with the fleet host:
+    // the answers describe the last contact. `agreed` is the strongest claim
+    // this verb makes and it is not available here.
+    const home = statusBox('ccrc-status-down-');
+    stubHealth(home, { mode: 'remote', connected: false, build: 'agreed', roster: 'agreed' });
+    const out = runDoctor(home, ['status']).stdout;
+    expect(out).toMatch(/fleet: +stale/);
+    expect(out).not.toMatch(/fleet: +agreed/);
+    expect(out).toMatch(/NOT currently in contact/);
+  });
+
+  it('will not say "agreed" beside a `connected` it could not read either', () => {
+    // The status half of the same defect: the line used to read
+    // `fleet: agreed` directly under `mode: remote (fleet host connected: ?)`,
+    // so the verb contradicted itself two lines apart.
+    const home = statusBox('ccrc-status-conn-unknown-');
+    stubHealth(home, { mode: 'remote', connected: 'yes', build: 'agreed', roster: 'agreed' });
+    const out = runDoctor(home, ['status']).stdout;
+    expect(out).toMatch(/connected: \?/);
+    expect(out).toMatch(/fleet: +stale/);
+    expect(out).not.toMatch(/fleet: +agreed/);
+    expect(out).toMatch(/did not say whether it is in contact/);
   });
 
   it('says so when the server is in local mode, rather than reporting agreement', () => {
