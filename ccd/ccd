@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fb2da1354e237188935aef3faf9358fc1dd84e87a7de27778a9a68e86ebc0317
+# ccrc:generated 1 sha256=79518c52230700c7e17ce234a4f17d9e9a7b733d881342c81790502596806109
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7771,7 +7771,14 @@ _ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no s
   #
   #   enabled — a default.target.wants symlink exists: it will come back at boot.
   #   loaded  — the manager knows the unit, but nothing promises a next boot.
-  #   absent  — list-units does not name it at all.
+  #   absent  — list-units ANSWERED and does not name it at all.
+  #
+  # `absent` is a MEASUREMENT, not a fallthrough, and the empty answer covers a
+  # probe that refused as well as a box with no systemctl. Piping list-units
+  # straight into `grep -qF` collapsed the two: a down or unreachable `--user`
+  # manager produces no rows, grep fails, and every workspace on the box would
+  # report `absent` — "nothing is watching this session", which is the precise
+  # F8 orphan signature this field exists to make visible. So the rc is read.
   #
   # THE PROBE IS `list-units`, NEVER `systemctl show`: `show` on an
   # UNINSTANTIATED TEMPLATE reports LoadState=loaded, so a naive check calls
@@ -7789,10 +7796,12 @@ _ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no s
   link="$HOME/.config/systemd/user/default.target.wants/$unit"
   # -L as well as -e: a wants symlink whose target is gone is still an enable.
   [[ -L "$link" || -e "$link" ]] && { echo enabled; return 0; }
-  if systemctl --user list-units 'claude-session@*' --all --plain --no-legend 2>/dev/null \
-       | grep -qF "$unit"; then
-    echo loaded; return 0
-  fi
+  local rows
+  # CAPTURED, not piped: `$(…)`'s status is systemctl's own, so a refusal
+  # degrades to the documented empty answer instead of to the FACT `absent`.
+  rows=$(systemctl --user list-units 'claude-session@*' --all --plain --no-legend 2>/dev/null) \
+    || return 0
+  grep -qF "$unit" <<<"$rows" && { echo loaded; return 0; }
   echo absent
 }
 

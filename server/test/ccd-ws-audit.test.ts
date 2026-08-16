@@ -2574,7 +2574,13 @@ describe('ws-audit reports the session\'s own state, on EVERY verdict', () => {
     expect(doc.verdict).toBe('not-archived');
     expect(doc.alive).toBe(false);          // ARCH stubs `_alive() { return 1; }`
     expect(doc.started).toBe(true);         // cmd_ws_add claimed it
-    expect(doc.unit).toBe('absent');        // the contained systemctl lists nothing
+    // NOT `absent`: the harness's contained systemctl REFUSES (exit 97) rather
+    // than listing nothing, and a refusal is "we could not look", which already
+    // has a home — `null`. `absent` is the positive claim that the manager
+    // answered and does not know this unit, which is the F8 orphan signature;
+    // emitting it for a manager that never answered would be this codebase's
+    // named highest-yield defect, an adapter narrowing a distinction it received.
+    expect(doc.unit).toBeNull();
   });
 
   it('says started:false for a row nobody claimed — the F8 shape, nameable at last', () => {
@@ -2627,8 +2633,20 @@ describe('_ws_unit_state', () => {
        _ws_unit_state x`)).toBe('loaded');
   });
 
-  it('is `absent` when list-units does not name it', () => {
+  it('is `absent` when list-units SUCCEEDS and does not name it', () => {
+    // The stub exits 0 with no rows — the manager answered, and the answer is
+    // that no unit is watching this session. That is a measurement.
     expect(h.sh('systemctl() { return 0; }; _ws_unit_state x')).toBe('absent');
+  });
+
+  it('prints NOTHING when the probe REFUSES — a manager that did not answer is not `absent`', () => {
+    // The distinction the third rung must not narrow. A down or unreachable
+    // `--user` manager makes `list-units` fail; piping it to `grep -qF` and
+    // reading only the grep would report EVERY workspace as `absent`, i.e.
+    // "nothing is watching this session" — a false positive on the exact
+    // signature this field exists to make visible. `null` already carries "we
+    // could not see a unit" (the `_have_systemctl` rung), so no fourth word.
+    expect(h.sh('systemctl() { return 97; }; _ws_unit_state x')).toBe('');
   });
 
   it('probes with list-units, NOT `systemctl show`', () => {
