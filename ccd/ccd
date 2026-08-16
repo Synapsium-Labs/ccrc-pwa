@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2b486ba759aaa905de235f225d839cc6cc40f3a88aaa1663b1d4a43c76005db3
+# ccrc:generated 1 sha256=52a6b2b7a9afdb85b4e6ac92aaaf6eb7aed77025fe9c2502aca91bd301eff2e8
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -1421,14 +1421,35 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     fi
   fi
 
-  # Captured, not discarded: a silent M6-shaped success on the workspace path
-  # was found by Task 4's reviewer (cmd_ws_add rc=0 with the success line
-  # printed over a spawn whose tmux session had vanished). Supervision wiring
-  # is untouched — `_ws_supervise` still runs on a failed spawn, since a
-  # unit that can retry is strictly better than one that never gets enabled.
-  local rc; _spawn "$id" new; rc=$?
+  # THE ORDERING IS THE FIX (F8). The pane is created, THEN the claim, THEN the
+  # supervision, and only THEN the blocking wait. Killed anywhere after the
+  # first line — the agent's 300s ws-add ceiling, a deploy sweep, a SIGTERM —
+  # what is left is an ordinary session: claimed, supervised, restartable. What
+  # F8 left was a live pane no registry row claimed and no unit was watching,
+  # invisible to `ccd ls`, to the PWA and to ws-gc alike.
+  #
+  # This is also what makes #50's LOUD non-zero exit on rc 3/4/5 safe. It was
+  # not safe before: a non-zero ws-add used to mean "an orphan was created". It
+  # now means "the session exists, is claimed, is supervised, and did not
+  # confirm its TUI".
+  #
+  # THE CALL SHAPE IS NOT NEGOTIABLE — plain call, `|| return $?`, then read
+  # `$SPAWN_FROMSWAP`. No `$( )`: see the block above `_spawn_start` for the
+  # commit where a command substitution there turned its `die` into rc 1, a
+  # code this very `if` does not test, and this function printed its success
+  # line over a spawn that never happened.
+  #
+  # Supervision wiring is untouched otherwise — `_ws_supervise` still runs on a
+  # failed spawn, since a unit that can retry is strictly better than one that
+  # never gets enabled. The rc is captured, not discarded: a silent M6-shaped
+  # success on the workspace path was found by Task 4's reviewer (cmd_ws_add
+  # rc=0 with the success line printed over a spawn whose tmux session had
+  # vanished).
+  local rc
+  _spawn_start "$id" new || return $?
   _reg_claim "$id"
   _ws_supervise "$id"
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
@@ -2545,20 +2566,32 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
   rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
+  # THE SAME F8 SHAPE, converted the same way — and this verb's agent budget is
+  # CCD_VERB_TIMEOUT_MS['ws-restore'] = 60s, FIVE TIMES TIGHTER than the ws-add
+  # budget whose expiry caused F8. The kill is likelier here, not less.
+  # Same call shape, same reason: no `$( )` around `_spawn_start`, or its `die`
+  # comes back as an rc 1 the `if` below does not test.
+  #
   # Captured, not discarded — same M6-shaped gap as ws-add, folded into this
   # task because it owns the start paths and the spawn-rc plumbing. Supervision
   # wiring stays untouched: `_ws_supervise` still runs on a failed spawn.
-  local rc; _spawn "$id" resume; rc=$?
+  local rc
+  _spawn_start "$id" resume || return $?
   _reg_claim "$id"
   _ws_supervise "$id"
-  # GIVEN BACK BEFORE THE VERB ANSWERS, for the reason `cmd_ws_reap` states at
-  # its own close: `flock` treats two `open()`s of one path in one process as
-  # two strangers, and ccd is SOURCED — by `ccd` itself and by its tests — so a
-  # descriptor left open here would refuse the next `ws-reap` in the same shell
-  # with `in-progress` for ever. The `die`s above need no close of their own:
-  # `die` exits, and the kernel closes what exits. Given back regardless of the
-  # spawn's fate — the undo (archive stamps gone) is real either way.
+  # GIVEN BACK BEFORE THE SETTLE, not merely before the verb answers. The reason
+  # `cmd_ws_reap` gives at its own close applies unchanged (`flock` treats two
+  # `open()`s of one path in one process as two strangers, and ccd is SOURCED —
+  # by `ccd` itself and by its tests — so a descriptor left open here would
+  # refuse the next `ws-reap` in the same shell with `in-progress` for ever),
+  # and the settle can now block for SPAWN_SETTLE_S: holding the reap lock
+  # across it would answer `in-progress` to every ws-reap on this id for four
+  # minutes. The `die`s above need no close of their own: `die` exits, and the
+  # kernel closes what exits. Given back regardless of the spawn's fate — the
+  # undo (archive stamps gone) is real either way, which is what made the old
+  # placement unconditional too.
   exec {lfd}>&-
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"

@@ -1254,7 +1254,9 @@ describe('ws-restore', () => {
     expect(h.reg('demo-quiet-basin', 'started')).toBe('1');
     // `ccd ensure` does NOT re-supervise, so restore must do it explicitly or
     // boot persistence is silently lost.
-    expect(h.calls()).toContain('spawn demo-quiet-basin resume');
+    // `spawn_start`, not `spawn`: restore now calls the two halves so the claim
+    // and the supervision land BEFORE the blocking settle (F8).
+    expect(h.calls()).toContain('spawn_start demo-quiet-basin resume');
     expect(h.calls()).toContain('supervise demo-quiet-basin');
   });
 

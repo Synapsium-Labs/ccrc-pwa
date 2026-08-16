@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-split-'); });
@@ -160,14 +160,101 @@ describe('_spawn_start / _spawn_settle', () => {
     expect(r.out).not.toContain('SURVIVED');
   });
 
-  it('_spawn reads fromswap out of the GLOBAL — no command substitution around _spawn_start', () => {
-    // The structural half of the pin above, so the composition cannot be
-    // "cleaned up" back into `fs=$(_spawn_start …)` while the behavioural test
-    // is passing for some other reason. Tasks 7/8 add more call sites; every
-    // one of them must have this shape.
-    const body = h.sh('type _spawn');
-    expect(body).not.toMatch(/\$\(\s*_spawn_start/);
-    expect(body).toContain('SPAWN_FROMSWAP');
+  // EVERY caller of `_spawn_start`, not just the composition. The structural
+  // half of the pin above was written against `_spawn` alone, which left the
+  // regression free to come back through any call site added after it — and
+  // Tasks 7/8 add five. A NEW CALLER MUST BE ADDED TO THIS LIST in the same
+  // commit that adds the call: the list is what makes the rule mechanical
+  // rather than a comment somebody has to read.
+  const SPAWN_START_CALLERS = ['_spawn', 'cmd_ws_add', 'cmd_ws_restore'];
+
+  it.each(SPAWN_START_CALLERS)(
+    '%s reads fromswap out of the GLOBAL — no command substitution around _spawn_start',
+    (fn) => {
+      // `$(_spawn_start …)` is what turned `die`'s `exit 1` into rc 1, a code in
+      // no caller's failure set, so every caller printed success over a spawn
+      // that never happened. With no `$( )` anywhere, `die` is process-fatal by
+      // construction instead of by test.
+      const body = h.sh(`type ${fn}`);
+      expect(body).not.toMatch(/\$\(\s*_spawn_start/);
+      expect(body).toContain('SPAWN_FROMSWAP');
+    });
+
+  it('the caller list is complete — nothing calls _spawn_start off the list', () => {
+    // The list above only means something if it is exhaustive. Ask the SHELL
+    // which functions mention `_spawn_start`, rather than trusting the list to
+    // have been updated: a new caller that forgets to enrol turns up here.
+    const callers = h.sh(
+      'while read -r f; do [[ "$f" == _spawn_start ]] && continue;'
+      + ' type "$f" 2>/dev/null | grep -q "_spawn_start" && echo "$f"; done'
+      + ' < <(declare -F | sed "s/^declare -f //") | sort; :');
+    expect(callers.split('\n').filter(Boolean).sort())
+      .toEqual([...SPAWN_START_CALLERS].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §1.1 — THE ORDERING IS THE FIX (F8).
+// ---------------------------------------------------------------------------
+
+describe('ws-add writes the claim and the supervision BEFORE anything blocks', () => {
+  it('claims and supervises before the settle — asserted by ORDER, not assumed', () => {
+    h.makeRepo('demo');
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo; :`);
+    const calls = h.calls();
+    const news    = calls.findIndex((c) => c.startsWith('tmux new-session'));
+    const superv  = calls.findIndex((c) => c === 'supervise demo-quiet-mesa');
+    const accept  = calls.findIndex((c) => c.startsWith('accept '));
+    expect(news).toBeGreaterThanOrEqual(0);
+    expect(superv).toBeGreaterThan(news);
+    expect(accept).toBeGreaterThan(superv);
+    expect(h.reg('demo-quiet-mesa', 'started')).toBe('1');
+  });
+
+  // H6 / F8, directly: the workspace a KILLED ws-add leaves behind is an
+  // ordinary restartable session, not a live pane no row claims and no unit
+  // watches. This is also what makes the deploy's supervisor sweep safe at any
+  // moment.
+  it('a settle that never returns still leaves a CLAIMED, SUPERVISED workspace', () => {
+    h.makeRepo('demo');
+    // The settle is the only half that can be killed; model it as a refusal
+    // that arrives after the claim, and prove both writes already landed.
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo; :`, { ACCEPT_RC: '4' });
+    expect(h.reg('demo-quiet-mesa', 'started')).toBe('1');
+    expect(h.calls()).toContain('supervise demo-quiet-mesa');
+    expect(h.reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
+  it('still returns the rc and withholds the success line on rc 4', () => {
+    h.makeRepo('demo');
+    let code = 0;
+    try { h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`, { ACCEPT_RC: '4' }); }
+    catch (e) { code = (e as { status?: number }).status ?? 1; }
+    expect(code).toBe(4);
+  });
+
+  it('ws-restore takes the same shape, and gives the reap lock back before the settle', () => {
+    // The settle can block for SPAWN_SETTLE_S; holding a reap lock across it
+    // would refuse every ws-reap on this id for four minutes.
+    //
+    // NOT `indexOf('exec {lfd}>&-')` — that finds the FIRST occurrence, and
+    // `cmd_ws_restore` already closes the fd inside its flock-REFUSAL block
+    // (`flock -n "$lfd" || { exec {lfd}>&-; die "another ccd process is
+    // reaping $id …" }`), which precedes everything. The mutant this test
+    // exists to kill would survive it. `lastIndexOf` is the RELEASE site, and
+    // the count is pinned at 2 so neither a third close nor a deleted release
+    // can slip past: delete the release and the count is 1; move it after the
+    // settle and the last index overtakes it.
+    //
+    // `type` and not the file, and therefore NOT a comment anchor: bash
+    // deparses a function from its parse tree and comments do not survive it
+    // (measured — the plan's `indexOf('GIVEN BACK BEFORE THE SETTLE')` can
+    // never be > -1). Ordering is asserted on the CODE.
+    const t = h.sh('type cmd_ws_restore');
+    expect(t.split('exec {lfd}>&-').length - 1).toBe(2);
+    expect(t.lastIndexOf('exec {lfd}>&-')).toBeLessThan(t.indexOf('_spawn_settle'));
+    expect(t.indexOf('_reg_claim')).toBeLessThan(t.indexOf('_spawn_settle'));
+    expect(t.indexOf('_ws_supervise')).toBeLessThan(t.indexOf('_spawn_settle'));
   });
 });
 
