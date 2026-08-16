@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b9c69f0db81df13b293e643198af59a8ea48d47f81cd28abb6e27bcae2803f97
+# ccrc:generated 1 sha256=d9ffba3514e8acd64cee4a71b73c6cd5163e00dd93482449a241bd7446546ab6
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -4724,7 +4724,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
   # The session behind the workspace, not just the tree. `unit` is null — never
-  # a fourth word — when this box has no systemctl at all.
+  # a fourth word — when this box has no systemctl, or the manager did not answer.
   printf '"alive":%s,"started":%s,"unit":%s,' \
     "$aliveflag" "$startedflag" "$( [[ -n "$unitstate" ]] && _json_str "$unitstate" || echo null)"
   # Six fields, one source of truth for whether each is a measurement: `null`
@@ -7771,7 +7771,7 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
 # else could.
 _have_systemctl() { command -v systemctl >/dev/null 2>&1; }
 
-_ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no systemctl
+_ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no systemctl OR the probe refused
   # Three states, and the empty fourth answer is deliberately not one of them:
   # "this box has no systemd" is not "this unit is absent", and the JSON writer
   # renders the empty string as `null` rather than inventing a word.
