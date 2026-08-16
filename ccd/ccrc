@@ -2,11 +2,10 @@
 # ccrc — the lifecycle CLI for a Claude Code fleet box: installs, updates and
 # diagnoses a box, as a sibling to `ccd`, which drives sessions once one is
 # already running. Stage 2b of the 2026-08-15-stage2b-ccrc-cli-and-doctor plan:
-# `version` (Task 1), `doctor` (Tasks 4-5) and `status` (Task 7) are
-# implemented; `adopt` is still a reserved verb NAME, so the usage line and
-# Task 8's `case` arm are already stable — dispatching to it today prints
-# "not implemented yet: adopt" and exits 1, distinct from an unrecognised verb
-# (exit 2, see below).
+# `version` (Task 1), `doctor` (Tasks 4-5), `status` (Task 7) and `adopt`
+# (Task 8) are all implemented, so the "not implemented yet" register that
+# stood in for the unbuilt verbs has no caller and is gone with the last one
+# that used it. Every verb name in the usage line now does its job.
 #
 # ── WHY `set -uo pipefail`, NOT `-euo` ─────────────────────────────────────
 # `ccrc-adopt` (this file's own model for argument handling) uses `-e`
@@ -133,7 +132,8 @@ already running).
   status    print what this box IS: its build stamp, its services, how many
             ccd sessions it holds, and — when it knows where its server is —
             whether the two boxes agree. Read-only; always exit 0
-  adopt     (not implemented yet) rediscover accounts.json from disk
+  adopt     rediscover this box's accounts from \$HOME/.local/bin and write
+            ~/.ccrc/accounts.json (runs ccrc-adopt; pass --out/--force to it)
 
   -h, --help   print this message and exit 0
 
@@ -150,10 +150,12 @@ _ccrc_die() { echo "$PROG: $*" >&2; exit 1; }
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
 _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
-# `doctor`/`status`/`adopt` share this exact refusal shape; naming the verb
-# again as a literal in three separate case arms is how that shape would
-# eventually drift between them.
-_ccrc_not_implemented() { _ccrc_die "not implemented yet: $1"; }
+# `_ccrc_not_implemented` lived here and is GONE (Task 8), with the last verb
+# that reached it. It was the deliberate middle refusal between "you typed it
+# wrong" (exit 2) and a real answer, for verb names that were reserved before
+# they were built — and every one of the four is built now. Re-add it in one
+# line together with the next reserved name, and not before; an uncalled
+# refusal is the same untested, uncallable code `_ccrc_say` was removed for.
 
 # cmd_version / _box_build_fields — what THIS box is running, per its own build
 # stamp, never a guess. Same three-way discipline as `ccd version`
@@ -364,13 +366,26 @@ _box_server_addr() {
 #     misses yields no address, which SKIPS the check with a detail, never a
 #     wrong address confidently probed — but it is a subset, and a comment that
 #     claimed the whole parser was a claim that could quietly stop being true.
+#     THE SUBSET HAS TO STAY A SUBSET, which is why the whitespace set below is
+#     spelled out rather than borrowed from POSIX (Task 8): `[[:space:]]` also
+#     contains vertical tab and form feed, and systemd's whitespace is space,
+#     tab, CR and the newline that already ended the line. Skipping a \v that
+#     systemd does not skip reads a key systemd never set, i.e. it answers with
+#     an address this box is NOT configured with — the one direction the
+#     paragraph above says this reader must never fail in.
 # The LAST assignment wins, as it does in systemd and in a shell.
 _box_env_value() {
   local file="$1" key="$2" line v=""
+  # Space, tab, CR — systemd's set, minus the newline `read` has consumed. A
+  # variable rather than a literal bracket expression because a tab and a CR
+  # typed inline are invisible in a diff and one stray edit from being deleted.
+  local ws=$' \t\r'
   while IFS= read -r line || [ -n "$line" ]; do
-    # Leading whitespace, exactly as systemd skips it. `${line#"${line%%[![:space:]]*}"}`
-    # is `_dr_trim`'s left half, in the one namespace this file can reach.
-    line="${line#"${line%%[![:space:]]*}"}"
+    # Leading whitespace, exactly as systemd skips it — `_dr_trim`'s left half,
+    # in the one namespace this file can reach, over systemd's character set
+    # rather than POSIX's. `$ws` expands INSIDE the bracket expression, which
+    # is why the pattern is unquoted here.
+    line="${line#"${line%%[!$ws]*}"}"
     case "$line" in
       "$key="*) v="${line#"$key="}" ;;
       *) continue ;;
@@ -519,20 +534,47 @@ _box_units() {
 # unit is running. So this reports the inference AND names it as one, rather
 # than asserting a role the box never declared. The moment a box does declare
 # one, this becomes a read of that declaration and the word "inferred" goes.
+#
+# ── `unknown` IS NOT `inactive`, AND NEITHER IS ABSENCE OF EVIDENCE ───────
+# `_box_units` answers `unknown` for a unit it could not ask — no systemctl, no
+# bus, an empty reply — and that is a THIRD state, not a synonym for "not
+# running". Every branch below is therefore written against what was MEASURED:
+#
+#   - "neither" is a negative claim about BOTH units, so it requires both to
+#     have answered. It used to require only that they were not both unknown
+#     (`&&` where this now has `||`), so a box where one unit could not be
+#     asked and the other was merely inactive was told "no ccrc unit is active
+#     here" — a statement about a unit nobody asked. Task 8 fixed it; the
+#     nine-state table in server/test/ccrc-doctor.test.ts pins every cell.
+#   - one unit ACTIVE and the other UNKNOWN is a real role plus an open
+#     question ("is it also the other half?"), and both halves are said out
+#     loud. Answering a bare "server" there would settle, silently, the
+#     single-box question that separates it from the first branch.
+#
+# Same defect class either way, and the same one the `connected` arm of
+# `cmd_status` had: asserting a state that was never measured.
 _box_role() {
   local ccrc_state="${BOX_UNITS[0]}" agent_state="${BOX_UNITS[1]}"
   local role
   if [ "$ccrc_state" = active ] && [ "$agent_state" = active ]; then
     role="server AND fleet host (both units active — a single-box install)"
+  elif [ "$ccrc_state" = active ] && [ "$agent_state" = unknown ]; then
+    role="server (and ${BOX_UNIT_NAMES[1]} could not be asked, so whether this box is ALSO a fleet host was not measured)"
+  elif [ "$agent_state" = active ] && [ "$ccrc_state" = unknown ]; then
+    role="fleet host (and ${BOX_UNIT_NAMES[0]} could not be asked, so whether this box is ALSO a server was not measured)"
   elif [ "$ccrc_state" = active ]; then
     role="server"
   elif [ "$agent_state" = active ]; then
     role="fleet host"
-  elif [ "$ccrc_state" = unknown ] && [ "$agent_state" = unknown ]; then
-    # The units could not be asked at all. "I could not tell" is not "no unit is
-    # running", and inferring the second from no evidence is the one thing this
-    # line exists not to do.
-    printf '%s' "unknown (the two units could not be asked, so nothing was inferred)"
+  elif [ "$ccrc_state" = unknown ] || [ "$agent_state" = unknown ]; then
+    # At least one unit could not be asked. "I could not tell" is not "no unit
+    # is running", and inferring the second from missing evidence is the one
+    # thing this line exists not to do — so the unasked unit is NAMED, because
+    # "unknown" without it leaves an operator nothing to go and check.
+    local unasked=""
+    [ "$ccrc_state" = unknown ] && unasked="${BOX_UNIT_NAMES[0]}"
+    [ "$agent_state" = unknown ] && unasked="${unasked:+$unasked and }${BOX_UNIT_NAMES[1]}"
+    printf '%s' "unknown ($unasked could not be asked, so nothing was inferred — \"I could not tell\" is not \"no unit is active\")"
     return 0
   else
     role="neither (no ccrc unit is active here — a dev checkout, or a box mid-install)"
@@ -711,14 +753,23 @@ cmd_status() {
 # reported as a bug in ccrc. "I did not run" and "here is my answer" cannot both
 # be true, and a silent skip is a check that vanished from the run.
 #
-# A COMPLETE INSTALL IS THREE FILES IN ONE DIRECTORY, not two: this script,
-# `ccrc-doctor-checks`, and `ccrc-wrapper-shape` (which the checks file sources
-# for the account-wrapper contract it shares with `ccrc-adopt`). All three
-# resolve each other through `${BASH_SOURCE[0]}`, which bash does NOT follow
-# through a symlink, so linking `ccrc` onto PATH does not drag its siblings
-# along — whatever installs one has to install all three. A missing library is
-# not fatal here: `_check_wrappers` reports its own absence as a FAIL with a
-# remedy, so the other ten checks still answer.
+# A COMPLETE INSTALL IS FOUR FILES IN ONE DIRECTORY, not two: this script,
+# `ccrc-doctor-checks`, `ccrc-wrapper-shape` (which the checks file sources for
+# the account-wrapper contract it shares with `ccrc-adopt`) and `ccrc-adopt`
+# itself, which `cmd_adopt` execs. All four resolve each other through
+# `${BASH_SOURCE[0]}`, which bash does NOT follow through a symlink, so linking
+# `ccrc` onto PATH does not drag its siblings along — whatever installs one has
+# to install all four. A missing library is not fatal here: `_check_wrappers`
+# reports its own absence as a FAIL with a remedy, so the other ten checks
+# still answer.
+#
+# THAT IS WHY THE DEPLOY SHIPS A SHIM (Task 8, `install_ccrc_shim` in
+# deploy/deploy.sh) rather than a copy: `~/.local/bin/ccrc` execs
+# `~/ccrc/ccd/ccrc`, the rsynced tree where all four files sit together and
+# where `_dr_pkg_candidates` finds the shipped `package.json` one level up.
+# Copying this file alone onto PATH breaks doctor's sourcing; copying all four
+# into `~/.local/bin` breaks the node check instead, whose floor would then be
+# looked for at `~/.local/{server,agent}/package.json`.
 #
 # Ways this refuses rather than reporting a healthy box it never measured — a
 # doctor that runs zero checks and exits 0 is the worst failure mode this verb
@@ -866,7 +917,38 @@ cmd_doctor() {
     "$ran" "$skipped" "$((pass + warn + fail))" "$pass" "$warn" "$fail"
   [[ "$fail" -eq 0 ]] || return 1
 }
-cmd_adopt()  { _ccrc_not_implemented adopt; }
+# cmd_adopt — rediscover this box's accounts from disk. The work is entirely
+# `ccd/ccrc-adopt`'s, and this verb is how it becomes reachable: adopt is a
+# tool that until now was installed by nothing, reached the fleet host only
+# incidentally inside the `ccd/` rsync, and sat off PATH at
+# `~/ccrc/ccd/ccrc-adopt` where nobody would find it. It is also, precisely, a
+# LIFECYCLE operation — "give this hand-built box a roster" — which is this
+# CLI's whole subject.
+#
+# ── EXEC, NOT SOURCE, AND NOT A SUBSHELL ─────────────────────────────────
+# `ccrc-adopt` runs `set -euo pipefail` because it is a straight-line "measure,
+# or die" pipeline; this file runs `set -uo pipefail` because doctor is a LIST
+# of independent checks and `-e` would abort the run at the first failing one
+# (see this file's header). Sourcing adopt would drag `-e` into the shell that
+# argument is about, and its `exit`s would be ccrc's. `exec` hands the process
+# over whole: adopt's stdout/stderr split, its argv handling (`--out`,
+# `--force`, `-h`) and its exit codes arrive unaltered — and the two tools
+# already share ONE exit-code table (0 success, 1 the tool ran and the answer
+# was bad, 2 a usage error), so nothing has to be translated at the seam.
+#
+# `$BASH` — the absolute path of the interpreter already running this file —
+# rather than `"$adopt"` directly or a bare `bash`: no PATH lookup on the box
+# whose PATH may be the broken thing, and no dependency on the exec bit
+# surviving whatever copied the tree.
+#
+# Arguments are NOT parsed here. `ccrc adopt --nope` must be adopt's own
+# "unknown argument" at exit 2, not this file's — one tool, one usage message.
+cmd_adopt() {
+  local adopt="$CCRC_HERE/ccrc-adopt"
+  [[ -f "$adopt" ]] \
+    || _ccrc_die "adopt's script is missing: $adopt — is this a complete ccrc install?"
+  exec "$BASH" "$adopt" "$@"
+}
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:394 source ccd itself, to call one

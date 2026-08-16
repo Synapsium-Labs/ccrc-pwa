@@ -1,11 +1,13 @@
 // ccd/ccrc — Task 1 of the stage-2b ccrc-cli-and-doctor plan: the dispatch
 // skeleton, the `version` verb, and usage/argument handling for the new
-// lifecycle CLI. `doctor`, `status` and `adopt` are reserved verb names that
-// task did not implement — dispatching to one of them is its own, deliberately
+// lifecycle CLI. `doctor`, `status` and `adopt` were reserved verb NAMES that
+// task did not implement — dispatching to one of them was its own, deliberately
 // distinct, refusal (exit 1, "not implemented yet") from an unrecognised verb
-// (exit 2, a USAGE error). `doctor` has since graduated out of that list in
-// Task 4 and is pinned by server/test/ccrc-doctor.test.ts; `status` and
-// `adopt` still refuse here.
+// (exit 2, a USAGE error). All three have since graduated: `doctor` in Task 4
+// and `status` in Task 7 (both pinned by server/test/ccrc-doctor.test.ts), and
+// `adopt` in Task 8, pinned by the `ccrc: adopt` block below. The
+// "not implemented yet" register has no caller left and is gone from `ccrc`
+// with the last verb that used it — a refusal nothing can reach is a comment.
 //
 // Harness: mkTmp + a hand-rolled runCcrcRaw/runCcrc pair, copied in shape
 // from ccrc-adopt's own (server/test/adopt.test.ts:33-44) — NOT
@@ -157,23 +159,103 @@ describe('ccrc: dispatch and usage', () => {
   });
 });
 
-describe('ccrc: reserved verbs not implemented yet', () => {
-  // adopt is a dispatchable name, but deliberately non-functional — Task 8
-  // fills it in. This is NOT the same refusal as an unrecognised verb: exit 1
-  // here (the verb is real, just not built yet), never 2 (that would claim the
-  // operator mistyped something).
+describe('ccrc: adopt', () => {
+  // Task 8. `adopt` is the LAST verb to graduate out of "not implemented yet",
+  // and it graduates by becoming what it always named: `ccd/ccrc-adopt`, the
+  // tool that rediscovers a hand-built box's accounts from disk. `ccrc` does
+  // not re-implement any of it — it execs the sibling that ships beside it, so
+  // there is one adopt, reachable by one name, on a box and in a checkout.
   //
-  // `doctor` LEFT this list in Task 4 and `status` in Task 7, each in the task
-  // that implemented it — a verb graduates out of here exactly once, when it
-  // starts doing its job. Their behaviour is pinned by
-  // server/test/ccrc-doctor.test.ts from that point on; nothing in this file
-  // asserts anything about either of them any more.
-  it.each(['adopt'] as const)('%s prints "not implemented yet" on stderr and exits 1', (verb) => {
-    const home = mkTmp(`ccrc-cli-notimpl-${verb}-`);
-    const r = runCcrcRaw(home, [verb]);
+  // WHY EXEC RATHER THAN SOURCE: adopt runs `set -euo pipefail` and is a
+  // straight-line "measure, or die" pipeline (its own header explains why that
+  // is right for it and wrong for doctor). Sourcing it would put `-e` into the
+  // shell doctor deliberately keeps it out of, and its `exit`s would become
+  // ccrc's. Exec keeps the two exit-code tables — which already agree, 0/1/2
+  // meaning the same three things in both files — as one process's.
+  it('--help reaches ccrc-adopt\'s OWN usage at exit 0 — the verb passes argv through', () => {
+    const home = mkTmp('ccrc-cli-adopt-help-');
+    const r = runCcrcRaw(home, ['adopt', '--help']);
+    expect(r.code).toBe(0);
+    // ccrc-adopt's usage, not ccrc's: proof the flag reached the sibling
+    // rather than being eaten by the dispatcher.
+    expect(r.stdout).toMatch(/usage: ccrc-adopt \[--out PATH\] \[--force\]/);
+    expect(r.stdout).not.toMatch(/usage: ccrc \{/);
+  });
+
+  it('an unknown argument is the SIBLING\'s usage error, exit 2 — the code is not flattened', () => {
+    // The two files share one exit-code table (0 success, 1 the tool ran and
+    // the answer was bad, 2 a usage error). A verb that ran the sibling in a
+    // subshell and returned its own code would collapse that.
+    const home = mkTmp('ccrc-cli-adopt-badarg-');
+    const r = runCcrcRaw(home, ['adopt', '--nope']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc-adopt: unknown argument: --nope$/m);
+  });
+
+  it('really runs the sibling against THIS box, and answers in ccrc-adopt\'s own voice', () => {
+    // The fixture HOME's `.local/bin` holds only this suite's poisons (gh,
+    // curl, systemctl) — id-shaped executables that set no CLAUDE_CONFIG_DIR
+    // — so adopt gets as far as its "nothing to adopt" refusal. That refusal
+    // is the evidence: it can only come from ccrc-adopt having actually run.
+    const home = mkTmp('ccrc-cli-adopt-run-');
+    const r = runCcrcRaw(home, ['adopt']);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(new RegExp(`^ccrc: not implemented yet: ${verb}$`, 'm'));
+    expect(r.stderr).toMatch(/^ccrc-adopt: no script under .*sets CLAUDE_CONFIG_DIR/m);
     expect(r.stdout).toBe('');
+  });
+
+  it('drives the WHOLE of adopt — discovery, cross-checks and self-validation', () => {
+    // The verb is only as real as the last line of the tool it hands over to,
+    // so this runs a synthetic box all the way to adopt's final gate: a
+    // non-script upstream binary plus one wrapper in the generated shape, in a
+    // copy of the ccd/ directory that has NO `../deploy/gen-accounts.mjs`
+    // beside it. Adopt gets as far as self-validation and refuses there —
+    // which is the deepest point reachable without a checkout, and proof that
+    // every earlier pass ran under `ccrc adopt` exactly as it does under
+    // `bash ccd/ccrc-adopt` (server/test/adopt.test.ts owns the happy path).
+    //
+    // It also pins the refusal's WORDING. `gen-accounts.mjs` resolves one
+    // directory up from adopt itself, which is true both in a checkout and at
+    // `~/ccrc/deploy` on a deployed box — so the message may no longer ask
+    // whether this is "a full ccrc-pwa checkout": Task 8 made `ccrc adopt`
+    // reachable on a box that never was one.
+    const kit = mkTmp('ccrc-cli-adopt-kit-');
+    for (const f of ['ccrc', 'ccrc-adopt', 'ccrc-wrapper-shape']) {
+      writeFileSync(join(kit, f), readFileSync(join(path.dirname(CCRC), f), 'utf8'), { mode: 0o755 });
+    }
+    const home = mkTmp('ccrc-cli-adopt-deep-');
+    const env = ccrcEnv(home);                       // plants the poisons in .local/bin
+    const bin = join(home, '.local', 'bin');
+    writeFileSync(join(bin, 'claude'), '\x7fELF not-a-script\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ccx'),
+      '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-x"\nexec "$HOME/.local/bin/claude" "$@"\n',
+      { mode: 0o755 });
+
+    const r = spawnSync('bash', [join(kit, 'ccrc'), 'adopt'], { env, encoding: 'utf8' });
+    expect(r.stderr).toMatch(/^ccrc-adopt: upstream account "claude"/m);   // pass 3 ran
+    expect(r.stderr).toMatch(/cross-check: adopt discovered "ccx"/);       // the cross-checks ran
+    expect(r.stderr).toMatch(/^ccrc-adopt: cannot self-validate: .*gen-accounts\.mjs is missing/m);
+    expect(r.stderr, 'the refusal must not ask a deployed box whether it is a checkout')
+      .not.toMatch(/is this a full ccrc-pwa checkout/);
+    expect(r.stderr).toContain('~/ccrc/deploy');
+    expect(r.status).toBe(1);
+    // Nothing was written: adopt's one write is behind the gate it just failed.
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(false);
+  });
+
+  it('refuses BY NAME when the sibling is not installed beside it', () => {
+    // `ccrc` finds `ccrc-adopt` through `${BASH_SOURCE[0]}`, exactly as it
+    // finds `ccrc-doctor-checks`, and for the same reason: bash does not
+    // resolve that through a symlink, so an install that copies one file and
+    // leaves the rest behind is a real state a box can be in. It must say
+    // which file is missing, not "command not found" or a silent skip.
+    const lone = join(mkTmp('ccrc-cli-adopt-lonely-'), 'ccrc');
+    writeFileSync(lone, readFileSync(CCRC, 'utf8'), { mode: 0o755 });
+    const home = mkTmp('ccrc-cli-adopt-lonely-home-');
+    const r = spawnSync('bash', [lone, 'adopt'], { env: ccrcEnv(home), encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: adopt's script is missing/m);
+    expect(r.stderr).toContain('ccrc-adopt');
   });
 });
 

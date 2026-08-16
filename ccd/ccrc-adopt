@@ -113,6 +113,14 @@ BIN_DIR="$WRAPPER_BIN_DIR"
 # parseRoster's rules a third time (shared/roster.ts is #1, gen-accounts.mjs
 # is #2 — see that file's header for why a bare interpreter can't import the
 # TypeScript directly).
+#
+# A CHECKOUT IS NO LONGER THE ONLY PLACE THIS RESOLVES (Task 8). `ccrc adopt`
+# execs this script where it ships, `~/ccrc/ccd/ccrc-adopt`, so the sibling it
+# needs is `~/ccrc/deploy/gen-accounts.mjs` — and BOTH deploy lanes rsync
+# `deploy` into `~/ccrc/`, so that path exists on the server box as well as on
+# the fleet host. One relative path, correct in both worlds; no `$HOME`-rooted
+# fallback to disagree with it. The refusal below therefore names both places
+# rather than asking a box that was never a checkout whether it is one.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GEN_ACCOUNTS="$HERE/../deploy/gen-accounts.mjs"
 
@@ -429,7 +437,7 @@ done
 #    makes "gen-accounts.mjs is happy" a faithful proxy for "parseRoster is
 #    happy" without re-deriving that proof here. ───────────────────────────
 if [ ! -f "$GEN_ACCOUNTS" ]; then
-  echo "$PROG: cannot self-validate: $GEN_ACCOUNTS is missing — is this a full ccrc-pwa checkout?" >&2
+  echo "$PROG: cannot self-validate: $GEN_ACCOUNTS is missing — it ships one directory up from this script, in a checkout and at ~/ccrc/deploy on a deployed box. Nothing was written." >&2
   exit 1
 fi
 TMP_JSON="$(mktemp)"

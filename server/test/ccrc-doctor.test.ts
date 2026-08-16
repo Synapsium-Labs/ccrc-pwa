@@ -1829,6 +1829,31 @@ describe('ccrc doctor: fleet', () => {
     expect(curlCalls(home).join('\n')).toContain(`http://${FIXTURE_ADDR}/api/fleet/health`);
   });
 
+  it('and does NOT read a key systemd would REFUSE — the parity runs in one direction only', () => {
+    // The other side of the test above, and the reason the reader trims a
+    // named three-character set rather than `[[:space:]]`. POSIX's space class
+    // also contains vertical tab and form feed; systemd's whitespace is space,
+    // tab, CR (and the newline that ends the line). So `\vCCRC_HOST=…` is a
+    // line systemd does NOT turn into an environment variable — and a reader
+    // that skips the \v anyway would answer with an address the box is not
+    // actually configured with, then probe it and report on a fleet nobody
+    // asked about.
+    //
+    // That direction is the one that matters: the reader is a deliberate
+    // SUBSET of systemd's parser, and its own comment justifies the subset by
+    // the failure being one-directional (a form it misses yields no address,
+    // which SKIPS with a detail). A form it reads that systemd does not
+    // breaks exactly that argument.
+    const home = healthy('ccrc-doctor-fleet-vtab-');
+    writeCcrcEnv(home, '\vCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\n');
+    const r = runDoctor(home);
+    // `lineFor` finds a VERDICT line; this check answers with a SKIP, which is
+    // deliberately not one (see the runner's fourth-outcome contract).
+    expect(r.stdout).toMatch(/^SKIP fleet: .*declares CCRC_PORT but no CCRC_HOST/m);
+    expect(r.stdout, 'an address systemd never set was reported as one').not.toContain('ccrc-fixture.invalid');
+    expect(curlCalls(home), 'an address systemd never set was probed anyway').toEqual([]);
+  });
+
   it('bounds the request, and the bound is overridable the way verify-service.sh\'s are', () => {
     // A route that hangs must not hang doctor. The knob exists so a test need
     // not wait out a production timeout — `deploy/verify-service.sh`'s
@@ -1940,6 +1965,93 @@ describe('ccrc status', () => {
     expect(line).toMatch(/unknown/);
     expect(line).not.toMatch(/neither/);
     expect(out).toMatch(/services: +.*ccrc\.service unknown/);
+  });
+
+  it('says unknown, not "neither", when only ONE unit could be asked — end to end', () => {
+    // The defect the sourced table below isolates, reached the way an operator
+    // reaches it: an EMPTY answer from `systemctl is-active` for one unit
+    // (which the fixture systemctl produces from an empty fixture file, and a
+    // real one produces on a bus it cannot reach) and a plain `inactive` for
+    // the other. Partial evidence used to fall straight through to "no ccrc
+    // unit is active here".
+    const home = statusBox('ccrc-status-role-halfasked-');
+    writeFileSync(join(home, 'fixture-unit-ccrc.service'), '\n');
+    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'inactive\n');
+    const out = runDoctor(home, ['status']).stdout;
+    const line = out.split('\n').find((l) => l.startsWith('role:')) ?? '';
+    expect(line, 'a role inferred from a unit nobody could ask').not.toMatch(/neither/);
+    expect(line).toMatch(/unknown/);
+    expect(out).toMatch(/services: +.*ccrc\.service unknown/);
+  });
+
+  // ── _box_role, every combination of what the two units can say ───────────
+  // Called DIRECTLY, by sourcing `ccrc` and setting `BOX_UNITS` — the file
+  // carries a source guard for exactly this, and it is the only way to reach
+  // all nine states without nine fixtures. The e2e cases above prove the
+  // function is wired to a real measurement; this proves what it does with it.
+  //
+  // THE RULE: no answer may state something no unit was asked about. "unknown"
+  // is a state a unit really reaches (no systemctl, no bus, an empty answer),
+  // and it is NOT "inactive" — the same distinction this whole file keeps
+  // between a check that failed and a check that could not run.
+  describe('_box_role never asserts a state it did not measure', () => {
+    const roleFor = (ccrc: string, agent: string): string => {
+      const r = spawnSync(BASH, ['-c',
+        `source "${CCRC_SRC}"; BOX_UNITS=(${ccrc} ${agent}); _box_role; echo`],
+        { encoding: 'utf8', env: { ...process.env, HOME: join(REPO, 'no-such-home-for-box-role') } });
+      expect(r.status, `_box_role exited ${r.status}\n${r.stderr}`).toBe(0);
+      expect(r.stderr).toBe('');
+      return r.stdout.trim();
+    };
+
+    it.each([
+      ['active', 'active', 'server AND fleet host'],
+      ['active', 'inactive', 'server'],
+      ['inactive', 'active', 'fleet host'],
+      ['inactive', 'inactive', 'neither'],
+    ] as const)('(%s, %s) — both units answered, so the inference is stated: %s', (c, a, want) => {
+      const line = roleFor(c, a);
+      expect(line).toContain(want);
+      expect(line, 'the word that makes it an inference rather than a fact').toMatch(/inferred|not declared/);
+    });
+
+    it('(active, inactive) is "server" and not the single-box answer', () => {
+      expect(roleFor('active', 'inactive')).not.toContain('fleet host');
+    });
+
+    it.each([
+      ['unknown', 'inactive', 'ccrc.service'],
+      ['inactive', 'unknown', 'ccrc-agent.service'],
+      ['unknown', 'unknown', 'ccrc.service'],
+    ] as const)('(%s, %s) is UNKNOWN — one unmeasured unit is enough to withhold "neither"', (c, a, names) => {
+      // The verified defect: the `elif` that answers "unknown" required BOTH
+      // units to be unknown, so a box where one unit could not be asked and
+      // the other was merely inactive fell into the `else` and was told "no
+      // ccrc unit is active here" — a negative claim about a unit nobody
+      // asked. Same class as the `connected` bug fixed one commit earlier:
+      // asserting a state that was never measured.
+      const line = roleFor(c, a);
+      expect(line, 'partial evidence still produced a confident "neither"').not.toContain('neither');
+      expect(line).toContain('unknown');
+      expect(line, 'the unmeasured unit is not named, so nobody can tell which one to check')
+        .toContain(names);
+    });
+
+    it.each([
+      ['active', 'unknown', 'ccrc-agent.service'],
+      ['unknown', 'active', 'ccrc.service'],
+    ] as const)('(%s, %s) names the active unit AND says the other was never asked', (c, a, unasked) => {
+      // The same rule pointing the other way. One unit is measurably active,
+      // so the box IS at least that role — but "server" alone silently answers
+      // the question "is it also a fleet host?", which nobody measured. The
+      // single-box case (both active) is a real and different answer.
+      const line = roleFor(c, a);
+      expect(line).toContain(c === 'active' ? 'server' : 'fleet host');
+      expect(line, 'the unasked unit is not named').toContain(unasked);
+      expect(line).toMatch(/could not be asked|not measured/);
+      expect(line, 'a half-measured box must not be reported as the single-box install')
+        .not.toContain('a single-box install');
+    });
   });
 
   it('counts the sessions the registry really holds, not a constant', () => {
